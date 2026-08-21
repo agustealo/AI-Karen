@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, AsyncIterator, Dict, List, Optional
-
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
@@ -14,6 +12,11 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionStatus,
     ChatRuntimeMetadata,
 )
+from ai_karen_engine.core.runtime.cortex_execution_decider import (
+    get_cortex_execution_decider,
+)
+from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.workflow_runtime import get_workflow_runtime
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     DegradedResponse,
     EmergencyFallbackResponse,
@@ -22,32 +25,45 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
 )
 from ai_karen_engine.models.shared_types import ChatStreamChunk
 from ai_karen_engine.utils.chat_helpers import normalize_session_id as normalize_chat_session_id
+from ai_karen_engine.core.expression.gateway import ExpressionGateway
+from ai_karen_engine.core.expression.contracts import ExpressionTask
 
 logger = get_logger(__name__)
 
-# Control-plane decisions that must short-circuit execution.
 GATE_RESPONSES = (MaintenanceResponse, EmergencyFallbackResponse, DegradedResponse)
+
+# Canonical runtime metadata keys — these must never be overwritten by
+# arbitrary provider/extension metadata (RC1.2.6 hardening direction).
+_CANONICAL_META_KEYS = (
+    "requested_provider",
+    "requested_model",
+    "actual_provider",
+    "actual_model",
+    "runtime_engine",
+    "response_source",
+    "fallback_level",
+    "degraded_mode",
+    "degradation_reason",
+)
 
 
 class ChatRuntime:
     """Single authoritative chat execution runtime.
 
-    This is the one chat runtime. Every transport must delegate to
-    :meth:`execute` (or :meth:`execute_stream`). No alternate chat runtime
-    is permitted.
+    Every transport delegates here. This runtime owns the pipeline and routes
+    execution based on a CORTEX-produced :class:`ExecutionDecision`:
 
-    The runtime owns the full execution pipeline:
+    * simple (``graph_required == False``) -> ExpressionGateway (no LangGraph)
+    * graph-required -> WorkflowRuntime/LangGraph adapter
 
-    control-plane gate -> context/correlation -> provider/model resolution ->
-    execution path decision (CORTEX/graph-required seam) -> orchestrator or
-    gateway execution -> metadata normalization -> final response contract.
+    The runtime stays framework-neutral for the simple path: LangChain/LangGraph
+    conversion lives inside the WorkflowRuntime adapter only.
     """
 
     async def execute(self, request: ChatExecutionRequest) -> ChatExecutionResult:
         start = time.time()
         ctx = request.context
 
-        # 1. Control-plane gate: system availability owns whether we proceed.
         gate = await self._resolve_gate(ctx)
         if gate is not None:
             return ChatExecutionResult(
@@ -61,20 +77,12 @@ class ChatRuntime:
                 ),
             )
 
-        conversation_id = ctx.conversation_id or normalize_chat_session_id(
-            ctx.session_id
-        )
-        config = self._build_config(request, ctx, conversation_id)
-
+        decision = await self._decide(request)
         try:
-            orchestrator = await self._get_orchestrator()
-            final_state = await orchestrator.process(
-                messages=self._to_langchain(request.messages),
-                user_id=ctx.user_id,
-                session_id=conversation_id,
-                config=config,
-            )
-            text, provider_meta = self._extract_payload(final_state)
+            if decision.is_graph_required:
+                text, provider_meta = await self._run_graph(request)
+            else:
+                text, provider_meta = await self._run_simple(request)
         except Exception as exc:  # pragma: no cover - defensive runtime boundary
             logger.error(
                 "ChatRuntime.execute failed: %s",
@@ -93,9 +101,7 @@ class ChatRuntime:
             )
 
         latency_ms = (time.time() - start) * 1000.0
-        metadata = self._build_metadata(
-            request, conversation_id, config, provider_meta, latency_ms
-        )
+        metadata = self._build_metadata(request, decision, provider_meta, latency_ms)
 
         status = (
             ChatExecutionStatus.DEGRADED
@@ -124,34 +130,85 @@ class ChatRuntime:
             )
             return
 
-        conversation_id = ctx.conversation_id or normalize_chat_session_id(
-            ctx.session_id
+        decision = await self._decide(request)
+        gen = (
+            self._run_graph_stream(request)
+            if decision.is_graph_required
+            else self._run_simple_stream(request)
         )
-        config = self._build_config(request, ctx, conversation_id)
+        async for chunk in gen:
+            yield chunk
 
+    # ------------------------------------------------------------------
+    # Routing
+    # ------------------------------------------------------------------
+
+    async def _decide(self, request: ChatExecutionRequest) -> ExecutionDecision:
+        return await get_cortex_execution_decider().decide(request)
+
+    async def _run_simple(
+        self, request: ChatExecutionRequest
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Simple conversational path: CORTEX -> ExpressionGateway.
+
+        No LangGraph, no LangChain. Returns (answer, normalized_metadata).
+        """
+        ctx = request.context
+        gateway = ExpressionGateway()
+        task = ExpressionTask(
+            task_id=f"expr_{ctx.correlation_id}",
+            kind="chat",
+            messages=request.messages,
+            response_mode="text",
+            required_capabilities=[],
+            forbidden_capabilities=[],
+            preferred_provider=request.preferred_provider,
+            preferred_model=request.preferred_model,
+            max_tokens=request.max_tokens,
+            temperature=request.temperature,
+            timeout_ms=30000,
+            correlation_id=ctx.correlation_id,
+            request_id=ctx.request_id,
+            metadata={
+                "transport": request.metadata.get("transport", "runtime"),
+                "execution_mode": "direct",
+            },
+        )
+        result = await gateway.generate(task)
+
+        normalized = {
+            "requested_provider": request.preferred_provider,
+            "requested_model": request.preferred_model,
+            "actual_provider": result.provider,
+            "actual_model": result.model,
+            "runtime_engine": result.runtime_engine or result.engine_id,
+            "response_source": result.response_source,
+            "fallback_level": (result.metadata or {}).get("fallback_level", 0),
+            "degraded_mode": result.degraded,
+            "degradation_reason": result.degradation_reason,
+        }
+        return result.text, normalized
+
+    async def _run_simple_stream(
+        self, request: ChatExecutionRequest
+    ) -> AsyncIterator[ChatStreamChunk]:
+        ctx = request.context
         try:
-            orchestrator = await self._get_orchestrator()
-            async for chunk in orchestrator.stream_process(
-                messages=self._to_langchain(request.messages),
-                user_id=ctx.user_id,
-                session_id=conversation_id,
-                config=config,
-            ):
-                content, meta = self._extract_stream_payload(chunk)
-                if content or meta:
-                    yield ChatStreamChunk(
-                        type=(
-                            "status"
-                            if meta.get("status") and not content
-                            else "content"
-                        ),
-                        content=content,
-                        correlation_id=ctx.correlation_id,
-                        metadata=meta,
-                    )
+            text, normalized = await self._run_simple(request)
+            yield ChatStreamChunk(
+                type="content",
+                content=text,
+                correlation_id=ctx.correlation_id,
+                metadata={
+                    "execution_mode": "direct",
+                    "actual_provider": normalized.get("actual_provider"),
+                    "actual_model": normalized.get("actual_model"),
+                    "response_source": normalized.get("response_source"),
+                },
+            )
         except Exception as exc:  # pragma: no cover - defensive runtime boundary
             logger.error(
-                "ChatRuntime.execute_stream failed: %s",
+                "ChatRuntime simple stream failed: %s",
                 exc,
                 extra={"correlation_id": ctx.correlation_id},
             )
@@ -161,17 +218,83 @@ class ChatRuntime:
                 correlation_id=ctx.correlation_id,
                 metadata={"event": "error"},
             )
+        finally:
+            yield ChatStreamChunk(
+                type="complete",
+                content="",
+                correlation_id=ctx.correlation_id,
+                metadata={
+                    "session_id": ctx.conversation_id
+                    or normalize_chat_session_id(ctx.session_id)
+                },
+            )
 
-        yield ChatStreamChunk(
-            type="complete",
-            content="",
-            correlation_id=ctx.correlation_id,
-            metadata={"session_id": conversation_id},
+    async def _run_graph(
+        self, request: ChatExecutionRequest
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Graph-required path: routed exclusively through WorkflowRuntime."""
+        text, response_metadata = await get_workflow_runtime().run(request)
+        return text, self._normalize_graph_meta(response_metadata, request)
+
+    async def _run_graph_stream(
+        self, request: ChatExecutionRequest
+    ) -> AsyncIterator[ChatStreamChunk]:
+        async for chunk in get_workflow_runtime().stream(request):
+            yield chunk
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _normalize_graph_meta(
+        self, response_metadata: Dict[str, Any], request: ChatExecutionRequest
+    ) -> Dict[str, Any]:
+        raw = response_metadata or {}
+        llm = raw.get("llm_metadata") or {}
+        return {
+            "requested_provider": llm.get("requested_provider")
+            or request.preferred_provider,
+            "requested_model": llm.get("requested_model") or request.preferred_model,
+            "actual_provider": llm.get("actual_provider"),
+            "actual_model": llm.get("actual_model"),
+            "runtime_engine": llm.get("runtime_engine"),
+            "response_source": llm.get("response_source"),
+            "fallback_level": llm.get("fallback_level", 0),
+            "degraded_mode": bool(llm.get("degraded_mode")),
+            "degradation_reason": llm.get("degradation_reason"),
+            "llm": raw.get("llm"),
+        }
+
+    def _build_metadata(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        normalized: Dict[str, Any],
+        latency_ms: float,
+    ) -> ChatRuntimeMetadata:
+        ctx = request.context
+        conversation_id = ctx.conversation_id or normalize_chat_session_id(
+            ctx.session_id
         )
-
-    # ------------------------------------------------------------------
-    # Internal pipeline helpers
-    # ------------------------------------------------------------------
+        md = ChatRuntimeMetadata(
+            correlation_id=ctx.correlation_id,
+            latency_ms=latency_ms,
+            requested_provider=request.preferred_provider,
+            requested_model=request.preferred_model,
+            mode="graph" if decision.is_graph_required else "normal",
+            response_id=ctx.request_id,
+            conversation_id=conversation_id,
+        )
+        # Set canonical fields from normalized metadata (never overwritten by extras).
+        for key in _CANONICAL_META_KEYS:
+            value = normalized.get(key)
+            if value is not None:
+                setattr(md, key, value)
+        # Everything else is non-canonical extension metadata.
+        md.extra.update(
+            {k: v for k, v in normalized.items() if k not in _CANONICAL_META_KEYS}
+        )
+        return md
 
     async def _resolve_gate(self, ctx: ChatExecutionContext):
         control_plane = await get_chat_runtime_control_plane()
@@ -185,131 +308,6 @@ class ChatRuntime:
         if gate is not None and isinstance(gate, GATE_RESPONSES):
             return gate
         return None
-
-    async def _get_orchestrator(self):
-        # RC1.2 (LangGraph containment) will replace this unconditional
-        # resolution with a CORTEX-driven graph-required decision. For RC1.1
-        # the runtime remains the single entry point and preserves behavior.
-        from ai_karen_engine.core.langgraph_orchestrator import get_default_orchestrator
-
-        return await get_default_orchestrator()
-
-    def _build_config(
-        self,
-        request: ChatExecutionRequest,
-        ctx: ChatExecutionContext,
-        conversation_id: str,
-    ) -> Dict[str, Any]:
-        response_id = ctx.request_id or str(uuid.uuid4())
-        request_config = {
-            "preferred_llm_provider": request.preferred_provider,
-            "preferred_model": request.preferred_model,
-            "provider": request.preferred_provider,
-            "model": request.preferred_model,
-            "temperature": request.temperature,
-            "max_tokens": request.max_tokens,
-            "messages": request.messages,
-            "response_id": response_id,
-        }
-        request_config.update(request.metadata or {})
-        return {
-            "model": request.preferred_model,
-            "provider": request.preferred_provider,
-            "temperature": request.temperature,
-            "max_tokens": request.max_tokens,
-            "correlation_id": ctx.correlation_id,
-            "request_config": request_config,
-        }
-
-    def _to_langchain(self, messages: List[Dict[str, Any]]) -> List[BaseMessage]:
-        converted: List[BaseMessage] = []
-        for msg in messages:
-            content = str(msg.get("content") or "")
-            message_type = str(msg.get("message_type") or "user").lower()
-            if message_type == "assistant":
-                converted.append(AIMessage(content=content))
-            elif message_type == "system":
-                converted.append(SystemMessage(content=content))
-            else:
-                converted.append(HumanMessage(content=content))
-        return converted
-
-    def _extract_payload(self, state: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
-        formatted = state.get("formatted_response")
-        if formatted is not None:
-            if hasattr(formatted, "data"):
-                data = getattr(formatted, "data") or {}
-                metadata = getattr(formatted, "metadata") or {}
-                text = str(data.get("response") or data.get("content") or "")
-                return text, metadata
-            if isinstance(formatted, dict):
-                data = formatted.get("data") or {}
-                metadata = formatted.get("metadata") or {}
-                text = str(data.get("response") or data.get("content") or "")
-                return text, metadata
-        text = str(state.get("response") or state.get("llm_response") or "")
-        metadata = dict(state.get("response_metadata") or {})
-        return text, metadata
-
-    def _extract_stream_payload(self, chunk: Any) -> tuple[str, Dict[str, Any]]:
-        if isinstance(chunk, dict):
-            for state_update in chunk.values():
-                if not isinstance(state_update, dict):
-                    continue
-                if "formatted_response" in state_update or "llm_response" in state_update:
-                    return self._extract_payload(state_update)
-                if "error" in state_update:
-                    return f"Error: {state_update['error']}", {
-                        "error": state_update["error"]
-                    }
-        if isinstance(chunk, str):
-            return chunk, {}
-        return "", {}
-
-    def _build_metadata(
-        self,
-        request: ChatExecutionRequest,
-        conversation_id: str,
-        config: Dict[str, Any],
-        provider_meta: Dict[str, Any],
-        latency_ms: float,
-    ) -> ChatRuntimeMetadata:
-        response_id = (config.get("request_config") or {}).get("response_id")
-        metadata = ChatRuntimeMetadata(
-            correlation_id=request.context.correlation_id,
-            latency_ms=latency_ms,
-            requested_provider=request.preferred_provider,
-            requested_model=request.preferred_model,
-            mode="normal",
-            response_id=response_id,
-            conversation_id=conversation_id,
-        )
-        provider_meta = provider_meta or {}
-        metadata.extra.update(provider_meta)
-
-        llm_metadata = provider_meta.get("llm") or {}
-        raw_llm = provider_meta.get("llm_metadata") or {}
-        if raw_llm:
-            llm_metadata = raw_llm
-
-        if llm_metadata:
-            metadata.requested_provider = llm_metadata.get("requested_provider")
-            metadata.actual_provider = llm_metadata.get("actual_provider")
-            metadata.requested_model = llm_metadata.get("requested_model")
-            metadata.actual_model = llm_metadata.get("actual_model")
-            metadata.runtime_engine = llm_metadata.get("runtime_engine")
-            metadata.response_source = llm_metadata.get("response_source")
-            metadata.fallback_level = llm_metadata.get("fallback_level", 0)
-            metadata.used_fallback = bool(llm_metadata.get("used_fallback"))
-            if llm_metadata.get("degraded_mode"):
-                metadata.degraded_mode = True
-
-        # Preserve any explicit provider/model defaults when missing.
-        if metadata.requested_provider is None:
-            metadata.requested_provider = config.get("provider")
-        if metadata.requested_model is None:
-            metadata.requested_model = config.get("model")
-        return metadata
 
 
 _chat_runtime: Optional[ChatRuntime] = None
