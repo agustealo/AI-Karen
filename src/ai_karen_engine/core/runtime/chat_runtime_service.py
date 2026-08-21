@@ -4,6 +4,10 @@ import logging
 import time
 from typing import Any, Dict, Optional, List
 
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
+    ChatExecutionRequest,
+)
+from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import get_chat_runtime_control_plane
 
 from ai_karen_engine.core.logging import get_logger
@@ -38,10 +42,22 @@ class ChatRuntimeService:
         return await control_plane.get_runtime_response(user_context=ctx)
 
     async def get_orchestrator(self):
-        """Canonical runtime entrypoint for orchestrator access across routes."""
+        """Legacy transport accessor. Prefer ``execute`` for new call sites.
+
+        RC1.2 (LangGraph containment) will remove this; transports should
+        delegate to :meth:`execute` / :meth:`execute_stream` instead.
+        """
         from ai_karen_engine.core.langgraph_orchestrator import get_default_orchestrator
 
         return await get_default_orchestrator()
+
+    async def execute(self, request: ChatExecutionRequest):
+        """Delegate canonical chat execution to the single chat runtime."""
+        return await get_chat_runtime().execute(request)
+
+    async def execute_stream(self, request: ChatExecutionRequest):
+        """Delegate canonical streaming chat execution to the single chat runtime."""
+        return get_chat_runtime().execute_stream(request)
 
     async def build_router_fallback_assist_payload(
         self,

@@ -17,7 +17,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Depends, Request, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 import re
 import uuid
@@ -34,6 +34,12 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     runtime_response_http_status,
 )
 from ai_karen_engine.core.runtime.chat_runtime_service import get_chat_runtime_service
+from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
+    ChatExecutionContext,
+    ChatExecutionRequest,
+    ChatExecutionStatus,
+)
 from ai_karen_engine.models.shared_types import (
     CanonicalChatRequest,
     CanonicalChatResponse,
@@ -489,21 +495,17 @@ async def create_chat_response(
     structured_logger = get_structured_logger()
 
     try:
-        # 1. Control Plane Gate
-        gate_response = await ChatRuntimeHelper.gate_request()
-        if gate_response:
-            return gate_response
-
-        # 2. Basic Validation & Normalization
+        # 1. Transport validation & normalization (route-owned responsibilities).
         session_id = SecurityValidator.sanitize_session_id(request.session_id)
         validated_messages = ChatRuntimeHelper.normalize_messages(request.messages)
 
-        # Get user's preferred provider/model from settings
         user_preferences = await ChatRuntimeHelper.get_user_provider_preferences()
-        preferred_provider, preferred_model = ChatRuntimeHelper.resolve_preferred_provider_model(request, user_preferences)
+        preferred_provider, preferred_model = ChatRuntimeHelper.resolve_preferred_provider_model(
+            request, user_preferences
+        )
         await ChatRuntimeHelper.validate_provider_model(preferred_provider, preferred_model)
 
-        # 3. Log request start
+        # 2. Log request start (transport telemetry only; runtime owns execution events).
         structured_logger.log_event(
             event="chat_request_started",
             user_id=user["user_id"],
@@ -519,72 +521,37 @@ async def create_chat_response(
             },
         )
 
-        # 4. Build Orchestrator Request
-        orchestrator = await get_chat_orchestrator()
-        chat_request = ChatRuntimeHelper.build_orchestrator_request(
-            request, user, validated_messages, response_id, correlation_id, session_id, user_preferences
+        # 3. Delegate the entire execution pipeline to the single chat runtime.
+        chat_request = ChatExecutionRequest(
+            messages=validated_messages,
+            context=ChatExecutionContext(
+                user_id=user["user_id"],
+                tenant_id=str(user.get("tenant_id") or "default"),
+                session_id=session_id,
+                conversation_id=normalize_chat_session_id(session_id),
+                request_id=response_id,
+                correlation_id=correlation_id,
+                roles=list(user.get("roles") or []),
+                permissions=list(user.get("permissions") or []),
+            ),
+            preferred_provider=preferred_provider,
+            preferred_model=preferred_model,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            stream=bool(request.stream),
+            metadata={"transport": "http"},
         )
-        langchain_messages = ChatRuntimeHelper.to_langchain_messages(validated_messages)
-
-        # 5. Process Request
-        selected_model = preferred_model
-        selected_provider = preferred_provider
 
         if request.stream:
             async def generate_stream():
-                try:
-                    async for chunk in orchestrator.stream_process(
-                        messages=langchain_messages,
-                        user_id=user["user_id"],
-                        session_id=session_id,
-                        config={
-                            "model": selected_model,
-                            "provider": selected_provider,
-                            "temperature": request.temperature,
-                            "max_tokens": request.max_tokens,
-                            "correlation_id": correlation_id,
-                            "request_config": chat_request.metadata,
-                        },
-                    ):
-                        content, metadata = ChatRuntimeHelper.extract_stream_payload(chunk)
-                        if content or metadata:
-                            event_type = "status" if metadata.get("status") and not content else "content"
-                            payload = {
-                                "content": content,
-                                "metadata": metadata,
-                                "finished": False,
-                                "event_type": event_type,
-                            }
-                            yield f"data: {json.dumps(payload)}\n\n"
-
-                    # Terminal event
-                    terminal_payload = {
-                        "content": "",
-                        "metadata": {"session_id": session_id},
-                        "finished": True,
-                        "event_type": "complete"
+                async for chunk in get_chat_runtime().execute_stream(chat_request):
+                    payload = {
+                        "content": chunk.content,
+                        "metadata": chunk.metadata,
+                        "finished": chunk.type == "complete",
+                        "event_type": chunk.type,
                     }
-                    yield f"data: {json.dumps(terminal_payload)}\n\n"
-
-                except Exception as e:
-                    structured_logger.log_error(
-                        error=str(e),
-                        endpoint="/api/chat/chat",
-                        user_id=user["user_id"],
-                        correlation_id=correlation_id,
-                        context="orchestrator_stream_error",
-                    )
-                    error_chunk = {
-                        "content": "",
-                        "metadata": {
-                            "event": "error",
-                            "error": str(e),
-                            "session_id": session_id,
-                        },
-                        "finished": True,
-                        "event_type": "error",
-                    }
-                    yield f"data: {json.dumps(error_chunk)}\n\n"
+                    yield f"data: {json.dumps(payload)}\n\n"
 
             return StreamingResponse(
                 generate_stream(),
@@ -596,72 +563,43 @@ async def create_chat_response(
                     "Connection": "keep-alive",
                 },
             )
-        else:
-            final_state = await orchestrator.process(
-                messages=langchain_messages,
-                user_id=user["user_id"],
-                session_id=session_id,
-                config={
-                    "model": selected_model,
-                    "provider": selected_provider,
-                    "temperature": request.temperature,
-                    "max_tokens": request.max_tokens,
-                    "correlation_id": correlation_id,
-                    "request_config": chat_request.metadata,
-                },
-            )
-            processing_time = time.time() - start_time
-            response_text, response_metadata = ChatRuntimeHelper.extract_response_payload(
-                final_state
-            )
-            response_metadata = dict(response_metadata or {})
-            response_metadata.setdefault("response_id", response_id)
-            response_metadata.setdefault("correlation_id", correlation_id)
-            response_metadata.setdefault("session_id", session_id)
-            response_metadata.setdefault("used_fallback", bool(final_state.get("used_fallback", False)))
-            response_metadata.setdefault("context_used", bool(final_state.get("context_used", False)))
-            
-            # Extract LLM metadata from orchestrator state for provider fallback tracking
-            llm_metadata = final_state.get("llm_metadata", {})
-            if llm_metadata:
-                response_metadata.update({
-                    "requested_provider": llm_metadata.get("requested_provider"),
-                    "actual_provider": llm_metadata.get("actual_provider"),
-                    "requested_model": llm_metadata.get("requested_model"),
-                    "actual_model": llm_metadata.get("actual_model"),
-                    "runtime_engine": llm_metadata.get("runtime_engine"),
-                    "response_source": llm_metadata.get("response_source"),
-                    "fallback_level": llm_metadata.get("fallback_level", 0),
-                    "fallback_chain": llm_metadata.get("fallback_chain", []),
-                    "attempted_providers": llm_metadata.get("attempted_providers", []),
-                })
-                # Update used_fallback if fallback was actually used
-                if llm_metadata.get("used_fallback"):
-                    response_metadata["used_fallback"] = True
-                if llm_metadata.get("degraded_mode"):
-                    response_metadata["degraded_mode"] = True
 
-            # Log & Metrics (Thin wrapper around telemetry)
-            structured_logger.log_response(
-                status_code=200,
-                endpoint="/api/chat/chat",
-                user_id=user["user_id"],
-                correlation_id=correlation_id,
-                response_data={
-                    "response_id": response_id,
-                    "model": preferred_model or "orchestrated",
-                    "processing_time": processing_time,
-                },
-            )
+        result = await get_chat_runtime().execute(chat_request)
 
-            return ChatResponse(
-                response_id=response_id,
-                content=response_text,
-                model=preferred_model or "orchestrated",
-                usage=(response_metadata.get("llm") or {}).get("usage", {}),
-                metadata=response_metadata,
-                timestamp=datetime.utcnow(),
-            )
+        # 4. Control-plane gate short-circuit (maintenance / degraded-minimal).
+        if result.status == ChatExecutionStatus.GATE and result.gate_response is not None:
+            gate = result.gate_response
+            payload = serialize_runtime_response(gate) or {}
+            status_code = runtime_response_http_status(gate) or 503
+            headers: Dict[str, str] = {}
+            retry = getattr(gate, "retry_after_seconds", None)
+            if retry is not None:
+                headers["Retry-After"] = str(retry)
+            return JSONResponse(status_code=status_code, content=payload, headers=headers)
+
+        processing_time = time.time() - start_time
+        response_metadata = result.metadata.to_dict()
+
+        structured_logger.log_response(
+            status_code=200,
+            endpoint="/api/chat/chat",
+            user_id=user["user_id"],
+            correlation_id=correlation_id,
+            response_data={
+                "response_id": response_id,
+                "model": preferred_model or "orchestrated",
+                "processing_time": processing_time,
+            },
+        )
+
+        return ChatResponse(
+            response_id=response_id,
+            content=result.answer,
+            model=preferred_model or "orchestrated",
+            usage=(response_metadata.get("llm") or {}).get("usage", {}),
+            metadata=response_metadata,
+            timestamp=datetime.utcnow(),
+        )
 
     except HTTPException:
         raise
