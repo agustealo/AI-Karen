@@ -11,6 +11,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
 )
+from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.models.shared_types import ChatStreamChunk as _SharedChatStreamChunk
 
 logger = get_logger(__name__)
@@ -26,10 +27,12 @@ class WorkflowRuntime:
     stays framework-neutral for simple chat.
     """
 
-    async def run(self, request: ChatExecutionRequest) -> Tuple[str, Dict[str, Any]]:
+    async def run(
+        self, request: ChatExecutionRequest, decision: Optional[ExecutionDecision] = None
+    ) -> Tuple[str, Dict[str, Any]]:
         ctx = request.context
         conversation_id = ctx.conversation_id or _normalize(ctx.session_id)
-        config = self._build_config(request, ctx, conversation_id)
+        config = self._build_config(request, ctx, conversation_id, decision)
 
         orchestrator = await self._get_orchestrator()
         final_state = await orchestrator.process(
@@ -41,11 +44,11 @@ class WorkflowRuntime:
         return self._extract_payload(final_state)
 
     async def stream(
-        self, request: ChatExecutionRequest
+        self, request: ChatExecutionRequest, decision: Optional[ExecutionDecision] = None
     ) -> AsyncIterator[_SharedChatStreamChunk]:
         ctx = request.context
         conversation_id = ctx.conversation_id or _normalize(ctx.session_id)
-        config = self._build_config(request, ctx, conversation_id)
+        config = self._build_config(request, ctx, conversation_id, decision)
 
         try:
             orchestrator = await self._get_orchestrator()
@@ -101,6 +104,7 @@ class WorkflowRuntime:
         request: ChatExecutionRequest,
         ctx: ChatExecutionContext,
         conversation_id: str,
+        decision: Optional[ExecutionDecision] = None,
     ) -> Dict[str, Any]:
         response_id = ctx.request_id or str(uuid.uuid4())
         request_config = {
@@ -113,6 +117,22 @@ class WorkflowRuntime:
             "messages": request.messages,
             "response_id": response_id,
         }
+        if decision is not None:
+            request_config.update({
+                "workflow_id": decision.workflow_id,
+                "workflow_version": decision.workflow_version,
+                "required_capabilities": list(decision.required_capabilities),
+                "forbidden_capabilities": list(decision.forbidden_capabilities),
+                "token_budget": decision.token_budget,
+                "time_budget_ms": decision.time_budget_ms,
+                "max_steps": decision.max_steps,
+                "reasoning_depth": decision.reasoning_depth,
+                "requires_human_gate": decision.requires_human_gate,
+                "requires_resumability": decision.requires_resumability,
+                "policy_decision_id": decision.policy_decision_id,
+                "policy_version": decision.policy_version,
+                "policy_reason_codes": list(decision.policy_reason_codes),
+            })
         request_config.update(request.metadata or {})
         return {
             "model": request.preferred_model,

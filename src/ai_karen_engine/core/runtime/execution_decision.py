@@ -39,8 +39,11 @@ class ExecutionDecision:
     risk_level: RiskLevel = RiskLevel.LOW
 
     reasoning_depth: str = "standard"
-    memory_required: bool = False
+    memory_recall_required: bool = False
+    memory_write_allowed: bool = True
     memory_scope: str = "session"
+    memory_top_k: int = 10
+    memory_classes: List[str] = field(default_factory=list)
 
     tool_requirements: List[str] = field(default_factory=list)
     plugin_candidates: List[str] = field(default_factory=list)
@@ -56,6 +59,13 @@ class ExecutionDecision:
     time_budget_ms: int = 30000
     token_budget: int = 4096
 
+    workflow_id: Optional[str] = None
+    workflow_version: str = "v1"
+
+    policy_decision_id: Optional[str] = None
+    policy_version: str = "v1"
+    policy_reason_codes: List[str] = field(default_factory=list)
+
     reason_codes: List[str] = field(default_factory=list)
     policy_constraints: Dict[str, Any] = field(default_factory=dict)
 
@@ -66,3 +76,12 @@ class ExecutionDecision:
     @property
     def is_simple(self) -> bool:
         return not self.graph_required
+
+    @property
+    def memory_required(self) -> bool:
+        """Backward-compatible alias for memory_recall_required."""
+        return self.memory_recall_required
+
+    @memory_required.setter
+    def memory_required(self, value: bool) -> None:
+        self.memory_recall_required = bool(value)

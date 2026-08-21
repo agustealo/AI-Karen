@@ -9,6 +9,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionStatus,
     ChatRuntimeMetadata,
 )
+from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision, RuntimeExecutionMode
 
 logger = get_logger(__name__)
 
@@ -21,6 +22,7 @@ async def build_runtime_fallback(
     correlation_id: str,
     conversation_id: str,
     start_time: Optional[float] = None,
+    decision: Optional[ExecutionDecision] = None,
 ) -> Optional[ChatExecutionResult]:
     """Unified runtime fallback path (RC1.4).
 
@@ -36,8 +38,13 @@ async def build_runtime_fallback(
             -> emergency unavailable
     """
     ctx = request.context
+    fallback_decision = decision or ExecutionDecision(
+        execution_mode=RuntimeExecutionMode.DEGRADED,
+        graph_required=False,
+        intent="fallback",
+    )
     try:
-        text, normalized = await runtime._run_simple(request)
+        text, normalized = await runtime._run_simple(request, fallback_decision)
     except Exception as fb_exc:  # pragma: no cover - defensive boundary
         logger.error(
             "Runtime fallback chain failed: %s",

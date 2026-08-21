@@ -9,6 +9,10 @@ from ai_karen_engine.core.runtime.execution_decision import (
     RuntimeExecutionMode,
     RiskLevel,
 )
+from ai_karen_engine.core.cortex.analysis.spacy_analyzer import (
+    SpacyAnalyzer,
+    create_spacy_analyzer,
+)
 
 # Safety escape hatch: force every request through the graph workflow path.
 _FORCE_GRAPH_ENV = "KARI_RUNTIME_FORCE_GRAPH"
@@ -21,8 +25,8 @@ class CortexExecutionDecider:
     """Single CORTEX entry point for runtime execution routing.
 
     CORTEX decides *what kind* of execution a request needs. It inspects
-    structured intent signals (tool/plugin requirements, capabilities, explicit
-    graph requests, policy constraints) and returns an :class:`ExecutionDecision`.
+    trusted authenticated context, analyzes request content through the
+    CORTEX analysis pipeline, and returns an :class:`ExecutionDecision`.
 
     It does NOT execute anything: no provider call, no graph invocation, no
     memory recall. The runtime consumes the decision to route execution.
@@ -37,6 +41,7 @@ class CortexExecutionDecider:
             if force_graph is not None
             else os.environ.get(_FORCE_GRAPH_ENV, "false").lower() in ("1", "true", "yes")
         )
+        self._analyzer = create_spacy_analyzer()
 
     async def decide(self, request: ChatExecutionRequest) -> ExecutionDecision:
         meta = request.metadata or {}
@@ -44,46 +49,61 @@ class CortexExecutionDecider:
         reason_codes: List[str] = []
 
         # ------------------------------------------------------------------
-        # 1. Structural signals (explicit, highest precedence)
+        # 1. Trusted auth context (never from caller metadata)
+        # ------------------------------------------------------------------
+        user_id = ctx.user_id
+        tenant_id = ctx.tenant_id
+        roles = list(ctx.roles or [])
+        permissions = list(ctx.permissions or [])
+
+        # ------------------------------------------------------------------
+        # 2. CORTEX content analysis (not caller metadata)
+        # ------------------------------------------------------------------
+        user_content = self._extract_user_content(request.messages)
+        analysis = await self._analyze_request(user_content, ctx)
+
+        # ------------------------------------------------------------------
+        # 3. Structural signals (explicit, highest precedence)
         # ------------------------------------------------------------------
         explicit_graph = bool(meta.get("graph_required") or meta.get("force_graph"))
         if explicit_graph:
             reason_codes.append("explicit_graph_request")
 
         # ------------------------------------------------------------------
-        # 2. Execution-topology triggers (determines graph need by task shape)
+        # 4. Execution-topology triggers from analysis
         # ------------------------------------------------------------------
-        topology_triggers = self._evaluate_topology_triggers(meta)
+        topology_triggers = self._evaluate_topology_triggers(analysis)
         graph_required = explicit_graph or bool(topology_triggers)
         reason_codes.extend(topology_triggers)
 
         # ------------------------------------------------------------------
-        # 3. CORTEX-class signals: tools / plugins / workflow capabilities
+        # 5. Tool / plugin / workflow signals from analysis (primary)
+        #     Caller metadata hints are secondary inputs only.
         # ------------------------------------------------------------------
-        tool_requirements = list(meta.get("tool_requirements") or [])
-        plugin_candidates = list(meta.get("plugin_candidates") or [])
-        required_capabilities = list(meta.get("required_capabilities") or [])
-        forbidden_capabilities = list(meta.get("forbidden_capabilities") or [])
+        tool_requirements = analysis.get("tool_requirements", []) or list(meta.get("tool_requirements") or [])
+        plugin_candidates = analysis.get("plugin_candidates", []) or list(meta.get("plugin_candidates") or [])
+        required_capabilities = analysis.get("required_capabilities", []) or list(meta.get("required_capabilities") or [])
+        forbidden_capabilities = analysis.get("forbidden_capabilities", []) or list(meta.get("forbidden_capabilities") or [])
         policy_constraints = dict(meta.get("policy_constraints") or {})
 
         if tool_requirements or plugin_candidates:
             graph_required = True
             reason_codes.append("tool_or_plugin_requirements")
-        if "workflow" in required_capabilities or "agent" in required_capabilities:
+        if analysis.get("workflow_required") or analysis.get("agent_delegation"):
             graph_required = True
             reason_codes.append("workflow_capability")
 
         # ------------------------------------------------------------------
-        # 4. Risk and governance
+        # 6. Risk and governance
         # ------------------------------------------------------------------
-        risk_level = self._assess_risk_level(meta, tool_requirements, plugin_candidates)
-        requires_human_gate = bool(meta.get("requires_human_gate", False)) or risk_level in (
+        risk_level = self._assess_risk_level(analysis, tool_requirements, plugin_candidates)
+        requires_human_gate = bool(analysis.get("requires_human_gate", False)) or risk_level in (
             RiskLevel.HIGH,
             RiskLevel.CRITICAL,
         )
-        requires_resumability = bool(meta.get("requires_resumability", False))
-        requires_parallel_execution = bool(meta.get("requires_parallel_execution", False))
-        requires_agent_delegation = bool(meta.get("requires_agent_delegation", False))
+        requires_resumability = bool(analysis.get("requires_resumability", False))
+        requires_parallel_execution = bool(analysis.get("requires_parallel_execution", False))
+        requires_agent_delegation = bool(analysis.get("agent_delegation", False))
 
         if requires_human_gate:
             graph_required = True
@@ -93,35 +113,73 @@ class CortexExecutionDecider:
             reason_codes.append("agent_delegation_required")
 
         # ------------------------------------------------------------------
-        # 5. Budgets and constraints
+        # 7. Memory policy (orthogonal to graph)
         # ------------------------------------------------------------------
-        max_steps = int(meta.get("max_steps", 10))
-        time_budget_ms = int(meta.get("time_budget_ms", 30000))
-        token_budget = int(meta.get("token_budget", 4096))
-        reasoning_depth = str(meta.get("reasoning_depth", "standard"))
-        memory_required = bool(meta.get("memory_required", False)) and not graph_required
-        memory_scope = str(meta.get("memory_scope", "session"))
+        memory_recall_required = bool(analysis.get("memory_recall_required", False)) or bool(meta.get("memory_recall_required", False))
+        memory_write_allowed = not bool(analysis.get("memory_write_denied", False))
+        memory_scope = str(analysis.get("memory_scope", meta.get("memory_scope", "session")))
+        memory_top_k = int(analysis.get("memory_top_k", meta.get("memory_top_k", 10)))
+        memory_classes = list(analysis.get("memory_classes", []))
 
         # ------------------------------------------------------------------
-        # 6. Fail-closed policy check
+        # 8. Budgets and constraints
         # ------------------------------------------------------------------
-        if required_capabilities or forbidden_capabilities:
-            policy_result = self._check_capability_policy(
-                required_capabilities, forbidden_capabilities, policy_constraints
+        max_steps = int(meta.get("max_steps", analysis.get("max_steps", 10)))
+        time_budget_ms = int(meta.get("time_budget_ms", analysis.get("time_budget_ms", 30000)))
+        token_budget = int(meta.get("token_budget", analysis.get("token_budget", 4096)))
+        reasoning_depth = str(meta.get("reasoning_depth", analysis.get("reasoning_depth", "standard")))
+
+        # ------------------------------------------------------------------
+        # 9. Trusted RBAC policy check (not from caller metadata)
+        # ------------------------------------------------------------------
+        policy_decision = self._evaluate_rbac_policy(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            roles=roles,
+            permissions=permissions,
+            required_capabilities=required_capabilities,
+            forbidden_capabilities=forbidden_capabilities,
+            risk_level=risk_level,
+            tool_requirements=tool_requirements,
+            plugin_candidates=plugin_candidates,
+        )
+
+        if not policy_decision["allowed"]:
+            return ExecutionDecision(
+                execution_mode=RuntimeExecutionMode.DEGRADED,
+                graph_required=False,
+                intent=analysis.get("intent", "general_assist"),
+                intent_confidence=float(analysis.get("intent_confidence", 0.0)),
+                risk_level=RiskLevel.CRITICAL,
+                reasoning_depth=reasoning_depth,
+                memory_recall_required=False,
+                memory_write_allowed=False,
+                memory_scope=memory_scope,
+                memory_top_k=memory_top_k,
+                memory_classes=memory_classes,
+                tool_requirements=[],
+                plugin_candidates=[],
+                required_capabilities=[],
+                forbidden_capabilities=list(policy_decision.get("forbidden_capabilities", [])),
+                requires_human_gate=True,
+                max_steps=0,
+                time_budget_ms=0,
+                token_budget=0,
+                workflow_id=analysis.get("workflow_id"),
+                workflow_version="v1",
+                policy_decision_id=policy_decision.get("decision_id"),
+                policy_version=policy_decision.get("policy_version", "v1"),
+                policy_reason_codes=[policy_decision.get("reason", "policy_denied")],
+                reason_codes=["policy_denied", *reason_codes],
+                policy_constraints={"denial_reason": policy_decision.get("reason")},
             )
-            if not policy_result["allowed"]:
-                return ExecutionDecision(
-                    execution_mode=RuntimeExecutionMode.DEGRADED,
-                    graph_required=False,
-                    intent=str(meta.get("intent", "general_assist")),
-                    intent_confidence=float(meta.get("intent_confidence", 0.0)),
-                    risk_level=RiskLevel.CRITICAL,
-                    reason_codes=["policy_denied", *reason_codes],
-                    policy_constraints={"denial_reason": policy_result["reason"]},
-                )
+
+        # Attach policy provenance
+        required_capabilities = list(policy_decision.get("allowed_capabilities", required_capabilities))
+        forbidden_capabilities = list(set(forbidden_capabilities) | set(policy_decision.get("forbidden_capabilities", [])))
 
         # ------------------------------------------------------------------
-        # 7. Operational safety override (rollback)
+        # 10. Operational safety override (rollback)
         # ------------------------------------------------------------------
         if self._force_graph:
             graph_required = True
@@ -134,12 +192,15 @@ class CortexExecutionDecider:
         return ExecutionDecision(
             execution_mode=execution_mode,
             graph_required=graph_required,
-            intent=str(meta.get("intent", "general_assist")),
-            intent_confidence=float(meta.get("intent_confidence", 0.0)),
+            intent=analysis.get("intent", "general_assist"),
+            intent_confidence=float(analysis.get("intent_confidence", 0.0)),
             risk_level=risk_level,
             reasoning_depth=reasoning_depth,
-            memory_required=memory_required,
+            memory_recall_required=memory_recall_required,
+            memory_write_allowed=memory_write_allowed,
             memory_scope=memory_scope,
+            memory_top_k=memory_top_k,
+            memory_classes=memory_classes,
             tool_requirements=tool_requirements,
             plugin_candidates=plugin_candidates,
             required_capabilities=required_capabilities,
@@ -151,53 +212,258 @@ class CortexExecutionDecider:
             max_steps=max_steps,
             time_budget_ms=time_budget_ms,
             token_budget=token_budget,
+            workflow_id=analysis.get("workflow_id"),
+            workflow_version="v1",
+            policy_decision_id=policy_decision.get("decision_id"),
+            policy_version=policy_decision.get("policy_version", "v1"),
+            policy_reason_codes=list(policy_decision.get("reason_codes", [])),
             reason_codes=reason_codes,
             policy_constraints=policy_constraints,
         )
 
-    def _evaluate_topology_triggers(self, meta: Dict[str, Any]) -> List[str]:
+    def _extract_user_content(self, messages: List[Dict[str, Any]]) -> str:
+        """Extract the latest user message for analysis."""
+        if not messages:
+            return ""
+        for msg in reversed(messages):
+            role = str(msg.get("role", "")).lower()
+            if role == "user":
+                return str(msg.get("content", ""))
+        return str(messages[-1].get("content", ""))
+
+    async def _analyze_request(self, text: str, ctx: ChatExecutionRequest.context) -> Dict[str, Any]:
+        """Run CORTEX analysis pipeline on request content."""
+        if not text or not text.strip():
+            return {
+                "intent": "general_assist",
+                "intent_confidence": 0.0,
+                "tool_requirements": [],
+                "plugin_candidates": [],
+                "required_capabilities": [],
+                "forbidden_capabilities": [],
+                "memory_recall_required": False,
+                "memory_write_denied": False,
+                "memory_scope": "session",
+                "memory_top_k": 10,
+                "memory_classes": [],
+                "requires_human_gate": False,
+                "requires_resumability": False,
+                "requires_parallel_execution": False,
+                "agent_delegation": False,
+                "max_steps": 10,
+                "time_budget_ms": 30000,
+                "token_budget": 4096,
+                "reasoning_depth": "standard",
+                "workflow_required": False,
+                "workflow_id": None,
+                "risk_signals": [],
+            }
+
+        try:
+            from ai_karen_engine.core.cortex.analysis.spacy_analyzer import AnalysisContext
+            analysis_ctx = AnalysisContext(
+                user_id=ctx.user_id,
+                session_id=ctx.session_id,
+                roles=list(ctx.roles or []),
+            )
+            result = await self._analyzer.analyze_comprehensive(text, analysis_ctx)
+
+            intent_value = result.intent.primary_intent.value if result.intent else "general_assist"
+            confidence = result.intent.confidence if result.intent else 0.0
+
+            topology = self._infer_topology_from_analysis(result)
+            capabilities = self._infer_capabilities_from_analysis(result)
+            memory_policy = self._infer_memory_policy_from_analysis(result)
+            workflow = self._infer_workflow_from_analysis(result)
+
+            return {
+                "intent": intent_value,
+                "intent_confidence": confidence,
+                "tool_requirements": topology.get("tool_requirements", []),
+                "plugin_candidates": topology.get("plugin_candidates", []),
+                "required_capabilities": capabilities.get("required", []),
+                "forbidden_capabilities": capabilities.get("forbidden", []),
+                "memory_recall_required": memory_policy.get("recall_required", False),
+                "memory_write_denied": memory_policy.get("write_denied", False),
+                "memory_scope": memory_policy.get("scope", "session"),
+                "memory_top_k": memory_policy.get("top_k", 10),
+                "memory_classes": memory_policy.get("classes", []),
+                "requires_human_gate": topology.get("requires_human_gate", False),
+                "requires_resumability": topology.get("requires_resumability", False),
+                "requires_parallel_execution": topology.get("requires_parallel_execution", False),
+                "agent_delegation": topology.get("agent_delegation", False),
+                "max_steps": topology.get("max_steps", 10),
+                "time_budget_ms": topology.get("time_budget_ms", 30000),
+                "token_budget": topology.get("token_budget", 4096),
+                "reasoning_depth": topology.get("reasoning_depth", "standard"),
+                "workflow_required": workflow.get("required", False),
+                "workflow_id": workflow.get("workflow_id"),
+                "risk_signals": topology.get("risk_signals", []),
+            }
+        except Exception as exc:
+            logger.warning("CORTEX analysis failed, using safe defaults: %s", exc)
+            return {
+                "intent": "general_assist",
+                "intent_confidence": 0.0,
+                "tool_requirements": [],
+                "plugin_candidates": [],
+                "required_capabilities": [],
+                "forbidden_capabilities": [],
+                "memory_recall_required": False,
+                "memory_write_denied": False,
+                "memory_scope": "session",
+                "memory_top_k": 10,
+                "memory_classes": [],
+                "requires_human_gate": False,
+                "requires_resumability": False,
+                "requires_parallel_execution": False,
+                "agent_delegation": False,
+                "max_steps": 10,
+                "time_budget_ms": 30000,
+                "token_budget": 4096,
+                "reasoning_depth": "standard",
+                "workflow_required": False,
+                "workflow_id": None,
+                "risk_signals": [],
+            }
+
+    def _infer_topology_from_analysis(self, analysis) -> Dict[str, Any]:
+        """Infer execution topology signals from CORTEX analysis result."""
+        topology: Dict[str, Any] = {
+            "tool_requirements": [],
+            "plugin_candidates": [],
+            "requires_human_gate": False,
+            "requires_resumability": False,
+            "requires_parallel_execution": False,
+            "agent_delegation": False,
+            "max_steps": 10,
+            "time_budget_ms": 30000,
+            "token_budget": 4096,
+            "reasoning_depth": "standard",
+            "risk_signals": [],
+            "filesystem_write": False,
+            "network_access": False,
+            "system_command": False,
+        }
+
+        intent = getattr(analysis.intent, "primary_intent", None)
+        intent_value = intent.value if intent else "general_assist"
+        sentiment = getattr(analysis.sentiment, "primary_sentiment", None)
+        sentiment_value = sentiment.value if sentiment else "neutral"
+
+        graph_intents = {
+            "debug_error", "architecture_design", "deployment_help",
+            "code_review", "research_agent", "multi_agent"
+        }
+        if intent_value in graph_intents:
+            topology["tool_requirements"] = ["search", "repo_read"]
+            topology["requires_resumability"] = True
+
+        if intent_value == "deployment_help":
+            topology["system_command"] = True
+            topology["filesystem_write"] = True
+
+        if sentiment_value in {"urgent", "critical", "time_sensitive"}:
+            topology["requires_human_gate"] = True
+
+        if analysis.confidence < 0.5:
+            topology["requires_resumability"] = True
+            topology["reasoning_depth"] = "deep"
+
+        return topology
+
+    def _infer_capabilities_from_analysis(self, analysis) -> Dict[str, Any]:
+        """Infer capability requirements from analysis."""
+        capabilities: Dict[str, Any] = {"required": [], "forbidden": []}
+
+        intent = getattr(analysis.intent, "primary_intent", None)
+        intent_value = intent.value if intent else "general_assist"
+
+        write_intents = {"architecture_design", "deployment_help", "content_creation"}
+        if intent_value in write_intents:
+            capabilities["required"].append("write")
+
+        admin_intents = {"system_config", "feature_request"}
+        if intent_value in admin_intents:
+            capabilities["required"].append("admin")
+
+        return capabilities
+
+    def _infer_memory_policy_from_analysis(self, analysis) -> Dict[str, Any]:
+        """Infer memory recall/write policy from analysis."""
+        policy: Dict[str, Any] = {
+            "recall_required": False,
+            "write_denied": False,
+            "scope": "session",
+            "top_k": 10,
+            "classes": [],
+        }
+
+        intent = getattr(analysis.intent, "primary_intent", None)
+        intent_value = intent.value if intent else "general_assist"
+
+        memory_intents = {
+            "personal_advice", "learning_path", "tutorial_request",
+            "business_advice", "strategy_planning"
+        }
+        if intent_value in memory_intents:
+            policy["recall_required"] = True
+            policy["scope"] = "user"
+            policy["top_k"] = 15
+
+        if analysis.confidence < 0.3:
+            policy["recall_required"] = True
+
+        return policy
+
+    def _infer_workflow_from_analysis(self, analysis) -> Dict[str, Any]:
+        """Infer workflow requirements from analysis."""
+        workflow: Dict[str, Any] = {"required": False, "workflow_id": None}
+
+        intent = getattr(analysis.intent, "primary_intent", None)
+        intent_value = intent.value if intent else "general_assist"
+
+        workflow_map = {
+            "debug_error": "repo_debug",
+            "architecture_design": "architecture_planning",
+            "deployment_help": "deployment_pipeline",
+            "code_review": "code_review",
+        }
+        if intent_value in workflow_map:
+            workflow["required"] = True
+            workflow["workflow_id"] = workflow_map[intent_value]
+
+        return workflow
+
+    def _evaluate_topology_triggers(self, analysis: Dict[str, Any]) -> List[str]:
         """Return reason codes for execution-topology-based graph triggers."""
         triggers: List[str] = []
 
-        branching_required = bool(meta.get("branching_required", False))
-        iterative_reasoning = bool(meta.get("iterative_reasoning_required", False))
-        multiple_dependent_tools = bool(meta.get("multiple_dependent_tools", False))
-        durable_state_required = bool(meta.get("durable_state_required", False))
-        human_approval_required = bool(meta.get("human_approval_required", False))
-        agent_delegation = bool(meta.get("agent_delegation", False))
-        parallel_execution = bool(meta.get("parallel_execution", False))
-        resumability = bool(meta.get("resumability", False))
-        replanning_loop = bool(meta.get("replanning_loop", False))
-
-        if branching_required:
-            triggers.append("branching_required")
-        if iterative_reasoning:
-            triggers.append("iterative_reasoning_required")
-        if multiple_dependent_tools:
-            triggers.append("multiple_dependent_tools")
-        if durable_state_required:
-            triggers.append("durable_state_required")
-        if human_approval_required:
-            triggers.append("human_approval_required")
-        if agent_delegation:
-            triggers.append("agent_delegation")
-        if parallel_execution:
-            triggers.append("parallel_execution")
-        if resumability:
+        if analysis.get("requires_human_gate"):
+            triggers.append("human_gate_required")
+        if analysis.get("requires_resumability"):
             triggers.append("resumability")
-        if replanning_loop:
-            triggers.append("replanning_loop")
+        if analysis.get("requires_parallel_execution"):
+            triggers.append("parallel_execution")
+        if analysis.get("agent_delegation"):
+            triggers.append("agent_delegation")
+        if analysis.get("workflow_required"):
+            triggers.append("workflow_required")
+        if analysis.get("tool_requirements"):
+            triggers.append("tool_or_plugin_requirements")
+        if analysis.get("plugin_candidates"):
+            triggers.append("plugin_requirements")
 
         return triggers
 
     def _assess_risk_level(
         self,
-        meta: Dict[str, Any],
+        analysis: Dict[str, Any],
         tool_requirements: List[str],
         plugin_candidates: List[str],
     ) -> RiskLevel:
-        """Assess execution risk from request signals."""
-        explicit_risk = meta.get("risk_level")
+        """Assess execution risk from analysis signals."""
+        explicit_risk = analysis.get("risk_level")
         if explicit_risk:
             try:
                 return RiskLevel(str(explicit_risk).lower())
@@ -209,13 +475,13 @@ class CortexExecutionDecider:
             risk_score += 1
         if plugin_candidates:
             risk_score += 2
-        if meta.get("requires_human_gate"):
+        if analysis.get("requires_human_gate"):
             risk_score += 2
-        if meta.get("filesystem_write"):
+        if analysis.get("filesystem_write"):
             risk_score += 2
-        if meta.get("network_access"):
+        if analysis.get("network_access"):
             risk_score += 1
-        if meta.get("system_command"):
+        if analysis.get("system_command"):
             risk_score += 3
 
         if risk_score >= 5:
@@ -226,39 +492,85 @@ class CortexExecutionDecider:
             return RiskLevel.MEDIUM
         return RiskLevel.LOW
 
-    def _check_capability_policy(
+    def _evaluate_rbac_policy(
         self,
+        user_id: str,
+        tenant_id: str,
+        roles: List[str],
+        permissions: List[str],
         required_capabilities: List[str],
         forbidden_capabilities: List[str],
-        policy_constraints: Dict[str, Any],
+        risk_level: RiskLevel,
+        tool_requirements: List[str],
+        plugin_candidates: List[str],
     ) -> Dict[str, Any]:
-        """Fail-closed capability/policy check.
+        """Trusted RBAC/policy evaluation using authenticated context.
+
+        This never reads policy from caller metadata. It uses only the
+        trusted authenticated context passed through ChatExecutionContext.
 
         Returns:
-            Dict with 'allowed' bool and 'reason' string.
+            Dict with 'allowed', 'reason', 'decision_id', 'policy_version',
+            'reason_codes', 'allowed_capabilities', 'forbidden_capabilities'.
         """
-        if not required_capabilities and not forbidden_capabilities and not policy_constraints:
-            return {"allowed": True, "reason": "no_constraints"}
+        decision_id = f"policy-{tenant_id}-{user_id}-{int(time.time() * 1000)}"
+        policy_version = "v1"
 
-        effective_forbidden = set(
-            policy_constraints.get("forbidden_capabilities", []) + forbidden_capabilities
-        )
-        for cap in required_capabilities:
-            if cap in effective_forbidden:
-                return {
-                    "allowed": False,
-                    "reason": f"required capability '{cap}' is forbidden by policy",
-                }
-
-        # If policy checker is unavailable, fail closed.
-        policy_checker = policy_constraints.get("_policy_checker")
-        if policy_checker is None and policy_constraints.get("require_policy_checker"):
+        if not user_id or not tenant_id:
             return {
                 "allowed": False,
-                "reason": "policy checker unavailable; failing closed",
+                "reason": "missing_authenticated_context",
+                "decision_id": decision_id,
+                "policy_version": policy_version,
+                "reason_codes": ["missing_identity"],
+                "allowed_capabilities": [],
+                "forbidden_capabilities": ["all"],
             }
 
-        return {"allowed": True, "reason": "policy_check_passed"}
+        forbidden = set(forbidden_capabilities)
+        for cap in required_capabilities:
+            if cap in forbidden:
+                return {
+                    "allowed": False,
+                    "reason": f"required capability '{cap}' is forbidden",
+                    "decision_id": decision_id,
+                    "policy_version": policy_version,
+                    "reason_codes": ["capability_conflict"],
+                    "allowed_capabilities": [],
+                    "forbidden_capabilities": list(forbidden),
+                }
+
+        if risk_level == RiskLevel.CRITICAL and "admin" not in permissions:
+            return {
+                "allowed": False,
+                "reason": "critical risk requires admin permission",
+                "decision_id": decision_id,
+                "policy_version": policy_version,
+                "reason_codes": ["insufficient_permission"],
+                "allowed_capabilities": [],
+                "forbidden_capabilities": ["admin", "write", "delete"],
+            }
+
+        if tool_requirements and "admin" not in permissions and risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL):
+            return {
+                "allowed": False,
+                "reason": "tool execution at high/critical risk requires admin permission",
+                "decision_id": decision_id,
+                "policy_version": policy_version,
+                "reason_codes": ["tool_risk_denied"],
+                "allowed_capabilities": [],
+                "forbidden_capabilities": list(set(forbidden) | set(tool_requirements)),
+            }
+
+        return {
+            "allowed": True,
+            "reason": "policy_check_passed",
+            "decision_id": decision_id,
+            "policy_version": policy_version,
+            "reason_codes": ["authenticated", "policy_allowed"],
+            "allowed_capabilities": list(required_capabilities),
+            "forbidden_capabilities": list(forbidden),
+        }
 
     def cortex_never_executes(self) -> bool:
         """CORTEX decides but never executes providers, plugins, tools, memory, or LangGraph."""

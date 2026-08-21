@@ -69,14 +69,14 @@ class ChatRuntime:
         decision = await self._decide(request)
 
         memory_recall_meta: Dict[str, Any] = {}
-        if decision.memory_required:
+        if decision.memory_recall_required:
             memory_recall_meta = await self._recall_memory(request, decision)
 
         try:
             if decision.is_graph_required:
-                text, provider_meta = await self._run_graph(request)
+                text, provider_meta = await self._run_graph(request, decision)
             else:
-                text, provider_meta = await self._run_simple(request)
+                text, provider_meta = await self._run_simple(request, decision)
         except Exception as exc:
             logger.error(
                 "ChatRuntime.execute failed, attempting fallback: %s",
@@ -92,10 +92,11 @@ class ChatRuntime:
                 correlation_id=ctx.correlation_id,
                 conversation_id=conversation_id,
                 start_time=start,
+                decision=decision,
             )
             if fallback is not None and fallback.answer:
-                await self._persist_memory(request, fallback.answer, memory_recall_meta)
-                return fallback
+                await self._persist_memory(request, fallback.answer, memory_recall_meta, decision)
+                return self._build_result(request, decision, provider_meta or {}, start, memory_recall_meta, fallback.answer)
             return ChatExecutionResult(
                 answer="",
                 status=ChatExecutionStatus.ERROR,
@@ -108,23 +109,10 @@ class ChatRuntime:
                 ),
             )
 
+        await self._persist_memory(request, text, memory_recall_meta, decision)
+
         latency_ms = (time.time() - start) * 1000.0
-        metadata = self._build_metadata(request, decision, provider_meta, latency_ms, memory_recall_meta)
-
-        status = (
-            ChatExecutionStatus.DEGRADED
-            if metadata.degraded_mode or memory_recall_meta.get("memory_degraded")
-            else ChatExecutionStatus.OK
-        )
-
-        await self._persist_memory(request, text, memory_recall_meta)
-
-        return ChatExecutionResult(
-            answer=text,
-            status=status,
-            metadata=metadata,
-            structured_content=dict(provider_meta.get("structured_content") or {}),
-        )
+        return self._build_result(request, decision, provider_meta, start, memory_recall_meta, text, latency_ms)
 
     async def execute_stream(
         self, request: ChatExecutionRequest
@@ -144,23 +132,23 @@ class ChatRuntime:
         decision = await self._decide(request)
 
         memory_recall_meta: Dict[str, Any] = {}
-        if decision.memory_required:
+        if decision.memory_recall_required:
             memory_recall_meta = await self._recall_memory(request, decision)
 
         streamed_text = ""
         gen = (
-            self._run_graph_stream(request)
+            self._run_graph_stream(request, decision)
             if decision.is_graph_required
-            else self._run_simple_stream(request)
+            else self._run_simple_stream(request, decision)
         )
         async for chunk in gen:
             if chunk.type == "content":
-                streamed_text = chunk.content
+                streamed_text += chunk.content
             yield chunk
 
-        if decision.memory_required and memory_recall_meta.get("memory_persistence_status") != "persisted":
+        if decision.memory_recall_required and decision.memory_write_allowed:
             try:
-                await self._persist_memory(request, streamed_text, memory_recall_meta)
+                await self._persist_memory(request, streamed_text, memory_recall_meta, decision)
             except Exception as exc:
                 logger.warning("Streaming memory persistence failed: %s", exc)
 
@@ -172,9 +160,7 @@ class ChatRuntime:
         self, request: ChatExecutionRequest, decision: ExecutionDecision
     ) -> Dict[str, Any]:
         ctx = request.context
-        user_message = ""
-        if request.messages:
-            user_message = request.messages[-1].get("content", "")
+        user_message = self._extract_user_message(request.messages)
 
         meta: Dict[str, Any] = {
             "memory_recall_status": "skipped",
@@ -194,7 +180,7 @@ class ChatRuntime:
                 user_id=ctx.user_id,
                 tenant_id=ctx.tenant_id,
                 query=user_message,
-                top_k=10,
+                top_k=decision.memory_top_k,
                 session_id=ctx.session_id,
                 conversation_id=ctx.conversation_id,
                 correlation_id=ctx.correlation_id,
@@ -233,8 +219,14 @@ class ChatRuntime:
         request: ChatExecutionRequest,
         response_text: str,
         memory_recall_meta: Dict[str, Any],
+        decision: ExecutionDecision,
     ) -> None:
+        if not decision.memory_write_allowed:
+            memory_recall_meta["memory_persistence_status"] = "denied_by_policy"
+            return
+
         if memory_recall_meta.get("memory_degraded") and memory_recall_meta.get("memory_recall_status") == "failed":
+            memory_recall_meta["memory_persistence_status"] = "skipped_degraded_recall"
             return
 
         ctx = request.context
@@ -242,16 +234,14 @@ class ChatRuntime:
             from ai_karen_engine.core.memory import get_memory_manager
 
             mem = get_memory_manager()
-            user_message = ""
-            if request.messages:
-                user_message = request.messages[-1].get("content", "")
+            user_message = self._extract_user_message(request.messages)
 
             if user_message.strip():
                 await mem.process_interaction(
                     text=user_message,
                     tenant_id=ctx.tenant_id,
                     user_id=ctx.user_id,
-                    source_type="chat",
+                    source_type="chat_user",
                     source_ref=ctx.conversation_id or ctx.session_id,
                     metadata={
                         "correlation_id": ctx.correlation_id,
@@ -259,15 +249,16 @@ class ChatRuntime:
                         "conversation_id": ctx.conversation_id,
                         "request_id": ctx.request_id,
                         "response_length": len(response_text or ""),
+                        "memory_actor": "user",
                     },
                 )
 
-            if response_text.strip():
+            if response_text.strip() and decision.memory_write_allowed:
                 await mem.process_interaction(
                     text=response_text,
                     tenant_id=ctx.tenant_id,
                     user_id=ctx.user_id,
-                    source_type="chat_response",
+                    source_type="chat_assistant",
                     source_ref=ctx.conversation_id or ctx.session_id,
                     metadata={
                         "correlation_id": ctx.correlation_id,
@@ -275,6 +266,8 @@ class ChatRuntime:
                         "conversation_id": ctx.conversation_id,
                         "request_id": ctx.request_id,
                         "is_assistant": True,
+                        "memory_actor": "assistant",
+                        "memory_promotion_eligible": False,
                     },
                 )
 
@@ -294,7 +287,7 @@ class ChatRuntime:
         return await get_cortex_execution_decider().decide(request)
 
     async def _run_simple(
-        self, request: ChatExecutionRequest
+        self, request: ChatExecutionRequest, decision: ExecutionDecision
     ) -> Tuple[str, Dict[str, Any]]:
         """Simple conversational path: CORTEX -> ExpressionGateway."""
         ctx = request.context
@@ -302,20 +295,21 @@ class ChatRuntime:
         task = ExpressionTask(
             task_id=f"expr_{ctx.correlation_id}",
             kind="chat",
-            messages=request.messages,
+            messages=self._assemble_prompt(request, decision),
             response_mode="text",
-            required_capabilities=[],
-            forbidden_capabilities=[],
+            required_capabilities=list(decision.required_capabilities),
+            forbidden_capabilities=list(decision.forbidden_capabilities),
             preferred_provider=request.preferred_provider,
             preferred_model=request.preferred_model,
-            max_tokens=request.max_tokens,
+            max_tokens=request.max_tokens or decision.token_budget,
             temperature=request.temperature,
-            timeout_ms=30000,
+            timeout_ms=decision.time_budget_ms,
             correlation_id=ctx.correlation_id,
             request_id=ctx.request_id,
             metadata={
                 "transport": request.metadata.get("transport", "runtime"),
                 "execution_mode": "direct",
+                "reasoning_depth": decision.reasoning_depth,
                 "memory_context": (ctx.metadata or {}).get("memory_context", {}),
             },
         )
@@ -335,11 +329,11 @@ class ChatRuntime:
         return result.text, normalized
 
     async def _run_simple_stream(
-        self, request: ChatExecutionRequest
+        self, request: ChatExecutionRequest, decision: ExecutionDecision
     ) -> AsyncIterator[ChatStreamChunk]:
         ctx = request.context
         try:
-            text, normalized = await self._run_simple(request)
+            text, normalized = await self._run_simple(request, decision)
             yield ChatStreamChunk(
                 type="content",
                 content=text,
@@ -375,21 +369,101 @@ class ChatRuntime:
             )
 
     async def _run_graph(
-        self, request: ChatExecutionRequest
+        self, request: ChatExecutionRequest, decision: ExecutionDecision
     ) -> Tuple[str, Dict[str, Any]]:
         """Graph-required path: routed exclusively through WorkflowRuntime."""
-        text, response_metadata = await get_workflow_runtime().run(request)
+        text, response_metadata = await get_workflow_runtime().run(request, decision)
         return text, self._normalize_graph_meta(response_metadata, request)
 
     async def _run_graph_stream(
-        self, request: ChatExecutionRequest
+        self, request: ChatExecutionRequest, decision: ExecutionDecision
     ) -> AsyncIterator[ChatStreamChunk]:
-        async for chunk in get_workflow_runtime().stream(request):
+        async for chunk in get_workflow_runtime().stream(request, decision):
             yield chunk
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _assemble_prompt(
+        self, request: ChatExecutionRequest, decision: ExecutionDecision
+    ) -> List[Dict[str, Any]]:
+        """Assemble prompt with memory context integrated into messages.
+
+        Memory recall is injected as a system-level context message when
+        available. The model receives controlled memory context, not raw
+        memory dumps.
+        """
+        messages = [dict(msg) for msg in request.messages]
+        ctx = request.context
+        memory_context = (ctx.metadata or {}).get("memory_context", {})
+        recall_items = memory_context.get("recall", [])
+
+        if recall_items and decision.memory_recall_required:
+            memory_lines = []
+            for item in recall_items[:3]:
+                content = item.get("content", "")
+                if content:
+                    memory_lines.append(f"[Memory: {content}]")
+
+            if memory_lines:
+                memory_block = "\n".join(memory_lines)
+                system_msg = {
+                    "role": "system",
+                    "content": (
+                        "Relevant context from memory (use only if helpful):\n"
+                        f"{memory_block}\n"
+                        "Answer the user's last message using this context when appropriate."
+                    ),
+                }
+                if messages and messages[0].get("role") == "system":
+                    messages[0] = system_msg
+                else:
+                    messages.insert(0, system_msg)
+
+        return messages
+
+    def _extract_user_message(self, messages: List[Dict[str, Any]]) -> str:
+        """Extract the latest user message."""
+        if not messages:
+            return ""
+        for msg in reversed(messages):
+            role = str(msg.get("role", "")).lower()
+            if role == "user":
+                return str(msg.get("content", ""))
+        return str(messages[-1].get("content", ""))
+
+    def _build_result(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        normalized: Dict[str, Any],
+        start: float,
+        memory_meta: Dict[str, Any],
+        text: str,
+        latency_ms: Optional[float] = None,
+    ) -> ChatExecutionResult:
+        ctx = request.context
+        conversation_id = ctx.conversation_id or normalize_chat_session_id(
+            ctx.session_id
+        )
+        if latency_ms is None:
+            latency_ms = (time.time() - start) * 1000.0
+
+        md = self._build_metadata(request, decision, normalized, latency_ms, memory_meta)
+
+        status = ChatExecutionStatus.OK
+        if md.degraded_mode or memory_meta.get("memory_degraded"):
+            status = ChatExecutionStatus.DEGRADED
+        if normalized.get("degradation_reason") and "all_execution_paths_failed" in str(normalized.get("degradation_reason")):
+            status = ChatExecutionStatus.ERROR
+
+        return ChatExecutionResult(
+            answer=text,
+            status=status,
+            metadata=md,
+            structured_content=dict(normalized.get("structured_content") or {}),
+        )
 
     def _normalize_graph_meta(
         self, response_metadata: Dict[str, Any], request: ChatExecutionRequest

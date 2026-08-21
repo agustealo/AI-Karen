@@ -319,8 +319,11 @@ def test_execution_decision_contract_expanded():
         intent_confidence=0.92,
         risk_level=RiskLevel.MEDIUM,
         reasoning_depth="deep",
-        memory_required=True,
+        memory_recall_required=True,
+        memory_write_allowed=True,
         memory_scope="session",
+        memory_top_k=10,
+        memory_classes=[],
         tool_requirements=["search_logs"],
         plugin_candidates=[],
         required_capabilities=["read"],
@@ -332,6 +335,11 @@ def test_execution_decision_contract_expanded():
         max_steps=5,
         time_budget_ms=15000,
         token_budget=2048,
+        workflow_id="repo_debug",
+        workflow_version="v1",
+        policy_decision_id="policy-123",
+        policy_version="v1",
+        policy_reason_codes=["authenticated"],
         reason_codes=["tool_or_plugin_requirements"],
         policy_constraints={"tenant": "acme"},
     )
@@ -343,6 +351,9 @@ def test_execution_decision_contract_expanded():
     assert d.forbidden_capabilities == ["write"]
     assert d.max_steps == 5
     assert d.token_budget == 2048
+    assert d.workflow_id == "repo_debug"
+    assert d.policy_decision_id == "policy-123"
+    assert d.memory_required is True
 
 
 def test_simple_chat_is_direct():
@@ -358,16 +369,17 @@ def test_simple_chat_is_direct():
 def test_complex_tool_chain_requires_graph():
     decider = CortexExecutionDecider()
     decision = asyncio.get_event_loop().run_until_complete(
-        decider.decide(_make_request(metadata={"tool_requirements": ["search", "repo_read"]}))
+        decider.decide(_make_request(messages=[{"content": "Debug this error in my repository", "message_type": "user"}]))
     )
     assert decision.graph_required is True
     assert "tool_or_plugin_requirements" in decision.reason_codes
+    assert decision.tool_requirements
 
 
 def test_topic_does_not_force_graph():
     decider = CortexExecutionDecider()
     decision = asyncio.get_event_loop().run_until_complete(
-        decider.decide(_make_request(metadata={"intent": "travel_planning"}))
+        decider.decide(_make_request(messages=[{"content": "Hello, how are you today?", "message_type": "user"}]))
     )
     assert decision.graph_required is False
     assert decision.execution_mode == RuntimeExecutionMode.DIRECT
@@ -376,7 +388,7 @@ def test_topic_does_not_force_graph():
 def test_human_gate_requires_graph():
     decider = CortexExecutionDecider()
     decision = asyncio.get_event_loop().run_until_complete(
-        decider.decide(_make_request(metadata={"requires_human_gate": True}))
+        decider.decide(_make_request(messages=[{"content": "URGENT: critical system failure! Fix immediately!", "message_type": "user"}]))
     )
     assert decision.graph_required is True
     assert "human_gate_required" in decision.reason_codes
@@ -386,20 +398,17 @@ def test_human_gate_requires_graph():
 def test_agent_delegation_requires_graph():
     decider = CortexExecutionDecider()
     decision = asyncio.get_event_loop().run_until_complete(
-        decider.decide(_make_request(metadata={"agent_delegation": True}))
+        decider.decide(_make_request(messages=[{"content": "Deploy this application to production with monitoring", "message_type": "user"}]))
     )
     assert decision.graph_required is True
-    assert "agent_delegation" in decision.reason_codes
+    assert "workflow_required" in decision.reason_codes or "tool_or_plugin_requirements" in decision.reason_codes
     assert decision.requires_agent_delegation is True
 
 
 def test_policy_failure_denies_privileged_execution():
     decider = CortexExecutionDecider()
     decision = asyncio.get_event_loop().run_until_complete(
-        decider.decide(_make_request(metadata={
-            "required_capabilities": ["admin"],
-            "policy_constraints": {"forbidden_capabilities": ["admin"]},
-        }))
+        decider.decide(_make_request(messages=[{"content": "Deploy the application to production and run database migrations", "message_type": "user"}]))
     )
     assert decision.execution_mode == RuntimeExecutionMode.DEGRADED
     assert "policy_denied" in decision.reason_codes
@@ -436,7 +445,7 @@ def test_direct_chat_calls_memory_runtime_when_required():
 
     async def _run():
         rt = ChatRuntime()
-        request = _make_request(metadata={"memory_required": True, "tool_requirements": []})
+        request = _make_request(metadata={"memory_recall_required": True, "tool_requirements": []})
         with patch(
             "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
             new=AsyncMock(return_value=_FakeCP()),
@@ -445,7 +454,7 @@ def test_direct_chat_calls_memory_runtime_when_required():
             new=lambda: _FakeDecider(ExecutionDecision(
                 execution_mode=RuntimeExecutionMode.DIRECT,
                 graph_required=False,
-                memory_required=True,
+                memory_recall_required=True,
             )),
         ), patch(
             "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
@@ -468,7 +477,7 @@ def test_memory_failure_marks_degradation():
 
     async def _run():
         rt = ChatRuntime()
-        request = _make_request(metadata={"memory_required": True, "tool_requirements": []})
+        request = _make_request(metadata={"memory_recall_required": True, "tool_requirements": []})
         with patch(
             "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
             new=AsyncMock(return_value=_FakeCP()),
@@ -477,7 +486,7 @@ def test_memory_failure_marks_degradation():
             new=lambda: _FakeDecider(ExecutionDecision(
                 execution_mode=RuntimeExecutionMode.DIRECT,
                 graph_required=False,
-                memory_required=True,
+                memory_recall_required=True,
             )),
         ), patch(
             "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
@@ -500,7 +509,7 @@ def test_memory_disabled_skips_recall_honestly():
 
     async def _run():
         rt = ChatRuntime()
-        request = _make_request(metadata={"memory_required": False, "tool_requirements": []})
+        request = _make_request(metadata={"memory_recall_required": False, "tool_requirements": []})
         with patch(
             "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
             new=AsyncMock(return_value=_FakeCP()),
@@ -509,7 +518,7 @@ def test_memory_disabled_skips_recall_honestly():
             new=lambda: _FakeDecider(ExecutionDecision(
                 execution_mode=RuntimeExecutionMode.DIRECT,
                 graph_required=False,
-                memory_required=False,
+                memory_recall_required=False,
             )),
         ), patch(
             "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
@@ -523,5 +532,219 @@ def test_memory_disabled_skips_recall_honestly():
             result = await rt.execute(request)
             assert not instance.recall_context.called
             assert not instance.process_interaction.called
+
+    asyncio.get_event_loop().run_until_complete(_run())
+
+
+# ----------------------------------------------------------------------
+# RC1.4 semantic contract tests
+# ----------------------------------------------------------------------
+
+
+def test_graph_can_require_memory():
+    decider = CortexExecutionDecider()
+    decision = asyncio.get_event_loop().run_until_complete(
+        decider.decide(_make_request(metadata={
+            "graph_required": True,
+            "memory_recall_required": True,
+        }))
+    )
+    assert decision.graph_required is True
+    assert decision.memory_recall_required is True
+    assert decision.execution_mode == RuntimeExecutionMode.GRAPH
+
+
+def test_stream_accumulates_all_content():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    class _ChunkedGateway:
+        async def generate(self, task):
+            return _fake_expression_result(text="full text")
+
+    async def _run():
+        rt = ChatRuntime()
+        request = _make_request()
+        chunks = []
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+            new=AsyncMock(return_value=_FakeCP()),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
+            new=lambda: _FakeDecider(ExecutionDecision(
+                execution_mode=RuntimeExecutionMode.DIRECT,
+                graph_required=False,
+            )),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
+            new=_ChunkedGateway,
+        ), patch(
+            "ai_karen_engine.core.memory.get_memory_manager",
+        ) as mock_mem:
+            instance = mock_mem.return_value
+            instance.recall_context = AsyncMock(return_value={"results": [], "status": "success"})
+            instance.process_interaction = AsyncMock()
+            async for chunk in rt.execute_stream(request):
+                chunks.append(chunk)
+        content_chunks = [c for c in chunks if c.type == "content"]
+        assert len(content_chunks) == 1
+        assert content_chunks[0].content == "full text"
+
+    asyncio.get_event_loop().run_until_complete(_run())
+
+
+def test_persistence_failure_visible_in_result():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    async def _run():
+        rt = ChatRuntime()
+        request = _make_request()
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+            new=AsyncMock(return_value=_FakeCP()),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
+            new=lambda: _FakeDecider(ExecutionDecision(
+                execution_mode=RuntimeExecutionMode.DIRECT,
+                graph_required=False,
+                memory_recall_required=True,
+                memory_write_allowed=True,
+            )),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
+            new=_FakeGateway,
+        ), patch(
+            "ai_karen_engine.core.memory.get_memory_manager",
+        ) as mock_mem:
+            instance = mock_mem.return_value
+            instance.recall_context = AsyncMock(return_value={"results": [], "status": "success"})
+            instance.process_interaction = AsyncMock(side_effect=RuntimeError("db down"))
+            result = await rt.execute(request)
+            assert result.status == ChatExecutionStatus.OK
+            assert result.metadata.extra.get("memory_persistence_status") == "failed"
+            assert result.metadata.extra.get("memory_degraded") is True
+
+    asyncio.get_event_loop().run_until_complete(_run())
+
+
+def test_required_capabilities_reach_gateway():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    async def _run():
+        rt = ChatRuntime()
+        request = _make_request()
+        captured: Dict[str, Any] = {}
+
+        class _CapturingGateway:
+            async def generate(self, task):
+                captured["required_capabilities"] = list(task.required_capabilities)
+                captured["forbidden_capabilities"] = list(task.forbidden_capabilities)
+                captured["timeout_ms"] = task.timeout_ms
+                captured["max_tokens"] = task.max_tokens
+                return _fake_expression_result()
+
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+            new=AsyncMock(return_value=_FakeCP()),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
+            new=lambda: _FakeDecider(ExecutionDecision(
+                execution_mode=RuntimeExecutionMode.DIRECT,
+                graph_required=False,
+                required_capabilities=["admin", "write"],
+                forbidden_capabilities=["delete"],
+                token_budget=2048,
+                time_budget_ms=5000,
+            )),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
+            new=_CapturingGateway,
+        ), patch(
+            "ai_karen_engine.core.memory.get_memory_manager",
+        ) as mock_mem:
+            instance = mock_mem.return_value
+            instance.recall_context = AsyncMock(return_value={"results": [], "status": "success"})
+            instance.process_interaction = AsyncMock()
+            await rt.execute(request)
+
+        assert captured["required_capabilities"] == ["admin", "write"]
+        assert captured["forbidden_capabilities"] == ["delete"]
+        assert captured["timeout_ms"] == 5000
+        assert captured["max_tokens"] == 2048
+
+    asyncio.get_event_loop().run_until_complete(_run())
+
+
+def test_memory_write_denied_blocks_persistence():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    async def _run():
+        rt = ChatRuntime()
+        request = _make_request()
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+            new=AsyncMock(return_value=_FakeCP()),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
+            new=lambda: _FakeDecider(ExecutionDecision(
+                execution_mode=RuntimeExecutionMode.DIRECT,
+                graph_required=False,
+                memory_recall_required=True,
+                memory_write_allowed=False,
+            )),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
+            new=_FakeGateway,
+        ), patch(
+            "ai_karen_engine.core.memory.get_memory_manager",
+        ) as mock_mem:
+            instance = mock_mem.return_value
+            instance.recall_context = AsyncMock(return_value={"results": [], "status": "success"})
+            instance.process_interaction = AsyncMock()
+            result = await rt.execute(request)
+            assert instance.recall_context.called
+            assert not instance.process_interaction.called
+            assert result.metadata.extra.get("memory_persistence_status") == "denied_by_policy"
+
+    asyncio.get_event_loop().run_until_complete(_run())
+
+
+def test_assistant_output_not_promoted_to_user_fact_by_default():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    async def _run():
+        rt = ChatRuntime()
+        request = _make_request()
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+            new=AsyncMock(return_value=_FakeCP()),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
+            new=lambda: _FakeDecider(ExecutionDecision(
+                execution_mode=RuntimeExecutionMode.DIRECT,
+                graph_required=False,
+                memory_recall_required=True,
+                memory_write_allowed=True,
+            )),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
+            new=_FakeGateway,
+        ), patch(
+            "ai_karen_engine.core.memory.get_memory_manager",
+        ) as mock_mem:
+            instance = mock_mem.return_value
+            instance.recall_context = AsyncMock(return_value={"results": [], "status": "success"})
+
+            async def capture_process(text, **kwargs):
+                capture_process.calls.append(kwargs)
+                return {}
+            capture_process.calls = []
+            instance.process_interaction = capture_process
+
+            await rt.execute(request)
+
+            assert len(capture_process.calls) >= 1
+            assistant_calls = [c for c in capture_process.calls if c.get("metadata", {}).get("memory_actor") == "assistant"]
+            for call in assistant_calls:
+                assert call.get("metadata", {}).get("memory_promotion_eligible") is False
 
     asyncio.get_event_loop().run_until_complete(_run())
