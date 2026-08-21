@@ -1,14 +1,3 @@
-"""
-Backward-compatibility shim for CORTEX analysis classes.
-
-These classes were previously defined in this file under ``langgraph_orchestrator``.
-They now live in ``core.cortex.analysis`` because intent/sentiment/entity analysis
-is a CORTEX responsibility, not a LangGraph workflow concern.
-
-This module re-exports the public surface so existing import paths continue to
-work during the RC1.3 migration.
-"""
-
 from __future__ import annotations
 
 from ai_karen_engine.core.cortex.analysis.spacy_analyzer import (

@@ -1,12 +1,14 @@
 """
 Service Registry and Dependency Injection for AI Karen Engine Integration.
 
-This module provides centralized service management and dependency injection
-for integrating the new Python backend services with the existing AI Karen engine.
+This module provides centralized service management and dependency injection.
 
-Enhanced with graceful dependency handling, metrics deduplication, and comprehensive
-health monitoring to prevent service initialization warnings.
+Architecture note: missing service imports must fail honestly. No dummy
+fallback implementations are created. Missing services are reported as
+DEPENDENCY_UNAVAILABLE or UNREGISTERED.
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -32,287 +34,6 @@ from enum import Enum
 logger = logging.getLogger(__name__)
 
 
-# Import service classes dynamically to avoid type conflicts
-def _get_service_classes():
-    """Get service classes dynamically to avoid type conflicts."""
-    classes = {}
-    try:
-        # Import from canonical ai_karen_engine package locations
-        logger.info("🔍 DEBUG: Attempting to import service classes...")
-        try:
-            classes["AIOrchestrator"] = __import__(
-                "ai_karen_engine.core.langgraph_orchestrator",
-                fromlist=["LangGraphOrchestrator"],
-            ).LangGraphOrchestrator
-            logger.info("✅ AIOrchestrator (LangGraph) imported successfully")
-        except Exception as e:
-            logger.warning(f"AIOrchestrator import failed: {e}")
-            classes["AIOrchestrator"] = None
-
-        try:
-            classes["WebUIMemoryService"] = __import__(
-                "ai_karen_engine.core.memory.memory_service", fromlist=["WebUIMemoryService"]
-            ).WebUIMemoryService
-            logger.info("✅ WebUIMemoryService imported successfully")
-        except Exception as e:
-            logger.warning(f"WebUIMemoryService import failed: {e}")
-            classes["WebUIMemoryService"] = None
-
-        try:
-            classes["UnifiedMemoryService"] = __import__(
-                "ai_karen_engine.core.memory.unified_memory_service",
-                fromlist=["UnifiedMemoryService"],
-            ).UnifiedMemoryService
-            logger.info("✅ UnifiedMemoryService imported successfully")
-        except Exception as e:
-            logger.warning(f"UnifiedMemoryService import failed: {e}")
-            classes["UnifiedMemoryService"] = None
-
-        try:
-            classes["ConversationService"] = __import__(
-                "ai_karen_engine.services.memory.conversation_service",
-                fromlist=["ConversationService"],
-            ).ConversationService
-            logger.info("✅ ConversationService imported successfully")
-        except Exception as e:
-            logger.warning(f"ConversationService import failed: {e}")
-            classes["ConversationService"] = None
-
-        try:
-            classes["PluginService"] = __import__(
-                "ai_karen_engine.services.plugin_service", fromlist=["PluginService"]
-            ).PluginService
-            logger.info("✅ PluginService imported successfully")
-        except Exception as e:
-            logger.warning(f"PluginService import failed: {e}")
-            classes["PluginService"] = None
-
-        try:
-            classes["ToolService"] = __import__(
-                "ai_karen_engine.services.tooling.tool_service", fromlist=["ToolService"]
-            ).ToolService
-            logger.info("✅ ToolService imported successfully")
-        except Exception as e:
-            logger.warning(f"ToolService import failed: {e}")
-            classes["ToolService"] = None
-
-        try:
-            classes["AnalyticsService"] = __import__(
-                "ai_karen_engine.services.monitoring.analytics_service",
-                fromlist=["AnalyticsService"],
-            ).AnalyticsService
-            logger.info("✅ AnalyticsService imported successfully")
-        except Exception as e:
-            logger.warning(f"AnalyticsService import failed: {e}")
-            classes["AnalyticsService"] = None
-
-        try:
-            classes["PerformanceAdaptiveRouter"] = __import__(
-                "ai_karen_engine.integrations.performance_adaptive_router",
-                fromlist=["PerformanceAdaptiveRouter"],
-            ).PerformanceAdaptiveRouter
-            logger.info("✅ PerformanceAdaptiveRouter imported successfully")
-        except Exception as e:
-            logger.warning(f"PerformanceAdaptiveRouter import failed: {e}")
-            classes["PerformanceAdaptiveRouter"] = None
-    except ImportError as e:
-        logger.warning(f"Some service imports failed: {e}")
-
-        # Define dummy classes for missing services
-        class AIOrchestrator:
-            def __init__(self, config):
-                self.config = config
-
-            async def initialize(self):
-                pass
-
-            def load_config(self):
-                return {"environment": "fallback", "debug": True}
-
-        class WebUIMemoryService:
-            def __init__(self, memory_manager):
-                self.memory_manager = memory_manager
-
-            async def initialize(self):
-                pass
-
-            def load_config(self):
-                return {"environment": "fallback", "debug": True}
-
-        class UnifiedMemoryService:
-            def __init__(self):
-                pass
-
-            async def initialize(self):
-                pass
-
-            def load_config(self):
-                return {"environment": "fallback", "debug": True}
-
-        class ConversationService:
-            def __init__(self, conversation_manager, memory_service):
-                self.conversation_manager = conversation_manager
-                self.memory_service = memory_service
-
-            async def initialize(self):
-                pass
-
-            def load_config(self):
-                return {"environment": "fallback", "debug": True}
-
-        class PluginService:
-            def __init__(self, marketplace_path, core_plugins_path):
-                self.marketplace_path = marketplace_path
-                self.core_plugins_path = core_plugins_path
-
-            async def initialize(self):
-                pass
-
-            def load_config(self):
-                return {"environment": "fallback", "debug": True}
-
-        class ToolService:
-            def __init__(self, config):
-                self.config = config
-
-            async def initialize(self):
-                pass
-
-            def load_config(self):
-                return {"environment": "fallback", "debug": True}
-
-        class AnalyticsService:
-            def __init__(self, config):
-                self.config = config
-
-            async def initialize(self):
-                pass
-
-            def load_config(self):
-                return {"environment": "fallback", "debug": True}
-
-        class PerformanceAdaptiveRouter:
-            def __init__(self, config=None):
-                self.config = config
-                self.initialized = False
-
-            async def initialize(self):
-                self.initialized = True
-                pass
-
-            def load_config(self):
-                return {"environment": "fallback", "debug": True}
-
-            async def start_monitoring(self):
-                pass
-
-            async def route_request(self, request_data):
-                return {"provider": "fallback", "confidence": 0.5}
-
-            async def record_performance(self, provider, metrics):
-                pass
-
-            def get_performance_metrics(self):
-                return {}
-
-            async def health_check(self):
-                return {"status": "healthy", "mode": "fallback"}
-
-        classes["AIOrchestrator"] = AIOrchestrator
-        classes["WebUIMemoryService"] = WebUIMemoryService
-        classes["UnifiedMemoryService"] = UnifiedMemoryService
-        classes["ConversationService"] = ConversationService
-        classes["PluginService"] = PluginService
-        classes["ToolService"] = ToolService
-        classes["AnalyticsService"] = AnalyticsService
-        classes["PerformanceAdaptiveRouter"] = PerformanceAdaptiveRouter
-
-    try:
-        classes["ConversationManager"] = __import__(
-            "ai_karen_engine.database.conversation_manager",
-            fromlist=["ConversationManager"],
-        ).ConversationManager
-        logger.info("✅ ConversationManager imported successfully")
-    except ImportError as e:
-        logger.warning(f"ConversationManager import failed: {e}")
-        # Try to import from the new location
-        try:
-            classes["ConversationManager"] = __import__(
-                "ai_karen_engine.chat.conversation_manager",
-                fromlist=["ConversationManager"],
-            ).ConversationManager
-            logger.info(
-                "✅ ConversationManager imported from new location successfully"
-            )
-        except ImportError as e2:
-            logger.warning(f"ConversationManager import from new location failed: {e2}")
-
-            class ConversationManager:
-                def __init__(self, db_client, memory_manager, embedding_manager):
-                    self.db_client = db_client
-                    self.memory_manager = memory_manager
-                    self.embedding_manager = embedding_manager
-
-                def load_config(self):
-                    return {"environment": "fallback", "debug": True}
-
-            classes["ConversationManager"] = ConversationManager
-
-    try:
-        classes["MultiTenantPostgresClient"] = __import__(
-            "ai_karen_engine.database.client", fromlist=["MultiTenantPostgresClient"]
-        ).MultiTenantPostgresClient
-        logger.info("✅ MultiTenantPostgresClient imported successfully")
-    except ImportError as e:
-        logger.warning(f"MultiTenantPostgresClient import failed: {e}")
-
-        class MultiTenantPostgresClient:
-            def __init__(self):
-                pass
-
-            def load_config(self):
-                return {"environment": "fallback", "debug": True}
-
-        classes["MultiTenantPostgresClient"] = MultiTenantPostgresClient
-
-    return classes
-
-
-# Get service classes
-_service_classes = _get_service_classes()
-
-
-# Make classes available at module level with proper type handling
-def _get_service_class(name: str):
-    """Get service class with proper type handling."""
-    service_class = _service_classes.get(name)
-    if service_class is None:
-        # Create a dummy class if the real one is not available
-        class DummyService:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            async def initialize(self):
-                pass
-
-            def load_config(self):
-                return {"environment": "fallback", "debug": True}
-
-        return DummyService
-    return service_class
-
-
-AIOrchestrator = _get_service_class("AIOrchestrator")
-WebUIMemoryService = _get_service_class("WebUIMemoryService")
-UnifiedMemoryService = _get_service_class("UnifiedMemoryService")
-ConversationService = _get_service_class("ConversationService")
-PluginService = _get_service_class("PluginService")
-ToolService = _get_service_class("ToolService")
-AnalyticsService = _get_service_class("AnalyticsService")
-PerformanceAdaptiveRouter = _get_service_class("PerformanceAdaptiveRouter")
-ConversationManager = _get_service_class("ConversationManager")
-MultiTenantPostgresClient = _get_service_class("MultiTenantPostgresClient")
-
 T = TypeVar("T")
 
 
@@ -323,8 +44,12 @@ class ServiceStatus(str, Enum):
     READY = "ready"
     ERROR = "error"
     STOPPED = "stopped"
-    DEGRADED = "degraded"  # Service running with missing dependencies
-    PENDING = "pending"  # Waiting for dependencies
+    DEGRADED = "degraded"
+    PENDING = "pending"
+    UNREGISTERED = "unregistered"
+    DISABLED = "disabled"
+    DEPENDENCY_UNAVAILABLE = "dependency_unavailable"
+    INITIALIZATION_FAILED = "initialization_failed"
 
 
 class DependencyStatus(str, Enum):

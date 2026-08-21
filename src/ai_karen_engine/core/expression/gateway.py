@@ -81,7 +81,7 @@ class ExpressionGateway:
         for level, engine_id in enumerate(sequence):
             # Resolve config
             cfg = self.settings.engines.get(engine_id)
-            logger.error(f"DEBUG: Gateway trying {engine_id}, cfg: {cfg}")
+            logger.debug("Gateway trying %s, cfg: %s", engine_id, cfg)
             
             if engine_id == "disabled":
                 # Emergency static is always enabled and fallback-eligible
@@ -119,7 +119,7 @@ class ExpressionGateway:
             
             try:
                 result = await engine.generate(task)
-                logger.error(f"DEBUG: Engine {engine_id} returned text: '{result.text}'")
+                logger.debug("Engine %s returned text: '%s'", engine_id, result.text)
                 
                 # Validate the generated output
                 has_text = bool(result.text and result.text.strip())

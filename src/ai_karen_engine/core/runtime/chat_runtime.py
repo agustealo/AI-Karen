@@ -17,6 +17,7 @@ from ai_karen_engine.core.runtime.cortex_execution_decider import (
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.core.runtime.workflow_runtime import get_workflow_runtime
+from ai_karen_engine.core.runtime.runtime_fallback import build_runtime_fallback
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     DegradedResponse,
     EmergencyFallbackResponse,
@@ -32,8 +33,6 @@ logger = get_logger(__name__)
 
 GATE_RESPONSES = (MaintenanceResponse, EmergencyFallbackResponse, DegradedResponse)
 
-# Canonical runtime metadata keys — these must never be overwritten by
-# arbitrary provider/extension metadata (RC1.2.6 hardening direction).
 _CANONICAL_META_KEYS = (
     "requested_provider",
     "requested_model",
@@ -48,17 +47,7 @@ _CANONICAL_META_KEYS = (
 
 
 class ChatRuntime:
-    """Single authoritative chat execution runtime.
-
-    Every transport delegates here. This runtime owns the pipeline and routes
-    execution based on a CORTEX-produced :class:`ExecutionDecision`:
-
-    * simple (``graph_required == False``) -> ExpressionGateway (no LangGraph)
-    * graph-required -> WorkflowRuntime/LangGraph adapter
-
-    The runtime stays framework-neutral for the simple path: LangChain/LangGraph
-    conversion lives inside the WorkflowRuntime adapter only.
-    """
+    """Single authoritative chat execution runtime."""
 
     async def execute(self, request: ChatExecutionRequest) -> ChatExecutionResult:
         start = time.time()
@@ -78,36 +67,58 @@ class ChatRuntime:
             )
 
         decision = await self._decide(request)
+
+        memory_recall_meta: Dict[str, Any] = {}
+        if decision.memory_required:
+            memory_recall_meta = await self._recall_memory(request, decision)
+
         try:
             if decision.is_graph_required:
                 text, provider_meta = await self._run_graph(request)
             else:
                 text, provider_meta = await self._run_simple(request)
-        except Exception as exc:  # pragma: no cover - defensive runtime boundary
+        except Exception as exc:
             logger.error(
-                "ChatRuntime.execute failed: %s",
+                "ChatRuntime.execute failed, attempting fallback: %s",
                 exc,
                 extra={"correlation_id": ctx.correlation_id},
             )
+            conversation_id = ctx.conversation_id or normalize_chat_session_id(
+                ctx.session_id
+            )
+            fallback = await build_runtime_fallback(runtime=self,
+                request=request,
+                failure=exc,
+                correlation_id=ctx.correlation_id,
+                conversation_id=conversation_id,
+                start_time=start,
+            )
+            if fallback is not None and fallback.answer:
+                await self._persist_memory(request, fallback.answer, memory_recall_meta)
+                return fallback
             return ChatExecutionResult(
                 answer="",
                 status=ChatExecutionStatus.ERROR,
                 metadata=ChatRuntimeMetadata(
                     correlation_id=ctx.correlation_id,
                     latency_ms=(time.time() - start) * 1000.0,
-                    mode="error",
-                    degradation_reason=str(exc)[:300],
+                    mode="emergency",
+                    degraded_mode=True,
+                    degradation_reason=f"all_execution_paths_failed:{type(exc).__name__}",
                 ),
             )
 
         latency_ms = (time.time() - start) * 1000.0
-        metadata = self._build_metadata(request, decision, provider_meta, latency_ms)
+        metadata = self._build_metadata(request, decision, provider_meta, latency_ms, memory_recall_meta)
 
         status = (
             ChatExecutionStatus.DEGRADED
-            if metadata.degraded_mode
+            if metadata.degraded_mode or memory_recall_meta.get("memory_degraded")
             else ChatExecutionStatus.OK
         )
+
+        await self._persist_memory(request, text, memory_recall_meta)
+
         return ChatExecutionResult(
             answer=text,
             status=status,
@@ -131,13 +142,149 @@ class ChatRuntime:
             return
 
         decision = await self._decide(request)
+
+        memory_recall_meta: Dict[str, Any] = {}
+        if decision.memory_required:
+            memory_recall_meta = await self._recall_memory(request, decision)
+
+        streamed_text = ""
         gen = (
             self._run_graph_stream(request)
             if decision.is_graph_required
             else self._run_simple_stream(request)
         )
         async for chunk in gen:
+            if chunk.type == "content":
+                streamed_text = chunk.content
             yield chunk
+
+        if decision.memory_required and memory_recall_meta.get("memory_persistence_status") != "persisted":
+            try:
+                await self._persist_memory(request, streamed_text, memory_recall_meta)
+            except Exception as exc:
+                logger.warning("Streaming memory persistence failed: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Memory
+    # ------------------------------------------------------------------
+
+    async def _recall_memory(
+        self, request: ChatExecutionRequest, decision: ExecutionDecision
+    ) -> Dict[str, Any]:
+        ctx = request.context
+        user_message = ""
+        if request.messages:
+            user_message = request.messages[-1].get("content", "")
+
+        meta: Dict[str, Any] = {
+            "memory_recall_status": "skipped",
+            "memory_recall_count": 0,
+            "memory_latency_ms": 0.0,
+            "memory_persistence_status": "skipped",
+            "memory_degraded": False,
+            "memory_degradation_reason": None,
+        }
+
+        try:
+            from ai_karen_engine.core.memory import get_memory_manager
+
+            mem = get_memory_manager()
+            recall_start = time.time()
+            result = await mem.recall_context(
+                user_id=ctx.user_id,
+                tenant_id=ctx.tenant_id,
+                query=user_message,
+                top_k=10,
+                session_id=ctx.session_id,
+                conversation_id=ctx.conversation_id,
+                correlation_id=ctx.correlation_id,
+            )
+            recall_ms = (time.time() - recall_start) * 1000.0
+
+            items = result.get("results") or []
+            meta.update({
+                "memory_recall_status": result.get("status", "success"),
+                "memory_recall_count": len(items),
+                "memory_latency_ms": recall_ms,
+                "memory_degraded": result.get("status") == "degraded",
+                "memory_degradation_reason": result.get("error") or result.get("reason"),
+            })
+
+            if items:
+                ctx.metadata = ctx.metadata or {}
+                ctx.metadata.setdefault("memory_context", {})
+                ctx.metadata["memory_context"]["recall"] = [
+                    {"id": i.get("id"), "content": i.get("content"), "timestamp": i.get("timestamp")}
+                    for i in items[:5]
+                ]
+
+        except Exception as exc:
+            logger.warning("Memory recall failed: %s", exc, extra={"correlation_id": ctx.correlation_id})
+            meta.update({
+                "memory_recall_status": "failed",
+                "memory_degraded": True,
+                "memory_degradation_reason": str(exc),
+            })
+
+        return meta
+
+    async def _persist_memory(
+        self,
+        request: ChatExecutionRequest,
+        response_text: str,
+        memory_recall_meta: Dict[str, Any],
+    ) -> None:
+        if memory_recall_meta.get("memory_degraded") and memory_recall_meta.get("memory_recall_status") == "failed":
+            return
+
+        ctx = request.context
+        try:
+            from ai_karen_engine.core.memory import get_memory_manager
+
+            mem = get_memory_manager()
+            user_message = ""
+            if request.messages:
+                user_message = request.messages[-1].get("content", "")
+
+            if user_message.strip():
+                await mem.process_interaction(
+                    text=user_message,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    source_type="chat",
+                    source_ref=ctx.conversation_id or ctx.session_id,
+                    metadata={
+                        "correlation_id": ctx.correlation_id,
+                        "session_id": ctx.session_id,
+                        "conversation_id": ctx.conversation_id,
+                        "request_id": ctx.request_id,
+                        "response_length": len(response_text or ""),
+                    },
+                )
+
+            if response_text.strip():
+                await mem.process_interaction(
+                    text=response_text,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    source_type="chat_response",
+                    source_ref=ctx.conversation_id or ctx.session_id,
+                    metadata={
+                        "correlation_id": ctx.correlation_id,
+                        "session_id": ctx.session_id,
+                        "conversation_id": ctx.conversation_id,
+                        "request_id": ctx.request_id,
+                        "is_assistant": True,
+                    },
+                )
+
+            memory_recall_meta["memory_persistence_status"] = "persisted"
+
+        except Exception as exc:
+            logger.warning("Memory persistence failed: %s", exc, extra={"correlation_id": ctx.correlation_id})
+            memory_recall_meta["memory_persistence_status"] = "failed"
+            memory_recall_meta["memory_degraded"] = True
+            memory_recall_meta["memory_degradation_reason"] = str(exc)
 
     # ------------------------------------------------------------------
     # Routing
@@ -149,10 +296,7 @@ class ChatRuntime:
     async def _run_simple(
         self, request: ChatExecutionRequest
     ) -> Tuple[str, Dict[str, Any]]:
-        """Simple conversational path: CORTEX -> ExpressionGateway.
-
-        No LangGraph, no LangChain. Returns (answer, normalized_metadata).
-        """
+        """Simple conversational path: CORTEX -> ExpressionGateway."""
         ctx = request.context
         gateway = ExpressionGateway()
         task = ExpressionTask(
@@ -172,6 +316,7 @@ class ChatRuntime:
             metadata={
                 "transport": request.metadata.get("transport", "runtime"),
                 "execution_mode": "direct",
+                "memory_context": (ctx.metadata or {}).get("memory_context", {}),
             },
         )
         result = await gateway.generate(task)
@@ -206,7 +351,7 @@ class ChatRuntime:
                     "response_source": normalized.get("response_source"),
                 },
             )
-        except Exception as exc:  # pragma: no cover - defensive runtime boundary
+        except Exception as exc:
             logger.error(
                 "ChatRuntime simple stream failed: %s",
                 exc,
@@ -271,6 +416,7 @@ class ChatRuntime:
         decision: ExecutionDecision,
         normalized: Dict[str, Any],
         latency_ms: float,
+        memory_meta: Optional[Dict[str, Any]] = None,
     ) -> ChatRuntimeMetadata:
         ctx = request.context
         conversation_id = ctx.conversation_id or normalize_chat_session_id(
@@ -285,12 +431,14 @@ class ChatRuntime:
             response_id=ctx.request_id,
             conversation_id=conversation_id,
         )
-        # Set canonical fields from normalized metadata (never overwritten by extras).
         for key in _CANONICAL_META_KEYS:
             value = normalized.get(key)
             if value is not None:
                 setattr(md, key, value)
-        # Everything else is non-canonical extension metadata.
+
+        if memory_meta:
+            md.extra.update({k: v for k, v in memory_meta.items() if k not in md.extra})
+
         md.extra.update(
             {k: v for k, v in normalized.items() if k not in _CANONICAL_META_KEYS}
         )
