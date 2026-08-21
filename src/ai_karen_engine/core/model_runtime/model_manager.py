@@ -385,7 +385,7 @@ class ModelManager:
 
             model_path = endpoint.default_model or None
             if not model_path or model_path == "auto":
-                model_path = get_default_model("builtin_transformers") or "/app/models/transformers/gpt2"
+                model_path = get_default_model("builtin_transformers") or "auto"
             runtime = CoreHelpersRuntime(
                 text_model=model_path,
                 embedding_model="/app/models/transformers/distilbert-base-uncased",

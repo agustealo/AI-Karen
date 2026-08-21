@@ -123,16 +123,22 @@ const renderMetadataPair = ({
   value,
   title,
   valueClassName = 'font-semibold',
+  testId,
 }: {
   label: string;
   value: string;
   title?: string;
   valueClassName?: string;
+  testId?: string;
 }) => {
   return (
     <div className="flex justify-between gap-2">
       <span className="text-muted-foreground">{label}:</span>
-      <span className={valueClassName} title={title || value}>
+      <span 
+        className={valueClassName} 
+        title={title || value}
+        data-testid={testId}
+      >
         {value}
       </span>
     </div>
@@ -317,6 +323,7 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
             ? 'rounded-tr-none bg-primary text-primary-foreground'
             : 'w-full flex-1 rounded-tl-none bg-card ring-1 ring-border/5'
         }`}
+        data-testid={isUser ? 'chat-message-user' : 'chat-message-assistant'}
       >
         <CardContent className="p-2 sm:p-3 md:p-4">
           <div className="flex items-start justify-between gap-2">
@@ -389,6 +396,7 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                     aria-label={
                       showDetails ? 'Hide response details' : 'Show response details'
                     }
+                    data-testid="chat-response-details-toggle"
                     aria-expanded={showDetails}
                     aria-controls={responseDetailsId}
                   >
@@ -410,6 +418,7 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                     <div
                       id={responseDetailsId}
                       className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-xl border border-border/30 bg-muted/40 p-2.5 font-mono text-[10px] shadow-inner animate-in fade-in zoom-in-95 duration-200"
+                      data-testid="chat-response-details-panel"
                       role="region"
                       aria-label="Response details"
                     >
@@ -425,33 +434,40 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                       {renderMetadataPair({
                         label: 'Requested Provider',
                         value: requestedProviderLabel,
+                        testId: 'chat-requested-provider',
                       })}
                       {renderMetadataPair({
                         label: 'Actual Provider',
                         value: providerLabel,
+                        testId: 'chat-actual-provider',
                       })}
                       {renderMetadataPair({
                         label: 'Requested Model',
                         value: requestedModelLabel,
                         valueClassName: 'max-w-[120px] truncate font-semibold',
+                        testId: 'chat-requested-model',
                       })}
                       {renderMetadataPair({
                         label: 'Actual Model',
                         value: modelLabel,
                         title: modelTitle,
                         valueClassName: 'max-w-[120px] truncate font-semibold',
+                        testId: 'chat-actual-model',
                       })}
                       {renderMetadataPair({
                         label: 'Response Source',
                         value: sourceLabel,
+                        testId: 'chat-response-source',
                       })}
                       {renderMetadataPair({
                         label: 'Fallback Level',
                         value: fallbackLevelLabel,
+                        testId: 'chat-fallback-level',
                       })}
                       {renderMetadataPair({
                         label: 'Runtime Engine',
                         value: runtimeEngineLabel,
+                        testId: 'chat-runtime-engine',
                       })}
                       {renderMetadataPair({
                         label: 'Speed',
@@ -467,7 +483,7 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                       {showStatusRow && (
                         <div className="col-span-2 mt-1 flex justify-between border-t border-border/20 pt-1">
                           <span className="text-muted-foreground">Status:</span>
-                          <span className="flex items-center gap-1 font-semibold text-amber-500">
+                          <span className="flex items-center gap-1 font-semibold text-amber-500" data-testid="chat-degraded-status">
                             <AlertTriangle className="h-3 w-3" aria-hidden="true" />
                             {statusLabel}
                           </span>
@@ -483,14 +499,11 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                         </div>
                       )}
 
-                      {showReasonRow && (
-                        <div className="col-span-2 mt-1 border-t border-border/20 pt-1">
-                          <span className="text-muted-foreground">Reason:</span>
-                          <span className="ml-2 break-all font-semibold text-rose-400">
-                            {reasonLabel}
-                          </span>
-                        </div>
-                      )}
+                      {renderMetadataPair({
+                        label: 'Correlation ID',
+                        value: message.metadata?.correlation_id || message.metadata?.llm?.correlation_id || 'N/A',
+                        testId: 'chat-correlation-id',
+                      })}
 
                       {showTokensRow && (
                         <div className="col-span-2 mt-1 flex justify-between border-t border-border/20 pt-1">
@@ -511,6 +524,20 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                       {renderMetadataPair({ label: 'Memory Latency', value: memoryLatencyLabel })}
                       {renderMetadataPair({ label: 'Memory Degraded', value: memoryDegradedLabel })}
                       {renderMetadataPair({ label: 'Writeback Status', value: writebackStatusLabel })}
+
+                      {providerAttempts && providerAttempts.length > 0 && (
+                        <div className="col-span-2 mt-2 border-t border-border/20 pt-2">
+                          <div className="mb-1 text-[8px] font-bold uppercase tracking-wider text-muted-foreground">Provider Attempts</div>
+                          <div className="space-y-1" data-testid="chat-provider-attempts">
+                            {providerAttempts.map((attempt, idx) => (
+                              <div key={`${attempt.provider}-${attempt.model}-${idx}`} className="flex justify-between text-[9px]">
+                                <span className="truncate text-muted-foreground">{attempt.provider} / {attempt.model || 'auto'}</span>
+                                <span className={attempt.status === 'success' ? 'text-emerald-500' : 'text-rose-400'}>{attempt.status}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

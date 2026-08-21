@@ -9,6 +9,11 @@ declare module '*.jsx' {
   export default component;
 }
 
+declare module '*.css' {
+  const content: Record<string, string>;
+  export default content;
+}
+
 // Webpack require.context type declarations
 interface RequireContext {
   keys(): string[];
@@ -28,4 +33,3 @@ declare namespace NodeJS {
     ): RequireContext;
   }
 }
-

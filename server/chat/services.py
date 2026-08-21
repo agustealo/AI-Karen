@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, and_, or_, desc
 from sqlalchemy.orm import selectinload
 
+from ai_karen_engine.config.llm_provider_config import get_provider_config_manager
 from .models import (
     ChatConversation,
     ChatMessage,
@@ -110,6 +111,40 @@ class SecureChatService:
         self._providers: Dict[str, BaseLLMProvider] = {}
         self.content_validator = get_content_validator(SecurityLevel.MEDIUM)
         self.encryption_manager = get_encryption_manager()
+
+    def _resolve_max_tokens(
+        self,
+        provider_name: Optional[str],
+        model_name: Optional[str],
+        metadata: Optional[Dict[str, Any]] = None,
+        default: int = 2048,
+    ) -> int:
+        """Resolve the effective output token budget from the central provider registry."""
+        requested_max_tokens = (metadata or {}).get("max_tokens")
+        if not provider_name:
+            return requested_max_tokens if isinstance(requested_max_tokens, int) and requested_max_tokens > 0 else default
+
+        try:
+            manager = get_provider_config_manager()
+            resolved = manager.get_effective_max_tokens(
+                provider_name,
+                model_name=model_name,
+                requested_max_tokens=requested_max_tokens,
+            )
+            if isinstance(resolved, int) and resolved > 0:
+                return resolved
+        except Exception as exc:
+            logger.debug(
+                "Falling back to request/default max_tokens for %s/%s: %s",
+                provider_name,
+                model_name,
+                exc,
+            )
+
+        if isinstance(requested_max_tokens, int) and requested_max_tokens > 0:
+            return requested_max_tokens
+
+        return default
 
     async def initialize_providers(self):
         """Initialize all configured providers from database."""
@@ -212,7 +247,7 @@ class SecureChatService:
                 "system_prompt", "You are a helpful AI assistant."
             )
             temperature = metadata.get("temperature", 0.7)
-            max_tokens = metadata.get("max_tokens", 2048)
+            max_tokens = self._resolve_max_tokens(provider_config, model, metadata)
 
             # Validate system prompt
             if system_prompt:
@@ -398,7 +433,10 @@ class SecureChatService:
                 messages=messages,
                 model=conversation.model,
                 temperature=conversation.temperature,
-                max_tokens=conversation.max_tokens,
+                max_tokens=conversation.max_tokens
+                or self._resolve_max_tokens(
+                    conversation.provider_id, conversation.model, conversation.metadata
+                ),
                 metadata=conversation.metadata,
             )
 
@@ -804,7 +842,7 @@ class ChatService:
                 "system_prompt", "You are a helpful AI assistant."
             )
             temperature = metadata.get("temperature", 0.7)
-            max_tokens = metadata.get("max_tokens", 2048)
+            max_tokens = self._resolve_max_tokens(provider_config, model, metadata)
 
             # Validate system prompt
             if system_prompt:
@@ -1053,7 +1091,10 @@ class ChatService:
                 messages=messages,
                 model=conversation.model,
                 temperature=conversation.temperature,
-                max_tokens=conversation.max_tokens,
+                max_tokens=conversation.max_tokens
+                or self._resolve_max_tokens(
+                    conversation.provider_id, conversation.model, conversation.metadata
+                ),
                 metadata=conversation.metadata,
             )
 

@@ -99,7 +99,7 @@ class EmbeddingManager:
     def _load_distilbert_model(self) -> bool:
         """Load DistilBERT model with proper error handling."""
         if not self._ensure_sentence_transformers():
-            logger.warning(
+            logger.info(
                 "[EmbeddingManager] sentence-transformers not installed; skipping DistilBERT load"
             )
             return False
@@ -152,7 +152,7 @@ class EmbeddingManager:
                         else:
                             raise RuntimeError("SentenceTransformer is None")
                     except Exception as path_exc:
-                        logger.warning(
+                        logger.info(
                             f"[EmbeddingManager] Failed to load from model path: {path_exc}"
                         )
                         # Try with original model name but with cache folder
@@ -199,7 +199,7 @@ class EmbeddingManager:
             return True
 
         except Exception as exc:
-            logger.error(
+            logger.info(
                 f"[EmbeddingManager] Failed to load DistilBERT model {self.model_name}: {exc}"
             )
             self.model = None
@@ -210,7 +210,7 @@ class EmbeddingManager:
         """Initialize embedding manager and load DistilBERT model."""
         success = self._load_distilbert_model()
         if not success:
-            logger.warning(
+            logger.info(
                 "[EmbeddingManager] DistilBERT model loading failed - fallback mechanisms will be used"
             )
 

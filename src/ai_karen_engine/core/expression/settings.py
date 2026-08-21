@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 
 @dataclass(slots=True)
@@ -45,6 +45,7 @@ class ExpressionSettings:
             
             # Get the expression block from config
             expr_cfg = config_manager.get_config_value("expression", default={})
+            print(f"DEBUG: Loaded expr_cfg: {expr_cfg}")
             
             settings = cls()
             if not expr_cfg:
@@ -58,20 +59,44 @@ class ExpressionSettings:
             persistent_engines = expr_cfg.get("engines", {})
             enabled_engines = expr_cfg.get("enabled_engines", [])
             
-            for engine_id, engine_cfg in settings.engines.items():
-                # Check granular config first
-                if engine_id in persistent_engines:
-                    p_cfg = persistent_engines[engine_id]
+            # 1. Update existing engines and add new ones from persistent_engines
+            from ai_karen_engine.core.model_runtime.provider_policy import evaluate_provider_policy
+            
+            for engine_id, p_cfg in persistent_engines.items():
+                if engine_id not in settings.engines:
+                    # Determine type based on policy
+                    decision = evaluate_provider_policy(engine_id)
+                    engine_type = "openai_compatible"
+                    if decision.classification == "builtin_engine":
+                        engine_type = "builtin_provider_engine"
+                    
+                    # Add new engine from config
+                    settings.engines[engine_id] = EngineConfig(
+                        enabled=p_cfg.get("enabled", True),
+                        type=p_cfg.get("type", engine_type),
+                        fallback_eligible=p_cfg.get("fallback_eligible", True),
+                        metadata=p_cfg.get("metadata", {}),
+                    )
+                else:
+                    # Update existing engine
+                    engine_cfg = settings.engines[engine_id]
                     engine_cfg.enabled = p_cfg.get("enabled", engine_cfg.enabled)
                     engine_cfg.fallback_eligible = p_cfg.get("fallback_eligible", engine_cfg.fallback_eligible)
                     engine_cfg.metadata = p_cfg.get("metadata") or engine_cfg.metadata
-                # Then check the legacy enabled_engines list
-                elif engine_id in enabled_engines:
-                    engine_cfg.enabled = True
-                else:
-                    # Builtin is usually always enabled unless explicitly in config as disabled
-                    if engine_id == "builtin" and "builtin" not in enabled_engines and "enabled_engines" in expr_cfg:
-                        engine_cfg.enabled = False
+            
+            print(f"DEBUG: Engines after loop 1: {[(k, e.enabled) for k, e in settings.engines.items()]}")
+
+            # 2. Process legacy enabled_engines list and builtin defaults
+            if "enabled_engines" in expr_cfg:
+                for engine_id, engine_cfg in settings.engines.items():
+                    if engine_id in enabled_engines:
+                        engine_cfg.enabled = True
+                    elif engine_id not in persistent_engines:
+                        # Builtin is usually always enabled unless explicitly in config as disabled
+                        if engine_id == "builtin" and "builtin" not in enabled_engines:
+                            engine_cfg.enabled = False
+            
+            print(f"DEBUG: Engines after loop 2: {[(k, e.enabled) for k, e in settings.engines.items()]}")
             
             # Policies
             policy_cfg = expr_cfg.get("policies", {})
@@ -82,3 +107,18 @@ class ExpressionSettings:
         except Exception:
             # Fallback to defaults on any config error
             return cls()
+
+_expression_settings_instance: Optional[ExpressionSettings] = None
+
+def get_expression_settings() -> ExpressionSettings:
+    """Get the global expression settings instance."""
+    global _expression_settings_instance
+    if _expression_settings_instance is None:
+        _expression_settings_instance = ExpressionSettings.load_from_config()
+    return _expression_settings_instance
+
+def reload_expression_settings():
+    """Reload expression settings from config."""
+    global _expression_settings_instance
+    _expression_settings_instance = ExpressionSettings.load_from_config()
+    return _expression_settings_instance

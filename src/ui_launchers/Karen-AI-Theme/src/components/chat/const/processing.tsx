@@ -1378,7 +1378,7 @@ export const resolveProcessingStatusMessage = (
         ? `Using degraded live path through ${actualRuntime}.`
         : "Using a degraded live runtime path.";
     case "emergency_static":
-      return "Live providers are unavailable. Showing an emergency availability message.";
+      return "No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.";
     case "completed":
       return "Response complete.";
     case "failed":

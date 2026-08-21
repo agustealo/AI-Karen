@@ -98,12 +98,28 @@ class ProviderRuntime:
             fallback_level=99,
             degraded_mode=True,
             degradation_type="fallback_exhausted",
-            degradation_reason="No configured provider could generate a response.",
+            degradation_reason="No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.",
             latency_ms=(time.time() - start_time) * 1000,
             correlation_id=correlation_id,
             provider_attempts=provider_attempts,
             metadata={"source": "emergency_static", "request_message": request.message[:200]},
         )
+
+    @staticmethod
+    def _should_allow_fallback(decision: ProviderRouteDecision) -> bool:
+        """Allow fallback only when the router was not executing an explicit provider/model choice."""
+        requested_provider = (decision.requested_provider or "").strip()
+        requested_model = (decision.requested_model or "").strip()
+        selected_provider = (decision.selected_provider or "").strip()
+        selected_model = (decision.selected_model or "").strip()
+
+        if requested_provider and requested_model:
+            return not (
+                requested_provider == selected_provider
+                and requested_model == selected_model
+            )
+
+        return True
 
     async def execute_chat(
         self,
@@ -153,6 +169,7 @@ class ProviderRuntime:
         try:
             attempt_start = time.time()
             text = ""
+            captured_metadata = {}
             async for chunk in self.router._attempt_provider_with_retries(
                 current_provider,
                 request,
@@ -161,6 +178,8 @@ class ProviderRuntime:
             ):
                 if isinstance(chunk, str):
                     text += chunk
+                elif isinstance(chunk, dict) and chunk.get("type") == "metadata":
+                    captured_metadata.update(chunk.get("metadata") or {})
             
             latency_ms = (time.time() - start_time) * 1000
             provider_attempts.append({
@@ -170,6 +189,7 @@ class ProviderRuntime:
                 "latency_ms": (time.time() - attempt_start) * 1000
             })
             
+            llm_metadata = captured_metadata.get("llm") or {}
             return ProviderExecutionResult(
                 text=text,
                 requested_provider=decision.requested_provider,
@@ -190,7 +210,12 @@ class ProviderRuntime:
                 latency_ms=latency_ms,
                 correlation_id=correlation_id,
                 provider_attempts=provider_attempts,
-                metadata={"source": "primary_execution"}
+                usage=llm_metadata.get("usage") or {},
+                metadata={
+                    **captured_metadata,
+                    "source": "primary_execution",
+                    "tokens_per_second": llm_metadata.get("tokens_per_second")
+                }
             )
             
         except Exception as exc:
@@ -203,6 +228,22 @@ class ProviderRuntime:
                 "error_message": str(exc),
                 "latency_ms": (time.time() - attempt_start) * 1000
             })
+
+            if not self._should_allow_fallback(decision):
+                degraded_message = await self.router._generate_degraded_fallback(
+                    request,
+                    [],
+                    reason="explicit_provider_failure",
+                )
+                return self._build_emergency_result(
+                    decision=decision,
+                    request=request,
+                    correlation_id=correlation_id,
+                    start_time=start_time,
+                    provider_attempts=provider_attempts,
+                    degraded_message=degraded_message or "The requested provider could not generate a response.",
+                )
+
             return await self._execute_fallback_chain(decision, request, exc, start_time, correlation_id, provider_attempts)
 
     async def stream_execute(
@@ -248,7 +289,7 @@ class ProviderRuntime:
                 fallback_level=99,
                 degraded_mode=True,
                 degradation_type="fallback_exhausted",
-                degradation_reason="No configured provider could generate a response.",
+                degradation_reason="No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.",
                 latency_ms=(time.time() - start_time) * 1000,
                 correlation_id=correlation_id,
                 provider_attempts=provider_attempts,
@@ -307,6 +348,37 @@ class ProviderRuntime:
                 "error_message": str(exc),
                 "latency_ms": (time.time() - attempt_start) * 1000
             })
+
+            if not self._should_allow_fallback(decision):
+                degraded_message = await self.router._generate_degraded_fallback(
+                    request,
+                    [],
+                    reason="explicit_provider_failure",
+                )
+                yield degraded_message
+                yield ProviderExecutionResult(
+                    text=degraded_message or "",
+                    requested_provider=decision.requested_provider,
+                    requested_model=decision.requested_model,
+                    selected_provider=decision.selected_provider,
+                    selected_model=decision.selected_model,
+                    actual_provider=current_provider,
+                    actual_model=current_model,
+                    provider_category=decision.provider_category,
+                    compatibility_profile=decision.compatibility_profile,
+                    runtime_engine=self._resolve_runtime_engine(current_provider, decision.provider_category),
+                    transport=decision.transport,
+                    response_source="provider_failure_no_fallback",
+                    fallback_level=decision.fallback_level,
+                    degraded_mode=True,
+                    degradation_type="requested_provider_failure",
+                    degradation_reason=str(exc),
+                    latency_ms=(time.time() - start_time) * 1000,
+                    correlation_id=correlation_id,
+                    provider_attempts=provider_attempts,
+                    metadata={"source": "explicit_provider_failure"},
+                )
+                return
 
             fallback_providers = await self.router._get_fallback_providers(current_provider, request)
             
@@ -387,7 +459,7 @@ class ProviderRuntime:
                 fallback_level=99,
                 degraded_mode=True,
                 degradation_type="fallback_exhausted",
-                degradation_reason="No configured provider could generate a response.",
+                degradation_reason="No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.",
                 latency_ms=(time.time() - start_time) * 1000,
                 correlation_id=correlation_id,
                 provider_attempts=provider_attempts
@@ -408,6 +480,7 @@ class ProviderRuntime:
                 fallback_model = self._resolve_actual_model(fallback_provider, fallback_candidate_model)
 
                 text = ""
+                captured_metadata = {}
                 async for chunk in self.router._attempt_provider_with_retries(
                     fallback_provider,
                     request,
@@ -416,6 +489,8 @@ class ProviderRuntime:
                 ):
                     if isinstance(chunk, str):
                         text += chunk
+                    elif isinstance(chunk, dict) and chunk.get("type") == "metadata":
+                        captured_metadata.update(chunk.get("metadata") or {})
 
                 latency_ms = (time.time() - start_time) * 1000
                 provider_attempts.append({
@@ -425,6 +500,7 @@ class ProviderRuntime:
                     "latency_ms": (time.time() - fallback_attempt_start) * 1000,
                 })
 
+                llm_metadata = captured_metadata.get("llm") or {}
                 return ProviderExecutionResult(
                     text=text,
                     requested_provider=decision.requested_provider,
@@ -445,6 +521,12 @@ class ProviderRuntime:
                     latency_ms=latency_ms,
                     correlation_id=correlation_id,
                     provider_attempts=provider_attempts,
+                    usage=llm_metadata.get("usage") or {},
+                    metadata={
+                        **captured_metadata,
+                        "source": "fallback_execution",
+                        "tokens_per_second": llm_metadata.get("tokens_per_second")
+                    }
                 )
             except Exception as fall_exc:
                 provider_attempts.append({
@@ -474,7 +556,7 @@ class ProviderRuntime:
             fallback_level=99,
             degraded_mode=True,
             degradation_type="fallback_exhausted",
-            degradation_reason="No configured provider could generate a response.",
+            degradation_reason="No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.",
             latency_ms=(time.time() - start_time) * 1000,
             correlation_id=correlation_id,
             provider_attempts=provider_attempts,

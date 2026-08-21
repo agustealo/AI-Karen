@@ -79,7 +79,7 @@ class ResponseSynthesizer:
                     fallback_level=99,
                     degraded_mode=True,
                     degradation_type="fallback_exhausted",
-                    degradation_reason="No configured provider could generate a response.",
+                    degradation_reason="No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.",
                     provider_healthy=False,
                     model_available=False,
                     allowed_for_current_user=False,

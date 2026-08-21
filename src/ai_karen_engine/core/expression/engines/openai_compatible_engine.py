@@ -33,7 +33,9 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
         if not provider_id:
              return self._failure_result(task, started, "no_suitable_provider_found")
 
-        model = task.preferred_model or "auto"
+        model = task.preferred_model
+        if model == "auto":
+             model = None
         
         try:
             # Use central registry to get the provider instance
@@ -44,12 +46,12 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             registry_service = get_provider_registry_service()
             endpoint = registry_service.get_provider_endpoint(provider_id)
             
-            # Get provider instance with necessary initialization args
+            # Get provider instance. Central registry handles API key resolution from 
+            # environment or encrypted secrets if not explicitly passed.
             provider = get_provider(
                 provider_id, 
                 model=model,
-                base_url=endpoint.base_url if endpoint else None,
-                api_key=endpoint.api_key if endpoint else None
+                base_url=endpoint.base_url if endpoint else None
             )
             
             if not provider:
@@ -59,17 +61,17 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             
             # Check if generate_text_async exists, fallback to generate_text or generate
             if hasattr(provider, "generate_text_async"):
-                 text = await provider.generate_text_async(prompt, max_tokens=task.max_tokens, temperature=task.temperature)
+                 text = await provider.generate_text_async(prompt, messages=task.messages, max_tokens=task.max_tokens, temperature=task.temperature)
             elif hasattr(provider, "generate_text"):
                  # Offload sync call
                  import asyncio
                  loop = asyncio.get_running_loop()
-                 text = await loop.run_in_executor(None, lambda: provider.generate_text(prompt, max_tokens=task.max_tokens, temperature=task.temperature))
+                 text = await loop.run_in_executor(None, lambda: provider.generate_text(prompt, messages=task.messages, max_tokens=task.max_tokens, temperature=task.temperature))
             else:
                  # Generic generate
                  import asyncio
                  loop = asyncio.get_running_loop()
-                 text = await loop.run_in_executor(None, lambda: provider.generate(prompt, **{"max_tokens": task.max_tokens, "temperature": task.temperature}))
+                 text = await loop.run_in_executor(None, lambda: provider.generate(prompt, **{"messages": task.messages, "max_tokens": task.max_tokens, "temperature": task.temperature}))
             
             actual_provider = provider_id
             actual_model = getattr(provider, "model", model)
@@ -99,15 +101,28 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
         """Finds the best healthy provider matching the engine category."""
         target_class = "external_provider_option" if is_cloud else "local_provider_option"
         
+        # Get current policy settings
+        from ..settings import get_expression_settings
+        expr_settings = get_expression_settings()
+        external_enabled = expr_settings.policies.allow_external_engines
+        
         # 1. Try preferred provider if it matches category
         if task.preferred_provider:
-            decision = evaluate_provider_policy(task.preferred_provider)
+            decision = evaluate_provider_policy(
+                task.preferred_provider,
+                local_enabled=True,
+                external_enabled=external_enabled
+            )
             if decision.classification == target_class:
                 return decision.provider
         
         # 2. Find any healthy provider in this category
         for p_id in registry.get_all_provider_names():
-            decision = evaluate_provider_policy(p_id)
+            decision = evaluate_provider_policy(
+                p_id,
+                local_enabled=True,
+                external_enabled=external_enabled
+            )
             if decision.classification == target_class:
                 # Check health
                 status = registry.get_provider_status(p_id)

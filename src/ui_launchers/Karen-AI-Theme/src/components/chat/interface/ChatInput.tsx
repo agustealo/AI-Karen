@@ -182,6 +182,27 @@ export function ChatInput({
     <div id="chat-input-area">
       <div className="chat-input-container sticky bottom-0 border-t border-border bg-background/80 p-3 backdrop-blur-sm md:p-4">
         <div className="mb-2 flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="sr-only">
+            <select 
+              data-testid="chat-provider-select" 
+              value={selectedProvider} 
+              onChange={(e) => applyModelSelection(e.target.value, 'auto')}
+            >
+              {selectableProviders.map(p => <option key={p.id} value={p.id}>{p.id}</option>)}
+            </select>
+            <select 
+              data-testid="chat-model-select" 
+              value={selectedModel} 
+              onChange={(e) => applyModelSelection(selectedProvider, e.target.value)}
+            >
+              {!selectableProviders.find(p => p.id === selectedProvider)?.models.some(m => m.id === 'auto') && (
+                <option value="auto">auto</option>
+              )}
+              {(selectableProviders.find(p => p.id === selectedProvider)?.models || []).map(m => (
+                <option key={m.id} value={m.id}>{m.id}</option>
+              ))}
+            </select>
+          </div>
           {/* Provider/session controls live above the input so the active runtime is visible before submit. */}
           <div className="flex flex-wrap gap-2">
             <ProviderSettingsModal
@@ -283,6 +304,7 @@ export function ChatInput({
             onPaste={onPaste}
             placeholder={inputPlaceholder}
             className="h-10 flex-1 bg-[#292929] text-sm sm:h-11 sm:text-base"
+            data-testid="chat-input"
             disabled={isAuthLoading}
             aria-label="Chat message input"
             aria-describedby="input-help"
@@ -301,6 +323,7 @@ export function ChatInput({
             className={`h-10 w-10 sm:h-11 sm:w-11 ${
               isLoading ? 'bg-destructive hover:bg-destructive/90' : ''
             }`}
+            data-testid="chat-submit"
             aria-label={submitButtonLabel}
             aria-describedby="submit-help"
           >

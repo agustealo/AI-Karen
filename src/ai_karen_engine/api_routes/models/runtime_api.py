@@ -138,7 +138,10 @@ async def get_runtime_provider_catalog(
         runtime_config_hash = None
 
         catalog_providers = []
-        for provider in settings_response.get("providers", []):
+        for provider_obj in settings_response.get("providers", []):
+            # Ensure we are working with a dictionary even if it's a Pydantic model
+            provider = provider_obj.model_dump() if hasattr(provider_obj, "model_dump") else (provider_obj.dict() if hasattr(provider_obj, "dict") else provider_obj)
+
             provider_type = str(provider.get("provider_type") or provider.get("type") or "external").lower()
             provider_id = str(provider.get("id") or "")
             if provider_id == "ollama" or provider_type == "local":
@@ -150,21 +153,30 @@ async def get_runtime_provider_catalog(
             else:
                 category = "external"
 
-            runtime_engine = str(provider.get("runtime_engine") or provider_id or "").replace("builtin_", "")
-            transport = "process" if category == "builtin" else "http"
             safe_metadata = provider.get("safe_diagnostic_metadata") or {}
+            # Use resolver's runtime_engine metadata instead of loose heuristics
+            runtime_engine = str(
+                safe_metadata.get("runtime_engine")
+                or provider.get("runtime_engine")
+                or provider_id
+            )
+            # Only strip "builtin_" prefix if it's still there for backward compatibility
+            if runtime_engine.startswith("builtin_"):
+                runtime_engine = runtime_engine.replace("builtin_", "")
+            transport = "process" if category == "builtin" else "http"
             raw_models = provider.get("models") or []
-            models = [
-                RuntimeModel(
-                    id=str(model.get("id") or ""),
-                    label=str(model.get("name") or model.get("label") or model.get("id") or ""),
-                    available=bool(model.get("is_installed", model.get("available", True))),
-                    default=str(model.get("id") or "") == str(provider.get("selected_model") or ""),
-                    capabilities=list(model.get("capabilities") or []),
-                )
-                for model in raw_models
-                if model.get("id")
-            ]
+            models = []
+            for model_obj in raw_models:
+                model = model_obj.model_dump() if hasattr(model_obj, "model_dump") else (model_obj.dict() if hasattr(model_obj, "dict") else model_obj)
+                if model.get("id"):
+                    models.append(RuntimeModel(
+                        id=str(model.get("id") or ""),
+                        label=str(model.get("name") or model.get("label") or model.get("id") or ""),
+                        available=bool(model.get("is_installed", model.get("available", True))),
+                        default=str(model.get("id") or "") == str(provider.get("selected_model") or ""),
+                        capabilities=list(model.get("capabilities") or []),
+                    ))
+
             if not models and provider.get("selected_model"):
                 models = [
                     RuntimeModel(

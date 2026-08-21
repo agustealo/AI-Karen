@@ -7,10 +7,11 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Label } from '@/components/ui/label';
-import { Bot, ChevronDown, Loader2 } from 'lucide-react';
+import { Bot, ChevronDown, Info, Loader2 } from 'lucide-react';
 import { getRuntimeDisplayName } from '@/lib/chat-response';
 import { getRuntimeProviderBucket } from '@/lib/model-runtime-inventory';
 import type { ProviderDetails } from '../types';
@@ -137,7 +138,22 @@ export const ProviderSettingsModal = ({
   const [localModel, setLocalModel] = useState(selectedModel);
 
   const providerGroups = useMemo(
-    () => getProviderGroups(providers),
+    () => getProviderGroups(selectableProviders),
+    [selectableProviders],
+  );
+
+  const activeCloudProviders = useMemo(
+    () =>
+      providers.filter((provider) => {
+        const bucket = getRuntimeProviderBucket(provider);
+        return (
+          bucket === 'thirdParty' &&
+          provider.enabled !== false &&
+          provider.user_selectable !== false &&
+          provider.policy_allowed !== false &&
+          provider.is_configured !== false
+        );
+      }),
     [providers],
   );
 
@@ -250,6 +266,15 @@ export const ProviderSettingsModal = ({
             <div className="mb-2 px-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
               Runtime Providers
             </div>
+
+            {activeCloudProviders.length === 0 ? (
+              <Alert className="mb-3 border-border/60 bg-background/80 px-2 py-2 text-muted-foreground">
+                <Info className="h-4 w-4" />
+                <AlertDescription className="text-[11px] leading-snug">
+                  No active cloud providers are configured. Built-in runtimes are still available.
+                </AlertDescription>
+              </Alert>
+            ) : null}
 
             {providerGroups.length === 0 ? (
               <div className="rounded-md border border-dashed px-3 py-4 text-xs text-muted-foreground">

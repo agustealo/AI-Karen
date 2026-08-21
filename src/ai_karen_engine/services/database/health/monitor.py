@@ -205,7 +205,7 @@ class DatabaseHealthMonitor:
                 
                 return True
             else:
-                logger.warning("Database health monitor initialized but database is not available")
+                logger.info("Database health monitor initialized but database is not available")
                 return False
                 
         except Exception as e:

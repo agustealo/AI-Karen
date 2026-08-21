@@ -8,6 +8,9 @@ const DEFAULT_FAILURE_MESSAGE =
 const DEFAULT_DEGRADED_MESSAGE =
   'Karen is running in degraded mode right now. Model routing is currently unavailable or misconfigured.';
 
+const NO_ACTIVE_CLOUD_PROVIDERS_MESSAGE =
+  'No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.';
+
 const AUTH_FAILURE_MESSAGE =
   'Karen could not use the requested provider with your current session permissions. Sign in again or switch to an available model.';
 
@@ -81,6 +84,13 @@ const extractRuntimeModeMessage = (payload: unknown): string => {
         cleanString(item.error);
 
       if (isUsefulMessage(message)) {
+        if (
+          message.toLowerCase().includes('no configured provider could generate a response') ||
+          message.toLowerCase().includes('no active cloud providers') ||
+          message.toLowerCase().includes('expression engine is currently inactive')
+        ) {
+          return NO_ACTIVE_CLOUD_PROVIDERS_MESSAGE;
+        }
         return message;
       }
     }
@@ -134,6 +144,14 @@ const getStatusMessage = (status: number, fallbackDetail: string): string => {
   }
 
   if (status >= 500) {
+    if (
+      fallbackDetail.toLowerCase().includes('no configured provider could generate a response') ||
+      fallbackDetail.toLowerCase().includes('expression engine is currently inactive') ||
+      fallbackDetail.toLowerCase().includes('emergency_static')
+    ) {
+      return NO_ACTIVE_CLOUD_PROVIDERS_MESSAGE;
+    }
+
     return fallbackDetail || DEFAULT_DEGRADED_MESSAGE;
   }
 
@@ -190,12 +208,25 @@ export const getDegradedResponseMessage = (error: unknown): string => {
     const message = cleanString(error.message);
 
     if (isUsefulMessage(message)) {
+      if (
+        message.toLowerCase().includes('no configured provider could generate a response') ||
+        message.toLowerCase().includes('expression engine is currently inactive')
+      ) {
+        return NO_ACTIVE_CLOUD_PROVIDERS_MESSAGE;
+      }
       return message;
     }
   }
 
   if (isUsefulMessage(error)) {
-    return cleanString(error);
+    const message = cleanString(error);
+    if (
+      message.toLowerCase().includes('no configured provider could generate a response') ||
+      message.toLowerCase().includes('expression engine is currently inactive')
+    ) {
+      return NO_ACTIVE_CLOUD_PROVIDERS_MESSAGE;
+    }
+    return message;
   }
 
   return DEFAULT_FAILURE_MESSAGE;

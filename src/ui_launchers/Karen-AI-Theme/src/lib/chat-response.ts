@@ -333,7 +333,11 @@ export const normalizeProviderName = (provider?: unknown): string => {
 
 export const isBuiltInRuntimeProvider = (provider?: unknown): boolean => {
   const normalized = normalizeProviderName(provider);
-  return normalized === BUILTIN_TRANSFORMERS_PROVIDER || normalized === BUILTIN_VLLM_PROVIDER;
+  return (
+    normalized === BUILTIN_TRANSFORMERS_PROVIDER ||
+    normalized === BUILTIN_VLLM_PROVIDER ||
+    normalized === FALLBACK_PROVIDER
+  );
 };
 
 export const isTransformersRuntimeProvider = (provider?: unknown): boolean => {
@@ -671,6 +675,12 @@ export const deriveDegradedPresentation = (
     normalizedActualProvider === FALLBACK_PROVIDER &&
     actualModelId.toLowerCase().startsWith(`${DEPRECATED_PROVIDER}:`);
 
+  const noActiveCloudProviders = Boolean(
+    isEmergency &&
+    !actualProvider &&
+    !failureReason,
+  );
+
   const actualProviderLabel = isExternalGgufBackedFallback
     ? 'GGUF External Endpoint'
     : getFriendlyProviderLabel(actualProvider);
@@ -689,6 +699,8 @@ export const deriveDegradedPresentation = (
 
   const degradedStatusLabel = isSafetyBlocked
     ? 'provider policy block'
+    : noActiveCloudProviders
+      ? 'no active cloud providers configured'
     : reasonLooksRateLimited(failureReason)
       ? `${requestedProvider || 'provider'} rate limited`
       : selectedRuntimeUnavailable
@@ -701,11 +713,16 @@ export const deriveDegradedPresentation = (
 
   const degradedBannerText =
     fallbackTransitionText ||
+    (noActiveCloudProviders
+      ? 'No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.'
+      : '') ||
     getDegradationReasonLabel(failureReason) ||
     (isDegraded ? 'System is operating in degraded mode.' : '');
 
   const visibleDegradedNotice = isSafetyBlocked
     ? (failureReason || 'Provider policy blocked this response.')
+    : noActiveCloudProviders
+      ? 'No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.'
     : fallbackTransitionText || getDegradationReasonLabel(failureReason) || degradedBannerText;
 
   const shouldRenderDegradedState = isDegraded || isSafetyBlocked || Boolean(visibleDegradedNotice);
@@ -814,13 +831,24 @@ export const deriveResponseDetailsPresentation = (
       ? `${totalTokens} total`
       : 'N/A';
 
-  const memoryUsedLabel = safeMetadata.memory_used ? 'yes' : 'no';
-  const memoryClassesLabel = toCleanString(safeMetadata.memory_classes || 'N/A');
-  const recallModeLabel = toCleanString(safeMetadata.memory_activation_mode || safeMetadata.recall_mode || 'N/A');
-  const memorySourcesLabel = toCleanString(safeMetadata.memory_sources || safeMetadata.stores_queried || 'N/A');
-  const memoryLatencyLabel = typeof safeMetadata.memory_latency_ms === 'number' ? `${safeMetadata.memory_latency_ms} ms` : 'N/A';
-  const memoryDegradedLabel = safeMetadata.memory_degraded ? 'yes' : 'no';
-  const writebackStatusLabel = toCleanString(safeMetadata.memory_writeback_status || 'N/A');
+  const memory = (isRecord(safeMetadata.memory) ? safeMetadata.memory : (isRecord(llm.memory) ? llm.memory : {})) as Record<string, unknown>;
+  const memoryUsedLabel = (safeMetadata.memory_used ?? memory.used) ? 'yes' : 'no';
+  const memoryClassesLabel = toCleanString(
+    safeMetadata.memory_classes || (Array.isArray(memory.classes) ? memory.classes.join(', ') : memory.classes) || 'N/A'
+  );
+  const recallModeLabel = toCleanString(
+    safeMetadata.memory_activation_mode || safeMetadata.recall_mode || memory.recall_mode || 'N/A'
+  );
+  const memorySourcesLabel = toCleanString(
+    safeMetadata.memory_sources || safeMetadata.stores_queried || (Array.isArray(memory.sources) ? memory.sources.join(', ') : memory.sources) || 'N/A'
+  );
+  const memoryLatencyLabel = typeof safeMetadata.memory_latency_ms === 'number' 
+    ? `${safeMetadata.memory_latency_ms} ms` 
+    : typeof memory.latency_ms === 'number'
+      ? `${Number(memory.latency_ms).toFixed(0)} ms`
+      : 'N/A';
+  const memoryDegradedLabel = (safeMetadata.memory_degraded ?? memory.degraded) ? 'yes' : 'no';
+  const writebackStatusLabel = toCleanString(safeMetadata.memory_writeback_status || memory.writeback_status || 'N/A');
   const capabilityWarning = degraded.capabilityWarning;
   const providerAttempts =
     Array.isArray(llm?.provider_attempts)
@@ -987,16 +1015,11 @@ const ensureRuntimeModeMetadata = (
   llm.source = llm.source || 'runtime_control_plane';
   llm.provider = llm.provider || null;
   if (runtimeMode === 'emergency_fallback') {
-    llm.actual_provider = null;
-    llm.actual_model = null;
-    llm.provider = null;
-    llm.model_id = null;
-    llm.model_name = null;
-  } else {
-    llm.actual_provider = null;
-    llm.actual_model = null;
-    llm.model_id = null;
-    llm.model_name = null;
+    llm.actual_provider = 'emergency_static';
+    llm.actual_model = 'static_fallback';
+    llm.model_id = 'static_fallback';
+    llm.model_name = 'Static Fallback';
+    llm.response_source = 'emergency_static';
   }
 
   if (runtimeMode === 'maintenance' || runtimeMode === 'emergency_fallback') {

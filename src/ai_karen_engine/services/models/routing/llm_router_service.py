@@ -636,8 +636,15 @@ class LLMRouter:
                             platform=request.platform,
                             status="preferred_rejected"
                         )
-                        preferred_provider = None
-                        preferred_model = None
+                        return self._build_route_decision(
+                            request=request,
+                            selected_provider=preferred_provider,
+                            selected_model=preferred_model,
+                            selection_source="preferred_unavailable",
+                            fallback_level=0,
+                            routing_reason=f"Explicit provider/model unavailable: {', '.join(reasons)}",
+                            latency_ms=(time.time() - selection_start) * 1000,
+                        )
 
             # If only preferred model specified, find provider by model
             if preferred_model and not preferred_provider:
@@ -718,6 +725,18 @@ class LLMRouter:
                         latency_ms=(time.time() - selection_start) * 1000,
                         routing_reason="Using user-preferred provider"
                     )
+            elif preferred_provider:
+                info = self.registry.get_provider_info(preferred_provider)
+                selected_model = self._effective_provider_model(info) if info else None
+                return self._build_route_decision(
+                    request=request,
+                    selected_provider=preferred_provider,
+                    selected_model=selected_model or "auto",
+                    selection_source="preferred_unavailable",
+                    fallback_level=0,
+                    routing_reason="Explicit provider unavailable after health check",
+                    latency_ms=(time.time() - selection_start) * 1000,
+                )
 
             # Get available providers sorted by priority
             available_providers = await self._get_available_providers_by_priority()
@@ -1272,7 +1291,7 @@ class LLMRouter:
                             degraded_mode=True,
                             fallback_level=99,
                             degradation_type="fallback_exhausted",
-                            degradation_reason="No configured provider could generate a response.",
+                            degradation_reason="No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.",
                             used_fallback=True,
                             provider_error="No suitable provider available",
                         )
@@ -1813,6 +1832,7 @@ class LLMRouter:
             raise
 
         # Yield metadata for successful generation
+        usage = getattr(provider, "last_usage", {}) if 'provider' in locals() else {}
         yield {
             "type": "metadata",
             "metadata": {
@@ -1822,6 +1842,8 @@ class LLMRouter:
                     "actual_provider": provider_name,
                     "actual_model": model_name,
                     "source": "instrumented_call",
+                    "usage": usage,
+                    "tokens_per_second": usage.get("tokens_per_second"),
                 }
             }
         }

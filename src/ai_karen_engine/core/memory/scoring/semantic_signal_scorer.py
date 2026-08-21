@@ -36,7 +36,7 @@ class SemanticSignalScorer:
             self._initialized = True
             logger.info("DistilBERT model loaded successfully.")
         except Exception as e:
-            logger.warning(f"Failed to load DistilBERT model: {e}")
+            logger.info(f"Failed to load DistilBERT model: {e}")
 
     def score_salience(self, text: str) -> float:
         """Score how salient or important a text is."""

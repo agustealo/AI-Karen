@@ -45,6 +45,7 @@ class TransformersRuntime(LLMProviderBase):
         self._model_name = self._resolve_model_name(model_path)
         self._pipeline = None
         self._lock = threading.Lock()
+        print(f"DEBUG: TransformersRuntime init with model_path={model_path}")
 
         if not self._transformers_available:
             logger.info("Transformers not installed; using deterministic fallback runtime")
@@ -55,7 +56,7 @@ class TransformersRuntime(LLMProviderBase):
     def _resolve_model_name(self, model_path: Optional[str]) -> str:
         """Resolve a human-readable model name from a path or ID."""
         if not model_path or model_path == "auto":
-            return "gpt2"
+            return "auto"
         
         # Strip directory path if it's a file path
         name = Path(model_path).name
@@ -72,55 +73,120 @@ class TransformersRuntime(LLMProviderBase):
             
         target_path = model_path or self.model_path
         
-        # Handle 'auto' or None by resolving to default
+        # Handle 'auto' or None by resolving to a real local default model.
         if not target_path or target_path == "auto":
-            from ai_karen_engine.config.config_manager import config_manager
-            target_path = config_manager.get_config_value("llm.default_model", default="gpt2")
-            # If it's an absolute path that doesn't exist, try local
-            import os
-            if target_path.startswith("/") and not os.path.exists(target_path):
-                target_path = target_path.split("/")[-1]
+            from ai_karen_engine.config.config_manager import get_default_model
 
-        if not target_path:
-            logger.debug("No model path provided for pre-warming")
-            return False
+            target_path = get_default_model("builtin_transformers")
+            logger.info("Resolved 'auto' model to %s from config", target_path)
+            if not target_path or target_path == "auto":
+                logger.warning("No local builtin transformers model available")
+                return False
 
         with self._lock:
             if self._pipeline and (not model_path or target_path == self.model_path):
                 return True
 
-            try:
-                import torch
-                from transformers import pipeline
+            import os
+            import torch
+            from transformers import pipeline
 
-                logger.info(f"Pre-warming Transformers pipeline for {target_path} on {self.device}")
-                
-                # Determine device index
-                device_idx = -1
-                if self.device == "auto":
-                    device_idx = 0 if torch.cuda.is_available() else -1
-                elif self.device.startswith("cuda"):
-                    try:
-                        device_idx = int(self.device.split(":")[1]) if ":" in self.device else 0
-                    except (ValueError, IndexError):
+            device_idx = -1
+            if self.device == "auto":
+                try:
+                    if torch.cuda.is_available():
+                        _ = torch.cuda.get_device_properties(0)
                         device_idx = 0
-                
-                dtype = torch.float16 if torch.cuda.is_available() and self.torch_dtype == "auto" else "auto"
-                
-                self._pipeline = pipeline(
-                    "text-generation",
-                    model=target_path,
-                    device=device_idx,
-                    torch_dtype=dtype,
-                    model_kwargs={"low_cpu_mem_usage": True}
-                )
-                self.model_path = target_path
-                self._model_name = self._resolve_model_name(target_path)
-                logger.info(f"Transformers pipeline warmed successfully for {self._model_name}")
-                return True
-            except Exception as e:
-                logger.error(f"Failed to pre-warm Transformers pipeline: {e}")
-                return False
+                        logger.info("CUDA available and verified, using GPU 0")
+                    else:
+                        device_idx = -1
+                        logger.info("CUDA not available, using CPU")
+                except Exception as cuda_err:
+                    logger.warning(
+                        "CUDA available but failed to initialize: %s. Falling back to CPU.",
+                        cuda_err,
+                    )
+                    device_idx = -1
+            elif self.device.startswith("cuda"):
+                try:
+                    device_idx = int(self.device.split(":")[1]) if ":" in self.device else 0
+                except (ValueError, IndexError):
+                    device_idx = 0
+
+            dtype = torch.float16 if torch.cuda.is_available() and self.torch_dtype == "auto" else "auto"
+            offline_mode = os.getenv("TRANSFORMERS_OFFLINE", "false").lower() == "true"
+
+            candidate_paths: List[str] = []
+
+            def _add_candidate(value: Optional[str]) -> None:
+                if not value:
+                    return
+                normalized = str(value).strip()
+                if normalized and normalized not in candidate_paths:
+                    candidate_paths.append(normalized)
+
+            _add_candidate(target_path)
+            _add_candidate(str(Path.cwd() / "models/transformers/gpt2"))
+            _add_candidate("models/transformers/gpt2")
+            _add_candidate("gpt2")
+
+            last_error: Optional[Exception] = None
+            for candidate in candidate_paths:
+                try:
+                    logger.info(
+                        "Pre-warming Transformers pipeline for %s on %s",
+                        candidate,
+                        self.device,
+                    )
+
+                    abs_path = os.path.abspath(candidate)
+                    model_path = abs_path if os.path.isdir(abs_path) else candidate
+
+                    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        model_path,
+                        local_files_only=offline_mode,
+                    )
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_path,
+                        torch_dtype=dtype if dtype != "auto" else None,
+                        low_cpu_mem_usage=True,
+                        local_files_only=offline_mode,
+                    )
+
+                    self._pipeline = pipeline(
+                        "text-generation",
+                        model=model,
+                        tokenizer=tokenizer,
+                        device=device_idx,
+                    )
+                    self.model_path = model_path
+                    self._model_name = self._resolve_model_name(model_path)
+                    logger.info(
+                        "Transformers pipeline warmed successfully for %s (path: %s)",
+                        self._model_name,
+                        model_path,
+                    )
+                    return True
+                except Exception as exc:
+                    last_error = exc
+                    logger.warning(
+                        "Failed to pre-warm Transformers candidate %s: %s",
+                        candidate,
+                        exc,
+                    )
+
+            logger.error("Failed to pre-warm Transformers pipeline", exc_info=last_error)
+            return False
+
+    def load_model(self, model_path: Optional[str] = None) -> bool:
+        """Alias for warm() to satisfy LLMRegistry interface."""
+        return self.warm(model_path)
+
+    def load_model_by_path(self, model_path: str) -> bool:
+        """Alias for load_model to satisfy LLMRegistry requirements."""
+        return self.load_model(model_path)
 
     def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate text using a real transformers pipeline."""
@@ -143,15 +209,33 @@ class TransformersRuntime(LLMProviderBase):
                     do_sample=temperature > 0,
                     pad_token_id=self._pipeline.tokenizer.eos_token_id
                 )
+                
+                print(f"DEBUG: Transformers raw result: {result}")
 
                 if result and isinstance(result, list) and "generated_text" in result[0]:
                     generated = result[0]["generated_text"]
+                    
+                    # More robust prompt stripping
                     if generated.startswith(prompt):
                         generated = generated[len(prompt):].strip()
+                    elif prompt in generated:
+                        # Find the last occurrence of the prompt and strip everything before it
+                        generated = generated.split(prompt)[-1].strip()
+                    else:
+                        # If prompt not found but we have text, it might just be the completion
+                        # without the prompt included.
+                        generated = generated.strip()
+                        
                     if generated:
                         return generated
+                    
+                    # Ultimate fallback: return the raw generated text if stripping produced empty result
+                    return result[0]["generated_text"].strip()
+                
+                return ""
             except Exception as e:
                 logger.warning(f"Transformers generation failed: {e}.")
+                return ""
 
         if not self._transformers_available:
             raise ProviderNotAvailable("Transformers runtime is not available")
@@ -204,6 +288,7 @@ class TransformersRuntime(LLMProviderBase):
             "device": self.device,
             "quantization": self.quantization,
             "transformers_available": self._transformers_available,
+            "supports_streaming": True,
         }
 
     def shutdown(self) -> None:

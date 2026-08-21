@@ -13,9 +13,29 @@ logger = get_logger(__name__)
 class ChatRuntimeService:
     """Canonical chat runtime service for route-level orchestration helpers."""
 
-    async def ensure_control_plane_ready(self, user_context: Optional[dict[str, Any]] = None):
+    async def ensure_control_plane_ready(
+        self,
+        user_context: Optional[dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+        message: Optional[str] = None,
+        session_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+    ):
+        """Ensure the control plane is ready for chat operations."""
         control_plane = await get_chat_runtime_control_plane()
-        return await control_plane.get_runtime_response(user_context=user_context)
+        
+        # Merge individual fields into context if provided
+        ctx = dict(user_context or {})
+        if user_id:
+            ctx["user_id"] = user_id
+        if message:
+            ctx["message"] = message
+        if session_id:
+            ctx["session_id"] = session_id
+        if correlation_id:
+            ctx["correlation_id"] = correlation_id
+            
+        return await control_plane.get_runtime_response(user_context=ctx)
 
     async def get_orchestrator(self):
         """Canonical runtime entrypoint for orchestrator access across routes."""

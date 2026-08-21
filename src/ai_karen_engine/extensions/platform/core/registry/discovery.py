@@ -193,6 +193,7 @@ class ExtensionDiscoveryService:
     async def _scan_extension_directories(self) -> List[Path]:
         """
         Scan for extension directories using configured patterns.
+        Optimized to skip junk directories and avoid deep recursive scans.
 
         Returns:
             List of extension directory paths
@@ -200,16 +201,35 @@ class ExtensionDiscoveryService:
         extension_dirs: List[Path] = []
         seen_dirs: Set[Path] = set()
 
+        # Directories to skip entirely during scanning
+        skip_dirs = {
+            "node_modules",
+            "__pycache__",
+            ".git",
+            ".pytest_cache",
+            ".artifacts",
+            "venv",
+            ".venv",
+            "dist",
+            "build",
+        }
+
         try:
-            for path in self.extensions_dir.rglob("*"):
-                if not path.is_dir() or path.name.startswith("_"):
+            # Start non-recursive scan for immediate subdirectories first
+            # Extensions are usually organized in one level under the extensions root
+            for path in self.extensions_dir.iterdir():
+                if not path.is_dir() or path.name.startswith("_") or path.name in skip_dirs:
                     continue
 
                 manifest_file = self._find_manifest_file(path)
-                if manifest_file and path not in seen_dirs:
+                if manifest_file:
                     extension_dirs.append(path)
                     seen_dirs.add(path)
 
+            # If no extensions found in top level, or if specifically needed,
+            # we could fall back to a limited recursive scan, but for now 
+            # we stick to the top-level for performance.
+            
             return extension_dirs
 
         except Exception as e:
@@ -358,8 +378,25 @@ class ExtensionDiscoveryService:
 
             hash_md5 = hashlib.md5()
 
+            # Directories to skip entirely during hashing
+            skip_dirs = {
+                "node_modules",
+                "__pycache__",
+                ".git",
+                ".pytest_cache",
+                ".artifacts",
+                "venv",
+                ".venv",
+                "dist",
+                "build",
+            }
+
             # Hash all Python and JSON files
             for file_path in extension_dir.rglob("*"):
+                # Skip files in junk directories
+                if any(part in skip_dirs for part in file_path.parts):
+                    continue
+
                 if file_path.is_file() and file_path.suffix in [
                     ".py",
                     ".json",

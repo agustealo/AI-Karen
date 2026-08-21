@@ -1035,6 +1035,8 @@ async def copilot_assist(
                     headers={"X-Correlation-Id": correlation_id},
                 )
 
+        from ai_karen_engine.core.runtime.chat_runtime_control_plane import get_chat_runtime_control_plane
+        runtime_plane = await get_chat_runtime_control_plane()
         runtime_status = runtime_plane.get_status()
         if runtime_status.get("mode") != "normal":
             fallback_payload = await _build_router_fallback_assist_payload(
@@ -1322,6 +1324,8 @@ async def copilot_assist_stream(
             if isinstance(response, DegradedResponse):
                 degraded_continuation_response = response
 
+        from ai_karen_engine.core.runtime.chat_runtime_control_plane import get_chat_runtime_control_plane
+        runtime_plane = await get_chat_runtime_control_plane()
         runtime_status = runtime_plane.get_status()
         if runtime_status.get("mode") != "normal":
             async def stream_runtime_router_fallback():

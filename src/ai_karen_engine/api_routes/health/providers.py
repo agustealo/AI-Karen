@@ -255,10 +255,11 @@ async def get_all_providers_health() -> Dict[str, Any]:
         info = registry.get_provider_info(provider_name)
         if info:
             result["providers"][provider_name] = {
-                "enabled": info.get("enabled", False),
-                "priority": info.get("priority", 0),
-                "provider_type": info.get("provider_type"),
-                "default_model": info.get("default_model"),
+                "enabled": getattr(info, "enabled", True),
+                "priority": getattr(info, "priority", 0),
+                "provider_type": getattr(info, "provider_type", getattr(info, "category", "LLM")),
+                "default_model": getattr(info, "default_model", ""),
+                "health_status": getattr(info, "health_status", "unknown"),
             }
     
     return result

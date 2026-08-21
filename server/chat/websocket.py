@@ -26,8 +26,41 @@ from .security_monitoring import (
     record_chat_metric, start_chat_session, update_chat_session,
     end_chat_session, MetricType, log_security_event, get_chat_monitoring_service
 )
+from ai_karen_engine.config.llm_provider_config import get_provider_config_manager
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_max_tokens(
+    provider_name: Optional[str],
+    model_name: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+    default: int = 2048,
+) -> int:
+    """Resolve the effective output token budget from the central provider registry."""
+    requested_max_tokens = (metadata or {}).get("max_tokens")
+    if not provider_name:
+        return (
+            requested_max_tokens
+            if isinstance(requested_max_tokens, int) and requested_max_tokens > 0
+            else default
+        )
+
+    try:
+        resolved = get_provider_config_manager().get_effective_max_tokens(
+            provider_name,
+            model_name=model_name,
+            requested_max_tokens=requested_max_tokens,
+        )
+        if isinstance(resolved, int) and resolved > 0:
+            return resolved
+    except Exception:
+        pass
+
+    if isinstance(requested_max_tokens, int) and requested_max_tokens > 0:
+        return requested_max_tokens
+
+    return default
 
 
 class ConnectionManager:
@@ -329,32 +362,31 @@ async def websocket_endpoint(
     }
     
     # Verify user has access to conversation
-    try:
-        conversation_result = await db_session.db_session.execute(
-            select(ChatConversation).where(
-                and_(
-                    ChatConversation.id == conversation_id,
-                    ChatConversation.user_id == user_id
-                )
+    conversation_result = await db_session.db_session.execute(
+        select(ChatConversation).where(
+            and_(
+                ChatConversation.id == conversation_id,
+                ChatConversation.user_id == user_id
             )
         )
-        conversation = conversation_result.scalar_one_or_none()
+    )
+    conversation = conversation_result.scalar_one_or_none()
         
-        if not conversation:
-            await log_security_event(
-                "websocket_unauthorized_conversation_access",
-                {
-                    "user_id": user_id,
-                    "conversation_id": conversation_id,
-                    "client_ip": current_user.get("client_ip"),
-                    "user_agent": current_user.get("user_agent")
-                },
-                user_id=user_id,
-                ip_address=current_user.get("client_ip"),
-                threat_level=ThreatLevel.HIGH
-            )
-            await websocket.close(code=4004, reason="Conversation not found or access denied")
-            return
+    if not conversation:
+        await log_security_event(
+            "websocket_unauthorized_conversation_access",
+            {
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "client_ip": current_user.get("client_ip"),
+                "user_agent": current_user.get("user_agent")
+            },
+            user_id=user_id,
+            ip_address=current_user.get("client_ip"),
+            threat_level=ThreatLevel.HIGH
+        )
+        await websocket.close(code=4004, reason="Conversation not found or access denied")
+        return
         
         # Start chat session for monitoring
         await start_chat_session(user_id, conversation_id, {
@@ -365,109 +397,124 @@ async def websocket_endpoint(
         
         # Connect to manager with security context
         await manager.connect(websocket, user_id, security_context)
-        
+
         try:
             # Handle WebSocket messages with security validation
             while True:
-                try:
-                    # Receive message with timeout
-                    data = await asyncio.wait_for(
-                        websocket.receive_json(), 
-                        timeout=300.0  # 5 minute timeout
-                    )
-                    
-                    message_type = data.get("type")
-                    
-                    # Rate limiting check
-                    if message_type in ["message", "typing"]:
-                        monitoring_service = get_chat_monitoring_service()
-                        if not monitoring_service.rate_limiter.check_rate_limit(
-                            user_id, "websocket_message", 10, 60  # 10 messages per minute
-                        ):
-                            await websocket.send_json({
+                # Receive message with timeout
+                data = await asyncio.wait_for(
+                    websocket.receive_json(),
+                    timeout=300.0,  # 5 minute timeout
+                )
+
+                message_type = data.get("type")
+
+                # Rate limiting check
+                if message_type in ["message", "typing"]:
+                    monitoring_service = get_chat_monitoring_service()
+                    if not monitoring_service.rate_limiter.check_rate_limit(
+                        user_id,
+                        "websocket_message",
+                        10,
+                        60,  # 10 messages per minute
+                    ):
+                        await websocket.send_json(
+                            {
                                 "type": "error",
-                                "message": "Rate limit exceeded. Please wait before sending more messages."
-                            })
-                            await log_security_event(
-                                "websocket_rate_limit_exceeded",
-                                {
-                                    "user_id": user_id,
-                                    "message_type": message_type,
-                                    "client_ip": security_context["ip_address"]
-                                },
-                                user_id=user_id,
-                                ip_address=security_context["ip_address"],
-                                threat_level=ThreatLevel.MEDIUM
-                            )
-                            continue
-                    
-                    if message_type == "ping":
-                        # Handle ping
-                        await websocket.send_json({
-                            "type": "pong",
-                            "timestamp": asyncio.get_event_loop().time()
-                        })
-                    
-                    elif message_type == "message":
-                        # Handle chat message with security validation
-                        await handle_chat_message_secure(
-                            websocket, user_id, conversation_id, 
-                            data, db_session, manager, security_context
+                                "message": "Rate limit exceeded. Please wait before sending more messages.",
+                            }
                         )
-                    
-                    elif message_type == "typing":
-                        # Handle typing indicator
-                        await handle_typing_indicator(
-                            websocket, user_id, conversation_id, data, manager
-                        )
-                    
-                    else:
-                        logger.warning(f"Unknown WebSocket message type: {message_type}")
                         await log_security_event(
-                            "websocket_unknown_message_type",
+                            "websocket_rate_limit_exceeded",
                             {
                                 "user_id": user_id,
                                 "message_type": message_type,
-                                "data": str(data)[:200]  # Truncate for logging
+                                "client_ip": security_context["ip_address"],
                             },
                             user_id=user_id,
                             ip_address=security_context["ip_address"],
-                            threat_level=ThreatLevel.LOW
+                            threat_level=ThreatLevel.MEDIUM,
                         )
-                        
-                except asyncio.TimeoutError:
-                    logger.info(f"WebSocket timeout for user {user_id}")
-                    await websocket.close(code=1000, reason="Connection timeout")
-                    break
-                    
-                except WebSocketDisconnect:
-                    logger.info(f"WebSocket disconnected for user {user_id}")
-                    break
-                    
-                except Exception as e:
-                    logger.error(f"WebSocket error for user {user_id}: {e}")
+                        continue
+
+                if message_type == "ping":
+                    # Handle ping
+                    await websocket.send_json(
+                        {
+                            "type": "pong",
+                            "timestamp": asyncio.get_event_loop().time(),
+                        }
+                    )
+
+                elif message_type == "message":
+                    # Handle chat message with security validation
+                    await handle_chat_message_secure(
+                        websocket,
+                        user_id,
+                        conversation_id,
+                        data,
+                        db_session,
+                        manager,
+                        security_context,
+                    )
+
+                elif message_type == "typing":
+                    # Handle typing indicator
+                    await handle_typing_indicator(
+                        websocket, user_id, conversation_id, data, manager
+                    )
+
+                else:
+                    logger.warning(
+                        f"Unknown WebSocket message type: {message_type}"
+                    )
                     await log_security_event(
-                        "websocket_error",
+                        "websocket_unknown_message_type",
                         {
                             "user_id": user_id,
-                            "error": str(e),
-                            "error_type": type(e).__name__
+                            "message_type": message_type,
+                            "data": str(data)[:200],  # Truncate for logging
                         },
                         user_id=user_id,
                         ip_address=security_context["ip_address"],
-                        threat_level=ThreatLevel.MEDIUM
+                        threat_level=ThreatLevel.LOW,
                     )
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "An error occurred while processing your message"
-                    })
-        
+
+        except asyncio.TimeoutError:
+            logger.info(f"WebSocket timeout for user {user_id}")
+            await websocket.close(code=1000, reason="Connection timeout")
+
+        except WebSocketDisconnect:
+            logger.info(f"WebSocket disconnected for user {user_id}")
+
+        except Exception as e:
+            logger.error(f"WebSocket error for user {user_id}: {e}")
+            await log_security_event(
+                "websocket_error",
+                {
+                    "user_id": user_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                user_id=user_id,
+                ip_address=security_context["ip_address"],
+                threat_level=ThreatLevel.MEDIUM,
+            )
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": "An error occurred while processing your message",
+                }
+            )
+
         finally:
             # Clean up connection and end session
             await manager.disconnect(websocket, user_id, "connection_closed")
-            await end_chat_session(user_id, conversation_id, {
-                "websocket_disconnected": True
-            })
+            await end_chat_session(
+                user_id,
+                conversation_id,
+                {"websocket_disconnected": True},
+            )
 
 
 async def handle_chat_message_secure(
@@ -585,7 +632,10 @@ async def handle_chat_message_secure(
             messages=messages,
             model=conversation.model,
             temperature=conversation.temperature,
-            max_tokens=conversation.max_tokens,
+            max_tokens=conversation.max_tokens
+            or _resolve_max_tokens(
+                conversation.provider_id, conversation.model, conversation.metadata
+            ),
             metadata=conversation.metadata
         )
         

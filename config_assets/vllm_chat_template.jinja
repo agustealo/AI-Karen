@@ -1,0 +1,13 @@
+{% for message in messages -%}
+{% set role = message['role'] -%}
+{% if role == 'system' -%}
+System: {{ message['content'] }}
+{% elif role == 'user' -%}
+User: {{ message['content'] }}
+{% elif role == 'assistant' -%}
+Assistant: {{ message['content'] }}
+{% else -%}
+{{ role|capitalize }}: {{ message['content'] }}
+{% endif -%}
+{% endfor -%}
+Assistant:

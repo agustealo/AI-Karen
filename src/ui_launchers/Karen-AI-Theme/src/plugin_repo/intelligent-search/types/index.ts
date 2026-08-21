@@ -153,6 +153,21 @@ export interface IntelligentSearchOptions {
   includePriceAction?: boolean;
   includeCompanyNews?: boolean;
   includeEarnings?: boolean;
+
+  // Crawl4AI-specific options
+  crawlEnabled?: boolean;
+  crawlMaxPages?: number;
+  crawlMaxDepth?: number;
+  crawlCaptureScreenshot?: boolean;
+  crawlUseCache?: boolean;
+  crawlRespectRobotsTxt?: boolean;
+  crawlIncludeDomains?: string[];
+  crawlExcludeDomains?: string[];
+  crawlExtractLinks?: boolean;
+  crawlExtractMedia?: boolean;
+  crawlExtractCleanedHtml?: boolean;
+  crawlStructuredSchema?: string;
+  crawlWaitForSelector?: string;
 }
 
 export interface IntelligentSearchState {

@@ -769,7 +769,7 @@ async def startup_event():
         logger.info("Initializing Agent Integration API...")
 
         # Initialize agent integration service
-        from ..agents import initialize_agent_integration
+        from ai_karen_engine.agents import initialize_agent_integration
 
         await initialize_agent_integration()
 

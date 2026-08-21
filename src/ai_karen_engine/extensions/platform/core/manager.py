@@ -120,17 +120,11 @@ class ExtensionCoreManager:
     async def initialize(self) -> Dict[str, Any]:
         """Initialize the extension system and perform discovery."""
         try:
-            # Initialize the registry first
+            # Initialize the registry first. This also performs initial discovery.
             await self.registry.initialize()
-
-            # Perform discovery
-            await self.refresh_registry()
 
             # Initialize integration components
             await self.integration.initialize()
-
-            # Load any existing extensions
-            await self.host.discover_extensions()
 
             logger.info(
                 f"Extension system initialized. Discovered {len(self.registry.list_discovered())} extensions."

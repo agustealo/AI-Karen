@@ -176,6 +176,10 @@ class OllamaProvider(LLMProviderBase):
                 self._record_usage(result)
                 message = result.get("message") or {}
                 content = str(message.get("content") or "").strip()
+                
+                # Fallback to thinking field if content is empty (common for reasoning models)
+                if not content and message.get("thinking"):
+                    content = str(message.get("thinking")).strip()
             else:
                 payload = {
                     "model": self.model,
@@ -187,6 +191,10 @@ class OllamaProvider(LLMProviderBase):
                 result = self._request("/generate", payload)
                 self._record_usage(result)
                 content = str(result.get("response") or "").strip()
+                
+                # Fallback to thinking field if response is empty
+                if not content and result.get("thinking"):
+                    content = str(result.get("thinking")).strip()
 
             record_llm_metric("generate_text", time.time() - t0, True, "ollama")
             if not content:

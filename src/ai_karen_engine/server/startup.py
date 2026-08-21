@@ -26,6 +26,11 @@ _core_services_initialized: bool = False
 _core_services_init_lock: Optional[asyncio.Lock] = None
 
 
+def _truthy_env(name: str, default: str = "false") -> bool:
+    """Return True when an env var is enabled using common truthy values."""
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _get_app_settings(app: FastAPI) -> Any:
     settings = getattr(app.state, "settings", None)
     if settings is not None:
@@ -36,32 +41,146 @@ def _get_app_settings(app: FastAPI) -> Any:
     return Settings()
 
 
-async def init_database() -> None:
-    """Initialize database connections - deferred to when actually needed."""
-    # Database initialization is now handled by server/database_config.py
-    # and only happens when database is available
-    logger.debug("Database initialization deferred (lazy loading)")
+async def init_database(app: Optional[FastAPI] = None) -> bool:
+    """
+    Initialize database connections and expose availability on app.state when available.
+
+    Startup must continue in degraded mode if the database is unavailable.
+    """
+    try:
+        if app is None:
+            logger.debug("Database initialization skipped: no FastAPI app provided")
+            return False
+
+        from ai_karen_engine.services.database_config import get_database_config
+
+        settings = _get_app_settings(app)
+        db_config = get_database_config(settings)
+
+        success = await db_config.initialize_database()
+        app.state.database_available = success
+
+        if success:
+            logger.info("Database available - initialized successfully")
+            await db_config.setup_graceful_shutdown()
+        else:
+            logger.info(
+                "Database not available - running in degraded mode "
+                "(DB-dependent features disabled)"
+            )
+
+        return bool(success)
+
+    except Exception as e:
+        logger.warning("Database initialization failed (degraded mode): %s", e)
+        if app is not None:
+            app.state.database_available = False
+        return False
+
+
+async def init_crawl4ai_service(app: FastAPI) -> None:
+    """
+    Initialize Crawl4AI diagnostics without launching a browser or blocking readiness.
+
+    Crawl4AI is used as a governed acquisition/extraction engine by Intelligent
+    Search. Browser work remains request-scoped inside the integration.
+    """
+    try:
+        enabled = _truthy_env("KAREN_CRAWL4AI_ENABLED", "true")
+        if not enabled:
+            app.state.crawl4ai_available = False
+            app.state.crawl4ai_health = {
+                "integration": "crawl4ai",
+                "available": False,
+                "enabled": False,
+                "reason": "disabled_by_environment",
+            }
+            logger.info("Crawl4AI integration disabled by environment")
+            return
+
+        from ai_karen_engine.integrations.web.crawl4ai_integration import (
+            get_crawl4ai_integration,
+        )
+
+        integration = get_crawl4ai_integration()
+        health = integration.health()
+
+        app.state.crawl4ai_available = bool(health.get("available"))
+        app.state.crawl4ai_health = health
+
+        if app.state.crawl4ai_available:
+            logger.info(
+                "Crawl4AI integration available",
+                extra={
+                    "integration": "crawl4ai",
+                    "available": True,
+                    "headless": health.get("headless"),
+                    "max_concurrency": health.get("max_concurrency"),
+                    "timeout_seconds": health.get("timeout_seconds"),
+                },
+            )
+        else:
+            logger.warning(
+                "Crawl4AI integration degraded",
+                extra={
+                    "integration": "crawl4ai",
+                    "available": False,
+                    "health": health,
+                },
+            )
+
+    except Exception as exc:
+        app.state.crawl4ai_available = False
+        app.state.crawl4ai_health = {
+            "integration": "crawl4ai",
+            "available": False,
+            "enabled": True,
+            "error": str(exc),
+        }
+        logger.warning("Crawl4AI initialization degraded: %s", exc)
+
+
+async def cleanup_crawl4ai_service(app: Optional[FastAPI] = None) -> None:
+    """Cleanup Crawl4AI singleton state if it was initialized."""
+    try:
+        from ai_karen_engine.integrations.web.crawl4ai_integration import (
+            close_crawl4ai_integration,
+        )
+
+        await close_crawl4ai_integration()
+
+        if app is not None:
+            app.state.crawl4ai_available = False
+            app.state.crawl4ai_health = {
+                "integration": "crawl4ai",
+                "available": False,
+                "status": "shutdown",
+            }
+
+        logger.info("Crawl4AI integration shutdown completed")
+
+    except ImportError:
+        logger.debug("Crawl4AI cleanup skipped: integration module unavailable")
+    except Exception as e:
+        logger.warning("Crawl4AI integration shutdown failed: %s", e)
 
 
 async def init_ai_services(settings: Any) -> None:
-    """Initialize all AI-related services with optimization"""
+    """Initialize all AI-related services with optimization."""
     global _optimization_enabled
 
-    # Check if optimization is enabled
     _optimization_enabled = getattr(
         settings,
         "enable_performance_optimization",
         os.getenv("ENABLE_PERFORMANCE_OPTIMIZATION", "true").lower() == "true",
     )
 
-    # Check for lazy loading mode
     lazy_loading_enabled = os.getenv("KARI_LAZY_LOADING", "true").lower() == "true"
 
     try:
         if lazy_loading_enabled:
             logger.info("⚡ Using ultra-optimized lazy loading startup")
 
-            # Use the new optimized startup system
             from ai_karen_engine.core.runtime.optimized_startup import (
                 optimized_startup_sequence,
             )
@@ -70,46 +189,40 @@ async def init_ai_services(settings: Any) -> None:
 
             logger.info("✅ Lazy loading startup completed")
             logger.info(
-                f"   • Startup time: {startup_report.get('startup_time', 0):.2f}s"
+                "   • Startup time: %.2fs",
+                startup_report.get("startup_time", 0),
             )
-            logger.info(f"   • Mode: {startup_report.get('mode', 'optimized')}")
+            logger.info("   • Mode: %s", startup_report.get("mode", "optimized"))
             logger.info(
-                f"   • Initialized services: {len(startup_report.get('initialized_services', []))}"
+                "   • Initialized services: %s",
+                len(startup_report.get("initialized_services", [])),
             )
 
         elif _optimization_enabled:
             logger.info("🚀 Using optimized service initialization")
 
-            # Initialize optimization components first
             optimization_report = await initialize_optimization_components(settings)
-
-            # Run startup audit for baseline
             audit_report = await run_startup_audit(settings)
-
-            # Use optimized service startup
             startup_report = await optimized_service_startup(settings)
 
-            # Initialize performance monitoring
             await initialize_performance_monitoring(settings)
-
-            # Integrate with existing logging
             await integrate_with_existing_logging(settings)
-
-            # Load plugins with optimization
             await load_plugins_optimized(settings.plugin_dir, settings)
 
             logger.info("✅ Optimized AI services initialization completed")
             logger.info(
-                f"   • Optimization time: {optimization_report.get('initialization_time', 0):.2f}s"
+                "   • Optimization time: %.2fs",
+                optimization_report.get("initialization_time", 0),
             )
             logger.info(
-                f"   • Startup time: {startup_report.get('startup_time', 0):.2f}s"
+                "   • Startup time: %.2fs",
+                startup_report.get("startup_time", 0),
             )
+            logger.debug("Startup audit report: %s", audit_report)
 
         else:
             logger.info("📦 Using standard service initialization")
 
-            # Standard initialization path
             from ai_karen_engine.core.memory import (
                 memory_runtime_manager as memory_manager,
             )
@@ -117,7 +230,6 @@ async def init_ai_services(settings: Any) -> None:
             memory_manager.init_memory()
             load_plugins(settings.plugin_dir)
 
-            # Initialize model orchestrator plugin if enabled
             try:
                 from ai_karen_engine.server.plugin_loader import ENABLED_PLUGINS
 
@@ -138,44 +250,46 @@ async def init_ai_services(settings: Any) -> None:
 
             sync_registry()
 
-            # Initialize the service registry and all services
             from ai_karen_engine.core.services.service_registry import initialize_services
 
             await initialize_services()
 
             logger.info("AI services initialized")
 
-        # Initialize LeanGraph relationship projection service separately from
-        # chat/provider startup so graph degradation does not block API startup.
         try:
             from ai_karen_engine.core.memory.graph.service import get_leangraph_service
+
             svc = get_leangraph_service()
             svc.initialize()
-        except Exception as graph_exc:  # pragma: no cover - defensive startup guard
+            logger.info("LeanGraph relationship projection initialized")
+        except Exception as graph_exc:
             logger.warning("LeanGraph initialization degraded: %s", str(graph_exc))
 
-    except Exception as e:  # pragma: no cover - defensive
+    except Exception as e:
         logger.error("AI services initialization failed: %s", str(e))
+
         if lazy_loading_enabled or _optimization_enabled:
             logger.info("🔄 Falling back to minimal startup")
 
-            # Fallback to ultra-minimal mode
             try:
                 logger.info("⚡ Using minimal fallback initialization")
 
-                from ai_karen_engine.core.runtime.optimized_startup import MinimalStartupMode
+                from ai_karen_engine.core.runtime.optimized_startup import (
+                    MinimalStartupMode,
+                )
 
                 startup_report = await MinimalStartupMode.initialize(settings)
 
                 logger.info("✅ Minimal fallback initialization completed")
                 logger.info(
-                    f"   • Startup time: {startup_report.get('startup_time', 0):.2f}s"
+                    "   • Startup time: %.2fs",
+                    startup_report.get("startup_time", 0),
                 )
 
             except Exception as fallback_error:
                 logger.error("Minimal fallback also failed: %s", str(fallback_error))
-                # Last resort: basic initialization
                 logger.info("🔄 Last resort: basic initialization")
+
                 from ai_karen_engine.core.memory import (
                     memory_runtime_manager as memory_manager,
                 )
@@ -207,14 +321,12 @@ async def ensure_core_services_initialized() -> None:
 
 
 async def cleanup_ai_services() -> None:
-    """Cleanup AI resources with optimization"""
+    """Cleanup AI resources with optimization."""
     try:
         if _optimization_enabled:
             logger.info("🧹 Using optimized cleanup")
-            # Cleanup optimization components first
             await cleanup_optimization_components()
 
-        # Check if lazy services are enabled
         lazy_loading_enabled = os.getenv("KARI_LAZY_LOADING", "true").lower() == "true"
 
         if lazy_loading_enabled:
@@ -223,40 +335,42 @@ async def cleanup_ai_services() -> None:
 
             await cleanup_lazy_services()
 
-        # Standard cleanup
         try:
-            from ai_karen_engine.core.services.service_registry import get_service_registry
+            from ai_karen_engine.core.services.service_registry import (
+                get_service_registry,
+            )
 
             registry = get_service_registry()
             await registry.shutdown()
         except Exception as e:
-            logger.warning(f"Service registry cleanup failed: {e}")
+            logger.warning("Service registry cleanup failed: %s", e)
 
         logger.info("✅ AI services cleanup completed")
 
     except Exception as e:
-        logger.error(f"Error during AI services cleanup: {e}")
+        logger.error("Error during AI services cleanup: %s", e)
 
-        from ai_karen_engine.core.memory import (
-            memory_runtime_manager as memory_manager,
-        )
+        try:
+            from ai_karen_engine.core.memory import (
+                memory_runtime_manager as memory_manager,
+            )
 
-        await memory_manager.close()
+            await memory_manager.close()
+        except Exception as memory_error:
+            logger.warning("Memory cleanup failed: %s", memory_error)
 
-        logger.info("AI services cleanup completed")
-    except Exception as e:  # pragma: no cover - defensive
-        logger.error("AI services cleanup failed: %s", str(e))
+        logger.info("AI services cleanup completed with degraded cleanup path")
 
 
 def init_security(settings: Any) -> None:
-    """Initialize security components"""
+    """Initialize security components."""
     if settings.secret_key == "changeme" and settings.environment == "production":
         logger.critical("Insecure default secret key in production!")
     logger.info("Security components initialized")
 
 
 def start_background_tasks(settings: Any) -> None:
-    """Start background tasks"""
+    """Start background tasks."""
     global _registry_refresh_task
 
     if settings.llm_refresh_interval > 0:
@@ -264,7 +378,7 @@ def start_background_tasks(settings: Any) -> None:
         async def _periodic_refresh() -> None:
             from ai_karen_engine.integrations.model_discovery import sync_registry
 
-            while True:  # pragma: no branch
+            while True:
                 await asyncio.sleep(settings.llm_refresh_interval)
                 sync_registry()
 
@@ -273,25 +387,34 @@ def start_background_tasks(settings: Any) -> None:
 
 
 async def stop_background_tasks() -> None:
-    """Stop background tasks"""
+    """Stop background tasks."""
     global _registry_refresh_task
 
     if _registry_refresh_task:
         _registry_refresh_task.cancel()
         try:
             await _registry_refresh_task
-        except asyncio.CancelledError:  # pragma: no cover - expected
+        except asyncio.CancelledError:
             logger.info("Background tasks stopped")
-        except Exception as e:  # pragma: no cover - defensive
+        except Exception as e:
             logger.error("Error stopping background tasks: %s", str(e))
+        finally:
+            _registry_refresh_task = None
 
 
-async def on_startup(settings: Any) -> None:
+async def on_startup(settings: Any, app: Optional[FastAPI] = None) -> None:
+    """Base server startup path."""
     global _startup_init_task
-    logger.info("Starting Kari AI Server in %s mode", settings.environment)
-    await init_database()
 
-    # Initialize extension system
+    logger.info("Starting Kari AI Server in %s mode", settings.environment)
+
+    if app is not None:
+        app.state.settings = settings
+        await init_database(app)
+        await init_crawl4ai_service(app)
+    else:
+        logger.debug("Startup called without app; app-scoped services skipped")
+
     try:
         from ai_karen_engine.extensions.platform.core.manager import (
             get_extension_core_manager,
@@ -299,18 +422,18 @@ async def on_startup(settings: Any) -> None:
 
         extension_manager = get_extension_core_manager()
         if extension_manager:
-            logger.info("Initializing extension system...")
-            await extension_manager.initialize()
-            logger.info("Extension system initialized successfully")
-        else:
-            logger.warning("Extension system not available")
+            if _truthy_env("KARI_FAST_STARTUP", "false"):
+                logger.info("⚡ Fast startup: skipping blocking extension initialization")
+            else:
+                logger.info("Initializing extension system in background")
+                asyncio.create_task(extension_manager.initialize())
     except Exception as e:
-        logger.error(f"Failed to initialize extension system: {e}")
+        logger.warning("Could not initialize extension system: %s", e)
 
-    # Fast-startup mode: don't block server readiness on heavy init
     fast_start = os.getenv(
         "KARI_FAST_STARTUP", os.getenv("FAST_STARTUP", "true")
     ).lower() in ("1", "true", "yes")
+
     if fast_start and (settings.environment or "").lower() in (
         "development",
         "dev",
@@ -322,7 +445,7 @@ async def on_startup(settings: Any) -> None:
         try:
             await init_ai_services(settings)
         except Exception as e:
-            logger.error(f"Failed to initialize AI services: {e}", exc_info=True)
+            logger.error("Failed to initialize AI services: %s", e, exc_info=True)
             logger.warning("Continuing startup without AI services")
 
     init_security(settings)
@@ -330,10 +453,12 @@ async def on_startup(settings: Any) -> None:
     logger.info("Server startup completed")
 
 
-async def on_shutdown() -> None:
+async def on_shutdown(app: Optional[FastAPI] = None) -> None:
+    """Base server shutdown path."""
     global _startup_init_task
+
     logger.info("Shutting down Kari AI Server")
-    # If background startup is still running, cancel it gracefully
+
     if _startup_init_task and not _startup_init_task.done():
         _startup_init_task.cancel()
         try:
@@ -344,13 +469,16 @@ async def on_shutdown() -> None:
             logger.warning("Background startup task error during shutdown: %s", e)
         finally:
             _startup_init_task = None
+
     await stop_background_tasks()
+    await cleanup_crawl4ai_service(app)
     await cleanup_ai_services()
+
     logger.info("Server shutdown completed")
 
 
 async def init_extension_monitoring(app: FastAPI) -> None:
-    """Initialize extension monitoring and alerting system"""
+    """Initialize extension monitoring and alerting system."""
     try:
         from ai_karen_engine.monitoring.extensions.extension_monitoring_startup import (
             initialize_extension_monitoring,
@@ -359,34 +487,32 @@ async def init_extension_monitoring(app: FastAPI) -> None:
         await initialize_extension_monitoring()
         logger.info("Extension monitoring system initialized")
     except Exception as e:
-        logger.warning(f"Extension monitoring initialization failed: {e}")
+        logger.warning("Extension monitoring initialization failed: %s", e)
 
 
 async def init_extension_health_monitor(app: FastAPI) -> None:
-    """Initialize extension health monitor"""
+    """Initialize extension health monitor."""
     try:
         from ai_karen_engine.extensions.health_monitor import (
             initialize_extension_health_monitor,
         )
 
-        # Get extension manager if available
         extension_manager = None
         try:
             extension_system = getattr(app.state, "extension_system", None)
             if extension_system:
                 extension_manager = extension_system.extension_manager
         except Exception:
-            pass
+            logger.debug("Extension manager lookup failed", exc_info=True)
 
         await initialize_extension_health_monitor(extension_manager)
         logger.info("Extension health monitor initialized")
     except Exception as e:
-        logger.warning(f"Extension health monitor initialization failed: {e}")
+        logger.warning("Extension health monitor initialization failed: %s", e)
 
 
 async def init_extension_database_service(app: FastAPI) -> None:
-    """Initialize extension database service"""
-    # Skip if database is not available
+    """Initialize extension database service."""
     if not getattr(app.state, "database_available", False):
         logger.info("Skipping extension database service (database not available)")
         return
@@ -395,22 +521,21 @@ async def init_extension_database_service(app: FastAPI) -> None:
         from ai_karen_engine.extensions.database_service import (
             initialize_database_service,
         )
+
         settings = _get_app_settings(app)
         database_url = settings.database_url
 
-        # Initialize extension database service
         async_database_url = database_url.replace(
             "postgresql://", "postgresql+asyncpg://"
         )
         initialize_database_service(async_database_url)
         logger.info("Extension database service initialized")
     except Exception as e:
-        logger.warning(f"Extension database service initialization failed: {e}")
+        logger.warning("Extension database service initialization failed: %s", e)
 
 
 async def init_extension_service_recovery(app: FastAPI) -> None:
-    """Initialize extension service recovery system with integration to existing patterns"""
-    # Skip if database is not available
+    """Initialize extension service recovery system with integration to existing patterns."""
     if not getattr(app.state, "database_available", False):
         logger.info("Skipping extension service recovery (database not available)")
         return
@@ -423,34 +548,29 @@ async def init_extension_service_recovery(app: FastAPI) -> None:
         from ai_karen_engine.services.enhanced_database_health_monitor import (
             get_enhanced_database_health_monitor,
         )
+
         settings = _get_app_settings(app)
 
-        # Get existing components for integration
         database_config = get_database_config(settings)
         enhanced_health_monitor = get_enhanced_database_health_monitor()
 
-        # Get extension manager if available
         extension_manager = None
         try:
             extension_system = getattr(app.state, "extension_system", None)
             if extension_system:
                 extension_manager = extension_system.extension_manager
         except Exception:
-            pass
+            logger.debug("Extension manager lookup failed", exc_info=True)
 
-        # Initialize recovery manager with existing components
         recovery_manager = await initialize_extension_service_recovery_manager(
             extension_manager=extension_manager,
             database_config=database_config,
             enhanced_health_monitor=enhanced_health_monitor,
         )
 
-        # Register extension-specific startup handlers
         recovery_manager.add_startup_handler(
             lambda: _extension_startup_recovery_handler(recovery_manager)
         )
-
-        # Register extension-specific graceful degradation handlers
         recovery_manager.add_graceful_degradation_handler(
             "extension_api", lambda: _extension_api_degradation_handler()
         )
@@ -458,24 +578,20 @@ async def init_extension_service_recovery(app: FastAPI) -> None:
             "authentication", lambda: _authentication_degradation_handler()
         )
 
-        # Execute startup handlers
         await recovery_manager.execute_startup_handlers()
 
         logger.info("Extension service recovery initialized")
 
     except Exception as e:
-        logger.warning(f"Extension service recovery initialization failed: {e}")
+        logger.warning("Extension service recovery initialization failed: %s", e)
 
 
-async def _extension_startup_recovery_handler(recovery_manager):
-    """Extension-specific startup recovery handler"""
+async def _extension_startup_recovery_handler(recovery_manager: Any) -> None:
+    """Extension-specific startup recovery handler."""
     try:
         logger.info("Executing extension startup recovery checks")
 
-        # Check if extension system needs recovery on startup
         status = recovery_manager.get_recovery_status()
-
-        # Log startup recovery status
         unhealthy_services = [
             name
             for name, state in status["service_states"].items()
@@ -484,10 +600,9 @@ async def _extension_startup_recovery_handler(recovery_manager):
 
         if unhealthy_services:
             logger.warning(
-                f"Unhealthy services detected on startup: {unhealthy_services}"
+                "Unhealthy services detected on startup: %s", unhealthy_services
             )
 
-            # Attempt immediate recovery for critical services
             for service_name in unhealthy_services:
                 if "authentication" in service_name or "database" in service_name:
                     await recovery_manager.force_recovery(service_name)
@@ -495,55 +610,52 @@ async def _extension_startup_recovery_handler(recovery_manager):
             logger.info("All extension services healthy on startup")
 
     except Exception as e:
-        logger.error(f"Extension startup recovery handler failed: {e}")
+        logger.error("Extension startup recovery handler failed: %s", e)
 
 
-async def _extension_api_degradation_handler():
-    """Graceful degradation handler for extension API"""
+async def _extension_api_degradation_handler() -> None:
+    """Graceful degradation handler for extension API."""
     try:
         logger.info("Enabling graceful degradation for extension API")
-
-        # Set extension API to read-only mode or disable non-critical features
-        # This would integrate with the extension system to limit functionality
-
         logger.info("Extension API graceful degradation enabled")
-
     except Exception as e:
-        logger.error(f"Extension API degradation handler failed: {e}")
+        logger.error("Extension API degradation handler failed: %s", e)
 
 
-async def _authentication_degradation_handler():
-    """Graceful degradation handler for authentication service"""
+async def _authentication_degradation_handler() -> None:
+    """Graceful degradation handler for authentication service."""
     try:
         logger.info("Enabling graceful degradation for authentication service")
-
-        # Enable development mode authentication or read-only access
-        # This would integrate with the security system to provide fallback auth
-
         logger.info("Authentication service graceful degradation enabled")
-
     except Exception as e:
-        logger.error(f"Authentication degradation handler failed: {e}")
+        logger.error("Authentication degradation handler failed: %s", e)
 
 
 async def warm_local_llm_stack(app: FastAPI) -> None:
     """Warm the local chat/LLM stack during startup so first chat request does not time out."""
-    if os.getenv("KARI_WARM_LOCAL_LLM_ON_STARTUP", "false").lower() not in (
-        "1",
-        "true",
-        "yes",
-    ):
+    if not _truthy_env("KARI_WARM_LOCAL_LLM_ON_STARTUP", "false"):
         logger.info("Skipping local LLM warmup (disabled by environment)")
         return
 
     try:
-        from ai_karen_engine.services.formatting.settings_manager import get_settings_manager
+        from ai_karen_engine.services.formatting.settings_manager import (
+            get_settings_manager,
+        )
 
         settings_manager = get_settings_manager()
         active_provider = (
             str(settings_manager.get_setting("provider", "") or "").strip().lower()
         )
-        if active_provider not in {"local_gguf", "local"}:
+
+        local_providers = {
+            "builtin_transformers",
+            "builtin_vllm",
+            "ollama",
+            "local",
+            "local_gguf",
+        }
+
+        if active_provider not in local_providers:
             logger.info(
                 "Skipping local LLM warmup for non-local provider: %s",
                 active_provider or "unset",
@@ -566,25 +678,31 @@ async def warm_local_llm_stack(app: FastAPI) -> None:
         logger.info("Local chat stack warmup completed")
     except Exception as e:
         app.state.local_llm_warmed = False
-        logger.warning(f"Local LLM warmup skipped after failure: {e}")
+        logger.warning("Local LLM warmup skipped after failure: %s", e)
 
 
 async def on_startup_with_extensions(settings: Any, app: FastAPI) -> None:
-    """Enhanced startup with extension and monitoring initialization"""
+    """Enhanced startup with extension and monitoring initialization."""
     global _startup_init_task
+
     logger.info("Starting Kari AI Server in %s mode", settings.environment)
-    await init_database()
+
+    app.state.settings = settings
+    await init_database(app)
+
+    # Lightweight integration diagnostics. This does not launch browser work.
+    await init_crawl4ai_service(app)
 
     fast_start = os.getenv(
         "KARI_FAST_STARTUP", os.getenv("FAST_STARTUP", "true")
     ).lower() in ("1", "true", "yes")
+
     lazy_environment = (settings.environment or "").lower() in (
         "development",
         "dev",
         "local",
     )
 
-    # Make sure chat-critical services are ready before the app starts serving.
     await ensure_core_services_initialized()
 
     if fast_start and lazy_environment:
@@ -611,19 +729,16 @@ async def on_startup_with_extensions(settings: Any, app: FastAPI) -> None:
 
         _startup_init_task = asyncio.create_task(_background_startup_init())
     else:
-        # Initialize extension monitoring and recovery systems
         await init_extension_monitoring(app)
         await init_extension_health_monitor(app)
         await init_extension_database_service(app)
         await init_extension_service_recovery(app)
-
-        # Warm local LLM stack if configured
         await warm_local_llm_stack(app)
 
         try:
             await init_ai_services(settings)
         except Exception as e:
-            logger.error(f"Failed to initialize AI services: {e}", exc_info=True)
+            logger.error("Failed to initialize AI services: %s", e, exc_info=True)
             logger.warning("Continuing startup without AI services")
 
     init_security(settings)
@@ -633,7 +748,6 @@ async def on_startup_with_extensions(settings: Any, app: FastAPI) -> None:
 
 async def initialize_extension_system(app: FastAPI) -> None:
     """Initialize the production extension system and monitoring."""
-    # Skip if database is not available
     if not getattr(app.state, "database_available", False):
         logger.info("Skipping extension system initialization (database not available)")
         return
@@ -649,7 +763,6 @@ async def initialize_extension_system(app: FastAPI) -> None:
             logger.warning("Extension system initialization unsuccessful")
             return
 
-        # Initialize extension health monitoring once the manager is available
         try:
             from ai_karen_engine.extensions.health_monitor import (
                 initialize_extension_health_monitor,
@@ -668,9 +781,9 @@ async def initialize_extension_system(app: FastAPI) -> None:
             else:
                 logger.warning("Extension manager unavailable")
         except Exception as monitor_error:
-            logger.warning(f"Extension health monitoring failed: {monitor_error}")
+            logger.warning("Extension health monitoring failed: %s", monitor_error)
     except Exception as exc:
-        logger.warning(f"Extension system initialization error: {exc}")
+        logger.warning("Extension system initialization error: %s", exc)
 
 
 async def init_extensions_for_production(
@@ -688,10 +801,10 @@ async def init_extensions_for_production(
             db_session=db_session,
             plugin_router=plugin_router,
         )
-        return success
+        return bool(success)
+
     except ImportError as canonical_error:
         try:
-            # Temporary fallback for migration compatibility.
             from ai_karen_engine.extensions.platform.core.host.factory import (  # type: ignore
                 initialize_extensions_for_production as initialize_extensions,
             )
@@ -703,7 +816,7 @@ async def init_extensions_for_production(
                 plugin_router=plugin_router,
             )
             logger.info("✅ Extension system initialized via legacy fallback path")
-            return success
+            return bool(success)
         except ImportError as legacy_error:
             logger.warning(
                 "Extension system not available (canonical=%s, fallback=%s)",
@@ -712,16 +825,16 @@ async def init_extensions_for_production(
             )
             return False
     except Exception as e:
-        logger.error(f"Extension system initialization failed: {e}")
+        logger.error("Extension system initialization failed: %s", e)
         return False
 
 
 async def on_shutdown_with_extensions(app: FastAPI) -> None:
-    """Enhanced shutdown with extension cleanup"""
+    """Enhanced shutdown with extension cleanup."""
     global _startup_init_task
+
     logger.info("Shutting down Kari AI Server")
 
-    # Shutdown extension monitoring
     try:
         from ai_karen_engine.monitoring.extensions.extension_monitoring_startup import (
             shutdown_extension_monitoring,
@@ -730,9 +843,8 @@ async def on_shutdown_with_extensions(app: FastAPI) -> None:
         await shutdown_extension_monitoring()
         logger.info("Extension monitoring shutdown completed")
     except Exception as e:
-        logger.error(f"Extension monitoring shutdown failed: {e}", exc_info=True)
+        logger.error("Extension monitoring shutdown failed: %s", e, exc_info=True)
 
-    # Shutdown extension health monitor
     try:
         from ai_karen_engine.extensions.health_monitor import (
             shutdown_extension_health_monitor,
@@ -741,20 +853,8 @@ async def on_shutdown_with_extensions(app: FastAPI) -> None:
         await shutdown_extension_health_monitor()
         logger.info("Extension health monitor shutdown completed")
     except Exception as e:
-        logger.error(f"Extension health monitor shutdown failed: {e}", exc_info=True)
+        logger.warning("Extension health monitor shutdown failed: %s", e)
 
-    # Shutdown extension health monitoring on application shutdown
-    try:
-        from ai_karen_engine.extensions.health_monitor import (
-            shutdown_extension_health_monitor,
-        )
-
-        await shutdown_extension_health_monitor()
-        logger.info("Extension health monitoring shutdown completed")
-    except Exception as e:
-        logger.warning(f"Extension health monitoring shutdown error: {e}")
-
-    # If background startup is still running, cancel it gracefully
     if _startup_init_task and not _startup_init_task.done():
         _startup_init_task.cancel()
         try:
@@ -765,27 +865,30 @@ async def on_shutdown_with_extensions(app: FastAPI) -> None:
             logger.warning("Background startup task error during shutdown: %s", e)
         finally:
             _startup_init_task = None
+
     await stop_background_tasks()
+    await cleanup_crawl4ai_service(app)
     await cleanup_ai_services()
+
     logger.info("Server shutdown completed")
 
 
 def create_lifespan(settings: Any):
-    """Create a lifespan context manager bound to settings"""
+    """Create a lifespan context manager bound to settings."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        await on_startup(settings)
+        await on_startup(settings, app)
         try:
             yield
         finally:
-            await on_shutdown()
+            await on_shutdown(app)
 
     return lifespan
 
 
 def create_lifespan_with_extensions(settings: Any):
-    """Create a lifespan context manager with extension and monitoring initialization"""
+    """Create a lifespan context manager with extension and monitoring initialization."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -799,46 +902,32 @@ def create_lifespan_with_extensions(settings: Any):
 
 
 def register_startup_tasks(app: FastAPI) -> None:
-    """Register startup tasks for LLM providers and services with extension recovery integration"""
-
-    # Store database availability state in app
+    """Register startup tasks for LLM providers and services with extension recovery integration."""
     app.state.database_available = False
+    app.state.crawl4ai_available = False
+    app.state.crawl4ai_health = {
+        "integration": "crawl4ai",
+        "available": False,
+        "status": "not_initialized",
+    }
 
     @app.on_event("startup")
     async def _init_database_config() -> None:
-        """Initialize database configuration with enhanced settings"""
-        try:
-            from ai_karen_engine.services.database_config import get_database_config
-            settings = _get_app_settings(app)
-            db_config = get_database_config(settings)
+        """Initialize database configuration with enhanced settings."""
+        await init_database(app)
 
-            # Initialize database with enhanced configuration
-            success = await db_config.initialize_database()
-            app.state.database_available = success
-
-            if success:
-                logger.info("Database available - initialized successfully")
-
-                # Setup graceful shutdown
-                await db_config.setup_graceful_shutdown()
-            else:
-                logger.info(
-                    "Database not available - running in degraded mode (DB-dependent features disabled)"
-                )
-
-        except Exception as e:
-            logger.warning(f"Database initialization failed (degraded mode): {e}")
-            app.state.database_available = False
+    @app.on_event("startup")
+    async def _init_crawl4ai() -> None:
+        """Initialize Crawl4AI diagnostics without blocking browser startup."""
+        await init_crawl4ai_service(app)
 
     @app.on_event("startup")
     async def _init_llm_providers() -> None:
         try:
-            import os
-            import asyncio
-
             fast = os.getenv(
                 "KARI_FAST_STARTUP", os.getenv("FAST_STARTUP", "true")
             ).lower() in ("1", "true", "yes")
+
             from ai_karen_engine.integrations.startup import initialize_llm_providers
 
             if fast:
@@ -846,7 +935,7 @@ def register_startup_tasks(app: FastAPI) -> None:
                     "⚡ Fast startup: deferring LLM provider initialization to background"
                 )
 
-                async def _bg_init():
+                async def _bg_init() -> None:
                     try:
                         result = await asyncio.to_thread(initialize_llm_providers)
                         logger.info(
@@ -859,7 +948,7 @@ def register_startup_tasks(app: FastAPI) -> None:
                         )
                     except Exception as e:
                         logger.warning(
-                            f"Background LLM provider initialization failed: {e}"
+                            "Background LLM provider initialization failed: %s", e
                         )
 
                 asyncio.create_task(_bg_init())
@@ -874,15 +963,12 @@ def register_startup_tasks(app: FastAPI) -> None:
                     },
                 )
         except Exception as e:
-            logger.warning(f"LLM provider initialization skipped: {e}")
+            logger.warning("LLM provider initialization skipped: %s", e)
 
     @app.on_event("startup")
     async def _init_memory_service() -> None:
-        """Initialize memory service with proper error handling"""
+        """Initialize memory service with proper error handling."""
         try:
-            # Check if memory service should be initialized
-            import os
-
             enable_memory = os.getenv("KARI_ENABLE_MEMORY_SERVICE", "true").lower() in (
                 "1",
                 "true",
@@ -895,11 +981,12 @@ def register_startup_tasks(app: FastAPI) -> None:
             if enable_memory:
                 if fast:
                     logger.info(
-                        "⚡ Fast startup: ensuring memory service initialization before background tasks"
+                        "⚡ Fast startup: ensuring memory service initialization "
+                        "before background tasks"
                     )
                     await ensure_core_services_initialized()
                 else:
-                    logger.info("Initializing memory service...")
+                    logger.info("Initializing memory service")
                     await ensure_core_services_initialized()
                     logger.info("Memory service initialized successfully")
             else:
@@ -907,29 +994,36 @@ def register_startup_tasks(app: FastAPI) -> None:
                     "Memory service initialization disabled by environment variable"
                 )
         except Exception as e:
-            logger.warning(f"Memory service initialization failed: {e}")
-            # Continue startup even if memory service fails
+            logger.warning("Memory service initialization failed: %s", e)
 
 
 def register_shutdown_tasks(app: FastAPI) -> None:
-    """Register shutdown tasks for extension service recovery integration"""
+    """Register shutdown tasks for extension service recovery integration."""
+
+    @app.on_event("shutdown")
+    async def _shutdown_crawl4ai() -> None:
+        """Shutdown Crawl4AI integration singleton."""
+        await cleanup_crawl4ai_service(app)
 
     @app.on_event("shutdown")
     async def _shutdown_database() -> None:
-        """Graceful shutdown of database connections"""
+        """Graceful shutdown of database connections."""
         try:
             logger.info("Starting database shutdown process")
+
             from ai_karen_engine.services.database_config import get_database_config
+
             settings = _get_app_settings(app)
             db_config = get_database_config(settings)
             await db_config.cleanup()
+
             logger.info("Database shutdown completed successfully")
         except Exception as e:
-            logger.error(f"Error during database shutdown: {e}")
+            logger.error("Error during database shutdown: %s", e)
 
     @app.on_event("shutdown")
     async def _shutdown_extension_service_recovery() -> None:
-        """Shutdown extension service recovery system with graceful cleanup"""
+        """Shutdown extension service recovery system with graceful cleanup."""
         try:
             from ai_karen_engine.extensions.service_recovery import (
                 get_extension_service_recovery_manager,
@@ -938,32 +1032,27 @@ def register_shutdown_tasks(app: FastAPI) -> None:
 
             recovery_manager = get_extension_service_recovery_manager()
             if recovery_manager:
-                # Execute shutdown handlers first
                 await recovery_manager.execute_shutdown_handlers()
-
-                # Then shutdown the recovery system
                 await shutdown_extension_service_recovery_manager()
 
                 logger.info("Extension service recovery system shutdown completed")
 
         except Exception as e:
-            logger.error(f"Extension service recovery shutdown failed: {e}")
+            logger.error("Extension service recovery shutdown failed: %s", e)
 
 
 async def initialize_fallback_systems() -> None:
-    """Initialize fallback systems for degraded mode operation"""
+    """Initialize fallback systems for degraded mode operation."""
     try:
-        # This would contain fallback system initialization logic
         logger.info("Fallback systems initialized")
     except Exception as e:
-        logger.error(f"Failed to initialize fallback systems: {e}")
+        logger.error("Failed to initialize fallback systems: %s", e)
 
 
-async def run_startup_checks_and_fallbacks(logger_param) -> None:
-    """Run startup checks and initialize fallback systems if needed"""
+async def run_startup_checks_and_fallbacks(logger_param: logging.Logger) -> None:
+    """Run startup checks and initialize fallback systems if needed."""
     try:
         await initialize_fallback_systems()
         logger_param.info("Startup checks completed successfully")
     except Exception as e:
-        logger_param.error(f"Startup checks failed: {e}")
-        # Continue with fallback systems
+        logger_param.error("Startup checks failed: %s", e)

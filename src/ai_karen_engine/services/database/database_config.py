@@ -111,13 +111,13 @@ class DatabaseConfig:
                     timeout=2.0  # Quick 2-second timeout
                 )
                 if not test_result:
-                    logger.warning("Database not available - skipping initialization (degraded mode)")
+                    logger.info("Database not available - skipping initialization (degraded mode)")
                     return False
             except asyncio.TimeoutError:
-                logger.warning("Database connection timeout - skipping initialization (degraded mode)")
+                logger.info("Database connection timeout - skipping initialization (degraded mode)")
                 return False
             except Exception as e:
-                logger.warning(f"Database availability check failed: {e} - skipping initialization (degraded mode)")
+                logger.info(f"Database availability check failed: {e} - skipping initialization (degraded mode)")
                 return False
 
             # Initialize service-isolated database manager first
@@ -231,7 +231,7 @@ class DatabaseConfig:
             )
 
             if not await self._service_isolated_manager.initialize():
-                logger.warning("Service-isolated database manager failed to initialize, falling back to shared pools")
+                logger.info("Service-isolated database manager failed to initialize, falling back to shared pools")
                 self._service_isolated_manager = None
             else:
                 logger.info("Service-isolated database manager initialized")
@@ -243,7 +243,7 @@ class DatabaseConfig:
             logger.debug("Service-isolated database manager not available")
             self._service_isolated_manager = None
         except Exception as e:
-            logger.warning(f"Service-isolated database manager init failed: {e}")
+            logger.info(f"Service-isolated database manager init failed: {e}")
             self._service_isolated_manager = None
     
     async def setup_graceful_shutdown(self):

@@ -32,12 +32,12 @@ class EmbeddingManager:
 
     def _load_model(self) -> None:
         if SentenceTransformer is None:
-            logger.warning("sentence-transformers not installed; using hash fallback")
+            logger.info("sentence-transformers not installed; using hash fallback")
             return
         try:
             self._model = SentenceTransformer(self.info.name)
         except Exception as exc:  # pragma: no cover - model load optional
-            logger.error("Failed to load DistilBERT model %s: %s", self.info.name, exc)
+            logger.info("Failed to load DistilBERT model %s: %s", self.info.name, exc)
             self._model = None
 
     @lru_cache(maxsize=1024)

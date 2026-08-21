@@ -277,7 +277,7 @@ export default function DashboardPage() {
     () => ({
       chat: (
         <SessionProvider>
-          <ChatInterface />
+          <ChatInterface isActive={activeMainView === 'chat'} />
         </SessionProvider>
       ),
       settings: <SettingsDialogComponent />,

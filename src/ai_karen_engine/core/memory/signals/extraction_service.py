@@ -31,7 +31,7 @@ class SpacyExtractionService:
             self._initialized = True
             logger.info("spaCy NLP model loaded successfully.")
         except Exception as e:
-            logger.error(f"Failed to load spaCy model: {e}")
+            logger.info(f"Failed to load spaCy model: {e}")
             raise
 
     def extract(self, text: str) -> List[MemorySignal]:

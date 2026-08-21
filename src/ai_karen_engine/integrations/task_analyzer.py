@@ -53,7 +53,7 @@ class TaskAnalyzer:
         "deepseek": ["text", "code", "reasoning"],
         "local_gguf": ["text"],
         "huggingface": ["text", "embeddings"],
-        "gemini": ["text", "vision"],
+        "gemini": ["text", "vision", "code", "reasoning", "streaming"],
     }
 
     _ROLE_TASK_HINTS: Dict[str, Tuple[str, float]] = {

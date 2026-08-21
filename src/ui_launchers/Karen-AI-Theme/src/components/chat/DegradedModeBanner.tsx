@@ -9,7 +9,7 @@ interface DegradedModeBannerProps {
 }
 
 const DEFAULT_DEGRADED_REASON =
-  'Karen is operating with limited runtime capability. Live fallback may still be available depending on provider health.';
+  'No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.';
 
 const cleanString = (value: unknown): string => {
   return typeof value === 'string' ? value.trim() : '';

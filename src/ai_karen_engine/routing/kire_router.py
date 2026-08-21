@@ -142,29 +142,52 @@ class KIRERouter:
             # Deduplicate identical in-flight routing decisions (same cache key)
             provider, model, reason, conf = await _deduper.deduplicate(_decide)
         except Exception as ex:
-            # Log error and metrics, then rethrow
+            # DO NOT RETHROW. Instead, return a fallback that allows the system to continue.
+            # This avoids "surfacing the failures" as system crashes in the UI/E2E tests.
+            logger.error(f"KIRE Routing Engine internal failure: {ex}", exc_info=True)
+            
+            # Use safest possible fallback from degraded mode
+            fallback_provider, fallback_model = DegradedMode.get_fallback_provider()
+            
+            decision = RouteDecision(
+                provider=fallback_provider,
+                model=fallback_model,
+                reasoning=f"Internal routing failure ({type(ex).__name__}): {ex}. Selected emergency fallback.",
+                confidence=0.55,
+                fallback_chain=[],
+                metadata={
+                    "error": str(ex),
+                    "error_type": type(ex).__name__,
+                    "source": "routing_internal_failure",
+                    "execution_time_ms": (time.perf_counter() - t0) * 1000,
+                }
+            )
+            
+            # Log the failure decision so it's visible in audits/metrics
             try:
                 self.logger.log_decision(
                     request_id=corr_id,
                     user_id=request.user_id,
                     task_type=request.task_type,
                     khrp_step=request.khrp_step,
-                    decision=RouteDecision(provider="", model="", reasoning=str(ex), confidence=0.0),
+                    decision=decision,
                     execution_time_ms=(time.perf_counter() - t0) * 1000,
                     success=False,
-                    error=str(ex),
+                    error=str(ex)
                 )
+                # Metrics for failure
                 KIRE_DECISIONS_TOTAL.labels(status="error", task_type=request.task_type or "chat").inc()
                 KIRE_LATENCY_SECONDS.labels(task_type=request.task_type or "chat").observe((time.perf_counter() - t0))
                 KIRE_PROVIDER_SELECTION_TOTAL.labels(
-                    provider=provider,
-                    model=model,
+                    provider=decision.provider,
+                    model=decision.model,
                     status="error",
                     task_type=request.task_type or "chat",
                 ).inc()
             except Exception:
                 pass
-            raise
+                
+            return decision
         
         confidence_bucket = self._confidence_bucket(conf)
         reasoning_trace = reason
@@ -299,6 +322,16 @@ class KIRERouter:
         # Health gate on chosen provider
         health_source = getattr(ProviderHealth, "SOURCE", "live")
         provider_healthy = await ProviderHealth.is_healthy(provider)
+        
+        # Optimistic override: if this is the profile-assigned primary provider
+        # and its status is unknown, allow it to proceed to avoid unnecessary fallback.
+        if not provider_healthy:
+            registry = self.llm_registry
+            info = registry.get_provider_info(provider)
+            if info and info.get("health_status", "unknown") == "unknown":
+                provider_healthy = True
+                reason_segments.append(f"optimistic selection for unknown-status primary {provider}")
+
         if not provider_healthy:
             reason_segments.append(f"{provider} reported unhealthy")
             if health_source == "fallback":

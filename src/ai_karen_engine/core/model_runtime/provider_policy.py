@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 BUILTIN_EXPRESSION_ENGINES: set[str] = {
+    "builtin",
     "vllm",
     "transformers",
     "builtin_vllm",
     "builtin_transformers",
+    "fallback",
 }
 
 LOCAL_PROVIDER_OPTIONS: set[str] = {
@@ -23,7 +25,6 @@ EXTERNAL_PROVIDER_OPTIONS: set[str] = {
     "zai",
     "openai_compatible_remote",
 }
-
 REMOVED_INTERNAL_PROVIDERS: set[str] = {
     "gguf",
     "local_gguf",
@@ -42,6 +43,7 @@ REMOVED_INTERNAL_PROVIDERS: set[str] = {
     "local",
     "default-model",
 }
+
 
 
 @dataclass(frozen=True, slots=True)

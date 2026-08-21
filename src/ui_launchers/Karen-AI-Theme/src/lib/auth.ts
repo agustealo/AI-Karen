@@ -72,7 +72,7 @@ class AuthService {
   private readonly SESSION_MARKER_KEY = 'kari_session_expected';
   private readonly LOGIN_SUCCESS_AT_KEY = 'kari_login_success_at';
   private readonly REQUEST_TIMEOUT_MS = 30000;
-  private readonly SESSION_VALIDATION_TIMEOUT_MS = 30000;
+  private readonly SESSION_VALIDATION_TIMEOUT_MS = 10000;
   private readonly REFRESH_RETRY_COOLDOWN_MS = 60000;
   private readonly LOGIN_VALIDATION_GRACE_MS = 30000;
   private refreshInFlight: Promise<string> | null = null;
@@ -408,6 +408,7 @@ class AuthService {
       const refreshToken = localStorage.getItem('refresh_token');
       const accessToken = localStorage.getItem('access_token');
       if (refreshToken) {
+        // Use a shorter timeout for logout to prevent UI hangs
         await this.fetchWithTimeout('/api/auth/logout', {
           method: 'POST',
           headers: {
@@ -416,7 +417,7 @@ class AuthService {
           },
           credentials: 'include',
           body: JSON.stringify({ refresh_token: refreshToken }),
-        });
+        }, 5000);
       }
     } catch (error) {
       console.error('Logout error:', error);

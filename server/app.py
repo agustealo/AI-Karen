@@ -167,38 +167,36 @@ def create_app() -> FastAPI:
                 return
 
             try:
-                success = await initialize_extensions(
-                    app=app,
-                    extension_root="extensions",
-                    db_session=None,
-                    plugin_router=None,
-                )
-                if not success:
-                    logger.warning("Extension system initialization unsuccessful")
-                    return
+               from ai_karen_engine.extensions.platform.core.host.factory import (
+                   ExtensionServiceConfig,
+                   initialize_extensions_for_production,
+               )
 
-                # Initialize extension health monitoring once the manager is available
-                try:
-                    from server.extension_health_monitor import (
-                        initialize_extension_health_monitor,
-                    )
+               # Initialize canonical extension system
+               ext_config = ExtensionServiceConfig(
+                   extension_root="src/ai_karen_engine/extensions/plugins",
+               )
+               extension_manager = initialize_extensions_for_production(ext_config)
 
-                    extension_system = getattr(app.state, "extension_system", None)
-                    extension_manager = (
-                        extension_system.get_extension_manager()
-                        if extension_system
-                        and hasattr(extension_system, "get_extension_manager")
-                        else None
-                    )
-                    if extension_manager:
-                        await initialize_extension_health_monitor(extension_manager)
-                        logger.info("Extension health monitoring initialized")
-                    else:
-                        logger.warning("Extension manager unavailable")
-                except Exception as monitor_error:
-                    logger.warning(
-                        f"Extension health monitoring failed: {monitor_error}"
-                    )
+               # Store in app state for health monitoring and API access
+               app.state.extension_system = extension_manager
+
+               # Initialize extension health monitoring once the manager is available
+               try:
+                   from server.extension_health_monitor import (
+                       initialize_extension_health_monitor,
+                   )
+
+                   if extension_manager:
+                       await initialize_extension_health_monitor(extension_manager)
+                       logger.info("Extension health monitoring initialized")
+                   else:
+                       logger.warning("Extension manager unavailable")
+               except Exception as monitor_error:
+                   logger.warning(
+                       f"Extension health monitoring failed: {monitor_error}"
+                   )
+
             except Exception as exc:
                 logger.warning(f"Extension system initialization error: {exc}")
 

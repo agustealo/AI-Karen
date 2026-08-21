@@ -1,5 +1,5 @@
 {
-  "environment": "local",
+  "environment": "production",
   "debug": false,
   "database": {
     "host": "localhost",
@@ -44,9 +44,9 @@
   "llm": {
     "default_nlp_model_id": "distilbert-base-uncased",
     "transformers_dir": "models/transformers",
-    "default_provider": "builtin_transformers",
-    "default_model": "/app/models/transformers/gpt2",
-    "default_lightweight_model_id": "gpt2",
+    "default_provider": "ollama",
+    "default_model": "qwen3:4b",
+    "default_lightweight_model_id": "qwen3:4b",
     "default_classifier_model_id": "default-classifier-model",
     "models_dir": "models",
     "fallback_chain": [
@@ -60,15 +60,16 @@
     "provider_defaults": {
       "openai": "gpt-4o-mini",
       "deepseek": "deepseek-chat",
-      "builtin_vllm": "/models/transformers/gpt2",
-      "builtin_transformers": "/app/models/transformers/gpt2",
-      "gemini": "gemini-1.5-flash",
+      "builtin_vllm": "auto",
+      "builtin_transformers": "auto",
+      "ollama": "qwen3:4b",
+      "gemini": "gemini-2.5-flash",
       "huggingface": "microsoft/DialoGPT-large"
     },
     "task_assignments": {
       "chat": {
-        "provider": "openai",
-        "model": "gpt-4o-mini"
+        "provider": "ollama",
+        "model": "qwen3:4b"
       },
       "code": {
         "provider": "deepseek",
@@ -79,8 +80,8 @@
         "model": "gpt-4o"
       },
       "summarization": {
-        "provider": "builtin_transformers",
-        "model": "auto"
+        "provider": "ollama",
+        "model": "qwen3:4b"
       }
     },
     "temperature": 0.7,
@@ -89,45 +90,57 @@
     "max_retries": 3
   },
   "expression": {
-    "active_engine": "builtin_transformers",
+    "active_engine": "cloud",
     "fallback_order": [
-      "builtin",
-      "local",
       "cloud",
-      "builtin"
+      "builtin",
+      "local"
     ],
     "policies": {
       "allow_third_party": true,
       "allow_external": true
     },
     "engines": {
+      "ollama": {
+        "enabled": true,
+        "fallback_eligible": true,
+        "metadata": {
+          "preferred_model": "qwen3:4b"
+        }
+      },
       "builtin": {
         "enabled": true,
         "fallback_eligible": true,
         "metadata": {
-          "preferred_model": "gpt2",
-          "preferred_provider": "vllm"
+          "preferred_model": "auto",
+          "preferred_provider": "builtin_transformers"
         }
       },
       "local": {
         "enabled": true,
-        "fallback_eligible": true
+        "fallback_eligible": true,
+        "metadata": {
+          "preferred_provider": "ollama",
+          "preferred_model": "qwen3:4b"
+        }
       },
       "cloud": {
         "enabled": true,
         "fallback_eligible": true,
         "metadata": {
-          "preferred_provider": "gemini"
+          "preferred_provider": "zai",
+          "preferred_model": "glm-4.5"
         }
       }
     },
     "enabled_engines": [
+      "ollama",
       "builtin",
       "openai_compatible_local"
     ]
   },
   "security": {
-    "jwt_secret": "m6sGgjv2xK+Og41EHE9MgWXeWoVF4qFzBb8KJZuu6Ms=",
+    "jwt_secret": "${_SHARED_SECRET}",
     "jwt_algorithm": "HS256",
     "jwt_expiration": 3600,
     "cors_origins": [
@@ -144,7 +157,7 @@
     "rate_limit_window": 60,
     "enable_auth": true,
     "enable_rate_limiting": true,
-    "secret_key": "m6sGgjv2xK+Og41EHE9MgWXeWoVF4qFzBb8KJZuu6Ms="
+    "secret_key": "${_SHARED_SECRET}"
   },
   "monitoring": {
     "enable_metrics": true,
@@ -203,5 +216,47 @@
   "event_bus": "memory",
   "ui": {
     "show_debug_info": false
-  }
+  },
+  "user_profiles": {
+    "profiles": [
+      {
+        "id": "default",
+        "name": "Default",
+        "assignments": {
+          "chat": {
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "parameters": {}
+          },
+          "code": {
+            "provider": "deepseek",
+            "model": "deepseek-coder",
+            "parameters": {}
+          },
+          "reasoning": {
+            "provider": "openai",
+            "model": "gpt-4o",
+            "parameters": {}
+          },
+          "summarization": {
+            "provider": "builtin_transformers",
+            "model": "auto",
+            "parameters": {}
+          }
+        },
+        "fallback_chain": [
+          "ollama",
+          "builtin_transformers",
+          "openai",
+          "deepseek",
+          "huggingface",
+          "gemini"
+        ],
+        "is_active": true,
+        "updated_at": "2026-05-10T19:22:02.479990"
+      }
+    ],
+    "active_profile": "default"
+  },
+  "active_profile": "default"
 }

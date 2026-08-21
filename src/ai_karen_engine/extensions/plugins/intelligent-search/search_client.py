@@ -105,6 +105,10 @@ class WebSearchClient:
                 "enabled": True,
                 "priority": 85,  # Reliable fallback for general knowledge
             },
+            "startpage": {
+                "enabled": True,
+                "priority": 87,
+            },
             "google_custom_search": {
                 "enabled": bool(
                     self.settings.get("google_api_key")
@@ -291,6 +295,8 @@ class WebSearchClient:
             return await self._search_wikipedia(query, max_results, **kwargs)
         elif provider_name == "google_custom_search":
             return await self._search_google(query, max_results, time_range, **kwargs)
+        elif provider_name == "startpage":
+            return await self._search_startpage(query, max_results, **kwargs)
         else:
             return SearchResponse(
                 query=query,
@@ -959,3 +965,77 @@ class WebSearchClient:
             for name, config in self.providers.items()
             if config.get("enabled", False)
         ]
+    async def _search_startpage(
+        self,
+        query: str,
+        max_results: int,
+        **kwargs,
+    ) -> SearchResponse:
+        """Search using Startpage (Google results proxy)."""
+        try:
+            url = "https://www.startpage.com/sp/search"
+            data = {
+                "query": query,
+                "cat": "web",
+                "language": "english",
+            }
+            headers = {
+                "User-Agent": random.choice(self.user_agents),
+                "Origin": "https://www.startpage.com",
+                "Referer": "https://www.startpage.com/",
+            }
+
+            async with self.session.post(url, data=data, headers=headers) as response:
+                if response.status != 200:
+                    return SearchResponse(
+                        query=query,
+                        results=[],
+                        provider="startpage",
+                        error=f"HTTP {response.status}",
+                    )
+                
+                html = await response.text()
+            
+            soup = BeautifulSoup(html, "html.parser")
+            results = []
+            
+            # Startpage uses 'w-gl__result' or similar
+            items = soup.find_all("div", class_="w-gl__result")
+            
+            for item in items[:max_results]:
+                try:
+                    title_elem = item.find("a", class_="w-gl__result-title")
+                    link_elem = title_elem if title_elem else item.find("a")
+                    snippet_elem = item.find("p", class_="w-gl__description")
+                    
+                    if link_elem:
+                        url = link_elem.get("href", "")
+                        if not url.startswith("http"):
+                            continue
+                            
+                        results.append(
+                            SearchResult(
+                                title=link_elem.get_text(strip=True),
+                                url=url,
+                                snippet=snippet_elem.get_text(strip=True) if snippet_elem else "",
+                                source="startpage",
+                            )
+                        )
+                except Exception as e:
+                    logger.debug(f"Failed to parse Startpage result: {e}")
+                    continue
+            
+            return SearchResponse(
+                query=query,
+                results=results,
+                total_results=len(results),
+                provider="startpage",
+            )
+        except Exception as e:
+            logger.warning(f"Startpage search failed: {e}")
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider="startpage",
+                error=str(e),
+            )

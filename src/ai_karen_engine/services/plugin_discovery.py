@@ -220,37 +220,43 @@ class PluginRegistry:
         """Discover plugins in a specific path."""
         discovered = {}
         
-        logger.debug(f"Scanning for plugin_manifest.json in: {base_path}")
-        for manifest_path in base_path.rglob("plugin_manifest.json"):
-            logger.debug(f"Found manifest candidate: {manifest_path}")
-            # Skip excluded paths
-            if any(excluded in manifest_path.parts for excluded in self.excluded_paths):
-                logger.debug(f"Skipping excluded path: {manifest_path}")
-                continue
-            
-            try:
-                plugin_metadata = await self._load_plugin_metadata(manifest_path, plugin_type)
-                if plugin_metadata:
-                    logger.info(f"Successfully loaded plugin: {plugin_metadata.manifest.name}")
-                    discovered[plugin_metadata.manifest.name] = plugin_metadata
-                else:
-                    logger.warning(f"Failed to load metadata for: {manifest_path}")
-            except Exception as e:
-                logger.error(f"Failed to load plugin from {manifest_path}: {e}")
-                # Create error metadata
-                error_metadata = PluginMetadata(
-                    manifest=PluginManifest(
-                        name=f"error_{manifest_path.parent.name}",
-                        version="0.0.0",
-                        description="Failed to load plugin",
-                        author="unknown",
-                        module="unknown"
-                    ),
-                    path=manifest_path.parent,
-                    status=PluginStatus.ERROR,
-                    error_message=str(e)
-                )
-                discovered[error_metadata.manifest.name] = error_metadata
+        logger.debug(f"Scanning for plugins in: {base_path}")
+        
+        # Optimized discovery: only look at immediate subdirectories first.
+        # Most plugins are at base_path/plugin-name/plugin_manifest.json
+        try:
+            if not base_path.exists():
+                return {}
+                
+            for item in base_path.iterdir():
+                if not item.is_dir() or item.name in self.excluded_paths or item.name.startswith("."):
+                    continue
+                
+                manifest_path = item / "plugin_manifest.json"
+                if manifest_path.exists():
+                    try:
+                        plugin_metadata = await self._load_plugin_metadata(manifest_path, plugin_type)
+                        if plugin_metadata:
+                            logger.info(f"Successfully loaded plugin: {plugin_metadata.manifest.name}")
+                            discovered[plugin_metadata.manifest.name] = plugin_metadata
+                    except Exception as e:
+                        logger.error(f"Failed to load plugin from {manifest_path}: {e}")
+                        # Create error metadata
+                        error_metadata = PluginMetadata(
+                            manifest=PluginManifest(
+                                name=f"error_{item.name}",
+                                version="0.0.0",
+                                description="Failed to load plugin",
+                                author="unknown",
+                                module="unknown"
+                            ),
+                            path=item,
+                            status=PluginStatus.ERROR,
+                            error_message=str(e)
+                        )
+                        discovered[error_metadata.manifest.name] = error_metadata
+        except Exception as e:
+            logger.error(f"Error scanning directory {base_path}: {e}")
         
         return discovered
     
@@ -296,11 +302,13 @@ class PluginRegistry:
             return None
     
     async def _calculate_plugin_checksum(self, plugin_path: Path) -> str:
-        """Calculate checksum for plugin files."""
+        """Calculate checksum for plugin files. Optimized to skip junk."""
         hasher = hashlib.sha256()
         
-        # Include all Python files and manifest
+        # Include all Python files and manifest, but skip junk directories
         for file_path in sorted(plugin_path.rglob("*.py")):
+            if any(excluded in file_path.parts for excluded in self.excluded_paths):
+                continue
             if file_path.is_file():
                 hasher.update(file_path.read_bytes())
         

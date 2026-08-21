@@ -19,7 +19,7 @@
             "transformers": {
               "enabled": true,
               "provider_type": "builtin",
-              "model_path": "/app/models/transformers"
+              "model_path": "models/transformers"
             }
           }
         }
@@ -142,11 +142,11 @@
       }
     }
   },
-  "provider": "builtin_vllm",
+  "provider": "builtin_transformers",
   "model": "auto",
   "model_providers": {
     "builtin_transformers": {
-      "last_model": "gpt2",
+      "last_model": "auto",
       "base_url": ""
     },
     "builtin_vllm": {
@@ -157,8 +157,14 @@
       "last_model": "gemini-2.5-flash"
     },
     "ollama": {
-      "last_model": "qwen3:4b",
+      "last_model": "auto",
       "base_url": "http://host.docker.internal:11434"
+    },
+    "zai": {
+      "last_model": "glm-4.5"
+    },
+    "fallback": {
+      "last_model": "auto"
     }
   }
 }

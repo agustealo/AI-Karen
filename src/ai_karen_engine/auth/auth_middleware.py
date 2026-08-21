@@ -26,7 +26,7 @@ from fastapi import Request
 from fastapi.security import HTTPBearer
 
 from ai_karen_engine.config.config_manager import get_config_manager
-from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.logging import get_logger, get_structured_logger
 from ai_karen_engine.core.operations.metrics_manager import get_metrics_manager
 
 logger = get_logger(__name__)
@@ -144,13 +144,13 @@ class SecureAuthMiddleware:
         """Initialize Redis client for token management."""
         try:
             if self.config_manager is None:
-                logger.warning("Config manager is None, skipping Redis initialization")
+                logger.info("Config manager is None, skipping Redis initialization")
                 self.redis_client = None
                 return
 
             config = self.config_manager.get_config()
             if config is None or not hasattr(config, "redis"):
-                logger.warning(
+                logger.info(
                     "Config or redis config is None, skipping Redis initialization"
                 )
                 self.redis_client = None

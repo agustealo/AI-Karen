@@ -28,7 +28,7 @@ class SignalPipeline:
         try:
             self.spacy_service.initialize()
         except Exception as e:
-            logger.warning(f"Could not initialize spaCy, pipeline will degrade to rule-based fallback. Error: {e}")
+            logger.info(f"Could not initialize spaCy, pipeline will degrade to rule-based fallback. Error: {e}")
             
     async def process_text(
         self, 

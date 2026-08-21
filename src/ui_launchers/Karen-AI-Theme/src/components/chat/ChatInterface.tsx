@@ -35,7 +35,7 @@ import { useUserPreferences } from './const/userPreferences';
 
 // Import interface components
 import { StatusIndicators, MessagesArea, ChatInput } from './interface';
-import AgentActivityPanel from './AgentActivityPanel';
+// import AgentActivityPanel from './AgentActivityPanel';
 import DegradedModeBanner from './DegradedModeBanner';
 import RuntimeMetadataPanel from './RuntimeMetadataPanel';
 import RuntimeReceipt from './RuntimeReceipt';
@@ -50,6 +50,10 @@ export interface Session {
   messageCount: number;
   isActive: boolean;
   lastMessage?: string;
+}
+
+interface ChatInterfaceProps {
+  isActive?: boolean;
 }
 
 interface ConversationApiResponse {
@@ -781,7 +785,7 @@ const loadSessionState = (sessionId: string): PersistedChatSessionState | null =
   }
 };
 
-export default function ChatInterface() {
+export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   const { 
     currentSession, 
     sessions, 
@@ -894,8 +898,11 @@ export default function ChatInterface() {
     if (isAuthLoading) {
       return;
     }
-    void loadModelSettings();
-  }, [isAuthLoading, loadModelSettings]);
+    
+    if (isAuthenticated && isActive) {
+      void loadModelSettings();
+    }
+  }, [isAuthLoading, isAuthenticated, loadModelSettings, isActive]);
 
   useEffect(() => {
     currentSessionRef.current = currentSession;
@@ -1000,7 +1007,9 @@ export default function ChatInterface() {
       status: isEmergencyStatic ? 'emergency unavailable' : status,
       responseSource,
       usedFallback: Boolean(llm.used_fallback || llm.is_fallback || metadata.used_fallback),
-      degradedReason: isEmergencyStatic ? degradedReason || 'No configured provider could generate a response.' : degradedReason,
+      degradedReason: isEmergencyStatic
+        ? degradedReason || 'No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.'
+        : degradedReason,
       showCircuitWarning: Boolean(metadata.circuit_breaker_open || metadata.dependency_degraded || degradedReason || isEmergencyStatic),
     };
   }, [messages]);
@@ -1577,6 +1586,9 @@ export default function ChatInterface() {
         ? normalizeBackendChatResponse(runtimePayload)
         : null;
 
+      const noActiveCloudProvidersMessage =
+        'No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.';
+
       const errorAssistantMessage: ChatMessage | null = fallbackErrorResponse ? {
         id: fallbackErrorResponse.correlationId || 'assistant-error-' + Date.now(),
         role: 'assistant',
@@ -1608,10 +1620,28 @@ export default function ChatInterface() {
                     ? 'Emergency fallback active'
                     : 'Limited chat mode',
               description: fallbackErrorResponse.answer,
-            }
+          }
           : {
               title: 'Chat request failed',
-              description: getDegradedResponseMessage(error),
+              description: (() => {
+                const message = getDegradedResponseMessage(error);
+                if (
+                  message.includes('No active cloud providers are configured') ||
+                  message.includes('Built-in runtimes may still be available')
+                ) {
+                  return message;
+                }
+
+                const raw = error instanceof Error ? error.message : '';
+                if (
+                  raw.toLowerCase().includes('no configured provider could generate a response') ||
+                  raw.toLowerCase().includes('expression engine is currently inactive')
+                ) {
+                  return noActiveCloudProvidersMessage;
+                }
+
+                return message;
+              })(),
               variant: 'destructive',
             },
       );
@@ -1953,7 +1983,7 @@ export default function ChatInterface() {
   }, [shouldSubmitVoiceInput, input, isLoading, isAuthLoading, handleSubmit]);
 
   return (
-    <div className="flex flex-col flex-1">
+    <div data-testid="chat-root" className="flex flex-col flex-1">
       <StatusIndicators
         isBackendOffline={isBackendOffline}
         error={error}
@@ -1999,11 +2029,14 @@ export default function ChatInterface() {
         messagesContainerRef={messagesContainerRef}
       />
 
+      {/* Legacy AgentActivityPanel removed to simplify UI */}
+      {/* 
       {agentSteps.length > 0 && (
         <div className="mx-4 mb-4">
           <AgentActivityPanel steps={agentSteps} />
         </div>
       )}
+      */}
 
       <ChatInput
         onSubmit={handleFormSubmit}

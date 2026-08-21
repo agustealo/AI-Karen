@@ -132,6 +132,10 @@ export interface NormalizedRuntimeProvider extends RuntimeProviderDetails {
   compatibility_profile?: string | null;
   degradation_reason?: string | null;
   requires_base_url?: boolean;
+  execution_family?: string | null;
+  adapter_class?: string | null;
+  adapter_module?: string | null;
+  execution_notes?: string | null;
 }
 
 export interface NormalizedRuntimeInventory {
@@ -280,12 +284,14 @@ export async function loadDynamicTransformersModels(): Promise<RuntimeProviderMo
 /**
  * Determine if a provider should be selectable in UI.
  * Previously we blocked Transformers, but now we allow it as a valid local option.
+ * We only show providers that are enabled AND configured (e.g. have API keys or local services detected).
  */
 const isProviderSelectable = (provider: RuntimeProviderDetails): boolean => {
   return (
     provider.enabled !== false &&
     provider.user_selectable !== false &&
-    provider.policy_allowed !== false
+    provider.policy_allowed !== false &&
+    provider.is_configured !== false
   );
 };
 
@@ -301,6 +307,7 @@ export function normalizeModelSettingsResponse(response: RuntimeSettingsResponse
       // The backend provides discovered models in the provider.models array.
       const normalizedModels = normalizeModels(provider, response.selected_provider, response.selected_model);
       const providerType = String((provider as { provider_type?: string; type?: string }).provider_type || provider.type || '').toLowerCase();
+      const diagnostic = provider.safe_diagnostic_metadata || {};
       return {
         ...provider,
         provider_type: providerType || provider.provider_type,
@@ -309,6 +316,11 @@ export function normalizeModelSettingsResponse(response: RuntimeSettingsResponse
         selectable: provider.user_selectable,
         runtime_display_name: getRuntimeDisplayName(provider.id, provider.display_name) || '',
         runtime_group_label: getRuntimeGroupLabel(provider.id) || 'Custom',
+        runtime_engine: String(diagnostic['runtime_engine'] || provider.runtime_engine || provider.id.replace('builtin_', '')),
+        execution_family: String(diagnostic['execution_family'] || ''),
+        adapter_class: String(diagnostic['adapter_class'] || ''),
+        adapter_module: String(diagnostic['adapter_module'] || ''),
+        execution_notes: String(diagnostic['execution_notes'] || ''),
         models: normalizedModels,
       };
     });
@@ -367,6 +379,7 @@ export function normalizeRuntimeProviderCatalogResponse(
         provider.default_model ||
         response.default_model ||
         '';
+      const diagnostic = provider.safe_diagnostic_metadata || {};
       const resolvedModels: RuntimeProviderModel[] =
         normalizedModels.length > 0
           ? normalizedModels
@@ -397,11 +410,16 @@ export function normalizeRuntimeProviderCatalogResponse(
         enabled: provider.enabled !== false,
         policy_allowed: provider.allowed_for_current_user !== false,
         policy_rejection_reason: provider.allowed_for_current_user === false ? 'not_allowed_for_current_user' : null,
-        runtime_engine: provider.runtime_engine || provider.id.replace('builtin_', ''),
+        runtime_engine:
+          String(diagnostic['runtime_engine'] || provider.runtime_engine || provider.id.replace('builtin_', '')),
         transport: provider.transport,
         compatibility_profile: provider.compatibility_profile || undefined,
         degradation_reason: provider.degradation_reason || null,
         requires_base_url: Boolean(provider.requires_base_url),
+        execution_family: String(diagnostic['execution_family'] || ''),
+        adapter_class: String(diagnostic['adapter_class'] || ''),
+        adapter_module: String(diagnostic['adapter_module'] || ''),
+        execution_notes: String(diagnostic['execution_notes'] || ''),
         api_key_header: provider.api_key_header || undefined,
         api_key_prefix: provider.api_key_prefix || undefined,
         default_base_url: provider.default_base_url || undefined,

@@ -275,6 +275,17 @@ class ProviderRegistryService:
         """List all canonical endpoints."""
         return list(self._provider_endpoints.values())
 
+    def get_all_provider_names(self) -> List[str]:
+        """Returns all known provider names (both endpoints and base registry)."""
+        names = set(self._provider_endpoints.keys())
+        try:
+            from ai_karen_engine.integrations.llm_registry import get_registry
+
+            names.update(get_registry().get_all_provider_names())
+        except Exception:
+            pass
+        return sorted(list(names))
+
     def register_provider(
         self,
         name: str,

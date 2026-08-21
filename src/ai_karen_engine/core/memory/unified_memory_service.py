@@ -3,6 +3,7 @@ Unified Memory Service - Phase 4.1.b
 Consolidates all memory adapters into single service with unified query/commit paths.
 """
 
+import json
 import logging
 import time
 import uuid
@@ -1246,6 +1247,26 @@ class UnifiedMemoryService:
 
         return base_metrics
 
+    async def initialize(self):
+        """Initialize the unified memory service."""
+        # Standard service lifecycle method
+        logger.info("Unified memory service initialized")
+        return True
+
+    async def health_check(self) -> Dict[str, Any]:
+        """Check the health of the memory service and its dependencies."""
+        db_healthy = await self.db_client.check_health()
+        milvus_healthy = await self.milvus_client.check_health()
+        
+        is_healthy = db_healthy and milvus_healthy
+        
+        return {
+            "status": "healthy" if is_healthy else "unhealthy",
+            "db_healthy": db_healthy,
+            "milvus_healthy": milvus_healthy,
+            "metrics": self.get_service_metrics()
+        }
+
     async def shutdown(self):
         """Shutdown the unified memory service and all subsystems"""
         try:
@@ -1256,6 +1277,45 @@ class UnifiedMemoryService:
 
         except Exception as e:
             logger.error(f"Error during unified memory service shutdown: {e}")
+
+    async def store(self, collection: str, key: str, value: Any) -> bool:
+        """Store a structured value in persistent storage (KV interface)."""
+        try:
+            # Use Redis if available for KV storage
+            if self.redis_client:
+                cache_key = f"kv:{collection}:{key}"
+                await self.redis_client.set(cache_key, json.dumps(value))
+                return True
+            
+            # Fallback to base manager or log warning
+            logger.warning(f"KV store requested but Redis unavailable: {collection}/{key}")
+            return False
+        except Exception as e:
+            logger.error(f"KV store failed: {e}")
+            return False
+
+    async def retrieve(self, collection: str, key: str) -> Optional[Any]:
+        """Retrieve a structured value from persistent storage (KV interface)."""
+        try:
+            # Use Redis if available
+            if self.redis_client:
+                cache_key = f"kv:{collection}:{key}"
+                data = await self.redis_client.get(cache_key)
+                if data:
+                    return json.loads(data)
+            
+            return None
+        except Exception as e:
+            logger.error(f"KV retrieve failed: {e}")
+            return None
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get the current status of the memory service."""
+        return {
+            "initialized": True,
+            "metrics": self.get_service_metrics(),
+            "capabilities": ["query", "commit", "kv_store"]
+        }
 
 
 # Export public interface - updated to include writeback components

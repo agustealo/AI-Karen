@@ -1,15 +1,18 @@
 from __future__ import annotations
+import logging
 from .contracts import ExpressionResult, ExpressionTask
 from .circuit_breakers import ExpressionCircuitBreakers
 from .observability import emit_expression_event
 from .registry import get_engine
-from .settings import ExpressionSettings, EngineConfig
+from ai_karen_engine.core.expression.settings import get_expression_settings, EngineConfig
 from ..response.response_validator import validate_response_text
 from ..model_runtime.provider_policy import evaluate_provider_policy
 
+logger = logging.getLogger(__name__)
+
 class ExpressionGateway:
-    def __init__(self, settings: ExpressionSettings | None = None):
-        self.settings = settings or ExpressionSettings.load_from_config()
+    def __init__(self, settings: Any | None = None):
+        self.settings = settings or get_expression_settings()
         self.circuits = ExpressionCircuitBreakers()
 
     def _event_payload(self, task: ExpressionTask, **extra):
@@ -35,10 +38,14 @@ class ExpressionGateway:
         pref_id = str(task.preferred_provider or "").strip().lower()
         if pref_id and pref_id != "auto":
              # Use policy to map provider to engine category
-             decision = evaluate_provider_policy(pref_id)
+             decision = evaluate_provider_policy(
+                 pref_id, 
+                 local_enabled=True, 
+                 external_enabled=self.settings.policies.allow_external_engines
+             )
              target_engine = None
              if decision.classification == "builtin_engine":
-                  target_engine = "builtin"
+                  target_engine = decision.provider
              elif decision.classification == "local_provider_option":
                   target_engine = "local"
              elif decision.classification == "external_provider_option":
@@ -57,15 +64,16 @@ class ExpressionGateway:
              sequence.append(self.settings.active_engine)
              
         for engine_id in fallback_order:
-            if engine_id not in sequence and len(sequence) < 4:
+            if engine_id not in sequence and len(sequence) < 5:
                 sequence.append(engine_id)
         
         # Step 5: Always Emergency Static
         if "disabled" not in sequence:
             sequence.append("disabled")
         
-        # Limit to 5 steps total
-        sequence = sequence[:5]
+        # Limit to 6 steps total to ensure 'disabled' is always included
+        sequence = sequence[:6]
+        logger.info(f"Expression gateway sequence: {sequence} (preferred: {task.preferred_provider})")
 
         last_error = None
         skipped_engines = []
@@ -73,6 +81,8 @@ class ExpressionGateway:
         for level, engine_id in enumerate(sequence):
             # Resolve config
             cfg = self.settings.engines.get(engine_id)
+            logger.error(f"DEBUG: Gateway trying {engine_id}, cfg: {cfg}")
+            
             if engine_id == "disabled":
                 # Emergency static is always enabled and fallback-eligible
                 cfg = EngineConfig(enabled=True, type="disabled_engine", fallback_eligible=True)
@@ -92,9 +102,11 @@ class ExpressionGateway:
             original_provider = task.preferred_provider
             original_model = task.preferred_model
             
-            decision = evaluate_provider_policy(engine_id)
-            if decision.classification != "unknown":
-                 task.preferred_provider = engine_id
+            # Only override if engine_id is a recognized provider, but NOT 'local' or 'cloud'
+            if engine_id not in {"local", "cloud", "builtin"}:
+                decision = evaluate_provider_policy(engine_id)
+                if decision.classification != "unknown" and decision.classification != "removed_internal_provider":
+                     task.preferred_provider = engine_id
             
             # Inject engine-specific overrides from config metadata
             if cfg and cfg.metadata:
@@ -107,11 +119,13 @@ class ExpressionGateway:
             
             try:
                 result = await engine.generate(task)
+                logger.error(f"DEBUG: Engine {engine_id} returned text: '{result.text}'")
                 
                 # Validate the generated output
-                is_valid = validate_response_text(result.text)
+                has_text = bool(result.text and result.text.strip())
+                is_valid = validate_response_text(result.text) if has_text else False
                 
-                if result.text.strip() and is_valid:
+                if has_text and is_valid:
                     if engine_id != "disabled":
                         self.circuits.mark_success(f"expression.engine.{engine_id}")
                     
@@ -122,7 +136,12 @@ class ExpressionGateway:
                     emit_expression_event("expression.engine.request.completed", self._event_payload(task, engine_id=result.engine_id, engine_type=cfg.type, provider=result.provider, model=result.model, latency_ms=result.latency_ms, degraded=result.degraded, fallback_level=level))
                     return result
                 else:
-                    reason = "invalid_output" if not is_valid else "empty_output"
+                    # Determine reason for failure
+                    if not has_text:
+                        reason = result.degradation_reason or "empty_output"
+                    else:
+                        reason = "invalid_output"
+                        
                     emit_expression_event("expression.output.invalid", self._event_payload(task, engine_id=result.engine_id, provider=result.provider, model=result.model, degraded=True, degradation_reason=reason))
                     if engine_id != "disabled":
                         self.circuits.mark_failure(f"validation.{result.model or 'unknown'}")

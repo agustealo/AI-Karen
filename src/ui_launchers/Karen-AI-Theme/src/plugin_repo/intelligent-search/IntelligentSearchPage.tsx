@@ -1,6 +1,9 @@
 import React from 'react';
 import { useIntelligentSearch } from './hooks/useIntelligentSearch';
 import { SearchHeader } from './components/SearchHeader';
+import { SearchQueryInput } from './components/SearchQueryInput';
+import { ModeSelector } from './components/ModeSelector';
+import { ModeSpecificControls } from './components/ModeSpecificControls';
 import { ResultsWorkspace } from './components/ResultsWorkspace';
 import { SearchControlsPanel } from './components/SearchControlsPanel';
 

@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO)
 
 async def main():
     try:
-        from ai_karen_engine.core.service_registry import initialize_services, get_service_registry
+        from ai_karen_engine.core.services.service_registry import initialize_services, get_service_registry
         await initialize_services()
         registry = get_service_registry()
         report = registry.get_initialization_report()

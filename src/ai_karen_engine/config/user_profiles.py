@@ -91,12 +91,19 @@ class UserProfilesManager:
     # ------------ Persistence helpers ------------
     def _ensure_section(self) -> Dict[str, Any]:
         cfg = self.cm.get_config()
-        up = cfg.user_profiles or {}
+        # Handle both object and dict for backward compatibility
+        if isinstance(cfg, dict):
+            up = cfg.get("user_profiles") or {}
+            active_profile = cfg.get("active_profile")
+        else:
+            up = getattr(cfg, "user_profiles", {}) or {}
+            active_profile = getattr(cfg, "active_profile", None)
+
         if "profiles" not in up:
             up["profiles"] = []
         if "active_profile" not in up:
             # Keep backwards compat with ConfigManager.active_profile if set
-            up["active_profile"] = cfg.active_profile or (
+            up["active_profile"] = active_profile or (
                 up["profiles"][0]["id"] if up["profiles"] else None
             )
         # persist back to in-memory config object

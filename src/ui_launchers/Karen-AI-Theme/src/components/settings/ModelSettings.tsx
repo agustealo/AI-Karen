@@ -79,6 +79,22 @@ function formatErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function formatExecutionFamilyLabel(value: string): string {
+  switch (value) {
+    case 'builtin_runtime':
+      return 'Built-in runtime';
+    case 'first_class_adapter':
+      return 'First-class adapter';
+    case 'openai_compatible':
+    case 'openai_compatible_unknown':
+      return 'OpenAI-compatible shared adapter';
+    case 'emergency_adapter':
+      return 'Emergency fallback adapter';
+    default:
+      return value.replace(/_/g, ' ');
+  }
+}
+
 function formatProviderCredentialMessage(providerName: string, message: string): string {
   const trimmed = message.trim();
   const lowered = trimmed.toLowerCase();
@@ -153,15 +169,20 @@ export default function ModelSettings() {
     [settings],
   );
 
-  const selectedProviderDetails = useMemo(() => {
-    return normalizedSettings?.providers.find((p) => p.id === selectedProvider) ?? null;
-  }, [normalizedSettings, selectedProvider]);
-
   const canSelectProvider = useCallback((provider?: { selectable?: boolean; requires_api_key?: boolean } | null) => {
     if (!provider) return false;
     if (provider.selectable !== false) return true;
     return Boolean(provider.requires_api_key);
   }, []);
+
+  const selectedProviderDetails = useMemo(() => {
+    return normalizedSettings?.providers.find((p) => p.id === selectedProvider) ?? null;
+  }, [normalizedSettings, selectedProvider]);
+
+  const selectableCloudProviders = useMemo(
+    () => (normalizedSettings?.thirdPartyProviders || []).filter((provider) => canSelectProvider(provider)),
+    [normalizedSettings?.thirdPartyProviders, canSelectProvider],
+  );
 
   const selectedProviderLabel = useMemo(() => {
     if (!selectedProviderDetails) return '';
@@ -549,6 +570,15 @@ export default function ModelSettings() {
                     </DialogContent>
                   </Dialog>
                 </div>
+
+                {!selectableCloudProviders.length ? (
+                  <Alert className="border-border/60 bg-muted/20 text-muted-foreground">
+                    <Info className="h-4 w-4" />
+                    <AlertDescription>
+                      No active cloud providers are configured. Built-in runtimes are still available.
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
                 
                 <Select
                   value={selectedProvider}
@@ -625,28 +655,34 @@ export default function ModelSettings() {
                     <SelectSeparator className="my-2" />
                     <SelectGroup>
                       <SelectLabel className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground"><HardDrive className="h-3 w-3" /> Cloud Providers</SelectLabel>
-                      {normalizedSettings?.thirdPartyProviders.map((p) => (
-                        <SelectItem
-                          key={p.id}
-                          value={p.id}
-                          disabled={!canSelectProvider(p)}
-                          className="cursor-pointer py-3 text-foreground hover:bg-primary/5 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-45"
-                        >
-                          <div className="flex items-center gap-3">
-                            <span className="font-semibold">{getRuntimeDisplayName(p.id, p.display_name)}</span>
-                            <Badge variant="outline" className="h-5 text-[9px] font-bold uppercase tracking-widest text-emerald-600/70">Third-Party</Badge>
-                            {p.selectable === false && !p.requires_api_key ? (
-                              <Badge variant="outline" className="h-5 text-[9px] font-bold uppercase tracking-widest text-muted-foreground/70">
-                                Locked
-                              </Badge>
-                            ) : p.requires_api_key && !p.api_key_configured ? (
-                              <Badge variant="outline" className="h-5 text-[9px] font-bold uppercase tracking-widest text-amber-600/70">
-                                Needs Key
-                              </Badge>
-                            ) : null}
-                          </div>
-                        </SelectItem>
-                      ))}
+                      {normalizedSettings?.thirdPartyProviders.length ? (
+                        normalizedSettings.thirdPartyProviders.map((p) => (
+                          <SelectItem
+                            key={p.id}
+                            value={p.id}
+                            disabled={!canSelectProvider(p)}
+                            className="cursor-pointer py-3 text-foreground hover:bg-primary/5 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-45"
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="font-semibold">{getRuntimeDisplayName(p.id, p.display_name)}</span>
+                              <Badge variant="outline" className="h-5 text-[9px] font-bold uppercase tracking-widest text-emerald-600/70">Third-Party</Badge>
+                              {p.selectable === false && !p.requires_api_key ? (
+                                <Badge variant="outline" className="h-5 text-[9px] font-bold uppercase tracking-widest text-muted-foreground/70">
+                                  Locked
+                                </Badge>
+                              ) : p.requires_api_key && !p.api_key_configured ? (
+                                <Badge variant="outline" className="h-5 text-[9px] font-bold uppercase tracking-widest text-amber-600/70">
+                                  Needs Key
+                                </Badge>
+                              ) : null}
+                            </div>
+                          </SelectItem>
+                        ))
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-border/50 bg-muted/5 px-3 py-2 text-xs text-muted-foreground">
+                          No active cloud providers are configured. Built-in runtimes are still available.
+                        </div>
+                      )}
                     </SelectGroup>
                     {normalizedSettings?.customProviders.length ? (
                       <>
@@ -998,10 +1034,28 @@ export default function ModelSettings() {
                         <span className="uppercase tracking-widest text-primary/80">{selectedProviderDetails.runtime_engine}</span>
                       </div>
                     )}
+                    {selectedProviderDetails.execution_family && (
+                      <div className="flex items-center justify-between text-xs font-semibold">
+                        <span className="text-muted-foreground">Execution</span>
+                        <span className="tracking-widest text-primary/80">{formatExecutionFamilyLabel(selectedProviderDetails.execution_family)}</span>
+                      </div>
+                    )}
+                    {selectedProviderDetails.adapter_class && (
+                      <div className="flex items-center justify-between text-xs font-semibold">
+                        <span className="text-muted-foreground">Adapter</span>
+                        <span className="max-w-[120px] truncate font-mono text-primary/70">{selectedProviderDetails.adapter_class}</span>
+                      </div>
+                    )}
                     {connectionTarget && (
                       <div className="flex items-center justify-between text-xs font-semibold">
                         <span className="text-muted-foreground">Connection Target</span>
                         <span className="max-w-[120px] truncate font-mono text-[10px] text-primary/70">{connectionTarget}</span>
+                      </div>
+                    )}
+                    {selectedProviderDetails.execution_notes && (
+                      <div className="flex flex-col gap-1 mt-2 p-2 rounded bg-muted/40 border border-border/30">
+                        <span className="text-[10px] font-bold uppercase text-muted-foreground">Execution Notes</span>
+                        <span className="text-[10px] text-muted-foreground leading-tight">{selectedProviderDetails.execution_notes}</span>
                       </div>
                     )}
                     {selectedProviderDetails.degraded_reason && (

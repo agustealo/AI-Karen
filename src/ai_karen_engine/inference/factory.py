@@ -108,11 +108,10 @@ class InferenceServiceFactory:
 
             # Default fallback model path if none provided
             if not model_path:
-                # Try to find a local instructor model
+                # Try to find a local instructor model - prioritize verified working models
                 default_paths = [
                     "models/transformers/Qwen--Qwen3.5-0.8B",
                     "models/transformers/deepseek-ai--DeepSeek-R1-Distill-Qwen-1.5B",
-                    "models/transformers/gpt2"
                 ]
                 for p in default_paths:
                     if Path(p).exists():

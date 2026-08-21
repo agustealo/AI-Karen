@@ -86,8 +86,8 @@ class LocalModelProvider(BaseLLMProvider):
         
         # Check max_tokens
         max_tokens = config.get("max_tokens")
-        if max_tokens is not None and (max_tokens < 1 or max_tokens > 32768):
-            errors.append("Max tokens must be between 1 and 32768")
+        if max_tokens is not None and max_tokens < 1:
+            errors.append("Max tokens must be greater than 0")
         
         # Check timeout
         timeout = config.get("timeout_seconds")

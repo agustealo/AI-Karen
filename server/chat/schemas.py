@@ -68,7 +68,11 @@ class ProviderConfig(BaseSchema):
     base_url: Optional[str] = None
     model: Optional[str] = None
     temperature: Optional[float] = Field(0.7, ge=0.0, le=2.0)
-    max_tokens: Optional[int] = Field(2048, ge=1, le=32000)
+    max_tokens: Optional[int] = Field(
+        2048,
+        ge=1,
+        description="Requested output tokens. Provider/model caps are enforced later.",
+    )
     timeout_seconds: Optional[int] = Field(30, ge=1, le=300)
     enabled: bool = True
     priority: int = 0

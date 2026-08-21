@@ -97,6 +97,9 @@ from ai_karen_engine.api_routes.plugins.plugins import router as plugin_router
 from ai_karen_engine.api_routes.plugins.plugins import (
     public_router as plugin_public_router,
 )
+from ai_karen_engine.api_routes.plugins.intelligent_search import (
+    router as intelligent_search_router,
+)
 from ai_karen_engine.api_routes.tools.tools import router as tool_router
 from ai_karen_engine.api_routes.chat.websocket import router as websocket_router
 from ai_karen_engine.api_routes.chat.runtime import router as chat_runtime_router
@@ -128,6 +131,7 @@ from ai_karen_engine.api_routes.automation.stats import (
     router as automation_stats_router,
 )
 from ai_karen_engine.api_routes.monitoring.health import router as health_router
+from ai_karen_engine.api_routes.health.providers import router as providers_health_router
 from ai_karen_engine.api_routes.models.management import (
     router as model_management_router,
 )
@@ -423,6 +427,11 @@ def wire_routers(app: FastAPI, settings: Settings) -> None:
         logger.error(f"Failed to include conversation router: {e}", exc_info=True)
     app.include_router(plugin_router, prefix="/api/plugins", tags=["plugins"])
     app.include_router(plugin_public_router, tags=["plugins-public"])
+    app.include_router(
+        intelligent_search_router,
+        prefix="/api/plugins",
+        tags=["intelligent-search"],
+    )
     app.include_router(tool_router, prefix="/api/tools", tags=["tools"])
     # Audit router enabled
     app.include_router(audit_router, prefix="/api/audit", tags=["audit"])
@@ -453,6 +462,8 @@ def wire_routers(app: FastAPI, settings: Settings) -> None:
     # Health router already defines a "/health" prefix, so mount it at the API root
     # to expose endpoints like "/api/health" and "/api/health/degraded-mode".
     app.include_router(health_router, prefix="/api", tags=["health"])
+    # Include providers health diagnostics
+    app.include_router(providers_health_router)
     app.include_router(model_management_router, tags=["model-management"])
     app.include_router(scheduler_router, tags=["scheduler"])
     app.include_router(public_router, tags=["public"])

@@ -212,7 +212,7 @@ services:
       AUTH_MODE: "hybrid"
       
       # Production optimizations
-      KARI_FAST_STARTUP: "false"
+      KARI_FAST_STARTUP: "true"
       WARMUP_LLM: "true"
       KARI_DEFER_ROUTER_WIRING: "false"
       AUTH_ALLOW_DEV_LOGIN: "false"

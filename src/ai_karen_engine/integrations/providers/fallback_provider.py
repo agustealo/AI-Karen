@@ -167,7 +167,7 @@ class FallbackProvider(LLMProviderBase):
                     break
 
         # 2. Rest of the models by preferred order
-        preferred_order = ["DialoGPT", "gpt2", "deepseek", "default_model"]
+        preferred_order = ["Qwen", "deepseek", "DialoGPT", "default_model"]
         remaining = [
             (name, path)
             for name, path in transformer_models.items()
@@ -195,7 +195,7 @@ class FallbackProvider(LLMProviderBase):
                         device="cpu",  # Use CPU for compatibility
                         torch_dtype="float32",
                     )
-                    if not runtime.load_model(model_path):
+                    if not runtime.warm(model_path):
                         logger.warning(
                             f"Failed to load transformers model: {model_name}"
                         )

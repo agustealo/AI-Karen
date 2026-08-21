@@ -76,6 +76,8 @@ class MemoryFetchNode:
             user_settings = user_profile.get("preferences", {})
             prompt = conversation_history[-1]["content"]
 
+            import time
+            memory_start = time.time()
             context = await context_manager.build_context(
                 user_id=user_id,
                 session_id=state.get("session_id"),
@@ -84,8 +86,11 @@ class MemoryFetchNode:
                 user_settings=user_settings,
                 memories=None,
             )
+            memory_latency = (time.time() - memory_start) * 1000
 
             state["memory_context"] = context
+            if isinstance(context, dict):
+                context.setdefault("context_metadata", {})["latency_ms"] = memory_latency
 
             # Salvaged: Retrieve session state for continuity
             session_state_manager = await ensure_session_state_manager(self)

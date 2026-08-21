@@ -96,8 +96,8 @@ class LLMConfig:
     """LLM configuration."""
 
     default_provider: str = "builtin_transformers"
-    default_model: str = "/app/models/transformers/gpt2"
-    default_lightweight_model_id: str = "gpt2"
+    default_model: str = "auto"
+    default_lightweight_model_id: str = "auto"
     default_nlp_model_id: str = "distilbert-base-uncased"
     default_classifier_model_id: str = "default-classifier-model"
     models_dir: str = "models"
@@ -116,10 +116,11 @@ class LLMConfig:
         default_factory=lambda: {
             "openai": "gpt-4o-mini",
             "deepseek": "deepseek-chat",
-            "builtin_vllm": "/models/transformers/gpt2",
-            "builtin_transformers": "/app/models/transformers/gpt2",
-            "gemini": "gemini-1.5-flash",
+            "builtin_vllm": "auto",
+            "builtin_transformers": "auto",
+            "gemini": "gemini-2.5-flash",
             "huggingface": "microsoft/DialoGPT-large",
+            "fallback": "kari-fallback-v1",
         }
     )
     task_assignments: Dict[str, Dict[str, str]] = field(
@@ -261,8 +262,8 @@ DEFAULT_CONFIG = {
     },
     "llm": {
         "default_provider": "builtin_transformers",
-        "default_model": "/app/models/transformers/gpt2",
-        "default_lightweight_model_id": "gpt2",
+        "default_model": "auto",
+        "default_lightweight_model_id": "auto",
         "default_nlp_model_id": "distilbert-base-uncased",
         "default_classifier_model_id": "default-classifier-model",
         "models_dir": "models",
@@ -271,10 +272,11 @@ DEFAULT_CONFIG = {
         "provider_defaults": {
             "openai": "gpt-4o-mini",
             "deepseek": "deepseek-chat",
-            "builtin_vllm": "/models/transformers/gpt2",
-            "builtin_transformers": "/app/models/transformers/gpt2",
-            "gemini": "gemini-1.5-flash",
+            "builtin_vllm": "auto",
+            "builtin_transformers": "auto",
+            "gemini": "gemini-2.5-flash",
             "huggingface": "microsoft/DialoGPT-large",
+            "fallback": "kari-fallback-v1",
         },
         "task_assignments": {
             "chat": {"provider": "openai", "model": "gpt-4o-mini"},
@@ -409,6 +411,47 @@ def validate_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
             for subk, subv in v.items():
                 if subk not in cfg[k]:
                     cfg[k][subk] = subv
+
+    llm_cfg = cfg.get("llm")
+    if isinstance(llm_cfg, dict):
+        provider_defaults = llm_cfg.get("provider_defaults")
+        if isinstance(provider_defaults, dict):
+            legacy_defaults = {
+                "builtin_vllm": {
+                    "gpt2",
+                    "models/transformers/gpt2",
+                    "/models/transformers/gpt2",
+                    "/app/models/transformers/gpt2",
+                },
+                "builtin_transformers": {
+                    "gpt2",
+                    "models/transformers/gpt2",
+                    "/models/transformers/gpt2",
+                    "/app/models/transformers/gpt2",
+                },
+            }
+            for provider_name, legacy_values in legacy_defaults.items():
+                current_value = provider_defaults.get(provider_name)
+                if isinstance(current_value, str) and current_value.strip() in legacy_values:
+                    provider_defaults[provider_name] = "auto"
+
+            if provider_defaults.get("fallback") == "gpt2":
+                provider_defaults["fallback"] = "kari-fallback-v1"
+
+        legacy_models = {
+            "gpt2",
+            "models/transformers/gpt2",
+            "/models/transformers/gpt2",
+            "/app/models/transformers/gpt2",
+        }
+        default_model = llm_cfg.get("default_model")
+        if isinstance(default_model, str) and default_model.strip() in legacy_models:
+            llm_cfg["default_model"] = "auto"
+
+        lightweight_model = llm_cfg.get("default_lightweight_model_id")
+        if isinstance(lightweight_model, str) and lightweight_model.strip() in legacy_models:
+            llm_cfg["default_lightweight_model_id"] = "auto"
+
     return cfg
 
 
@@ -590,6 +633,47 @@ def get_llm_config() -> Dict[str, Any]:
     return cfg.get("llm", DEFAULT_CONFIG["llm"])
 
 
+def _resolve_builtin_transformers_default_model(llm: Dict[str, Any]) -> str:
+    """Resolve a real local model path for builtin transformers when set to auto.
+
+    The legacy gpt2 fallback is intentionally avoided here so built-in
+    Transformers can warm against an actually present local model.
+    """
+    env_override = (os.getenv("KARI_TRANSFORMERS_DEFAULT_MODEL") or "").strip()
+    if env_override:
+        candidate = Path(env_override)
+        return str(candidate) if candidate.exists() else env_override
+
+    provider_defaults = llm.get("provider_defaults", {})
+    configured = provider_defaults.get("builtin_transformers")
+    legacy_values = {
+        "gpt2",
+        "models/transformers/gpt2",
+        "/models/transformers/gpt2",
+        "/app/models/transformers/gpt2",
+    }
+    if isinstance(configured, str):
+        value = configured.strip()
+        if value and value not in {"auto", *legacy_values}:
+            candidate = Path(value)
+            return str(candidate) if candidate.exists() else value
+
+    transformers_dir = Path(llm.get("transformers_dir", "models/transformers"))
+    if not transformers_dir.is_absolute():
+        transformers_dir = Path.cwd() / transformers_dir
+
+    candidates = [
+        transformers_dir / "gpt2",
+        transformers_dir / "Qwen--Qwen3.5-0.8B",
+        transformers_dir / "deepseek-ai--DeepSeek-R1-Distill-Qwen-1.5B",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    return "auto"
+
+
 def get_default_model(provider: str = "") -> str:
     """Get the default model for a provider, or the system default.
 
@@ -599,10 +683,22 @@ def get_default_model(provider: str = "") -> str:
     """
     llm = get_llm_config()
     if provider:
-        return llm.get("provider_defaults", {}).get(
-            provider, llm.get("default_model", "Phi-3-mini-4k-instruct-q4.gguf")
-        )
-    return llm.get("default_model", "Phi-3-mini-4k-instruct-q4.gguf")
+        provider_defaults = llm.get("provider_defaults", {})
+        if provider == "builtin_transformers":
+            return _resolve_builtin_transformers_default_model(llm)
+        value = provider_defaults.get(provider, llm.get("default_model", "auto"))
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped in {
+                "gpt2",
+                "models/transformers/gpt2",
+                "/models/transformers/gpt2",
+                "/app/models/transformers/gpt2",
+            }:
+                return "auto"
+            return stripped or llm.get("default_model", "auto")
+        return value
+    return llm.get("default_model", "auto")
 
 
 def get_default_provider() -> str:
@@ -731,6 +827,15 @@ class ConfigManager:
 
     def get_config(self):
         return load_config()
+
+    def update_config(self, update: Dict[str, Any]) -> Dict[str, Any]:
+        return update_config(update)
+
+    def save_config(self, cfg: Optional[Dict[str, Any]] = None):
+        if cfg is not None:
+            save_config(cfg)
+        else:
+            save_config(load_config())
 
     def get_config_value(self, section: str, key: str = None, default=None):
         """Get a config value from a section, with optional key and default"""

@@ -44,8 +44,13 @@ from importlib import import_module
 from ai_karen_engine.routing.types import RouteRequest
 from ai_karen_engine.config.llm_provider_config import (
     get_provider_class_module,
+    get_provider_config_manager,
     resolve_provider_class_name,
     resolve_provider_name,
+)
+from ai_karen_engine.config.provider_execution_resolver import (
+    ProviderExecutionSpec,
+    resolve_provider_execution,
 )
 
 logger = logging.getLogger("kari.llm_registry")
@@ -176,7 +181,7 @@ class LLMRegistry:
 
         # Register built-in providers first so runtime lookups always have a canonical
         # baseline for local + cloud providers, then layer persisted registry state.
-        self._register_builtin_providers()
+        self._register_configured_providers()
 
         # Load existing registry data next
         self._load_registry()
@@ -513,122 +518,30 @@ class LLMRegistry:
                 temp_path.unlink()
             raise ex
 
-    def _register_builtin_providers(self):
-        """Register all built-in LLM providers."""
-        builtin_providers = [
-            {
-                "name": "builtin_vllm",
-                "provider_class": "VLLMRuntime",
-                "description": "Built-in vLLM text serving runtime",
-                "supports_streaming": True,
-                "supports_embeddings": False,
-                "requires_api_key": False,
-                "default_model": "auto",
-            },
-            {
-                "name": "builtin_transformers",
-                "provider_class": "TransformersRuntime",
-                "description": "Built-in Transformers runtime for local embeddings and fallback text generation",
-                "supports_streaming": False,
-                "supports_embeddings": True,
-                "requires_api_key": False,
-                "default_model": "auto",
-            },
-            {
-                "name": "ollama",
-                "provider_class": "OllamaProvider",
-                "description": "Local Ollama server reachable from Karen runtime",
-                "supports_streaming": True,
-                "supports_embeddings": False,
-                "requires_api_key": False,
-                "default_model": "deepseek-r1:1.5b",
-            },
-            {
-                "name": "openai",
-                "provider_class": "OpenAIProvider",
-                "description": "OpenAI GPT models via API",
-                "supports_streaming": True,
-                "supports_embeddings": True,
-                "requires_api_key": True,
-                "default_model": "gpt-3.5-turbo",
-            },
-            {
-                "name": "zai",
-                "provider_class": "OpenAIProvider",
-                "description": "Z.ai models via OpenAI-compatible API",
-                "supports_streaming": True,
-                "supports_embeddings": False,
-                "requires_api_key": True,
-                "default_model": "glm-5",
-            },
-            {
-                "name": "gemini",
-                "provider_class": "GeminiProvider",
-                "description": "Google Gemini models via API",
-                "supports_streaming": True,
-                "supports_embeddings": True,
-                "requires_api_key": True,
-                "default_model": "gemini-1.5-flash",
-            },
-            {
-                "name": "deepseek",
-                "provider_class": "DeepseekProvider",
-                "description": "Deepseek models optimized for coding and reasoning",
-                "supports_streaming": True,
-                "supports_embeddings": False,
-                "requires_api_key": True,
-                "default_model": "deepseek-chat",
-            },
-            {
-                "name": "huggingface",
-                "provider_class": "HuggingFaceProvider",
-                "description": "HuggingFace models via Inference API or local execution",
-                "supports_streaming": False,
-                "supports_embeddings": True,
-                "requires_api_key": True,
-                "default_model": "microsoft/DialoGPT-large",
-            },
-            {
-                "name": "copilotkit",
-                "provider_class": "CopilotKitProvider",
-                "description": "CopilotKit AI-powered code assistance and contextual suggestions",
-                "supports_streaming": False,
-                "supports_embeddings": True,
-                "requires_api_key": True,
-                "default_model": "gpt-4",
-            },
-            {
-                "name": "fallback",
-                "provider_class": "FallbackProvider",
-                "description": "Deterministic offline fallback provider",
-                "supports_streaming": False,
-                "supports_embeddings": True,
-                "requires_api_key": False,
-                "default_model": "kari-fallback-v1",
-                "health_status": "healthy",
-            },
-        ]
-
-        # Get default models from config system
+    def _register_configured_providers(self):
+        """Register all configured providers from the config manager."""
         try:
-            from ai_karen_engine.config.llm_provider_config import (
-                get_provider_config_manager,
-            )
-
             config_mgr = get_provider_config_manager()
+            provider_names = [provider.name for provider in config_mgr.list_providers()]
         except Exception:
-            config_mgr = None
+            provider_names = list(self._priorities)
 
-        for provider_info in builtin_providers:
-            registration = ProviderRegistration(**provider_info)
-
-            # Override default_model with config value if available
-            if config_mgr:
-                config = config_mgr.get_provider(provider_info["name"])
-                if config and config.default_model:
-                    registration.default_model = config.default_model
-
-            self._registrations[provider_info["name"]] = registration
+        for provider_name in provider_names:
+            spec = resolve_provider_execution(provider_name)
+            if spec is None:
+                continue
+            provider_class = self._get_provider_class_from_spec(spec)
+            if provider_class is None:
+                continue
+            self.register_provider(
+                spec.provider_id,
+                provider_class,
+                description=f"Execution adapter for {spec.display_name}",
+                supports_streaming=spec.supports_streaming,
+                supports_embeddings=spec.supports_embeddings,
+                requires_api_key=spec.requires_api_key,
+                default_model=spec.default_model or "",
+            )
 
     def _load_registry(self):
         """Load registry from JSON file."""
@@ -848,6 +761,13 @@ class LLMRegistry:
         retry_delay = 0.01  # 10ms between retries
 
         resolved_name = self._resolve_provider_alias(name)
+        spec = resolve_provider_execution(resolved_name)
+        if spec is None:
+            logger.error("Provider '%s' could not be resolved", name)
+            return None
+        if not spec.enabled:
+            logger.debug("Skipping provider '%s' because it is disabled", resolved_name)
+            return None
         for attempt in range(max_retries):
             try:
                 resolved_name = self._resolve_provider_alias(name)
@@ -864,7 +784,7 @@ class LLMRegistry:
 
                 registration = self._registrations[resolved_name]
 
-                if registration.requires_api_key and not self._provider_is_configured(
+                if spec.requires_api_key and not self._provider_is_configured(
                     resolved_name, init_kwargs
                 ):
                     logger.debug(
@@ -882,8 +802,16 @@ class LLMRegistry:
                     return None
 
                 # Build cache key including model so different model inits are not conflated
-                model_key = init_kwargs.get("model") or registration.default_model or ""
-                cache_key = f"{resolved_name}|{model_key}"
+                model_key = (
+                    init_kwargs.get("model")
+                    or spec.default_model
+                    or registration.default_model
+                    or ""
+                )
+                base_url_key = str(
+                    init_kwargs.get("base_url") or spec.base_url or ""
+                ).strip()
+                cache_key = f"{resolved_name}|{model_key}|{base_url_key}"
 
                 # Return cached instance if available, unless it is a stale failed instance
                 if cache_key in self._providers:
@@ -904,26 +832,39 @@ class LLMRegistry:
                         self._providers.pop(cache_key, None)
 
                 # Create new instance
-                provider_class = self._get_provider_class(registration.provider_class)
+                provider_class = self._get_provider_class_from_spec(spec)
 
                 if provider_class:
                     # Use default model if not specified
-                    if "model" not in init_kwargs and registration.default_model:
-                        init_kwargs["model"] = registration.default_model
+                    if "model" not in init_kwargs and spec.default_model:
+                        init_kwargs["model"] = spec.default_model
 
                     init_kwargs = self._apply_saved_provider_settings(
                         resolved_name, init_kwargs
                     )
 
-                    if (
-                        registration.provider_class == "OpenAIProvider"
-                        and "provider_name" not in init_kwargs
-                    ):
-                        init_kwargs["provider_name"] = resolved_name
+                    if spec.adapter_class in {"OpenAIProvider", "OpenAICompatibleProvider"}:
+                        init_kwargs.setdefault("provider_name", resolved_name)
 
-                    if registration.provider_class == "CopilotKitProvider":
+                    if spec.requires_base_url and not init_kwargs.get("base_url"):
+                        logger.debug(
+                            "Skipping provider '%s' because base URL is missing",
+                            resolved_name,
+                        )
+                        return None
+
+                    if spec.requires_api_key and not self._provider_is_configured(
+                        resolved_name, init_kwargs
+                    ):
+                        logger.debug(
+                            "Skipping provider '%s' because it is not configured after settings resolution",
+                            resolved_name,
+                        )
+                        return None
+
+                    if spec.adapter_class == "CopilotKitProvider":
                         model_name = (
-                            init_kwargs.get("model") or registration.default_model
+                            init_kwargs.get("model") or spec.default_model
                         )
                         provider_config = {
                             "model": model_name,
@@ -1043,6 +984,15 @@ class LLMRegistry:
                 api_key = secret_manager.get_secret(env_var) or os.getenv(env_var)
             if api_key:
                 resolved["api_key"] = api_key
+        
+        # Apply custom authentication metadata from configuration
+        if provider_config.authentication:
+            if "api_key_header" not in resolved and provider_config.authentication.api_key_header:
+                resolved["api_key_header"] = provider_config.authentication.api_key_header
+            if "api_key_prefix" not in resolved and provider_config.authentication.api_key_prefix:
+                resolved["api_key_prefix"] = provider_config.authentication.api_key_prefix
+            if "custom_headers" not in resolved and provider_config.authentication.custom_headers:
+                resolved["custom_headers"] = provider_config.authentication.custom_headers
 
         if name == "huggingface":
             if "api_key" in resolved and "api_token" not in resolved:
@@ -1156,6 +1106,30 @@ class LLMRegistry:
             )
         return provider_cls
 
+    def _get_provider_class_from_spec(
+        self, spec: Optional[ProviderExecutionSpec]
+    ) -> Optional[Type[LLMProviderBase]]:
+        """Import the executable provider class described by a resolver spec."""
+        if spec is None:
+            return None
+
+        try:
+            module = import_module(spec.adapter_module)
+        except Exception as exc:
+            logger.error(
+                "Failed to import provider module '%s': %s", spec.adapter_module, exc
+            )
+            return None
+
+        provider_cls = getattr(module, spec.adapter_class, None)
+        if provider_cls is None:
+            logger.error(
+                "Provider class '%s' not found in module '%s'",
+                spec.adapter_class,
+                spec.adapter_module,
+            )
+        return provider_cls
+
     # -----------------------------
     # Local GGUF model resolution & verification
     # -----------------------------
@@ -1186,69 +1160,25 @@ class LLMRegistry:
 
     def ensure_builtin_providers_registered(self) -> None:
         """Ensure all built-in providers are registered, fixing any race conditions."""
-        # Define built-in providers that should always be available
-        builtin_providers = [
-            {
-                "name": "builtin_vllm",
-                "provider_class": "VLLMRuntime",
-                "description": "Built-in vLLM text serving runtime",
-                "supports_streaming": True,
-                "supports_embeddings": False,
-                "requires_api_key": False,
-                "default_model": "auto",
-            },
-            {
-                "name": "builtin_transformers",
-                "provider_class": "TransformersRuntime",
-                "description": "Built-in Transformers runtime for local embeddings and fallback text generation",
-                "supports_streaming": False,
-                "supports_embeddings": True,
-                "requires_api_key": False,
-                "default_model": "auto",
-            },
-        ]
-
         # Thread-safe registration of missing built-in providers
         with _registry_lock:
-            for provider_config in builtin_providers:
-                provider_name = provider_config["name"]
+            for provider_name in ["builtin_vllm", "builtin_transformers"]:
+                spec = resolve_provider_execution(provider_name)
+                if spec is None:
+                    continue
                 if provider_name not in self._registrations:
                     try:
-                        # Resolve provider class based on configuration
-                        provider_class_name = provider_config["provider_class"]
-
-                        # Import the correct provider class
-                        if provider_class_name == "VLLMRuntime":
-                            from ai_karen_engine.inference.vllm_runtime import (
-                                VLLMRuntime,
-                            )
-                            provider_class = VLLMRuntime
-                        elif provider_class_name == "TransformersRuntime":
-                            from ai_karen_engine.inference.transformers_runtime import (
-                                TransformersRuntime,
-                            )
-                            provider_class = TransformersRuntime
-                        elif provider_class_name == "OpenAICompatibleProvider":
-                            from .providers.openai_compatible_provider import (
-                                OpenAICompatibleProvider,
-                            )
-                            provider_class = OpenAICompatibleProvider
-                        elif provider_class_name == "OllamaProvider":
-                            from .providers.ollama_provider import OllamaProvider
-                            provider_class = OllamaProvider
-                        else:
-                            # Fallback to trying to resolve the class
-                            provider_class = self._resolve_provider_class(provider_class_name)
-
-                        # Register the provider (already thread-safe)
+                        provider_class = self._get_provider_class_from_spec(spec)
+                        if provider_class is None:
+                            continue
                         self.register_provider(
                             provider_name,
                             provider_class,
-                            description=provider_config["description"],
-                            supports_streaming=provider_config["supports_streaming"],
-                            supports_embeddings=provider_config["supports_embeddings"],
-                            requires_api_key=provider_config["requires_api_key"],
-                            default_model=provider_config["default_model"],
+                            description=f"Execution adapter for {spec.display_name}",
+                            supports_streaming=spec.supports_streaming,
+                            supports_embeddings=spec.supports_embeddings,
+                            requires_api_key=spec.requires_api_key,
+                            default_model=spec.default_model or "",
                         )
                         logger.info(
                             f"Ensured built-in provider is registered: {provider_name}"

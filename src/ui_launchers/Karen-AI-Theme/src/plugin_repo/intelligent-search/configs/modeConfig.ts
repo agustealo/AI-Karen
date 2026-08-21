@@ -11,7 +11,7 @@ export const MODE_CONFIG: Record<SearchModeId, ModeConfigItem> = {
   general: {
     label: 'General',
     description: 'Broad web search',
-    visibleControls: ['maxUrls', 'freshnessBias', 'allowedDomains', 'blockedDomains'],
+    visibleControls: ['maxUrls', 'freshnessBias', 'allowedDomains', 'blockedDomains', 'crawlOptions'],
     resultTabs: ['results', 'sources', 'extractedData', 'diagnostics'],
   },
   news: {
@@ -29,7 +29,7 @@ export const MODE_CONFIG: Record<SearchModeId, ModeConfigItem> = {
   deep_research: {
     label: 'Deep Research',
     description: 'Multi-source synthesis and comparison',
-    visibleControls: ['maxSubqueries', 'maxHops', 'sourceDiversity'],
+    visibleControls: ['maxSubqueries', 'maxHops', 'sourceDiversity', 'crawlOptions'],
     resultTabs: ['results', 'sources', 'extractedData', 'insights', 'diagnostics'],
   },
   structured_extract: {

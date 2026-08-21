@@ -59,6 +59,14 @@ class HookTypes:
     SYSTEM_STARTUP = "system_startup"
     SYSTEM_SHUTDOWN = "system_shutdown"
     SYSTEM_ERROR = "system_error"
+
+    # Workflow lifecycle hooks
+    WORKFLOW_REGISTERED = "workflow_registered"
+    WORKFLOW_STARTED = "workflow_started"
+    WORKFLOW_COMPLETED = "workflow_completed"
+    WORKFLOW_FAILED = "workflow_failed"
+    WORKFLOW_STEP_STARTED = "workflow_step_started"
+    WORKFLOW_STEP_COMPLETED = "workflow_step_completed"
     
     # Authentication hooks
     USER_LOGIN = "user_login"

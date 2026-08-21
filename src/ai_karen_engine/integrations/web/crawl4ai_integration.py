@@ -216,7 +216,7 @@ class Crawl4AIIntegration:
 
         if not self.available:
             error_details = f": {_IMPORT_ERROR}" if _IMPORT_ERROR else ""
-            logger.warning(
+            logger.info(
                 f"Crawl4AI is not installed or could not be imported{error_details}. "
                 "Crawl4AIIntegration will return structured dependency failures. "
                 "To fix this, ensure 'crawl4ai' and 'playwright' are in requirements.txt "
@@ -1077,6 +1077,29 @@ class Crawl4AIIntegration:
             status=status,
             failure_code=failure_code,
         ).observe(result.elapsed_ms / 1000)
+
+
+_integration_instance: Optional[Crawl4AIIntegration] = None
+
+
+def get_crawl4ai_integration() -> Crawl4AIIntegration:
+    """
+    Get or create the singleton Crawl4AI integration instance.
+    """
+    global _integration_instance
+    if _integration_instance is None:
+        _integration_instance = Crawl4AIIntegration()
+    return _integration_instance
+
+
+async def close_crawl4ai_integration() -> None:
+    """
+    Close the global Crawl4AI integration instance.
+    """
+    global _integration_instance
+    if _integration_instance:
+        await _integration_instance.close()
+        _integration_instance = None
 
 
 def first_non_empty(*values: Any) -> str:

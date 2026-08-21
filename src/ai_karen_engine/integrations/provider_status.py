@@ -25,14 +25,20 @@ class ProviderHealth:
             # Check health status from registry
             health_status = provider_info.get("health_status", "unknown")
             
-            # Consider built-in local runtimes healthy when their status is not
-            # explicitly unhealthy so routing can prefer them before falling back.
-            if provider_name in {
-                "local_gguf",
-                "builtin_vllm",
-                "builtin_transformers",
-            } and health_status in ["healthy", "unknown", "degraded"]:
-                return True
+            # Consider built-in local runtimes and common cloud providers healthy 
+            # when their status is 'unknown' so routing can prefer them before 
+            # falling back to degraded modes.
+            if health_status in ["healthy", "unknown", "degraded"]:
+                if provider_name in {
+                    "local_gguf",
+                    "builtin_vllm",
+                    "builtin_transformers",
+                    "openai",
+                    "gemini",
+                    "deepseek",
+                    "anthropic",
+                }:
+                    return True
             
             return health_status == "healthy"
         except Exception:

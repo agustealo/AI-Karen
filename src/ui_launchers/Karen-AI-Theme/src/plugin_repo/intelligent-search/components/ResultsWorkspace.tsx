@@ -20,12 +20,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   const sources = response?.sources ?? [];
   const sourceCount = response?.sources?.length ?? 0;
   const resultCount = response?.results?.length ?? 0;
-  const providerLabel =
-    typeof response?.provider === 'string' && response.provider.trim()
-      ? response.provider
-      : typeof response?.metadata?.provider === 'string' && response.metadata.provider.trim()
-        ? response.metadata.provider
-        : 'crawl4ai';
+  const providerLabel = response?.provider || response?.metadata?.provider || 'crawl4ai';
   const elapsed = response?.execution_time_ms ? `${response.execution_time_ms}ms` : 'live';
   const featuredItem = response?.results?.[0] ?? response?.sources?.[0];
   const featuredPreview =

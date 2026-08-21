@@ -44,7 +44,7 @@ class GeminiProvider(BaseLLMProvider):
             vision=True,
             embedding=True,
             fine_tuning=False,
-            max_tokens=8192,
+            max_tokens=self.max_tokens,
             supported_models=[
                 "gemini-pro",
                 "gemini-pro-vision",
@@ -75,12 +75,8 @@ class GeminiProvider(BaseLLMProvider):
 
         # Check max_tokens
         max_tokens = config.get("max_tokens")
-        if max_tokens is not None and (
-            max_tokens < 1 or max_tokens > self.features.max_tokens
-        ):
-            errors.append(
-                f"Max tokens must be between 1 and {self.features.max_tokens}"
-            )
+        if max_tokens is not None and max_tokens < 1:
+            errors.append("Max tokens must be greater than 0")
 
         # Check timeout
         timeout = config.get("timeout_seconds")

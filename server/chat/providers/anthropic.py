@@ -42,7 +42,7 @@ class AnthropicProvider(BaseLLMProvider):
             vision=True,
             embedding=False,  # Anthropic doesn't provide embeddings
             fine_tuning=False,
-            max_tokens=4096,
+            max_tokens=self.max_tokens,
             supported_models=[
                 "claude-3-opus-20240229",
                 "claude-3-sonnet-20240229",
@@ -74,8 +74,8 @@ class AnthropicProvider(BaseLLMProvider):
         
         # Check max_tokens
         max_tokens = config.get("max_tokens")
-        if max_tokens is not None and (max_tokens < 1 or max_tokens > self.features.max_tokens):
-            errors.append(f"Max tokens must be between 1 and {self.features.max_tokens}")
+        if max_tokens is not None and max_tokens < 1:
+            errors.append("Max tokens must be greater than 0")
         
         # Check timeout
         timeout = config.get("timeout_seconds")

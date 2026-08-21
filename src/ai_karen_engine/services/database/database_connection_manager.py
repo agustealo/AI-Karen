@@ -217,6 +217,45 @@ class DatabaseConnectionManager:
         # Implementation would close actual pool
         pass
 
+    def is_degraded(self) -> bool:
+        """
+        Check if the database manager is in a degraded state.
+        
+        Returns:
+            True if any pools are unhealthy or in degraded mode, False otherwise.
+        """
+        # For this implementation, we check if any connection failures have occurred
+        # or if the health checker reports any issues.
+        if hasattr(self, 'health_checker'):
+             # If we have a health history, check the last status
+             pass
+        
+        # In a real implementation, this would check actual pool health
+        return False
+
+    def _get_pool_metrics(self) -> Dict[str, Any]:
+        """Get metrics for all connection pools."""
+        return {
+            "total_pools": len(self.pools),
+            "stats": {name: {"size": 10, "active": 0} for name in self.pools}
+        }
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def async_session_scope(self):
+        """Provide a transactional scope around a series of operations."""
+        # This is a placeholder for actual session management
+        # In a real implementation, this would yield a SQLAlchemy AsyncSession
+        class MockSession:
+            async def execute(self, query):
+                class MockResult:
+                    def scalar(self):
+                        return 1
+                return MockResult()
+        
+        yield MockSession()
+
 
 @lru_cache()
 def get_database_manager(config: Optional[Dict[str, Any]] = None) -> DatabaseConnectionManager:

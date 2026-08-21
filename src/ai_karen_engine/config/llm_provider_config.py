@@ -75,6 +75,7 @@ PROVIDER_CLASS_ALIASES: Dict[str, str] = {
 MODEL_SETTINGS_PROVIDER_ORDER: List[str] = [
     "builtin_transformers",
     "builtin_vllm",
+    "fallback",
     "openai",
     "anthropic",
     "gemini",
@@ -186,14 +187,6 @@ OPENAI_COMPATIBLE_PROVIDER_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "common_models": [
             "meta-llama/Llama-3.1-70B-Instruct",
             "Qwen/Qwen2.5-72B-Instruct",
-        ],
-    },
-    "builtin_vllm": {
-        "api_key_env": "VLLM_API_KEY",
-        "base_url": os.getenv("KAREN_BUILTIN_VLLM_BASE_URL", "http://vllm:8000/v1"),
-        "display_name": "vLLM",
-        "common_models": [
-            os.getenv("KAREN_BUILTIN_VLLM_SERVED_MODEL_NAME", "auto"),
         ],
     },
 }
@@ -469,6 +462,7 @@ class LLMProviderConfigManager:
         if not self._providers:
             self._create_default_configurations()
         self._create_additional_default_configurations()
+        self._ensure_builtin_runtime_configurations()
 
     # ---------- Configuration Management ----------
 
@@ -500,7 +494,10 @@ class LLMProviderConfigManager:
 
             config = self._providers[name]
 
-            # Apply updates
+            # Re-apply environment variable overrides first to ensure we have a baseline
+            self._apply_env_overrides(config)
+
+            # Apply manual updates (these should take precedence over env vars)
             for key, value in updates.items():
                 if hasattr(config, key):
                     setattr(config, key, value)
@@ -509,9 +506,6 @@ class LLMProviderConfigManager:
 
             # Re-validate configuration
             self._validate_provider_config(config)
-
-            # Apply environment variable overrides
-            self._apply_env_overrides(config)
 
             # Save to disk
             self._save_provider_config(config)
@@ -545,6 +539,211 @@ class LLMProviderConfigManager:
         """Get a provider configuration"""
         return self._providers.get(name)
 
+    def _normalize_default_model(
+        self, provider_name: str, model_name: Optional[str], model_ids: List[str]
+    ) -> Optional[str]:
+        """Map legacy default model names to an available model ID."""
+        if not model_name:
+            return None
+
+        normalized = model_name.strip()
+        if normalized in model_ids:
+            return normalized
+
+        legacy_aliases = {
+            "builtin_transformers": {
+                "gpt2": "auto",
+                "distilbert": "auto",
+                "sentence-transformers/all-mpnet-base-v2": "auto",
+                "models/transformers/gpt2": "auto",
+            },
+            "builtin_vllm": {
+                "gpt2": "auto",
+                "local": "auto",
+                "karen-vllm-local": "auto",
+            },
+        }
+
+        alias = legacy_aliases.get(provider_name, {}).get(normalized.lower())
+        if alias in model_ids:
+            return alias
+
+        return None
+
+    def _build_builtin_runtime_configurations(self) -> List[ProviderConfig]:
+        """Build the built-in local runtime configurations used by Karen."""
+        return [
+            ProviderConfig(
+                name="builtin_transformers",
+                display_name="Transformers",
+                description="Built-in Transformers runtime for local embeddings and fallback text generation",
+                provider_type=ProviderType.BUILTIN,
+                priority=96,
+                models=[
+                    ProviderModel(
+                        id="auto",
+                        name="Auto",
+                        family="transformers",
+                        capabilities={"text", "embedding", "classification", "summarization"},
+                        context_length=32768,
+                        max_tokens=4096,
+                        supports_streaming=False,
+                    )
+                ],
+                default_model="auto",
+                capabilities={"embeddings", "text_generation"},
+                limits=ProviderLimits(
+                    concurrent_requests=4,
+                    max_context_length=32768,
+                    max_output_tokens=4096,
+                ),
+            ),
+            ProviderConfig(
+                name="builtin_vllm",
+                display_name="vLLM",
+                description="Primary built-in runtime for high-throughput text generation and streaming.",
+                provider_type=ProviderType.BUILTIN,
+                priority=95,
+                endpoint=ProviderEndpoint(
+                    base_url=os.getenv("KAREN_BUILTIN_VLLM_BASE_URL", "http://vllm:8000/v1"),
+                    health_endpoint=os.getenv("KAREN_BUILTIN_VLLM_HEALTH_URL", "http://vllm:8000/health"),
+                    timeout=int(os.getenv("KAREN_BUILTIN_VLLM_TIMEOUT_SECONDS", "120")),
+                ),
+                models=[
+                    ProviderModel(
+                        id="auto",
+                        name="Auto",
+                        family="vllm",
+                        capabilities={"chat_completion", "text_generation", "streaming"},
+                        context_length=int(os.getenv("KAREN_BUILTIN_VLLM_MAX_MODEL_LEN", "4096")),
+                        max_tokens=4096,
+                    )
+                ],
+                default_model=os.getenv("KAREN_BUILTIN_VLLM_SERVED_MODEL_NAME", "auto"),
+                capabilities={"streaming", "chat_completion", "text_generation"},
+                limits=ProviderLimits(
+                    concurrent_requests=12,
+                    max_context_length=int(os.getenv("KAREN_BUILTIN_VLLM_MAX_MODEL_LEN", "4096")),
+                    max_output_tokens=4096,
+                ),
+                enabled=os.getenv("KAREN_BUILTIN_VLLM_ENABLED", "true").lower() == "true",
+            ),
+            ProviderConfig(
+                name="fallback",
+                display_name="Fallback",
+                description="Deterministic emergency provider that keeps Karen responsive when all other engines fail",
+                provider_type=ProviderType.BUILTIN,
+                priority=1,
+                models=[
+                    ProviderModel(
+                        id="kari-fallback-v1",
+                        name="Kari Fallback",
+                        family="fallback",
+                        capabilities={"text", "embeddings"},
+                        context_length=8192,
+                        max_tokens=1024,
+                        supports_streaming=False,
+                    )
+                ],
+                default_model="kari-fallback-v1",
+                capabilities={"text_generation", "embeddings"},
+                limits=ProviderLimits(
+                    concurrent_requests=2,
+                    max_context_length=8192,
+                    max_output_tokens=1024,
+                ),
+            ),
+        ]
+
+    def _ensure_builtin_runtime_configurations(self) -> None:
+        """Ensure built-in runtime providers exist without overwriting user configs."""
+        for config in self._build_builtin_runtime_configurations():
+            if config.name not in self._providers:
+                self.add_provider(config)
+
+    def get_model(self, provider_name: str, model_name: Optional[str] = None) -> Optional[ProviderModel]:
+        """Get a provider model configuration by provider and model name."""
+        config = self.get_provider(provider_name)
+        if not config or not config.models:
+            return None
+
+        candidate_names = [
+            model_name,
+            config.default_model,
+        ]
+
+        for candidate in candidate_names:
+            if not candidate:
+                continue
+
+            for model in config.models:
+                if candidate in {model.id, model.name}:
+                    return model
+
+        if len(config.models) == 1:
+            return config.models[0]
+
+        return None
+
+    def get_effective_context_length(
+        self, provider_name: str, model_name: Optional[str] = None
+    ) -> Optional[int]:
+        """Return the best known context length for a provider/model pair."""
+        config = self.get_provider(provider_name)
+        model = self.get_model(provider_name, model_name)
+        candidates: List[int] = []
+
+        if model and isinstance(model.context_length, int) and model.context_length > 0:
+            candidates.append(model.context_length)
+
+        if config:
+            if (
+                isinstance(config.limits.max_context_length, int)
+                and config.limits.max_context_length > 0
+            ):
+                candidates.append(config.limits.max_context_length)
+
+        return min(candidates) if candidates else None
+
+    def get_effective_max_tokens(
+        self,
+        provider_name: str,
+        model_name: Optional[str] = None,
+        requested_max_tokens: Optional[int] = None,
+    ) -> Optional[int]:
+        """
+        Resolve the output token budget for a provider/model pair.
+
+        The resolver prefers model-specific limits, then provider limits, and only
+        uses the request value as a soft upper bound. This avoids the old global
+        ceiling behavior while still preventing requests from exceeding the
+        selected model's capabilities.
+        """
+        config = self.get_provider(provider_name)
+        model = self.get_model(provider_name, model_name)
+        candidates: List[int] = []
+
+        if model:
+            for value in (model.max_tokens, model.context_length):
+                if isinstance(value, int) and value > 0:
+                    candidates.append(value)
+
+        if config:
+            for value in (
+                config.limits.max_output_tokens,
+                config.limits.max_context_length,
+            ):
+                if isinstance(value, int) and value > 0:
+                    candidates.append(value)
+
+        if isinstance(requested_max_tokens, int) and requested_max_tokens > 0:
+            candidates.append(requested_max_tokens)
+
+        if candidates:
+            return min(candidates)
+
+        return requested_max_tokens if isinstance(requested_max_tokens, int) and requested_max_tokens > 0 else None
+
     def list_providers(self, enabled_only: bool = False) -> List[ProviderConfig]:
         """List all provider configurations"""
         providers = list(self._providers.values())
@@ -574,11 +773,11 @@ class LLMProviderConfigManager:
 
         # Endpoint overrides
         if config.endpoint:
-            base_url = os.getenv(f"{env_prefix}_BASE_URL")
+            base_url = os.getenv(f"{env_prefix}_BASE_URL") or os.getenv(f"{config.name.upper()}_BASE_URL")
             if base_url:
                 config.endpoint.base_url = base_url
 
-            timeout = os.getenv(f"{env_prefix}_TIMEOUT")
+            timeout = os.getenv(f"{env_prefix}_TIMEOUT") or os.getenv(f"{config.name.upper()}_TIMEOUT")
             if timeout:
                 try:
                     config.endpoint.timeout = int(timeout)
@@ -591,6 +790,10 @@ class LLMProviderConfigManager:
         enabled = os.getenv(f"{env_prefix}_ENABLED")
         if enabled is not None:
             config.enabled = enabled.lower() in ("true", "1", "yes", "on")
+        elif config.name == "zai":
+            # Z.ai is opt-in only. Keep it out of the active provider list unless
+            # the environment explicitly enables it.
+            config.enabled = False
 
         # Priority override
         priority = os.getenv(f"{env_prefix}_PRIORITY")
@@ -686,7 +889,8 @@ class LLMProviderConfigManager:
             if not config.endpoint:
                 errors.append("Endpoint configuration is required for remote providers")
             elif not config.endpoint.base_url:
-                errors.append("Base URL is required for remote providers")
+                if config.name != "custom":
+                    errors.append("Base URL is required for remote providers")
 
         # Authentication validation
         if config.authentication.type == AuthenticationType.API_KEY:
@@ -702,9 +906,15 @@ class LLMProviderConfigManager:
                 errors.append("Duplicate model IDs found")
 
             if config.default_model and config.default_model not in model_ids:
-                errors.append(
-                    f"Default model '{config.default_model}' not found in model list"
+                normalized_default = self._normalize_default_model(
+                    config.name, config.default_model, model_ids
                 )
+                if normalized_default:
+                    config.default_model = normalized_default
+                else:
+                    errors.append(
+                        f"Default model '{config.default_model}' not found in model list"
+                    )
 
         # Update validation status
         config.is_valid = len(errors) == 0
@@ -822,6 +1032,13 @@ class LLMProviderConfigManager:
                 # Validate and apply environment overrides
                 self._validate_provider_config(config)
                 self._apply_env_overrides(config)
+                normalized_default_model = self._normalize_default_model(
+                    config.name,
+                    config.default_model,
+                    [model.id for model in config.models],
+                )
+                if normalized_default_model:
+                    config.default_model = normalized_default_model
 
                 self._providers[config.name] = config
 
@@ -834,7 +1051,7 @@ class LLMProviderConfigManager:
 
     def _save_provider_config(self, config: ProviderConfig) -> None:
         """Save a provider configuration to disk"""
-        if config.name.startswith("builtin_"):
+        if config.provider_type == ProviderType.BUILTIN or config.name == "fallback":
             return
 
         config_file = self.config_dir / f"{config.name}.json"
@@ -962,8 +1179,8 @@ class LLMProviderConfigManager:
                     cost_per_1k_tokens=0.0035,
                 ),
                 ProviderModel(
-                    id="gemini-1.5-flash",
-                    name="Gemini 1.5 Flash",
+                    id="gemini-2.5-flash",
+                    name="Gemini 2.5 Flash",
                     family="gemini",
                     capabilities={"text", "vision", "code"},
                     context_length=1048576,
@@ -973,7 +1190,7 @@ class LLMProviderConfigManager:
                     cost_per_1k_tokens=0.00075,
                 ),
             ],
-            default_model="gemini-1.5-flash",
+            default_model="gemini-2.5-flash",
             capabilities={"streaming", "vision", "code"},
             limits=ProviderLimits(
                 requests_per_minute=1500,
@@ -1036,33 +1253,6 @@ class LLMProviderConfigManager:
         )
         self.add_provider(deepseek_config)
 
-        transformers_config = ProviderConfig(
-            name="builtin_transformers",
-            display_name="Transformers",
-            description="Built-in Transformers runtime for local embeddings and fallback text generation",
-            provider_type=ProviderType.BUILTIN,
-            priority=96,
-            models=[
-                ProviderModel(
-                    id="auto",
-                    name="Auto",
-                    family="transformers",
-                    capabilities={"text", "embedding", "classification", "summarization"},
-                    context_length=32768,
-                    max_tokens=4096,
-                    supports_streaming=False,
-                )
-            ],
-            default_model="auto",
-            capabilities={"embeddings", "text_generation"},
-            limits=ProviderLimits(
-                concurrent_requests=4,
-                max_context_length=32768,
-                max_output_tokens=4096,
-            ),
-        )
-        self.add_provider(transformers_config)
-
         # HuggingFace Provider
         huggingface_config = ProviderConfig(
             name="huggingface",
@@ -1113,38 +1303,6 @@ class LLMProviderConfigManager:
         )
         self.add_provider(huggingface_config)
 
-        vllm_config = ProviderConfig(
-            name="builtin_vllm",
-            display_name="vLLM",
-            description="Primary built-in runtime for high-throughput text generation and streaming.",
-            provider_type=ProviderType.BUILTIN,
-            priority=95,
-            endpoint=ProviderEndpoint(
-                base_url=os.getenv("KAREN_BUILTIN_VLLM_BASE_URL", "http://vllm:8000/v1"),
-                health_endpoint=os.getenv("KAREN_BUILTIN_VLLM_HEALTH_URL", "http://vllm:8000/health"),
-                timeout=int(os.getenv("KAREN_BUILTIN_VLLM_TIMEOUT_SECONDS", "120")),
-            ),
-            models=[
-                ProviderModel(
-                    id="auto",
-                    name="Auto",
-                    family="vllm",
-                    capabilities={"chat_completion", "text_generation", "streaming"},
-                    context_length=int(os.getenv("KAREN_BUILTIN_VLLM_MAX_MODEL_LEN", "4096")),
-                    max_tokens=4096,
-                )
-            ],
-            default_model=os.getenv("KAREN_BUILTIN_VLLM_SERVED_MODEL_NAME", "auto"),
-            capabilities={"streaming", "chat_completion", "text_generation"},
-            limits=ProviderLimits(
-                concurrent_requests=12,
-                max_context_length=int(os.getenv("KAREN_BUILTIN_VLLM_MAX_MODEL_LEN", "4096")),
-                max_output_tokens=4096,
-            ),
-            enabled=os.getenv("KAREN_BUILTIN_VLLM_ENABLED", "true").lower() == "true",
-        )
-        self.add_provider(vllm_config)
-
         # Ollama remains a supported local runtime option.
 
         logger.info("Created default LLM provider configurations")
@@ -1153,61 +1311,6 @@ class LLMProviderConfigManager:
         """Create any additional default providers that are not already configured."""
 
         additional_configs = [
-            ProviderConfig(
-                name="builtin_transformers",
-                display_name="Transformers",
-                description="Built-in Transformers runtime for local embeddings and fallback text generation",
-                provider_type=ProviderType.LOCAL,
-                priority=96,
-                models=[
-                    ProviderModel(
-                        id="auto",
-                        name="Auto",
-                        family="transformers",
-                        capabilities={"text", "embedding", "classification", "summarization"},
-                        context_length=32768,
-                        max_tokens=4096,
-                        supports_streaming=False,
-                    )
-                ],
-                default_model="auto",
-                capabilities={"embeddings", "text_generation"},
-                limits=ProviderLimits(
-                    concurrent_requests=4,
-                    max_context_length=32768,
-                    max_output_tokens=4096,
-                ),
-            ),
-            ProviderConfig(
-                name="builtin_vllm",
-                display_name="vLLM",
-                description="Primary built-in runtime for high-throughput text generation and streaming.",
-                provider_type=ProviderType.LOCAL,
-                priority=95,
-                endpoint=ProviderEndpoint(
-                    base_url=os.getenv("KAREN_BUILTIN_VLLM_BASE_URL", "http://vllm:8000/v1"),
-                    health_endpoint=os.getenv("KAREN_BUILTIN_VLLM_HEALTH_URL", "http://vllm:8000/health"),
-                    timeout=int(os.getenv("KAREN_BUILTIN_VLLM_TIMEOUT_SECONDS", "120")),
-                ),
-                models=[
-                    ProviderModel(
-                        id="auto",
-                        name="Auto",
-                        family="vllm",
-                        capabilities={"chat_completion", "text_generation", "streaming"},
-                        context_length=int(os.getenv("KAREN_BUILTIN_VLLM_MAX_MODEL_LEN", "4096")),
-                        max_tokens=4096,
-                    )
-                ],
-                default_model=os.getenv("KAREN_BUILTIN_VLLM_SERVED_MODEL_NAME", "auto"),
-                capabilities={"streaming", "chat_completion", "text_generation"},
-                limits=ProviderLimits(
-                    concurrent_requests=12,
-                    max_context_length=int(os.getenv("KAREN_BUILTIN_VLLM_MAX_MODEL_LEN", "4096")),
-                    max_output_tokens=4096,
-                ),
-                enabled=os.getenv("KAREN_BUILTIN_VLLM_ENABLED", "true").lower() == "true",
-            ),
             ProviderConfig(
                 name="anthropic",
                 display_name="Anthropic Claude",
@@ -1776,6 +1879,7 @@ class LLMProviderConfigManager:
                     max_context_length=131072,
                     max_output_tokens=131072,
                 ),
+                enabled=os.getenv("ZAI_ENABLED", "false").lower() == "true",
             ),
             ProviderConfig(
                 name="together",
@@ -2302,6 +2406,24 @@ def get_provider_config_manager() -> LLMProviderConfigManager:
     if _provider_config_manager is None:
         _provider_config_manager = LLMProviderConfigManager()
     return _provider_config_manager
+
+
+def get_provider_execution_spec(provider_name: str) -> Optional[Dict[str, Any]]:
+    """Return execution metadata for a configured provider."""
+    try:
+        from ai_karen_engine.config.provider_execution_resolver import (
+            resolve_provider_execution,
+        )
+
+        spec = resolve_provider_execution(provider_name)
+        return spec.to_dict() if spec else None
+    except Exception:
+        logger.debug(
+            "Failed to resolve provider execution metadata for %s",
+            provider_name,
+            exc_info=True,
+        )
+        return None
 
 
 def reset_provider_config_manager() -> None:

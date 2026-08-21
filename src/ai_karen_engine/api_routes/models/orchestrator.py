@@ -252,7 +252,11 @@ class ConversationProcessingRequest(_PromptValidatedModel):
     include_insights: bool = True
     llm_preferences: Optional[Dict[str, str]] = None
     stream_response: bool = False
-    max_tokens: Optional[int] = Field(None, ge=1, le=4096)
+    max_tokens: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Requested tokens to generate; provider/model caps are enforced downstream.",
+    )
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
 
 

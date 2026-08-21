@@ -169,7 +169,7 @@ class ResponseSynthesisNode:
                 "fallback_level": 99,
                 "degraded_mode": True,
                 "degradation_type": "fallback_exhausted",
-                "degradation_reason": "No configured provider could generate a response.",
+                "degradation_reason": "No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.",
                 "provider_attempts": exec_result.provider_attempts if exec_result else [],
                 "latency_ms": exec_result.latency_ms if exec_result else 0,
                 "streaming_enabled": bool(state.get("streaming_enabled")),
@@ -207,7 +207,9 @@ class ResponseSynthesisNode:
             "correlation_id": result.correlation_id,
             "provider_attempts": result.provider_attempts,
             "usage": result.usage,
+            "tokens_per_second": result.metadata.get("tokens_per_second"),
             "finish_reason": result.finish_reason,
+            "raw_metadata": result.metadata,
         }
 
     def _compose_deterministic_fallback(
@@ -233,9 +235,29 @@ class ResponseSynthesisNode:
         state: LangGraphOrchestrationState, llm_metadata: Dict[str, Any]
     ) -> None:
         state["llm_metadata"] = llm_metadata
+        
+        # Pull memory context telemetry if available
+        memory_context = state.get("memory_context") or {}
+        memory_metadata = {}
+        if memory_context:
+            context_meta = memory_context.get("context_metadata") or {}
+            memory_metadata = {
+                "used": bool(memory_context.get("memories")),
+                "classes": memory_context.get("memory_types_found") or [],
+                "recall_mode": "curated" if context_meta.get("curated_recall") else "semantic",
+                "sources": ["vector_db", "postgres"] if memory_context.get("memories") else [],
+                "latency_ms": context_meta.get("latency_ms"),
+                "degraded": bool(memory_context.get("error") or state.get("memory_fetch_error")),
+                "writeback_status": "completed" if state.get("memory_writeback_completed") else "pending"
+            }
+
         response_metadata = {
             **(state.get("response_metadata") or {}),
-            "llm": llm_metadata,
+            "llm": {
+                **llm_metadata,
+                "memory": memory_metadata
+            },
+            "memory": memory_metadata,
             "degraded_mode": bool(llm_metadata.get("degraded_mode")),
             "response_source": llm_metadata.get("response_source"),
             "actual_provider": llm_metadata.get("actual_provider"),

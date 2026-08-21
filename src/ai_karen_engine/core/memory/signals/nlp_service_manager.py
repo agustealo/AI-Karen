@@ -904,7 +904,7 @@ class NLPServiceManager:
             if health_status.is_healthy:
                 logger.info("NLP services initialized successfully")
             else:
-                logger.warning(
+                logger.info(
                     f"NLP services initialized with issues: {health_status.alerts}"
                 )
 

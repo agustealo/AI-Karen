@@ -276,9 +276,14 @@ class AuthenticationManager:
     def _validate_google_key(self, api_key: str) -> ValidationResult:
         """Validate Google/Gemini API key."""
         try:
-            import google.generativeai as genai
-            
-            genai.configure(api_key=api_key)
+            import importlib
+
+            genai = importlib.import_module("google.generativeai")
+            configure = getattr(genai, "configure", None)
+            if configure is None:
+                raise AttributeError("google.generativeai.configure is unavailable")
+
+            configure(api_key=api_key)
             
             # Test with model list
             models = list(genai.list_models())

@@ -2,13 +2,13 @@
 profiles:
   default:
     provider: builtin_transformers
-    model: gpt2
+    model: auto
     temperature: 0.7
     max_tokens: 150
     
   creative:
     provider: builtin_transformers
-    model: gpt2
+    model: auto
     temperature: 0.9
     max_tokens: 200
     

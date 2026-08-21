@@ -107,7 +107,11 @@ def configure_middleware(
         max_age=600,
     )
 
-    app.add_middleware(GZipMiddleware, minimum_size=1000)
+    # Use more conservative GZip settings to prevent MemoryError on high-load/low-memory systems.
+    # Higher minimum_size (5KB) avoids compression overhead for small JSON responses.
+    # Lower compresslevel (5 instead of default 9) significantly reduces memory allocation 
+    # for compression objects while still providing good compression ratios.
+    app.add_middleware(GZipMiddleware, minimum_size=5000, compresslevel=5)
 
     # Ensure streaming responses are not served with a stale Content-Length.
     # Some upstream handlers and error paths may set Content-Length on a body

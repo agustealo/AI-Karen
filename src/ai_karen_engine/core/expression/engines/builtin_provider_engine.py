@@ -23,12 +23,12 @@ class BuiltinProviderEngine(BaseExpressionEngine):
         started = time.perf_counter()
         payload = self._build_payload(task)
 
-        providers_to_try = ["builtin_vllm", "builtin_transformers"]
+        providers_to_try = ["builtin_vllm", "builtin_transformers", "fallback"]
         pref = str(task.preferred_provider or "").lower()
         if "transformers" in pref:
-            providers_to_try = ["builtin_transformers", "builtin_vllm"]
+            providers_to_try = ["builtin_transformers", "builtin_vllm", "fallback"]
         elif "vllm" in pref:
-            providers_to_try = ["builtin_vllm", "builtin_transformers"]
+            providers_to_try = ["builtin_vllm", "builtin_transformers", "fallback"]
 
         text = ""
         actual_provider = None
@@ -41,6 +41,9 @@ class BuiltinProviderEngine(BaseExpressionEngine):
         for idx, provider_id in enumerate(providers_to_try):
             attempt_start = time.perf_counter()
             model_id = payload.get("model")
+            if model_id == "auto":
+                 model_id = None
+            
             try:
                 decision = evaluate_provider_policy(provider_id)
                 if decision.classification != "builtin_engine":
@@ -99,7 +102,7 @@ class BuiltinProviderEngine(BaseExpressionEngine):
 
         return ExpressionResult(
             task_id=task.task_id,
-            text=final_text,
+            text=text,
             provider=actual_provider,
             model=str(model) if model else None,
             engine_id=self.engine_id,

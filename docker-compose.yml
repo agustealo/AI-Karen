@@ -296,7 +296,7 @@ services:
     profiles:
       - vllm
     ports:
-      - "${KAREN_BUILTIN_VLLM_HOST_PORT:-8001}:8000"
+      - "${KAREN_BUILTIN_VLLM_HOST_PORT:-8002}:8000"
     environment:
       HF_HOME: /models/huggingface
       HUGGING_FACE_HUB_TOKEN: "${HUGGING_FACE_HUB_TOKEN:-}"
@@ -306,13 +306,14 @@ services:
       CUDA_VISIBLE_DEVICES: "${CUDA_VISIBLE_DEVICES:-0}"
     volumes:
       - ./models:/models
+      - ./config_assets:/config_assets:ro
     command:
       - --host
       - 0.0.0.0
       - --port
       - "8000"
       - --model
-      - ${KAREN_BUILTIN_VLLM_MODEL_ID:-/models/transformers/gpt2}
+      - ${KAREN_BUILTIN_VLLM_MODEL_ID:-/models/transformers/Qwen--Qwen3.5-0.8B}
       - --served-model-name
       - ${KAREN_BUILTIN_VLLM_SERVED_MODEL_NAME:-auto}
       - --device
@@ -325,6 +326,8 @@ services:
       - ${KAREN_BUILTIN_VLLM_MAX_MODEL_LEN:-1024}
       - --generation-config
       - ${KAREN_BUILTIN_VLLM_GENERATION_CONFIG:-auto}
+      - --chat-template
+      - /config_assets/vllm_chat_template.jinja
     deploy:
       resources:
         limits:
@@ -363,28 +366,29 @@ services:
     profiles:
       - vllm-cpu
     ports:
-      - "${KAREN_BUILTIN_VLLM_HOST_PORT:-8001}:8000"
+      - "${KAREN_BUILTIN_VLLM_CPU_HOST_PORT:-8001}:8000"
     environment:
       HF_HOME: /models/huggingface
       HUGGING_FACE_HUB_TOKEN: "${HUGGING_FACE_HUB_TOKEN:-}"
       VLLM_TARGET_DEVICE: "${KAREN_BUILTIN_VLLM_CPU_TARGET_DEVICE:-cpu}"
-      VLLM_CPU_KVCACHE_SPACE: "${VLLM_CPU_KVCACHE_SPACE:-8}"
-      VLLM_CPU_NUM_OF_RESERVED_CPU: "${VLLM_CPU_NUM_OF_RESERVED_CPU:-1}"
+      VLLM_CPU_KVCACHE_SPACE: "4"
     volumes:
       - ./models:/models
+      - ./config_assets:/config_assets:ro
     command:
       - --host
       - 0.0.0.0
       - --port
       - "8000"
       - --model
-      - ${KAREN_BUILTIN_VLLM_MODEL_ID:-/models/transformers/gpt2}
+      - ${KAREN_BUILTIN_VLLM_MODEL_ID:-/models/transformers/Qwen--Qwen3.5-0.8B}
       - --served-model-name
       - ${KAREN_BUILTIN_VLLM_SERVED_MODEL_NAME:-auto}
       - --device
       - cpu
+      - --enforce-eager
       - --worker-cls
-      - ${KAREN_BUILTIN_VLLM_CPU_WORKER_CLS:-vllm.worker.cpu_worker.CPUWorker}
+      - vllm.worker.cpu_worker.CPUWorker
       - --dtype
       - ${KAREN_BUILTIN_VLLM_CPU_DTYPE:-float32}
       - --max-model-len
@@ -394,6 +398,8 @@ services:
       - --generation-config
       - ${KAREN_BUILTIN_VLLM_GENERATION_CONFIG:-auto}
       - --disable-async-output-proc
+      - --chat-template
+      - /config_assets/vllm_chat_template.jinja
     deploy:
       resources:
         limits:
@@ -547,7 +553,7 @@ services:
       # Set PYTHONPATH to include src directory for proper module imports
       PYTHONPATH: "/app:/app/src:$PYTHONPATH"
       # Do not skip production-style initialization
-      KARI_FAST_STARTUP: "false"
+      KARI_FAST_STARTUP: "true"
       WARMUP_LLM: "false"
       # Disable deferred router wiring to ensure auth routes are loaded
       KARI_DEFER_ROUTER_WIRING: "false"

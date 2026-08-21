@@ -8,7 +8,7 @@
   "discovery_policy": {
     "canonical_transformers_root": "models/transformers",
     "runtime_visible_transformers": [
-      "gpt2",
+      "Qwen--Qwen3.5-0.8B",
       "deepseek-ai--DeepSeek-R1-Distill-Qwen-1.5B"
     ],
     "system_transformers": [
@@ -20,9 +20,9 @@
       "sentence-transformers--all-MiniLM-L6-v2",
       "distilbert-base-uncased"
     ],
-    "default_runtime_model": "gpt2",
-    "default_runtime_model_path": "/models/transformers/gpt2",
-    "low_resource_fallback_model": "gpt2"
+    "default_runtime_model": "Qwen--Qwen3.5-0.8B",
+    "default_runtime_model_path": "/models/transformers/Qwen--Qwen3.5-0.8B",
+    "low_resource_fallback_model": "Qwen--Qwen3.5-0.8B"
   },
   "format_signatures": {
     "gguf": [".gguf"],

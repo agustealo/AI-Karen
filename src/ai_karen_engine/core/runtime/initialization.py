@@ -35,8 +35,8 @@ class SystemInitializer:
 
         self.default_models = {
             "transformers": [
-                "gpt2",  # Will be downloaded via transformers library if not present
-                # "distilbert-base-uncased" - already available in models/
+                "models/transformers/Qwen--Qwen3.5-0.8B",
+                "models/transformers/deepseek-ai--DeepSeek-R1-Distill-Qwen-1.5B",
             ],
         }
 
@@ -501,8 +501,8 @@ class SystemInitializer:
                 },
             },
             "default_models": {
-                "chat": "gpt2",
-                "completion": "gpt2",
+                "chat": "auto",
+                "completion": "auto",
                 "embedding": "distilbert-base-uncased",
             },
         }
@@ -513,19 +513,19 @@ class SystemInitializer:
 profiles:
   default:
     provider: builtin_transformers
-    model: gpt2
+    model: auto
     temperature: 0.7
     max_tokens: 150
     
   creative:
     provider: builtin_transformers
-    model: gpt2
+    model: auto
     temperature: 0.9
     max_tokens: 200
     
   precise:
     provider: builtin_transformers
-    model: distilbert-base-uncased
+    model: auto
     temperature: 0.3
     max_tokens: 100
 """

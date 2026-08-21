@@ -37,6 +37,7 @@ from ai_karen_engine.config.llm_provider_config import (
     ProviderModel,
     ProviderType,
     get_provider_config_manager,
+    get_provider_execution_spec,
     is_docker,
 )
 from ai_karen_engine.core.model_runtime.model_discovery_service import (
@@ -410,11 +411,21 @@ async def update_model_settings(
 
     if request.base_url is not None:
         if request.provider:
+            provider_id = _normalize_provider_id(request.provider)
             settings.set_setting(
-                f"model_providers.{_normalize_provider_id(request.provider)}.base_url",
+                f"model_providers.{provider_id}.base_url",
                 request.base_url,
                 save=False,
             )
+            # Also update the ProviderConfigManager for persistence across reloads
+            try:
+                provider_config = provider_manager.get_provider(provider_id)
+                if provider_config and provider_config.endpoint:
+                    # Update the dataclass field
+                    provider_config.endpoint.base_url = request.base_url
+                    provider_manager.update_provider(provider_id, {"endpoint": provider_config.endpoint})
+            except Exception as e:
+                logger.warning(f"Failed to update provider config for {provider_id}: {e}")
 
     if request.api_key is not None or request.clear_api_key:
         if not request.provider:
@@ -424,36 +435,95 @@ async def update_model_settings(
 
         provider_id = _normalize_provider_id(request.provider)
         secret_manager = get_secret_manager()
-        secret_name = SECRET_NAMES.get(provider_id)
+        # Dynamically determine secret name if not in static mapping
+        secret_name = SECRET_NAMES.get(provider_id) or f"{provider_id.upper().replace('-', '_')}_API_KEY"
 
         if secret_name:
             if request.clear_api_key:
                 secret_manager.delete_secret(secret_name)
             else:
-                secret_manager.store_secret(secret_name, request.api_key)
+                secret_manager.set_secret(secret_name, request.api_key, description=f"{provider_id} API key")
+            
+            # CRITICAL: Invalidate the registry cache so the new key is picked up immediately
+            try:
+                from ai_karen_engine.integrations.llm_registry import get_registry
+                get_registry().invalidate_provider_cache(provider_id)
+                logger.info(f"Invalidated provider cache for {provider_id} due to API key update")
+            except Exception as e:
+                logger.warning(f"Failed to invalidate provider cache for {provider_id}: {e}")
 
     if request.api_key_header is not None:
+        provider_id = _normalize_provider_id(request.provider)
         settings.set_setting(
-            f"model_providers.{_normalize_provider_id(request.provider)}.api_key_header",
+            f"model_providers.{provider_id}.api_key_header",
             request.api_key_header,
             save=False,
         )
+        # Persist to ProviderConfigManager
+        try:
+            provider_config = provider_manager.get_provider(provider_id)
+            if provider_config and provider_config.authentication:
+                provider_config.authentication.api_key_header = request.api_key_header
+                provider_manager.update_provider(provider_id, {"authentication": provider_config.authentication})
+        except: pass
+        
+        # Trigger cache invalidation for header changes too
+        try:
+            from ai_karen_engine.integrations.llm_registry import get_registry
+            get_registry().invalidate_provider_cache(provider_id)
+        except: pass
 
     if request.api_key_prefix is not None:
+        provider_id = _normalize_provider_id(request.provider)
         settings.set_setting(
-            f"model_providers.{_normalize_provider_id(request.provider)}.api_key_prefix",
+            f"model_providers.{provider_id}.api_key_prefix",
             request.api_key_prefix,
             save=False,
         )
+        # Persist to ProviderConfigManager
+        try:
+            provider_config = provider_manager.get_provider(provider_id)
+            if provider_config and provider_config.authentication:
+                provider_config.authentication.api_key_prefix = request.api_key_prefix
+                provider_manager.update_provider(provider_id, {"authentication": provider_config.authentication})
+        except: pass
+
+        # Trigger cache invalidation for prefix changes
+        try:
+            from ai_karen_engine.integrations.llm_registry import get_registry
+            get_registry().invalidate_provider_cache(provider_id)
+        except: pass
 
     if request.custom_headers is not None:
+        provider_id = _normalize_provider_id(request.provider)
         settings.set_setting(
-            f"model_providers.{_normalize_provider_id(request.provider)}.custom_headers",
+            f"model_providers.{provider_id}.custom_headers",
             request.custom_headers,
             save=False,
         )
+        # Persist to ProviderConfigManager
+        try:
+            provider_config = provider_manager.get_provider(provider_id)
+            if provider_config and provider_config.authentication:
+                provider_config.authentication.custom_headers = request.custom_headers
+                provider_manager.update_provider(provider_id, {"authentication": provider_config.authentication})
+        except: pass
+
+        # Trigger cache invalidation for custom header changes
+        try:
+            from ai_karen_engine.integrations.llm_registry import get_registry
+            get_registry().invalidate_provider_cache(provider_id)
+        except: pass
 
     settings._save_settings()
+    
+    # Final global invalidation to be sure
+    if request.provider:
+        try:
+            from ai_karen_engine.integrations.llm_registry import get_registry
+            get_registry().invalidate_provider_cache(_normalize_provider_id(request.provider))
+        except: pass
+
     return await build_model_settings_payload()
 
 
@@ -684,8 +754,11 @@ async def build_model_settings_payload() -> Dict[str, Any]:
         if _supports_base_url_override(provider):
             required_fields.append("base_url")
 
-        # Runtime engine derivation
-        runtime_engine = provider.name.replace("builtin_", "")
+        execution_spec = get_provider_execution_spec(provider.name) or {}
+        runtime_engine = str(
+            execution_spec.get("runtime_engine")
+            or provider.name.replace("builtin_", "")
+        )
         if provider.name == "custom":
             runtime_engine = "openai_compatible"
 
@@ -697,7 +770,7 @@ async def build_model_settings_payload() -> Dict[str, Any]:
             provider_type=provider.provider_type.value,
             icon_name=provider.name if provider.name in {"openai", "gemini", "anthropic", "meta", "huggingface", "vllm", "ollama"} else "openai",
             doc_url=PROVIDER_DOC_URLS.get(provider.name, ""),
-            supports_model_discovery=bool(provider.capabilities is not None and "custom_endpoint" in provider.capabilities), 
+            supports_model_discovery=bool(execution_spec.get("supports_model_discovery")),
             supports_base_url_override=_supports_base_url_override(provider),
             default_base_url=provider.endpoint.base_url if provider.endpoint else None,
             requires_api_key=bool(provider.authentication and provider.authentication.type == AuthenticationType.API_KEY),
@@ -724,7 +797,12 @@ async def build_model_settings_payload() -> Dict[str, Any]:
             required_config_fields=required_fields,
             safe_diagnostic_metadata={
                 "connection_target": override.get("base_url") or (provider.endpoint.base_url if provider.endpoint else "internal"),
-                "is_docker": is_docker()
+                "is_docker": is_docker(),
+                "execution_family": execution_spec.get("execution_family"),
+                "adapter_class": execution_spec.get("adapter_class"),
+                "adapter_module": execution_spec.get("adapter_module"),
+                "runtime_engine": execution_spec.get("runtime_engine") or runtime_engine,
+                "execution_notes": execution_spec.get("notes"),
             }
         ))
 
@@ -737,7 +815,7 @@ async def build_model_settings_payload() -> Dict[str, Any]:
         "default_provider": "builtin_transformers",
         "default_model": "auto",
         "fallback_hierarchy": list(settings.get_setting("llm_providers.fallback_hierarchy") or [
-            "builtin_transformers", "builtin_vllm", "openai", "gemini"
+            "builtin_transformers", "builtin_vllm", "fallback", "openai", "gemini"
         ])
     }
 
@@ -796,7 +874,7 @@ def _normalize_ollama_base_url(url: str) -> str:
 
 
 def _supports_base_url_override(provider: ProviderConfig) -> bool:
-    return provider.provider_type in {ProviderType.LOCAL, ProviderType.HYBRID} or provider.name in {"openai", "azure", "vllm", "builtin_vllm"}
+    return provider.provider_type in {ProviderType.LOCAL, ProviderType.HYBRID, ProviderType.CUSTOM} or provider.name in {"openai", "azure", "vllm", "builtin_vllm"}
 
 
 def _normalize_selected_model_for_provider(provider_name: str, model_id: Any) -> str:
@@ -909,13 +987,15 @@ async def add_custom_openai_provider(
         name=normalized_name,
         display_name=display_name or name,
         description=request.get("description", f"Custom provider: {name}"),
-        type=ProviderType.CUSTOM,
+        provider_type=ProviderType.CUSTOM,
         endpoint=ProviderEndpoint(
             base_url=base_url,
         ),
         authentication=ProviderAuthentication(
             type=AuthenticationType.API_KEY,
             api_key_env_var=f"{normalized_name.upper().replace('-', '_')}_API_KEY",
+            api_key_header=request.get("api_key_header", "Authorization"),
+            api_key_prefix=request.get("api_key_prefix", "Bearer"),
         ),
         models=[
             ProviderModel(
@@ -931,9 +1011,20 @@ async def add_custom_openai_provider(
     )
 
     provider_manager.add_provider(provider)
+    
+    # Invalidate registry cache for the new provider
+    try:
+        from ai_karen_engine.integrations.llm_registry import get_registry
+        get_registry().invalidate_provider_cache(normalized_name)
+    except: pass
+
     settings.set_setting("provider", provider.name, save=False)
     settings.set_setting("model", model_id, save=False)
     settings.set_setting(f"model_providers.{provider.name}.base_url", base_url, save=False)
+    # Save auth metadata to general settings as well for UI display consistency
+    settings.set_setting(f"model_providers.{provider.name}.api_key_header", provider.authentication.api_key_header, save=False)
+    settings.set_setting(f"model_providers.{provider.name}.api_key_prefix", provider.authentication.api_key_prefix, save=False)
+    
     settings._save_settings()
     
     return await build_model_settings_payload()

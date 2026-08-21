@@ -35,6 +35,9 @@ class OpenAIProvider(LLMProviderBase):
         max_retries: int = 3,
         provider_name: str = "openai",
         health_url: Optional[str] = None,
+        api_key_header: Optional[str] = None,
+        api_key_prefix: Optional[str] = None,
+        custom_headers: Optional[Dict[str, str]] = None,
     ):
         """
         Initialize OpenAI provider.
@@ -46,6 +49,9 @@ class OpenAIProvider(LLMProviderBase):
             timeout: Request timeout in seconds
             max_retries: Maximum number of retry attempts
             health_url: Optional custom health check URL
+            api_key_header: Optional custom header for API key (e.g. "X-API-Key")
+            api_key_prefix: Optional prefix for API key value (e.g. "Bearer")
+            custom_headers: Additional custom headers for all requests
         """
         self.provider_name = str(provider_name or "openai").strip().lower()
         self.provider_defaults = get_openai_compatible_provider_defaults(
@@ -59,6 +65,9 @@ class OpenAIProvider(LLMProviderBase):
             base_url or str(self.provider_defaults["base_url"])
         )
         self.health_url = health_url or os.getenv(f"KAREN_BUILTIN_{self.provider_name.upper()}_HEALTH_URL")
+        self.api_key_header = api_key_header or self.provider_defaults.get("api_key_header", "Authorization")
+        self.api_key_prefix = api_key_prefix if api_key_prefix is not None else self.provider_defaults.get("api_key_prefix", "Bearer")
+        self.custom_headers = custom_headers or {}
         self.timeout = timeout
         self.max_retries = (
             min(max_retries, 2) if self.provider_name == "zai" else max_retries
@@ -103,6 +112,22 @@ class OpenAIProvider(LLMProviderBase):
             }
             if self.base_url:
                 client_kwargs["base_url"] = self.base_url
+
+            # Prepare custom headers
+            headers = dict(self.custom_headers)
+            
+            # Apply custom API key header if it's not the default Authorization header
+            # or if a custom prefix is specified
+            if self.api_key_header != "Authorization" or self.api_key_prefix != "Bearer":
+                auth_val = f"{self.api_key_prefix} {self.api_key}" if self.api_key_prefix else self.api_key
+                headers[self.api_key_header] = auth_val
+                # If we're using a custom header, we must set a dummy key in the client 
+                # constructor so the SDK doesn't complain about missing api_key, 
+                # but our custom header will take precedence in the underlying requests.
+                client_kwargs["api_key"] = "PROVIDED_VIA_CUSTOM_HEADER"
+
+            if headers:
+                client_kwargs["default_headers"] = headers
 
             self.client = openai.OpenAI(**client_kwargs)
 

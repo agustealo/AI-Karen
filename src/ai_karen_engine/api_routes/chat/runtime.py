@@ -171,7 +171,9 @@ class ChatRequest(BaseModel):
         default=0.7, ge=0.0, le=2.0, description="Sampling temperature"
     )
     max_tokens: Optional[int] = Field(
-        default=None, ge=1, le=4096, description="Maximum tokens to generate"
+        default=None,
+        ge=1,
+        description="Requested tokens to generate; provider/model caps are enforced downstream.",
     )
     stream: Optional[bool] = Field(
         default=False, description="Whether to stream the response"

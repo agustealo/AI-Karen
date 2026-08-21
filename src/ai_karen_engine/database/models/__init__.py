@@ -646,6 +646,7 @@ class AuthSession(Base):
     __table_args__ = (
         Index("idx_auth_sessions_user_active", "user_id", "is_active"),
         Index("idx_auth_sessions_last_accessed", "last_accessed"),
+        Index("idx_auth_sessions_refresh_token", "refresh_token"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - simple repr

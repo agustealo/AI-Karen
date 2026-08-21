@@ -8,21 +8,10 @@ interface PanelProps {
 
 type ViewMode = 'snippet' | 'markdown' | 'json';
 
-type SearchInjectableItem = {
-  title?: string;
-  snippet?: string;
-  content?: string;
-  markdown?: string;
-  full_content?: string;
-  extracted_data?: Record<string, unknown>;
-  extractedData?: Record<string, unknown>;
-  url?: string;
-};
-
 /**
  * Enhanced function to send rich content to the main Karen chat
  */
-const sendToChat = (item: SearchInjectableItem) => {
+const sendToChat = (item: any) => {
   let content = `I found this information for you:\n\n**${item.title || 'Search Result'}**\n\n`;
   
   if (item.extracted_data || item.extractedData) {
@@ -72,7 +61,7 @@ function ViewToggle({ active, onClick, label, icon }: { active: boolean; onClick
 
 export function ResultsPanel({ response }: PanelProps) {
   const results = response.results || [];
-  const sources = useMemo(() => response.sources || [], [response.sources]);
+  const sources = response.sources || [];
   const initialActiveSourceIndex = useMemo(() => getMostRelevantSourceIndex(sources), [sources]);
   const [activeSourceIndex, setActiveSourceIndex] = useState(initialActiveSourceIndex);
   const [sourceViewMode, setSourceViewMode] = useState<ViewMode>('snippet');
@@ -84,12 +73,7 @@ export function ResultsPanel({ response }: PanelProps) {
 
   const sourceCount = response.diagnostics?.sourceCount ?? sources.length ?? 0;
   const resultCount = results.length;
-  const providerLabel =
-    typeof response.provider === 'string' && response.provider.trim()
-      ? response.provider
-      : typeof response.metadata?.provider === 'string' && response.metadata.provider.trim()
-        ? response.metadata.provider
-        : 'crawl4ai';
+  const providerLabel = response.provider || response.metadata?.provider || 'crawl4ai';
 
   React.useEffect(() => {
     setActiveSourceIndex(initialActiveSourceIndex);
@@ -272,7 +256,7 @@ export function ResultsPanel({ response }: PanelProps) {
 }
 
 export function SourcesPanel({ response }: PanelProps) {
-  const sources = useMemo(() => response.sources || [], [response.sources]);
+  const sources = response.sources || [];
   const initialActiveSourceIndex = useMemo(() => getMostRelevantSourceIndex(sources), [sources]);
   const [activeSourceIndex, setActiveSourceIndex] = useState(initialActiveSourceIndex);
   const [sourceViewMode, setSourceViewMode] = useState<ViewMode>('snippet');
@@ -390,7 +374,7 @@ export function SourcesPanel({ response }: PanelProps) {
   );
 }
 
-function ResultCard({ result, index, onSend }: { result: SearchResultItem; index: number; onSend: (item: SearchInjectableItem) => void }) {
+function ResultCard({ result, index, onSend }: { result: SearchResultItem; index: number; onSend: (item: any) => void }) {
   const [viewMode, setViewMode] = useState<ViewMode>('snippet');
 
   return (

@@ -32,6 +32,7 @@ class OpenAIProvider(BaseLLMProvider):
         self.base_url = config.get("base_url", "https://api.openai.com/v1")
         self.model = config.get("model", "gpt-3.5-turbo")
         self.timeout = config.get("timeout_seconds", 30)
+        self.max_tokens = config.get("max_tokens", 4096)
     
     def _get_features(self) -> ProviderFeatures:
         """Get OpenAI provider features."""
@@ -41,7 +42,7 @@ class OpenAIProvider(BaseLLMProvider):
             vision=True,
             embedding=True,
             fine_tuning=False,
-            max_tokens=4096,
+            max_tokens=self.max_tokens,
             supported_models=[
                 "gpt-3.5-turbo",
                 "gpt-3.5",
@@ -77,8 +78,8 @@ class OpenAIProvider(BaseLLMProvider):
         
         # Check max_tokens
         max_tokens = config.get("max_tokens")
-        if max_tokens is not None and (max_tokens < 1 or max_tokens > self.features.max_tokens):
-            errors.append(f"Max tokens must be between 1 and {self.features.max_tokens}")
+        if max_tokens is not None and max_tokens < 1:
+            errors.append("Max tokens must be greater than 0")
         
         # Check timeout
         timeout = config.get("timeout_seconds")
@@ -98,6 +99,7 @@ class OpenAIProvider(BaseLLMProvider):
         self.base_url = config.get("base_url", "https://api.openai.com/v1")
         self.model = config.get("model", "gpt-3.5-turbo")
         self.timeout = config.get("timeout_seconds", 30)
+        self.max_tokens = config.get("max_tokens", self.max_tokens)
         
         logger.info(f"OpenAI provider configured with model: {self.model}")
     
@@ -107,7 +109,8 @@ class OpenAIProvider(BaseLLMProvider):
             "api_key": self.api_key,
             "base_url": self.base_url,
             "model": self.model,
-            "timeout_seconds": self.timeout
+            "timeout_seconds": self.timeout,
+            "max_tokens": self.max_tokens,
         }
     
     async def get_status(self) -> ProviderStatus:
@@ -194,7 +197,7 @@ class OpenAIProvider(BaseLLMProvider):
                 "model": request.model or self.model,
                 "messages": self._prepare_messages(request.messages),
                 "temperature": request.temperature,
-                "max_tokens": request.max_tokens,
+                "max_tokens": request.max_tokens or self.max_tokens,
                 "stream": False
             }
             
@@ -250,7 +253,7 @@ class OpenAIProvider(BaseLLMProvider):
                 "model": request.model or self.model,
                 "messages": self._prepare_messages(request.messages),
                 "temperature": request.temperature,
-                "max_tokens": request.max_tokens,
+                "max_tokens": request.max_tokens or self.max_tokens,
                 "stream": True
             }
             

@@ -68,7 +68,7 @@ class VLLMRuntime(LLMProviderBase):
             if os.path.exists("/.dockerenv") or os.getenv("KAREN_DOCKER") == "true":
                 raw_url = "http://vllm:8000/v1"
             else:
-                raw_url = "http://localhost:8001/v1"
+                raw_url = "http://localhost:8000/v1"
         
         self.base_url = raw_url
         self.health_url = os.getenv("KAREN_BUILTIN_VLLM_HEALTH_URL")

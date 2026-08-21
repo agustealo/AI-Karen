@@ -641,6 +641,9 @@ class LLMOrchestrator:
             self._setup_watchdog()
             self._initialized = True
             
+            # Ensure minimum models are available for health probes before returning
+            self._ensure_minimum_models_registered()
+            
             # Provider warmup can load local model runtimes and pin the
             # interpreter long enough to make the API stop answering health
             # checks. Keep it opt-in; chat runtime fallback is owned by the

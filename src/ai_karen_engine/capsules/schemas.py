@@ -86,7 +86,11 @@ class CapsuleManifest(BaseModel):
     prometheus_enabled: bool = Field(default=True, description="Enable Prometheus metrics")
 
     # LLM Configuration (if applicable)
-    max_tokens: int = Field(default=256, ge=1, le=4096, description="Max LLM tokens")
+    max_tokens: int = Field(
+        default=256,
+        ge=1,
+        description="Max LLM tokens. Provider/model caps are enforced downstream.",
+    )
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="LLM temperature")
 
     # Metadata

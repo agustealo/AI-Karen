@@ -17,7 +17,7 @@ export function LoadingState({ state }: { state: IntelligentSearchState }) {
         </h3>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
           Running <span className="font-semibold text-primary">{state.mode}</span> mode for
-          <span className="font-medium text-foreground"> &quot;{state.query.slice(0, 48)}{state.query.length > 48 ? '...' : ''}&quot;</span>
+          <span className="font-medium text-foreground"> "{state.query.slice(0, 48)}{state.query.length > 48 ? '...' : ''}"</span>
         </p>
       </div>
     </div>
@@ -32,7 +32,7 @@ export function ErrorState({ error }: { error: Error }) {
       </div>
       <h3 className="mb-2 text-xl font-semibold text-red-400">Search execution failed</h3>
       <p className="max-w-2xl break-words rounded-2xl border border-red-500/20 bg-red-950/20 p-4 font-mono text-sm leading-6 text-red-300">
-        {error.message || 'An unknown error occurred while communicating with the plugin host.'}
+        {error.message || "An unknown error occurred while communicating with the plugin host."}
       </p>
     </div>
   );
