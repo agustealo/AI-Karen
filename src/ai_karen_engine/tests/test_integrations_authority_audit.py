@@ -330,6 +330,43 @@ def test_core_runtime_does_not_import_from_duplicate_router_authorities() -> Non
     )
 
 
+def test_duplicate_provider_registry_imports_are_documented() -> None:
+    """All imports from duplicate provider registries must be documented."""
+    import subprocess
+
+    duplicate_registries = [
+        "integrations.llm_registry",
+        "integrations.registry",
+        "integrations.provider_registry",
+        "integrations.llm.llm_registry",
+        "integrations.intelligent_provider_registry",
+        "integrations.dynamic_provider_system",
+    ]
+
+    matches = []
+    for registry in duplicate_registries:
+        cmd = [
+            "rg",
+            "-n",
+            "--hidden",
+            "--glob",
+            "*.py",
+            registry,
+            "src",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        except FileNotFoundError:
+            continue
+        if result.stdout.strip():
+            matches.append(registry)
+
+    assert matches, (
+        "Expected duplicate registry imports to be present during migration. "
+        "If none exist, the migration is complete."
+    )
+
+
 def test_deleted_dead_files_are_gone() -> None:
     """Deleted dead files must no longer exist on disk."""
     deleted_files = [
