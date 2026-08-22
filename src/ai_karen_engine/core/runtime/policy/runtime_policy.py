@@ -27,6 +27,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from ai_karen_engine.core.runtime.contracts import (
+    AuthorizedExecutionPlan,
+    DegradationState,
+    ExecutionBudget,
+    ExecutionTopology,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -135,6 +142,66 @@ class PolicyDecision:
     @forbidden_capabilities.setter
     def forbidden_capabilities(self, value: List[str]) -> None:
         self.denied_capabilities = list(value)
+
+    def to_authorized_plan(self) -> AuthorizedExecutionPlan:
+        """Convert to the canonical AuthorizedExecutionPlan consumed by RuntimeExecutor."""
+        topology = ExecutionTopology.DIRECT
+        if self.requires_human_gate:
+            topology = ExecutionTopology.WORKFLOW
+        if self.runtime_constraints.get("agent_delegation"):
+            topology = ExecutionTopology.MULTI_AGENT
+        if self.runtime_constraints.get("reasoning_required"):
+            topology = ExecutionTopology.REASONING
+
+        return AuthorizedExecutionPlan(
+            execution_id=self.decision_id,
+            policy_decision_id=self.decision_id,
+            topology=topology,
+            allowed_capabilities=list(self.allowed_capabilities),
+            allowed_tools=list(self.runtime_constraints.get("allowed_tools") or []),
+            allowed_plugins=list(self.runtime_constraints.get("allowed_plugins") or []),
+            allowed_agents=list(self.runtime_constraints.get("allowed_agents") or []),
+            provider_constraints=(
+                {
+                    "eligible_providers": self.provider_constraints.eligible_providers if self.provider_constraints else [],
+                    "forbidden_providers": self.provider_constraints.forbidden_providers if self.provider_constraints else [],
+                    "local_only": self.provider_constraints.local_only if self.provider_constraints else False,
+                    "external_allowed": self.provider_constraints.external_allowed if self.provider_constraints else True,
+                }
+                if self.provider_constraints
+                else {}
+            ),
+            memory_scope=str(self.runtime_constraints.get("memory_scope", "session")),
+            resource_scope=(
+                {
+                    "allowed_paths": list(self.resource_scope.allowed_paths) if self.resource_scope else [],
+                    "forbidden_paths": list(self.resource_scope.forbidden_paths) if self.resource_scope else [],
+                    "max_file_size_mb": self.resource_scope.max_file_size_mb if self.resource_scope else 10,
+                }
+                if self.resource_scope
+                else {}
+            ),
+            budget=ExecutionBudget(
+                max_duration_ms=self.resource_constraints.max_wall_time_seconds * 1000 if self.resource_constraints else 30000,
+                max_output_tokens=self.resource_constraints.max_output_size_kb * 1024 if self.resource_constraints else 4096,
+            ),
+            approval_requirements=["human_gate"] if self.requires_human_gate else [],
+            reasoning_modes=list(self.runtime_constraints.get("reasoning_modes") or []),
+            workflow_id=self.runtime_constraints.get("workflow_id"),
+            agent_topology=self.runtime_constraints.get("agent_topology"),
+            degraded_allowed=bool(self.runtime_constraints.get("degraded_allowed", True)),
+            degradation_state=DegradationState(
+                degraded=not self.allowed,
+                reason_code=self.reason_codes[0].value if self.reason_codes else None,
+                level=str(self.risk_level or "none").lower(),
+            ) if not self.allowed else None,
+            audit_context={
+                "decision_id": self.decision_id,
+                "policy_version": self.policy_version,
+                "evaluated_at": self.evaluated_at,
+                "risk_level": self.risk_level,
+            },
+        )
 
 
 class PolicyCheckResult:

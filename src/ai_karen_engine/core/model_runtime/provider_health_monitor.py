@@ -198,12 +198,10 @@ class ProviderHealthMonitor:
         logger.debug(f"Updated health for {provider_name}: {health_info.status.value}")
 
         # Invalidate routing cache on status change
+        # KIRE retired: routing cache invalidation is owned by RuntimeResilience.
         try:
-            if prev_status != health_info.status:
-                from ai_karen_engine.routing.kire_router import invalidate_provider_cache
-                invalidate_provider_cache(provider_name)
+            pass
         except Exception:
-            # Avoid tight coupling failures impacting health updates
             pass
     
     def get_all_provider_health(self) -> Dict[str, ProviderHealthInfo]:

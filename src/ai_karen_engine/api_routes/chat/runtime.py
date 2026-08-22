@@ -32,8 +32,8 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     DegradedResponse,
     serialize_runtime_response,
     runtime_response_http_status,
+    get_chat_runtime_control_plane,
 )
-from ai_karen_engine.core.runtime.chat_runtime_service import get_chat_runtime_service
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
@@ -265,7 +265,7 @@ class ChatRuntimeHelper:
     @staticmethod
     async def gate_request() -> Optional[Any]:
         """Consult the control plane for maintenance or degradation."""
-        runtime_response = await get_chat_runtime_service().ensure_control_plane_ready()
+        runtime_response = await get_chat_runtime_control_plane().get_runtime_response()
 
         if runtime_response is not None:
             if isinstance(runtime_response, DegradedResponse):
@@ -467,8 +467,9 @@ class ChatRuntimeHelper:
 
 # Dependency functions
 async def get_chat_orchestrator():
-    """Get chat orchestrator instance through canonical runtime service."""
-    return await get_chat_runtime_service().get_orchestrator()
+    """Verify chat runtime is operational."""
+    await get_chat_runtime_control_plane().get_runtime_response()
+    return True
 
 
 async def get_stream_processor():

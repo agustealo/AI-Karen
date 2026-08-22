@@ -7,26 +7,27 @@ The old root-level re-export surface has been removed. Import concrete functiona
 ## Current domain map
 
 ### `core/langgraph_orchestrator/`
-Live chat execution authority.
+Graph workflow executor.
 
 Owns:
-- orchestration lifecycle
-- runtime policy
-- decision flow
-- response synthesis
-- formatting pipeline
 - LangGraph nodes, contracts, and context helpers
+- workflow lifecycle
+- human-in-the-loop approval
+- checkpoint/resume
+- parallel graph execution
+- long-running workflow orchestration
 
 ### `core/runtime/`
-Runtime environment and lifecycle support.
+LIVE EXECUTION AUTHORITY.
 
 Owns:
-- startup / initialization
+- chat runtime lifecycle
+- runtime control plane
+- execution decisions
 - degraded mode policy
 - lazy loading
 - resource monitoring
 - async task orchestration
-- runtime control plane helpers
 
 ### `core/operations/`
 Operational support and observability.
@@ -128,6 +129,9 @@ Those compatibility exports were removed to keep authority boundaries clear.
 The top-level `core/` package should not become a second runtime.
 
 If a responsibility is part of live chat execution, it belongs in:
+- `core/runtime/`
+
+If it is workflow/graph execution, it belongs in:
 - `core/langgraph_orchestrator/`
 
 If it is support infrastructure, it belongs in the most specific preserved domain folder.

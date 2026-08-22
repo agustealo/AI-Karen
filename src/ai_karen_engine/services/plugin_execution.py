@@ -1214,7 +1214,7 @@ async def initialize_plugin_execution_engine(
     return _execution_engine
 
 # Compatibility shim: routes/runtime should dispatch through unified registry only.
-from ai_karen_engine.extensions.unified.core.cortex_execution_registry import CortexExecutionContext
+from ai_karen_engine.extensions.platform.core.cortex_execution_registry import CortexExecutionContext
 from ai_karen_engine.services.plugin_registry import UNIFIED_REGISTRY
 
 

@@ -55,14 +55,6 @@ from ai_karen_engine.config.provider_execution_resolver import (
 
 logger = logging.getLogger("kari.llm_registry")
 
-try:
-    from ai_karen_engine.routing.kire_router import KIRERouter as KIREAdapter
-
-    _KIRE_IMPORT_ERROR: Optional[Exception] = None
-except Exception as kire_import_error:  # pragma: no cover - optional dependency path
-    KIREAdapter = None  # type: ignore[assignment]
-    _KIRE_IMPORT_ERROR = kire_import_error
-
 
 @dataclass
 class ProviderRegistration:
@@ -1030,7 +1022,7 @@ class LLMRegistry:
         return {key: value for key, value in resolved.items() if key in accepted}
 
     # -----------------------------
-    # KIRE routing integration
+    # Provider selection integration
     # -----------------------------
     async def get_provider_with_routing(
         self,
@@ -1042,31 +1034,34 @@ class LLMRegistry:
         requirements: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Route to provider/model using KIRE and return instance + decision.
+        Resolve provider/model using canonical provider registry.
 
-        Returns dict with keys: provider_instance, decision (RouteDecision), provider_name, model_name
+        KIRE retired: provider selection is owned by RuntimePolicy + ProviderRouter.
+        This method now uses the canonical provider registry directly.
         """
         try:
-            if self._kire is None:
-                if KIREAdapter is None:
-                    raise RuntimeError(
-                        f"KIRE routing unavailable: {_KIRE_IMPORT_ERROR!r}"
-                    )
-                self._kire = KIREAdapter(llm_registry=self)
-            decision = await self._kire.route(
-                user_id=user_ctx.get("user_id", "anon"),
-                task_type=task_type,
-                query=query,
-                khrp_step=khrp_step,
-                context={"user_ctx": user_ctx},
-                requirements=requirements or {},
+            from ai_karen_engine.core.model_runtime.provider_registry_service import (
+                get_provider_registry_service,
             )
-            provider = self.get_provider(decision.provider, model=decision.model)
+
+            registry_service = get_provider_registry_service()
+            provider_names = registry_service.get_all_provider_names()
+            provider_name = provider_names[0] if provider_names else "builtin_vllm"
+
+            provider = self.get_provider(provider_name)
             return {
                 "provider_instance": provider,
-                "decision": decision,
-                "provider_name": decision.provider,
-                "model_name": decision.model,
+                "decision": None,
+                "provider_name": provider_name,
+                "model_name": "auto",
+            }
+        except Exception as e:
+            logger.error(f"Provider resolution failed: {e}")
+            return {
+                "provider_instance": None,
+                "decision": None,
+                "provider_name": "builtin_vllm",
+                "model_name": "auto",
             }
         except Exception as ex:
             logger.error(f"KIRE routing failed, falling back. Error: {ex}")

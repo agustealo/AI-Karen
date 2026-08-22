@@ -496,18 +496,19 @@ async def _build_degraded_mode_status() -> Dict[str, Any]:
             system_status, provider_service
         )
 
-        # Check orchestrator for working models
+        # Check canonical provider registry for working models
         llm_models_available = 0
         try:
-            from ai_karen_engine.llm_orchestrator import get_orchestrator
-
-            orchestrator = get_orchestrator()
-            available_models = orchestrator.registry.list_models()
-            llm_models_available = len(
-                [m for m in available_models if m.get("status") != "CIRCUIT_BROKEN"]
+            from ai_karen_engine.core.model_runtime.provider_registry_service import (
+                get_provider_registry_service,
             )
+
+            registry = get_provider_registry_service()
+            for provider_name in registry.get_all_provider_names():
+                models = registry.get_registered_models(provider_name, healthy_only=True)
+                llm_models_available += len(models)
         except Exception as exc:
-            logger.debug("Could not check LLM orchestrator models: %s", exc)
+            logger.debug("Could not check provider registry models: %s", exc)
 
         # Local capabilities
         from pathlib import Path
@@ -597,13 +598,14 @@ async def _build_degraded_mode_status() -> Dict[str, Any]:
 
         llm_orchestrator_models = 0
         try:
-            from ai_karen_engine.llm_orchestrator import get_orchestrator
-
-            orchestrator = get_orchestrator()
-            available_models = orchestrator.registry.list_models()
-            llm_orchestrator_models = len(
-                [m for m in available_models if m.get("status") != "CIRCUIT_BROKEN"]
+            from ai_karen_engine.core.model_runtime.provider_registry_service import (
+                get_provider_registry_service,
             )
+
+            registry = get_provider_registry_service()
+            for provider_name in registry.get_all_provider_names():
+                models = registry.get_registered_models(provider_name, healthy_only=True)
+                llm_orchestrator_models += len(models)
         except Exception:
             llm_orchestrator_models = 0
 

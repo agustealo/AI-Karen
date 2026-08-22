@@ -26,20 +26,17 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 
-from ai_karen_engine.core.runtime.chat_runtime_service import (
-    ChatRuntimeService,
-    get_chat_runtime_service,
-)
-from ai_karen_engine.models.shared_types import CanonicalChatRequest
-from ai_karen_engine.services.streaming.stream_processor import AsyncStreamProcessor
-from ai_karen_engine.services.streaming.websocket_gateway import WebSocketGateway
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     RuntimeMode,
     MaintenanceResponse,
     EmergencyFallbackResponse,
     DegradedResponse,
     serialize_runtime_response,
+    get_chat_runtime_control_plane,
 )
+from ai_karen_engine.models.shared_types import CanonicalChatRequest
+from ai_karen_engine.services.streaming.stream_processor import AsyncStreamProcessor
+from ai_karen_engine.services.streaming.websocket_gateway import WebSocketGateway
 
 # REMOVED: Complex auth service - replaced with simple auth
 from ai_karen_engine.utils.dependency_checks import import_pydantic
@@ -133,15 +130,16 @@ class StreamMetricsResponse(BaseModel):
 
 
 # Dependency injection functions
-def get_runtime_service() -> ChatRuntimeService:
-    return get_chat_runtime_service()
+def get_runtime_service():
+    """Get runtime control plane for gating requests."""
+    return get_chat_runtime_control_plane()
 
 
 async def get_websocket_gateway(
-    runtime_service: ChatRuntimeService = Depends(get_runtime_service),
+    runtime_service=Depends(get_runtime_service),
 ) -> WebSocketGateway:
     """Get WebSocket gateway instance."""
-    return WebSocketGateway(await runtime_service.get_orchestrator())
+    return WebSocketGateway(None)
 
 
 def get_stream_processor() -> AsyncStreamProcessor:
@@ -210,7 +208,7 @@ async def websocket_chat_endpoint(
 
     try:
         # ── Control Plane Gate ──────────────────────────────────
-        runtime_response = await get_chat_runtime_service().ensure_control_plane_ready(current_user)
+        runtime_response = await get_chat_runtime_control_plane().get_runtime_response(user_context=current_user)
 
         if runtime_response is not None:
             await websocket.accept()

@@ -72,27 +72,12 @@ class RuntimeConstants:
     """Centralized strings and labels for runtime communication."""
 
     # Standard fallback messages
-    DEGRADED_BRAIN_ERROR = "I'm having trouble connecting to my brain right now. Please try again in a moment."
     EMERGENCY_UNAVAILABLE = "Service temporarily unavailable. Please try again shortly."
     MAINTENANCE_MESSAGE = (
         "We're performing scheduled improvements to enhance your experience."
     )
 
-    # Detection patterns for placeholder responses
-    PLACEHOLDER_PATTERNS = [
-        DEGRADED_BRAIN_ERROR,
-        EMERGENCY_UNAVAILABLE,
-        "Service is temporarily operating with limited capabilities",
-        "I understand you're asking about:",
-        "I'm currently operating with limited capabilities",
-        "limited assistant with:",
-        "trouble connecting",
-        "Error: Generation failed",
-        "Error:",
-    ]
-
     # Source labels
-    SOURCE_DEGRADED_LLM = "degraded_fallback_llm"
     SOURCE_DEGRADED_STATIC = "degraded_fallback"
     SOURCE_EMERGENCY = "emergency_fallback"
 
@@ -417,7 +402,6 @@ class ProviderRouterProbe:
             from ai_karen_engine.core.expression.contracts import ExpressionTask
 
             gateway = ExpressionGateway()
-            # Perform a lightweight health task to verify at least one engine is available
             test_task = ExpressionTask(
                 task_id="health_probe",
                 kind="probe",
@@ -429,7 +413,6 @@ class ProviderRouterProbe:
                 response_mode="text"
             )
             
-            # Use generate as a health check - disabled_engine will return text if no other engine works
             result = await gateway.generate(test_task)
             
             elapsed = (time.time() - start) * 1000
@@ -478,77 +461,28 @@ class MemorySubsystemProbe:
             )
 
 
-class ChatOrchestratorProbe:
-    """Probes whether the LLM orchestrator is initialized and has active models."""
+class ProviderRegistryProbe:
+    """Probes whether at least one provider is registered and available."""
 
-    name = "chat_orchestrator"
+    name = "provider_registry"
 
     async def check(self) -> DependencyHealth:
         start = time.time()
         try:
-            from ai_karen_engine.llm_orchestrator import get_orchestrator
+            from ai_karen_engine.core.model_runtime.provider_registry_service import (
+                get_provider_registry_service,
+            )
 
-            orchestrator = get_orchestrator()
-            # If orchestrator has a registry, use it. Otherwise it might be initializing.
-            registry = getattr(orchestrator, "registry", None)
-            if not registry:
-                return DependencyHealth(
-                    name=self.name,
-                    status=DependencyStatus.HEALTHY, # Assume healthy while initializing
-                    reason="Orchestrator initializing",
-                    response_time_ms=(time.time() - start) * 1000,
-                )
-            
-            models = registry.list_models()
-            active_models = [m for m in models if m.get("status") == "ACTIVE"]
+            registry = get_provider_registry_service()
+            providers = registry.get_all_provider_names()
 
             elapsed = (time.time() - start) * 1000
-            healthy = len(active_models) > 0
+            healthy = len(providers) > 0
             return DependencyHealth(
                 name=self.name,
                 status=DependencyStatus.HEALTHY if healthy else DependencyStatus.UNHEALTHY,
-                reason=None if healthy else "No active models in orchestrator",
+                reason=None if healthy else "No providers registered",
                 response_time_ms=elapsed,
-            )
-        except Exception as e:
-            return DependencyHealth(
-                name=self.name,
-                status=DependencyStatus.UNHEALTHY,
-                reason=str(e),
-                response_time_ms=(time.time() - start) * 1000,
-            )
-
-
-class LocalModelProbe:
-    """Probes whether a local fallback model (vLLM, Transformers) is registered and active."""
-
-    name = "local_model"
-
-    async def check(self) -> DependencyHealth:
-        start = time.time()
-        try:
-            from ai_karen_engine.llm_orchestrator import get_orchestrator, ModelStatus
-
-            orchestrator = get_orchestrator()
-            with orchestrator.registry._lock:
-                fallback_models = [
-                    m_id for m_id, info in orchestrator.registry._models.items()
-                    if info.status == ModelStatus.ACTIVE and ("fallback" in info.tags or m_id.startswith("local:"))
-                ]
-
-            if fallback_models:
-                return DependencyHealth(
-                    name=self.name,
-                    status=DependencyStatus.HEALTHY,
-                    reason=f"Found {len(fallback_models)} active local fallback models: {', '.join(fallback_models[:2])}",
-                    response_time_ms=(time.time() - start) * 1000,
-                )
-
-            return DependencyHealth(
-                name=self.name,
-                status=DependencyStatus.UNHEALTHY,
-                reason="No active local fallback models found in orchestrator",
-                response_time_ms=(time.time() - start) * 1000,
             )
         except Exception as e:
             return DependencyHealth(
@@ -634,8 +568,7 @@ class ChatRuntimeControlPlane:
             RedisProbe(),
             ProviderRouterProbe(),
             MemorySubsystemProbe(),
-            ChatOrchestratorProbe(),
-            LocalModelProbe(),
+            ProviderRegistryProbe(),
         ]
 
         # Enhanced hardening features

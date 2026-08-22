@@ -8,7 +8,7 @@ import pkgutil
 from types import ModuleType
 from typing import Dict
 
-from ai_karen_engine.extensions.unified.core.cortex_execution_registry import (
+from ai_karen_engine.extensions.platform.core.cortex_execution_registry import (
     CortexExecutionRegistry,
     CortexPluginRecord,
 )

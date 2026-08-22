@@ -82,7 +82,6 @@ async def routing_select_handler(user_ctx: Dict[str, Any], query: str, context: 
     khrp_step = (context or {}).get("khrp_step")
     requirements = (context or {}).get("requirements", {})
 
-    # Emit start-like marker
     req_id = hashlib.md5(f"{user_id}:{time.time()}".encode()).hexdigest()[:10]
     _router.logger.log_start(req_id, user_id, "routing.select", {"task_type": task_type, "khrp_step": khrp_step})
 
@@ -111,11 +110,12 @@ async def routing_select_handler(user_ctx: Dict[str, Any], query: str, context: 
                 "step_hint": analysis.khrp_step_hint,
             },
         },
+        "deprecated": True,
+        "note": "KIRE routing is retired. Provider selection is owned by RuntimePolicy + ProviderRouter.",
     }
 
 
 async def routing_profile_handler(user_ctx: Dict[str, Any], query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    # Surface active profile + basic validation
     pr = _router.profile_resolver.get_user_profile(user_ctx.get("user_id", "anon"))
     if not pr:
         return {"active_profile": None, "valid": False, "errors": ["No active profile"]}
@@ -126,6 +126,8 @@ async def routing_profile_handler(user_ctx: Dict[str, Any], query: str, context:
         "fallback_chain": pr.fallback_chain,
         "valid": len(errs) == 0,
         "errors": errs,
+        "deprecated": True,
+        "note": "KIRE routing profile inspection is retired. Provider selection is owned by RuntimePolicy + ProviderRouter.",
     }
     KIRE_ACTIONS_TOTAL.labels(action="routing.profile", status="success").inc()
     return out
@@ -137,7 +139,12 @@ async def routing_health_handler(user_ctx: Dict[str, Any], query: str, context: 
     results = {name: reg.health_check(name) for name in providers}
     available = [name for name, h in results.items() if h.get("status") in ("healthy", "unknown")]
     KIRE_ACTIONS_TOTAL.labels(action="routing.health", status="success").inc()
-    return {"results": results, "available": available}
+    return {
+        "results": results,
+        "available": available,
+        "deprecated": True,
+        "note": "KIRE routing health inspection is retired. Use canonical provider health checks.",
+    }
 
 
 # Mutable routing/profile ops with RBAC gates
@@ -180,7 +187,6 @@ async def routing_audit_history_handler(user_ctx: Dict[str, Any], query: str, co
 
 async def routing_dry_run_handler(user_ctx: Dict[str, Any], query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     analysis = _analyze_task(query, context=context)
-    # Do not call providers; only compute decision inputs
     KIRE_ACTIONS_TOTAL.labels(action="routing.dry-run", status="success").inc()
     return {
         "dry_run": True,
@@ -190,6 +196,8 @@ async def routing_dry_run_handler(user_ctx: Dict[str, Any], query: str, context:
             "khrp_step_hint": analysis.khrp_step_hint,
             "confidence": analysis.confidence,
         },
+        "deprecated": True,
+        "note": "KIRE dry-run is retired. Use CORTEX IntelligenceRuntime for intent analysis.",
     }
 
 

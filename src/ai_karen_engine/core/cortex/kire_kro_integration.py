@@ -1,5 +1,5 @@
 """
-KIRE-KRO Integration Module - Production Wiring
+KIRE-KRO Integration Module - Production Wiring (DEPRECATED)
 
 This module integrates:
 - KIRE (Kari Intelligent Routing Engine) for LLM selection
@@ -9,7 +9,9 @@ This module integrates:
 - Content Optimization Engine for response improvement
 - OSIRIS logging for observability
 
-This provides a single entry point for production-grade AI-Karen request processing.
+DEPRECATED: This integration layer is being retired. Routing authority belongs
+to ProviderRouter. Reasoning belongs to ReasoningRuntime. Execution belongs
+to Runtime. See ARCHITECTURE.md for the canonical ownership map.
 """
 
 from __future__ import annotations
@@ -23,14 +25,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+import warnings
+
 from langchain_core.messages import HumanMessage
 
-from ai_karen_engine.monitoring.kire_metrics import (
-    KIRE_ADVISORY_OUTCOMES_TOTAL,
-    KRO_SPECIALIZED_PATH_TOTAL,
-)
 from ai_karen_engine.routing.decision_logger import get_decision_logger
-from ai_karen_engine.routing.types import RouteDecision
 from ai_karen_engine.core.cortex.runtime_policy import RuntimePolicyDecision
 from ai_karen_engine.agent_medusa.agent_medusa_node import medusa_node
 
@@ -55,14 +54,22 @@ class IntegrationConfig:
 
 class KIREKROIntegration:
     """
-    Production integration layer for KIRE and KRO.
+    Production integration layer for KIRE and KRO. (DEPRECATED)
 
     This class provides a unified interface for processing user requests through
     the complete AI-Karen pipeline with intelligent routing, reasoning, and optimization.
+
+    DEPRECATED: Migrate to canonical Runtime + ProviderRouter + ReasoningRuntime.
     """
 
     def __init__(self, config: Optional[IntegrationConfig] = None):
         """Initialize integration layer."""
+        warnings.warn(
+            "KIREKROIntegration is deprecated. "
+            "Use Runtime, ProviderRouter, and ReasoningRuntime directly.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.config = config or IntegrationConfig()
 
         # Core components
@@ -139,16 +146,33 @@ class KIREKROIntegration:
                     except Exception as e:
                         logger.warning(f"Model Discovery initialization failed: {e}")
 
-                # Initialize KIRE Router
-                if self.config.enable_kire_routing:
+                # Initialize Model Discovery
+                if self.config.enable_model_discovery:
                     try:
-                        from ai_karen_engine.routing.kire_router import KIRERouter
+                        from ai_karen_engine.core.model_runtime.model_discovery_service import (
+                            get_model_discovery_service,
+                        )
 
-                        self.kire_router = KIRERouter(llm_registry=self.llm_registry)
-                        logger.info("✓ KIRE Router initialized")
+                        self.model_discovery = get_model_discovery_service()
+                        await self.model_discovery.discover_all_models()
+                        stats = self.model_discovery.get_discovery_statistics()
+                        logger.info(
+                            f"✓ Model Discovery initialized: {stats['total_models']} models discovered"
+                        )
+
+                        if stats.get("total_models", 0) == 0:
+                            logger.warning(
+                                "⚠ Model Discovery completed but found no models. "
+                                "The system will operate in degraded mode. "
+                                "Please ensure models are installed in the models/ directory."
+                            )
                     except Exception as e:
-                        logger.error(f"KIRE Router initialization failed: {e}")
-                        raise
+                        logger.warning(f"Model Discovery initialization failed: {e}")
+
+                # KIRE Router retired: provider selection is owned by RuntimePolicy + ProviderRouter.
+                # Routing advisory signals are produced by CORTEX IntelligenceRuntime.
+                if self.config.enable_kire_routing:
+                    logger.info("✓ KIRE routing signals produced by CORTEX (no standalone router)")
 
                 # Initialize CUDA Acceleration
                 if self.config.enable_cuda_acceleration:
@@ -236,16 +260,8 @@ class KIREKROIntegration:
             )
 
             routing_advisory: Optional[Dict[str, Any]] = None
-            if self.kire_router:
-                try:
-                    routing_advisory = await self.get_routing_decision(
-                        user_input=user_input,
-                        user_id=user_id,
-                        task_type=context.get("task_type"),
-                        context=context,
-                    )
-                except Exception as route_exc:
-                    logger.debug(f"KIRE advisory routing unavailable: {route_exc}")
+            # KIRE routing retired: provider selection is owned by RuntimePolicy + ProviderRouter.
+            # Routing advisory is no longer produced as a separate authority.
 
             policy_decision = RuntimePolicyDecision.from_cortex(
                 context.get("cortex_policy"),
@@ -255,7 +271,6 @@ class KIREKROIntegration:
                 "source": "kire_kro_integration",
                 "channel": context.get("channel", "kro"),
                 "conversation_history": conversation_history or [],
-                "kire_routing_advisory": routing_advisory,
                 "runtime_policy": policy_decision.to_telemetry_metadata(),
                 **context,
             }
@@ -334,28 +349,14 @@ class KIREKROIntegration:
                 else None,
             }
 
-            advisory_decision = self._route_decision_from_advisory(routing_advisory)
-            routing_outcome = self._determine_routing_outcome(
-                advisory_provider=advisory_decision.provider
-                if advisory_decision
-                else None,
-                advisory_model=advisory_decision.model if advisory_decision else None,
-                final_provider=final_metadata.get("provider"),
-                final_model=final_metadata.get("model"),
-            )
-            KIRE_ADVISORY_OUTCOMES_TOTAL.labels(
-                outcome=routing_outcome,
-                final_status="degraded" if final_state.get("degraded_mode") else "completed",
-                execution_path=final_state.get("execution_path", "langgraph"),
-            ).inc()
             self._decision_logger.log_outcome(
                 correlation_id,
                 user_id,
                 context.get("task_type", "chat"),
-                outcome=routing_outcome,
+                outcome="completed",
                 final_status="degraded" if final_state.get("degraded_mode") else "completed",
                 execution_path=final_state.get("execution_path"),
-                advisory_decision=advisory_decision,
+                advisory_decision=None,
                 final_provider=final_metadata.get("provider"),
                 final_model=final_metadata.get("model"),
                 metadata={
@@ -381,7 +382,6 @@ class KIREKROIntegration:
                     "assistant_message_id": final_state.get("assistant_message_id"),
                     "correlation_id": final_state.get("correlation_id", correlation_id),
                 },
-                "routing": routing_advisory,
                 "structured_content": final_state.get("structured_content"),
                 "actions": final_state.get("actions"),
                 "telemetry": final_state.get("telemetry"),
@@ -389,10 +389,10 @@ class KIREKROIntegration:
             }
             response_dict["_integration"] = {
                 "authority": "chat_orchestrator",
-                "kire_enabled": self.config.enable_kire_routing,
+                "kire_enabled": False,
                 "kro_specialized_available": bool(self.kro_orchestrator),
-                "routing_advisory_used": bool(routing_advisory),
-                "routing_outcome": routing_outcome,
+                "routing_advisory_used": False,
+                "routing_outcome": "retired",
                 "correlation_id": correlation_id,
             }
             return response_dict
@@ -450,43 +450,6 @@ class KIREKROIntegration:
             "specialized_flow": True,
         }
         return response_dict
-
-    @staticmethod
-    def _route_decision_from_advisory(
-        routing_advisory: Optional[Dict[str, Any]],
-    ) -> Optional[RouteDecision]:
-        """Rebuild a RouteDecision from a serialized advisory payload when available."""
-        if not routing_advisory or routing_advisory.get("error"):
-            return None
-        provider = routing_advisory.get("provider")
-        model = routing_advisory.get("model")
-        if not provider or not model:
-            return None
-        return RouteDecision(
-            provider=provider,
-            model=model,
-            reasoning=routing_advisory.get("reasoning", ""),
-            confidence=float(routing_advisory.get("confidence", 0.0)),
-            fallback_chain=list(routing_advisory.get("fallback_chain", [])),
-            metadata=dict(routing_advisory.get("metadata", {})),
-        )
-
-    @staticmethod
-    def _determine_routing_outcome(
-        *,
-        advisory_provider: Optional[str],
-        advisory_model: Optional[str],
-        final_provider: Optional[str],
-        final_model: Optional[str],
-    ) -> str:
-        """Classify whether KIRE advisory routing was used or overridden downstream."""
-        if not advisory_provider or not advisory_model:
-            return "unavailable"
-        if advisory_provider == final_provider and advisory_model == final_model:
-            return "used"
-        if final_provider or final_model:
-            return "overridden"
-        return "missing_final"
 
     def _kro_response_to_dict(self, kro_response) -> Dict[str, Any]:
         """Convert KRO response dataclass to dictionary."""
@@ -603,36 +566,20 @@ class KIREKROIntegration:
         task_type: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Get routing decision without executing the full request."""
-        await self.initialize()
+        """Get routing decision without executing the full request.
 
-        if not self.kire_router:
-            return {"error": "KIRE routing not available"}
-
-        try:
-            from ai_karen_engine.routing.types import RouteRequest
-
-            route_req = RouteRequest(
-                user_id=user_id,
-                query=user_input,
-                task_type=task_type or "chat",
-                context=context or {},
-            )
-
-            decision = await self.kire_router.route_provider_selection(route_req)
-
-            return {
-                "provider": decision.provider,
-                "model": decision.model,
-                "reasoning": decision.reasoning,
-                "confidence": decision.confidence,
-                "fallback_chain": decision.fallback_chain,
-                "metadata": decision.metadata,
-            }
-
-        except Exception as e:
-            logger.error(f"Routing decision failed: {e}")
-            return {"error": str(e)}
+        DEPRECATED: KIRE routing is retired. Provider selection is owned by
+        RuntimePolicy + ProviderRouter. This method now returns unavailable.
+        """
+        return {
+            "error": "KIRE routing retired",
+            "provider": None,
+            "model": None,
+            "reasoning": "Provider selection is owned by RuntimePolicy + ProviderRouter",
+            "confidence": 0.0,
+            "fallback_chain": [],
+            "metadata": {"retired": True},
+        }
 
     async def get_system_status(self) -> Dict[str, Any]:
         """Get comprehensive system status."""
@@ -643,14 +590,14 @@ class KIREKROIntegration:
             "components": {
                 "kro_orchestrator": bool(self.kro_orchestrator),
                 "kro_specialized_supported": self._can_initialize_kro(),
-                "kire_router": bool(self.kire_router),
+                "kire_router": False,
                 "llm_registry": bool(self.llm_registry),
                 "model_discovery": bool(self.model_discovery),
                 "cuda_engine": bool(self.cuda_engine),
                 "optimization_engine": bool(self.optimization_engine),
             },
             "config": {
-                "kire_routing": self.config.enable_kire_routing,
+                "kire_routing": False,
                 "cuda_acceleration": self.config.enable_cuda_acceleration,
                 "content_optimization": self.config.enable_content_optimization,
                 "model_discovery": self.config.enable_model_discovery,

@@ -43,7 +43,7 @@ class ExecutionDecision:
 
     execution_mode: RuntimeExecutionMode = RuntimeExecutionMode.DIRECT
     graph_required: bool = False
-    topology: ExecutionTopology = field(default_factory=ExecutionTopology.DIRECT)
+    topology: ExecutionTopology = ExecutionTopology.DIRECT
 
     intent: str = "general_assist"
     intent_confidence: float = 0.0

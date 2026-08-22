@@ -7,6 +7,7 @@ from typing import Optional, List, Dict, Any
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext, ChatExecutionRequest
 from ai_karen_engine.core.runtime.execution_decision import (
     ExecutionDecision,
+    ExecutionTopology,
     RuntimeExecutionMode,
     RiskLevel,
 )
@@ -208,9 +209,18 @@ class CortexExecutionDecider:
             RuntimeExecutionMode.GRAPH if graph_required else RuntimeExecutionMode.DIRECT
         )
 
+        topology = ExecutionTopology.DIRECT
+        if requires_agent_delegation:
+            topology = ExecutionTopology.MULTI_AGENT
+        elif reasoning_depth == "deep" or analysis.get("reasoning_required"):
+            topology = ExecutionTopology.REASONING
+        elif graph_required:
+            topology = ExecutionTopology.WORKFLOW
+
         return ExecutionDecision(
             execution_mode=execution_mode,
             graph_required=graph_required,
+            topology=topology,
             intent=analysis.get("intent", "general_assist"),
             intent_confidence=float(analysis.get("intent_confidence", 0.0)),
             risk_level=risk_level,

@@ -54,7 +54,7 @@ class MedusaSafetyManager:
 
     async def validate_input(self, text: str) -> SafetyResult:
         """Validate input for malicious patterns and size."""
-        if len(text.encode('utf-8')) > self.validation_rules["max_message_size"]:
+        if len(text.encode("utf-8")) > self.validation_rules["max_message_size"]:
             return SafetyResult(is_safe=False, reason="Message too large", flags=["size_limit"])
 
         for pattern in self.malicious_patterns:
@@ -74,19 +74,26 @@ class MedusaSafetyManager:
         """Sanitize content by redacting sensitive information and escaping HTML."""
         if not isinstance(text, str):
             return text
-        
+
         sanitized = text
-        # Redact sensitive data
         for pattern in self.sensitive_data_patterns:
             sanitized = pattern.sub("[REDACTED]", sanitized)
-        
-        # Basic HTML escaping
-        sanitized = html.escape(sanitized, quote=True)
-        return sanitized
+
+        return html.escape(sanitized, quote=True)
 
     async def check_access(self, user_context: Dict[str, Any], agent_id: str, action: str) -> bool:
-        """Check if a user has access to an agent for a specific action."""
-        # Integration point for AuthContextAdapter
+        """Check if a user has access to an agent for a specific action.
+
+        NOTE: Authorization is owned by RuntimePolicy, not MedusaSafetyManager.
+        This method exists only for local input validation hooks. It must NOT
+        be used as the authoritative allow/deny decision.
+        """
+        if not agent_id or not isinstance(agent_id, str):
+            return False
+        if not re.match(self.validation_rules["agent_id_pattern"], agent_id):
+            return False
+        if agent_id.lower() in self.validation_rules["forbidden_names"]:
+            return False
         return True
 
 _safety_manager: Optional[MedusaSafetyManager] = None

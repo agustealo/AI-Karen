@@ -23,7 +23,6 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     RuntimeConstants,
 )
 from ai_karen_engine.core.runtime.degraded_mode import generate_degraded_mode_response
-from ai_karen_engine.core.runtime.chat_runtime_service import get_chat_runtime_service
 from ai_karen_engine.core.services.dependencies import bypass_user_context_func
 from ai_karen_engine.models.shared_types import (
     CanonicalChatRequest,
@@ -60,8 +59,6 @@ def _is_placeholder_response(response_text: str) -> bool:
     # IMPORTANT: do not treat all short responses as placeholders.
     # Legitimate replies like "Hi!" or "Yes." must pass through.
     known_prefixes = (
-        RuntimeConstants.DEGRADED_BRAIN_ERROR.lower(),
-        RuntimeConstants.EMERGENCY_UNAVAILABLE.lower(),
         "service is temporarily operating with limited capabilities",
         "i understand you're asking about:",
         "i'm currently operating with limited capabilities",
@@ -216,23 +213,27 @@ async def _build_live_degraded_payload(
 
 
 async def _build_router_fallback_assist_payload(*, request: "AssistRequest", correlation_id: str, conversation_id: str, start_time: float, request_config_metadata: Dict[str, Any], actual_mode: str, transport: str, failure: Exception, streaming_enabled: bool = False) -> Optional[Dict[str, Any]]:
-    service = get_chat_runtime_service()
-    return await service.build_router_fallback_assist_payload(
-        request=request,
-        correlation_id=correlation_id,
-        conversation_id=conversation_id,
-        start_time=start_time,
-        request_config_metadata=request_config_metadata,
-        actual_mode=actual_mode,
-        transport=transport,
-        failure=failure,
-        streaming_enabled=streaming_enabled,
-        metadata_normalizer=_normalize_runtime_truth_metadata,
-    )
+    return {
+        "answer": str(failure),
+        "structured_content": {},
+        "actions": [],
+        "metadata": {
+            "correlation_id": correlation_id,
+            "conversation_id": conversation_id,
+            "degraded_mode": True,
+            "mode": actual_mode or "degraded",
+            "response_source": "unavailable",
+            "fallback_level": 1,
+            **request_config_metadata,
+        },
+    }
 
 
 def _build_router_fallback_sse_events(payload: Dict[str, Any], correlation_id: str) -> List[Dict[str, Any]]:
-    return get_chat_runtime_service().build_router_fallback_sse_events(payload, correlation_id)
+    return [
+        {"type": "content", "content": payload.get("answer", ""), "correlation_id": correlation_id},
+        {"type": "complete", "content": "", "correlation_id": correlation_id},
+    ]
 
 
 logger = logging.getLogger(__name__)
@@ -714,30 +715,11 @@ from ai_karen_engine.utils.chat_helpers import (
 
 
 async def _get_chat_orchestrator():
-    """Return orchestrator via canonical chat runtime service."""
-    try:
-        timeout_seconds = float(os.getenv("KAREN_COPILOT_ORCHESTRATOR_TIMEOUT", "5"))
-        orchestrator = await asyncio.wait_for(
-            get_chat_runtime_service().get_orchestrator(),
-            timeout=timeout_seconds,
-        )
-        logger.info(
-            "Successfully retrieved ChatOrchestrator", extra={"correlation_id": "debug"}
-        )
-        return orchestrator
-    except asyncio.TimeoutError as exc:
-        logger.error(
-            "Timed out getting chat orchestrator",
-            extra={"correlation_id": "debug"},
-        )
-        raise HTTPException(status_code=503, detail="Chat service unavailable") from exc
-    except Exception as exc:
-        logger.error(
-            "Failed to get chat orchestrator: %s",
-            exc,
-            extra={"correlation_id": "debug"},
-        )
-        raise HTTPException(status_code=503, detail="Chat service unavailable")
+    """Return orchestrator via canonical chat runtime."""
+    raise RuntimeError(
+        "Legacy orchestrator path retired. Migrate copilot execution to "
+        "ChatRuntime.execute() or LangGraph workflow executor."
+    )
 
 
 def _get_predictor_registry():
@@ -991,8 +973,7 @@ async def copilot_assist(
     )
 
     try:
-        runtime_service = get_chat_runtime_service()
-        response = await runtime_service.ensure_control_plane_ready(
+        response = await get_chat_runtime_control_plane().get_runtime_response(
             user_id=request.user_id,
             message=request.message,
             session_id=request.session_id,
@@ -1275,8 +1256,7 @@ async def copilot_assist_stream(
     )
 
     try:
-        runtime_service = get_chat_runtime_service()
-        response = await runtime_service.ensure_control_plane_ready(
+        response = await get_chat_runtime_control_plane().get_runtime_response(
             user_id=request.user_id,
             message=request.message,
             session_id=request.session_id,

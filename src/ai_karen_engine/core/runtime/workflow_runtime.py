@@ -132,6 +132,7 @@ class WorkflowRuntime:
                 "policy_decision_id": decision.policy_decision_id,
                 "policy_version": decision.policy_version,
                 "policy_reason_codes": list(decision.policy_reason_codes),
+                "execution_topology": decision.topology.value if hasattr(decision.topology, "value") else str(decision.topology),
             })
         request_config.update(request.metadata or {})
         return {

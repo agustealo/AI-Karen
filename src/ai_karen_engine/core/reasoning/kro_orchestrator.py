@@ -353,16 +353,13 @@ class KROOrchestrator:
     def __init__(
         self,
         llm_registry=None,
-        kire_router=None,
         enable_cuda: bool = True,
         enable_optimization: bool = True,
     ):
         """Initialize KRO with dependencies."""
         from ai_karen_engine.integrations.llm_registry import get_registry
-        from ai_karen_engine.routing.kire_router import KIRERouter
 
         self.llm_registry = llm_registry or get_registry()
-        self.kire_router = kire_router or KIRERouter(llm_registry=self.llm_registry)
         self.helpers = HelperModels()
         self.suggestions = SuggestionEngine()
 
@@ -748,37 +745,18 @@ class KROOrchestrator:
         classification: Classification,
         context: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """Route request to appropriate model via KIRE."""
-        try:
-            from ai_karen_engine.routing.types import RouteRequest
+        """Route request to appropriate model.
 
-            route_req = RouteRequest(
-                user_id=user_id,
-                query=user_input,
-                task_type=classification.category.value,
-                context=context or {},
-            )
-
-            decision = await self.kire_router.route_provider_selection(route_req)
-
-            return {
-                "provider": decision.provider,
-                "model": decision.model,
-                "reasoning": decision.reasoning,
-                "confidence": decision.confidence,
-                "fallback_chain": decision.fallback_chain,
-            }
-
-        except Exception as e:
-            logger.error(f"KIRE routing failed: {e}")
-            # Fallback to default
-            return {
-                "provider": "builtin_vllm",
-                "model": "auto",
-                "reasoning": f"KIRE routing failed: {e}",
-                "confidence": 0.5,
-                "fallback_chain": ["builtin_vllm", "builtin_transformers"],
-            }
+        KIRE retired: provider selection is owned by RuntimePolicy + ProviderRouter.
+        This method returns a default routing decision for backward compatibility.
+        """
+        return {
+            "provider": "builtin_vllm",
+            "model": "auto",
+            "reasoning": "Provider selection is owned by RuntimePolicy + ProviderRouter",
+            "confidence": 0.5,
+            "fallback_chain": ["builtin_vllm", "builtin_transformers"],
+        }
 
     async def _execute_plan(
         self,

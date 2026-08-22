@@ -101,7 +101,16 @@ class KIRERouter:
         self.cognitive_reasoner = CognitiveReasoner()
     
     async def route_provider_selection(self, request: RouteRequest) -> RouteDecision:
-        """Main routing method - returns routing decision."""
+        """Main routing method - returns routing decision.
+
+        DEPRECATED: KIRE is being retired as a routing authority. Provider
+        selection is owned by RuntimePolicy + ProviderRouter. This method
+        remains for backward compatibility and diagnostic APIs only.
+        """
+        logger.warning(
+            "KIRERouter.route_provider_selection is deprecated; "
+            "provider selection is owned by RuntimePolicy + ProviderRouter"
+        )
         t0 = time.perf_counter()
         cache_key = self._generate_cache_key(request)
         # Correlation id sourced from context if present (CopilotKit pattern)
