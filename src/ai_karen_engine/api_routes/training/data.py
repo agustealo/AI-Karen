@@ -29,7 +29,7 @@ from ai_karen_engine.learning.training_data_manager import (
     DatasetVersion
 )
 from ai_karen_engine.learning.autonomous_learner import TrainingExample, LearningDataType
-from ai_karen_engine.core.langgraph_orchestrator.decision_engine import SpacyAnalyzer
+from ai_karen_engine.core.cortex.analysis import SpacyAnalyzer
 from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
 from ai_karen_engine.auth.rbac_middleware import (
     require_permission, get_current_user, Permission, 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
@@ -388,40 +389,39 @@ class ChatRuntime:
     def _assemble_prompt(
         self, request: ChatExecutionRequest, decision: ExecutionDecision
     ) -> List[Dict[str, Any]]:
-        """Assemble prompt with memory context integrated into messages.
+        """Assemble prompt using canonical PromptRuntime.
 
-        Memory recall is injected as a system-level context message when
-        available. The model receives controlled memory context, not raw
-        memory dumps.
+        Memory recall, persona, policy, tools, and workflow context are
+        assembled into the final message list sent to ExpressionGateway.
         """
-        messages = [dict(msg) for msg in request.messages]
+        from ai_karen_engine.core.runtime.prompt import get_prompt_assembler
+
         ctx = request.context
         memory_context = (ctx.metadata or {}).get("memory_context", {})
         recall_items = memory_context.get("recall", [])
 
-        if recall_items and decision.memory_recall_required:
-            memory_lines = []
-            for item in recall_items[:3]:
-                content = item.get("content", "")
-                if content:
-                    memory_lines.append(f"[Memory: {content}]")
+        assembly_request = PromptAssemblyRequest(
+            prompt_id="karen-chat",
+            prompt_version="v1",
+            memory_items=recall_items if decision.memory_recall_required else [],
+            tool_contracts=[
+                {"name": name, "description": ""}
+                for name in decision.tool_requirements
+            ],
+            workflow_context={
+                "workflow_id": decision.workflow_id,
+                "workflow_version": decision.workflow_version,
+                "requires_human_gate": decision.requires_human_gate,
+                "requires_resumability": decision.requires_resumability,
+            },
+            token_budget=decision.token_budget,
+            messages=[dict(msg) for msg in request.messages],
+        )
 
-            if memory_lines:
-                memory_block = "\n".join(memory_lines)
-                system_msg = {
-                    "role": "system",
-                    "content": (
-                        "Relevant context from memory (use only if helpful):\n"
-                        f"{memory_block}\n"
-                        "Answer the user's last message using this context when appropriate."
-                    ),
-                }
-                if messages and messages[0].get("role") == "system":
-                    messages[0] = system_msg
-                else:
-                    messages.insert(0, system_msg)
-
-        return messages
+        result = asyncio.get_event_loop().run_until_complete(
+            get_prompt_assembler().assemble(assembly_request)
+        )
+        return result.messages
 
     def _extract_user_message(self, messages: List[Dict[str, Any]]) -> str:
         """Extract the latest user message."""

@@ -748,3 +748,86 @@ def test_assistant_output_not_promoted_to_user_fact_by_default():
                 assert call.get("metadata", {}).get("memory_promotion_eligible") is False
 
     asyncio.get_event_loop().run_until_complete(_run())
+
+
+# ----------------------------------------------------------------------
+# RC1.4 PromptRuntime + invariant tests
+# ----------------------------------------------------------------------
+
+
+def test_memory_context_reaches_prompt():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.prompt.prompt_contract import PromptAssemblyResult
+
+    async def _run():
+        rt = ChatRuntime()
+        request = _make_request(messages=[
+            {"content": "What did we discuss earlier?", "message_type": "user"}
+        ])
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+            new=AsyncMock(return_value=_FakeCP()),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
+            new=lambda: _FakeDecider(ExecutionDecision(
+                execution_mode=RuntimeExecutionMode.DIRECT,
+                graph_required=False,
+                memory_recall_required=True,
+                memory_write_allowed=True,
+            )),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
+            new=_FakeGateway,
+        ), patch(
+            "ai_karen_engine.core.runtime.prompt.prompt_assembler.get_prompt_assembler",
+        ) as mock_assembler:
+            assembled = PromptAssemblyResult(
+                messages=[
+                    {"role": "system", "content": "Memory context: [Memory: user likes blue]"},
+                    {"role": "user", "content": "What did we discuss earlier?"},
+                ],
+                prompt_id="karen-chat",
+                prompt_version="v1",
+                prompt_hash="abc123",
+            )
+            mock_assembler.return_value.assemble = AsyncMock(return_value=assembled)
+            instance = mock_assembler.return_value
+
+            await rt.execute(request)
+            assert instance.assemble.called
+
+    asyncio.get_event_loop().run_until_complete(_run())
+
+
+def test_client_cannot_supply_authorization_policy():
+    decider = CortexExecutionDecider()
+    decision = asyncio.get_event_loop().run_until_complete(
+        decider.decide(_make_request(messages=[{"content": "Hello", "message_type": "user"}]))
+    )
+    assert decision.required_capabilities == []
+    assert decision.forbidden_capabilities == []
+    assert not any("_policy_checker" in str(k) for k in (decision.policy_constraints or {}).keys())
+
+
+def test_simple_chat_never_invokes_langgraph():
+    simple_decision = ExecutionDecision(
+        execution_mode=RuntimeExecutionMode.DIRECT, graph_required=False
+    )
+    with patch(
+        "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+        new=AsyncMock(return_value=_FakeCP()),
+    ), patch(
+        "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
+        new=lambda: _FakeDecider(simple_decision),
+    ), patch(
+        "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
+        new=_FakeGateway,
+    ), patch(
+        "ai_karen_engine.core.langgraph_orchestrator.get_default_orchestrator",
+        new=AsyncMock(side_effect=AssertionError("LangGraph must not be used for simple chat")),
+    ):
+        result = asyncio.get_event_loop().run_until_complete(
+            get_chat_runtime().execute(_make_request())
+        )
+        assert result.answer == "hello from gateway"
+        assert result.metadata.mode == "normal"

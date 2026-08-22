@@ -27,7 +27,7 @@ from ai_karen_engine.services.scheduling.scheduler_manager import (
     SafetyLevel,
 )
 from ai_karen_engine.learning.autonomous_learner import AutonomousLearner
-from ai_karen_engine.core.langgraph_orchestrator.decision_engine import SpacyAnalyzer
+from ai_karen_engine.core.cortex.analysis import SpacyAnalyzer
 from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
 
 # Simple auth imports
