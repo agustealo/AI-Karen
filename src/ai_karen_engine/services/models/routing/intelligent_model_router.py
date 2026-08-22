@@ -32,10 +32,20 @@ from ai_karen_engine.services.models.discovery.model_discovery_engine import (
     ModelCategory,
 )
 from .llm_router_service import LLMRouter, ChatRequest, RoutingPolicy
-from ai_karen_engine.integrations.llm_router import IntelligentLLMRouter, RoutingRequest, TaskType
 from ai_karen_engine.integrations.registry import get_registry
 
 logger = logging.getLogger("kari.intelligent_model_router")
+
+
+class TaskType(Enum):
+    CHAT = "chat"
+    CODE = "code"
+    REASONING = "reasoning"
+    EMBEDDING = "embedding"
+    SUMMARIZATION = "summarization"
+    TRANSLATION = "translation"
+    CREATIVE = "creative"
+    ANALYSIS = "analysis"
 
 class ConnectionStatus(Enum):
     """Model connection status."""
@@ -119,7 +129,6 @@ class ModelRouter:
         
         # Initialize existing routers (preserve existing logic)
         self.existing_llm_router = LLMRouter(registry=cast(Any, self.llm_registry))
-        self.intelligent_router = IntelligentLLMRouter(registry=cast(Any, self.llm_registry))
         
         # Model connections and routing state
         self.model_connections: Dict[str, ModelConnection] = {}
@@ -354,7 +363,7 @@ class ModelRouter:
     
     async def route_request_to_model(
         self, 
-        request: Union[ChatRequest, RoutingRequest], 
+        request: Union[ChatRequest, Any], 
         model_id: str
     ) -> Optional[RoutingDecision]:
         """
@@ -437,51 +446,20 @@ class ModelRouter:
     ) -> Optional[RoutingDecision]:
         """Use existing routing logic from LLM routers."""
         try:
-            # Convert task type to existing enum
-            task_enum = self._convert_task_type(task_type)
-            
-            # Create request for existing router
-            if hasattr(self.intelligent_router, 'route'):
-                routing_request = RoutingRequest(
-                    prompt="Task routing request",
-                    task_type=task_enum,
-                    preferred_provider=user_preferences.get("preferred_provider"),
-                    preferred_model=user_preferences.get("preferred_model")
-                )
-                
-                # Use intelligent router
-                route_decision = self.intelligent_router.route(routing_request)
-                
-                if route_decision:
-                    # Convert to our decision format
-                    model_id = f"{route_decision['provider']}:{route_decision['model_id']}"
-                    
-                    # Get or create connection
-                    connection = await self.wire_model_connection(model_id)
-                    if connection:
-                        return RoutingDecision(
-                            model_id=model_id,
-                            provider=route_decision['provider'],
-                            model_connection=connection,
-                            routing_strategy=RoutingStrategy.PROFILE_BASED,
-                            confidence=route_decision.get('confidence', 0.8),
-                            reasoning="Using existing intelligent routing logic"
-                        )
-            
-            # Fallback to basic LLM router
+            # Fallback to basic LLM router (IntelligentLLMRouter retired)
             chat_request = ChatRequest(
                 message="Task routing request",
                 preferred_model=user_preferences.get("preferred_model")
             )
-            
+
             selection = await self.existing_llm_router.select_provider(
                 chat_request, user_preferences
             )
-            
+
             if selection:
                 provider, model = selection
                 model_id = f"{provider}:{model}" if model else provider
-                
+
                 # Get or create connection
                 connection = await self.wire_model_connection(model_id)
                 if connection:
@@ -493,10 +471,10 @@ class ModelRouter:
                         confidence=0.7,
                         reasoning="Using existing LLM router logic"
                     )
-            
+
         except Exception as e:
             logger.error(f"Existing routing logic failed: {e}")
-        
+
         return None
     
     def _convert_task_type(self, task_type: str) -> TaskType:

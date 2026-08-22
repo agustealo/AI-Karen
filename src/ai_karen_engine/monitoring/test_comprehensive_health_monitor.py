@@ -57,7 +57,7 @@ class TestComprehensiveHealthMonitor(unittest.TestCase):
         # Create monitor with mocked dependencies
         with mock.patch('src.ai_karen_engine.monitoring.comprehensive_health_monitor.get_network_monitor') as mock_get_network:
             with mock.patch('src.ai_karen_engine.monitoring.comprehensive_health_monitor.get_intelligent_provider_registry') as mock_get_registry:
-                with mock.patch('src.ai_karen_engine.monitoring.comprehensive_health_monitor.get_model_availability_cache') as mock_get_cache:
+                with mock.patch('src.ai_karen_engine.monitoring.comprehensive_health_monitor.get_model_cache_service') as mock_get_cache:
                     with mock.patch('src.ai_karen_engine.monitoring.comprehensive_health_monitor.get_capability_selector') as mock_get_selector:
                         mock_get_network.return_value = self.mock_network_monitor
                         mock_get_registry.return_value = self.mock_provider_registry

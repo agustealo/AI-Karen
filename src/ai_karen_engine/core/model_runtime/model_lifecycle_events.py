@@ -25,7 +25,31 @@ CANONICAL_LIFECYCLE_EVENTS = (
     "model.evicted",
     "model.download_started",
     "model.download_failed",
+    "model.download.requested",
+    "model.download.started",
+    "model.download.completed",
+    "model.load.started",
+    "model.load.completed",
+    "model.unloaded",
+    "model.health.changed",
 )
+
+
+class ModelLifecycleState(str, Enum):
+    """Canonical model lifecycle states."""
+
+    KNOWN = "KNOWN"
+    DISCOVERED = "DISCOVERED"
+    REMOTE_AVAILABLE = "REMOTE_AVAILABLE"
+    DOWNLOADING = "DOWNLOADING"
+    INSTALLED = "INSTALLED"
+    LOADABLE = "LOADABLE"
+    LOADING = "LOADING"
+    LOADED = "LOADED"
+    HEALTHY = "HEALTHY"
+    UNHEALTHY = "UNHEALTHY"
+    UNAVAILABLE = "UNAVAILABLE"
+    REMOVED = "REMOVED"
 
 
 class ModelLifecycleEvent(str, Enum):
@@ -40,6 +64,13 @@ class ModelLifecycleEvent(str, Enum):
     MODEL_EVICTED = "model.evicted"
     MODEL_DOWNLOAD_STARTED = "model.download_started"
     MODEL_DOWNLOAD_FAILED = "model.download_failed"
+    MODEL_DOWNLOAD_REQUESTED = "model.download.requested"
+    MODEL_DOWNLOAD_STARTED_DOT = "model.download.started"
+    MODEL_DOWNLOAD_COMPLETED = "model.download.completed"
+    MODEL_LOAD_STARTED_DOT = "model.load.started"
+    MODEL_LOAD_COMPLETED = "model.load.completed"
+    MODEL_UNLOADED = "model.unloaded"
+    MODEL_HEALTH_CHANGED = "model.health.changed"
 
 
 @dataclass

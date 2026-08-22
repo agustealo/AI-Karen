@@ -347,7 +347,10 @@ class HealthBasedDecisionMaker:
                 )
             
             # Get optimal provider
-            new_provider, provider_score = self._capability_selector.select_provider(criteria)
+            try:
+                new_provider, provider_score = self._capability_selector.select_provider(criteria)
+            except RuntimeError:
+                return None
             
             if not new_provider or new_provider == current_provider:
                 return None

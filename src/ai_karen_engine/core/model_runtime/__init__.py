@@ -35,6 +35,15 @@ from .provider_registry_service import (
     initialize_provider_registry_service,
 )
 
+from .model_cache_service import (
+    AvailabilityStatus,
+    CacheEntry,
+    ModelCacheService,
+    ModelMetadata,
+    PreloadPriority,
+    get_model_cache_service,
+)
+
 __all__ = [
     "DiscoveryProgress",
     "DiscoveryStatus",
@@ -59,4 +68,10 @@ __all__ = [
     "ProductionDecision",
     "ProductionDecisionService",
     "get_production_decision_service",
+    "AvailabilityStatus",
+    "CacheEntry",
+    "ModelCacheService",
+    "ModelMetadata",
+    "PreloadPriority",
+    "get_model_cache_service",
 ]

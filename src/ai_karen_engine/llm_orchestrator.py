@@ -29,9 +29,6 @@ from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Union
 
 from ai_karen_engine.core.errors.exceptions import RateLimitError
-from .integrations.performance_adaptive_router import (
-    PerformanceAdaptiveRouter, AdaptiveStrategy, get_performance_adaptive_router
-)
 
 
 # === Constants & Configuration ===
@@ -598,46 +595,6 @@ class LLMOrchestrator:
             self._rate_limit_queue: Deque[Dict[str, Any]] = deque(maxlen=queue_size)
             self._degraded_events: Deque[Dict[str, Any]] = deque(maxlen=64)
             
-            # Initialize PerformanceAdaptiveRouter with config from main config
-            try:
-                import json
-                with open('config.json', 'r') as f:
-                    config_data = json.load(f)
-                    router_config = config_data.get('performance_adaptive_router', {})
-                    
-                # Create AdaptiveConfig from config data
-                from .integrations.performance_adaptive_router import AdaptiveConfig
-                adaptive_config = AdaptiveConfig(
-                    enable_adaptive_routing=router_config.get('enable_adaptive_routing', True),
-                    enable_predictive_routing=router_config.get('enable_predictive_routing', True),
-                    enable_ml_optimization=router_config.get('enable_ml_optimization', True),
-                    metrics_collection_interval=router_config.get('metrics_collection_interval', 5.0),
-                    performance_history_size=router_config.get('performance_history_size', 1000),
-                    anomaly_detection_enabled=router_config.get('anomaly_detection_enabled', True),
-                    anomaly_threshold=router_config.get('anomaly_threshold', 2.0),
-                    routing_update_interval=router_config.get('routing_update_interval', 30.0),
-                    strategy_switch_threshold=router_config.get('strategy_switch_threshold', 0.2),
-                    load_balancing_enabled=router_config.get('load_balancing_enabled', True),
-                    max_concurrent_routes=router_config.get('max_concurrent_routes', 10),
-                    ml_model_update_interval=router_config.get('ml_model_update_interval', 300.0),
-                    prediction_confidence_threshold=router_config.get('prediction_confidence_threshold', 0.7),
-                    min_training_samples=router_config.get('min_training_samples', 100),
-                    auto_optimization_enabled=router_config.get('auto_optimization_enabled', True),
-                    optimization_interval=router_config.get('optimization_interval', 600.0),
-                    performance_degradation_threshold=router_config.get('performance_degradation_threshold', 0.15),
-                    analytics_history_size=router_config.get('analytics_history_size', 5000),
-                    enable_performance_dashboard=router_config.get('enable_performance_dashboard', True),
-                    report_generation_interval=router_config.get('report_generation_interval', 3600.0),
-                    integrate_with_fallback_manager=router_config.get('integrate_with_fallback_manager', True),
-                    integrate_with_health_monitor=router_config.get('integrate_with_health_monitor', True),
-                    integrate_with_provider_switcher=router_config.get('integrate_with_provider_switcher', True)
-                )
-                
-                self.performance_router = get_performance_adaptive_router(adaptive_config)
-            except Exception as e:
-                logger.warning(f"Failed to load PerformanceAdaptiveRouter config, using defaults: {e}")
-                self.performance_router = get_performance_adaptive_router()
-            
             self._setup_watchdog()
             self._initialized = True
             
@@ -663,18 +620,7 @@ class LLMOrchestrator:
             else:
                 logger.info("Legacy provider preload disabled")
             
-            # Start performance monitoring in a background thread
-            def start_monitoring():
-                import asyncio
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(self.performance_router.start_monitoring())
-                loop.close()
-            
-            monitoring_thread = threading.Thread(target=start_monitoring, daemon=True)
-            monitoring_thread.start()
-            
-            logger.info("LLMOrchestrator initialized in secure mode with PerformanceAdaptiveRouter")
+            self._initialized = True
 
     def _setup_watchdog(self):
         """Start monitoring thread"""
@@ -1440,13 +1386,6 @@ class LLMOrchestrator:
                         registration_error,
                     )
 
-        # Use PerformanceAdaptiveRouter for intelligent routing if available
-        use_performance_router = (
-            hasattr(self, 'performance_router') and
-            self.performance_router and
-            not preferred_models  # Don't override explicit copilotkit preference
-        )
-
         start_time = time.time()
         while True:
             if preferred_models:
@@ -1458,72 +1397,6 @@ class LLMOrchestrator:
                     if not model or not self._model_ready(candidate_id, model):
                         continue
                 model_id = candidate_id
-            elif use_performance_router:
-                # Get available models for performance routing
-                available_models = []
-                with self.registry._lock:
-                    for mid, info in self.registry._models.items():
-                        if self._model_ready(mid, info):
-                            available_models.append(mid)
-                
-                if available_models:
-                    try:
-                        # Use PerformanceAdaptiveRouter for routing decision
-                        import asyncio
-                        try:
-                            loop = asyncio.get_running_loop()
-                            # Run in thread pool to avoid blocking
-                            import concurrent.futures
-                            with concurrent.futures.ThreadPoolExecutor() as executor:
-                                future = executor.submit(
-                                    asyncio.run,
-                                    self.performance_router.route_request(
-                                        request_id=f"req_{int(time.time() * 1000)}_{len(attempted_models)}",
-                                        context=context.get('type', 'chat') if context else 'chat',
-                                        requirements={
-                                            'capabilities': [skill] if skill else ['generic'],
-                                            'max_latency': kwargs.get('max_latency'),
-                                            'max_cost': kwargs.get('max_cost'),
-                                            'cost_sensitive': kwargs.get('cost_sensitive', False),
-                                            'quality_sensitive': kwargs.get('quality_sensitive', False)
-                                        },
-                                        strategy=AdaptiveStrategy.BALANCED
-                                    )
-                                )
-                                routing_decision = future.result(timeout=5.0)
-                        except RuntimeError:
-                            # No event loop running, create one
-                            routing_decision = asyncio.run(
-                                self.performance_router.route_request(
-                                    request_id=f"req_{int(time.time() * 1000)}_{len(attempted_models)}",
-                                    context=context.get('type', 'chat') if context else 'chat',
-                                    requirements={
-                                        'capabilities': [skill] if skill else ['generic'],
-                                        'max_latency': kwargs.get('max_latency'),
-                                        'max_cost': kwargs.get('max_cost'),
-                                        'cost_sensitive': kwargs.get('cost_sensitive', False),
-                                        'quality_sensitive': kwargs.get('quality_sensitive', False)
-                                    },
-                                    strategy=AdaptiveStrategy.BALANCED
-                                )
-                            )
-                        
-                        # Get the selected model from routing decision
-                        if routing_decision and routing_decision.selected_provider:
-                            model_id = routing_decision.selected_provider
-                            with self.registry._lock:
-                                model = self.registry._models.get(model_id)
-                                if not model or not self._model_ready(model_id, model):
-                                    # Fall back to traditional selection if performance router fails
-                                    model_id, model = self._select_model(skill)
-                        else:
-                            # Fall back to traditional selection if no routing decision
-                            model_id, model = self._select_model(skill)
-                    except Exception as e:
-                        logger.warning(f"PerformanceAdaptiveRouter failed: {e}, falling back to traditional selection")
-                        model_id, model = self._select_model(skill)
-                else:
-                    model_id, model = self._select_model(skill)
             else:
                 model_id, model = self._select_model(skill)
 
@@ -2521,32 +2394,10 @@ class LLMOrchestrator:
             "timestamp": time.time(),
         }
         
-        # Add PerformanceAdaptiveRouter status
-        if hasattr(self, 'performance_router') and self.performance_router:
-            try:
-                router_analytics = self.performance_router.get_routing_analytics()
-                router_metrics = self.performance_router.get_all_provider_performance()
-                
-                health_data["performance_adaptive_router"] = {
-                    "status": "active",
-                    "total_requests": router_analytics.total_requests,
-                    "successful_requests": router_analytics.successful_requests,
-                    "success_rate": (
-                        router_analytics.successful_requests / max(router_analytics.total_requests, 1)
-                    ),
-                    "monitored_providers": len(router_metrics),
-                    "strategy_usage": router_analytics.strategy_usage,
-                    "routing_accuracy": router_analytics.routing_accuracy
-                }
-            except Exception as e:
-                health_data["performance_adaptive_router"] = {
-                    "status": "error",
-                    "error": str(e)
-                }
-        else:
-            health_data["performance_adaptive_router"] = {
-                "status": "not_initialized"
-            }
+        health_data["performance_adaptive_router"] = {
+            "status": "retired",
+            "detail": "Routing authority migrated to ChatRuntimeControlPlane / ProviderRouter",
+        }
         
         # Add response formatting health
         try:

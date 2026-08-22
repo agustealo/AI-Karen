@@ -222,16 +222,9 @@ class ErrorResponseService:
             return False
 
     def _get_llm_router(self):
-        """Lazily initialize LLM router to avoid circular imports."""
-        if self._llm_router is None:
-            try:
-                from ai_karen_engine.integrations.llm_router import LLMProfileRouter
-
-                self._llm_router = LLMProfileRouter()
-            except Exception as e:
-                self.logger.warning(f"Failed to initialize LLM router: {e}")
-                self._llm_router = None
-        return self._llm_router
+        """LLM router is retired; AI-powered error analysis is unavailable."""
+        self.logger.info("LLM router is retired; skipping AI error analysis")
+        return None
 
     def _get_llm_utils(self):
         """Lazily initialize LLM utils to avoid circular imports."""

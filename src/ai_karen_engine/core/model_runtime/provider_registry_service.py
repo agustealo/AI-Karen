@@ -120,7 +120,7 @@ class ProviderRegistryService:
         "builtin_vllm": "builtin_vllm",
     }
 
-    def __init__(self, seed_from_legacy: bool = True):
+    def __init__(self):
         # Canonical provider registration state — no dependency on integrations
         self._provider_registrations: Dict[str, ProviderRegistration] = {}
         self._provider_endpoints: Dict[str, ProviderEndpoint] = {
@@ -140,58 +140,8 @@ class ProviderRegistryService:
         # Initialize default fallback chains
         self._setup_default_fallback_chains()
 
-        # Seed canonical state from legacy registry for backward compatibility
-        # during migration. This is a one-time copy, not an ongoing dependency.
-        if seed_from_legacy:
-            self._seed_from_legacy_registry()
-
         # Don't start old health monitoring - use LLMRouter's health
         self._monitoring_task = None
-
-    def _seed_from_legacy_registry(self) -> None:
-        """One-time seed of canonical state from legacy integrations registry.
-
-        This enables gradual migration: existing providers registered in the
-        legacy system are copied into canonical state on first init. New
-        registrations should flow through register_provider().
-
-        TEMPORARY: This import is a documented migration compatibility shim.
-        It must be removed in INTEGRATIONS-2B.2 once all providers register
-        through the canonical path.
-        """
-        try:
-            # TEMPORARY migration import — remove in INTEGRATIONS-2B.2
-            from ai_karen_engine.integrations.llm_registry import get_registry  # noqa: TEMP-MIGRATION
-
-            legacy = get_registry()
-            for name in legacy.list_providers():
-                info = legacy.get_provider_info(name)
-                if not info:
-                    continue
-                registration = ProviderRegistration(
-                    name=name,
-                    provider_class=info.get("provider_class"),
-                    description=str(info.get("description", "")),
-                    models=[
-                        ModelInfo(
-                            name=str(m.get("name", m) if isinstance(m, dict) else m),
-                            description=str(m.get("description", "") if isinstance(m, dict) else ""),
-                            capabilities=list(m.get("capabilities", []) if isinstance(m, dict) else []),
-                        )
-                        for m in (info.get("models") or [])
-                        if m
-                    ],
-                    requires_api_key=bool(info.get("requires_api_key", False)),
-                    default_model=info.get("default_model"),
-                    category=str(info.get("category", "LLM")),
-                    supports_streaming=bool(info.get("supports_streaming", False)),
-                    supports_embeddings=bool(info.get("supports_embeddings", False)),
-                    health_status=str(info.get("health_status", "unknown")),
-                    metadata=dict(info) if isinstance(info, dict) else {},
-                )
-                self._provider_registrations[name] = registration
-        except Exception as exc:
-            logger.debug("Legacy registry seeding skipped: %s", exc)
 
     def _get_llm_router(self):
         """Lazy-load the router used for provider health snapshots."""

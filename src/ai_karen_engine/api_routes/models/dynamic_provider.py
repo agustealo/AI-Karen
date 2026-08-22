@@ -19,14 +19,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from ai_karen_engine.integrations.dynamic_provider_system import (
     get_dynamic_provider_manager,
 )
-from ai_karen_engine.integrations.llm_profile_system import (
-    get_profile_manager,
-    RouterPolicy,
-    GuardrailLevel,
-    ProviderPreference,
-    GuardrailConfig,
-    MemoryBudget,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -418,333 +410,60 @@ async def discover_models(
 
 @router.get("/profiles", response_model=List[LLMProfileResponse])
 async def list_profiles() -> List[LLMProfileResponse]:
-    """List all LLM profiles."""
-    try:
-        profile_manager = get_profile_manager()
-        profiles = profile_manager.list_profiles()
-
-        profile_responses = []
-        for profile in profiles:
-            # Convert providers to dict format for API response
-            providers_dict = {}
-            for use_case, pref in profile.providers.items():
-                providers_dict[use_case] = {
-                    "provider": pref.provider,
-                    "model": pref.model,
-                    "priority": pref.priority,
-                    "max_cost_per_1k_tokens": pref.max_cost_per_1k_tokens,
-                    "required_capabilities": list(pref.required_capabilities),
-                    "excluded_capabilities": list(pref.excluded_capabilities),
-                }
-
-            profile_responses.append(
-                LLMProfileResponse(
-                    id=profile.id,
-                    name=profile.name,
-                    description=profile.description,
-                    router_policy=profile.router_policy.value,
-                    providers=providers_dict,
-                    fallback_provider=profile.fallback_provider,
-                    fallback_model=profile.fallback_model,
-                    is_valid=profile.is_valid,
-                    validation_errors=profile.validation_errors,
-                    created_at=profile.created_at,
-                    updated_at=profile.updated_at,
-                )
-            )
-
-        return profile_responses
-
-    except Exception as e:
-        logger.error(f"Failed to list profiles: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to list profiles: {str(e)}"
-        )
+    raise HTTPException(
+        status_code=503,
+        detail="LLM profile management is retired. Use ProviderRegistryService for provider configuration.",
+    )
 
 
 @router.get("/profiles/active", response_model=Optional[LLMProfileResponse])
 async def get_active_profile() -> Optional[LLMProfileResponse]:
-    """Get the currently active profile."""
-    try:
-        profile_manager = get_profile_manager()
-        profile = profile_manager.get_active_profile()
-
-        if not profile:
-            return None
-
-        # Convert providers to dict format
-        providers_dict = {}
-        for use_case, pref in profile.providers.items():
-            providers_dict[use_case] = {
-                "provider": pref.provider,
-                "model": pref.model,
-                "priority": pref.priority,
-                "max_cost_per_1k_tokens": pref.max_cost_per_1k_tokens,
-                "required_capabilities": list(pref.required_capabilities),
-                "excluded_capabilities": list(pref.excluded_capabilities),
-            }
-
-        return LLMProfileResponse(
-            id=profile.id,
-            name=profile.name,
-            description=profile.description,
-            router_policy=profile.router_policy.value,
-            providers=providers_dict,
-            fallback_provider=profile.fallback_provider,
-            fallback_model=profile.fallback_model,
-            is_valid=profile.is_valid,
-            validation_errors=profile.validation_errors,
-            created_at=profile.created_at,
-            updated_at=profile.updated_at,
-        )
-
-    except Exception as e:
-        logger.error(f"Failed to get active profile: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to get active profile: {str(e)}"
-        )
+    raise HTTPException(
+        status_code=503,
+        detail="LLM profile management is retired. Use ProviderRegistryService for provider configuration.",
+    )
 
 
 @router.post("/profiles", response_model=LLMProfileResponse)
 async def create_profile(request: CreateProfileRequest) -> LLMProfileResponse:
-    """Create a new LLM profile."""
-    try:
-        profile_manager = get_profile_manager()
-
-        # Convert providers dict to ProviderPreference objects
-        providers = {}
-        for use_case, pref_data in request.providers.items():
-            providers[use_case] = ProviderPreference(
-                provider=pref_data["provider"],
-                model=pref_data.get("model"),
-                priority=pref_data.get("priority", 50),
-                max_cost_per_1k_tokens=pref_data.get("max_cost_per_1k_tokens"),
-                required_capabilities=set(pref_data.get("required_capabilities", [])),
-                excluded_capabilities=set(pref_data.get("excluded_capabilities", [])),
-            )
-
-        profile = profile_manager.create_profile(
-            name=request.name,
-            description=request.description,
-            router_policy=RouterPolicy(request.router_policy),
-            providers=providers,
-            fallback_provider=request.fallback_provider,
-            fallback_model=request.fallback_model,
-            enable_streaming=request.enable_streaming,
-            enable_function_calling=request.enable_function_calling,
-            enable_vision=request.enable_vision,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-        )
-
-        # Convert back to response format
-        providers_dict = {}
-        for use_case, pref in profile.providers.items():
-            providers_dict[use_case] = {
-                "provider": pref.provider,
-                "model": pref.model,
-                "priority": pref.priority,
-                "max_cost_per_1k_tokens": pref.max_cost_per_1k_tokens,
-                "required_capabilities": list(pref.required_capabilities),
-                "excluded_capabilities": list(pref.excluded_capabilities),
-            }
-
-        return LLMProfileResponse(
-            id=profile.id,
-            name=profile.name,
-            description=profile.description,
-            router_policy=profile.router_policy.value,
-            providers=providers_dict,
-            fallback_provider=profile.fallback_provider,
-            fallback_model=profile.fallback_model,
-            is_valid=profile.is_valid,
-            validation_errors=profile.validation_errors,
-            created_at=profile.created_at,
-            updated_at=profile.updated_at,
-        )
-
-    except Exception as e:
-        logger.error(f"Failed to create profile: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to create profile: {str(e)}"
-        )
+    raise HTTPException(
+        status_code=503,
+        detail="LLM profile management is retired. Use ProviderRegistryService for provider configuration.",
+    )
 
 
 @router.put("/profiles/{profile_id}", response_model=LLMProfileResponse)
 async def update_profile(
     profile_id: str, request: UpdateProfileRequest
 ) -> LLMProfileResponse:
-    """Update an existing LLM profile."""
-    try:
-        profile_manager = get_profile_manager()
-
-        # Prepare updates
-        updates = {}
-        if request.name is not None:
-            updates["name"] = request.name
-        if request.description is not None:
-            updates["description"] = request.description
-        if request.router_policy is not None:
-            updates["router_policy"] = RouterPolicy(request.router_policy)
-        if request.fallback_provider is not None:
-            updates["fallback_provider"] = request.fallback_provider
-        if request.fallback_model is not None:
-            updates["fallback_model"] = request.fallback_model
-        if request.enable_streaming is not None:
-            updates["enable_streaming"] = request.enable_streaming
-        if request.enable_function_calling is not None:
-            updates["enable_function_calling"] = request.enable_function_calling
-        if request.enable_vision is not None:
-            updates["enable_vision"] = request.enable_vision
-        if request.temperature is not None:
-            updates["temperature"] = request.temperature
-        if request.max_tokens is not None:
-            updates["max_tokens"] = request.max_tokens
-
-        # Convert providers if provided
-        if request.providers is not None:
-            providers = {}
-            for use_case, pref_data in request.providers.items():
-                providers[use_case] = ProviderPreference(
-                    provider=pref_data["provider"],
-                    model=pref_data.get("model"),
-                    priority=pref_data.get("priority", 50),
-                    max_cost_per_1k_tokens=pref_data.get("max_cost_per_1k_tokens"),
-                    required_capabilities=set(
-                        pref_data.get("required_capabilities", [])
-                    ),
-                    excluded_capabilities=set(
-                        pref_data.get("excluded_capabilities", [])
-                    ),
-                )
-            updates["providers"] = providers
-
-        profile = profile_manager.update_profile(profile_id, **updates)
-
-        # Convert back to response format
-        providers_dict = {}
-        for use_case, pref in profile.providers.items():
-            providers_dict[use_case] = {
-                "provider": pref.provider,
-                "model": pref.model,
-                "priority": pref.priority,
-                "max_cost_per_1k_tokens": pref.max_cost_per_1k_tokens,
-                "required_capabilities": list(pref.required_capabilities),
-                "excluded_capabilities": list(pref.excluded_capabilities),
-            }
-
-        return LLMProfileResponse(
-            id=profile.id,
-            name=profile.name,
-            description=profile.description,
-            router_policy=profile.router_policy.value,
-            providers=providers_dict,
-            fallback_provider=profile.fallback_provider,
-            fallback_model=profile.fallback_model,
-            is_valid=profile.is_valid,
-            validation_errors=profile.validation_errors,
-            created_at=profile.created_at,
-            updated_at=profile.updated_at,
-        )
-
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Failed to update profile {profile_id}: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to update profile: {str(e)}"
-        )
+    raise HTTPException(
+        status_code=503,
+        detail="LLM profile management is retired. Use ProviderRegistryService for provider configuration.",
+    )
 
 
 @router.delete("/profiles/{profile_id}")
 async def delete_profile(profile_id: str) -> Dict[str, str]:
-    """Delete an LLM profile."""
-    try:
-        profile_manager = get_profile_manager()
-        success = profile_manager.delete_profile(profile_id)
-
-        if not success:
-            raise HTTPException(
-                status_code=404, detail=f"Profile {profile_id} not found"
-            )
-
-        return {"message": f"Profile {profile_id} deleted successfully"}
-
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to delete profile {profile_id}: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to delete profile: {str(e)}"
-        )
+    raise HTTPException(
+        status_code=503,
+        detail="LLM profile management is retired. Use ProviderRegistryService for provider configuration.",
+    )
 
 
 @router.post("/profiles/{profile_id}/activate", response_model=LLMProfileResponse)
 async def activate_profile(profile_id: str) -> LLMProfileResponse:
-    """Activate a profile (switch to it)."""
-    try:
-        profile_manager = get_profile_manager()
-        profile = profile_manager.switch_profile(profile_id)
-
-        # Convert to response format
-        providers_dict = {}
-        for use_case, pref in profile.providers.items():
-            providers_dict[use_case] = {
-                "provider": pref.provider,
-                "model": pref.model,
-                "priority": pref.priority,
-                "max_cost_per_1k_tokens": pref.max_cost_per_1k_tokens,
-                "required_capabilities": list(pref.required_capabilities),
-                "excluded_capabilities": list(pref.excluded_capabilities),
-            }
-
-        return LLMProfileResponse(
-            id=profile.id,
-            name=profile.name,
-            description=profile.description,
-            router_policy=profile.router_policy.value,
-            providers=providers_dict,
-            fallback_provider=profile.fallback_provider,
-            fallback_model=profile.fallback_model,
-            is_valid=profile.is_valid,
-            validation_errors=profile.validation_errors,
-            created_at=profile.created_at,
-            updated_at=profile.updated_at,
-        )
-
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Failed to activate profile {profile_id}: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to activate profile: {str(e)}"
-        )
+    raise HTTPException(
+        status_code=503,
+        detail="LLM profile management is retired. Use ProviderRegistryService for provider configuration.",
+    )
 
 
 @router.get("/profiles/{profile_id}/validate")
 async def validate_profile_compatibility(profile_id: str) -> Dict[str, Any]:
-    """Validate profile compatibility with available providers."""
-    try:
-        profile_manager = get_profile_manager()
-        profile = profile_manager.get_profile(profile_id)
-
-        if not profile:
-            raise HTTPException(
-                status_code=404, detail=f"Profile {profile_id} not found"
-            )
-
-        result = profile_manager.validate_profile_compatibility(profile)
-        return result
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to validate profile {profile_id}: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Profile validation failed: {str(e)}"
-        )
+    raise HTTPException(
+        status_code=503,
+        detail="LLM profile management is retired. Use ProviderRegistryService for provider configuration.",
+    )
 
 
 # Add the router to the main application

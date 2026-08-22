@@ -31,8 +31,7 @@ import socket
 
 from .network_connectivity import NetworkStatus, get_network_monitor
 from ..integrations.intelligent_provider_registry import get_intelligent_provider_registry
-from ..integrations.model_availability_cache import get_model_availability_cache
-from ..integrations.capability_aware_selector import get_capability_selector
+from ..core.model_runtime.model_cache_service import get_model_cache_service
 
 logger = logging.getLogger(__name__)
 
@@ -166,8 +165,7 @@ class ComprehensiveHealthMonitor:
         # Component integrations
         self._network_monitor = get_network_monitor()
         self._provider_registry = get_intelligent_provider_registry()
-        self._model_cache = get_model_availability_cache()
-        self._capability_selector = get_capability_selector()
+        self._model_cache = get_model_cache_service()
         
         # Background monitoring
         self._monitoring_active = False

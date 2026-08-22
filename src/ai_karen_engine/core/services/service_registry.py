@@ -1133,11 +1133,6 @@ async def initialize_services() -> None:
             {
                 "intelligent_provider_registry": False,  # Optional dependency
                 "capability_aware_selector": False,  # Optional dependency
-                "model_availability_cache": False,  # Optional dependency
-                "comprehensive_health_monitor": False,  # Optional dependency
-                "health_based_decision_maker": False,  # Optional dependency
-                "fallback_chain_manager": False,  # Optional dependency
-                "model_download_manager": False,  # Optional dependency
                 "intelligent_provider_switcher": False,  # Optional dependency
             },
         )

@@ -68,8 +68,6 @@ FILE_CLASSIFICATIONS: Dict[str, str] = {
     "llm_router.py": "DUPLICATE",
     "llm_utils.py": "MOVE_TO_CANONICAL",
     "local_rpa_client.py": "KEEP_AS_ADAPTER",
-    "model_availability_cache.py": "MOVE_TO_CANONICAL",
-    "model_availability_manager.py": "MOVE_TO_CANONICAL",
     "nanda_client.py": "KEEP_AS_ADAPTER",
     "partial_failure_handler.py": "NEEDS_AUDIT",
     "performance_adaptive_router.py": "DUPLICATE",
@@ -447,12 +445,16 @@ def test_model_lifecycle_events_contract() -> None:
 
 
 def test_model_lifecycle_consumers_off_integrations() -> None:
-    """model_availability_* live under migration until their only consumers
-    (the deprecated llm_router + the doomed routing cluster) are retired.
-    Gate the classification so the convergence stays explicit."""
+    """model_availability_* were retired after migration to core/model_runtime.
+    The old integrations files must no longer exist and their classifications
+    should be removed."""
     for filename in ("model_availability_cache.py", "model_availability_manager.py"):
-        assert FILE_CLASSIFICATIONS.get(filename) == "MOVE_TO_CANONICAL", (
-            f"{filename} must be classified MOVE_TO_CANONICAL until migrated to core/model_runtime"
+        file_path = _SRC_ROOT / "integrations" / filename
+        assert not file_path.exists(), (
+            f"{filename} should have been deleted after migration to core/model_runtime"
+        )
+        assert FILE_CLASSIFICATIONS.get(filename) is None, (
+            f"{filename} classification should be removed after deletion"
         )
     assert FILE_CLASSIFICATIONS.get("model_discovery.py") is None, (
         "model_discovery.py was retired; classification entry should be removed"

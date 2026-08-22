@@ -7,8 +7,14 @@ from .registry import get_engine
 from ai_karen_engine.core.expression.settings import get_expression_settings, EngineConfig
 from ..response.response_validator import validate_response_text
 from ..model_runtime.provider_policy import evaluate_provider_policy
+from ai_karen_engine.core.logging.events import RoutingEvents, ProviderEvents
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_routing_event(event_name: str, **kwargs):
+    """Emit a routing observability event using structured logging."""
+    logger.event(event_name, **kwargs)
 
 class ExpressionGateway:
     def __init__(self, settings: Any | None = None):
@@ -26,7 +32,17 @@ class ExpressionGateway:
 
     async def generate(self, task: ExpressionTask) -> ExpressionResult:
         emit_expression_event("expression.task.started", self._event_payload(task, engine_id=self.settings.active_engine))
-        
+
+        # Emit routing.requested event
+        _emit_routing_event(
+            RoutingEvents.REQUESTED,
+            correlation_id=task.correlation_id,
+            request_id=task.request_id,
+            preferred_provider=task.preferred_provider,
+            preferred_model=task.preferred_model,
+            response_mode=task.response_mode
+        )
+
         # Build the actual execution sequence (max 5 steps)
         # 0. Start with user's preferred provider if explicitly requested and different from active engine
         # 1. Then add the configured active engine
@@ -34,13 +50,13 @@ class ExpressionGateway:
         # Fixed 5th step is always 'disabled' (Emergency Static).
         fallback_order = self.settings.engine_fallback_order
         sequence = []
-        
+
         pref_id = str(task.preferred_provider or "").strip().lower()
         if pref_id and pref_id != "auto":
              # Use policy to map provider to engine category
              decision = evaluate_provider_policy(
-                 pref_id, 
-                 local_enabled=True, 
+                 pref_id,
+                 local_enabled=True,
                  external_enabled=self.settings.policies.allow_external_engines
              )
              target_engine = None
@@ -50,7 +66,7 @@ class ExpressionGateway:
                   target_engine = "local"
              elif decision.classification == "external_provider_option":
                   target_engine = "cloud"
-             
+
              if target_engine:
                   if target_engine not in sequence:
                        sequence.insert(0, target_engine)
@@ -58,42 +74,77 @@ class ExpressionGateway:
                        # Move to front if already present
                        sequence.remove(target_engine)
                        sequence.insert(0, target_engine)
-        
+
         # Then add the configured active engine
         if self.settings.active_engine not in sequence:
              sequence.append(self.settings.active_engine)
-             
+
         for engine_id in fallback_order:
             if engine_id not in sequence and len(sequence) < 5:
                 sequence.append(engine_id)
-        
+
         # Step 5: Always Emergency Static
         if "disabled" not in sequence:
             sequence.append("disabled")
-        
+
         # Limit to 6 steps total to ensure 'disabled' is always included
         sequence = sequence[:6]
+
+        # Emit routing.evaluated event with the full sequence
+        _emit_routing_event(
+            RoutingEvents.EVALUATED,
+            correlation_id=task.correlation_id,
+            request_id=task.request_id,
+            sequence=sequence,
+            active_engine=self.settings.active_engine,
+            preferred_provider=task.preferred_provider
+        )
+
         logger.info(f"Expression gateway sequence: {sequence} (preferred: {task.preferred_provider})")
 
         last_error = None
         skipped_engines = []
-        
+
         for level, engine_id in enumerate(sequence):
             # Resolve config
             cfg = self.settings.engines.get(engine_id)
             logger.debug("Gateway trying %s, cfg: %s", engine_id, cfg)
-            
+
             if engine_id == "disabled":
                 # Emergency static is always enabled and fallback-eligible
                 cfg = EngineConfig(enabled=True, type="disabled_engine", fallback_eligible=True)
-            
+
             if not cfg or not cfg.enabled:
                 skipped_engines.append({"engine_id": engine_id, "reason": "disabled"})
+                _emit_routing_event(
+                    RoutingEvents.REJECTED,
+                    correlation_id=task.correlation_id,
+                    request_id=task.request_id,
+                    engine_id=engine_id,
+                    reason="disabled"
+                )
                 continue
 
             if engine_id != "disabled" and self.circuits.is_open(f"expression.engine.{engine_id}"):
                 skipped_engines.append({"engine_id": engine_id, "reason": "circuit_open"})
+                _emit_routing_event(
+                    RoutingEvents.REJECTED,
+                    correlation_id=task.correlation_id,
+                    request_id=task.request_id,
+                    engine_id=engine_id,
+                    reason="circuit_open"
+                )
                 continue
+
+            # Emit routing.selected event
+            _emit_routing_event(
+                RoutingEvents.SELECTED,
+                correlation_id=task.correlation_id,
+                request_id=task.request_id,
+                engine_id=engine_id,
+                engine_type=cfg.type,
+                fallback_level=level
+            )
 
             emit_expression_event("expression.engine.selected", self._event_payload(task, engine_id=engine_id, engine_type=cfg.type, fallback_level=level))
             engine = get_engine(engine_id, cfg.type)

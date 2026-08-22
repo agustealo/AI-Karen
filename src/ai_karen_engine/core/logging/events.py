@@ -29,8 +29,18 @@ class ProviderEvents(str, Enum):
     ATTEMPT_STARTED = "provider.attempt.started"
     ATTEMPT_COMPLETED = "provider.attempt.completed"
     ATTEMPT_FAILED = "provider.attempt.failed"
+    RETRY = "provider.retry"
+    FALLBACK = "provider.fallback"
+    EXHAUSTED = "provider.exhausted"
     POLICY_REJECTED = "provider.policy.rejected"
     CIRCUIT_OPEN = "provider.circuit.open"
+
+
+class RoutingEvents(str, Enum):
+    REQUESTED = "routing.requested"
+    EVALUATED = "routing.evaluated"
+    SELECTED = "routing.selected"
+    REJECTED = "routing.rejected"
 
 class MemoryEvents(str, Enum):
     ACTIVATION_STARTED = "memory.activation.started"
