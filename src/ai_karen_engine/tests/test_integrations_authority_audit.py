@@ -77,7 +77,6 @@ FILE_CLASSIFICATIONS: Dict[str, str] = {
     "performance_adaptive_router.py": "DUPLICATE",
     "provider_hierarchy.py": "DUPLICATE",
     "provider_registry.py": "SHIM",
-    "provider_status.py": "NEEDS_AUDIT",
     "registry.py": "DUPLICATE",
     "routing_policies.py": "DUPLICATE",
     "sr_llamaindex_adapter.py": "KEEP_AS_ADAPTER",
@@ -345,6 +344,7 @@ def test_deleted_dead_files_are_gone() -> None:
         "diagnostic_prompt.py",
         "error_recovery.py",
         "model_download_manager.py",
+        "provider_status.py",
     ]
     for filename in deleted_files:
         path = INTEGRATIONS_ROOT / filename
