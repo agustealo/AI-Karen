@@ -4,9 +4,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from ai_karen_engine.core.runtime.contracts import ExecutionTopology
+
 
 class RuntimeExecutionMode(str, Enum):
-    """How the runtime must execute a single chat request."""
+    """Backward-compatible runtime mode alias for ExecutionTopology."""
 
     DIRECT = "direct"
     GRAPH = "graph"
@@ -20,6 +22,14 @@ class RiskLevel(str, Enum):
     CRITICAL = "critical"
 
 
+def _topology_from_execution_mode(mode: RuntimeExecutionMode, graph_required: bool) -> ExecutionTopology:
+    if mode == RuntimeExecutionMode.DEGRADED:
+        return ExecutionTopology.DIRECT
+    if graph_required:
+        return ExecutionTopology.WORKFLOW
+    return ExecutionTopology.DIRECT
+
+
 @dataclass
 class ExecutionDecision:
     """CORTEX-produced, runtime-consumed execution decision.
@@ -31,8 +41,9 @@ class ExecutionDecision:
     This is the single decision contract between CORTEX and ChatRuntime.
     """
 
-    execution_mode: RuntimeExecutionMode
-    graph_required: bool
+    execution_mode: RuntimeExecutionMode = RuntimeExecutionMode.DIRECT
+    graph_required: bool = False
+    topology: ExecutionTopology = field(default_factory=ExecutionTopology.DIRECT)
 
     intent: str = "general_assist"
     intent_confidence: float = 0.0
@@ -69,13 +80,25 @@ class ExecutionDecision:
     reason_codes: List[str] = field(default_factory=list)
     policy_constraints: Dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if self.topology == ExecutionTopology.DIRECT and self.execution_mode == RuntimeExecutionMode.GRAPH:
+            self.topology = ExecutionTopology.WORKFLOW
+        if self.topology == ExecutionTopology.DIRECT and self.graph_required:
+            self.topology = ExecutionTopology.WORKFLOW
+        if self.topology == ExecutionTopology.WORKFLOW and not self.graph_required and self.execution_mode != RuntimeExecutionMode.GRAPH:
+            self.graph_required = True
+
     @property
     def is_graph_required(self) -> bool:
-        return bool(self.graph_required)
+        return bool(self.graph_required) or self.topology in {
+            ExecutionTopology.WORKFLOW,
+            ExecutionTopology.MULTI_AGENT,
+            ExecutionTopology.REASONING,
+        }
 
     @property
     def is_simple(self) -> bool:
-        return not self.graph_required
+        return not self.is_graph_required
 
     @property
     def memory_required(self) -> bool:
