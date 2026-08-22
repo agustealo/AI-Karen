@@ -16,7 +16,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from ai_karen_engine.core.operations.health_checker import HealthChecker
 from ai_karen_engine.core.model_runtime.model_selection_algorithm import ModelSelectionAlgorithm
 from ai_karen_engine.core.runtime.degraded_mode import (
     get_degraded_mode_manager,
@@ -59,7 +58,6 @@ class OrchestrationAgent:
         self,
         provider_registry: Optional[ProviderRegistryService] = None,
         llm_utils: Optional[LLMUtils] = None,
-        health_checker: Optional[HealthChecker] = None,
         distilbert: Optional[DistilBertService] = None,
         spacy_service: Optional[SpacyService] = None,
         small_language_model_service: Optional[SmallLanguageModelService] = None,
@@ -70,7 +68,6 @@ class OrchestrationAgent:
 
         self.provider_registry = provider_registry or get_provider_registry_service()
         self.llm_utils = llm_utils or LLMUtils()
-        self.health_checker = health_checker or HealthChecker()
         self.degraded_manager = get_degraded_mode_manager()
         self.distilbert = distilbert or DistilBertService()
         self.spacy_service = spacy_service or SpacyService()
@@ -82,7 +79,6 @@ class OrchestrationAgent:
         # Initialize model selection algorithm
         self.model_selector = ModelSelectionAlgorithm(
             provider_registry=self.provider_registry,
-            health_checker=self.health_checker,
             config=self.config,
         )
 

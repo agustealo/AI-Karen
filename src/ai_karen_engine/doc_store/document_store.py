@@ -15,9 +15,9 @@ from ai_karen_engine.core.model_runtime.milvus_client import MilvusClient
 from ai_karen_engine.clients.database.postgres_client import PostgresClient
 
 try:
-    import fitz  # type: ignore
+    import pymupdf  # type: ignore
 except Exception:  # pragma: no cover - optional
-    fitz = None
+    pymupdf = None
 
 try:
     from docx import Document  # type: ignore
@@ -73,9 +73,9 @@ class _DocPostgres(PostgresClient):
 
 
 def _read_pdf(path: str) -> str:
-    if not fitz:
+    if not pymupdf:
         raise RuntimeError("PyMuPDF not installed")
-    doc = fitz.open(path)
+    doc = pymupdf.open(path)
     text = "\n".join(page.get_text() for page in doc)
     doc.close()
     return text

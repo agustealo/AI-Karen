@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional, Callable, Union, Literal, TYPE_CHECKING,
 from fastapi import Depends, HTTPException, Request
 
 from ai_karen_engine.config.config_manager import AIKarenConfig, get_config
-from ai_karen_engine.core.operations.health_monitor import HealthMonitor, get_health_monitor
+
 # from ai_karen_engine.core.services.service_registry import get_service_registry  <- Moved to local scope
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.auth_middleware import AuthenticationError
@@ -307,10 +307,6 @@ async def get_current_config() -> AIKarenConfig:
     return get_config()
 
 
-async def get_health_monitor_service() -> HealthMonitor:
-    return get_health_monitor()
-
-
 async def get_service_registry_instance() -> Any:
     return get_service_registry()
 
@@ -318,7 +314,6 @@ async def get_service_registry_instance() -> Any:
 # --- Dependency Injection Aliases (The API Surface) ---
 
 Config_Dep = Depends(get_current_config)
-HealthMonitor_Dep = Depends(get_health_monitor_service)
 ServiceRegistry_Dep = Depends(get_service_registry_instance)
 
 LangGraphOrchestrator_Dep = Depends(get_langgraph_orchestrator_service)

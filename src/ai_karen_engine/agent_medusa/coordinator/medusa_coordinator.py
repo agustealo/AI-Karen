@@ -54,6 +54,12 @@ class MedusaCoordinator:
         self.trajectories: Dict[str, ExecutionTrajectory] = {}
         self.extension_adapter = ExtensionRuntimeAdapter()
         self.memory_adapter = MemoryRuntimeAdapter()
+        self._global_sinks: List[Any] = []
+
+    def attach_sink(self, sink: Any) -> None:
+        """Attach a durable event sink (e.g. websocket stream) to all runs."""
+        self._global_sinks.append(sink)
+        self.event_emitter._sinks.append(sink)
 
     async def handle_request(self, request: RuntimeRequest) -> RuntimeResponse:
         logger.info(f"Medusa Coordinator -> Handling request {request.request_id}")
@@ -75,6 +81,7 @@ class MedusaCoordinator:
             meter.start()
 
             trajectory = ExecutionTrajectory(request_id=request.request_id, trajectory_id=request.request_id)
+            request_emitter = EventEmitter(sinks=list(self._global_sinks))
             self.active_plans[request.request_id] = plan
             try:
                 step_outputs: list[Dict[str, Any]] = []
@@ -95,7 +102,7 @@ class MedusaCoordinator:
                         raise RuntimeError("Medusa Execution Stalled: dependency failure")
                     results = await asyncio.gather(
                         *[
-                            self._execute_step(step, plan, request, authorized_plan, meter, self.event_emitter, trajectory)
+                            self._execute_step(step, plan, request, authorized_plan, meter, request_emitter, trajectory)
                             for step in runnable_steps
                         ],
                         return_exceptions=True,
@@ -113,6 +120,7 @@ class MedusaCoordinator:
 
             final_status = aggregate_status([s.status.value for s in plan.steps])
             trajectory.complete(final_status.value)
+            trajectory.events = request_emitter._events
             self.trajectories[request.request_id] = trajectory
             return await self.assembler.assemble(
                 request_id=request.request_id,
@@ -205,6 +213,7 @@ class MedusaCoordinator:
             raise
         finally:
             await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.IDLE)
+
 
 
 

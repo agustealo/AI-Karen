@@ -35,6 +35,8 @@ from prometheus_client import Counter, Histogram
 from ..search.search_query_planner import SearchQueryPlanner
 from ..search.search_result_processor import SearchResultProcessor
 from ..search.web_search_provider_registry import WebSearchProviderRegistry
+from ...core.runtime.contracts import ActionExecutionGate, AuthorizedExecutionPlan, ExecutionBudget, ExecutionContext
+from ...core.runtime.policy.runtime_policy import PolicyEvaluationRequest, RuntimePolicyEnforcer
 from ...integrations.web.crawl4ai_integration import Crawl4AIIntegration
 
 logger = logging.getLogger(__name__)
@@ -235,6 +237,8 @@ class InternetCapabilityService:
         search_client: Optional[AsyncSearchClient] = None,
         search_client_factory: Optional[Any] = None,
         provider_registry: Optional[WebSearchProviderRegistry] = None,
+        policy_enforcer: Optional[RuntimePolicyEnforcer] = None,
+        action_gate: Optional[ActionExecutionGate] = None,
         default_max_urls: int = 5,
         max_expanded_queries: int = 2,
     ) -> None:
@@ -244,6 +248,8 @@ class InternetCapabilityService:
         self.search_client = search_client
         self.search_client_factory = search_client_factory
         self.provider_registry = provider_registry or WebSearchProviderRegistry()
+        self.policy_enforcer = policy_enforcer
+        self.action_gate = action_gate
         self.default_max_urls = max(1, min(int(default_max_urls), 25))
         self.max_expanded_queries = max(1, min(int(max_expanded_queries), 5))
 
@@ -251,7 +257,8 @@ class InternetCapabilityService:
         self,
         query: str,
         config_override: Optional[Dict[str, Any]] = None,
-        context: Optional[InternetExecutionContext] = None,
+        context: Optional[ExecutionContext] = None,
+        authorized_plan: Optional[AuthorizedExecutionPlan] = None,
     ) -> Dict[str, Any]:
         """
         Execute a full live internet intelligence cycle.
@@ -259,13 +266,13 @@ class InternetCapabilityService:
         This method intentionally preserves the old signature:
             execute(query, config_override=None)
 
-        It adds optional context for RBAC/audit/telemetry integration without
+        It adds optional context/plan for RBAC/audit/telemetry integration without
         breaking existing plugin callers.
         """
 
         start_time = time.perf_counter()
         request = InternetSearchRequest.from_payload(query, config_override)
-        execution_context = context or InternetExecutionContext()
+        execution_context = self._normalize_context(context)
 
         mode = self._resolve_mode(request)
         strategy = self._resolve_strategy(mode, request)
@@ -290,11 +297,15 @@ class InternetCapabilityService:
         )
 
         try:
-            self._authorize(execution_context)
+            await self._authorize(execution_context, authorized_plan)
+
+            budget = execution_context.budget or (authorized_plan.budget if authorized_plan else None)
+            effective_timeout = self._effective_timeout(request, budget)
+            effective_max_urls = self._effective_max_urls(strategy, request, budget)
 
             urls = await asyncio.wait_for(
-                self._get_relevant_urls(expanded_queries, strategy, request),
-                timeout=request.timeout_seconds,
+                self._get_relevant_urls(expanded_queries, strategy, request, effective_max_urls),
+                timeout=effective_timeout,
             )
 
             if not urls:
@@ -316,7 +327,7 @@ class InternetCapabilityService:
 
             crawl_results = await asyncio.wait_for(
                 self._crawl_many(urls, request),
-                timeout=request.timeout_seconds,
+                timeout=effective_timeout,
             )
 
             if not crawl_results:
@@ -330,11 +341,8 @@ class InternetCapabilityService:
                     "Crawl4AI is not installed or unavailable; content fetch is degraded."
                 )
             else:
-                # If Crawler is available, we can perform deeper extraction for specific modes
-                if mode == "weather" and crawl_results:
-                    logger.info("Performing structured weather extraction via Crawl4AI")
-                    # Future: Implement schema-based extraction here if needed
-                    pass
+                if mode == "structured_extract" and crawl_results:
+                    crawl_results = await self._apply_extraction(crawl_results, request)
 
             processed_chunks = self.processor.process(crawl_results, request.query)
 
@@ -355,7 +363,7 @@ class InternetCapabilityService:
         except asyncio.TimeoutError:
             degraded = True
             warnings.append(
-                f"Internet capability timed out after {request.timeout_seconds:.1f}s."
+                f"Internet capability timed out after {effective_timeout:.1f}s."
             )
             logger.warning(
                 "internet_capability.timeout",
@@ -440,6 +448,7 @@ class InternetCapabilityService:
         queries: Sequence[str],
         strategy: Mapping[str, Any],
         request: InternetSearchRequest,
+        max_urls: int,
     ) -> List[str]:
         """
         Fetch unique URLs from the configured search provider.
@@ -449,9 +458,6 @@ class InternetCapabilityService:
         """
 
         client = self._resolve_search_client()
-        max_urls = int(strategy.get("max_urls") or request.max_urls or self.default_max_urls)
-        max_urls = max(1, min(max_urls, 25))
-
         all_urls: List[str] = []
 
         for search_query in list(queries)[: self.max_expanded_queries]:
@@ -497,16 +503,29 @@ class InternetCapabilityService:
 
         if not urls:
             return []
-            
+
+        seen_canonical: set = set()
+        unique_urls: List[str] = []
+        for url in urls:
+            canonical = self._normalize_url(url)
+            if not canonical or canonical in seen_canonical:
+                continue
+            seen_canonical.add(canonical)
+            unique_urls.append(url)
+
         extraction_strategy = None
         if request.extraction and hasattr(self.crawler, "_build_extraction_strategy"):
             extraction_strategy = self.crawler._build_extraction_strategy(request.extraction)
 
+        current_depth = 0
+        max_depth = request.crawl_max_depth or 0
+
         # Optimization: use fetch_many if available and no specialized extraction requested
         if not extraction_strategy and hasattr(self.crawler, "fetch_many"):
             results = await self.crawler.fetch_many(
-                list(urls),
+                list(unique_urls),
                 bypass_cache=request.bypass_cache,
+                depth=current_depth,
             )
             return self._normalize_crawl_results(results)
 
@@ -529,7 +548,7 @@ class InternetCapabilityService:
                     )
                 return None
 
-        fetched = await asyncio.gather(*(fetch_one(url) for url in urls))
+        fetched = await asyncio.gather(*(fetch_one(url) for url in unique_urls))
         return [item for item in fetched if item]
 
     def _build_response(
@@ -545,7 +564,7 @@ class InternetCapabilityService:
         start_time: float,
         degraded: bool,
         warnings: Sequence[str],
-        execution_context: InternetExecutionContext,
+        execution_context: ExecutionContext,
         status: str = "ok",
     ) -> Dict[str, Any]:
         execution_time_ms = int((time.perf_counter() - start_time) * 1000)
@@ -740,21 +759,35 @@ class InternetCapabilityService:
                 "Inject search_client/search_client_factory or provider_registry."
             ) from exc
 
-    def _authorize(self, context: InternetExecutionContext) -> None:
-        """
-        Capability-level RBAC guard.
-
-        This is intentionally light because full RBAC belongs in the caller.
-        Still, this protects direct service use.
-        """
-
-        permissions = set(context.permissions or [])
-        role = (context.role or "user").lower()
-
-        if role in {"admin", "system", "service"}:
+    async def _authorize(
+        self,
+        context: ExecutionContext,
+        plan: Optional[AuthorizedExecutionPlan] = None,
+    ) -> None:
+        if self.policy_enforcer is not None:
+            request = PolicyEvaluationRequest(
+                user_id=context.user_id,
+                tenant_id=context.tenant_id,
+                session_id=context.session_id,
+                correlation_id=context.correlation_id,
+                roles=[],
+                permissions=list(context.allowed_capabilities),
+                action="web_search",
+                requested_capabilities=["web.search"],
+                forbidden_capabilities=[],
+                risk_signals={},
+            )
+            decision = await self.policy_enforcer.evaluate(request)
+            if not decision.allowed:
+                raise PermissionError(
+                    f"Web capability denied by runtime policy: {decision.reason_codes}"
+                )
             return
 
-        if not permissions:
+        if plan is not None and not plan.degraded_allowed and plan.degradation_state and plan.degradation_state.degraded:
+            raise PermissionError("Execution plan does not allow degraded web capability.")
+
+        if not context.allowed_capabilities:
             return
 
         allowed = {
@@ -762,10 +795,292 @@ class InternetCapabilityService:
             "web:search",
             "capability:internet",
             "plugin:intelligent-search",
+            "web.search",
+            "web.fetch.public",
+            "web.scrape.public",
+            "web.crawl.public",
+            "web.extract.structured",
+            "web.screenshot",
         }
 
-        if permissions.isdisjoint(allowed):
-            raise PermissionError("Internet search is not permitted for this context.")
+        if not any(cap in allowed for cap in context.allowed_capabilities):
+            raise PermissionError("Web capability is not permitted for this context.")
+
+    def _normalize_context(self, context: Optional[ExecutionContext]) -> ExecutionContext:
+        if isinstance(context, ExecutionContext):
+            return context
+        if isinstance(context, InternetExecutionContext):
+            return ExecutionContext(
+                request_id=context.request_id,
+                correlation_id=context.correlation_id,
+                user_id=context.user_id or "anonymous",
+                tenant_id=context.tenant_id or "default",
+                session_id=context.session_id,
+                conversation_id=context.conversation_id,
+                allowed_capabilities=list(context.permissions),
+                audit_context=dict(context.metadata),
+            )
+        return ExecutionContext(
+            request_id=str(uuid.uuid4()),
+            correlation_id=str(uuid.uuid4()),
+            user_id="anonymous",
+            tenant_id="default",
+        )
+
+    def _effective_timeout(
+        self,
+        request: InternetSearchRequest,
+        budget: Optional[ExecutionBudget],
+    ) -> float:
+        requested = max(3.0, min(float(request.timeout_seconds), 90.0))
+        if budget is None:
+            return requested
+        remaining_ms = budget.max_duration_ms
+        remaining_seconds = max(0.1, remaining_ms / 1000.0)
+        return min(requested, remaining_seconds)
+
+    def _effective_max_urls(
+        self,
+        strategy: Mapping[str, Any],
+        request: InternetSearchRequest,
+        budget: Optional[ExecutionBudget],
+    ) -> int:
+        requested = int(strategy.get("max_urls") or request.max_urls or self.default_max_urls)
+        requested = max(1, min(requested, 25))
+        if budget is None:
+            return requested
+        return min(requested, max(1, budget.max_external_requests))
+
+    async def _apply_extraction(
+        self,
+        crawl_results: List[Dict[str, Any]],
+        request: InternetSearchRequest,
+    ) -> List[Dict[str, Any]]:
+        if not request.extraction:
+            return crawl_results
+
+        extraction = dict(request.extraction or {})
+        preference = extraction.get("preference", "schema_first")
+        allow_llm_fallback = extraction.get("allow_llm_fallback", False)
+
+        extraction_type = extraction.get("type")
+        schema = extraction.get("schema")
+        instruction = extraction.get("instruction")
+        target_selectors = extraction.get("target_selectors") or {}
+
+        extracted_results = []
+        for result in crawl_results:
+            html = result.get("html") or result.get("cleaned_html") or ""
+            markdown = result.get("markdown") or ""
+            text = result.get("text") or ""
+
+            extracted = None
+
+            if preference == "schema_first":
+                if schema:
+                    extracted = self._extract_schema(markdown, text, html, schema)
+                if not extracted and target_selectors:
+                    extracted = self._extract_css(html, target_selectors)
+                if not extracted and extraction_type == "xpath":
+                    extracted = self._extract_xpath(html, target_selectors)
+                if not extracted and instruction:
+                    extracted = self._extract_instruction(text, instruction)
+            else:
+                if target_selectors:
+                    extracted = self._extract_css(html, target_selectors)
+                if not extracted and schema:
+                    extracted = self._extract_schema(markdown, text, html, schema)
+                if not extracted and instruction:
+                    extracted = self._extract_instruction(text, instruction)
+
+            if not extracted and allow_llm_fallback and instruction:
+                extracted = await self._extract_llm_fallback(
+                    text=text[:4000],
+                    schema=schema,
+                    instruction=instruction,
+                )
+
+            if extracted:
+                result = dict(result)
+                result["extracted_content"] = extracted
+                result["extraction_type"] = "structured"
+
+            extracted_results.append(result)
+
+        return extracted_results
+
+    def _extract_jsonld(self, html: str) -> List[Dict[str, Any]]:
+        import re
+        import json
+
+        if not html:
+            return []
+
+        matches = re.findall(r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>', html, re.DOTALL | re.IGNORECASE)
+        results = []
+        for match in matches:
+            try:
+                data = json.loads(match)
+                if isinstance(data, dict):
+                    results.append(data)
+                elif isinstance(data, list):
+                    results.extend([item for item in data if isinstance(item, dict)])
+            except json.JSONDecodeError:
+                continue
+        return results
+
+    def _extract_css(self, html: str, selectors: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        from bs4 import BeautifulSoup
+
+        if not html or not selectors:
+            return None
+
+        soup = BeautifulSoup(html, "html.parser")
+        extracted: Dict[str, Any] = {}
+
+        for field, selector in selectors.items():
+            if isinstance(selector, str):
+                elements = soup.select(selector)
+                if elements:
+                    extracted[field] = elements[0].get_text(strip=True)
+            elif isinstance(selector, dict):
+                css = selector.get("css") or selector.get("selector")
+                attr = selector.get("attr")
+                if css:
+                    elements = soup.select(css)
+                    if elements:
+                        if attr:
+                            extracted[field] = elements[0].get(attr, "")
+                        else:
+                            extracted[field] = elements[0].get_text(strip=True)
+
+        return extracted or None
+
+    def _extract_xpath(self, html: str, selectors: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        try:
+            from lxml import etree
+
+            if not html or not selectors:
+                return None
+
+            tree = etree.HTML(html)
+            extracted: Dict[str, Any] = {}
+
+            for field, selector in selectors.items():
+                if isinstance(selector, str):
+                    nodes = tree.xpath(selector)
+                    if nodes:
+                        text = nodes[0].text_content() if hasattr(nodes[0], "text_content") else str(nodes[0])
+                        extracted[field] = text.strip()
+                elif isinstance(selector, dict):
+                    xpath = selector.get("xpath") or selector.get("selector")
+                    attr = selector.get("attr")
+                    if xpath:
+                        nodes = tree.xpath(xpath)
+                        if nodes:
+                            if attr:
+                                extracted[field] = nodes[0].get(attr, "")
+                            else:
+                                text = nodes[0].text_content() if hasattr(nodes[0], "text_content") else str(nodes[0])
+                                extracted[field] = text.strip()
+
+            return extracted or None
+        except ImportError:
+            logger.debug("lxml not available for XPath extraction")
+            return None
+
+    def _extract_schema(
+        self,
+        markdown: str,
+        text: str,
+        html: str,
+        schema: Any,
+    ) -> Optional[Dict[str, Any]]:
+        if not schema:
+            return None
+
+        if isinstance(schema, dict):
+            fields = schema.get("fields", schema)
+        elif isinstance(schema, list):
+            fields = {item: "" for item in schema}
+        else:
+            return None
+
+        source = markdown or text or html
+        if not source:
+            return None
+
+        extracted: Dict[str, Any] = {}
+        for field, pattern in fields.items() if isinstance(fields, dict) else []:
+            if isinstance(pattern, str):
+                import re
+                match = re.search(pattern, source, re.IGNORECASE)
+                if match:
+                    extracted[field] = match.group(1) if match.groups() else match.group(0)
+            elif callable(pattern):
+                try:
+                    extracted[field] = pattern(source)
+                except Exception:
+                    continue
+
+        return extracted or None
+
+    def _extract_instruction(self, text: str, instruction: str) -> Optional[Dict[str, Any]]:
+        if not text or not instruction:
+            return None
+
+        instruction_lower = instruction.lower()
+        if "list" in instruction_lower or "extract all" in instruction_lower:
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            return {"items": lines[:50], "count": len(lines[:50])}
+
+        if "summary" in instruction_lower or "summarize" in instruction_lower:
+            return {"summary": self._summarize_text(text, 500)}
+
+        return {"text": self._summarize_text(text, 1000)}
+
+    async def _extract_llm_fallback(
+        self,
+        text: str,
+        schema: Any,
+        instruction: str,
+    ) -> Optional[Dict[str, Any]]:
+        if not text or not instruction:
+            return None
+
+        try:
+            from ai_karen_engine.core.runtime.prompt.prompt_assembler import PromptRegistry
+            from ai_karen_engine.core.runtime.contracts import GenerationRequest
+
+            prompt_registry = PromptRegistry()
+            contract = prompt_registry.get_contract("karen.web.structured_extract@v1")
+            if contract is None:
+                return None
+
+            request = GenerationRequest(
+                prompt=contract.render(
+                    source_content=text[:4000],
+                    schema=schema,
+                    instruction=instruction,
+                ),
+                model="openai/gpt-4o-mini",
+                max_tokens=1024,
+                temperature=0.0,
+            )
+
+            from ai_karen_engine.services.model_runtime import get_model_runtime
+            runtime = get_model_runtime()
+            response = await runtime.generate(request)
+
+            content = getattr(response, "content", "") or ""
+            import json
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                return {"raw": content}
+        except Exception as exc:
+            logger.warning("LLM extraction fallback failed: %s", exc)
+            return None
 
     def _normalize_crawl_results(
         self,
@@ -796,6 +1111,7 @@ class InternetCapabilityService:
                 "success": getattr(item, "success", True),
                 "status_code": getattr(item, "status_code", None),
                 "elapsed_ms": getattr(item, "elapsed_ms", 0.0),
+                "depth": getattr(item, "depth", 0),
             }
             normalized.append(value)
 

@@ -33,10 +33,6 @@ from ai_karen_engine.config.runtime_provider_manager import RuntimeProviderManag
 from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
 
 from ai_karen_engine.core.model_runtime.runtime_contracts import ProviderRouteDecision
-from ai_karen_engine.core.operations.routing_decision_persistence import (
-    RoutingDecisionPersistence,
-    get_routing_persistence,
-)
 # from ai_karen_engine.integrations.llm_registry import get_registry, LLMRegistry  <- Moved to local scope
 from ai_karen_engine.integrations.llm_utils import LLMProviderBase
 from ai_karen_engine.services.response import ResponseContract, ResponsePromptBuilder, ResponseSanitizer
@@ -384,10 +380,6 @@ class LLMRouter:
             "fallback_activations": 0,
         }
 
-        # Routing decision persistence
-        self._routing_persistence: Optional[RoutingDecisionPersistence] = None
-        self._initialize_routing_persistence()
-
         # Security features
         self._provider_whitelist: Optional[Set[str]] = None
         self._provider_blacklist: Set[str] = set()
@@ -410,15 +402,6 @@ class LLMRouter:
         # Initialize health monitoring and enhanced features
         self._initialize_health_monitoring()
         self._initialize_enhanced_features()
-
-    def _initialize_routing_persistence(self):
-        """Initialize routing decision persistence"""
-        try:
-            self._routing_persistence = get_routing_persistence()
-            logger.info("Routing decision persistence initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize routing persistence: {e}")
-            self._routing_persistence = None
 
     def _initialize_health_monitoring(self):
         """Initialize health monitoring for all providers"""
@@ -2290,13 +2273,6 @@ class LLMRouter:
 
         await self._cancel_health_monitor_task()
 
-        # Shutdown routing persistence
-        if self._routing_persistence:
-            try:
-                await self._routing_persistence.shutdown()
-            except Exception as e:
-                logger.error(f"Failed to shutdown routing persistence: {e}")
-
     def __del__(self):  # pragma: no cover - defensive cleanup
         """Best-effort cancellation of background tasks on destruction."""
 
@@ -2922,26 +2898,6 @@ class LLMRouter:
         if len(self._routing_decisions) > 1000:
             self._routing_decisions = self._routing_decisions[-1000:]
 
-        # Record to persistent storage
-        if self._routing_persistence:
-            try:
-                await self._routing_persistence.record_routing_decision(
-                    request_id=request_id,
-                    message_length=len(request.message),
-                    preferred_provider=decision["preferred_provider"],
-                    preferred_model=request.preferred_model,
-                    selected_provider=selected_provider,
-                    selected_model=selected_model,
-                    reason=reason,
-                    routing_policy=self.routing_policy.value,
-                    streaming=request.stream,
-                    success=success,
-                    latency_ms=latency_ms,
-                    error_message=error_message,
-                )
-            except Exception as e:
-                logger.error(f"Failed to persist routing decision: {e}")
-
         # Record metrics
         PROVIDER_SELECTION_COUNTER.labels(
             provider=selected_provider or "none",
@@ -2974,19 +2930,6 @@ class LLMRouter:
         if len(self._audit_trail) > 5000:
             self._audit_trail = self._audit_trail[-5000:]
 
-        # Record to persistent storage
-        if self._routing_persistence:
-            try:
-                await self._routing_persistence.record_provider_interaction(
-                    provider=provider_name,
-                    request_type=request_type,
-                    success=success,
-                    latency_ms=latency * 1000,
-                    error_message=error_message,
-                )
-            except Exception as e:
-                logger.error(f"Failed to persist provider interaction: {e}")
-
         # Update performance metrics
         self._performance_metrics["total_requests"] += 1
         if success:
@@ -3003,46 +2946,19 @@ class LLMRouter:
 
     async def get_routing_audit_trail(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Get routing decision audit trail"""
-        # Get from persistent storage if available
-        if self._routing_persistence:
-            try:
-                return self._routing_persistence.get_routing_decisions(limit=limit)
-            except Exception as e:
-                logger.error(f"Failed to get routing audit trail from persistence: {e}")
-
-        # Fallback to in-memory storage
         return self._routing_decisions[-limit:]
 
     async def get_provider_audit_trail(
         self, provider_name: Optional[str] = None, limit: int = 100
     ) -> List[Dict[str, Any]]:
         """Get provider interaction audit trail"""
-        # Get from persistent storage if available
-        if self._routing_persistence:
-            try:
-                return self._routing_persistence.get_provider_interactions(
-                    provider_filter=provider_name, limit=limit
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to get provider audit trail from persistence: {e}"
-                )
-
-        # Fallback to in-memory storage
         if provider_name:
             filtered = [i for i in self._audit_trail if i["provider"] == provider_name]
             return filtered[-limit:]
         return self._audit_trail[-limit:]
 
     async def get_routing_statistics(self) -> Dict[str, Any]:
-        """Get routing statistics from persistent storage"""
-        if self._routing_persistence:
-            try:
-                return self._routing_persistence.get_routing_statistics()
-            except Exception as e:
-                logger.error(f"Failed to get routing statistics: {e}")
-
-        # Fallback to in-memory calculation
+        """Get routing statistics"""
         if not self._routing_decisions:
             return {
                 "total_decisions": 0,
@@ -3090,14 +3006,7 @@ class LLMRouter:
         }
 
     async def get_provider_statistics(self) -> Dict[str, Any]:
-        """Get provider statistics from persistent storage"""
-        if self._routing_persistence:
-            try:
-                return self._routing_persistence.get_provider_statistics()
-            except Exception as e:
-                logger.error(f"Failed to get provider statistics: {e}")
-
-        # Fallback to in-memory calculation
+        """Get provider statistics"""
         if not self._audit_trail:
             return {
                 "total_interactions": 0,
@@ -3276,19 +3185,47 @@ class LLMRouter:
 
     async def export_routing_data(self, output_dir: str, format: str = "json") -> str:
         """Export routing data to external file"""
-        if not self._routing_persistence:
-            raise RuntimeError("Routing persistence not initialized")
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
 
-        return await self._routing_persistence.export_data(output_dir, format)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+
+        if format == "json":
+            import json
+
+            decisions_file = output_path / f"routing_decisions_{timestamp}.json"
+            with open(decisions_file, "w") as f:
+                json.dump(self._routing_decisions, f, indent=2)
+
+            interactions_file = output_path / f"provider_interactions_{timestamp}.json"
+            with open(interactions_file, "w") as f:
+                json.dump(self._audit_trail, f, indent=2)
+
+            stats_file = output_path / f"routing_statistics_{timestamp}.json"
+            stats = {
+                "routing_statistics": await self.get_routing_statistics(),
+                "provider_statistics": await self.get_provider_statistics(),
+                "export_timestamp": timestamp,
+            }
+            with open(stats_file, "w") as f:
+                json.dump(stats, f, indent=2)
+
+            logger.info(f"Data exported to {output_path}")
+            return str(output_path)
+
+        else:
+            raise ValueError(f"Unsupported export format: {format}")
 
     async def clear_routing_data(
         self, decisions: bool = True, interactions: bool = True
     ):
-        """Clear persisted routing data"""
-        if not self._routing_persistence:
-            raise RuntimeError("Routing persistence not initialized")
+        """Clear in-memory routing data"""
+        if decisions:
+            self._routing_decisions.clear()
+        if interactions:
+            self._audit_trail.clear()
 
-        await self._routing_persistence.clear_data(decisions, interactions)
+        logger.info("Cleared routing data")
 
     async def get_routing_analytics(self) -> Dict[str, Any]:
         """Get comprehensive routing analytics"""

@@ -194,4 +194,4 @@ class ToolBridge:
     async def _authorize(tool_name: str, plan: AuthorizedExecutionPlan) -> bool:
         from ...core.runtime.contracts import ActionExecutionGate
 
-        return ActionExecutionGate.authorize(plan, tool_name)
+        return await ActionExecutionGate.authorize(plan, tool_name)

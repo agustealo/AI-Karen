@@ -1,140 +1,202 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
 
-# dependencies
-/node_modules
-/.pnp
-.pnp.*
-.tools/
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+.factorypath
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+*.mo
+*.rej
+*.orig
+*.bak
+*.BAK
+*.backup
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+virEnv/
+VIRTUAL_ENV/
+.venv*/
+env.bak/
+
+# Node.js / Next.js
+node_modules/
+.next/
+out/
+build/
+.npm
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+.pnpm-debug.log*
 .yarn/*
 !.yarn/patches
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
-.codex
-.coveragerc
-.dockerignore
-.kilocodemodes
-.pre-commit-config.yaml
-.env.local
-config/secrets/*
-config/archive/auth/*
-.ruff_cache
-/models/local-gguf
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
-*.pem
-
-# debug
+.pnp.*
+.yarn-debug.log*
+.yarn-error.log*
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-# crash dumps
-core.*
-# Ignore log files
-*.log
 
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
+# TypeScript / JavaScript
 next-env.d.ts
 
-# Generated files
-.genkit/*
-
-# firebase
-firebase-debug.log
-firestore-debug.log
-__pycache__/
-logs/
-server.pid
-/.env
-.DS_Store
-.github
-.pytest_cache
-.vscode
-# Ignore local environment files
-.envrc
-.venv/
-*.duckdb
-*.db
-.kiro/specs/web-ui-karen-integration/biome
-/.kiro
-/.github
-/data/default_classifier
-/kari_duckdb.db
-.fuse_hidden0004897500000004
-llm_settings.json
-.env
-config/llm_settings.local.json
-.kren_env/
-.kiro/
-/.karen_env/bin
-/.karen_env
-/models
-/.env_karen/bin
-/.env_karen
-.tools
-# Temporary and development files
-temp_files/
-*.tmp
-*.temp
-.env.temp
-.env.dev
-cookies.txt
-token.txt
-auth.db
-auth_sessions.db
-
-# Archive and backup files
-archives/
-*.BAK
-*.backup
-
-# Coverage and test reports
+# Testing
+coverage/
+.nyc_output/
 .coverage
 coverage.xml
 htmlcov/
-/venv
+.pytest_cache/
 
-# Ignore Theme active related development files
-# /ui_launchers/KAREN-Theme-Default
-/.env_kari
+# Logs
+logs/
+*.log
+server.log
+server_output.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+pnpm-debug.log*
+firebase-debug.log
+firestore-debug.log
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+.envrc
+.env.local
+.env.temp
+.env.dev
+.env.cuda
+.env_karen/
+.karen_env/
+.kren_env/
+.kilo_env/
+.env_kari/
+config/secrets/*
+config/archive/auth/*
+config/llm_settings.local.json
+
+# Databases and local data
+*.db
+*.sqlite3
+*.duckdb
+*.db-journal
+auth.db
+auth_sessions.db
 data/users.json
-*/test*
-/,env_karen/lib
-/,env_karen
-/,env_karen
-/ui_launchers/STREAMLIT-Theme/venv
-/.kilo
-/docker/database/backups
-/llama_CPP_Server/venv
-/scripts
-/src/ai_karen_engine/services/__tests__
-/tests
-/.tools
-/.tools
-/.goose
-/.tools
-.tools/
-.virEnv
-server/models/transformers
-ui_launchers/Karen-AI-Theme/.next
-/src/ui_launchers/Karen-AI-Theme/e2e
-/docs
-/.claude
-/.claude
-/.playwright
-/.playwright
+llm_settings.json
+model_registry.json
+
+# ML / Models
+models/
+models/local-gguf/
+server/models/transformers/
+model_cache/
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.h5
+*.hdf5
+
+# Docker
+.dockerignore
+
+# Build and output
+/.next/cache/
+/.genkit/*
+
+# Coverage and reports
+core.*
+*.tmp
+*.temp
+temp_files/
+archives/
+cookies.txt
+token.txt
+*.pem
+*.key
+*.p12
+*.pfx
+*.p7b
+*.p7c
+*.jks
+*.keystore
+
+# Misc
+.coveragerc
+.kilocodemodes
+.pre-commit-config.yaml
+.agents/
+.codex
+.gemini/
+.goose/
+.kiro/
+.kilo/
+.ruff_cache/
+.virEnv/
+.fuse_hidden*
+core.*
+
+# Platform specific
+.fuse_hidden*

@@ -1,0 +1,405 @@
+{
+  "config": {
+    "configFile": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/playwright.config.ts",
+    "rootDir": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e",
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.spec.ts"
+        ],
+        "timeout": 60000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "html",
+        {
+          "outputFolder": "playwright-report"
+        }
+      ],
+      [
+        "list",
+        null
+      ],
+      [
+        "json",
+        {
+          "outputFile": "test-results.json"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.59.1",
+    "workers": 1,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "test_gemini_live_response.spec.ts",
+      "file": "test_gemini_live_response.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Gemini Live Response Tests",
+          "file": "test_gemini_live_response.spec.ts",
+          "line": 16,
+          "column": 6,
+          "specs": [
+            {
+              "title": "Gemini provider returns live response with correct metadata",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 42285,
+                      "error": {
+                        "message": "TimeoutError: page.waitForURL: Timeout 15000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================",
+                        "stack": "TimeoutError: page.waitForURL: Timeout 15000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================\n    at /mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts:36:18",
+                        "location": {
+                          "file": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts",
+                          "column": 18,
+                          "line": 36
+                        },
+                        "snippet": "\u001b[0m \u001b[90m 34 |\u001b[39m     \u001b[90m// Use waitForURL with a more flexible check\u001b[39m\n \u001b[90m 35 |\u001b[39m     \u001b[36mtry\u001b[39m {\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 36 |\u001b[39m       \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mwaitForURL(\u001b[35m/\\/dashboard/\u001b[39m\u001b[33m,\u001b[39m { timeout\u001b[33m:\u001b[39m \u001b[35m15000\u001b[39m })\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                  \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 37 |\u001b[39m     } \u001b[36mcatch\u001b[39m (e) {\n \u001b[90m 38 |\u001b[39m       \u001b[90m// If already on dashboard (from previous test), that's fine\u001b[39m\n \u001b[90m 39 |\u001b[39m       \u001b[36mif\u001b[39m (\u001b[33m!\u001b[39mpage\u001b[33m.\u001b[39murl()\u001b[33m.\u001b[39mincludes(\u001b[32m'/dashboard'\u001b[39m)) {\u001b[0m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts",
+                            "column": 18,
+                            "line": 36
+                          },
+                          "message": "TimeoutError: page.waitForURL: Timeout 15000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================\n\n\u001b[0m \u001b[90m 34 |\u001b[39m     \u001b[90m// Use waitForURL with a more flexible check\u001b[39m\n \u001b[90m 35 |\u001b[39m     \u001b[36mtry\u001b[39m {\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 36 |\u001b[39m       \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mwaitForURL(\u001b[35m/\\/dashboard/\u001b[39m\u001b[33m,\u001b[39m { timeout\u001b[33m:\u001b[39m \u001b[35m15000\u001b[39m })\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                  \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 37 |\u001b[39m     } \u001b[36mcatch\u001b[39m (e) {\n \u001b[90m 38 |\u001b[39m       \u001b[90m// If already on dashboard (from previous test), that's fine\u001b[39m\n \u001b[90m 39 |\u001b[39m       \u001b[36mif\u001b[39m (\u001b[33m!\u001b[39mpage\u001b[33m.\u001b[39murl()\u001b[33m.\u001b[39mincludes(\u001b[32m'/dashboard'\u001b[39m)) {\u001b[0m\n\u001b[2m    at /mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts:36:18\u001b[22m"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-05-10T17:24:30.123Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--12e3b-ponse-with-correct-metadata-chromium/test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--12e3b-ponse-with-correct-metadata-chromium/video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--12e3b-ponse-with-correct-metadata-chromium/error-context.md"
+                        },
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--12e3b-ponse-with-correct-metadata-chromium/trace.zip"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts",
+                        "column": 18,
+                        "line": 36
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "11fef131df92a0ebf430-69fd392fd821efec0438",
+              "file": "test_gemini_live_response.spec.ts",
+              "line": 62,
+              "column": 7
+            },
+            {
+              "title": "Gemini response does not trigger logout",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 39385,
+                      "error": {
+                        "message": "TimeoutError: page.waitForURL: Timeout 15000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================",
+                        "stack": "TimeoutError: page.waitForURL: Timeout 15000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================\n    at /mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts:36:18",
+                        "location": {
+                          "file": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts",
+                          "column": 18,
+                          "line": 36
+                        },
+                        "snippet": "\u001b[0m \u001b[90m 34 |\u001b[39m     \u001b[90m// Use waitForURL with a more flexible check\u001b[39m\n \u001b[90m 35 |\u001b[39m     \u001b[36mtry\u001b[39m {\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 36 |\u001b[39m       \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mwaitForURL(\u001b[35m/\\/dashboard/\u001b[39m\u001b[33m,\u001b[39m { timeout\u001b[33m:\u001b[39m \u001b[35m15000\u001b[39m })\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                  \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 37 |\u001b[39m     } \u001b[36mcatch\u001b[39m (e) {\n \u001b[90m 38 |\u001b[39m       \u001b[90m// If already on dashboard (from previous test), that's fine\u001b[39m\n \u001b[90m 39 |\u001b[39m       \u001b[36mif\u001b[39m (\u001b[33m!\u001b[39mpage\u001b[33m.\u001b[39murl()\u001b[33m.\u001b[39mincludes(\u001b[32m'/dashboard'\u001b[39m)) {\u001b[0m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts",
+                            "column": 18,
+                            "line": 36
+                          },
+                          "message": "TimeoutError: page.waitForURL: Timeout 15000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================\n\n\u001b[0m \u001b[90m 34 |\u001b[39m     \u001b[90m// Use waitForURL with a more flexible check\u001b[39m\n \u001b[90m 35 |\u001b[39m     \u001b[36mtry\u001b[39m {\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 36 |\u001b[39m       \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mwaitForURL(\u001b[35m/\\/dashboard/\u001b[39m\u001b[33m,\u001b[39m { timeout\u001b[33m:\u001b[39m \u001b[35m15000\u001b[39m })\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                  \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 37 |\u001b[39m     } \u001b[36mcatch\u001b[39m (e) {\n \u001b[90m 38 |\u001b[39m       \u001b[90m// If already on dashboard (from previous test), that's fine\u001b[39m\n \u001b[90m 39 |\u001b[39m       \u001b[36mif\u001b[39m (\u001b[33m!\u001b[39mpage\u001b[33m.\u001b[39murl()\u001b[33m.\u001b[39mincludes(\u001b[32m'/dashboard'\u001b[39m)) {\u001b[0m\n\u001b[2m    at /mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts:36:18\u001b[22m"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-05-10T17:26:49.183Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--5fa0d-nse-does-not-trigger-logout-chromium/test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--5fa0d-nse-does-not-trigger-logout-chromium/video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--5fa0d-nse-does-not-trigger-logout-chromium/error-context.md"
+                        },
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--5fa0d-nse-does-not-trigger-logout-chromium/trace.zip"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts",
+                        "column": 18,
+                        "line": 36
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "11fef131df92a0ebf430-b99add60d1037538eb4b",
+              "file": "test_gemini_live_response.spec.ts",
+              "line": 140,
+              "column": 7
+            },
+            {
+              "title": "Gemini API key is configured",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 2,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 64559,
+                      "error": {
+                        "message": "TimeoutError: page.waitForURL: Timeout 15000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================",
+                        "stack": "TimeoutError: page.waitForURL: Timeout 15000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================\n    at /mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts:36:18",
+                        "location": {
+                          "file": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts",
+                          "column": 18,
+                          "line": 36
+                        },
+                        "snippet": "\u001b[0m \u001b[90m 34 |\u001b[39m     \u001b[90m// Use waitForURL with a more flexible check\u001b[39m\n \u001b[90m 35 |\u001b[39m     \u001b[36mtry\u001b[39m {\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 36 |\u001b[39m       \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mwaitForURL(\u001b[35m/\\/dashboard/\u001b[39m\u001b[33m,\u001b[39m { timeout\u001b[33m:\u001b[39m \u001b[35m15000\u001b[39m })\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                  \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 37 |\u001b[39m     } \u001b[36mcatch\u001b[39m (e) {\n \u001b[90m 38 |\u001b[39m       \u001b[90m// If already on dashboard (from previous test), that's fine\u001b[39m\n \u001b[90m 39 |\u001b[39m       \u001b[36mif\u001b[39m (\u001b[33m!\u001b[39mpage\u001b[33m.\u001b[39murl()\u001b[33m.\u001b[39mincludes(\u001b[32m'/dashboard'\u001b[39m)) {\u001b[0m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts",
+                            "column": 18,
+                            "line": 36
+                          },
+                          "message": "TimeoutError: page.waitForURL: Timeout 15000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================\n\n\u001b[0m \u001b[90m 34 |\u001b[39m     \u001b[90m// Use waitForURL with a more flexible check\u001b[39m\n \u001b[90m 35 |\u001b[39m     \u001b[36mtry\u001b[39m {\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 36 |\u001b[39m       \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mwaitForURL(\u001b[35m/\\/dashboard/\u001b[39m\u001b[33m,\u001b[39m { timeout\u001b[33m:\u001b[39m \u001b[35m15000\u001b[39m })\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                  \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 37 |\u001b[39m     } \u001b[36mcatch\u001b[39m (e) {\n \u001b[90m 38 |\u001b[39m       \u001b[90m// If already on dashboard (from previous test), that's fine\u001b[39m\n \u001b[90m 39 |\u001b[39m       \u001b[36mif\u001b[39m (\u001b[33m!\u001b[39mpage\u001b[33m.\u001b[39murl()\u001b[33m.\u001b[39mincludes(\u001b[32m'/dashboard'\u001b[39m)) {\u001b[0m\n\u001b[2m    at /mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts:36:18\u001b[22m"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-05-10T17:28:54.137Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--02999-emini-API-key-is-configured-chromium/test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--02999-emini-API-key-is-configured-chromium/video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--02999-emini-API-key-is-configured-chromium/error-context.md"
+                        },
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--02999-emini-API-key-is-configured-chromium/trace.zip"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts",
+                        "column": 18,
+                        "line": 36
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "11fef131df92a0ebf430-9f0131c5a43623fdf285",
+              "file": "test_gemini_live_response.spec.ts",
+              "line": 181,
+              "column": 7
+            },
+            {
+              "title": "Response metadata shows live_model source",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 3,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 85229,
+                      "error": {
+                        "message": "TimeoutError: page.goto: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - navigating to \"http://localhost:8010/\", waiting until \"load\"\u001b[22m\n",
+                        "stack": "TimeoutError: page.goto: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - navigating to \"http://localhost:8010/\", waiting until \"load\"\u001b[22m\n\n    at /mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts:23:16",
+                        "location": {
+                          "file": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts",
+                          "column": 16,
+                          "line": 23
+                        },
+                        "snippet": "\u001b[0m \u001b[90m 21 |\u001b[39m     \n \u001b[90m 22 |\u001b[39m     \u001b[90m// Navigate to login page\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 23 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[33mBASE_URL\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 24 |\u001b[39m     \n \u001b[90m 25 |\u001b[39m     \u001b[90m// Wait for login form\u001b[39m\n \u001b[90m 26 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mwaitForSelector(\u001b[32m'input[type=\"email\"], input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m { timeout\u001b[33m:\u001b[39m \u001b[35m10000\u001b[39m })\u001b[33m;\u001b[39m\u001b[0m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts",
+                            "column": 16,
+                            "line": 23
+                          },
+                          "message": "TimeoutError: page.goto: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - navigating to \"http://localhost:8010/\", waiting until \"load\"\u001b[22m\n\n\n\u001b[0m \u001b[90m 21 |\u001b[39m     \n \u001b[90m 22 |\u001b[39m     \u001b[90m// Navigate to login page\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 23 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[33mBASE_URL\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 24 |\u001b[39m     \n \u001b[90m 25 |\u001b[39m     \u001b[90m// Wait for login form\u001b[39m\n \u001b[90m 26 |\u001b[39m     \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mwaitForSelector(\u001b[32m'input[type=\"email\"], input[name=\"email\"]'\u001b[39m\u001b[33m,\u001b[39m { timeout\u001b[33m:\u001b[39m \u001b[35m10000\u001b[39m })\u001b[33m;\u001b[39m\u001b[0m\n\u001b[2m    at /mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts:23:16\u001b[22m"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-05-10T17:34:05.997Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--10e24-ata-shows-live-model-source-chromium/video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--10e24-ata-shows-live-model-source-chromium/error-context.md"
+                        },
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test-results/test_gemini_live_response--10e24-ata-shows-live-model-source-chromium/trace.zip"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "/mnt/Development/KIRO/AI-Karen/src/ui_launchers/Karen-AI-Theme/e2e/test_gemini_live_response.spec.ts",
+                        "column": 16,
+                        "line": 23
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "11fef131df92a0ebf430-f5a3690eaf4614ca620d",
+              "file": "test_gemini_live_response.spec.ts",
+              "line": 198,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-05-10T17:23:45.257Z",
+    "duration": 719101.7450000001,
+    "expected": 0,
+    "skipped": 0,
+    "unexpected": 4,
+    "flaky": 0
+  }
+}

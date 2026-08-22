@@ -478,9 +478,9 @@ class FileUploadHandler:
 
             if file_type == ContextFileType.PDF:
                 try:
-                    import fitz  # type: ignore
+                    import pymupdf  # type: ignore
 
-                    doc = fitz.open(file_path)
+                    doc = pymupdf.open(file_path)
                     text_content = ""
                     for page in doc:
                         text_content += page.get_text()  # type: ignore

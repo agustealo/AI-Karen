@@ -14,9 +14,6 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
 
-if TYPE_CHECKING:
-    from ai_karen_engine.core.operations.health_checker import HealthChecker
-
 from ai_karen_engine.core.logging import get_logger
 logger = get_logger(__name__)
 
@@ -47,11 +44,9 @@ class ModelSelectionAlgorithm:
     def __init__(
         self,
         provider_registry: ProviderRegistryService,
-        health_checker: HealthChecker,
         config: Optional[Dict[str, Any]] = None
     ):
         self.provider_registry = provider_registry
-        self.health_checker = health_checker
         self.config = config or {}
         
         # Configuration
@@ -237,64 +232,30 @@ class ModelSelectionAlgorithm:
     
     async def _check_provider_health_with_timeout(self, provider: str) -> Dict[str, Any]:
         """
-        Check provider health with fail-fast logic and immediate fallback.
-        Requirements: 1.1, 1.2, 2.5
+        Check provider health using canonical provider registry status.
         """
         start_time = time.time()
+        provider_status = self.provider_registry.get_provider_status(provider)
+        check_time = (time.time() - start_time) * 1000
         
-        try:
-            # Use asyncio timeout for fail-fast behavior
-            import asyncio
-            
-            health_check_task = self.health_checker.check_single_provider(provider)
-            status = await asyncio.wait_for(health_check_task, timeout=self.health_check_timeout)
-            
-            check_time = (time.time() - start_time) * 1000
-            
-            if status and status.available and status.authenticated:
-                logger.debug(f"Provider {provider} health check passed in {check_time:.1f}ms")
-                return {
-                    "healthy": True,
-                    "status": status,
-                    "check_time_ms": check_time,
-                    "failure_reason": None
-                }
-            else:
-                failure_reasons = []
-                if not status:
-                    failure_reasons.append("status unavailable")
-                elif not status.available:
-                    failure_reasons.append("not available")
-                elif not status.authenticated:
-                    failure_reasons.append("authentication failed")
-                
-                failure_reason = ", ".join(failure_reasons)
-                logger.debug(f"Provider {provider} health check failed in {check_time:.1f}ms: {failure_reason}")
-                
-                return {
-                    "healthy": False,
-                    "status": status,
-                    "check_time_ms": check_time,
-                    "failure_reason": failure_reason
-                }
-                
-        except asyncio.TimeoutError:
-            check_time = (time.time() - start_time) * 1000
-            logger.warning(f"Provider {provider} health check timed out after {check_time:.1f}ms")
+        if provider_status and provider_status.is_available:
+            logger.debug(f"Provider {provider} health check passed in {check_time:.1f}ms")
             return {
-                "healthy": False,
-                "status": None,
+                "healthy": True,
+                "status": provider_status,
                 "check_time_ms": check_time,
-                "failure_reason": f"health check timeout ({self.health_check_timeout}s)"
+                "failure_reason": None
             }
-        except Exception as e:
-            check_time = (time.time() - start_time) * 1000
-            logger.error(f"Provider {provider} health check failed with error in {check_time:.1f}ms: {e}")
+        else:
+            failure_reason = "not available"
+            if not provider_status:
+                failure_reason = "status unavailable"
+            logger.debug(f"Provider {provider} health check failed in {check_time:.1f}ms: {failure_reason}")
             return {
                 "healthy": False,
-                "status": None,
+                "status": provider_status,
                 "check_time_ms": check_time,
-                "failure_reason": f"health check error: {str(e)}"
+                "failure_reason": failure_reason
             }
     
     def _get_default_model_for_provider(self, provider: str) -> Optional[str]:

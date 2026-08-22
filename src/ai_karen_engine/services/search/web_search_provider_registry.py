@@ -35,6 +35,64 @@ class WebSearchProviderDescriptor:
     config: Mapping[str, Any] = field(default_factory=dict)
 
 
+WEB_SEARCH_CAPABILITIES: Dict[str, WebSearchProviderDescriptor] = {
+    "web.search": WebSearchProviderDescriptor(
+        provider_id="web.search",
+        capabilities=("web.search",),
+        locality="any",
+        requires_api_key=False,
+        supports_time_filter=True,
+        supports_structured_results=True,
+        supported_filters=("time_range",),
+    ),
+    "web.fetch.public": WebSearchProviderDescriptor(
+        provider_id="web.fetch.public",
+        capabilities=("web.fetch.public",),
+        locality="external",
+        requires_api_key=False,
+        supports_time_filter=False,
+        supports_structured_results=False,
+        supported_filters=(),
+    ),
+    "web.scrape.public": WebSearchProviderDescriptor(
+        provider_id="web.scrape.public",
+        capabilities=("web.scrape.public",),
+        locality="external",
+        requires_api_key=False,
+        supports_time_filter=False,
+        supports_structured_results=True,
+        supported_filters=(),
+    ),
+    "web.crawl.public": WebSearchProviderDescriptor(
+        provider_id="web.crawl.public",
+        capabilities=("web.crawl.public",),
+        locality="external",
+        requires_api_key=False,
+        supports_time_filter=False,
+        supports_structured_results=True,
+        supported_filters=("max_pages", "max_depth"),
+    ),
+    "web.extract.structured": WebSearchProviderDescriptor(
+        provider_id="web.extract.structured",
+        capabilities=("web.extract.structured",),
+        locality="any",
+        requires_api_key=False,
+        supports_time_filter=False,
+        supports_structured_results=True,
+        supported_filters=(),
+    ),
+    "web.screenshot": WebSearchProviderDescriptor(
+        provider_id="web.screenshot",
+        capabilities=("web.screenshot",),
+        locality="external",
+        requires_api_key=False,
+        supports_time_filter=False,
+        supports_structured_results=False,
+        supported_filters=(),
+    ),
+}
+
+
 class WebSearchProviderRegistry:
     """
     Canonical registry for web search providers.

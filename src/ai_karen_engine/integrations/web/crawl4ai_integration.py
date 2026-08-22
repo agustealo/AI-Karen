@@ -29,6 +29,8 @@ from enum import Enum
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
+from ai_karen_engine.integrations.web.web_utils import canonicalize_url, is_content_type_binary
+
 from prometheus_client import Counter, Histogram
 
 try:
@@ -78,6 +80,7 @@ class CrawlFailureCode(str, Enum):
     BLOCKED_HOST = "blocked_host"
     PRIVATE_NETWORK_BLOCKED = "private_network_blocked"
     DNS_RESOLUTION_FAILED = "dns_resolution_failed"
+    ROBOTS_BLOCKED = "robots_blocked"
     TIMEOUT = "timeout"
     CRAWLER_ERROR = "crawler_error"
     EMPTY_RESULT = "empty_result"
@@ -96,6 +99,8 @@ class Crawl4AISettings:
     verbose: bool = False
     timeout_seconds: float = 45.0
     max_concurrency: int = 5
+    max_concurrency_per_domain: int = 2
+    max_response_bytes: int = 5 * 1024 * 1024
     user_agent: Optional[str] = None
     bypass_cache: bool = False
     include_raw_html: bool = False
@@ -104,6 +109,7 @@ class Crawl4AISettings:
     include_pdf: bool = False
     resolve_dns_for_safety: bool = True
     allow_private_networks: bool = False
+    respect_robots_txt: bool = True
     allowed_schemes: Sequence[str] = field(default_factory=lambda: ("http", "https"))
     blocked_hosts: Sequence[str] = field(
         default_factory=lambda: (
@@ -125,6 +131,7 @@ class CrawlRequest:
     bypass_cache: Optional[bool] = None
     timeout_seconds: Optional[float] = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    depth: int = 0
 
 
 @dataclass(frozen=True)
@@ -147,6 +154,7 @@ class CrawlResult:
     failure_code: Optional[str]
     elapsed_ms: float
     source: str = "crawl4ai"
+    depth: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Return JSON-serializable result payload."""
@@ -173,6 +181,8 @@ class Crawl4AIIntegration:
         headless: bool = True,
         timeout_seconds: float = 45.0,
         max_concurrency: int = 5,
+        max_concurrency_per_domain: int = 2,
+        max_response_bytes: int = 5 * 1024 * 1024,
         user_agent: Optional[str] = None,
         verbose: bool = False,
         include_raw_html: bool = False,
@@ -184,6 +194,7 @@ class Crawl4AIIntegration:
         allowed_schemes: Optional[Sequence[str]] = None,
         resolve_dns_for_safety: bool = True,
         allow_private_networks: bool = False,
+        respect_robots_txt: bool = True,
     ) -> None:
         default_settings = Crawl4AISettings()
 
@@ -192,6 +203,8 @@ class Crawl4AIIntegration:
             verbose=bool(verbose),
             timeout_seconds=max(float(timeout_seconds), 1.0),
             max_concurrency=max(int(max_concurrency), 1),
+            max_concurrency_per_domain=max(int(max_concurrency_per_domain), 1),
+            max_response_bytes=max(int(max_response_bytes), 1024),
             user_agent=user_agent,
             bypass_cache=bool(bypass_cache),
             include_raw_html=bool(include_raw_html),
@@ -200,6 +213,7 @@ class Crawl4AIIntegration:
             include_pdf=bool(include_pdf),
             resolve_dns_for_safety=bool(resolve_dns_for_safety),
             allow_private_networks=bool(allow_private_networks),
+            respect_robots_txt=bool(respect_robots_txt),
             blocked_hosts=tuple(blocked_hosts)
             if blocked_hosts is not None
             else default_settings.blocked_hosts,
@@ -224,6 +238,8 @@ class Crawl4AIIntegration:
             )
 
         self.browser_config = self._build_browser_config()
+        self.robots_policy = RobotsPolicy(user_agent=user_agent or "AI-Karen-Bot")
+        self._domain_semaphores: dict[str, asyncio.Semaphore] = {}
 
     @classmethod
     def from_settings(cls, settings: Crawl4AISettings) -> "Crawl4AIIntegration":
@@ -308,6 +324,7 @@ class Crawl4AIIntegration:
         urls: Sequence[str],
         bypass_cache: Optional[bool] = None,
         timeout_seconds: Optional[float] = None,
+        depth: int = 0,
     ) -> List[CrawlResult]:
         """
         Fetch multiple URLs concurrently with bounded concurrency.
@@ -320,6 +337,7 @@ class Crawl4AIIntegration:
                 bypass_cache=bypass_cache,
                 timeout_seconds=timeout_seconds,
                 metadata={"batch_index": index},
+                depth=depth,
             )
             for index, url in enumerate(urls)
         ]
@@ -422,6 +440,15 @@ class Crawl4AIIntegration:
         """
         return None
 
+    def _get_domain_semaphore(self, url: str) -> asyncio.Semaphore:
+        parsed = urlparse(url)
+        hostname = (parsed.hostname or "default").lower()
+        if hostname not in self._domain_semaphores:
+            self._domain_semaphores[hostname] = asyncio.Semaphore(
+                max(1, self.settings.max_concurrency_per_domain)
+            )
+        return self._domain_semaphores[hostname]
+
     async def _fetch_with_crawler(self, crawler: Any, req: CrawlRequest) -> CrawlResult:
         """Fetch one request using an already-open Crawl4AI crawler."""
         started = time.perf_counter()
@@ -442,6 +469,22 @@ class Crawl4AIIntegration:
             self._observe_result(result)
             return result
 
+        if self.settings.respect_robots_txt:
+            allowed, reason = await self.robots_policy.is_allowed(normalized_url)
+            if not allowed:
+                result = self._failure_result(
+                    url=normalized_url,
+                    started=started,
+                    error=f"Blocked by robots.txt: {reason}",
+                    failure_code=CrawlFailureCode.ROBOTS_BLOCKED.value,
+                    metadata={
+                        "request_metadata": dict(req.metadata),
+                        "robots_reason": reason,
+                    },
+                )
+                self._observe_result(result)
+                return result
+
         try:
             timeout = max(float(req.timeout_seconds or self.settings.timeout_seconds), 1.0)
             bypass_cache = bool(
@@ -449,40 +492,17 @@ class Crawl4AIIntegration:
                 if req.bypass_cache is None
                 else req.bypass_cache
             )
-            
-            # Extract strategy from internal metadata key
-            extraction_strategy = req.metadata.get("_extraction_strategy")
-            run_config = self._build_run_config(
-                bypass_cache=bypass_cache,
-                extraction_strategy=extraction_strategy,
-            )
 
-            logger.info(f"🚀 Crawl4AI starting arun for {normalized_url} (timeout={timeout}s, strategy={type(extraction_strategy).__name__ if extraction_strategy else 'None'})")
-            raw_result = await asyncio.wait_for(
-                crawler.arun(url=normalized_url, config=run_config),
-                timeout=timeout,
-            )
-            logger.info(f"✅ Crawl4AI arun completed for {normalized_url}")
-
-            if raw_result is None:
-                result = self._failure_result(
-                    url=normalized_url,
-                    started=started,
-                    error="Crawl4AI returned an empty result.",
-                    failure_code=CrawlFailureCode.EMPTY_RESULT.value,
-                    metadata={"request_metadata": dict(req.metadata)},
+            domain_semaphore = self._get_domain_semaphore(normalized_url)
+            async with domain_semaphore:
+                return await self._crawl_one(
+                    crawler,
+                    req,
+                    normalized_url,
+                    timeout,
+                    bypass_cache,
+                    started,
                 )
-                self._observe_result(result)
-                return result
-
-            result = self._normalize_result(
-                result=raw_result,
-                requested_url=normalized_url,
-                started=started,
-                request_metadata=dict(req.metadata),
-            )
-            self._observe_result(result)
-            return result
 
         except asyncio.TimeoutError:
             result = self._failure_result(
@@ -506,6 +526,61 @@ class Crawl4AIIntegration:
             )
             self._observe_result(result)
             return result
+
+    async def _crawl_one(
+        self,
+        crawler: Any,
+        req: CrawlRequest,
+        normalized_url: str,
+        timeout: float,
+        bypass_cache: bool,
+        started: float,
+    ) -> CrawlResult:
+        extraction_strategy = req.metadata.get("_extraction_strategy")
+        run_config = self._build_run_config(
+            bypass_cache=bypass_cache,
+            extraction_strategy=extraction_strategy,
+        )
+
+        logger.info(f"🚀 Crawl4AI starting arun for {normalized_url} (timeout={timeout}s, strategy={type(extraction_strategy).__name__ if extraction_strategy else 'None'})")
+        raw_result = await asyncio.wait_for(
+            crawler.arun(url=normalized_url, config=run_config),
+            timeout=timeout,
+        )
+        logger.info(f"✅ Crawl4AI arun completed for {normalized_url}")
+
+        if raw_result is None:
+            result = self._failure_result(
+                url=normalized_url,
+                started=started,
+                error="Crawl4AI returned an empty result.",
+                failure_code=CrawlFailureCode.EMPTY_RESULT.value,
+                metadata={"request_metadata": dict(req.metadata)},
+            )
+            self._observe_result(result)
+            return result
+
+        result = self._normalize_result(
+            result=raw_result,
+            requested_url=normalized_url,
+            started=started,
+            request_metadata=dict(req.metadata),
+        )
+
+        if result.success and result.metadata.get("content_lengths", {}).get("markdown", 0) > self.settings.max_response_bytes:
+            result = self._failure_result(
+                url=normalized_url,
+                started=started,
+                error=f"Response exceeded max size of {self.settings.max_response_bytes} bytes.",
+                failure_code=CrawlFailureCode.CRAWLER_ERROR.value,
+                metadata={
+                    "request_metadata": dict(req.metadata),
+                    "content_lengths": result.metadata.get("content_lengths"),
+                },
+            )
+
+        self._observe_result(result)
+        return result
 
     def _build_extraction_strategy(self, config: Optional[Dict[str, Any]]) -> Optional[Any]:
         """Build a Crawl4AI extraction strategy from a configuration dictionary."""
@@ -651,6 +726,18 @@ class Crawl4AIIntegration:
         status_code = self._extract_status_code(result)
         error = self._extract_error(result)
 
+        content_type = getattr(result, "content_type", None) or getattr(result, "media_type", None)
+        if not content_type and isinstance(metadata, Mapping):
+            content_type = metadata.get("content_type") or metadata.get("media_type")
+
+        if is_content_type_binary(content_type):
+            success = False
+            error = error or f"Binary content type '{content_type}' is not allowed for text extraction."
+            markdown = ""
+            text = ""
+            html = ""
+            cleaned_html = ""
+
         final_url = first_non_empty(
             getattr(result, "final_url", None),
             getattr(result, "redirected_url", None),
@@ -668,6 +755,9 @@ class Crawl4AIIntegration:
                 "cleaned_html": len(cleaned_html),
             },
         }
+
+        if content_type:
+            normalized_metadata["content_type"] = content_type
 
         screenshot = getattr(result, "screenshot", None)
         pdf = getattr(result, "pdf", None)
@@ -852,8 +942,9 @@ class Crawl4AIIntegration:
                 link.get("title"),
                 link.get("label"),
             )
+            canonical = canonicalize_url(href) if href else ""
             return {
-                "url": href,
+                "url": canonical,
                 "text": text,
                 "category": category or str(link.get("category") or ""),
                 "metadata": {
@@ -872,8 +963,9 @@ class Crawl4AIIntegration:
                 },
             }
 
+        canonical = canonicalize_url(str(link)) if link else ""
         return {
-            "url": str(link),
+            "url": canonical,
             "text": "",
             "category": category or "",
             "metadata": {},
@@ -1018,7 +1110,7 @@ class Crawl4AIIntegration:
 
     @staticmethod
     def _normalize_url(url: str) -> str:
-        """Normalize user-provided URL."""
+        """Normalize and canonicalize user-provided URL."""
         cleaned = str(url or "").strip()
 
         if not cleaned:
@@ -1027,9 +1119,9 @@ class Crawl4AIIntegration:
         parsed = urlparse(cleaned)
 
         if not parsed.scheme and "." in cleaned:
-            return f"https://{cleaned}"
+            cleaned = f"https://{cleaned}"
 
-        return cleaned
+        return canonicalize_url(cleaned)
 
     @staticmethod
     def _elapsed_ms(started: float) -> float:

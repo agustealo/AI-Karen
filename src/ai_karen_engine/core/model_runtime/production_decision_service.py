@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.model_runtime.model_selection_algorithm import ModelSelectionAlgorithm
 from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
-from ai_karen_engine.core.operations.health_checker import HealthChecker
 
 
 @dataclass
@@ -32,14 +31,11 @@ class ProductionDecisionService:
     def __init__(
         self,
         provider_registry: ProviderRegistryService,
-        health_checker: Optional[HealthChecker] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.provider_registry = provider_registry
-        self.health_checker = health_checker or HealthChecker()
         self.selector = ModelSelectionAlgorithm(
             provider_registry=provider_registry,
-            health_checker=self.health_checker,
             config=config,
         )
 

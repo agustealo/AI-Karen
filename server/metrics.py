@@ -24,7 +24,7 @@ except ImportError:
     logger.warning("Prometheus client not available, metrics disabled")
 
 # Initialize metrics using the enhanced metrics manager
-from ai_karen_engine.core.operations.metrics_manager import get_metrics_manager
+from ai_karen_engine.core.observability.metrics import get_metrics_manager
 
 
 def initialize_metrics() -> Dict[str, Any]:
