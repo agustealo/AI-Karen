@@ -56,6 +56,9 @@ class IntelligenceSignal:
     feature_version: str = "v1"
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    encoder_model: str = ""
+    inference_method: str = ""
+
 
 @dataclass
 class IntelligenceAnalysisResult:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Optional, List, Dict, Any
 
-from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext, ChatExecutionRequest
 from ai_karen_engine.core.runtime.execution_decision import (
     ExecutionDecision,
     RuntimeExecutionMode,
@@ -228,7 +228,7 @@ class CortexExecutionDecider:
                 return str(msg.get("content", ""))
         return str(messages[-1].get("content", ""))
 
-    async def _analyze_request(self, text: str, ctx: ChatExecutionRequest.context) -> Dict[str, Any]:
+    async def _analyze_request(self, text: str, ctx: ChatExecutionContext) -> Dict[str, Any]:
         """Run CORTEX analysis pipeline on request content."""
         if not text or not text.strip():
             return self._default_analysis()
