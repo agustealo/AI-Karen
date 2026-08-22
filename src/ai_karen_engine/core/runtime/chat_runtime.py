@@ -296,7 +296,7 @@ class ChatRuntime:
         task = ExpressionTask(
             task_id=f"expr_{ctx.correlation_id}",
             kind="chat",
-            messages=self._assemble_prompt(request, decision),
+            messages=await self._assemble_prompt(request, decision),
             response_mode="text",
             required_capabilities=list(decision.required_capabilities),
             forbidden_capabilities=list(decision.forbidden_capabilities),
@@ -386,7 +386,7 @@ class ChatRuntime:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _assemble_prompt(
+    async def _assemble_prompt(
         self, request: ChatExecutionRequest, decision: ExecutionDecision
     ) -> List[Dict[str, Any]]:
         """Assemble prompt using canonical PromptRuntime.
@@ -394,7 +394,10 @@ class ChatRuntime:
         Memory recall, persona, policy, tools, and workflow context are
         assembled into the final message list sent to ExpressionGateway.
         """
-        from ai_karen_engine.core.runtime.prompt import get_prompt_assembler
+        from ai_karen_engine.core.runtime.prompt import (
+            PromptAssemblyRequest,
+            get_prompt_assembler,
+        )
 
         ctx = request.context
         memory_context = (ctx.metadata or {}).get("memory_context", {})
@@ -418,9 +421,7 @@ class ChatRuntime:
             messages=[dict(msg) for msg in request.messages],
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
-            get_prompt_assembler().assemble(assembly_request)
-        )
+        result = await get_prompt_assembler().assemble(assembly_request)
         return result.messages
 
     def _extract_user_message(self, messages: List[Dict[str, Any]]) -> str:

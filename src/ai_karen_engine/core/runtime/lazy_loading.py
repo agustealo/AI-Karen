@@ -666,24 +666,14 @@ def create_nlp_service_factory():
 
 
 def create_chat_orchestrator_factory():
-    """Factory for Chat orchestrator service (LangGraph-based)."""
+    """Factory for Chat orchestrator service."""
 
     def factory():
-        logger.info("🔍 DEBUG: Creating Chat orchestrator factory instance...")
-        try:
-            from ai_karen_engine.core.langgraph_orchestrator import (
-                get_default_orchestrator,
-            )
+        from ai_karen_engine.core.langgraph_orchestrator import (
+            get_default_orchestrator,
+        )
 
-            service = get_default_orchestrator()
-            logger.info("✅ Chat orchestrator factory created successfully")
-            return service
-        except Exception as e:
-            logger.error(
-                f"❌ Failed to create Chat orchestrator factory: {e}", exc_info=True
-            )
-            # Re-use AI orchestrator factory logic if it fails or return mock
-            return create_langgraph_orchestrator_factory()()
+        return get_default_orchestrator()
 
     return factory
 
@@ -692,44 +682,16 @@ def create_langgraph_orchestrator_factory():
     """Factory for LangGraph orchestrator service."""
 
     def factory():
-        logger.info("🔍 DEBUG: Creating LangGraph orchestrator factory instance...")
-        try:
-            from ai_karen_engine.core.services.base import ServiceConfig
-            from ai_karen_engine.core.langgraph_orchestrator import (
-                LangGraphOrchestrator,
+        from ai_karen_engine.core.services.base import ServiceConfig
+        from ai_karen_engine.core.langgraph_orchestrator import (
+            LangGraphOrchestrator,
+        )
+
+        return LangGraphOrchestrator(
+            ServiceConfig(
+                name="langgraph_orchestrator", dependencies=[], config={},
             )
-
-            service = LangGraphOrchestrator(
-                ServiceConfig(
-                    name="langgraph_orchestrator", dependencies=[], config={},
-                )
-            )
-            logger.info("✅ LangGraph orchestrator factory created successfully")
-            return service
-        except Exception as e:
-            logger.error(
-                f"❌ Failed to create LangGraph orchestrator factory: {e}", exc_info=True
-            )
-
-            # Create a fallback service
-            class FallbackAIOrchestrator:
-                def __init__(self, config):
-                    self.config = config
-                    self.initialized = False
-                    logger.info("🔄 Created fallback LangGraph orchestrator")
-
-                async def initialize(self):
-                    self.initialized = True
-                    logger.info("🔄 Fallback LangGraph orchestrator initialized")
-
-                def load_config(self):
-                    return {"environment": "fallback", "debug": True}
-
-            return FallbackAIOrchestrator(
-                ServiceConfig(
-                    name="langgraph_orchestrator", dependencies=[], config={}
-                )
-            )
+        )
 
     return factory
 

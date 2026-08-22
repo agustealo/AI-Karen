@@ -279,12 +279,13 @@ class MemoryContextBuilder:
         """Analyze query using NLP to extract key information for better context building."""
         try:
             # Import spaCy service for query analysis
-            from ai_karen_engine.services.nlp_service_manager import nlp_service_manager
+            from ai_karen_engine.core.memory.signals.spacy_service import SpacyService
+            spacy_service = SpacyService()
 
             # Get comprehensive NLP analysis of the query
-            parsed_query = await nlp_service_manager.spacy_service.parse_message(query)
+            parsed_query = await spacy_service.parse_message(query)
             linguistic_features = (
-                await nlp_service_manager.spacy_service.get_linguistic_features(query)
+                await spacy_service.get_linguistic_features(query)
             )
 
             # Extract key entities and their types
@@ -341,7 +342,8 @@ class MemoryContextBuilder:
         """Enhance memory ranking using NLP analysis of query and memory content."""
         try:
             # Import spaCy service for memory analysis
-            from ai_karen_engine.services.nlp_service_manager import nlp_service_manager
+            from ai_karen_engine.core.memory.signals.spacy_service import SpacyService
+            spacy_service = SpacyService()
 
             query_entities = {
                 entity["text"].lower() for entity in query_analysis.get("entities", [])
@@ -356,7 +358,7 @@ class MemoryContextBuilder:
                 try:
                     # Analyze memory content
                     memory_entities = (
-                        await nlp_service_manager.spacy_service.extract_entities(
+                        await spacy_service.extract_entities(
                             memory.content
                         )
                     )
@@ -1002,12 +1004,13 @@ class WebUIMemoryService(UnifiedMemoryService):
         """Generate automatic tags for memory content using spaCy NLP."""
         try:
             # Import spaCy service for entity-based tagging
-            from ai_karen_engine.services.nlp_service_manager import nlp_service_manager
+            from ai_karen_engine.core.memory.signals.spacy_service import SpacyService
+            spacy_service = SpacyService()
 
             tags = []
 
             # Extract entities and use them as tags
-            entities = await nlp_service_manager.spacy_service.extract_entities(content)
+            entities = await spacy_service.extract_entities(content)
             for entity_text, entity_label in entities:
                 # Add entity labels as tags
                 tags.append(entity_label.lower())
@@ -1016,7 +1019,7 @@ class WebUIMemoryService(UnifiedMemoryService):
                     tags.append(entity_text.lower().replace(" ", "_"))
 
             # Get linguistic features for additional tagging
-            features = await nlp_service_manager.spacy_service.get_linguistic_features(
+            features = await spacy_service.get_linguistic_features(
                 content
             )
 
@@ -1113,10 +1116,11 @@ class WebUIMemoryService(UnifiedMemoryService):
         """Extract facts from memory content using spaCy NLP."""
         try:
             # Import spaCy service for fact extraction
-            from ai_karen_engine.services.nlp_service_manager import nlp_service_manager
+            from ai_karen_engine.core.memory.signals.spacy_service import SpacyService
+            spacy_service = SpacyService()
 
             # Use spaCy service to extract facts
-            facts = await nlp_service_manager.spacy_service.extract_facts(content)
+            facts = await spacy_service.extract_facts(content)
 
             # Convert fact dictionaries to strings for storage
             fact_strings = []

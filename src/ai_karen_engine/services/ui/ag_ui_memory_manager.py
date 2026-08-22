@@ -16,12 +16,13 @@ from ai_karen_engine.core.memory.memory_runtime_manager import (
     update_memory,
 )
 
-# Import NLP services - unified manager provides both spaCy and DistilBERT
+# Import NLP services - canonical adapters provide spaCy and DistilBERT
 try:
-    from ai_karen_engine.core.memory.signals.nlp_service_manager import nlp_service_manager
-    # Access spaCy and DistilBERT services from unified manager
-    spacy_service_manager = nlp_service_manager.spacy_service if hasattr(nlp_service_manager, 'spacy_service') else None
-    distilbert_service_manager = nlp_service_manager.distilbert_service if hasattr(nlp_service_manager, 'distilbert_service') else None
+    from ai_karen_engine.core.memory.signals.spacy_service import SpacyService
+    from ai_karen_engine.core.memory.signals.distilbert_service import DistilBertService
+
+    spacy_service_manager = SpacyService()
+    distilbert_service_manager = DistilBertService()
 except ImportError:
     spacy_service_manager = None
     distilbert_service_manager = None

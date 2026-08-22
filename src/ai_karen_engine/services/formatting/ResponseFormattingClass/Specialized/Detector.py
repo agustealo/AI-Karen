@@ -126,10 +126,11 @@ class ContentTypeDetector:
     async def _get_nlp_analysis(self, text: str) -> Dict[str, Any]:
         """Get NLP analysis using existing services."""
         try:
-            from ai_karen_engine.core.memory.signals.nlp_service_manager import nlp_service_manager
-            parsed_message = await nlp_service_manager.spacy_service.parse_message(text)
+            from ai_karen_engine.core.memory.signals.spacy_service import SpacyService
+            spacy_service = SpacyService()
+            parsed_message = await spacy_service.parse_message(text)
             entities = [ent.label_ for ent in parsed_message.entities] if parsed_message.entities else []
-            features = await nlp_service_manager.spacy_service.get_linguistic_features(text)
+            features = await spacy_service.get_linguistic_features(text)
             keywords = features.get("keywords", []) if features else []
 
             return {

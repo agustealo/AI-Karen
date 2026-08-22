@@ -194,8 +194,8 @@ class HelperModels:
             self.default_model_provider = registry.get_provider("builtin_transformers")
 
             # Initialize DistilBERT for classification
-            from ai_karen_engine.core.memory.signals.nlp_service_manager import nlp_service_manager
-            self.distilbert = nlp_service_manager
+            from ai_karen_engine.core.memory.signals.distilbert_service import DistilBertService
+            self.distilbert = DistilBertService()
 
             # Initialize spaCy for NLP
             from ai_karen_engine.core.memory.signals.spacy_service import get_spacy_service
