@@ -22,6 +22,7 @@ This service does NOT:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 import uuid
@@ -1145,6 +1146,7 @@ class InternetCapabilityService:
             citations.append(
                 {
                     "id": f"citation_{len(citations)}",
+                    "evidence_id": f"evidence_{len(citations)}_{hashlib.md5(normalized_url.encode()).hexdigest()[:8]}",
                     "url": normalized_url,
                     "title": title,
                     "snippet": self._summarize_text(preview, 240),
@@ -1170,6 +1172,7 @@ class InternetCapabilityService:
             citations.append(
                 {
                     "id": f"citation_{idx}",
+                    "evidence_id": f"evidence_{idx}_{hashlib.md5(url.encode()).hexdigest()[:8]}",
                     "url": url,
                     "title": self._chunk_title(content, url, idx),
                     "snippet": self._summarize_text(content, 240),
@@ -1211,13 +1214,17 @@ class InternetCapabilityService:
             sources.append(
                 {
                     "id": f"source_{len(sources)}",
+                    "evidence_id": f"evidence_{len(sources)}_{hashlib.md5(url.encode()).hexdigest()[:8]}",
                     "url": url,
+                    "canonical_url": url,
                     "title": title,
                     "domain": urlparse(url).netloc,
                     "snippet": self._summarize_text(preview_source, 220),
                     "content": self._summarize_text(preview_source, 1000),
                     "full_content": markdown,
                     "markdown": markdown,
+                    "content_ref": f"content:{hashlib.sha256(markdown.encode()).hexdigest()[:16]}",
+                    "content_hash": hashlib.sha256(markdown.encode()).hexdigest()[:16],
                     "extracted_data": result.get("extracted_content"),
                     "publishedDate": metadata.get("published_date")
                     or metadata.get("date")
