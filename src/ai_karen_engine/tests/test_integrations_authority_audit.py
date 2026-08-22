@@ -212,6 +212,29 @@ def test_no_hidden_registry_classes_in_providers_package() -> None:
     assert not registry_paths, f"Providers package contains registry classes: {registry_paths}"
 
 
+def test_canonical_provider_registry_service_exists() -> None:
+    """The canonical provider registry must live in core/model_runtime."""
+    from ai_karen_engine.core.model_runtime.provider_registry_service import (
+        ProviderRegistryService,
+    )
+
+    assert ProviderRegistryService is not None
+
+
+def test_canonical_providers_package_contains_only_adapters() -> None:
+    """The integrations/providers package must not contain registries or routers."""
+    providers_root = INTEGRATIONS_ROOT / "providers"
+    forbidden = []
+    for path in providers_root.rglob("*.py"):
+        if path.name.startswith("__pycache__"):
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if "class Registry" in text or "class Router" in text or "class Manager" in text:
+            forbidden.append(path)
+
+    assert not forbidden, f"Providers package contains non-adapter classes: {forbidden}"
+
+
 def test_deleted_dead_files_are_gone() -> None:
     """Deleted dead files must no longer exist on disk."""
     deleted_files = [
