@@ -306,3 +306,103 @@ def test_wired_request_fields_appear_in_assembly() -> None:
     assert "workflow_id=wf-1" in contents
     assert "format=json" in contents
 
+
+def test_runtime_policy_uses_capabilities_not_intent_strings() -> None:
+    """RuntimePolicy must evaluate typed capabilities, not hardcoded intent strings."""
+    import asyncio
+    from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer, PolicyEvaluationRequest
+
+    enforcer = RuntimePolicyEnforcer()
+
+    request = PolicyEvaluationRequest(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        permissions=["user"],
+        requested_capabilities=["write"],
+        forbidden_capabilities=[],
+        risk_signals={"score": 0.0, "categories": []},
+        runtime_level="FULL",
+    )
+    decision = asyncio.get_event_loop().run_until_complete(enforcer.evaluate(request))
+    assert decision.allowed is True
+    assert "write" in decision.allowed_capabilities
+
+
+def test_runtime_policy_denies_on_risk_categories() -> None:
+    """RuntimePolicy must deny high-risk capability combinations based on risk_signals."""
+    import asyncio
+    from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer, PolicyEvaluationRequest
+
+    enforcer = RuntimePolicyEnforcer()
+
+    request = PolicyEvaluationRequest(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        permissions=["user"],
+        requested_capabilities=["admin"],
+        forbidden_capabilities=[],
+        risk_signals={"score": 0.8, "categories": ["credential_access"]},
+        runtime_level="FULL",
+    )
+    decision = asyncio.get_event_loop().run_until_complete(enforcer.evaluate(request))
+    assert decision.allowed is False
+    assert "admin" in decision.forbidden_capabilities
+
+
+def test_runtime_policy_rejects_missing_identity() -> None:
+    """RuntimePolicy must fail-closed when identity is missing."""
+    import asyncio
+    from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer, PolicyEvaluationRequest
+
+    enforcer = RuntimePolicyEnforcer()
+
+    request = PolicyEvaluationRequest(
+        user_id="",
+        tenant_id="",
+        requested_capabilities=[],
+    )
+    decision = asyncio.get_event_loop().run_until_complete(enforcer.evaluate(request))
+    assert decision.allowed is False
+    assert "all" in decision.forbidden_capabilities
+
+
+def test_runtime_policy_uses_provider_constraints_not_hardcoded_list() -> None:
+    """Routing policy must use provider constraints from state, not hardcoded provider lists."""
+    import asyncio
+    from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer
+
+    enforcer = RuntimePolicyEnforcer()
+
+    state = {
+        "runtime_level": "SAFE",
+        "provider_constraints": {
+            "safe_trusted_providers": ["trusted-provider"]
+        },
+    }
+    provider_selection = {"provider": "trusted-provider", "model": "model-x"}
+    result = asyncio.get_event_loop().run_until_complete(
+        enforcer.check_routing_policy(state, provider_selection)
+    )
+    assert result.allowed is True
+
+    provider_selection_denied = {"provider": "untrusted-provider", "model": "model-x"}
+    result = asyncio.get_event_loop().run_until_complete(
+        enforcer.check_routing_policy(state, provider_selection_denied)
+    )
+    assert result.allowed is False
+
+
+def test_response_policy_has_no_keyword_safety_logic() -> None:
+    """Response policy must not block based on weak keyword scanning."""
+    import asyncio
+    from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer
+
+    enforcer = RuntimePolicyEnforcer()
+
+    state = {"runtime_level": "SAFE"}
+    response = "Here is how to delete a file safely."
+    result = asyncio.get_event_loop().run_until_complete(
+        enforcer.check_response_policy(state, response)
+    )
+    assert result.allowed is True
+
