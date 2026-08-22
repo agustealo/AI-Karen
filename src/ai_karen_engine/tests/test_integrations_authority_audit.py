@@ -59,12 +59,10 @@ FILE_CLASSIFICATIONS: Dict[str, str] = {
     "config_validator.py": "MOVE_TO_CANONICAL",
     "copilotkit_provider.py": "DUPLICATE",
     "copilot_router.py": "DUPLICATE",
-    "dependencies.py": "DANGEROUS",
     "dependency_checker.py": "MOVE_TO_CANONICAL",
     "diagnostic_prompt.py": "NEEDS_AUDIT",
     "dynamic_provider_system.py": "DUPLICATE",
     "error_recovery.py": "NEEDS_AUDIT",
-    "factory.py": "DEAD",
     "failure_pattern_analyzer.py": "NEEDS_AUDIT",
     "fallback_chain_manager.py": "DEAD",
     "health_monitor.py": "NEEDS_AUDIT",
@@ -184,7 +182,6 @@ def test_dangerous_files_are_flagged() -> None:
     dangerous = [name for name, cls in FILE_CLASSIFICATIONS.items() if cls == "DANGEROUS"]
     expected_dangerous = [
         "auth_manager.py",
-        "dependencies.py",
         "startup.py",
     ]
     for expected in expected_dangerous:
@@ -233,19 +230,6 @@ def test_canonical_providers_package_contains_only_adapters() -> None:
             forbidden.append(path)
 
     assert not forbidden, f"Providers package contains non-adapter classes: {forbidden}"
-
-
-def test_deleted_dead_files_are_gone() -> None:
-    """Deleted dead files must no longer exist on disk."""
-    deleted_files = [
-        "fallback_manager.py",
-        "automation_manager.py",
-        "prompt_blocks.py",
-        "performance_router_init.py",
-    ]
-    for filename in deleted_files:
-        path = INTEGRATIONS_ROOT / filename
-        assert not path.exists(), f"Deleted file still exists: {path}"
 
 
 def test_integrations_init_exports_only_adapters() -> None:
@@ -303,6 +287,55 @@ def test_canonical_resilience_owns_fallback() -> None:
     assert get_fallback_manager is not None
 
 
+def test_core_runtime_does_not_import_from_duplicate_router_authorities() -> None:
+    """Core runtime must not import from duplicate router authorities."""
+    import subprocess
+
+    duplicate_routers = [
+        "integrations.llm_router",
+        "integrations.capability_router",
+        "integrations.capability_aware_selector",
+        "integrations.copilot_router",
+        "integrations.performance_adaptive_router",
+        "integrations.intelligent_provider_switcher",
+        "integrations.dynamic_provider_system",
+        "integrations.intelligent_provider_registry",
+        "integrations.routing_policies",
+        "integrations.provider_hierarchy",
+    ]
+
+    core_dirs = [
+        "src/ai_karen_engine/core",
+        "src/ai_karen_engine/runtime",
+        "src/ai_karen_engine/cortex",
+        "src/ai_karen_engine/services",
+    ]
+
+    violations = []
+    for router in duplicate_routers:
+        for directory in core_dirs:
+            cmd = [
+                "rg",
+                "-n",
+                "--hidden",
+                "--glob",
+                "*.py",
+                router,
+                directory,
+            ]
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            except FileNotFoundError:
+                continue
+            if result.stdout.strip():
+                violations.append(f"{router} imported in {directory}")
+
+    assert not violations, (
+        "Core runtime code imports from duplicate router authorities: "
+        f"{violations}"
+    )
+
+
 def test_deleted_dead_files_are_gone() -> None:
     """Deleted dead files must no longer exist on disk."""
     deleted_files = [
@@ -310,6 +343,8 @@ def test_deleted_dead_files_are_gone() -> None:
         "automation_manager.py",
         "prompt_blocks.py",
         "performance_router_init.py",
+        "factory.py",
+        "dependencies.py",
     ]
     for filename in deleted_files:
         path = INTEGRATIONS_ROOT / filename
