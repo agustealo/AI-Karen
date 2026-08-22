@@ -11,6 +11,29 @@ from importlib import import_module
 from typing import Any
 
 __all__ = [
+    "ReasoningRequest",
+    "ReasoningResult",
+    "ReasoningEvidence",
+    "ReasoningHypothesis",
+    "ReasoningContradiction",
+    "ReasoningAssessment",
+    "ReasoningEvidenceNeed",
+    "ReasoningEscalationRequest",
+    "ReasoningAction",
+    "ReasoningBudget",
+    "ReasoningStatus",
+    "ReasoningMode",
+    "ReasoningDisposition",
+    "ReasoningErrorCode",
+    "HypothesisStatus",
+    "ContradictionSeverity",
+    "EvidenceSensitivity",
+    "EvidenceProvider",
+    "ReasoningGenerationClient",
+    "ReasoningToolClient",
+    "ReasoningStrategyEngine",
+    "ReasoningExecutor",
+    "get_reasoning_executor",
     # Core Soft Reasoning
     "SoftReasoningEngine",
     "RecallConfig",
@@ -54,7 +77,6 @@ __all__ = [
     "MetacognitiveState",
     "MetacognitiveConfig",
     "CognitiveState",
-    "ReasoningStrategy",
     "PerformanceMetrics",
     # Retrieval
     "SRRetriever",
@@ -85,9 +107,43 @@ __all__ = [
     # KRO orchestrator
     "KROOrchestrator",
     "get_kro_orchestrator",
+    # Strategies
+    "KROReasoningStrategy",
+    "CausalReasoner",
+    "SoftReasoner",
+    "Verifier",
+    "Refiner",
+    "MetacognitionStrategy",
+    "get_default_strategies",
+    "get_default_executor",
 ]
 
 _EXPORTS = {
+    # Canonical contracts
+    "ReasoningRequest": ("ai_karen_engine.core.reasoning.contracts", "ReasoningRequest"),
+    "ReasoningResult": ("ai_karen_engine.core.reasoning.contracts", "ReasoningResult"),
+    "ReasoningEvidence": ("ai_karen_engine.core.reasoning.contracts", "ReasoningEvidence"),
+    "ReasoningHypothesis": ("ai_karen_engine.core.reasoning.contracts", "ReasoningHypothesis"),
+    "ReasoningContradiction": ("ai_karen_engine.core.reasoning.contracts", "ReasoningContradiction"),
+    "ReasoningConfidence": ("ai_karen_engine.core.reasoning.contracts", "ReasoningConfidence"),
+    "ReasoningEvidenceNeed": ("ai_karen_engine.core.reasoning.contracts", "ReasoningEvidenceNeed"),
+    "ReasoningAction": ("ai_karen_engine.core.reasoning.contracts", "ReasoningAction"),
+    "ReasoningBudget": ("ai_karen_engine.core.reasoning.contracts", "ReasoningBudget"),
+    "ReasoningStrategy": ("ai_karen_engine.core.reasoning.contracts", "ReasoningStrategy"),
+    "ReasoningPlan": ("ai_karen_engine.core.reasoning.contracts", "ReasoningPlan"),
+    "ReasoningStatus": ("ai_karen_engine.core.reasoning.contracts", "ReasoningStatus"),
+    "ReasoningMode": ("ai_karen_engine.core.reasoning.contracts", "ReasoningMode"),
+    "HypothesisStatus": ("ai_karen_engine.core.reasoning.contracts", "HypothesisStatus"),
+    "ContradictionSeverity": ("ai_karen_engine.core.reasoning.contracts", "ContradictionSeverity"),
+    "StrategyDeterminism": ("ai_karen_engine.core.reasoning.contracts", "StrategyDeterminism"),
+    "EvidenceProvider": ("ai_karen_engine.core.reasoning.contracts", "EvidenceProvider"),
+    "ReasoningGenerationClient": ("ai_karen_engine.core.reasoning.contracts", "ReasoningGenerationClient"),
+    "ReasoningToolClient": ("ai_karen_engine.core.reasoning.contracts", "ReasoningToolClient"),
+    "ReasoningStrategyEngine": ("ai_karen_engine.core.reasoning.strategy", "ReasoningStrategyEngine"),
+    "ReasoningStrategyRegistry": ("ai_karen_engine.core.reasoning.strategy", "ReasoningStrategyRegistry"),
+    "ReasoningExecutor": ("ai_karen_engine.core.reasoning.executor", "ReasoningExecutor"),
+    "get_reasoning_executor": ("ai_karen_engine.core.reasoning.executor", "get_reasoning_executor"),
+    "get_reasoning_strategy_registry": ("ai_karen_engine.core.reasoning.strategy", "get_reasoning_strategy_registry"),
     # Soft reasoning
     "SoftReasoningEngine": ("ai_karen_engine.core.reasoning.soft_reasoning.engine", "SoftReasoningEngine"),
     "RecallConfig": ("ai_karen_engine.core.reasoning.soft_reasoning.engine", "RecallConfig"),
@@ -130,7 +186,6 @@ _EXPORTS = {
     "MetacognitiveState": ("ai_karen_engine.core.reasoning.synthesis.metacognition", "MetacognitiveState"),
     "MetacognitiveConfig": ("ai_karen_engine.core.reasoning.synthesis.metacognition", "MetacognitiveConfig"),
     "CognitiveState": ("ai_karen_engine.core.reasoning.synthesis.metacognition", "CognitiveState"),
-    "ReasoningStrategy": ("ai_karen_engine.core.reasoning.synthesis.metacognition", "ReasoningStrategy"),
     "PerformanceMetrics": ("ai_karen_engine.core.reasoning.synthesis.metacognition", "PerformanceMetrics"),
     # Retrieval
     "SRRetriever": ("ai_karen_engine.core.reasoning.retrieval.adapters", "SRRetriever"),
@@ -161,6 +216,15 @@ _EXPORTS = {
     # KRO
     "KROOrchestrator": ("ai_karen_engine.core.reasoning.kro_orchestrator", "KROOrchestrator"),
     "get_kro_orchestrator": ("ai_karen_engine.core.reasoning.kro_orchestrator", "get_kro_orchestrator"),
+    # Strategy
+    "KROReasoningStrategy": ("ai_karen_engine.core.reasoning.strategies.kro_strategy", "KROReasoningStrategy"),
+    "CausalReasoner": ("ai_karen_engine.core.reasoning.strategies.causal_strategy", "CausalReasoner"),
+    "SoftReasoner": ("ai_karen_engine.core.reasoning.strategies.soft_strategy", "SoftReasoner"),
+    "Verifier": ("ai_karen_engine.core.reasoning.strategies.verifier_strategy", "Verifier"),
+    "Refiner": ("ai_karen_engine.core.reasoning.strategies.refiner_strategy", "Refiner"),
+    "MetacognitionStrategy": ("ai_karen_engine.core.reasoning.strategies.metacognition_strategy", "MetacognitionStrategy"),
+    "get_default_strategies": ("ai_karen_engine.core.reasoning.defaults", "get_default_strategies"),
+    "get_default_executor": ("ai_karen_engine.core.reasoning.defaults", "get_default_executor"),
 }
 
 

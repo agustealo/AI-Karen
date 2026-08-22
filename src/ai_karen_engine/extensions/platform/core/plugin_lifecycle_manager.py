@@ -51,6 +51,21 @@ class PluginLifecycleState(Enum):
     ROLLING_BACK = "rolling_back"  # Rollback in progress
 
 
+LIFECYCLE_TRANSITIONS = {
+    PluginLifecycleState.AVAILABLE: {PluginLifecycleState.INSTALLING},
+    PluginLifecycleState.INSTALLING: {PluginLifecycleState.INSTALLED, PluginLifecycleState.ERROR},
+    PluginLifecycleState.INSTALLED: {PluginLifecycleState.ENABLING, PluginLifecycleState.UNINSTALLING},
+    PluginLifecycleState.ENABLING: {PluginLifecycleState.ENABLED, PluginLifecycleState.ERROR},
+    PluginLifecycleState.ENABLED: {PluginLifecycleState.DISABLING},
+    PluginLifecycleState.DISABLING: {PluginLifecycleState.DISABLED, PluginLifecycleState.ERROR},
+    PluginLifecycleState.DISABLED: {PluginLifecycleState.ENABLING, PluginLifecycleState.UNINSTALLING},
+    PluginLifecycleState.UNINSTALLING: {PluginLifecycleState.UNINSTALLED, PluginLifecycleState.ERROR},
+    PluginLifecycleState.UNINSTALLED: {PluginLifecycleState.AVAILABLE},
+    PluginLifecycleState.ERROR: {PluginLifecycleState.AVAILABLE, PluginLifecycleState.INSTALLING},
+    PluginLifecycleState.ROLLING_BACK: {PluginLifecycleState.INSTALLED, PluginLifecycleState.ERROR},
+}
+
+
 class PluginOperation(Enum):
     """Plugin operations."""
 
@@ -649,6 +664,18 @@ class PluginLifecycleManager:
     async def get_plugin_state(self, plugin_id: str) -> PluginLifecycleState:
         """Get current lifecycle state of a plugin."""
         return await self._get_plugin_state(plugin_id)
+
+    def validate_transition(
+        self, plugin_id: str, from_state: PluginLifecycleState, to_state: PluginLifecycleState
+    ) -> bool:
+        """Validate that a lifecycle transition is allowed."""
+        valid_transitions = LIFECYCLE_TRANSITIONS.get(from_state, set())
+        if to_state not in valid_transitions:
+            raise ValueError(
+                f"Invalid transition for {plugin_id}: {from_state.value} -> {to_state.value}. "
+                f"Valid transitions: {sorted(s.value for s in valid_transitions)}"
+            )
+        return True
 
     async def list_plugins(
         self, include_available: bool = True, include_installed: bool = True

@@ -30,23 +30,13 @@ def test_kire_kro_integration_is_deprecated() -> None:
 
 
 def test_no_new_code_imports_kire_kro_integration() -> None:
-    """Non-test production code must not add new imports of deprecated KIREKROIntegration.
-    
-    Existing imports in initialize_kire_kro.py and api_routes/cognition/kro.py
-    are migration residue tracked for removal in the post-closure audit.
-    """
+    """No production code must import deprecated KIREKROIntegration."""
     src_root = RUNTIME_ROOT
     forbidden = "from ai_karen_engine.core.cortex.kire_kro_integration import"
-    grandfathered = {
-        RUNTIME_ROOT / "initialize_kire_kro.py",
-        RUNTIME_ROOT / "api_routes" / "cognition" / "kro.py",
-    }
 
     violations = []
     for path in src_root.rglob("*.py"):
         if "/tests/" in str(path) or "tests" in path.parts:
-            continue
-        if path in grandfathered:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         if forbidden in text:

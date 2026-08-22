@@ -94,32 +94,35 @@ class PluginExecutionContext:
 
     Security fields are resolved from manifest, RuntimePolicy, and trusted
     runtime config. Callers cannot mutate security fields after policy evaluation.
+
+    This context is built from AuthorizedExecutionPlan, NOT from caller-supplied
+    permission sets or resource limits.
     """
 
-    user_id: str
+    plugin_id: str
+    plugin_version: str
     tenant_id: str
+    user_id: str
     session_id: str
     conversation_id: str
     request_id: str
     correlation_id: str
 
-    roles: List[str] = field(default_factory=list)
-    permissions: List[str] = field(default_factory=list)
-
-    plugin_id: str = ""
-    plugin_version: str = ""
-    action: str = ""
-
-    policy_decision_id: str = ""
+    policy_decision_id: str
 
     allowed_capabilities: List[str] = field(default_factory=list)
     forbidden_capabilities: List[str] = field(default_factory=list)
+
+    allowed_tools: List[str] = field(default_factory=list)
+    allowed_plugins: List[str] = field(default_factory=list)
 
     resource_scope: Dict[str, Any] = field(default_factory=dict)
     resource_limits: Optional[Dict[str, Any]] = None
     security_policy: Optional[Dict[str, Any]] = None
 
     provider_constraints: Optional[Dict[str, Any]] = None
+
+    action: str = "execute"
 
 
 class ExecutionRequest(BaseModel):
@@ -397,11 +400,43 @@ class PluginExecutionEngine:
         self,
         request: ExecutionRequest,
         manifest: Any,
+        plan: Optional[Any] = None,
     ) -> PluginExecutionContext:
-        """Build restricted execution context from manifest and request."""
+        """Build restricted execution context from manifest and policy.
+
+        The context is built from AuthorizedExecutionPlan, not from caller-supplied
+        permission sets or resource limits. RuntimePolicy is the sole authorization authority.
+        """
         plugin_name = getattr(manifest, "name", request.plugin_name)
         plugin_version = getattr(manifest, "version", "unknown")
         plugin_id = request.plugin_name or plugin_name
+
+        allowed_capabilities = list(request.allowed_capabilities)
+        forbidden_capabilities = list(request.forbidden_capabilities)
+        resource_scope: Dict[str, Any] = {}
+        resource_limits: Optional[Dict[str, Any]] = None
+        security_policy: Optional[Dict[str, Any]] = None
+        provider_constraints: Optional[Dict[str, Any]] = None
+        allowed_tools: List[str] = []
+        allowed_plugins: List[str] = []
+
+        if plan is not None:
+            allowed_capabilities = list(plan.allowed_capabilities)
+            forbidden_capabilities = []
+            resource_scope = dict(plan.resource_scope)
+            allowed_tools = list(plan.allowed_tools)
+            allowed_plugins = list(plan.allowed_plugins)
+            provider_constraints = dict(plan.provider_constraints) if plan.provider_constraints else None
+            if plan.budget is not None:
+                resource_limits = {
+                    "max_memory_mb": getattr(plan.budget, "max_memory_mb", None),
+                    "max_cpu_time_seconds": getattr(plan.budget, "max_cpu_time_seconds", None),
+                    "max_wall_time_seconds": getattr(plan.budget, "max_wall_time_seconds", None),
+                    "max_output_size_kb": getattr(plan.budget, "max_output_size_kb", None),
+                    "max_file_descriptors": getattr(plan.budget, "max_file_descriptors", None),
+                    "max_processes": getattr(plan.budget, "max_processes", None),
+                    "max_threads": getattr(plan.budget, "max_threads", None),
+                }
 
         return PluginExecutionContext(
             user_id=request.user_id or "",
@@ -414,18 +449,21 @@ class PluginExecutionEngine:
             plugin_version=plugin_version,
             action="execute",
             policy_decision_id=request.policy_decision_id or "",
-            allowed_capabilities=list(request.allowed_capabilities),
-            forbidden_capabilities=list(request.forbidden_capabilities),
-            resource_scope={},
-            resource_limits=None,
-            security_policy=None,
-            provider_constraints=None,
+            allowed_capabilities=allowed_capabilities,
+            forbidden_capabilities=forbidden_capabilities,
+            allowed_tools=allowed_tools,
+            allowed_plugins=allowed_plugins,
+            resource_scope=resource_scope,
+            resource_limits=resource_limits,
+            security_policy=security_policy,
+            provider_constraints=provider_constraints,
         )
 
     def _validate_execution_authorization(
         self,
         context: PluginExecutionContext,
         manifest: Any,
+        plan: Optional[Any] = None,
     ) -> None:
         """Validate that plugin execution is authorized by policy."""
         if not context.policy_decision_id:
@@ -433,6 +471,13 @@ class PluginExecutionEngine:
                 f"Plugin '{context.plugin_id}' requires a policy_decision_id for execution. "
                 "CORTEX must route through RuntimePolicy before execution."
             )
+
+        if plan is not None:
+            from ai_karen_engine.core.runtime.contracts import ActionExecutionGate
+            if not ActionExecutionGate.authorize(plan, context.action):
+                raise ValueError(
+                    f"Plugin '{context.plugin_id}' action '{context.action}' denied by AuthorizedExecutionPlan."
+                )
 
         manifest_permissions = getattr(manifest, "permissions", None)
         if manifest_permissions is None:
@@ -465,53 +510,53 @@ class PluginExecutionEngine:
                     f"Plugin '{context.plugin_id}' denied: missing allowed capabilities {missing}"
                 )
     
-    async def execute_plugin(self, request: ExecutionRequest) -> ExecutionResult:
+    async def execute_plugin(
+        self,
+        request: ExecutionRequest,
+        plan: Optional[Any] = None,
+    ) -> ExecutionResult:
         """
         Execute a plugin with the specified parameters.
-        
+
         Args:
             request: Plugin execution request
-            
+            plan: AuthorizedExecutionPlan from RuntimePolicy. Required for
+                  governance closure. When provided, resource limits and
+                  capabilities are taken from the plan, not the caller.
+
         Returns:
             Execution result
         """
-        # Create execution result
         result = ExecutionResult(
             request_id=request.request_id,
             plugin_name=request.plugin_name,
             status=ExecutionStatus.PENDING
         )
-        
-        # Track active execution
+
         self.active_executions[request.request_id] = result
 
         start_time = time.time()
         plugin_result: Any = None
 
         try:
-            # RuntimePolicy authorization gate
             if not request.policy_decision_id:
                 raise ValueError(
                     f"Plugin '{request.plugin_name}' requires a policy_decision_id for execution. "
                     "CORTEX must route through RuntimePolicy before execution."
                 )
 
-            # Validate plugin exists and is registered
             plugin_metadata = self.registry.get_plugin(request.plugin_name)
             if not plugin_metadata:
                 raise ValueError(f"Plugin '{request.plugin_name}' not found")
 
             if plugin_metadata.get("status") not in ["registered", "loaded", "active"]:
                 raise ValueError(f"Plugin '{request.plugin_name}' is not available for execution")
-            
-            # Build restricted execution context from manifest and policy
+
             manifest = plugin_metadata.get("manifest")
-            execution_context = self._build_execution_context(request, manifest)
+            execution_context = self._build_execution_context(request, manifest, plan=plan)
 
-            # Validate plugin capabilities against policy decision
-            self._validate_execution_authorization(execution_context, manifest)
+            self._validate_execution_authorization(execution_context, manifest, plan=plan)
 
-            # Validate and sanitize input
             sanitized_params = await self._validate_and_sanitize_input(
                 request.parameters, plugin_metadata
             )
@@ -519,7 +564,6 @@ class PluginExecutionEngine:
             resource_limits = self._resolve_resource_limits(manifest)
             security_policy = self._resolve_security_policy(manifest)
 
-            # Execute plugin based on mode
             result.status = ExecutionStatus.RUNNING
 
             if request.execution_mode == ExecutionMode.DIRECT:

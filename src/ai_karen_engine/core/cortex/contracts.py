@@ -4,6 +4,22 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol
 
+from ai_karen_engine.core.reasoning.contracts import (
+    ReasoningBudget,
+    ReasoningAssessment,
+    ReasoningContradiction,
+    ReasoningDisposition,
+    ReasoningEvidence,
+    ReasoningEvidenceNeed,
+    ReasoningEscalationRequest,
+    ReasoningErrorCode,
+    ReasoningHypothesis,
+    ReasoningRequest as CanonicalReasoningRequest,
+    ReasoningResult as CanonicalReasoningResult,
+    ReasoningAction,
+    ReasoningStatus,
+)
+
 
 class ReasoningDepth(str, Enum):
     NONE = "none"
@@ -126,6 +142,84 @@ class ReasoningRequest:
     kire: KireSignal
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    def to_canonical(self) -> CanonicalReasoningRequest:
+        """Convert to the canonical core.reasoning.ReasoningRequest."""
+        evidence: List[ReasoningEvidence] = []
+        mem_ctx = self.memory_context or {}
+        recall = mem_ctx.get("recall") or []
+        for idx, item in enumerate(recall):
+            if isinstance(item, dict):
+                evidence.append(ReasoningEvidence(
+                    evidence_id=str(item.get("id", f"mem-{idx}")),
+                    type="memory",
+                    source="memory_recall",
+                    source_ref=str(item.get("timestamp", "")),
+                    content=str(item.get("content", "")),
+                    relevance=0.5,
+                    confidence=0.5,
+                    tenant_id=self.user.tenant_id or "default",
+                ))
+
+        return CanonicalReasoningRequest(
+            request_id=self.metadata.get("correlation_id", ""),
+            correlation_id=self.metadata.get("correlation_id", ""),
+            tenant_id=self.user.tenant_id or "default",
+            user_id=self.user.user_id,
+            conversation_id=self.user.thread_id,
+            objective=self.message,
+            reasoning_modes=list(self.kire.reasoning_modes or []),
+            evidence=evidence,
+            constraints={
+                "reasoning_depth": self.kire.reasoning_depth.value if hasattr(self.kire.reasoning_depth, "value") else str(self.kire.reasoning_depth),
+                "should_self_refine": self.kire.should_self_refine,
+                "should_verify": self.kire.should_verify,
+                "should_use_causal": self.kire.should_use_causal_reasoning,
+                "should_use_graph": self.kire.should_use_graph_reasoning,
+                "should_use_retrieval": self.kire.should_use_retrieval_reasoning,
+            },
+            policy_decision_id=self.metadata.get("policy_decision_id", ""),
+            budget=ReasoningBudget(),
+            metadata=self.metadata,
+        )
+
+    @classmethod
+    def from_canonical(cls, canonical: CanonicalReasoningRequest) -> ReasoningRequest:
+        """Build a legacy cortex request from a canonical request (best-effort)."""
+        depth = ReasoningDepth.STANDARD
+        try:
+            depth = ReasoningDepth(canonical.constraints.get("reasoning_depth", "standard"))
+        except ValueError:
+            pass
+
+        kire = KireSignal(
+            requires_reasoning=True,
+            reasoning_depth=depth,
+            reasoning_modes=list(canonical.reasoning_modes or []),
+            should_use_memory=bool(canonical.evidence),
+            should_use_tools=False,
+            should_use_retrieval_reasoning=canonical.constraints.get("should_use_retrieval", False),
+            should_use_causal_reasoning=canonical.constraints.get("should_use_causal", False),
+            should_use_graph_reasoning=canonical.constraints.get("should_use_graph", False),
+            should_self_refine=canonical.constraints.get("should_self_refine", False),
+            should_verify=canonical.constraints.get("should_verify", False),
+        )
+
+        return cls(
+            message=canonical.objective,
+            user=UserContext(
+                user_id=canonical.user_id,
+                tenant_id=canonical.tenant_id,
+                session_id=None,
+                thread_id=canonical.conversation_id,
+            ),
+            memory_context={},
+            tool_context={},
+            intent=IntentSignal(primary_intent="reasoning"),
+            predictors=PredictorSignal(),
+            kire=kire,
+            metadata=canonical.metadata,
+        )
+
 
 @dataclass(slots=True)
 class ReasoningResult:
@@ -145,6 +239,55 @@ class ReasoningResult:
     needs_human_confirmation: bool = False
     fallback_used: Optional[str] = None
     evidence_source_mix: Dict[str, int] = field(default_factory=dict)
+
+    @classmethod
+    def from_canonical(cls, canonical: CanonicalReasoningResult) -> ReasoningResult:
+        """Build a legacy cortex result from a canonical result."""
+        hypotheses = [h.statement for h in (canonical.hypotheses or [])]
+        evidence = [
+            {
+                "id": e.evidence_id,
+                "type": e.type,
+                "source": e.source,
+                "source_ref": e.source_ref,
+                "content": e.content,
+                "relevance": e.relevance,
+                "confidence": e.confidence,
+                "payload": e.metadata,
+            }
+            for e in (canonical.evidence or [])
+        ]
+        contradictions = [
+            {
+                "claim_a": c.claim_a,
+                "claim_b": c.claim_b,
+                "severity": c.severity,
+                "resolvable": c.resolvable,
+                "recommended_action": c.recommended_action,
+            }
+            for c in (canonical.contradictions or [])
+        ]
+        verification_notes = []
+        if canonical.verification:
+            verification_notes = [str(v) for v in canonical.verification.values()]
+
+        confidence = 0.0
+        if canonical.assessment:
+            confidence = canonical.assessment.confidence
+
+        return cls(
+            summary=canonical.conclusion,
+            evidence=evidence,
+            hypotheses=hypotheses,
+            confidence=confidence,
+            verification_notes=verification_notes,
+            diagnostics=canonical.diagnostics or {},
+            success=canonical.status not in ("failed", "budget_exhausted"),
+            degraded=canonical.status in ("failed", "budget_exhausted"),
+            reasoning_type=canonical.diagnostics.get("reasoning_type", "reasoning") if canonical.diagnostics else "reasoning",
+            contradictions_found=contradictions,
+            needs_human_confirmation=canonical.status == "needs_human_confirmation",
+        )
 
 
 @dataclass(slots=True)

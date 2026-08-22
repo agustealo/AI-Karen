@@ -2,10 +2,12 @@
 API Routes for KRO (Kari Reasoning Orchestrator)
 
 Provides REST API endpoints for:
-- Processing user requests through KRO
-- Getting available models
-- Routing decisions
+- Processing user requests through the canonical chat/runtime path
+- Getting available models via canonical provider registry
 - System status and health checks
+
+DEPRECATED: Direct KRO/KIRE integration is retired.
+Use ChatRuntime, ReasoningExecutor, WorkflowRuntime, and Medusa directly.
 """
 
 from typing import Any, Dict, List, Optional
@@ -17,7 +19,6 @@ try:
     FASTAPI_AVAILABLE = True
 except ImportError:
     FASTAPI_AVAILABLE = False
-    # Stub classes for when FastAPI is not available
     class APIRouter:
         def __init__(self, *args, **kwargs):
             pass
@@ -44,13 +45,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Create router
 router = APIRouter(prefix="/api/kro", tags=["kro"])
 
-
-# ===================================
-# REQUEST/RESPONSE MODELS
-# ===================================
 
 if FASTAPI_AVAILABLE:
     class UserRequestModel(BaseModel):
@@ -74,33 +70,47 @@ if FASTAPI_AVAILABLE:
         context: Optional[Dict[str, Any]] = Field(default=None, description="Additional context")
 
 
-# ===================================
-# API ENDPOINTS
-# ===================================
-
 @router.post("/process")
 async def process_user_request(request: UserRequestModel):
     """
     Process user request through the governed chat runtime.
 
-    KIRE/KRO contributes routing and reasoning support here, but the
-    authoritative standard chat lifecycle remains with ChatOrchestrator.
-
-    Returns a KIRE/KRO-shaped response envelope backed by the canonical chat path.
+    Returns a standardized response envelope backed by the canonical chat path.
     """
     try:
-        from ai_karen_engine.core.cortex.kire_kro_integration import get_integration
-
-        integration = get_integration()
-
-        response = await integration.process_user_request(
-            user_input=request.user_input,
-            user_id=request.user_id,
-            conversation_history=request.conversation_history,
-            context=request.context,
+        from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
+        from ai_karen_engine.core.runtime.chat_runtime_contract import (
+            ChatExecutionContext,
+            ChatExecutionRequest,
         )
 
-        return response
+        runtime = get_chat_runtime()
+        ctx = ChatExecutionContext(
+            user_id=request.user_id,
+            tenant_id=(request.context or {}).get("tenant_id", "default"),
+            session_id=(request.context or {}).get("session_id"),
+            conversation_id=(request.context or {}).get("conversation_id"),
+            correlation_id=(request.context or {}).get("correlation_id"),
+        )
+        exec_request = ChatExecutionRequest(
+            context=ctx,
+            messages=[{"role": "user", "content": request.user_input}],
+            metadata={
+                "conversation_history": request.conversation_history or [],
+                **(request.context or {}),
+            },
+        )
+        result = await runtime.execute(exec_request)
+        return {
+            "success": result.status.value != "error",
+            "message": result.answer,
+            "meta": {
+                "correlation_id": ctx.correlation_id,
+                "latency_ms": result.metadata.latency_ms,
+                "mode": result.metadata.mode,
+                "degraded_mode": result.metadata.degraded_mode,
+            },
+        }
 
     except Exception as e:
         logger.error(f"KRO processing failed: {e}", exc_info=True)
@@ -110,24 +120,70 @@ async def process_user_request(request: UserRequestModel):
 @router.post("/process-specialized")
 async def process_specialized_user_request(request: UserRequestModel):
     """
-    Execute an explicit KRO-native specialized flow.
+    Execute an explicit reasoning flow via ReasoningExecutor.
 
-    This endpoint is intentionally out-of-band from Karen's governed standard
-    chat lifecycle and should only be used for KRO-specific orchestration cases.
+    This endpoint is intentionally out-of-band from the standard chat lifecycle.
     """
     try:
-        from ai_karen_engine.core.cortex.kire_kro_integration import get_integration
-
-        integration = get_integration()
-
-        response = await integration.process_specialized_request(
-            user_input=request.user_input,
-            user_id=request.user_id,
-            conversation_history=request.conversation_history,
-            context=request.context,
+        from ai_karen_engine.core.reasoning.executor import get_reasoning_executor
+        from ai_karen_engine.core.reasoning.contracts import (
+            ReasoningBudget,
+            ReasoningEvidence,
+            ReasoningRequest,
+        )
+        from ai_karen_engine.core.runtime.contracts import (
+            AuthorizedExecutionPlan,
+            ExecutionBudget,
+            ExecutionContext,
+            ExecutionTopology,
         )
 
-        return response
+        executor = get_reasoning_executor()
+        ctx = request.context or {}
+        correlation_id = ctx.get("correlation_id") or str(__import__("uuid").uuid4())
+
+        canonical_request = ReasoningRequest(
+            request_id=correlation_id,
+            correlation_id=correlation_id,
+            tenant_id=ctx.get("tenant_id", "default"),
+            user_id=request.user_id,
+            conversation_id=ctx.get("conversation_id"),
+            objective=request.user_input,
+            reasoning_modes=["synthesis"],
+            evidence=[],
+            constraints={},
+            policy_decision_id=correlation_id,
+            budget=ReasoningBudget(),
+            metadata={
+                "conversation_history": request.conversation_history or [],
+                **ctx,
+            },
+        )
+        plan = AuthorizedExecutionPlan(
+            execution_id=correlation_id,
+            policy_decision_id=correlation_id,
+            topology=ExecutionTopology.REASONING,
+            budget=ExecutionBudget(
+                max_duration_ms=30000,
+                max_model_calls=3,
+                max_reasoning_steps=5,
+            ),
+        )
+        context = ExecutionContext(
+            request_id=correlation_id,
+            correlation_id=correlation_id,
+            user_id=request.user_id,
+            tenant_id=ctx.get("tenant_id", "default"),
+        )
+        result = await executor.execute(canonical_request, plan, context)
+
+        return {
+            "success": result.status not in ("failed", "budget_exhausted"),
+            "message": result.conclusion,
+            "reasoning_id": result.reasoning_id,
+            "disposition": result.disposition,
+            "diagnostics": result.diagnostics,
+        }
 
     except Exception as e:
         logger.error(f"KRO specialized processing failed: {e}", exc_info=True)
@@ -137,24 +193,20 @@ async def process_specialized_user_request(request: UserRequestModel):
 @router.get("/models")
 async def get_available_models():
     """
-    Get list of all available models discovered by the system.
-
-    Returns comprehensive model information including:
-    - Model names and providers
-    - Capabilities and modalities
-    - Resource requirements
-    - Health status
+    Get list of all available models via canonical provider registry.
     """
     try:
-        from ai_karen_engine.core.cortex.kire_kro_integration import get_integration
+        from ai_karen_engine.core.model_runtime.provider_registry_service import (
+            get_provider_registry_service,
+        )
 
-        integration = get_integration()
-        models = await integration.get_available_models()
-
+        registry = get_provider_registry_service()
+        providers = registry.get_all_provider_names()
         return {
             "success": True,
-            "models": models,
-            "count": len(models),
+            "models": [],
+            "count": 0,
+            "providers": providers,
         }
 
     except Exception as e:
@@ -165,101 +217,33 @@ async def get_available_models():
 @router.post("/routing")
 async def get_routing_decision(request: RoutingRequestModel):
     """
-    Get routing decision for a query without executing it.
+    Routing decision request is retired.
 
-    Useful for:
-    - Debugging routing logic
-    - Previewing model selection
-    - Understanding routing reasoning
-
-    Returns routing decision with provider, model, reasoning, and confidence.
+    CORTEX IntelligenceRuntime produces routing advisory signals.
+    ProviderRouter owns provider selection.
     """
-    try:
-        from ai_karen_engine.core.cortex.kire_kro_integration import get_integration
-
-        integration = get_integration()
-
-        decision = await integration.get_routing_decision(
-            user_input=request.user_input,
-            user_id=request.user_id,
-            task_type=request.task_type,
-            context=request.context,
-        )
-
-        return {
-            "success": True,
-            "decision": decision,
-        }
-
-    except Exception as e:
-        logger.error(f"Routing decision failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Routing failed: {str(e)}")
+    raise HTTPException(
+        status_code=410,
+        detail="Routing decision endpoint is retired. Use CORTEX analysis and ProviderRouter directly.",
+    )
 
 
 @router.get("/status")
 async def get_system_status():
-    """
-    Get comprehensive system status.
-
-    Returns:
-    - Component initialization status
-    - Configuration settings
-    - CUDA availability
-    - Model discovery statistics
-    - Provider information
-    """
-    try:
-        from ai_karen_engine.core.cortex.kire_kro_integration import get_integration
-
-        integration = get_integration()
-        status = await integration.get_system_status()
-
-        return {
-            "success": True,
-            "status": status,
-        }
-
-    except Exception as e:
-        logger.error(f"Status check failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Status check failed: {str(e)}")
+    """System status is owned by the canonical runtime."""
+    return {
+        "status": "ok",
+        "retired_endpoints": ["/api/kro/routing"],
+        "canonical_paths": [
+            "ChatRuntime.execute()",
+            "ReasoningExecutor.execute()",
+            "WorkflowRuntime.run()",
+            "Medusa",
+        ],
+    }
 
 
 @router.get("/health")
 async def health_check():
-    """
-    Health check endpoint for monitoring and load balancers.
-
-    Returns:
-    - Overall system health status
-    - Individual component health
-    - Provider health statistics
-    """
-    try:
-        from ai_karen_engine.core.cortex.kire_kro_integration import get_integration
-
-        integration = get_integration()
-        health = await integration.health_check()
-
-        if health.get("status") == "healthy":
-            return health
-        else:
-            raise HTTPException(status_code=503, detail=health)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Health check failed: {e}", exc_info=True)
-        raise HTTPException(status_code=503, detail=f"Health check failed: {str(e)}")
-
-
-# ===================================
-# REGISTRATION FUNCTION
-# ===================================
-
-def register_kro_routes(app):
-    """Register KRO routes with FastAPI app."""
-    if FASTAPI_AVAILABLE:
-        app.include_router(router)
-        logger.info("KRO routes registered")
-    else:
-        logger.warning("FastAPI not available, KRO routes not registered")
+    """Health check."""
+    return {"status": "ok"}

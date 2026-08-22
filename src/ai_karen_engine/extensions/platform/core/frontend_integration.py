@@ -1,36 +1,29 @@
 """
-Frontend Integration Service - Bridges authority chain with frontend plugin host.
+Frontend Integration Service - Bridges plugin lifecycle with frontend plugin host.
 
-This service ensures that the frontend plugin host respects the authority chain
-and lifecycle rules established by the backend services.
+This service ensures that the frontend plugin host respects the canonical
+plugin lifecycle and category rules established by backend services.
+
+Authorization is owned by RuntimePolicy.
+Lifecycle ownership is PluginLifecycleManager / PluginLifecycleState.
 """
 
 from __future__ import annotations
 
 import logging
-import json
-from typing import Dict, List, Optional, Set, Tuple, Any, Union
+from typing import Dict, List, Optional, Set, Any
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
-import asyncio
 
-from ai_karen_engine.extensions.platform.core.authority_chain import (
-    AuthorityChainService,
-    AuthorityLevel,
-    LifecycleStage,
-    AuthorityRecord,
-    AuthorityViolation,
-    get_authority_chain_service,
-)
-from ai_karen_engine.extensions.platform.core.lifecycle_validation import (
-    LifecycleValidationService,
-    get_lifecycle_validation_service,
-)
 from ai_karen_engine.extensions.platform.core.category_validation import (
     CategoryValidationService,
     CategoryType,
     get_category_validation_service,
+)
+from ai_karen_engine.extensions.platform.core.plugin_lifecycle_manager import (
+    PluginLifecycleManager,
+    PluginLifecycleState,
 )
 
 logger = logging.getLogger("kari.frontend_integration")
@@ -49,14 +42,13 @@ class FrontendPermission(str, Enum):
 
 @dataclass
 class FrontendPluginRecord:
-    """Frontend representation of a plugin with authority information."""
+    """Frontend representation of a plugin with lifecycle information."""
 
     plugin_id: str
     display_name: str
     description: str
     category: str
-    authority_level: AuthorityLevel
-    lifecycle_stage: LifecycleStage
+    lifecycle_state: PluginLifecycleState
     is_visible: bool = True
     is_mountable: bool = False
     is_configurable: bool = False
@@ -79,22 +71,18 @@ class FrontendValidationResult:
 
 class FrontendIntegrationService:
     """
-    Service that bridges backend authority chain with frontend plugin host.
+    Service that bridges backend plugin lifecycle with frontend plugin host.
 
     Responsibilities:
-    - Filter plugins based on user authority and frontend permissions
+    - Filter plugins based on lifecycle state for frontend display
     - Enforce lifecycle rules in frontend operations
-    - Validate frontend plugin requests against backend authority
     - Provide canonical plugin catalog to frontend
-    - Handle frontend plugin mounting/unmounting with authority checks
+    - Handle frontend plugin mounting/unmounting requests
     """
 
-    def __init__(self, authority_chain_service: AuthorityChainService):
+    def __init__(self, lifecycle_manager: PluginLifecycleManager):
         """Initialize frontend integration service."""
-        self.authority_chain = authority_chain_service
-        self.lifecycle_validation = get_lifecycle_validation_service(
-            authority_chain_service
-        )
+        self.lifecycle_manager = lifecycle_manager
         self.category_validation = get_category_validation_service()
 
         # Frontend plugin registry
@@ -112,26 +100,30 @@ class FrontendIntegrationService:
         self.user_permissions[user_id] = permissions
         logger.debug(f"Registered permissions for user {user_id}")
 
-    def sync_frontend_registry(self) -> Dict[str, FrontendPluginRecord]:
+    async def sync_frontend_registry(self) -> Dict[str, FrontendPluginRecord]:
         """
-        Synchronize frontend registry with backend authority chain.
+        Synchronize frontend registry with backend plugin lifecycle.
 
         Returns:
             Dictionary of frontend plugin records
         """
-        logger.info("Synchronizing frontend registry with backend authority chain")
+        logger.info("Synchronizing frontend registry with backend plugin lifecycle")
 
         # Clear existing registry
         self.frontend_registry.clear()
 
-        # Get all plugins from authority chain
-        for (
-            plugin_name,
-            authority_record,
-        ) in self.authority_chain.authority_records.items():
-            frontend_record = self._create_frontend_record(authority_record)
+        plugins = await self.lifecycle_manager.list_plugins(
+            include_available=True, include_installed=True
+        )
+
+        for plugin in plugins:
+            plugin_id = plugin["id"]
+            state = plugin.get("state", PluginLifecycleState.AVAILABLE)
+            category = plugin.get("category", "plugins")
+
+            frontend_record = self._create_frontend_record(plugin_id, plugin, state, category)
             if frontend_record:
-                self.frontend_registry[plugin_name] = frontend_record
+                self.frontend_registry[plugin_id] = frontend_record
 
         logger.info(
             f"Synchronized {len(self.frontend_registry)} plugins to frontend registry"
@@ -139,110 +131,90 @@ class FrontendIntegrationService:
         return self.frontend_registry
 
     def _create_frontend_record(
-        self, authority_record: AuthorityRecord
+        self,
+        plugin_id: str,
+        plugin: Dict[str, Any],
+        state: PluginLifecycleState,
+        category: str,
     ) -> Optional[FrontendPluginRecord]:
-        """Create a frontend plugin record from authority record."""
+        """Create a frontend plugin record from lifecycle state."""
         try:
-            # Get category information from authority record
-            if not authority_record.category:
-                logger.warning(
-                    f"No category info for plugin: {authority_record.plugin_name}"
-                )
-                return None
-
-            category_info = self.category_validation.get_category_info(
-                authority_record.category
-            )
+            category_info = self.category_validation.get_category_info(category)
             if not category_info:
-                logger.warning(
-                    f"No category info for plugin: {authority_record.plugin_name}"
-                )
+                logger.warning(f"No category info for plugin: {plugin_id}")
                 return None
 
-            # Determine frontend visibility based on authority level
-            is_visible = self._is_frontend_visible(authority_record.authority_level)
+            is_visible = self._is_frontend_visible(state)
+            is_mountable = state in {
+                PluginLifecycleState.ENABLED,
+                PluginLifecycleState.DISABLED,
+                PluginLifecycleState.INSTALLED,
+            }
+            is_configurable = state in {
+                PluginLifecycleState.ENABLED,
+                PluginLifecycleState.DISABLED,
+            }
 
-            # Determine mountability based on lifecycle stage
-            is_mountable = authority_record.lifecycle_stage in [
-                LifecycleStage.MOUNTED,
-                LifecycleStage.ENABLED,
-                LifecycleStage.DISABLED,
-            ]
-
-            # Determine configurability
-            is_configurable = authority_record.lifecycle_stage in [
-                LifecycleStage.ENABLED,
-                LifecycleStage.DISABLED,
-            ]
-
-            # Calculate required frontend permissions
-            required_permissions = self._calculate_required_permissions(
-                authority_record.authority_level,
-                authority_record.lifecycle_stage,
-                category_info["name"],
-            )
+            required_permissions = self._calculate_required_permissions(state, category)
 
             return FrontendPluginRecord(
-                plugin_id=authority_record.plugin_name,
-                display_name=category_info.get(
-                    "display_name", authority_record.plugin_name
-                ),
-                description=category_info.get("description", ""),
+                plugin_id=plugin_id,
+                display_name=plugin.get("display_name", plugin_id),
+                description=plugin.get("description", ""),
                 category=category_info["name"],
-                authority_level=authority_record.authority_level,
-                lifecycle_stage=authority_record.lifecycle_stage,
+                lifecycle_state=state,
                 is_visible=is_visible,
                 is_mountable=is_mountable,
                 is_configurable=is_configurable,
                 required_permissions=required_permissions,
-                ui_components=self._get_ui_components(authority_record.plugin_name),
+                ui_components=self._get_ui_components(plugin_id),
                 last_updated=datetime.utcnow(),
             )
 
         except Exception as e:
             logger.error(
-                f"Failed to create frontend record for {authority_record.plugin_name}: {str(e)}"
+                f"Failed to create frontend record for {plugin_id}: {str(e)}"
             )
             return None
 
-    def _is_frontend_visible(self, authority_level: AuthorityLevel) -> bool:
-        """Determine if a plugin should be visible in frontend based on authority level."""
-        # Higher authority levels are visible to lower levels
-        authority_hierarchy = {
-            AuthorityLevel.GUEST: 0,
-            AuthorityLevel.USER: 1,
-            AuthorityLevel.FRONTEND: 2,
-            AuthorityLevel.PLUGIN: 3,
-            AuthorityLevel.ADMIN: 4,
-            AuthorityLevel.SYSTEM: 5,
+    def _is_frontend_visible(self, state: PluginLifecycleState) -> bool:
+        """Determine if a plugin should be visible in frontend based on lifecycle state."""
+        return state in {
+            PluginLifecycleState.AVAILABLE,
+            PluginLifecycleState.INSTALLED,
+            PluginLifecycleState.ENABLED,
+            PluginLifecycleState.DISABLED,
         }
-
-        # Plugins with authority level >= current user level are visible
-        # For now, assume current user is at USER level
-        user_level = AuthorityLevel.USER
-        return authority_level.value <= user_level.value
 
     def _calculate_required_permissions(
         self,
-        authority_level: AuthorityLevel,
-        lifecycle_stage: LifecycleStage,
+        lifecycle_state: PluginLifecycleState,
         category: str,
     ) -> Set[FrontendPermission]:
         """Calculate required frontend permissions for a plugin."""
         permissions = set()
 
-        # All visible plugins require view permission
-        permissions.add(FrontendPermission.VIEW_PLUGIN)
+        if lifecycle_state in {
+            PluginLifecycleState.AVAILABLE,
+            PluginLifecycleState.INSTALLED,
+            PluginLifecycleState.ENABLED,
+            PluginLifecycleState.DISABLED,
+        }:
+            permissions.add(FrontendPermission.VIEW_PLUGIN)
 
-        # Mountable plugins require mount permission
-        if lifecycle_stage in [LifecycleStage.MOUNTED, LifecycleStage.ENABLED]:
+        if lifecycle_state in {
+            PluginLifecycleState.ENABLED,
+            PluginLifecycleState.DISABLED,
+            PluginLifecycleState.INSTALLED,
+        }:
             permissions.add(FrontendPermission.MOUNT_PLUGIN_COMPONENT)
 
-        # Configurable plugins require configure permission
-        if lifecycle_stage in [LifecycleStage.ENABLED, LifecycleStage.DISABLED]:
+        if lifecycle_state in {
+            PluginLifecycleState.ENABLED,
+            PluginLifecycleState.DISABLED,
+        }:
             permissions.add(FrontendPermission.CONFIGURE_PLUGIN_UI)
 
-        # Plugins with UI components require interaction permission
         if category == CategoryType.PLUGINS.value:
             permissions.add(FrontendPermission.INTERACT_WITH_PLUGIN)
 
@@ -250,7 +222,6 @@ class FrontendIntegrationService:
 
     def _get_ui_components(self, plugin_name: str) -> List[str]:
         """Get UI components for a plugin (placeholder implementation)."""
-        # This would read from the plugin's manifest.json or UI configuration
         return ["main_component", "settings_component"]
 
     def get_frontend_catalog(
@@ -270,11 +241,9 @@ class FrontendIntegrationService:
         catalog = {}
 
         for plugin_id, record in self.frontend_registry.items():
-            # Check visibility
             if not record.is_visible and not include_hidden:
                 continue
 
-            # Check user permissions
             if not user_permissions.issuperset(record.required_permissions):
                 continue
 
@@ -293,31 +262,22 @@ class FrontendIntegrationService:
         action_params: Optional[Dict[str, Any]] = None,
     ) -> FrontendValidationResult:
         """
-        Validate a frontend request against authority rules.
+        Validate a frontend request against lifecycle rules.
 
-        Args:
-            user_id: User making the request
-            plugin_id: Plugin ID being accessed
-            requested_action: Action being requested
-            action_params: Additional parameters for the action
-
-        Returns:
-            FrontendValidationResult with validation results
+        Authorization is owned by RuntimePolicy. This method validates
+        frontend-specific constraints only.
         """
         result = FrontendValidationResult(is_valid=True, plugin_id=plugin_id)
 
         try:
-            # Check if plugin exists in frontend registry
             plugin_record = self.frontend_registry.get(plugin_id)
             if not plugin_record:
                 result.is_valid = False
                 result.errors.append(f"Plugin not found: {plugin_id}")
                 return result
 
-            # Check user permissions
             user_permissions = self.user_permissions.get(user_id, set())
 
-            # Map requested action to frontend permission
             required_permission = self._map_action_to_permission(requested_action)
             if required_permission and required_permission not in user_permissions:
                 result.is_valid = False
@@ -326,28 +286,14 @@ class FrontendIntegrationService:
                 )
                 return result
 
-            # Check authority boundary
-            try:
-                self.authority_chain.verify_authority_boundary(
-                    plugin_id,
-                    requested_action,
-                    AuthorityLevel.FRONTEND,  # Frontend is making the request
-                )
-            except AuthorityViolation as e:
-                result.is_valid = False
-                result.errors.append(f"Authority violation: {str(e)}")
-                return result
-
-            # Check lifecycle stage compatibility
             lifecycle_error = self._validate_lifecycle_action(
-                plugin_record.lifecycle_stage, requested_action
+                plugin_record.lifecycle_state, requested_action
             )
             if lifecycle_error:
                 result.is_valid = False
                 result.errors.append(lifecycle_error)
                 return result
 
-            # Check category-specific rules
             category_error = self._validate_category_action(
                 plugin_record.category, requested_action, action_params
             )
@@ -356,7 +302,6 @@ class FrontendIntegrationService:
                 result.errors.append(category_error)
                 return result
 
-            # If all checks pass, set the frontend record
             result.frontend_record = plugin_record
 
         except Exception as e:
@@ -378,27 +323,29 @@ class FrontendIntegrationService:
         return action_mapping.get(action)
 
     def _validate_lifecycle_action(
-        self, lifecycle_stage: LifecycleStage, requested_action: str
+        self, lifecycle_state: PluginLifecycleState, requested_action: str
     ) -> Optional[str]:
-        """Validate that an action is compatible with the current lifecycle stage."""
+        """Validate that an action is compatible with the current lifecycle state."""
 
         if requested_action in ["mount", "interact", "configure"]:
-            if lifecycle_stage in [
-                LifecycleStage.DISCOVERED,
-                LifecycleStage.DOWNLOADED,
-                LifecycleStage.VALIDATED,
-            ]:
+            if lifecycle_state in {
+                PluginLifecycleState.AVAILABLE,
+                PluginLifecycleState.INSTALLING,
+                PluginLifecycleState.UNINSTALLING,
+                PluginLifecycleState.UNINSTALLED,
+                PluginLifecycleState.ERROR,
+            }:
                 return (
-                    f"Cannot {requested_action} plugin in {lifecycle_stage.value} stage"
+                    f"Cannot {requested_action} plugin in {lifecycle_state.value} state"
                 )
 
         if requested_action == "unmount":
-            if lifecycle_stage not in [
-                LifecycleStage.MOUNTED,
-                LifecycleStage.ENABLED,
-                LifecycleStage.DISABLED,
-            ]:
-                return f"Cannot unmount plugin in {lifecycle_stage.value} stage"
+            if lifecycle_state not in {
+                PluginLifecycleState.ENABLED,
+                PluginLifecycleState.DISABLED,
+                PluginLifecycleState.INSTALLED,
+            }:
+                return f"Cannot unmount plugin in {lifecycle_state.value} state"
 
         return None
 
@@ -416,34 +363,26 @@ class FrontendIntegrationService:
 
         if category == CategoryType.CHANNELS.value:
             if requested_action == "configure" and action_params:
-                # Channels might require special configuration validation
                 if "protocol" not in action_params:
                     return "Channel configuration requires protocol specification"
 
         return None
 
-    def request_plugin_mount(
+    async def request_plugin_mount(
         self,
         user_id: str,
         plugin_id: str,
         component_id: str,
         mount_params: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[bool, List[str]]:
+    ) -> tuple[bool, List[str]]:
         """
         Request to mount a plugin component.
-
-        Args:
-            user_id: User making the request
-            plugin_id: Plugin ID to mount
-            component_id: Component ID to mount
-            mount_params: Additional mount parameters
 
         Returns:
             Tuple of (success, error_messages)
         """
         errors = []
 
-        # Validate the request
         validation_result = self.validate_frontend_request(
             user_id,
             plugin_id,
@@ -454,54 +393,40 @@ class FrontendIntegrationService:
         if not validation_result.is_valid:
             return False, validation_result.errors
 
-        # Check if plugin is already mounted
         plugin_record = validation_result.frontend_record
-        if plugin_record.lifecycle_stage == LifecycleStage.ENABLED:
+        if plugin_record.lifecycle_state == PluginLifecycleState.ENABLED:
             errors.append(f"Plugin {plugin_id} is already mounted and enabled")
 
-        # Try to transition to mounted stage
-        try:
-            # This would call the authority chain to transition the lifecycle
-            # For now, we'll simulate it
-            if plugin_record.lifecycle_stage == LifecycleStage.REGISTERED:
-                # Would call: self.authority_chain.transition_lifecycle_stage(
-                #     plugin_id, LifecycleStage.MOUNTED
-                # )
-                logger.info(f"Would mount plugin {plugin_id} component {component_id}")
+        if plugin_record.lifecycle_state == PluginLifecycleState.INSTALLED:
+            try:
+                await self.lifecycle_manager.enable_plugin(plugin_id)
                 return True, errors
-            elif plugin_record.lifecycle_stage == LifecycleStage.DISABLED:
-                # Would call: self.authority_chain.transition_lifecycle_stage(
-                #     plugin_id, LifecycleStage.ENABLED
-                # )
-                logger.info(f"Would enable plugin {plugin_id} component {component_id}")
+            except Exception as e:
+                errors.append(f"Failed to mount plugin: {str(e)}")
+        elif plugin_record.lifecycle_state == PluginLifecycleState.DISABLED:
+            try:
+                await self.lifecycle_manager.enable_plugin(plugin_id)
                 return True, errors
-            else:
-                errors.append(
-                    f"Plugin {plugin_id} cannot be mounted from {plugin_record.lifecycle_stage.value} stage"
-                )
-
-        except Exception as e:
-            errors.append(f"Failed to mount plugin: {str(e)}")
+            except Exception as e:
+                errors.append(f"Failed to mount plugin: {str(e)}")
+        else:
+            errors.append(
+                f"Plugin {plugin_id} cannot be mounted from {plugin_record.lifecycle_state.value} state"
+            )
 
         return False, errors
 
-    def request_plugin_unmount(
+    async def request_plugin_unmount(
         self, user_id: str, plugin_id: str, component_id: str
-    ) -> Tuple[bool, List[str]]:
+    ) -> tuple[bool, List[str]]:
         """
         Request to unmount a plugin component.
-
-        Args:
-            user_id: User making the request
-            plugin_id: Plugin ID to unmount
-            component_id: Component ID to unmount
 
         Returns:
             Tuple of (success, error_messages)
         """
         errors = []
 
-        # Validate the request
         validation_result = self.validate_frontend_request(
             user_id, plugin_id, "unmount", {"component_id": component_id}
         )
@@ -509,71 +434,54 @@ class FrontendIntegrationService:
         if not validation_result.is_valid:
             return False, validation_result.errors
 
-        # Check if plugin is mounted
         plugin_record = validation_result.frontend_record
-        if plugin_record.lifecycle_stage not in [
-            LifecycleStage.MOUNTED,
-            LifecycleStage.ENABLED,
-        ]:
+        if plugin_record.lifecycle_state not in {
+            PluginLifecycleState.ENABLED,
+            PluginLifecycleState.DISABLED,
+            PluginLifecycleState.INSTALLED,
+        }:
             errors.append(
-                f"Plugin {plugin_id} is not mounted (current stage: {plugin_record.lifecycle_stage.value})"
+                f"Plugin {plugin_id} is not mounted (current state: {plugin_record.lifecycle_state.value})"
             )
 
-        # Try to transition to disabled stage
-        try:
-            # This would call the authority chain to transition the lifecycle
-            # For now, we'll simulate it
-            if plugin_record.lifecycle_stage == LifecycleStage.ENABLED:
-                # Would call: self.authority_chain.transition_lifecycle_stage(
-                #     plugin_id, LifecycleStage.DISABLED
-                # )
-                logger.info(
-                    f"Would disable plugin {plugin_id} component {component_id}"
-                )
+        if plugin_record.lifecycle_state == PluginLifecycleState.ENABLED:
+            try:
+                await self.lifecycle_manager.disable_plugin(plugin_id)
                 return True, errors
-            elif plugin_record.lifecycle_stage == LifecycleStage.MOUNTED:
-                # Would call: self.authority_chain.transition_lifecycle_stage(
-                #     plugin_id, LifecycleStage.UNINSTALLED
-                # )
-                logger.info(
-                    f"Would unmount plugin {plugin_id} component {component_id}"
-                )
+            except Exception as e:
+                errors.append(f"Failed to unmount plugin: {str(e)}")
+        elif plugin_record.lifecycle_state == PluginLifecycleState.DISABLED:
+            try:
+                await self.lifecycle_manager.uninstall_plugin(plugin_id)
                 return True, errors
-            else:
-                errors.append(
-                    f"Plugin {plugin_id} cannot be unmounted from {plugin_record.lifecycle_stage.value} stage"
-                )
-
-        except Exception as e:
-            errors.append(f"Failed to unmount plugin: {str(e)}")
+            except Exception as e:
+                errors.append(f"Failed to unmount plugin: {str(e)}")
+        else:
+            errors.append(
+                f"Plugin {plugin_id} cannot be unmounted from {plugin_record.lifecycle_state.value} state"
+            )
 
         return False, errors
 
     def get_authority_boundary_status(self, user_id: str) -> Dict[str, Any]:
         """
-        Get authority boundary status for a user.
+        Get lifecycle boundary status for a user.
 
-        Args:
-            user_id: User ID to check
-
-        Returns:
-            Dictionary with authority boundary status
+        This is descriptive UI metadata only. Runtime authorization is owned
+        by RuntimePolicy.
         """
         user_permissions = self.user_permissions.get(user_id, set())
 
-        # Count plugins by category and authority level
         category_counts = {}
-        authority_counts = {}
+        state_counts = {}
 
         for record in self.frontend_registry.values():
             if record.is_visible:
-                # Category counts
                 category = record.category
                 category_counts[category] = category_counts.get(category, 0) + 1
 
-                # Authority level counts
-                auth_level = record.authority_level.value
-                authority_counts[auth_level] = authority_counts.get(auth_level, 0) + 1
+                state = record.lifecycle_state.value
+                state_counts[state] = state_counts.get(state, 0) + 1
 
         return {
             "user_id": user_id,
@@ -582,7 +490,7 @@ class FrontendIntegrationService:
                 [r for r in self.frontend_registry.values() if r.is_visible]
             ),
             "category_distribution": category_counts,
-            "authority_distribution": authority_counts,
+            "state_distribution": state_counts,
             "boundary_health": "healthy"
             if len(user_permissions) > 0
             else "no_permissions",
@@ -594,13 +502,13 @@ _frontend_integration_service: Optional[FrontendIntegrationService] = None
 
 
 def get_frontend_integration_service(
-    authority_chain_service: AuthorityChainService,
+    lifecycle_manager: PluginLifecycleManager,
 ) -> FrontendIntegrationService:
     """Get the global frontend integration service instance."""
     global _frontend_integration_service
     if _frontend_integration_service is None:
         _frontend_integration_service = FrontendIntegrationService(
-            authority_chain_service
+            lifecycle_manager
         )
     return _frontend_integration_service
 

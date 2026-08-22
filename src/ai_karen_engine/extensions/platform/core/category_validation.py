@@ -17,7 +17,7 @@ from pathlib import Path
 import asyncio
 from datetime import datetime
 
-from ai_karen_engine.extensions.platform.core.authority_chain import AuthorityLevel, AuthorityViolation
+from ai_karen_engine.extensions.platform.core.authority_chain import AuthorityLevel
 
 logger = logging.getLogger("kari.category_validation")
 

@@ -11,7 +11,9 @@ from ai_karen_engine.core.cortex.contracts import (
     ReasoningDepth,
     UserContext,
 )
-from ai_karen_engine.core.reasoning.kro_orchestrator import get_kro_orchestrator
+from ai_karen_engine.core.reasoning.executor import get_reasoning_executor
+from ai_karen_engine.core.reasoning.strategy import ReasoningStrategyRegistry
+from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionContext
 from ai_karen_engine.core.runtime.resilience import get_safe_stage_runner
 from ..contracts.orchestration_state import LangGraphOrchestrationState
 
@@ -32,10 +34,13 @@ def select_reasoning_branch(state: LangGraphOrchestrationState) -> str:
 
 
 class ReasoningNode:
-    """Optional specialist reasoning stage for LangGraph."""
+    """Optional specialist reasoning stage for LangGraph.
 
-    def __init__(self, kro_orchestrator=None):
-        self._kro = kro_orchestrator or get_kro_orchestrator()
+    Uses the canonical ReasoningExecutor instead of calling KRO directly.
+    """
+
+    def __init__(self, executor=None):
+        self._executor = executor or get_reasoning_executor()
         self._safe_runner = get_safe_stage_runner()
 
     def _build_request(self, state: LangGraphOrchestrationState) -> ReasoningRequest:
@@ -114,8 +119,47 @@ class ReasoningNode:
             },
         )
 
-    async def _run_reasoning(self, request: ReasoningRequest) -> ReasoningResult:
-        result = await self._kro.run(request)
+    def _build_plan(self, state: LangGraphOrchestrationState) -> AuthorizedExecutionPlan:
+        from ai_karen_engine.core.runtime.contracts import (
+            AuthorizedExecutionPlan,
+            ExecutionBudget,
+            ExecutionTopology,
+        )
+        hints = state.get("reasoning_hints") or {}
+        reasoning_depth = hints.get("reasoning_depth", "standard")
+        max_steps = 5 if reasoning_depth == "deep" else 3
+
+        return AuthorizedExecutionPlan(
+            execution_id=f"reasoning-{state.get('correlation_id', '')}",
+            policy_decision_id=state.get("policy_decision_id", ""),
+            topology=ExecutionTopology.REASONING,
+            allowed_capabilities=["memory.read", "reasoning.causal", "reasoning.verify", "model.generate"],
+            allowed_tools=[],
+            allowed_plugins=[],
+            memory_scope="tenant + conversation",
+            budget=ExecutionBudget(
+                max_reasoning_steps=max_steps,
+                max_model_calls=3,
+                max_tool_calls=2,
+                max_duration_ms=20000,
+            ),
+            reasoning_modes=list(hints.get("reasoning_modes") or []),
+        )
+
+    def _build_context(self, state: LangGraphOrchestrationState) -> ExecutionContext:
+        return ExecutionContext(
+            request_id=state.get("request_id", ""),
+            correlation_id=state.get("correlation_id", ""),
+            user_id=state.get("user_id", ""),
+            tenant_id=state.get("tenant_id", "default"),
+            session_id=state.get("session_id"),
+            conversation_id=state.get("conversation_id"),
+            policy_decision_id=state.get("policy_decision_id"),
+            budget=None,
+        )
+
+    async def _run_reasoning(self, request: ReasoningRequest, plan: AuthorizedExecutionPlan, context: ExecutionContext) -> ReasoningResult:
+        result = await self._executor.execute(request, plan, context)
         return result
 
     async def __call__(self, state: LangGraphOrchestrationState) -> LangGraphOrchestrationState:
@@ -129,17 +173,21 @@ class ReasoningNode:
 
         try:
             request = self._build_request(state)
+            plan = self._build_plan(state)
+            context = self._build_context(state)
             result = await self._safe_runner.run_stage(
-                "kro_orchestrator",
-                "kro_orchestrator_enabled",
+                "reasoning_executor",
+                "reasoning_enabled",
                 self._run_reasoning,
                 request,
+                plan,
+                context,
                 tenant_id=state.get("tenant_id"),
                 user_id=state.get("user_id"),
             )
 
             if isinstance(result, ReasoningResult):
-                result_dict = asdict(result)
+                result_dict = result.__dict__ if hasattr(result, "__dict__") else asdict(result)
             elif isinstance(result, dict):
                 result_dict = result
             else:
@@ -153,16 +201,15 @@ class ReasoningNode:
                 }
 
             state["reasoning_result"] = result_dict
-            reasoning_type = result_dict.get("reasoning_type") or result_dict.get("diagnostics", {}).get("reasoning_type", "reasoning")
+            reasoning_type = result_dict.get("diagnostics", {}).get("reasoning_type", "reasoning")
             state["reasoning_metadata"] = {
                 "reasoning_type": reasoning_type,
                 "confidence": result_dict.get("confidence", 0.0),
                 "verification_notes": result_dict.get("verification_notes", []),
-                "fallback_used": result_dict.get("fallback_used")
-                or result_dict.get("diagnostics", {}).get("degraded_mode", False),
-                "needs_human_confirmation": result_dict.get("needs_human_confirmation", False),
-                "memory_ids": result_dict.get("memory_ids", []),
-                "graph_paths_used": result_dict.get("graph_paths_used", []),
+                "fallback_used": result_dict.get("diagnostics", {}).get("degraded_mode", False),
+                "needs_human_confirmation": result_dict.get("status") == "needs_human_confirmation",
+                "memory_ids": [],
+                "graph_paths_used": [],
             }
 
             if result_dict.get("diagnostics", {}).get("degraded_mode"):
@@ -187,7 +234,7 @@ class ReasoningNode:
 
 async def reasoning_node(
     state: LangGraphOrchestrationState,
-    kro_orchestrator=None,
+    reasoning_executor=None,
 ) -> LangGraphOrchestrationState:
-    node = ReasoningNode(kro_orchestrator)
+    node = ReasoningNode(reasoning_executor)
     return await node(state)

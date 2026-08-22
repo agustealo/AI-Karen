@@ -227,7 +227,10 @@ class ExtensionManifest(BaseModel):
     All extensions should use this manifest format.
     """
 
-    model_config = ConfigDict(extra="allow")
+    # Canonical ExtensionManifest uses strict validation.
+    # Unknown fields must be rejected at the boundary; legacy normalization
+    # happens explicitly in from_dict() before model creation.
+    model_config = ConfigDict(extra="forbid")
 
     # Basic metadata (from manifest.py)
     name: str = Field(pattern=NAME_PATTERN, min_length=1, max_length=50)
@@ -247,6 +250,8 @@ class ExtensionManifest(BaseModel):
     entrypoint: Optional[str] = None
 
     # Capabilities and configuration
+    # Permissions and resources are REQUESTED declarations from the extension.
+    # They are not runtime grants. RuntimePolicy decides what is actually granted.
     capabilities: ExtensionCapabilities = Field(default_factory=ExtensionCapabilities)
     dependencies: ExtensionDependencies = Field(default_factory=ExtensionDependencies)
     permissions: ExtensionPermissions = Field(default_factory=ExtensionPermissions)
@@ -290,55 +295,103 @@ class ExtensionManifest(BaseModel):
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ExtensionManifest":
         """
-        Create manifest from dictionary with normalization.
+        Create manifest from dictionary with explicit compatibility translation.
 
-        Handles legacy manifest formats from both base.py and manifest.py.
+        Legacy fields are normalized into the canonical schema before validation.
+        Unknown fields are stripped with a warning; the canonical schema is strict.
         """
-        # Normalize legacy formats
-        if "plugin_api_version" in data or "plugin_type" in data:
-            # Legacy format from manifest.py
-            normalized = {
-                "name": data.get("name", ""),
-                "version": data.get("version", "1.0.0"),
-                "display_name": data.get(
-                    "display_name", data.get("name", "").replace("-", " ").title()
-                ),
-                "description": data.get("description", ""),
-                "author": data.get("author", "Unknown"),
-                "license": data.get("license", "unknown"),
-                "category": data.get("category", data.get("plugin_type", "general")),
-                "tags": data.get("tags", []),
-                "api_version": data.get(
-                    "api_version", data.get("plugin_api_version", "1.0")
-                ),
-                "kari_min_version": data.get("kari_min_version", "0.4.0"),
-                "entrypoint": data.get("entry_point"),
-                "capabilities": {
-                    "provides_ui": bool(data.get("trusted_ui")),
-                    "provides_api": False,
-                    "provides_background_tasks": bool(
-                        data.get("enable_external_workflow")
-                    ),
-                    "provides_webhooks": False,
-                    "prompt_first": True,
-                    "allowed_prompt_overrides": data.get("allowed_prompt_overrides", []),
-                },
-                "prompt_files": {
-                    "prompt_first": True,
-                    "mode": data.get("prompt_mode", PromptMode.DEFAULT.value),
-                    "contract_id": data.get("prompt_contract_id"),
-                    "action_contracts": data.get("action_prompt_contracts", {}),
-                    "allowed_overrides": data.get("allowed_prompt_overrides", []),
-                },
-                "rbac": {
-                    "default_enabled": data.get("default_enabled", True),
-                },
-            }
-            # Merge in original data
-            normalized.update(data)
-            data = normalized
+        allowed_keys = {
+            "name",
+            "version",
+            "display_name",
+            "description",
+            "author",
+            "license",
+            "category",
+            "tags",
+            "api_version",
+            "kari_min_version",
+            "entrypoint",
+            "capabilities",
+            "dependencies",
+            "permissions",
+            "resources",
+            "rbac",
+            "hook_points",
+            "prompt_files",
+            "config_schema",
+            "ui",
+            "api",
+            "background_tasks",
+            "marketplace",
+        }
 
-        return cls(**data)
+        legacy_keys = {
+            "plugin_api_version",
+            "plugin_type",
+            "entry_point",
+            "module",
+            "intent",
+            "required_roles",
+            "trusted_ui",
+            "enable_external_workflow",
+            "prompt_mode",
+            "prompt_contract_id",
+            "action_prompt_contracts",
+            "allowed_prompt_overrides",
+            "default_enabled",
+        }
+
+        normalized: Dict[str, Any] = {}
+        stripped: List[str] = []
+        for key, value in data.items():
+            if key in allowed_keys:
+                normalized[key] = value
+            elif key in legacy_keys:
+                continue
+            else:
+                stripped.append(key)
+
+        if stripped:
+            logger.warning(
+                "Stripped unknown manifest fields: %s. "
+                "Legacy fields must be mapped before validation.",
+                stripped,
+            )
+
+        if "plugin_api_version" in data or "plugin_type" in data:
+            normalized.setdefault("name", data.get("name", ""))
+            normalized.setdefault("version", data.get("version", "1.0.0"))
+            normalized.setdefault("display_name", data.get("display_name", data.get("name", "").replace("-", " ").title()))
+            normalized.setdefault("description", data.get("description", ""))
+            normalized.setdefault("author", data.get("author", "Unknown"))
+            normalized.setdefault("license", data.get("license", "unknown"))
+            normalized.setdefault("category", data.get("category", data.get("plugin_type", "general")))
+            normalized.setdefault("tags", data.get("tags", []))
+            normalized.setdefault("api_version", data.get("api_version", data.get("plugin_api_version", "1.0")))
+            normalized.setdefault("kari_min_version", data.get("kari_min_version", "0.4.0"))
+            normalized.setdefault("entrypoint", data.get("entry_point"))
+            normalized.setdefault("capabilities", {
+                "provides_ui": bool(data.get("trusted_ui")),
+                "provides_api": False,
+                "provides_background_tasks": bool(data.get("enable_external_workflow")),
+                "provides_webhooks": False,
+                "prompt_first": True,
+                "allowed_prompt_overrides": data.get("allowed_prompt_overrides", []),
+            })
+            normalized.setdefault("prompt_files", {
+                "prompt_first": True,
+                "mode": data.get("prompt_mode", PromptMode.DEFAULT.value),
+                "contract_id": data.get("prompt_contract_id"),
+                "action_contracts": data.get("action_prompt_contracts", {}),
+                "allowed_overrides": data.get("allowed_prompt_overrides", []),
+            })
+            normalized.setdefault("rbac", {
+                "allowed_roles": data.get("required_roles", []),
+                "default_enabled": data.get("default_enabled", True),
+            })
+
+        return cls(**normalized)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert manifest to dictionary."""
@@ -401,7 +454,7 @@ class ExtensionManifestAPI(BaseModel):
     prompt_files: Dict[str, Any] = {}
     marketplace: Dict[str, Any] = {}
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
 
 class ExtensionStatusAPI(BaseModel):

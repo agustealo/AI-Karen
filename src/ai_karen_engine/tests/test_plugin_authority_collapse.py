@@ -138,23 +138,21 @@ def test_plugin_execution_context_exists() -> None:
     from ai_karen_engine.services.plugin_execution import PluginExecutionContext
 
     context = PluginExecutionContext(
-        user_id="user-1",
+        plugin_id="github",
+        plugin_version="1.0.0",
         tenant_id="tenant-1",
+        user_id="user-1",
         session_id="session-1",
         conversation_id="conv-1",
         request_id="req-1",
         correlation_id="corr-1",
-        roles=["user"],
-        permissions=["tool:access"],
-        plugin_id="github",
-        plugin_version="1.0.0",
-        action="search",
         policy_decision_id="policy-1",
         allowed_capabilities=["web_search"],
         forbidden_capabilities=["admin"],
         resource_scope={"files": ["/tmp"]},
         resource_limits={"max_memory_mb": 256},
         security_policy={"allow_network": True},
+        action="search",
     )
 
     assert context.plugin_id == "github"

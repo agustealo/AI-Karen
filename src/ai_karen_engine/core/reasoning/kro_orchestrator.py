@@ -533,20 +533,36 @@ class KROOrchestrator:
 
             return degraded_response, degraded_message
 
-    async def run(self, request: ReasoningRequest) -> ReasoningResult:
-        """Protocol-aligned entry point for runtime reasoning invocation."""
-        kro_response, ui_message = await self.process_request(
-            user_input=request.message,
-            user_id=request.user.user_id,
-            conversation_history=request.metadata.get("conversation_history") or [],
-            ui_context=request.metadata.get("ui_context"),
-            config_ui=request.metadata.get("config_ui"),
-            system_caps=request.metadata.get("system_caps") or {},
-            mem_snapshot=request.memory_context,
-            correlation_id=request.metadata.get("correlation_id"),
+    async def run(self, request: Any) -> Any:
+        """Protocol-aligned entry point for runtime reasoning invocation.
+
+        Accepts either the canonical core.reasoning.ReasoningRequest or the
+        legacy cortex ReasoningRequest for backward compatibility.
+        """
+        from ai_karen_engine.core.reasoning.contracts import (
+            ReasoningRequest as CanonicalRequest,
+            ReasoningResult as CanonicalResult,
+            ReasoningEvidence,
+            ReasoningHypothesis,
+            ReasoningConfidence,
         )
 
-        reasoning_modes = list(request.kire.reasoning_modes or [])
+        if isinstance(request, CanonicalRequest):
+            return await self._run_canonical(request)
+
+        legacy = request
+        kro_response, ui_message = await self.process_request(
+            user_input=legacy.message,
+            user_id=legacy.user.user_id,
+            conversation_history=legacy.metadata.get("conversation_history") or [],
+            ui_context=legacy.metadata.get("ui_context"),
+            config_ui=legacy.metadata.get("config_ui"),
+            system_caps=legacy.metadata.get("system_caps") or {},
+            mem_snapshot=legacy.memory_context,
+            correlation_id=legacy.metadata.get("correlation_id"),
+        )
+
+        reasoning_modes = list(legacy.kire.reasoning_modes or [])
         reasoning_type = reasoning_modes[0] if reasoning_modes else "synthesis"
 
         evidence: List[Dict[str, Any]] = []
@@ -615,24 +631,139 @@ class KROOrchestrator:
             "evidence_source_mix": dict(evidence_source_mix),
         }
 
-        return ReasoningResult(
+        return CanonicalResult(
             summary=kro_response.reasoning_summary,
-            evidence=evidence,
-            hypotheses=hypotheses,
-            confidence=confidence,
-            verification_notes=verification_notes,
-            refined_answer=ui_message,
+            evidence=[
+                ReasoningEvidence(
+                    evidence_id=str(uuid.uuid4())[:8],
+                    type=item.get("type", "unknown"),
+                    source=item.get("source", ""),
+                    source_ref=item.get("source_ref", ""),
+                    content=str(item.get("snippet") or item.get("content") or ""),
+                    relevance=0.0,
+                    confidence=0.0,
+                    tenant_id=legacy.user.tenant_id or "default",
+                    metadata=item.get("payload") or {},
+                )
+                for item in evidence
+            ],
+            hypotheses=[
+                ReasoningHypothesis(
+                    hypothesis_id=f"hyp-{idx}",
+                    statement=stmt,
+                    provenance="kro_legacy",
+                )
+                for idx, stmt in enumerate(hypotheses)
+            ],
+            confidence=ReasoningConfidence(overall=confidence),
+            verification={"notes": verification_notes},
+            suggested_next_actions=[],
+            status="completed" if not degraded else "failed",
             diagnostics=diagnostics,
-            success=True,
-            degraded=degraded,
-            reasoning_type=reasoning_type,
-            memory_ids=memory_ids,
-            graph_paths_used=graph_paths_used,
-            contradictions_found=contradictions_found,
-            needs_human_confirmation=needs_human_confirmation,
-            fallback_used="kro_degraded_mode" if degraded else None,
-            evidence_source_mix=evidence_source_mix,
         )
+
+    async def _run_canonical(self, request: Any) -> Any:
+        from ai_karen_engine.core.reasoning.contracts import (
+            ReasoningRequest as CanonicalRequest,
+            ReasoningResult as CanonicalResult,
+            ReasoningEvidence,
+            ReasoningHypothesis,
+            ReasoningConfidence,
+        )
+
+        legacy = self._build_legacy_request(request)
+        kro_response, ui_message = await self.process_request(
+            user_input=legacy["message"],
+            user_id=legacy["user_id"],
+            conversation_history=legacy["conversation_history"],
+            ui_context=legacy.get("ui_context"),
+            config_ui=legacy.get("config_ui"),
+            system_caps=legacy.get("system_caps") or {},
+            mem_snapshot=legacy.get("mem_snapshot"),
+            correlation_id=legacy.get("correlation_id"),
+        )
+
+        reasoning_modes = request.reasoning_modes or ["synthesis"]
+        reasoning_type = reasoning_modes[0] if reasoning_modes else "synthesis"
+
+        evidence = []
+        for item in kro_response.evidence:
+            if isinstance(item, dict):
+                normalized = dict(item)
+            elif hasattr(item, "__dict__"):
+                normalized = dict(item.__dict__)
+            else:
+                normalized = {"value": str(item)}
+            evidence.append(normalized)
+
+        hypotheses = []
+        keywords = getattr(kro_response.classification, "keywords", "")
+        if keywords:
+            hypotheses.extend([part.strip() for part in str(keywords).split("|") if part.strip()])
+        if not hypotheses:
+            hypotheses.extend([step.action for step in kro_response.plan[:5] if getattr(step, "action", None)])
+
+        verification_notes = list(kro_response.telemetry.errors)
+        if kro_response.meta.degraded_mode:
+            verification_notes.append("KRO degraded mode active")
+
+        confidence = float(kro_response.meta.confidence)
+        degraded = bool(kro_response.meta.degraded_mode)
+
+        diagnostics = {
+            "ui_message": ui_message,
+            "classification": asdict(kro_response.classification),
+            "meta": asdict(kro_response.meta),
+            "plan_steps": len(kro_response.plan),
+            "suggestions": list(kro_response.suggestions),
+            "telemetry_notes": kro_response.telemetry.notes,
+            "degraded_mode": kro_response.meta.degraded_mode,
+            "reasoning_type": reasoning_type,
+            "reasoning_modes": reasoning_modes,
+        }
+
+        return CanonicalResult(
+            summary=kro_response.reasoning_summary,
+            evidence=[
+                ReasoningEvidence(
+                    evidence_id=str(uuid.uuid4())[:8],
+                    type=item.get("type", "unknown"),
+                    source=item.get("source", ""),
+                    source_ref=item.get("source_ref", ""),
+                    content=str(item.get("snippet") or item.get("content") or ""),
+                    relevance=0.0,
+                    confidence=0.0,
+                    tenant_id=request.tenant_id,
+                    metadata=item.get("payload") or {},
+                )
+                for item in evidence
+            ],
+            hypotheses=[
+                ReasoningHypothesis(
+                    hypothesis_id=f"hyp-{idx}",
+                    statement=stmt,
+                    provenance="kro",
+                )
+                for idx, stmt in enumerate(hypotheses)
+            ],
+            confidence=ReasoningConfidence(overall=confidence),
+            verification={"notes": verification_notes},
+            suggested_next_actions=[],
+            status="completed" if not degraded else "failed",
+            diagnostics=diagnostics,
+        )
+
+    def _build_legacy_request(self, request: Any) -> Dict[str, Any]:
+        return {
+            "message": request.objective,
+            "user_id": request.user_id,
+            "conversation_history": request.metadata.get("conversation_history") or [],
+            "ui_context": request.metadata.get("ui_context"),
+            "config_ui": request.metadata.get("config_ui"),
+            "system_caps": request.metadata.get("system_caps") or {},
+            "mem_snapshot": {},
+            "correlation_id": request.correlation_id,
+        }
 
     async def _classify_intent(
         self,
