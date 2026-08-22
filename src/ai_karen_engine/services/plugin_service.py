@@ -6,13 +6,13 @@ registry, discovery, validation, and execution capabilities.
 """
 
 import logging
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.services.plugin_discovery import (
     PluginRegistry,
-    get_plugin_registry,
     initialize_plugin_registry,
 )
 from ai_karen_engine.services.plugin_execution import (
@@ -20,10 +20,12 @@ from ai_karen_engine.services.plugin_execution import (
     ExecutionRequest,
     ExecutionResult,
     ExecutionMode,
-    ResourceLimits,
-    SecurityPolicy,
-    get_plugin_execution_engine,
+    ExecutionStatus,
     initialize_plugin_execution_engine,
+)
+from ai_karen_engine.core.runtime.policy import (
+    PolicyEvaluationRequest,
+    RuntimePolicyEnforcer,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,6 +47,7 @@ class PluginService:
         self.marketplace_path = marketplace_path
         self.core_plugins_path = core_plugins_path
         self.initialized = False
+        self._policy_enforcer = RuntimePolicyEnforcer()
 
     async def initialize(self, auto_discover: bool = True) -> None:
         """
@@ -166,6 +169,9 @@ class PluginService:
         timeout_seconds: int = 30,
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        policy_decision_id: Optional[str] = None,
+        allowed_capabilities: Optional[List[str]] = None,
+        forbidden_capabilities: Optional[List[str]] = None,
     ) -> ExecutionResult:
         """
         Execute a plugin with the specified parameters.
@@ -177,11 +183,40 @@ class PluginService:
             timeout_seconds: Execution timeout
             user_id: User ID for tracking
             session_id: Session ID for tracking
+            policy_decision_id: RuntimePolicy decision ID for authorization
+            allowed_capabilities: Capabilities allowed by policy
+            forbidden_capabilities: Capabilities denied by policy
 
         Returns:
             Execution result
         """
         await self._ensure_initialized()
+
+        if not policy_decision_id:
+            policy_request = PolicyEvaluationRequest(
+                user_id=user_id or "anonymous",
+                tenant_id="default",
+                session_id=session_id,
+                requested_capabilities=allowed_capabilities or [],
+                forbidden_capabilities=forbidden_capabilities or [],
+                action="plugin_execution",
+            )
+            policy_decision = await self._policy_enforcer.evaluate(policy_request)
+            if not policy_decision.allowed:
+                return ExecutionResult(
+                    request_id=str(uuid.uuid4()),
+                    plugin_name=plugin_name,
+                    status=ExecutionStatus.FAILED,
+                    error="Plugin execution denied by RuntimePolicy",
+                    error_code="policy_denied",
+                    user_id=user_id or "",
+                    policy_decision_id=policy_decision.decision_id,
+                    requested_capabilities=allowed_capabilities or [],
+                    granted_capabilities=[],
+                )
+            policy_decision_id = policy_decision.decision_id
+            allowed_capabilities = list(policy_decision.allowed_capabilities)
+            forbidden_capabilities = list(policy_decision.denied_capabilities)
 
         request = ExecutionRequest(
             plugin_name=plugin_name,
@@ -190,6 +225,9 @@ class PluginService:
             timeout_seconds=timeout_seconds,
             user_id=user_id,
             session_id=session_id,
+            policy_decision_id=policy_decision_id,
+            allowed_capabilities=allowed_capabilities or [],
+            forbidden_capabilities=forbidden_capabilities or [],
         )
 
         return await self._get_execution_engine().execute_plugin(request)

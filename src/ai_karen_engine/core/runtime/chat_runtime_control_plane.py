@@ -1422,36 +1422,34 @@ class ChatRuntimeControlPlane:
         return False
 
     async def _has_live_provider_path(self) -> bool:
-        """Query the existing provider router/registry before blocking chat in emergency mode."""
+        """Query the canonical provider registry before blocking chat in emergency mode."""
         try:
-            from ai_karen_engine.integrations.llm_registry import get_registry
+            from ai_karen_engine.core.model_runtime.provider_registry_service import (
+                get_provider_registry_service,
+            )
 
-            registry = get_registry()
+            registry = get_provider_registry_service()
 
-            for provider_name in registry.list_providers():
+            for provider_name in registry.get_all_provider_names():
                 if provider_name in {"fallback", "copilotkit", "custom_copilotkit"}:
                     continue
-                provider_info = registry.get_provider_info(provider_name)
-                if not isinstance(provider_info, dict):
-                    continue
-                if provider_info.get("health_status") != "healthy":
+                status = registry.get_provider_status(provider_name)
+                if status is None or not status.is_available:
                     continue
                 if provider_name == "builtin_vllm":
-                    if (
-                        provider_info.get("runtime") == "vllm"
-                        and not provider_info.get("initialization_error")
-                    ):
+                    endpoint = registry.get_provider_endpoint("builtin_vllm")
+                    if endpoint is not None and endpoint.enabled:
                         return True
                     continue
                 if provider_name == "builtin_transformers":
-                    if provider_info.get("transformers_available") is True:
+                    endpoint = registry.get_provider_endpoint("builtin_transformers")
+                    if endpoint is not None and endpoint.enabled:
                         return True
                     continue
-                available_models = provider_info.get("available_models")
-                if provider_info.get("requires_api_key") is False and isinstance(
-                    available_models,
-                    list,
-                ) and available_models:
+                if not status.has_api_key:
+                    continue
+                models = registry.get_registered_models(provider_name)
+                if status.has_api_key and models:
                     return True
         except Exception as exc:
             logger.debug("Live provider path probe failed: %s", exc)

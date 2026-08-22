@@ -26,10 +26,31 @@ _deduper = get_request_deduplicator()
 
 logger = logging.getLogger(__name__)
 
+
+class TaskAnalysis:
+    """Minimal stub for legacy routing compatibility."""
+
+    def __init__(self, task_type: str = "chat", **kwargs: Any) -> None:
+        self.task_type = task_type
+        self.required_capabilities: List[str] = []
+        self.tool_intents: List[str] = []
+        self.hints: Dict[str, Any] = {}
+        self.confidence: float = 0.75
+        self.user_need_state: Dict[str, Any] = {}
+
+
+def _analyze_task(query: str, context: Optional[Dict[str, Any]] = None) -> TaskAnalysis:
+    """Lightweight task analysis stub for legacy routing."""
+    return TaskAnalysis(task_type="chat")
+
+
+def _provider_supports(provider: str, required_caps: List[str]) -> bool:
+    """Capability check stub for legacy routing."""
+    return True
+
 from ai_karen_engine.routing.types import RouteRequest, RouteDecision
 from ai_karen_engine.routing.profile_resolver import ProfileResolver
 from ai_karen_engine.routing.decision_logger import DecisionLogger
-from ai_karen_engine.integrations.task_analyzer import TaskAnalyzer, TaskAnalysis
 from ai_karen_engine.routing.cognitive_reasoner import CognitiveReasoner, RoutingCognition
 
 # Import existing components
@@ -77,7 +98,6 @@ class KIRERouter:
         self.llm_registry = llm_registry or LLMRegistry()
         self.profile_resolver = ProfileResolver()
         self.logger = DecisionLogger()
-        self.task_analyzer = TaskAnalyzer()
         self.cognitive_reasoner = CognitiveReasoner()
     
     async def route_provider_selection(self, request: RouteRequest) -> RouteDecision:
@@ -113,11 +133,7 @@ class KIRERouter:
                 profile, request.task_type, request.khrp_step
             )
             # Analyze query for task hints/capabilities
-            analysis = self.task_analyzer.analyze(
-                request.query,
-                user_ctx={"roles": (request.context or {}).get("user_roles", [])},
-                context=request.context,
-            )
+            analysis = _analyze_task(request.query, context=request.context)
             cognition = self.cognitive_reasoner.evaluate(request, analysis, profile)
             task_type = request.task_type or cognition.primary_goal or analysis.task_type
 
@@ -268,12 +284,12 @@ class KIRERouter:
         reason_segments: List[str] = []
 
         # Ensure provider supports required capabilities or tool intents
-        if not self.task_analyzer.provider_supports(provider, required_caps):
+        if not _provider_supports(provider, required_caps):
             reason_segments.append(f"{provider} lacks capabilities {required_caps}")
             for alt in chain:
                 if alt == provider:
                     continue
-                if self.task_analyzer.provider_supports(alt, required_caps) and await ProviderHealth.is_healthy(alt):
+                if _provider_supports(alt, required_caps) and await ProviderHealth.is_healthy(alt):
                     provider, model = alt, self._default_model(alt)
                     reason_segments.append(f"switching to {alt} for capabilities")
                     break

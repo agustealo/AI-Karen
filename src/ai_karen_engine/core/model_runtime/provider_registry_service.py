@@ -1,6 +1,9 @@
 """
 Provider Registry with Health Monitoring and Graceful Fallbacks
 
+Canonical provider authority. Owns provider registration, lookup, availability,
+capabilities, model inventory, and provider metadata directly.
+
 This service manages AI provider registration, health monitoring, and automatic
 fallback chains to ensure system resilience when providers are unavailable.
 """
@@ -21,15 +24,38 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import (
     ProviderEndpointStatus,
     ProviderEndpointType,
 )
-from ai_karen_engine.integrations.provider_registry import (
-    ProviderRegistry as BaseProviderRegistry,
-    ProviderRegistration,
-    ModelInfo,
-    get_provider_registry,
-)
 from ai_karen_engine.core.model_runtime.provider_health_monitor import HealthStatus
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class ModelInfo:
+    """Canonical model metadata contract."""
+
+    name: str
+    description: str = ""
+    capabilities: List[str] = field(default_factory=list)
+    default_settings: Dict[str, Any] = field(default_factory=dict)
+    context_length: Optional[int] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ProviderRegistration:
+    """Canonical provider registration contract."""
+
+    name: str
+    provider_class: Any
+    description: str = ""
+    models: List[ModelInfo] = field(default_factory=list)
+    requires_api_key: bool = False
+    default_model: Optional[str] = None
+    category: str = "LLM"
+    supports_streaming: bool = False
+    supports_embeddings: bool = False
+    health_status: str = "unknown"
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class ProviderCapability(str, Enum):
@@ -94,9 +120,9 @@ class ProviderRegistryService:
         "builtin_vllm": "builtin_vllm",
     }
 
-    def __init__(self, use_global_registry: bool = True):
-        # Use the centralized registry instead of creating our own
-        self.base_registry = get_provider_registry()
+    def __init__(self, seed_from_legacy: bool = True):
+        # Canonical provider registration state — no dependency on integrations
+        self._provider_registrations: Dict[str, ProviderRegistration] = {}
         self._provider_endpoints: Dict[str, ProviderEndpoint] = {
             endpoint.provider_id: endpoint for endpoint in BUILTIN_PROVIDER_ENDPOINTS
         }
@@ -114,8 +140,58 @@ class ProviderRegistryService:
         # Initialize default fallback chains
         self._setup_default_fallback_chains()
 
+        # Seed canonical state from legacy registry for backward compatibility
+        # during migration. This is a one-time copy, not an ongoing dependency.
+        if seed_from_legacy:
+            self._seed_from_legacy_registry()
+
         # Don't start old health monitoring - use LLMRouter's health
         self._monitoring_task = None
+
+    def _seed_from_legacy_registry(self) -> None:
+        """One-time seed of canonical state from legacy integrations registry.
+
+        This enables gradual migration: existing providers registered in the
+        legacy system are copied into canonical state on first init. New
+        registrations should flow through register_provider().
+
+        TEMPORARY: This import is a documented migration compatibility shim.
+        It must be removed in INTEGRATIONS-2B.2 once all providers register
+        through the canonical path.
+        """
+        try:
+            # TEMPORARY migration import — remove in INTEGRATIONS-2B.2
+            from ai_karen_engine.integrations.llm_registry import get_registry  # noqa: TEMP-MIGRATION
+
+            legacy = get_registry()
+            for name in legacy.list_providers():
+                info = legacy.get_provider_info(name)
+                if not info:
+                    continue
+                registration = ProviderRegistration(
+                    name=name,
+                    provider_class=info.get("provider_class"),
+                    description=str(info.get("description", "")),
+                    models=[
+                        ModelInfo(
+                            name=str(m.get("name", m) if isinstance(m, dict) else m),
+                            description=str(m.get("description", "") if isinstance(m, dict) else ""),
+                            capabilities=list(m.get("capabilities", []) if isinstance(m, dict) else []),
+                        )
+                        for m in (info.get("models") or [])
+                        if m
+                    ],
+                    requires_api_key=bool(info.get("requires_api_key", False)),
+                    default_model=info.get("default_model"),
+                    category=str(info.get("category", "LLM")),
+                    supports_streaming=bool(info.get("supports_streaming", False)),
+                    supports_embeddings=bool(info.get("supports_embeddings", False)),
+                    health_status=str(info.get("health_status", "unknown")),
+                    metadata=dict(info) if isinstance(info, dict) else {},
+                )
+                self._provider_registrations[name] = registration
+        except Exception as exc:
+            logger.debug("Legacy registry seeding skipped: %s", exc)
 
     def _get_llm_router(self):
         """Lazy-load the router used for provider health snapshots."""
@@ -276,15 +352,11 @@ class ProviderRegistryService:
         return list(self._provider_endpoints.values())
 
     def get_all_provider_names(self) -> List[str]:
-        """Returns all known provider names (both endpoints and base registry)."""
-        names = set(self._provider_endpoints.keys())
-        try:
-            from ai_karen_engine.integrations.llm_registry import get_registry
-
-            names.update(get_registry().get_all_provider_names())
-        except Exception:
-            pass
-        return sorted(list(names))
+        """Returns all known provider names (both endpoints and registrations)."""
+        with self._lock:
+            names = set(self._provider_endpoints.keys())
+            names.update(self._provider_registrations.keys())
+            return sorted(names)
 
     def register_provider(
         self,
@@ -312,16 +384,17 @@ class ProviderRegistryService:
             capabilities: Provider capabilities
         """
         with self._lock:
-            # Register with base registry
-            self.base_registry.register_provider(
+            # Store in canonical registration state
+            registration = ProviderRegistration(
                 name=name,
                 provider_class=provider_class,
                 description=description,
-                models=models or [],
+                models=list(models or []),
                 requires_api_key=requires_api_key,
                 default_model=default_model,
                 category=category,
             )
+            self._provider_registrations[name] = registration
 
             # Detect capabilities if not provided
             if capabilities is None:
@@ -476,20 +549,20 @@ class ProviderRegistryService:
             status = self._provider_status_cache.get(name)
 
             if status is None:
-                # Provider may have been auto-registered in the base registry
-                # before this service instance was created. Populate a fresh
-                # status entry on-demand so availability checks reflect the
-                # real provider roster.
-                provider_info = self.base_registry.get_provider_info(name)
-                if provider_info:
+                # Provider may have been registered in canonical state before
+                # this service instance was created. Populate a fresh status
+                # entry on-demand so availability checks reflect the real
+                # provider roster.
+                registration = self._provider_registrations.get(name)
+                if registration is not None:
                     try:
                         capabilities = self._detect_provider_capabilities(
-                            provider_info.provider_class
+                            registration.provider_class
                         )
                         self._update_provider_status(
                             name,
                             capabilities,
-                            provider_info.requires_api_key,
+                            registration.requires_api_key,
                         )
                         status = self._provider_status_cache.get(name)
                     except Exception as exc:
@@ -506,13 +579,13 @@ class ProviderRegistryService:
                 > self._cache_ttl
             ):
                 # Refresh status
-                provider_info = self.base_registry.get_provider_info(name)
-                if provider_info:
+                registration = self._provider_registrations.get(name)
+                if registration is not None:
                     capabilities = getattr(
                         status, "capabilities", {ProviderCapability.TEXT_GENERATION}
                     )
                     self._update_provider_status(
-                        name, capabilities, provider_info.requires_api_key
+                        name, capabilities, registration.requires_api_key
                     )
                     status = self._provider_status_cache.get(name)
 
@@ -546,12 +619,15 @@ class ProviderRegistryService:
             # registry first so local built-ins stay authoritative and fast.
             return available_providers
 
-        provider_names = list(self.base_registry.list_providers(category=category))
-        for endpoint in self._provider_endpoints.values():
-            if endpoint.provider_id not in provider_names:
-                provider_names.append(endpoint.provider_id)
+        # Iterate canonical registrations
+        registrations = list(self._provider_registrations.items())
+        for provider_name, registration in registrations:
+            if category and registration.category != category:
+                continue
+            if provider_name not in seen:
+                seen.add(provider_name)
 
-        for provider_name in provider_names:
+        for provider_name in seen:
             status = self.get_provider_status(provider_name)
 
             if status and status.is_available:
@@ -559,8 +635,7 @@ class ProviderRegistryService:
                 if capability and capability not in status.capabilities:
                     continue
 
-                if provider_name not in seen:
-                    seen.add(provider_name)
+                if provider_name not in available_providers:
                     available_providers.append(provider_name)
 
         return available_providers
@@ -582,8 +657,8 @@ class ProviderRegistryService:
             A list of model names in registration order without duplicates.
         """
 
-        provider_info = self.base_registry.get_provider_info(provider_name)
-        if not provider_info:
+        registration = self._provider_registrations.get(provider_name)
+        if not registration:
             return []
 
         if healthy_only:
@@ -594,7 +669,7 @@ class ProviderRegistryService:
         seen: Set[str] = set()
         model_names: List[str] = []
 
-        for model in provider_info.models:
+        for model in registration.models:
             name = (model.name or "").strip()
             if not name:
                 continue
@@ -606,7 +681,7 @@ class ProviderRegistryService:
             seen.add(key)
             model_names.append(name)
 
-        default_model = (provider_info.default_model or "").strip()
+        default_model = (registration.default_model or "").strip()
         if default_model:
             key = default_model.lower()
             if key not in seen:
@@ -756,8 +831,8 @@ class ProviderRegistryService:
 
             # Provide configuration guidance
             if not failed_status.has_api_key:
-                provider_info = self.base_registry.get_provider_info(failed_provider)
-                if provider_info and provider_info.requires_api_key:
+                registration = self._provider_registrations.get(failed_provider)
+                if registration and registration.requires_api_key:
                     api_key_mapping = {
                         "openai": "OPENAI_API_KEY",
                         "anthropic": "ANTHROPIC_API_KEY",
@@ -807,12 +882,13 @@ class ProviderRegistryService:
             "recommendations": [],
         }
 
-        provider_names = list(self.base_registry.list_providers())
+        # Collect all provider names from canonical state
+        all_names: Set[str] = set()
         for endpoint in self._provider_endpoints.values():
-            if endpoint.provider_id not in provider_names:
-                provider_names.append(endpoint.provider_id)
+            all_names.add(endpoint.provider_id)
+        all_names.update(self._provider_registrations.keys())
 
-        for provider_name in provider_names:
+        for provider_name in all_names:
             provider_status = self.get_provider_status(provider_name)
             status["total_providers"] += 1
 
@@ -821,8 +897,8 @@ class ProviderRegistryService:
                     status["available_providers"] += 1
 
                 if not provider_status.has_api_key:
-                    provider_info = self.base_registry.get_provider_info(provider_name)
-                    if provider_info and provider_info.requires_api_key:
+                    registration = self._provider_registrations.get(provider_name)
+                    if registration and registration.requires_api_key:
                         status["providers_missing_api_keys"] += 1
 
                 if provider_status.health_status == HealthStatus.UNHEALTHY:
@@ -859,15 +935,15 @@ class ProviderRegistryService:
         def monitor_loop():
             while True:
                 try:
-                    # Refresh provider statuses
-                    for provider_name in self.base_registry.list_providers():
+                    # Refresh provider statuses from canonical state
+                    for provider_name in self._provider_registrations:
                         status = self.get_provider_status(
                             provider_name
                         )  # This will refresh if stale
 
                     time.sleep(300)  # Check every 5 minutes
                 except Exception as e:
-                    logger.error(f"Error in health monitoring loop: {e}")
+                    logger.error(f"Error in health monitoring loop: %s", e)
                     time.sleep(60)  # Wait 1 minute before retrying
 
         # Start monitoring in background thread

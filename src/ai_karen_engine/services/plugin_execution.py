@@ -8,23 +8,17 @@ import asyncio
 import builtins
 import inspect
 import logging
-import os
 import re
 import resource
-import signal
 import sys
 import time
 import traceback
-from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, Callable
+from typing import Any, Dict, List, Optional, Callable
 import uuid
 import importlib.util
-import multiprocessing
-import threading
 from concurrent.futures import (
     Future as ConcurrentFuture,
     ProcessPoolExecutor,
@@ -33,11 +27,12 @@ from concurrent.futures import (
 )
 
 try:
-    from pydantic import BaseModel, ConfigDict, Field, validator
+    from pydantic import BaseModel, ConfigDict, Field
 except ImportError:
-    from ai_karen_engine.pydantic_stub import BaseModel, ConfigDict, Field, validator
+    from ai_karen_engine.pydantic_stub import BaseModel, ConfigDict, Field
 
 from ai_karen_engine.extensions.platform.core.manifest import ExtensionContext, ExtensionManifest
+from ai_karen_engine.services.plugin_discovery import PluginRegistry, get_plugin_registry
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +119,8 @@ class PluginExecutionContext:
     resource_limits: Optional[Dict[str, Any]] = None
     security_policy: Optional[Dict[str, Any]] = None
 
+    provider_constraints: Optional[Dict[str, Any]] = None
+
 
 class ExecutionRequest(BaseModel):
     """Plugin execution request."""
@@ -137,6 +134,9 @@ class ExecutionRequest(BaseModel):
     user_id: Optional[str] = None
     session_id: Optional[str] = None
     request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    policy_decision_id: Optional[str] = None
+    allowed_capabilities: List[str] = Field(default_factory=list)
+    forbidden_capabilities: List[str] = Field(default_factory=list)
 
 
 @dataclass
@@ -153,6 +153,15 @@ class ExecutionResult:
     started_at: datetime = field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    plugin_id: str = ""
+    plugin_version: str = ""
+    user_id: str = ""
+    tenant_id: str = ""
+    correlation_id: str = ""
+    policy_decision_id: str = ""
+    requested_capabilities: List[str] = field(default_factory=list)
+    granted_capabilities: List[str] = field(default_factory=list)
+    error_code: Optional[str] = None
 
 
 @dataclass
@@ -383,6 +392,78 @@ class PluginExecutionEngine:
             allow_file_system=data.get("allow_file_system", False),
             allow_subprocess=data.get("allow_subprocess", False),
         )
+
+    def _build_execution_context(
+        self,
+        request: ExecutionRequest,
+        manifest: Any,
+    ) -> PluginExecutionContext:
+        """Build restricted execution context from manifest and request."""
+        plugin_name = getattr(manifest, "name", request.plugin_name)
+        plugin_version = getattr(manifest, "version", "unknown")
+        plugin_id = request.plugin_name or plugin_name
+
+        return PluginExecutionContext(
+            user_id=request.user_id or "",
+            tenant_id="",
+            session_id=request.session_id or "",
+            conversation_id="",
+            request_id=request.request_id,
+            correlation_id="",
+            plugin_id=plugin_id,
+            plugin_version=plugin_version,
+            action="execute",
+            policy_decision_id=request.policy_decision_id or "",
+            allowed_capabilities=list(request.allowed_capabilities),
+            forbidden_capabilities=list(request.forbidden_capabilities),
+            resource_scope={},
+            resource_limits=None,
+            security_policy=None,
+            provider_constraints=None,
+        )
+
+    def _validate_execution_authorization(
+        self,
+        context: PluginExecutionContext,
+        manifest: Any,
+    ) -> None:
+        """Validate that plugin execution is authorized by policy."""
+        if not context.policy_decision_id:
+            raise ValueError(
+                f"Plugin '{context.plugin_id}' requires a policy_decision_id for execution. "
+                "CORTEX must route through RuntimePolicy before execution."
+            )
+
+        manifest_permissions = getattr(manifest, "permissions", None)
+        if manifest_permissions is None:
+            return
+
+        if hasattr(manifest_permissions, "model_dump"):
+            perms = manifest_permissions.model_dump()
+        elif isinstance(manifest_permissions, dict):
+            perms = manifest_permissions
+        else:
+            return
+
+        required_perms = []
+        for perm_key, perm_value in perms.items():
+            if perm_value is True:
+                required_perms.append(perm_key)
+            elif isinstance(perm_value, list):
+                required_perms.extend(perm_value)
+
+        denied = [p for p in required_perms if p in context.forbidden_capabilities]
+        if denied:
+            raise ValueError(
+                f"Plugin '{context.plugin_id}' denied: forbidden capabilities {denied}"
+            )
+
+        if context.allowed_capabilities:
+            missing = [p for p in required_perms if p not in context.allowed_capabilities]
+            if missing:
+                raise ValueError(
+                    f"Plugin '{context.plugin_id}' denied: missing allowed capabilities {missing}"
+                )
     
     async def execute_plugin(self, request: ExecutionRequest) -> ExecutionResult:
         """
@@ -408,6 +489,13 @@ class PluginExecutionEngine:
         plugin_result: Any = None
 
         try:
+            # RuntimePolicy authorization gate
+            if not request.policy_decision_id:
+                raise ValueError(
+                    f"Plugin '{request.plugin_name}' requires a policy_decision_id for execution. "
+                    "CORTEX must route through RuntimePolicy before execution."
+                )
+
             # Validate plugin exists and is registered
             plugin_metadata = self.registry.get_plugin(request.plugin_name)
             if not plugin_metadata:
@@ -416,12 +504,18 @@ class PluginExecutionEngine:
             if plugin_metadata.get("status") not in ["registered", "loaded", "active"]:
                 raise ValueError(f"Plugin '{request.plugin_name}' is not available for execution")
             
+            # Build restricted execution context from manifest and policy
+            manifest = plugin_metadata.get("manifest")
+            execution_context = self._build_execution_context(request, manifest)
+
+            # Validate plugin capabilities against policy decision
+            self._validate_execution_authorization(execution_context, manifest)
+
             # Validate and sanitize input
             sanitized_params = await self._validate_and_sanitize_input(
                 request.parameters, plugin_metadata
             )
 
-            manifest = plugin_metadata.get("manifest")
             resource_limits = self._resolve_resource_limits(manifest)
             security_policy = self._resolve_security_policy(manifest)
 
@@ -476,6 +570,13 @@ class PluginExecutionEngine:
             result.result = sanitized_result
             result.execution_time = execution_time
             result.completed_at = datetime.utcnow()
+            result.plugin_id = execution_context.plugin_id
+            result.plugin_version = execution_context.plugin_version
+            result.user_id = execution_context.user_id
+            result.tenant_id = execution_context.tenant_id
+            result.policy_decision_id = execution_context.policy_decision_id
+            result.requested_capabilities = list(request.allowed_capabilities)
+            result.granted_capabilities = list(execution_context.allowed_capabilities)
             
             # Update metrics
             self.metrics["executions_successful"] += 1
@@ -488,14 +589,26 @@ class PluginExecutionEngine:
             result.metadata.setdefault("cancel_requested", True)
             self.metrics["executions_cancelled"] += 1
             return result
+        except ValueError as exc:
+            result.status = ExecutionStatus.FAILED
+            result.error = str(exc)
+            result.error_code = "policy_denied"
+            result.execution_time = time.time() - start_time
+            result.completed_at = datetime.utcnow()
+            result.metadata["traceback"] = ""
+            self.metrics["executions_failed"] += 1
+            logger.error("Plugin execution policy denied: %s", exc)
+            return result
         except TimeoutError:
             result.status = ExecutionStatus.TIMEOUT
             result.error = f"Plugin execution timed out after {request.timeout_seconds} seconds"
+            result.error_code = "timeout"
             self.metrics["executions_timeout"] += 1
 
         except Exception as e:
             result.status = ExecutionStatus.FAILED
             result.error = str(e)
+            result.error_code = "execution_error"
             result.metadata["traceback"] = traceback.format_exc()
             self.metrics["executions_failed"] += 1
             logger.error(f"Plugin execution failed: {e}")

@@ -92,26 +92,28 @@ class KIREKROIntegration:
             try:
                 logger.info("Initializing KIRE-KRO integration components...")
 
-                # Initialize LLM Registry
-                from ai_karen_engine.integrations.llm_registry import get_registry
+                # Initialize canonical provider registry
+                from ai_karen_engine.core.model_runtime.provider_registry_service import (
+                    get_provider_registry_service,
+                )
 
-                self.llm_registry = get_registry()
+                self.llm_registry = get_provider_registry_service()
 
                 # Check if registry has any providers
                 try:
-                    providers = self.llm_registry.list_providers()
+                    providers = self.llm_registry.get_all_provider_names()
                     if not providers:
                         logger.warning(
-                            "⚠ LLM Registry initialized but no providers are registered. "
+                            "⚠ Provider registry initialized but no providers are registered. "
                             "Model discovery will attempt to populate the registry."
                         )
                     else:
                         logger.info(
-                            f"✓ LLM Registry initialized with {len(providers)} providers"
+                            f"✓ Provider registry initialized with {len(providers)} providers"
                         )
                 except Exception as e:
-                    logger.warning(f"Could not check LLM Registry providers: {e}")
-                    logger.info("✓ LLM Registry initialized")
+                    logger.warning(f"Could not check provider registry: %s", e)
+                    logger.info("✓ Provider registry initialized")
 
                 # Initialize Model Discovery
                 if self.config.enable_model_discovery:

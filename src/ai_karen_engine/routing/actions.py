@@ -12,15 +12,32 @@ import hashlib
 import threading
 import time
 from collections import deque
-from typing import Any, Deque, Dict, Optional
+from dataclasses import dataclass, field
+from typing import Any, Deque, Dict, List, Optional
 
 from ai_karen_engine.core.cortex.predictors import register_predictor
 from ai_karen_engine.routing.kire_router import KIRERouter
 from ai_karen_engine.routing.types import RouteRequest
 from ai_karen_engine.integrations.llm_registry import get_registry
-from ai_karen_engine.integrations.task_analyzer import TaskAnalyzer
 from ai_karen_engine.routing.decision_logger import get_decision_logger
 from ai_karen_engine.monitoring.kire_metrics import KIRE_ACTIONS_TOTAL
+
+
+@dataclass
+class TaskAnalysis:
+    """Minimal stub for legacy routing compatibility."""
+
+    task_type: str = "chat"
+    required_capabilities: List[str] = field(default_factory=list)
+    khrp_step_hint: Optional[str] = None
+    hints: Dict[str, Any] = field(default_factory=dict)
+    confidence: float = 0.75
+    user_need_state: Dict[str, Any] = field(default_factory=dict)
+
+
+def _analyze_task(query: str, context: Optional[Dict[str, Any]] = None) -> TaskAnalysis:
+    """Lightweight task analysis stub for legacy routing."""
+    return TaskAnalysis(task_type=_task_from_query(query))
 
 
 _router = KIRERouter(llm_registry=get_registry())
@@ -60,8 +77,7 @@ async def routing_select_handler(user_ctx: Dict[str, Any], query: str, context: 
         KIRE_ACTIONS_TOTAL.labels(action="routing.select", status="forbidden").inc()
         raise
 
-    analyzer = TaskAnalyzer()
-    analysis = analyzer.analyze(query, user_ctx=user_ctx, context=context)
+    analysis = _analyze_task(query, context=context)
     task_type = (context or {}).get("task_type") or analysis.task_type
     khrp_step = (context or {}).get("khrp_step")
     requirements = (context or {}).get("requirements", {})
@@ -163,8 +179,7 @@ async def routing_audit_history_handler(user_ctx: Dict[str, Any], query: str, co
 
 
 async def routing_dry_run_handler(user_ctx: Dict[str, Any], query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    analyzer = TaskAnalyzer()
-    analysis = analyzer.analyze(query, user_ctx=user_ctx, context=context)
+    analysis = _analyze_task(query, context=context)
     # Do not call providers; only compute decision inputs
     KIRE_ACTIONS_TOTAL.labels(action="routing.dry-run", status="success").inc()
     return {

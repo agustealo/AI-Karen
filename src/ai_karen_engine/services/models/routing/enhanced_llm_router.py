@@ -56,11 +56,29 @@ from ai_karen_engine.core.runtime.degraded_mode import (
 from ai_karen_engine.routing.types import RouteRequest, RouteDecision
 from ai_karen_engine.routing.profile_resolver import ProfileResolver
 from ai_karen_engine.routing.decision_logger import DecisionLogger
-from ai_karen_engine.integrations.task_analyzer import TaskAnalyzer, TaskAnalysis
 from ai_karen_engine.routing.cognitive_reasoner import (
     CognitiveReasoner,
     RoutingCognition,
 )
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TaskAnalysis:
+    """Minimal stub for legacy routing compatibility."""
+
+    task_type: str = "chat"
+    required_capabilities: List[str] = field(default_factory=list)
+    tool_intents: List[str] = field(default_factory=list)
+    hints: Dict[str, Any] = field(default_factory=dict)
+    confidence: float = 0.75
+    user_need_state: Dict[str, Any] = field(default_factory=dict)
+
+
+def _analyze_task(query: str, context: Optional[Dict[str, Any]] = None) -> TaskAnalysis:
+    """Lightweight task analysis stub for legacy routing."""
+    return TaskAnalysis(task_type="chat")
 
 try:  # pragma: no cover - SecretManager may require optional deps
     from ai_karen_engine.models.secret_manager import SecretManager
@@ -162,7 +180,6 @@ class EnhancedLLMRouter:
         self.registry = get_registry()
         self.profile_resolver = ProfileResolver()
         self.decision_logger = DecisionLogger()
-        self.task_analyzer = TaskAnalyzer()
         self.cognitive_reasoner = CognitiveReasoner()
         self.degraded_mode_manager = get_degraded_mode_manager()
 
@@ -221,9 +238,7 @@ class EnhancedLLMRouter:
                 return decision
 
         # Analyze task for routing context
-        task_analysis = await self.task_analyzer.analyze_task(
-            request.message, request.context, request.tools
-        )
+        task_analysis = _analyze_task(request.message, context=request.context)
 
         # Apply cognitive reasoning
         cognition = await self.cognitive_reasoner.reason_routing(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Optional, List, Dict, Any
 
@@ -9,7 +10,13 @@ from ai_karen_engine.core.runtime.execution_decision import (
     RuntimeExecutionMode,
     RiskLevel,
 )
+from ai_karen_engine.core.runtime.policy import (
+    PolicyEvaluationRequest,
+    RuntimePolicyEnforcer,
+)
 from ai_karen_engine.core.intelligence import get_intelligence_runtime
+
+logger = logging.getLogger(__name__)
 
 # Safety escape hatch: force every request through the graph workflow path.
 _FORCE_GRAPH_ENV = "KARI_RUNTIME_FORCE_GRAPH"
@@ -30,6 +37,9 @@ class CortexExecutionDecider:
 
     Security: RBAC/policy failures are fail-closed. Missing capability
     infrastructure means DENIED, not implicit permission.
+
+    CORTEX delegates authorization to RuntimePolicyEnforcer. CORTEX never
+    authorizes execution itself.
     """
 
     def __init__(self, *, force_graph: Optional[bool] = None):
@@ -39,6 +49,7 @@ class CortexExecutionDecider:
             else os.environ.get(_FORCE_GRAPH_ENV, "false").lower() in ("1", "true", "yes")
         )
         self._intelligence = get_intelligence_runtime()
+        self._policy_enforcer = RuntimePolicyEnforcer()
 
     async def decide(self, request: ChatExecutionRequest) -> ExecutionDecision:
         meta = request.metadata or {}
@@ -50,6 +61,7 @@ class CortexExecutionDecider:
         # ------------------------------------------------------------------
         user_id = ctx.user_id
         tenant_id = ctx.tenant_id
+        session_id = getattr(ctx, "session_id", None)
         roles = list(ctx.roles or [])
         permissions = list(ctx.permissions or [])
 
@@ -80,7 +92,7 @@ class CortexExecutionDecider:
         tool_requirements = analysis.get("tool_requirements", []) or list(meta.get("tool_requirements") or [])
         plugin_candidates = analysis.get("plugin_candidates", []) or list(meta.get("plugin_candidates") or [])
         required_capabilities = analysis.get("required_capabilities", []) or list(meta.get("required_capabilities") or [])
-        forbidden_capabilities = analysis.get("forbidden_capabilities", []) or list(meta.get("forbidden_capabilities") or [])
+        denied_capabilities = analysis.get("forbidden_capabilities", []) or list(meta.get("forbidden_capabilities") or [])
         policy_constraints = dict(meta.get("policy_constraints") or {})
 
         if tool_requirements or plugin_candidates:
@@ -127,21 +139,31 @@ class CortexExecutionDecider:
         reasoning_depth = str(meta.get("reasoning_depth", analysis.get("reasoning_depth", "standard")))
 
         # ------------------------------------------------------------------
-        # 9. Trusted RBAC policy check (not from caller metadata)
+        # 9. RuntimePolicy authorization (not from caller metadata)
         # ------------------------------------------------------------------
-        policy_decision = self._evaluate_rbac_policy(
+        policy_evaluation = PolicyEvaluationRequest(
             user_id=user_id,
             tenant_id=tenant_id,
+            session_id=session_id,
+            correlation_id=getattr(request, "correlation_id", None),
             roles=roles,
             permissions=permissions,
-            required_capabilities=required_capabilities,
-            forbidden_capabilities=forbidden_capabilities,
-            risk_level=risk_level,
-            tool_requirements=tool_requirements,
-            plugin_candidates=plugin_candidates,
+            action="general_assist",
+            requested_capabilities=required_capabilities,
+            forbidden_capabilities=denied_capabilities,
+            risk_signals=analysis.get("risk_signals", {}),
+            runtime_level=self._risk_level_to_runtime_level(risk_level),
+            tool_id=tool_requirements[0] if tool_requirements else None,
+            environment="production",
+            execution_topology={
+                "tool_requirements": tool_requirements,
+                "plugin_candidates": plugin_candidates,
+                "requires_human_gate": requires_human_gate,
+            },
         )
+        policy_decision = await self._policy_enforcer.evaluate(policy_evaluation)
 
-        if not policy_decision["allowed"]:
+        if not policy_decision.allowed:
             return ExecutionDecision(
                 execution_mode=RuntimeExecutionMode.DEGRADED,
                 graph_required=False,
@@ -157,23 +179,23 @@ class CortexExecutionDecider:
                 tool_requirements=[],
                 plugin_candidates=[],
                 required_capabilities=[],
-                forbidden_capabilities=list(policy_decision.get("forbidden_capabilities", [])),
+                forbidden_capabilities=list(policy_decision.denied_capabilities),
                 requires_human_gate=True,
                 max_steps=0,
                 time_budget_ms=0,
                 token_budget=0,
                 workflow_id=analysis.get("workflow_id"),
                 workflow_version="v1",
-                policy_decision_id=policy_decision.get("decision_id"),
-                policy_version=policy_decision.get("policy_version", "v1"),
-                policy_reason_codes=[policy_decision.get("reason", "policy_denied")],
+                policy_decision_id=policy_decision.decision_id,
+                policy_version=policy_decision.policy_version,
+                policy_reason_codes=[code.value for code in policy_decision.reason_codes],
                 reason_codes=["policy_denied", *reason_codes],
-                policy_constraints={"denial_reason": policy_decision.get("reason")},
+                policy_constraints={"denial_reason": policy_decision.reason_codes[0].value if policy_decision.reason_codes else "policy_denied"},
             )
 
         # Attach policy provenance
-        required_capabilities = list(policy_decision.get("allowed_capabilities", required_capabilities))
-        forbidden_capabilities = list(set(forbidden_capabilities) | set(policy_decision.get("forbidden_capabilities", [])))
+        required_capabilities = list(policy_decision.allowed_capabilities)
+        denied_capabilities = list(set(denied_capabilities) | set(policy_decision.denied_capabilities))
 
         # ------------------------------------------------------------------
         # 10. Operational safety override (rollback)
@@ -201,7 +223,7 @@ class CortexExecutionDecider:
             tool_requirements=tool_requirements,
             plugin_candidates=plugin_candidates,
             required_capabilities=required_capabilities,
-            forbidden_capabilities=forbidden_capabilities,
+            forbidden_capabilities=denied_capabilities,
             requires_human_gate=requires_human_gate,
             requires_resumability=requires_resumability,
             requires_parallel_execution=requires_parallel_execution,
@@ -211,12 +233,22 @@ class CortexExecutionDecider:
             token_budget=token_budget,
             workflow_id=analysis.get("workflow_id"),
             workflow_version="v1",
-            policy_decision_id=policy_decision.get("decision_id"),
-            policy_version=policy_decision.get("policy_version", "v1"),
-            policy_reason_codes=list(policy_decision.get("reason_codes", [])),
+            policy_decision_id=policy_decision.decision_id,
+            policy_version=policy_decision.policy_version,
+            policy_reason_codes=[code.value for code in policy_decision.reason_codes],
             reason_codes=reason_codes,
             policy_constraints=policy_constraints,
         )
+
+    def _risk_level_to_runtime_level(self, risk_level: RiskLevel) -> Any:
+        from ai_karen_engine.core.runtime.policy import RuntimeLevel
+        mapping = {
+            RiskLevel.LOW: RuntimeLevel.FULL,
+            RiskLevel.MEDIUM: RuntimeLevel.REDUCED,
+            RiskLevel.HIGH: RuntimeLevel.SAFE,
+            RiskLevel.CRITICAL: RuntimeLevel.EMERGENCY,
+        }
+        return mapping.get(risk_level, RuntimeLevel.FULL)
 
     def _extract_user_content(self, messages: List[Dict[str, Any]]) -> str:
         """Extract the latest user message for analysis."""
@@ -480,86 +512,6 @@ class CortexExecutionDecider:
         if risk_score >= 0.2:
             return RiskLevel.MEDIUM
         return RiskLevel.LOW
-
-    def _evaluate_rbac_policy(
-        self,
-        user_id: str,
-        tenant_id: str,
-        roles: List[str],
-        permissions: List[str],
-        required_capabilities: List[str],
-        forbidden_capabilities: List[str],
-        risk_level: RiskLevel,
-        tool_requirements: List[str],
-        plugin_candidates: List[str],
-    ) -> Dict[str, Any]:
-        """Trusted RBAC/policy evaluation using authenticated context.
-
-        This never reads policy from caller metadata. It uses only the
-        trusted authenticated context passed through ChatExecutionContext.
-
-        Returns:
-            Dict with 'allowed', 'reason', 'decision_id', 'policy_version',
-            'reason_codes', 'allowed_capabilities', 'forbidden_capabilities'.
-        """
-        decision_id = f"policy-{tenant_id}-{user_id}-{int(time.time() * 1000)}"
-        policy_version = "v1"
-
-        if not user_id or not tenant_id:
-            return {
-                "allowed": False,
-                "reason": "missing_authenticated_context",
-                "decision_id": decision_id,
-                "policy_version": policy_version,
-                "reason_codes": ["missing_identity"],
-                "allowed_capabilities": [],
-                "forbidden_capabilities": ["all"],
-            }
-
-        forbidden = set(forbidden_capabilities)
-        for cap in required_capabilities:
-            if cap in forbidden:
-                return {
-                    "allowed": False,
-                    "reason": f"required capability '{cap}' is forbidden",
-                    "decision_id": decision_id,
-                    "policy_version": policy_version,
-                    "reason_codes": ["capability_conflict"],
-                    "allowed_capabilities": [],
-                    "forbidden_capabilities": list(forbidden),
-                }
-
-        if risk_level == RiskLevel.CRITICAL and "admin" not in permissions:
-            return {
-                "allowed": False,
-                "reason": "critical risk requires admin permission",
-                "decision_id": decision_id,
-                "policy_version": policy_version,
-                "reason_codes": ["insufficient_permission"],
-                "allowed_capabilities": [],
-                "forbidden_capabilities": ["admin", "write", "delete"],
-            }
-
-        if tool_requirements and "admin" not in permissions and risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL):
-            return {
-                "allowed": False,
-                "reason": "tool execution at high/critical risk requires admin permission",
-                "decision_id": decision_id,
-                "policy_version": policy_version,
-                "reason_codes": ["tool_risk_denied"],
-                "allowed_capabilities": [],
-                "forbidden_capabilities": list(set(forbidden) | set(tool_requirements)),
-            }
-
-        return {
-            "allowed": True,
-            "reason": "policy_check_passed",
-            "decision_id": decision_id,
-            "policy_version": policy_version,
-            "reason_codes": ["authenticated", "policy_allowed"],
-            "allowed_capabilities": list(required_capabilities),
-            "forbidden_capabilities": list(forbidden),
-        }
 
     def cortex_never_executes(self) -> bool:
         """CORTEX decides but never executes providers, plugins, tools, memory, or LangGraph."""

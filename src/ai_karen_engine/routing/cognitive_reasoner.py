@@ -11,8 +11,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from ai_karen_engine.integrations.task_analyzer import TaskAnalysis
 from ai_karen_engine.routing.types import RouteRequest, UserProfile
+
+
+@dataclass
+class TaskAnalysis:
+    """Minimal stub for legacy routing compatibility."""
+
+    task_type: str = "chat"
+    required_capabilities: List[str] = field(default_factory=list)
+    tool_intents: List[str] = field(default_factory=list)
+    hints: Dict[str, Any] = field(default_factory=dict)
+    confidence: float = 0.75
+    user_need_state: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

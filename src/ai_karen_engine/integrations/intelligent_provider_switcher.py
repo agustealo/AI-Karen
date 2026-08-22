@@ -36,10 +36,6 @@ from .capability_aware_selector import (
     SelectionCriteria, SelectionStrategy, RequestContext, get_capability_selector
 )
 from .model_availability_cache import get_model_availability_cache
-from .fallback_chain_manager import (
-    FallbackChainManager, FallbackStrategy, CapabilityPreservationLevel,
-    get_fallback_chain_manager
-)
 from ..monitoring.network_connectivity import NetworkStatus, get_network_monitor
 from ..monitoring.comprehensive_health_monitor import (
     HealthStatus, HealthCheckType, get_comprehensive_health_monitor
@@ -47,6 +43,20 @@ from ..monitoring.comprehensive_health_monitor import (
 from ..monitoring.health_based_decision_maker import (
     DecisionStrategy, get_health_decision_maker
 )
+
+
+class _FallbackChainManagerStub:
+    """Stub replacing retired integrations/fallback_chain_manager.py."""
+
+    def register_switch_callback(self, callback: Any) -> None:
+        pass
+
+    def _create_context_bridge(self, *args: Any, **kwargs: Any) -> Any:
+        return None
+
+
+def _get_fallback_chain_manager_stub() -> _FallbackChainManagerStub:
+    return _FallbackChainManagerStub()
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +203,7 @@ class IntelligentProviderSwitcher:
         self._provider_registry = get_intelligent_provider_registry()
         self._capability_selector = get_capability_selector()
         self._model_cache = get_model_availability_cache()
-        self._fallback_manager = get_fallback_chain_manager()
+        self._fallback_manager = _get_fallback_chain_manager_stub()
         self._network_monitor = get_network_monitor()
         self._health_monitor = get_comprehensive_health_monitor()
         self._decision_maker = get_health_decision_maker()

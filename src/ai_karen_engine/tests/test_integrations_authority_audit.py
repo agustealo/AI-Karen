@@ -78,7 +78,6 @@ FILE_CLASSIFICATIONS: Dict[str, str] = {
     "routing_policies.py": "DUPLICATE",
     "sr_llamaindex_adapter.py": "KEEP_AS_ADAPTER",
     "startup.py": "DANGEROUS",
-    "task_analyzer.py": "DUPLICATE",
     "video_providers.py": "KEEP_AS_ADAPTER",
     "video_registry.py": "KEEP_AS_ADAPTER",
     "voice_providers.py": "KEEP_AS_ADAPTER",
