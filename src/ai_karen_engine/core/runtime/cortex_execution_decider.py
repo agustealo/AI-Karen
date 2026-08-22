@@ -93,7 +93,7 @@ class CortexExecutionDecider:
         # ------------------------------------------------------------------
         # 6. Risk and governance
         # ------------------------------------------------------------------
-        risk_level = self._assess_risk_level(analysis, tool_requirements, plugin_candidates)
+        risk_level = self._assess_risk_level(analysis)
         requires_human_gate = bool(analysis.get("requires_human_gate", False)) or risk_level in (
             RiskLevel.HIGH,
             RiskLevel.CRITICAL,
@@ -243,10 +243,16 @@ class CortexExecutionDecider:
             capabilities = self._infer_capabilities_from_analysis(analysis)
             memory_policy = self._infer_memory_policy_from_analysis(analysis)
             workflow = self._infer_workflow_from_analysis(analysis)
+            risk_level = self._assess_risk_level(analysis)
 
             return {
                 "intent": intent_value,
                 "intent_confidence": confidence,
+                "task_complexity": getattr(analysis, "task_complexity", "simple"),
+                "memory_relevance": getattr(analysis, "memory_relevance", 0.0),
+                "topology_signals": getattr(analysis, "topology_signals", {}),
+                "risk_signals": getattr(analysis, "risk_signals", {}),
+                "capability_hints": getattr(analysis, "capability_hints", {}),
                 "tool_requirements": topology.get("tool_requirements", []),
                 "plugin_candidates": topology.get("plugin_candidates", []),
                 "required_capabilities": capabilities.get("required", []),
@@ -256,7 +262,7 @@ class CortexExecutionDecider:
                 "memory_scope": memory_policy.get("scope", "session"),
                 "memory_top_k": memory_policy.get("top_k", 10),
                 "memory_classes": memory_policy.get("classes", []),
-                "requires_human_gate": topology.get("requires_human_gate", False),
+                "requires_human_gate": topology.get("requires_human_gate", False) or risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL),
                 "requires_resumability": topology.get("requires_resumability", False),
                 "requires_parallel_execution": topology.get("requires_parallel_execution", False),
                 "agent_delegation": topology.get("agent_delegation", False),
@@ -266,7 +272,9 @@ class CortexExecutionDecider:
                 "reasoning_depth": topology.get("reasoning_depth", "standard"),
                 "workflow_required": workflow.get("required", False),
                 "workflow_id": workflow.get("workflow_id"),
-                "risk_signals": topology.get("risk_signals", []),
+                "risk_level": risk_level.value if isinstance(risk_level, RiskLevel) else str(risk_level),
+                "risk_score": (getattr(analysis, "risk_signals", {}) or {}).get("score", 0.0),
+                "risk_categories": (getattr(analysis, "risk_signals", {}) or {}).get("categories", []),
             }
         except Exception as exc:
             logger.warning("CORTEX analysis failed, using safe defaults: %s", exc)
@@ -276,6 +284,11 @@ class CortexExecutionDecider:
         return {
             "intent": "general_assist",
             "intent_confidence": 0.0,
+            "task_complexity": "simple",
+            "memory_relevance": 0.0,
+            "topology_signals": {},
+            "risk_signals": {"categories": [], "score": 0.0},
+            "capability_hints": {},
             "tool_requirements": [],
             "plugin_candidates": [],
             "required_capabilities": [],
@@ -295,7 +308,9 @@ class CortexExecutionDecider:
             "reasoning_depth": "standard",
             "workflow_required": False,
             "workflow_id": None,
-            "risk_signals": [],
+            "risk_level": RiskLevel.LOW.value,
+            "risk_score": 0.0,
+            "risk_categories": [],
         }
 
     def _infer_topology_from_analysis(self, analysis) -> Dict[str, Any]:
@@ -317,24 +332,30 @@ class CortexExecutionDecider:
             "system_command": False,
         }
 
-        intent_value = getattr(analysis, "intent", "general_assist") or "general_assist"
-        confidence = getattr(analysis, "intent_confidence", 0.0) or 0.0
+        topology_signals = getattr(analysis, "topology_signals", {}) or {}
+        capability_hints = getattr(analysis, "capability_hints", {}) or {}
+        task_complexity = getattr(analysis, "task_complexity", "simple")
 
-        graph_intents = {
-            "debug_error", "architecture_design", "deployment_help",
-            "code_review", "research_agent", "multi_agent"
-        }
-        if intent_value in graph_intents:
-            topology["tool_requirements"] = ["search", "repo_read"]
-            topology["requires_resumability"] = True
+        if topology_signals.get("external_lookup"):
+            topology["tool_requirements"].append("search")
+        if topology_signals.get("code_execution"):
+            topology["tool_requirements"].append("code_execution")
+        if topology_signals.get("filesystem_operation"):
+            topology["tool_requirements"].append("filesystem_operation")
+        if capability_hints.get("web_search"):
+            topology["tool_requirements"].append("web_search")
 
-        if intent_value == "deployment_help":
-            topology["system_command"] = True
-            topology["filesystem_write"] = True
-
-        if confidence < 0.5:
+        if topology_signals.get("multiple_actions") or topology_signals.get("dependency_chain"):
             topology["requires_resumability"] = True
             topology["reasoning_depth"] = "deep"
+
+        if topology_signals.get("parallelizable"):
+            topology["requires_parallel_execution"] = True
+
+        if task_complexity == "complex":
+            topology["requires_resumability"] = True
+            topology["reasoning_depth"] = "deep"
+            topology["max_steps"] = max(topology["max_steps"], 20)
 
         return topology
 
@@ -342,15 +363,27 @@ class CortexExecutionDecider:
         """Infer capability requirements from analysis."""
         capabilities: Dict[str, Any] = {"required": [], "forbidden": []}
 
-        intent_value = getattr(analysis, "intent", "general_assist") or "general_assist"
+        capability_hints = getattr(analysis, "capability_hints", {}) or {}
+        risk_signals = getattr(analysis, "risk_signals", {}) or {}
 
-        write_intents = {"architecture_design", "deployment_help", "content_creation"}
-        if intent_value in write_intents:
-            capabilities["required"].append("write")
+        if capability_hints.get("web_search"):
+            capabilities["required"].append("web")
+        if capability_hints.get("code_execution"):
+            capabilities["required"].append("code_execution")
+        if capability_hints.get("filesystem_read"):
+            capabilities["required"].append("filesystem_read")
+        if capability_hints.get("filesystem_write"):
+            capabilities["required"].append("filesystem_write")
+        if capability_hints.get("structured_output"):
+            capabilities["required"].append("structured_output")
+        if capability_hints.get("deep_reasoning"):
+            capabilities["required"].append("reasoning")
 
-        admin_intents = {"system_config", "feature_request"}
-        if intent_value in admin_intents:
-            capabilities["required"].append("admin")
+        risk_categories = risk_signals.get("categories", [])
+        if "credential_access" in risk_categories or "production_impact" in risk_categories:
+            capabilities["forbidden"].append("admin")
+        if "destructive_action" in risk_categories:
+            capabilities["forbidden"].append("delete")
 
         return capabilities
 
@@ -364,20 +397,16 @@ class CortexExecutionDecider:
             "classes": [],
         }
 
-        intent_value = getattr(analysis, "intent", "general_assist") or "general_assist"
-        confidence = getattr(analysis, "intent_confidence", 0.0) or 0.0
+        memory_relevance = getattr(analysis, "memory_relevance", 0.0) or 0.0
+        task_complexity = getattr(analysis, "task_complexity", "simple")
 
-        memory_intents = {
-            "personal_advice", "learning_path", "tutorial_request",
-            "business_advice", "strategy_planning"
-        }
-        if intent_value in memory_intents:
+        if memory_relevance >= 0.5:
             policy["recall_required"] = True
             policy["scope"] = "user"
             policy["top_k"] = 15
 
-        if confidence < 0.3:
-            policy["recall_required"] = True
+        if task_complexity == "complex":
+            policy["top_k"] = max(policy["top_k"], 20)
 
         return policy
 
@@ -385,17 +414,17 @@ class CortexExecutionDecider:
         """Infer workflow requirements from analysis."""
         workflow: Dict[str, Any] = {"required": False, "workflow_id": None}
 
-        intent_value = getattr(analysis, "intent", "general_assist") or "general_assist"
+        topology_signals = getattr(analysis, "topology_signals", {}) or {}
+        capability_hints = getattr(analysis, "capability_hints", {}) or {}
+        task_complexity = getattr(analysis, "task_complexity", "simple")
 
-        workflow_map = {
-            "debug_error": "repo_debug",
-            "architecture_design": "architecture_planning",
-            "deployment_help": "deployment_pipeline",
-            "code_review": "code_review",
-        }
-        if intent_value in workflow_map:
+        if topology_signals.get("dependency_chain") or task_complexity == "complex":
             workflow["required"] = True
-            workflow["workflow_id"] = workflow_map[intent_value]
+            workflow["workflow_id"] = "multi_step_pipeline"
+
+        if capability_hints.get("code_execution") and topology_signals.get("external_lookup"):
+            workflow["required"] = True
+            workflow["workflow_id"] = "research_and_code"
 
         return workflow
 
@@ -420,12 +449,7 @@ class CortexExecutionDecider:
 
         return triggers
 
-    def _assess_risk_level(
-        self,
-        analysis: Dict[str, Any],
-        tool_requirements: List[str],
-        plugin_candidates: List[str],
-    ) -> RiskLevel:
+    def _assess_risk_level(self, analysis: Dict[str, Any]) -> RiskLevel:
         """Assess execution risk from analysis signals."""
         explicit_risk = analysis.get("risk_level")
         if explicit_risk:
@@ -434,25 +458,26 @@ class CortexExecutionDecider:
             except ValueError:
                 pass
 
-        risk_score = 0
-        if tool_requirements:
-            risk_score += 1
-        if plugin_candidates:
-            risk_score += 2
-        if analysis.get("requires_human_gate"):
-            risk_score += 2
-        if analysis.get("filesystem_write"):
-            risk_score += 2
-        if analysis.get("network_access"):
-            risk_score += 1
-        if analysis.get("system_command"):
-            risk_score += 3
+        risk_signals = analysis.get("risk_signals", {}) or {}
+        risk_score = float(risk_signals.get("score", 0.0) or 0.0)
+        categories = risk_signals.get("categories", []) or []
 
-        if risk_score >= 5:
+        if "production_impact" in categories:
+            risk_score = max(risk_score, 0.8)
+        if "credential_access" in categories:
+            risk_score = max(risk_score, 0.7)
+        if "financial_consequence" in categories:
+            risk_score = max(risk_score, 0.6)
+        if "destructive_action" in categories:
+            risk_score = max(risk_score, 0.5)
+        if "admin_scope" in categories:
+            risk_score = max(risk_score, 0.4)
+
+        if risk_score >= 0.8:
             return RiskLevel.CRITICAL
-        if risk_score >= 3:
+        if risk_score >= 0.5:
             return RiskLevel.HIGH
-        if risk_score >= 1:
+        if risk_score >= 0.2:
             return RiskLevel.MEDIUM
         return RiskLevel.LOW
 
