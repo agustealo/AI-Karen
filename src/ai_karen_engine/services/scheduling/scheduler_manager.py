@@ -37,6 +37,7 @@ except ImportError:
 
 from ai_karen_engine.learning.autonomous_learner import AutonomousLearner, LearningCycleResult
 from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
+from ai_karen_engine.core.runtime.resilience import get_feature_flags
 
 logger = logging.getLogger(__name__)
 
@@ -749,9 +750,14 @@ class SchedulerManager:
     
     async def _execute_training(self, schedule_id: str, schedule: ScheduleInfo):
         """Execute a training cycle for a schedule."""
-        start_time = datetime.utcnow()
-        schedule.last_run = start_time
-        schedule.total_runs += 1
+        if not get_feature_flags().is_enabled("autonomous_learning_enabled", tenant_id=schedule.tenant_id):
+            schedule.last_result = json.dumps({
+                "error": "autonomous_learning_enabled feature flag is disabled",
+                "status": "skipped",
+                "timestamp": datetime.utcnow().isoformat()
+            })
+            self._save_schedules()
+            return
         
         try:
             # Send start notification

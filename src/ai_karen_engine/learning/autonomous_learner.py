@@ -23,6 +23,7 @@ from ai_karen_engine.core.cortex.analysis import SpacyAnalyzer
 from ai_karen_engine.core.memory.signals.spacy_service import SpacyService, ParsedMessage
 from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
 from ai_karen_engine.core.memory.unified_memory_service import MemoryCommitRequest, MemoryQueryRequest
+from ai_karen_engine.core.runtime.resilience import get_feature_flags
 
 logger = logging.getLogger(__name__)
 
@@ -778,6 +779,18 @@ class AutonomousLearner:
         force_training: bool = False
     ) -> LearningCycleResult:
         """Trigger a complete autonomous learning cycle."""
+        if not get_feature_flags().is_enabled("autonomous_learning_enabled", tenant_id=tenant_id):
+            result = LearningCycleResult(
+                cycle_id=str(uuid.uuid4()),
+                started_at=datetime.utcnow(),
+                completed_at=datetime.utcnow(),
+                status=TrainingStatus.FAILED,
+                data_collected=0,
+                examples_created=0,
+                error_message="autonomous_learning_enabled feature flag is disabled",
+            )
+            return result
+        
         cycle_id = str(uuid.uuid4())
         started_at = datetime.utcnow()
         

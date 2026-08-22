@@ -33,6 +33,7 @@ class FeatureFlags:
             "training_candidates_enabled": False, # Safer default
             "personalization_enabled": True,
             "organization_learning_enabled": False,
+            "autonomous_learning_enabled": False,
         }
         self._tenant_overrides: Dict[str, Dict[str, bool]] = {}
         self._user_overrides: Dict[str, Dict[str, bool]] = {}
