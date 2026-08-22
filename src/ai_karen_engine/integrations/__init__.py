@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # Genuine adapter imports
 from ai_karen_engine.integrations.local_rpa_client import LocalRPAClient
 from ai_karen_engine.integrations.nanda_client import NANDAClient
-from ai_karen_engine.integrations.sr_llamaindex_adapter import SrLlamaIndexAdapter
+from ai_karen_engine.integrations.sr_llamaindex_adapter import LlamaIndexSRAdapter as SrLlamaIndexAdapter
 
 # Voice/video registries retained as integration-boundary registries
 from ai_karen_engine.integrations.voice_registry import (
