@@ -174,3 +174,135 @@ def test_prompt_registry_registration_and_list() -> None:
 
     assert registry.get("karen.tool.use", "v1") is definition
     assert definition in registry.list_definitions()
+
+
+def test_prompt_definition_affects_assembly() -> None:
+    """Resolved PromptDefinition must contribute defaults to assembly."""
+    import asyncio
+
+    registry = PromptRegistry()
+    definition = PromptDefinition(
+        prompt_id="karen.chat.default",
+        version="v1",
+        name="Default",
+        description="Default contract",
+        system_prompt="Default system prompt from contract.",
+        token_budget=2048,
+        tool_contracts=[{"name": "contract_tool", "description": "From contract"}],
+        output_schema={"format": "json"},
+    )
+    registry.register(definition)
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        messages=[{"role": "user", "content": "Hello"}],
+        tool_contracts=[{"name": "request_tool", "description": "From request"}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+
+    assert result.metadata.get("registry_lookup") is True
+    assert result.metadata.get("prompt_contract_id") == "karen.chat.default"
+    assert any("Default system prompt from contract." in msg.get("content", "") for msg in result.messages)
+    assert "contract_tool" in result.included_tool_contracts
+    assert "request_tool" in result.included_tool_contracts
+
+
+def test_assembly_respects_token_budget() -> None:
+    """Assembly must respect token budget and emit truncation events."""
+    import asyncio
+
+    registry = PromptRegistry()
+    definition = PromptDefinition(
+        prompt_id="karen.chat.default",
+        version="v1",
+        name="Default",
+        description="Default contract",
+        system_prompt="System prompt.",
+        token_budget=50,
+    )
+    registry.register(definition)
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        token_budget=50,
+        messages=[{"role": "user", "content": "Hello " * 200}],
+        memory_items=[{"id": "m1", "content": "Memory " * 200}],
+        tool_contracts=[{"name": "tool", "description": "Tool " * 200}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+
+    assert result.token_estimate <= 50
+    assert result.truncation_events
+
+
+def test_policy_sections_are_protected_from_truncation() -> None:
+    """System policy and output contract should be protected from truncation."""
+    import asyncio
+
+    registry = PromptRegistry()
+    definition = PromptDefinition(
+        prompt_id="karen.chat.default",
+        version="v1",
+        name="Default",
+        description="Default contract",
+        system_prompt="Protected system policy.",
+        output_schema={"format": "json"},
+        token_budget=100,
+    )
+    registry.register(definition)
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        system_policy="Protected system policy.",
+        output_schema={"format": "json"},
+        token_budget=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        memory_items=[{"id": "m1", "content": "Memory " * 200}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+
+    contents = " ".join(msg.get("content", "") for msg in result.messages)
+    assert "Protected system policy." in contents
+    assert "format=json" in contents
+
+
+def test_wired_request_fields_appear_in_assembly() -> None:
+    """Wired PromptAssemblyRequest fields must appear in assembled output."""
+    import asyncio
+
+    registry = PromptRegistry()
+    register_default_prompts(registry)
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        system_policy="System policy",
+        tenant_policy="Tenant policy",
+        persona={"system_prompt": "Persona prompt"},
+        profile={"style": "concise"},
+        cortex_intent={"intent": "research", "intent_confidence": 0.9},
+        tool_contracts=[{"name": "search", "description": "Search tool"}],
+        workflow_context={"workflow_id": "wf-1", "objective": "Research"},
+        provider_capabilities={"format": "json"},
+        output_schema={"type": "object"},
+        token_budget=4096,
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+
+    contents = " ".join(msg.get("content", "") for msg in result.messages)
+    assert "System policy" in contents
+    assert "Tenant policy" in contents
+    assert "Persona prompt" in contents
+    assert "intent=research" in contents
+    assert "search" in contents
+    assert "workflow_id=wf-1" in contents
+    assert "format=json" in contents
+
