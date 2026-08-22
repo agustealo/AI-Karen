@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Callable
+from collections.abc import Callable
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .context import set_log_context, clear_log_context, RuntimeLogContext
-from .logger import get_logger
+from ai_karen_engine.core.observability.context import (
+    ObservabilityContext,
+    clear_observability_context,
+    set_observability_context,
+)
+from ai_karen_engine.core.observability.emitter import get_observability_emitter
+
+from .context import RuntimeLogContext, clear_log_context, set_log_context
 from .events import RuntimeEvents
+from .logger import get_logger
 
 logger = get_logger("kari.middleware")
+
 
 class RuntimeLoggingMiddleware(BaseHTTPMiddleware):
     """Middleware to bind request context and log request lifecycle."""
@@ -20,42 +28,57 @@ class RuntimeLoggingMiddleware(BaseHTTPMiddleware):
         # 1. Create context
         correlation_id = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
         request_id = str(uuid.uuid4())
-        
+
         # Determine client IP hash for privacy
         client_ip = request.client.host if request.client else "0.0.0.0"
-        # In real prod we'd hash it properly, here just a placeholder
         client_ip_hash = f"hash_{client_ip[-4:]}"
 
-        ctx = RuntimeLogContext(
+        log_ctx = RuntimeLogContext(
             correlation_id=correlation_id,
             request_id=request_id,
             route=request.url.path,
             method=request.method,
             client_ip_hash=client_ip_hash,
-            runtime_stage="ingress"
+            runtime_stage="ingress",
         )
-        
-        # 2. Bind to async context
-        token = set_log_context(ctx)
-        
+
+        obs_ctx = ObservabilityContext(
+            correlation_id=correlation_id,
+            request_id=request_id,
+        )
+
+        log_token = set_log_context(log_ctx)
+        obs_token = set_observability_context(obs_ctx)
+        emitter = get_observability_emitter()
+        emitter.emit(
+            RuntimeEvents.REQUEST_STARTED,
+            route=request.url.path,
+            method=request.method,
+        )
+
         # Also attach to request state for downstream convenience
         request.state.correlation_id = correlation_id
         request.state.request_id = request_id
-        
+
         start_time = time.perf_counter()
         logger.event(RuntimeEvents.REQUEST_STARTED)
 
         try:
             # 3. Process request
             response = await call_next(request)
-            
+
             # Update context with response info
             duration_ms = (time.perf_counter() - start_time) * 1000
-            ctx.status = str(response.status_code)
-            ctx.latency_ms = duration_ms
-            
+            log_ctx.status = str(response.status_code)
+            log_ctx.latency_ms = duration_ms
+
             logger.event(RuntimeEvents.REQUEST_COMPLETED)
-            
+            emitter.emit(
+                RuntimeEvents.REQUEST_COMPLETED,
+                status=str(response.status_code),
+                duration_ms=duration_ms,
+            )
+
             # Add correlation header to response
             response.headers["X-Correlation-ID"] = correlation_id
             return response
@@ -63,13 +86,20 @@ class RuntimeLoggingMiddleware(BaseHTTPMiddleware):
         except Exception as exc:
             # Handle failure
             duration_ms = (time.perf_counter() - start_time) * 1000
-            ctx.status = "500"
-            ctx.latency_ms = duration_ms
-            ctx.error_type = exc.__class__.__name__
-            
+            log_ctx.status = "500"
+            log_ctx.latency_ms = duration_ms
+            log_ctx.error_type = exc.__class__.__name__
+
             logger.exception(RuntimeEvents.REQUEST_FAILED)
+            emitter.emit(
+                RuntimeEvents.REQUEST_FAILED,
+                status="500",
+                duration_ms=duration_ms,
+                error_type=exc.__class__.__name__,
+            )
             raise
 
         finally:
             # 4. Cleanup
             clear_log_context()
+            clear_observability_context()
