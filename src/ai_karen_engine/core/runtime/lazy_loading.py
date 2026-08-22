@@ -655,12 +655,12 @@ lazy_registry = LazyServiceRegistry()
 
 # Convenience functions for common services
 def create_nlp_service_factory():
-    """Factory for NLP service manager."""
+    """Factory for canonical spaCy service."""
 
     def factory():
-        from ai_karen_engine.services.nlp_service_manager import NLPServiceManager
+        from ai_karen_engine.core.memory.signals.spacy_service import SpacyService
 
-        return NLPServiceManager()
+        return SpacyService()
 
     return factory
 
@@ -917,9 +917,9 @@ class LazyServiceManager:
         """Get service using eager initialization (fallback)."""
         # Import and create services directly for non-lazy mode
         if name == "nlp_service":
-            from ai_karen_engine.services.nlp_service_manager import NLPServiceManager
+            from ai_karen_engine.core.memory.signals.spacy_service import SpacyService
 
-            return NLPServiceManager()
+            return SpacyService()
         elif name == "langgraph_orchestrator":
             from ai_karen_engine.core.services.base import ServiceConfig
             from ai_karen_engine.core.langgraph_orchestrator import (

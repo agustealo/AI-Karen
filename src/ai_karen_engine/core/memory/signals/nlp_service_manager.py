@@ -1248,7 +1248,6 @@ _nlp_manager_instance: Optional[NLPServiceManager] = None
 
 def get_nlp_service_manager() -> NLPServiceManager:
     """Return the lazily-created :class:`NLPServiceManager` singleton."""
-
     global _nlp_manager_instance
     if _nlp_manager_instance is None:
         with _nlp_manager_lock:
@@ -1273,10 +1272,10 @@ class _LazyNLPServiceManagerProxy:
         else:
             setattr(self._resolve(), key, value)
 
-    def __repr__(self) -> str:  # pragma: no cover - simple debug helper
+    def __repr__(self) -> str:
         return f"<LazyNLPServiceManagerProxy wrapping {self._resolve()!r}>"
 
-    def __dir__(self):  # pragma: no cover - used for developer ergonomics
+    def __dir__(self):
         return sorted(set(dir(self._resolve())))
 
 
@@ -1285,7 +1284,6 @@ nlp_service_manager = _LazyNLPServiceManagerProxy()
 
 def reset_nlp_service_manager() -> None:
     """Reset the cached manager instance (primarily for tests)."""
-
     global _nlp_manager_instance
     with _nlp_manager_lock:
         _nlp_manager_instance = None
