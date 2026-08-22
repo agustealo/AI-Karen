@@ -35,9 +35,6 @@ from ai_karen_engine.core.runtime.prompt.prompt_contract import (
 
 logger = logging.getLogger(__name__)
 
-_PROMPT_REGISTRY: Dict[str, PromptDefinition] = {}
-_DEFAULT_PROMPT_ID = "karen-default"
-
 
 class PromptRegistry:
     """Registry of known prompt definitions."""
@@ -45,11 +42,23 @@ class PromptRegistry:
     def __init__(self) -> None:
         self._definitions: Dict[str, PromptDefinition] = {}
 
-    def register(self, definition: PromptDefinition) -> None:
-        self._definitions[definition.prompt_id] = definition
+    def _key(self, prompt_id: str, version: str) -> str:
+        return f"{prompt_id}@{version}"
 
-    def get(self, prompt_id: str) -> Optional[PromptDefinition]:
-        return self._definitions.get(prompt_id)
+    def register(self, definition: PromptDefinition) -> None:
+        self._definitions[self._key(definition.prompt_id, definition.version)] = definition
+
+    def get(self, prompt_id: str, version: Optional[str] = None) -> Optional[PromptDefinition]:
+        if version:
+            return self._definitions.get(self._key(prompt_id, version))
+        matches = [
+            definition
+            for key, definition in self._definitions.items()
+            if key.startswith(f"{prompt_id}@")
+        ]
+        if not matches:
+            return None
+        return sorted(matches, key=lambda item: item.version)[-1]
 
     def list_definitions(self) -> List[PromptDefinition]:
         return list(self._definitions.values())
@@ -70,7 +79,7 @@ class PromptAssembler:
     """Assembles canonical prompts from trusted runtime components."""
 
     def __init__(self, registry: Optional[PromptRegistry] = None) -> None:
-        self.registry = registry or PromptRegistry()
+        self.registry = registry or get_prompt_registry()
 
     async def assemble(self, request: PromptAssemblyRequest) -> PromptAssemblyResult:
         """Assemble prompt from request inputs."""
@@ -115,7 +124,7 @@ class PromptAssembler:
 
         return PromptAssemblyResult(
             messages=messages,
-            prompt_id=request.prompt_id or _DEFAULT_PROMPT_ID,
+            prompt_id=request.prompt_id or "karen.chat.default",
             prompt_version=request.prompt_version or "v1",
             prompt_hash=prompt_hash,
             included_memory_refs=included_memory_refs,
@@ -123,7 +132,7 @@ class PromptAssembler:
             token_estimate=token_estimate,
             truncation_events=truncation_events,
             metadata={
-                "registry_lookup": bool(request.prompt_id and self.registry.get(request.prompt_id)),
+                "registry_lookup": bool(request.prompt_id and self.registry.get(request.prompt_id, request.prompt_version)),
                 "memory_items_considered": len(request.memory_items),
                 "tool_contracts_considered": len(request.tool_contracts),
             },
@@ -212,3 +221,53 @@ def get_prompt_assembler() -> PromptAssembler:
     if _prompt_assembler is None:
         _prompt_assembler = PromptAssembler()
     return _prompt_assembler
+
+
+def register_default_prompts(registry: Optional[PromptRegistry] = None) -> PromptRegistry:
+    """Register canonical prompt contracts into the given or global PromptRegistry."""
+    target = registry or get_prompt_registry()
+    defaults = [
+        PromptDefinition(
+            prompt_id="karen.chat.default",
+            version="v1",
+            name="Karen Chat Default",
+            description="Default chat prompt contract",
+            system_prompt="You are Karen, a helpful assistant.",
+            token_budget=4096,
+        ),
+        PromptDefinition(
+            prompt_id="karen.chat.reasoning",
+            version="v1",
+            name="Karen Chat Reasoning",
+            description="Reasoning-optimized chat prompt contract",
+            system_prompt="You are Karen. Think step by step before answering.",
+            token_budget=4096,
+        ),
+        PromptDefinition(
+            prompt_id="karen.workflow.default",
+            version="v1",
+            name="Workflow Default",
+            description="Default workflow prompt contract",
+            system_prompt="You are Karen. Follow the workflow steps carefully.",
+            token_budget=4096,
+        ),
+        PromptDefinition(
+            prompt_id="karen.tool.use",
+            version="v1",
+            name="Tool Use",
+            description="Tool-use prompt contract",
+            system_prompt="You are Karen. Use available tools when needed.",
+            token_budget=4096,
+        ),
+        PromptDefinition(
+            prompt_id="karen.extension.default",
+            version="v1",
+            name="Extension Default",
+            description="Default extension prompt contract",
+            system_prompt="You are Karen. Integrate extension outputs safely.",
+            token_budget=4096,
+        ),
+    ]
+    for definition in defaults:
+        target.register(definition)
+    return target

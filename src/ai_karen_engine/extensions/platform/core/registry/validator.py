@@ -281,10 +281,15 @@ class ExtensionValidator:
         resolved = None
 
         if contract_id:
-            resolved = registry.get(contract_id)
+            if "@" in contract_id:
+                prompt_id, version = contract_id.split("@", 1)
+                resolved = registry.get(prompt_id, version)
+            else:
+                resolved = registry.get(contract_id)
         else:
             default_contract_id = f"plugin.{manifest.name}.default@v1"
-            resolved = registry.get(default_contract_id)
+            prompt_id, version = default_contract_id.split("@", 1)
+            resolved = registry.get(prompt_id, version)
 
         if resolved is None:
             self.errors.append(

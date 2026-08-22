@@ -192,7 +192,8 @@ def test_plugin_default_prompt_resolves_from_prompt_registry() -> None:
     )
 
     assert manifest.prompt_files.contract_id == default_contract_id
-    assert registry.get(default_contract_id) is not None
+    prompt_id, version = default_contract_id.split("@", 1)
+    assert registry.get(prompt_id, version) is not None
 
 
 def test_plugin_custom_prompt_requires_registered_contract() -> None:

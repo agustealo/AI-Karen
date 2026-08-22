@@ -5,6 +5,7 @@ from ai_karen_engine.core.runtime.prompt.prompt_assembler import (
     PromptRegistry,
     get_prompt_assembler,
     get_prompt_registry,
+    register_default_prompts,
 )
 from ai_karen_engine.core.runtime.prompt.prompt_contract import (
     PromptAssemblyRequest,
@@ -17,6 +18,7 @@ __all__ = [
     "PromptRegistry",
     "get_prompt_assembler",
     "get_prompt_registry",
+    "register_default_prompts",
     "PromptAssemblyRequest",
     "PromptAssemblyResult",
     "PromptDefinition",
