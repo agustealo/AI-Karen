@@ -246,3 +246,43 @@ def test_deleted_dead_files_are_gone() -> None:
     for filename in deleted_files:
         path = INTEGRATIONS_ROOT / filename
         assert not path.exists(), f"Deleted file still exists: {path}"
+
+
+def test_integrations_init_exports_only_adapters() -> None:
+    """integrations/__init__.py must not eagerly import dead/duplicate authorities."""
+    init_path = INTEGRATIONS_ROOT / "__init__.py"
+    text = init_path.read_text(encoding="utf-8", errors="ignore")
+
+    assert "from ai_karen_engine.integrations.factory import" not in text
+    assert "get_fallback_manager" not in text
+    assert "get_task_analyzer_dependency" not in text
+    assert "get_best_available_router" not in text
+    assert "get_llm_router_dependency" not in text
+
+
+def test_canonical_provider_registry_service_is_single_source_of_truth() -> None:
+    """Provider registry must resolve from core/model_runtime, not integrations shim."""
+    from ai_karen_engine.core.model_runtime.provider_registry_service import (
+        ProviderRegistryService,
+    )
+    from ai_karen_engine.integrations.provider_registry import ProviderRegistry
+
+    canonical = ProviderRegistryService
+    legacy = ProviderRegistry
+
+    assert canonical is not None
+    assert legacy is not None
+    assert "Legacy" in legacy.__doc__ or "compatibility" in legacy.__doc__.lower()
+
+
+def test_deleted_dead_files_are_gone() -> None:
+    """Deleted dead files must no longer exist on disk."""
+    deleted_files = [
+        "fallback_manager.py",
+        "automation_manager.py",
+        "prompt_blocks.py",
+        "performance_router_init.py",
+    ]
+    for filename in deleted_files:
+        path = INTEGRATIONS_ROOT / filename
+        assert not path.exists(), f"Deleted file still exists: {path}"

@@ -1,95 +1,77 @@
 """
 Integration helpers for Kari AI.
 
-Production-ready LLM integration system with:
-- Multi-provider support (OpenAI, Gemini, local GGUF, HuggingFace, DeepSeek, etc.)
-- Intelligent routing with capability awareness
-- Fallback management (cloud → local → degraded)
-- Error recovery and failure pattern analysis
-- Model discovery and availability management
-- Factory pattern for centralized initialization
+This package primarily contains external adapter/protocol boundaries.
+Canonical runtime owners (provider routing, policy, fallback, task analysis,
+prompt assembly) now live outside integrations.
+
+Remaining integration concerns:
+- External provider API adapters (OpenAI, Gemini, etc.)
+- Media adapters (voice/video)
+- CopilotKit boundary
+- RPA/web retrieval adapters
 """
 
-# Import factory for centralized initialization
-from ai_karen_engine.integrations.factory import (
-    IntegrationServiceConfig,
-    IntegrationServiceFactory,
-    get_integration_service_factory,
-    get_provider_registry,
-    get_llm_router,
-    get_fallback_manager,
-    initialize_integrations_for_production,
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+# Genuine adapter imports
+from ai_karen_engine.integrations.local_rpa_client import LocalRPAClient
+from ai_karen_engine.integrations.nanda_client import NANDAClient
+from ai_karen_engine.integrations.sr_llamaindex_adapter import SrLlamaIndexAdapter
+
+# Voice/video registries retained as integration-boundary registries
+from ai_karen_engine.integrations.voice_registry import (
+    VoiceProviderBase,
+    VoiceRegistry,
+    get_voice_registry,
+)
+from ai_karen_engine.integrations.video_registry import (
+    VideoProviderBase,
+    VideoRegistry,
+    get_video_registry,
 )
 
-# Import dependencies for FastAPI dependency injection
-from ai_karen_engine.integrations.dependencies import (
-    get_provider_registry_dependency,
-    get_llm_router_dependency,
-    get_capability_router_dependency,
-    get_copilot_router_dependency,
-    get_fallback_manager_dependency,
-    get_error_recovery_dependency,
-    get_model_discovery_dependency,
-    get_model_availability_manager_dependency,
-    get_voice_registry_dependency,
-    get_video_registry_dependency,
-    get_confidence_scorer_dependency,
-    get_task_analyzer_dependency,
-    get_integration_health_check,
-    get_best_available_router,
-)
 
 __all__ = [
-    # Legacy compatibility
     "LocalRPAClient",
-    "LLMProfileRouter",
-    "ProviderRegistry",
-    "ModelInfo",
-    "get_voice_registry",
+    "NANDAClient",
+    "SrLlamaIndexAdapter",
     "VoiceRegistry",
     "VoiceProviderBase",
-    "DummyVoiceProvider",
-    "OpenAIVoiceProvider",
+    "get_voice_registry",
     "VideoRegistry",
     "VideoProviderBase",
-    "DummyVideoProvider",
-    "OpenAIImageProvider",
     "get_video_registry",
-    # Factory
-    "IntegrationServiceConfig",
-    "IntegrationServiceFactory",
-    "get_integration_service_factory",
-    # Factory convenience functions
-    "get_provider_registry",
-    "get_llm_router",
-    "get_fallback_manager",
-    "initialize_integrations_for_production",
-    # Dependencies (FastAPI)
-    "get_provider_registry_dependency",
-    "get_llm_router_dependency",
-    "get_capability_router_dependency",
-    "get_copilot_router_dependency",
-    "get_fallback_manager_dependency",
-    "get_error_recovery_dependency",
-    "get_model_discovery_dependency",
-    "get_model_availability_manager_dependency",
-    "get_voice_registry_dependency",
-    "get_video_registry_dependency",
-    "get_confidence_scorer_dependency",
-    "get_task_analyzer_dependency",
-    "get_integration_health_check",
-    "get_best_available_router",
 ]
 
 
-def __getattr__(name):
-    if name == "LocalRPAClient":
-        from ai_karen_engine.integrations.local_rpa_client import LocalRPAClient as _LocalRPAClient
+def __getattr__(name: str) -> Any:
+    deprecated_legacy = {
+        "AutomationManager",
+        "LLMProfileRouter",
+        "ProviderRegistry",
+        "ModelInfo",
+        "DummyVoiceProvider",
+        "OpenAIVoiceProvider",
+        "DummyVideoProvider",
+        "OpenAIImageProvider",
+        "get_provider_registry",
+    }
+    if name in deprecated_legacy:
+        logger.warning(
+            "Deprecated integrations export '%s' accessed. "
+            "Use canonical runtime owners instead.",
+            name,
+        )
 
-        return _LocalRPAClient
     if name == "LLMProfileRouter":
         from ai_karen_engine.integrations.llm_router import LLMProfileRouter as _LLMProfileRouter
-
         return _LLMProfileRouter
     if name in {"ProviderRegistry", "ModelInfo", "get_provider_registry"}:
         from ai_karen_engine.integrations.provider_registry import (
@@ -97,7 +79,6 @@ def __getattr__(name):
             ModelInfo as _ModelInfo,
             get_provider_registry as _get_provider_registry,
         )
-
         return {
             "ProviderRegistry": _ProviderRegistry,
             "ModelInfo": _ModelInfo,
@@ -117,7 +98,6 @@ def __getattr__(name):
             OpenAIVoiceProvider as _OpenAIVoiceProvider,
             get_voice_registry as _get_voice_registry,
         )
-
         return {
             "VoiceRegistry": _VoiceRegistry,
             "VoiceProviderBase": _VoiceProviderBase,
@@ -139,7 +119,6 @@ def __getattr__(name):
             OpenAIImageProvider as _OpenAIImageProvider,
             get_video_registry as _get_video_registry,
         )
-
         return {
             "VideoRegistry": _VideoRegistry,
             "VideoProviderBase": _VideoProviderBase,
