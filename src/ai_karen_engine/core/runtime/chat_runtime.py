@@ -13,6 +13,17 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionStatus,
     ChatRuntimeMetadata,
 )
+from ai_karen_engine.core.runtime.contracts import (
+    ActionExecutionGate,
+    AuthorizedExecutionPlan,
+    DegradationState,
+    ExecutionBudget,
+    ExecutionBudgetMeter,
+    ExecutionContext,
+    ExecutionTopology,
+    ResponseProvenance,
+    ResponseSource,
+)
 from ai_karen_engine.core.runtime.cortex_execution_decider import (
     get_cortex_execution_decider,
 )
@@ -25,6 +36,10 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     MaintenanceResponse,
     get_chat_runtime_control_plane,
 )
+from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
+from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
+from ai_karen_engine.core.observability.emitter import get_observability_emitter
+from ai_karen_engine.core.observability.contracts import RuntimeEventType
 from ai_karen_engine.models.shared_types import ChatStreamChunk
 from ai_karen_engine.utils.chat_helpers import normalize_session_id as normalize_chat_session_id
 from ai_karen_engine.core.expression.gateway import ExpressionGateway
@@ -50,12 +65,29 @@ _CANONICAL_META_KEYS = (
 class ChatRuntime:
     """Single authoritative chat execution runtime."""
 
+    def __init__(self) -> None:
+        self._trajectory_recorder = TrajectoryRecorder()
+        self._outcome_recorder = OutcomeRecorder()
+        self._emitter = get_observability_emitter()
+
     async def execute(self, request: ChatExecutionRequest) -> ChatExecutionResult:
         start = time.time()
         ctx = request.context
 
+        self._bind_observability_context(ctx)
+        self._emitter.emit(
+            RuntimeEventType.REQUEST_RECEIVED,
+            intent="general_assist",
+            metadata={"transport": "http", "message_count": len(request.messages)},
+        )
+
         gate = await self._resolve_gate(ctx)
         if gate is not None:
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="gate",
+                metadata={"gate_mode": getattr(gate, "mode", "gate")},
+            )
             return ChatExecutionResult(
                 answer="",
                 status=ChatExecutionStatus.GATE,
@@ -68,23 +100,60 @@ class ChatRuntime:
             )
 
         decision = await self._decide(request)
+        self._emitter.emit(
+            RuntimeEventType.CORTEX_DECISION,
+            intent=decision.intent,
+            policy_decision_id=decision.policy_decision_id,
+            metadata={
+                "topology": decision.topology.value,
+                "execution_mode": decision.execution_mode.value,
+                "reason_codes": decision.reason_codes,
+            },
+        )
+
+        plan = self._build_authorized_plan(request, decision)
+        meter = ExecutionBudgetMeter(plan.budget)
+        meter.start()
+        trajectory = self._trajectory_recorder.start()
 
         memory_recall_meta: Dict[str, Any] = {}
+        provider_meta: Dict[str, Any] = {}
         if decision.memory_recall_required:
+            self._emitter.emit(
+                RuntimeEventType.MEMORY_RECALL_STARTED,
+                policy_decision_id=decision.policy_decision_id,
+            )
             memory_recall_meta = await self._recall_memory(request, decision)
+            self._emitter.emit(
+                RuntimeEventType.MEMORY_RECALL_COMPLETED,
+                policy_decision_id=decision.policy_decision_id,
+                memory_recall_count=memory_recall_meta.get("memory_recall_count", 0),
+            )
+            trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
+            trajectory.memory_recall_refs = [
+                item.get("id", "")
+                for item in (memory_recall_meta.get("memory_context") or {}).get("recall", [])[:5]
+                if item.get("id")
+            ]
 
         try:
             if decision.topology.value == "reasoning":
-                text, provider_meta = await self._run_reasoning(request, decision)
+                text, provider_meta = await self._run_reasoning(request, decision, plan, meter)
             elif decision.is_graph_required:
-                text, provider_meta = await self._run_graph(request, decision)
+                text, provider_meta = await self._run_graph(request, decision, plan, meter)
             else:
-                text, provider_meta = await self._run_simple(request, decision)
+                text, provider_meta = await self._run_simple(request, decision, plan, meter)
         except Exception as exc:
             logger.error(
                 "ChatRuntime.execute failed, attempting fallback: %s",
                 exc,
                 extra={"correlation_id": ctx.correlation_id},
+            )
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                error_type=type(exc).__name__,
+                status="error",
+                metadata={"error": str(exc)},
             )
             conversation_id = ctx.conversation_id or normalize_chat_session_id(
                 ctx.session_id
@@ -98,8 +167,13 @@ class ChatRuntime:
                 decision=decision,
             )
             if fallback is not None and fallback.answer:
-                await self._persist_memory(request, fallback.answer, memory_recall_meta, decision)
-                return self._build_result(request, decision, provider_meta or {}, start, memory_recall_meta, fallback.answer)
+                if decision.memory_recall_required:
+                    await self._persist_memory(request, fallback.answer, memory_recall_meta, plan)
+                self._record_trajectory_completion(trajectory, decision, fallback.answer, start, meter, provider_meta or {}, memory_recall_meta, error=f"fallback:{type(exc).__name__}")
+                self._record_execution_outcome(trajectory.trajectory_id, decision, fallback.answer, start, meter, memory_recall_meta, success=False)
+                return fallback
+            self._record_trajectory_completion(trajectory, decision, "", start, meter, {}, memory_recall_meta, error="all_execution_paths_failed")
+            self._record_execution_outcome(trajectory.trajectory_id, decision, "", start, meter, memory_recall_meta, success=False)
             return ChatExecutionResult(
                 answer="",
                 status=ChatExecutionStatus.ERROR,
@@ -112,9 +186,25 @@ class ChatRuntime:
                 ),
             )
 
-        await self._persist_memory(request, text, memory_recall_meta, decision)
+        if decision.memory_recall_required:
+            await self._persist_memory(request, text, memory_recall_meta, plan)
 
         latency_ms = (time.time() - start) * 1000.0
+        self._record_trajectory_completion(trajectory, decision, text, start, meter, provider_meta, memory_recall_meta)
+        self._record_execution_outcome(trajectory.trajectory_id, decision, text, start, meter, memory_recall_meta, success=True)
+
+        self._emitter.emit(
+            RuntimeEventType.REQUEST_COMPLETED,
+            latency_ms=latency_ms,
+            provider=provider_meta.get("actual_provider"),
+            model=provider_meta.get("actual_model"),
+            runtime_engine=provider_meta.get("runtime_engine"),
+            response_source=provider_meta.get("response_source"),
+            fallback_level=provider_meta.get("fallback_level", 0),
+            degraded_mode=provider_meta.get("degraded_mode", False),
+            memory_recall_count=memory_recall_meta.get("memory_recall_count", 0),
+        )
+
         return self._build_result(request, decision, provider_meta, start, memory_recall_meta, text, latency_ms)
 
     async def execute_stream(
@@ -122,8 +212,20 @@ class ChatRuntime:
     ) -> AsyncIterator[ChatStreamChunk]:
         ctx = request.context
 
+        self._bind_observability_context(ctx)
+        self._emitter.emit(
+            RuntimeEventType.REQUEST_RECEIVED,
+            intent="general_assist",
+            metadata={"transport": "stream", "message_count": len(request.messages)},
+        )
+
         gate = await self._resolve_gate(ctx)
         if gate is not None:
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="gate",
+                metadata={"gate_mode": getattr(gate, "mode", "gate")},
+            )
             yield ChatStreamChunk(
                 type="error",
                 content=getattr(gate, "message", "Service unavailable"),
@@ -133,19 +235,30 @@ class ChatRuntime:
             return
 
         decision = await self._decide(request)
+        plan = self._build_authorized_plan(request, decision)
+        meter = ExecutionBudgetMeter(plan.budget)
+        meter.start()
+        trajectory = self._trajectory_recorder.start()
+        stream_start = time.time()
 
         memory_recall_meta: Dict[str, Any] = {}
         if decision.memory_recall_required:
             memory_recall_meta = await self._recall_memory(request, decision)
+            trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
+            trajectory.memory_recall_refs = [
+                item.get("id", "")
+                for item in (memory_recall_meta.get("memory_context") or {}).get("recall", [])[:5]
+                if item.get("id")
+            ]
 
         streamed_text = ""
         gen = (
-            self._run_reasoning_stream(request, decision)
+            self._run_reasoning_stream(request, decision, plan, meter)
             if decision.topology.value == "reasoning"
             else (
-                self._run_graph_stream(request, decision)
+                self._run_graph_stream(request, decision, plan, meter)
                 if decision.is_graph_required
-                else self._run_simple_stream(request, decision)
+                else self._run_simple_stream(request, decision, plan, meter)
             )
         )
         async for chunk in gen:
@@ -155,9 +268,19 @@ class ChatRuntime:
 
         if decision.memory_recall_required and decision.memory_write_allowed:
             try:
-                await self._persist_memory(request, streamed_text, memory_recall_meta, decision)
+                await self._persist_memory(request, streamed_text, memory_recall_meta, plan)
             except Exception as exc:
                 logger.warning("Streaming memory persistence failed: %s", exc)
+
+        latency_ms = (time.time() - stream_start) * 1000.0
+        self._record_trajectory_completion(trajectory, decision, streamed_text, stream_start, meter, {}, memory_recall_meta)
+        self._record_execution_outcome(trajectory.trajectory_id, decision, streamed_text, stream_start, meter, memory_recall_meta, success=bool(streamed_text))
+        self._emitter.emit(
+            RuntimeEventType.REQUEST_COMPLETED,
+            intent=decision.intent,
+            latency_ms=latency_ms,
+            memory_recall_count=memory_recall_meta.get("memory_recall_count", 0),
+        )
 
     # ------------------------------------------------------------------
     # Memory
@@ -204,12 +327,12 @@ class ChatRuntime:
             })
 
             if items:
-                ctx.metadata = ctx.metadata or {}
-                ctx.metadata.setdefault("memory_context", {})
-                ctx.metadata["memory_context"]["recall"] = [
+                memory_context = (request.metadata or {}).get("memory_context") or {}
+                memory_context["recall"] = [
                     {"id": i.get("id"), "content": i.get("content"), "timestamp": i.get("timestamp")}
                     for i in items[:5]
                 ]
+                request.metadata["memory_context"] = memory_context
 
         except Exception as exc:
             logger.warning("Memory recall failed: %s", exc, extra={"correlation_id": ctx.correlation_id})
@@ -226,9 +349,9 @@ class ChatRuntime:
         request: ChatExecutionRequest,
         response_text: str,
         memory_recall_meta: Dict[str, Any],
-        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
     ) -> None:
-        if not decision.memory_write_allowed:
+        if not await ActionExecutionGate.authorize(plan, "memory.write"):
             memory_recall_meta["memory_persistence_status"] = "denied_by_policy"
             return
 
@@ -260,7 +383,7 @@ class ChatRuntime:
                     },
                 )
 
-            if response_text.strip() and decision.memory_write_allowed:
+            if response_text.strip():
                 await mem.process_interaction(
                     text=response_text,
                     tenant_id=ctx.tenant_id,
@@ -279,12 +402,22 @@ class ChatRuntime:
                 )
 
             memory_recall_meta["memory_persistence_status"] = "persisted"
+            self._emitter.emit(
+                RuntimeEventType.PERSISTENCE_COMPLETED,
+                policy_decision_id=plan.policy_decision_id,
+                metadata={"target": "memory"},
+            )
 
         except Exception as exc:
             logger.warning("Memory persistence failed: %s", exc, extra={"correlation_id": ctx.correlation_id})
             memory_recall_meta["memory_persistence_status"] = "failed"
             memory_recall_meta["memory_degraded"] = True
             memory_recall_meta["memory_degradation_reason"] = str(exc)
+            self._emitter.emit(
+                RuntimeEventType.PERSISTENCE_FAILED,
+                error_type=type(exc).__name__,
+                metadata={"target": "memory", "error": str(exc)},
+            )
 
     # ------------------------------------------------------------------
     # Routing
@@ -293,16 +426,63 @@ class ChatRuntime:
     async def _decide(self, request: ChatExecutionRequest) -> ExecutionDecision:
         return await get_cortex_execution_decider().decide(request)
 
-    async def _run_simple(
+    def _build_authorized_plan(
         self, request: ChatExecutionRequest, decision: ExecutionDecision
+    ) -> AuthorizedExecutionPlan:
+        """Derive the single AuthorizedExecutionPlan for this request.
+
+        Every topology consumes this exact plan. No downstream module
+        manufactures its own authorization.
+        """
+        ctx = request.context
+        budget = ExecutionBudget(
+            max_duration_ms=decision.time_budget_ms,
+            max_model_calls=decision.max_steps,
+            max_tool_calls=len(decision.tool_requirements) + 5,
+            max_reasoning_steps=decision.max_steps,
+            max_output_tokens=request.max_tokens or 4096,
+        )
+        degradation = DegradationState(
+            degraded=decision.execution_mode.value == "degraded",
+            reason_code=decision.policy_reason_codes[0] if decision.policy_reason_codes else None,
+            level=decision.risk_level.value if hasattr(decision.risk_level, "value") else str(decision.risk_level),
+        )
+        allowed_caps = list(decision.required_capabilities)
+        if decision.memory_write_allowed and "memory.write" not in allowed_caps:
+            allowed_caps.append("memory.write")
+        return AuthorizedExecutionPlan(
+            execution_id=f"exec-{ctx.request_id}",
+            policy_decision_id=decision.policy_decision_id or f"policy-{ctx.correlation_id}",
+            topology=decision.topology,
+            allowed_capabilities=allowed_caps,
+            allowed_tools=list(decision.tool_requirements),
+            allowed_plugins=list(decision.plugin_candidates),
+            budget=budget,
+            memory_scope=decision.memory_scope,
+            reasoning_modes=[decision.reasoning_depth] if decision.reasoning_depth != "standard" else [],
+            workflow_id=decision.workflow_id,
+            degraded_allowed=True,
+            degradation_state=degradation,
+            audit_context={
+                "intent": decision.intent,
+                "risk_level": decision.risk_level.value if hasattr(decision.risk_level, "value") else str(decision.risk_level),
+                "reason_codes": decision.reason_codes,
+            },
+        )
+
+    async def _run_simple(
+        self, request: ChatExecutionRequest, decision: ExecutionDecision, plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter, memory_recall_meta: Optional[Dict[str, Any]] = None
     ) -> Tuple[str, Dict[str, Any]]:
         """Simple conversational path: CORTEX -> ExpressionGateway."""
+        if not meter.consume_model_call():
+            raise RuntimeError("Execution budget exhausted: max_model_calls")
+
         ctx = request.context
         gateway = ExpressionGateway()
         task = ExpressionTask(
             task_id=f"expr_{ctx.correlation_id}",
             kind="chat",
-            messages=await self._assemble_prompt(request, decision),
+            messages=await self._assemble_prompt(request, decision, memory_recall_meta),
             response_mode="text",
             required_capabilities=list(decision.required_capabilities),
             forbidden_capabilities=list(decision.forbidden_capabilities),
@@ -317,10 +497,34 @@ class ChatRuntime:
                 "transport": request.metadata.get("transport", "runtime"),
                 "execution_mode": "direct",
                 "reasoning_depth": decision.reasoning_depth,
-                "memory_context": (ctx.metadata or {}).get("memory_context", {}),
+                "memory_context": memory_recall_meta.get("memory_context", {}) if hasattr(memory_recall_meta, "get") else {},
+                "topology": plan.topology.value,
             },
         )
+
+        self._emitter.emit(
+            RuntimeEventType.PROVIDER_SELECTION,
+            policy_decision_id=plan.policy_decision_id,
+            provider=request.preferred_provider,
+            model=request.preferred_model,
+            intent=decision.intent,
+        )
+
         result = await gateway.generate(task)
+
+        if not meter.check_duration():
+            raise RuntimeError("Execution budget exhausted: max_duration_ms")
+
+        provenance = ResponseProvenance(
+            response_source=ResponseSource.MODEL,
+            provider=result.provider,
+            model=result.model,
+            engine=result.runtime_engine or result.engine_id,
+            fallback_level=(result.metadata or {}).get("fallback_level", 0),
+            degradation_reason=result.degradation_reason if result.degraded else None,
+            correlation_id=ctx.correlation_id,
+            decision_id=plan.policy_decision_id,
+        )
 
         normalized = {
             "requested_provider": request.preferred_provider,
@@ -332,15 +536,16 @@ class ChatRuntime:
             "fallback_level": (result.metadata or {}).get("fallback_level", 0),
             "degraded_mode": result.degraded,
             "degradation_reason": result.degradation_reason,
+            "provenance": provenance,
         }
         return result.text, normalized
 
     async def _run_simple_stream(
-        self, request: ChatExecutionRequest, decision: ExecutionDecision
+        self, request: ChatExecutionRequest, decision: ExecutionDecision, plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter, memory_recall_meta: Optional[Dict[str, Any]] = None
     ) -> AsyncIterator[ChatStreamChunk]:
         ctx = request.context
         try:
-            text, normalized = await self._run_simple(request, decision)
+            text, normalized = await self._run_simple(request, decision, plan, meter, memory_recall_meta)
             yield ChatStreamChunk(
                 type="content",
                 content=text,
@@ -350,6 +555,7 @@ class ChatRuntime:
                     "actual_provider": normalized.get("actual_provider"),
                     "actual_model": normalized.get("actual_model"),
                     "response_source": normalized.get("response_source"),
+                    "topology": plan.topology.value,
                 },
             )
         except Exception as exc:
@@ -357,6 +563,11 @@ class ChatRuntime:
                 "ChatRuntime simple stream failed: %s",
                 exc,
                 extra={"correlation_id": ctx.correlation_id},
+            )
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                error_type=type(exc).__name__,
+                status="error",
             )
             yield ChatStreamChunk(
                 type="error",
@@ -376,20 +587,20 @@ class ChatRuntime:
             )
 
     async def _run_graph(
-        self, request: ChatExecutionRequest, decision: ExecutionDecision
+        self, request: ChatExecutionRequest, decision: ExecutionDecision, plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter
     ) -> Tuple[str, Dict[str, Any]]:
         """Graph-required path: routed exclusively through WorkflowRuntime."""
         text, response_metadata = await get_workflow_runtime().run(request, decision)
         return text, self._normalize_graph_meta(response_metadata, request)
 
     async def _run_graph_stream(
-        self, request: ChatExecutionRequest, decision: ExecutionDecision
+        self, request: ChatExecutionRequest, decision: ExecutionDecision, plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter
     ) -> AsyncIterator[ChatStreamChunk]:
         async for chunk in get_workflow_runtime().stream(request, decision):
             yield chunk
 
     async def _run_reasoning(
-        self, request: ChatExecutionRequest, decision: ExecutionDecision
+        self, request: ChatExecutionRequest, decision: ExecutionDecision, plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter
     ) -> Tuple[str, Dict[str, Any]]:
         """Reasoning topology path: routed through ReasoningExecutor."""
         from ai_karen_engine.core.reasoning.contracts import (
@@ -398,16 +609,12 @@ class ChatRuntime:
             ReasoningRequest,
         )
         from ai_karen_engine.core.reasoning.executor import get_reasoning_executor
-        from ai_karen_engine.core.runtime.contracts import (
-            AuthorizedExecutionPlan,
-            ExecutionBudget,
-            ExecutionContext,
-            ExecutionTopology,
-        )
 
         ctx = request.context
-        memory_context = (ctx.metadata or {}).get("memory_context", {})
-        recall_items = memory_context.get("recall") or []
+        memory_items = []
+        if request.metadata:
+            memory_items = (request.metadata or {}).get("memory_context", {}).get("recall") or []
+        recall_items = memory_items[: decision.memory_top_k]
 
         evidence = [
             ReasoningEvidence(
@@ -448,23 +655,6 @@ class ChatRuntime:
             },
         )
 
-        plan = AuthorizedExecutionPlan(
-            execution_id=f"reasoning-{ctx.request_id}",
-            policy_decision_id=decision.policy_decision_id or "",
-            topology=ExecutionTopology.REASONING,
-            allowed_capabilities=list(decision.required_capabilities) or ["model.generate"],
-            allowed_tools=list(decision.tool_requirements),
-            allowed_plugins=list(decision.plugin_candidates),
-            memory_scope=decision.memory_scope,
-            budget=ExecutionBudget(
-                max_duration_ms=decision.time_budget_ms,
-                max_model_calls=decision.max_steps,
-                max_tool_calls=len(decision.tool_requirements),
-                max_reasoning_steps=decision.max_steps,
-            ),
-            reasoning_modes=list(decision.required_capabilities) or ["synthesis"],
-        )
-
         context = ExecutionContext(
             request_id=ctx.request_id,
             correlation_id=ctx.correlation_id,
@@ -498,26 +688,40 @@ class ChatRuntime:
         }
         return text, provider_meta
 
+    async def _run_reasoning_stream(
+        self, request: ChatExecutionRequest, decision: ExecutionDecision, plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter
+    ) -> AsyncIterator[ChatStreamChunk]:
+        text, normalized = await self._run_reasoning(request, decision, plan, meter)
+        yield ChatStreamChunk(
+            type="content",
+            content=text,
+            correlation_id=request.context.correlation_id,
+            metadata={
+                "execution_mode": "reasoning",
+                "actual_provider": normalized.get("actual_provider"),
+                "actual_model": normalized.get("actual_model"),
+                "response_source": normalized.get("response_source"),
+                "topology": plan.topology.value,
+            },
+        )
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
     async def _assemble_prompt(
-        self, request: ChatExecutionRequest, decision: ExecutionDecision
+        self, request: ChatExecutionRequest, decision: ExecutionDecision, memory_context: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
-        """Assemble prompt using canonical PromptRuntime.
-
-        Memory recall, persona, policy, tools, and workflow context are
-        assembled into the final message list sent to ExpressionGateway.
-        """
+        """Assemble prompt using canonical PromptRuntime."""
         from ai_karen_engine.core.runtime.prompt import (
             PromptAssemblyRequest,
             get_prompt_assembler,
         )
 
         ctx = request.context
-        memory_context = (ctx.metadata or {}).get("memory_context", {})
-        recall_items = memory_context.get("recall", [])
+        recall_items = (memory_context or {}).get("recall", []) if memory_context else []
+        if not recall_items and decision.memory_recall_required:
+            recall_items = (request.metadata or {}).get("memory_context", {}).get("recall", []) or []
 
         assembly_request = PromptAssemblyRequest(
             prompt_id="karen.chat.default",
@@ -570,7 +774,7 @@ class ChatRuntime:
         md = self._build_metadata(request, decision, normalized, latency_ms, memory_meta)
 
         status = ChatExecutionStatus.OK
-        if md.degraded_mode or memory_meta.get("memory_degraded"):
+        if md.degraded_mode:
             status = ChatExecutionStatus.DEGRADED
         if normalized.get("degradation_reason") and "all_execution_paths_failed" in str(normalized.get("degradation_reason")):
             status = ChatExecutionStatus.ERROR
@@ -647,6 +851,88 @@ class ChatRuntime:
         if gate is not None and isinstance(gate, GATE_RESPONSES):
             return gate
         return None
+
+    def _bind_observability_context(self, ctx: ChatExecutionContext) -> None:
+        from ai_karen_engine.core.observability.context import bind_observability_context
+        bind_observability_context(
+            correlation_id=ctx.correlation_id,
+            request_id=ctx.request_id,
+            user_id=ctx.user_id,
+            tenant_id=ctx.tenant_id,
+            session_id=ctx.session_id,
+            conversation_id=ctx.conversation_id,
+        )
+
+    def _record_trajectory_completion(
+        self,
+        trajectory: Any,
+        decision: ExecutionDecision,
+        text: str,
+        start: float,
+        meter: ExecutionBudgetMeter,
+        provider_meta: Dict[str, Any],
+        memory_meta: Dict[str, Any],
+        error: Optional[str] = None,
+    ) -> None:
+        trajectory.intent = decision.intent
+        trajectory.cortex_decision = {
+            "topology": decision.topology.value,
+            "execution_mode": decision.execution_mode.value,
+            "risk_level": decision.risk_level.value if hasattr(decision.risk_level, "value") else str(decision.risk_level),
+            "reason_codes": decision.reason_codes,
+        }
+        trajectory.policy_decision_id = decision.policy_decision_id
+        trajectory.policy_allowed_capabilities = list(decision.required_capabilities)
+        trajectory.policy_denied_capabilities = list(decision.forbidden_capabilities)
+        trajectory.requested_provider = provider_meta.get("requested_provider")
+        trajectory.requested_model = provider_meta.get("requested_model")
+        trajectory.actual_provider = provider_meta.get("actual_provider")
+        trajectory.actual_model = provider_meta.get("actual_model")
+        trajectory.runtime_engine = provider_meta.get("runtime_engine")
+        trajectory.fallback_level = provider_meta.get("fallback_level", 0)
+        trajectory.degraded_mode = provider_meta.get("degraded_mode", False)
+        trajectory.degradation_reason = provider_meta.get("degradation_reason")
+        trajectory.latencies = {
+            "total_ms": (time.time() - start) * 1000.0,
+            "model_calls": float(meter.model_calls),
+            "tool_calls": float(meter.tool_calls),
+        }
+        trajectory.execution_status = "success" if text else "failure"
+        trajectory.error_code = error
+        trajectory.response_source = provider_meta.get("response_source")
+        self._trajectory_recorder.complete(
+            trajectory,
+            execution_status=trajectory.execution_status,
+            error_code=error,
+            response_source=provider_meta.get("response_source"),
+        )
+
+    def _record_execution_outcome(
+        self,
+        trajectory_id: Optional[str],
+        decision: ExecutionDecision,
+        text: str,
+        start: float,
+        meter: ExecutionBudgetMeter,
+        memory_meta: Dict[str, Any],
+        success: bool,
+    ) -> None:
+        from ai_karen_engine.core.runtime.outcome.contracts import ExecutionStatus
+        latency_ms = (time.time() - start) * 1000.0
+        self._outcome_recorder.record_execution_outcome(
+            trajectory_id=trajectory_id,
+            status=ExecutionStatus.SUCCESS if success else ExecutionStatus.FAILURE,
+            latency_ms=latency_ms,
+            fallback_count=0,
+            response_completed=bool(text),
+            persistence_success=memory_meta.get("memory_persistence_status") == "persisted",
+            metadata={
+                "topology": decision.topology.value,
+                "model_calls": meter.model_calls,
+                "tool_calls": meter.tool_calls,
+                "reasoning_steps": meter.reasoning_steps,
+            },
+        )
 
 
 _chat_runtime: Optional[ChatRuntime] = None

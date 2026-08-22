@@ -9,6 +9,13 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionStatus,
     ChatRuntimeMetadata,
 )
+from ai_karen_engine.core.runtime.contracts import (
+    AuthorizedExecutionPlan,
+    DegradationState,
+    ExecutionBudget,
+    ExecutionBudgetMeter,
+    ExecutionTopology,
+)
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision, RuntimeExecutionMode
 
 logger = get_logger(__name__)
@@ -28,14 +35,7 @@ async def build_runtime_fallback(
 
     Collapses fallback into one owner: the runtime delegates to the
     ExpressionGateway fallback chain, then reports a degraded/emergency result
-    through the single ``ChatRuntimeMetadata`` normalizer. No second
-    independent router is started.
-
-    Flow:
-        requested execution
-            -> ExpressionGateway fallback chain
-            -> runtime degraded response
-            -> emergency unavailable
+    through the single ChatRuntimeMetadata normalizer.
     """
     ctx = request.context
     fallback_decision = decision or ExecutionDecision(
@@ -43,8 +43,26 @@ async def build_runtime_fallback(
         graph_required=False,
         intent="fallback",
     )
+    plan = AuthorizedExecutionPlan(
+        execution_id=f"fallback-{ctx.request_id}",
+        policy_decision_id=fallback_decision.policy_decision_id or f"policy-{correlation_id}",
+        topology=ExecutionTopology.DIRECT,
+        budget=ExecutionBudget(
+            max_duration_ms=fallback_decision.time_budget_ms,
+            max_model_calls=1,
+            max_output_tokens=request.max_tokens or 4096,
+        ),
+        degraded_allowed=True,
+        degradation_state=DegradationState(
+            degraded=True,
+            reason_code="primary_failure",
+            level=fallback_decision.risk_level.value if hasattr(fallback_decision.risk_level, "value") else str(fallback_decision.risk_level),
+        ),
+    )
+    meter = ExecutionBudgetMeter(plan.budget)
+    meter.start()
     try:
-        text, normalized = await runtime._run_simple(request, fallback_decision)
+        text, normalized = await runtime._run_simple(request, fallback_decision, plan, meter)
     except Exception as fb_exc:  # pragma: no cover - defensive boundary
         logger.error(
             "Runtime fallback chain failed: %s",
@@ -72,7 +90,6 @@ async def build_runtime_fallback(
         response_id=ctx.request_id,
         conversation_id=conversation_id,
     )
-    # Preserve SSE/transport compatibility (provider identity under "llm").
     md.extra["llm"] = {
         "requested_provider": md.requested_provider,
         "actual_provider": md.actual_provider,

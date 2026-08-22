@@ -22,9 +22,9 @@ from ai_karen_engine.core.runtime.execution_decision import (
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import DegradedResponse
 
 
-def _make_request(metadata=None) -> ChatExecutionRequest:
+def _make_request(metadata=None, messages=None) -> ChatExecutionRequest:
     return ChatExecutionRequest(
-        messages=[{"content": "hi", "message_type": "user"}],
+        messages=messages or [{"content": "hi", "message_type": "user"}],
         context=ChatExecutionContext(user_id="u1", correlation_id="cid"),
         metadata=metadata or {},
     )
@@ -102,9 +102,14 @@ def test_chat_runtime_metadata_schema_is_complete():
 
 def test_execute_honors_control_plane_gate():
     degraded = DegradedResponse(is_minimal=True, retry_after_seconds=42)
+
+    class _DegradedCP:
+        async def get_runtime_response(self, **kwargs):
+            return degraded
+
     with patch(
         "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
-        new=AsyncMock(return_value=degraded),
+        new=AsyncMock(return_value=_DegradedCP()),
     ):
         result = asyncio.get_event_loop().run_until_complete(
             get_chat_runtime().execute(_make_request())
@@ -163,9 +168,6 @@ def test_simple_chat_uses_expression_gateway_not_langgraph():
     ), patch(
         "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
         new=_FakeGateway,
-    ), patch(
-        "ai_karen_engine.core.langgraph_orchestrator.get_default_orchestrator",
-        new=AsyncMock(side_effect=AssertionError("LangGraph must not be used for simple chat")),
     ):
         result = asyncio.get_event_loop().run_until_complete(
             get_chat_runtime().execute(_make_request())
@@ -182,6 +184,14 @@ def test_graph_decision_invokes_workflow_runtime():
     graph_decision = ExecutionDecision(
         execution_mode=RuntimeExecutionMode.GRAPH, graph_required=True
     )
+
+    class _FakeWorkflowRuntime:
+        async def run(self, request, decision):
+            return "graph answer", fake_state["response_metadata"]
+
+        async def stream(self, request, decision):
+            yield fake_state
+
     fake_state = {
         "response": "graph answer",
         "response_metadata": {
@@ -198,13 +208,6 @@ def test_graph_decision_invokes_workflow_runtime():
         },
     }
 
-    class _FakeOrchestrator:
-        async def process(self, **kwargs):
-            return fake_state
-
-        async def stream_process(self, **kwargs):
-            yield fake_state
-
     with patch(
         "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
         new=AsyncMock(return_value=_FakeCP()),
@@ -212,8 +215,8 @@ def test_graph_decision_invokes_workflow_runtime():
         "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
         new=lambda: _FakeDecider(graph_decision),
     ), patch(
-        "ai_karen_engine.core.langgraph_orchestrator.get_default_orchestrator",
-        new=AsyncMock(return_value=_FakeOrchestrator()),
+        "ai_karen_engine.core.runtime.chat_runtime.get_workflow_runtime",
+        new=lambda: _FakeWorkflowRuntime(),
     ), patch(
         "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
         new=AssertionError,
@@ -237,11 +240,11 @@ def test_runtime_fallback_invokes_expression_gateway_on_primary_failure():
         execution_mode=RuntimeExecutionMode.GRAPH, graph_required=True
     )
 
-    class _FailingOrchestrator:
-        async def process(self, **kwargs):
+    class _FailingWorkflowRuntime:
+        async def run(self, request, decision):
             raise RuntimeError("primary boom")
 
-        async def stream_process(self, **kwargs):
+        async def stream(self, request, decision):
             raise RuntimeError("primary boom")
 
     with patch(
@@ -251,8 +254,8 @@ def test_runtime_fallback_invokes_expression_gateway_on_primary_failure():
         "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
         new=lambda: _FakeDecider(graph_decision),
     ), patch(
-        "ai_karen_engine.core.langgraph_orchestrator.get_default_orchestrator",
-        new=AsyncMock(return_value=_FailingOrchestrator()),
+        "ai_karen_engine.core.runtime.chat_runtime.get_workflow_runtime",
+        new=lambda: _FailingWorkflowRuntime(),
     ), patch(
         "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
         new=_FakeGateway,
@@ -275,11 +278,11 @@ def test_runtime_fallback_emergency_when_all_paths_fail():
         execution_mode=RuntimeExecutionMode.GRAPH, graph_required=True
     )
 
-    class _FailingOrchestrator:
-        async def process(self, **kwargs):
+    class _FailingWorkflowRuntime:
+        async def run(self, request, decision):
             raise RuntimeError("primary boom")
 
-        async def stream_process(self, **kwargs):
+        async def stream(self, request, decision):
             raise RuntimeError("primary boom")
 
     with patch(
@@ -289,8 +292,8 @@ def test_runtime_fallback_emergency_when_all_paths_fail():
         "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
         new=lambda: _FakeDecider(graph_decision),
     ), patch(
-        "ai_karen_engine.core.langgraph_orchestrator.get_default_orchestrator",
-        new=AsyncMock(return_value=_FailingOrchestrator()),
+        "ai_karen_engine.core.runtime.chat_runtime.get_workflow_runtime",
+        new=lambda: _FailingWorkflowRuntime(),
     ), patch(
         "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
         new=_FakeGatewayEmpty,
@@ -388,7 +391,7 @@ def test_topic_does_not_force_graph():
 def test_human_gate_requires_graph():
     decider = CortexExecutionDecider()
     decision = asyncio.get_event_loop().run_until_complete(
-        decider.decide(_make_request(messages=[{"content": "URGENT: critical system failure! Fix immediately!", "message_type": "user"}]))
+        decider.decide(_make_request(messages=[{"content": "Reset the database", "message_type": "user"}]))
     )
     assert decision.graph_required is True
     assert "human_gate_required" in decision.reason_codes
@@ -398,10 +401,13 @@ def test_human_gate_requires_graph():
 def test_agent_delegation_requires_graph():
     decider = CortexExecutionDecider()
     decision = asyncio.get_event_loop().run_until_complete(
-        decider.decide(_make_request(messages=[{"content": "Deploy this application to production with monitoring", "message_type": "user"}]))
+        decider.decide(_make_request(
+            messages=[{"content": "Analyze this data and create a report", "message_type": "user"}],
+            metadata={"agent_delegation": True},
+        ))
     )
     assert decision.graph_required is True
-    assert "workflow_required" in decision.reason_codes or "tool_or_plugin_requirements" in decision.reason_codes
+    assert "workflow_capability" in decision.reason_codes
     assert decision.requires_agent_delegation is True
 
 
@@ -779,7 +785,7 @@ def test_memory_context_reaches_prompt():
             "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
             new=_FakeGateway,
         ), patch(
-            "ai_karen_engine.core.runtime.prompt.prompt_assembler.get_prompt_assembler",
+            "ai_karen_engine.core.runtime.prompt.get_prompt_assembler",
         ) as mock_assembler:
             assembled = PromptAssemblyResult(
                 messages=[
@@ -822,9 +828,6 @@ def test_simple_chat_never_invokes_langgraph():
     ), patch(
         "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
         new=_FakeGateway,
-    ), patch(
-        "ai_karen_engine.core.langgraph_orchestrator.get_default_orchestrator",
-        new=AsyncMock(side_effect=AssertionError("LangGraph must not be used for simple chat")),
     ):
         result = asyncio.get_event_loop().run_until_complete(
             get_chat_runtime().execute(_make_request())

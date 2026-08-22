@@ -158,7 +158,7 @@ class WebSearchDispatcher(ExtensionBase):
         try:
             prepared = await handler.prepare(query, context)
 
-            if mode == "general" and self._internet_service:
+            if self._internet_service:
                 try:
                     internet_result = await self._internet_service.execute(
                         query,
@@ -169,53 +169,31 @@ class WebSearchDispatcher(ExtensionBase):
                         },
                     )
                     if internet_result.get("sources") or internet_result.get("results"):
-                        # Ensure all required frontend fields are present
                         internet_result.setdefault("mode", mode)
                         internet_result["can_execute"] = True
                         internet_result.setdefault("provider", "crawl4ai")
                         internet_result.setdefault("results", [])
                         internet_result.setdefault("sources", [])
                         internet_result.setdefault("extractedData", None)
-                        
                         metadata = internet_result.get("metadata")
                         if isinstance(metadata, dict):
                             metadata.setdefault("provider", "crawl4ai")
                         return internet_result
 
                     self.logger.info(
-                        "InternetCapabilityService returned no live results for mode %s; falling back to WebSearchClient",
+                        "InternetCapabilityService returned no live results for mode %s",
                         mode,
                     )
                 except Exception as exc:
                     self.logger.warning(
-                        "InternetCapabilityService failed for mode %s; falling back to WebSearchClient",
+                        "InternetCapabilityService failed for mode %s",
                         mode,
                         extra={"error": str(exc), "query": query},
                     )
 
-            # Mode-specific handlers provide the first pass; general mode uses the
-            # crawl-backed internet service above before falling back here.
             result = await handler.execute(prepared, query)
-
             result.setdefault("mode", mode)
             result["can_execute"] = bool(result.get("sources") or result.get("results"))
-            
-            # For non-general modes, fall back to the InternetCapabilityService when the
-            # mode-specific handler cannot produce live sources.
-            if (
-                mode != "general"
-                and not result.get("sources")
-                and not result.get("results")
-                and self._internet_service
-            ):
-                self.logger.info(f"Handler returned 0 results for mode {mode}, trying InternetCapabilityService as fallback")
-                service_result = await self._internet_service.execute(query, config_override={"mode": mode})
-                if service_result.get("sources") or service_result.get("results"):
-                    result["sources"] = service_result.get("sources")
-                    result["results"] = service_result.get("results")
-                    result["summary"] = service_result.get("summary")
-                    result["provider"] = service_result.get("provider", "internet_service")
-                    result["can_execute"] = bool(result.get("sources") or result.get("results"))
 
         except Exception as exc:
             self.logger.warning(

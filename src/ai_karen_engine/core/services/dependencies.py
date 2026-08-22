@@ -69,31 +69,29 @@ async def get_user_context(request: Request) -> UserData:
 
         # 1. Check for explicit Auth Bypass (Dev/Test mode)
         if auth_config.should_bypass_auth():
-            logger.info("🔓 Auth Bypass Active: Providing elevated developer context")
+            logger.info("Auth Bypass Active: Providing elevated developer context")
             payload = auth_config.get_dev_user_context()
             return UserData.from_dict(payload)
 
         # 2. Production Path: Real Authentication via Auth Middleware
+        #    Fail closed: production auth failure is 401, not anonymous.
         from ai_karen_engine.auth.auth_middleware import get_current_user as get_real_user
         
         try:
             user_dict = await get_real_user(request)
             return UserData.from_dict(user_dict)
         except Exception as auth_err:
-            logger.warning(f"Production auth failed, falling back to anonymous: {auth_err}")
+            logger.warning("Production auth failed: %s", auth_err)
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required",
+            )
 
-        # 3. Fallback: Anonymous User (Safe Minimum)
-        payload = {
-            "user_id": "anonymous",
-            "email": None,
-            "roles": [],
-            "tenant_id": "default",
-            "is_active": True,
-            "authenticated": False,
-        }
-        return UserData.from_dict(payload)
+        # 3. Fallback: Anonymous User — REMOVED per CHAT-LIVE fail-closed auth
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Context resolution failure: {e}")
+        logger.error("Context resolution failure: %s", e)
         raise HTTPException(
             status_code=401, detail="Authentication context unavailable"
         )

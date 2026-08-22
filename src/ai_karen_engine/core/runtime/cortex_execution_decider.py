@@ -96,6 +96,11 @@ class CortexExecutionDecider:
         denied_capabilities = analysis.get("forbidden_capabilities", []) or list(meta.get("forbidden_capabilities") or [])
         policy_constraints = dict(meta.get("policy_constraints") or {})
 
+        if meta.get("agent_delegation"):
+            analysis["agent_delegation"] = True
+        if meta.get("workflow_required"):
+            analysis["workflow_required"] = True
+
         if tool_requirements or plugin_candidates:
             graph_required = True
             reason_codes.append("tool_or_plugin_requirements")
@@ -286,6 +291,16 @@ class CortexExecutionDecider:
             memory_policy = self._infer_memory_policy_from_analysis(analysis)
             workflow = self._infer_workflow_from_analysis(analysis)
             risk_level = self._assess_risk_level(analysis)
+
+            lower_text = text.lower()
+            heuristic_tools = []
+            if any(k in lower_text for k in ["debug", "error", "traceback", "exception", "bug"]):
+                heuristic_tools.append("code_execution")
+            if any(k in lower_text for k in ["repository", "repo", "codebase", "folder", "directory"]):
+                heuristic_tools.append("filesystem_operation")
+            for tool in heuristic_tools:
+                if tool not in topology.get("tool_requirements", []):
+                    topology.setdefault("tool_requirements", []).append(tool)
 
             return {
                 "intent": intent_value,
@@ -484,23 +499,17 @@ class CortexExecutionDecider:
             triggers.append("agent_delegation")
         if analysis.get("workflow_required"):
             triggers.append("workflow_required")
-        if analysis.get("tool_requirements"):
-            triggers.append("tool_or_plugin_requirements")
-        if analysis.get("plugin_candidates"):
-            triggers.append("plugin_requirements")
 
         return triggers
 
-    def _assess_risk_level(self, analysis: Dict[str, Any]) -> RiskLevel:
+    def _assess_risk_level(self, analysis) -> RiskLevel:
         """Assess execution risk from analysis signals."""
-        explicit_risk = analysis.get("risk_level")
-        if explicit_risk:
-            try:
-                return RiskLevel(str(explicit_risk).lower())
-            except ValueError:
-                pass
-
-        risk_signals = analysis.get("risk_signals", {}) or {}
+        if hasattr(analysis, "get"):
+            explicit_risk = analysis.get("risk_level")
+            risk_signals = dict((analysis.get("risk_signals", {}) or {}))
+        else:
+            explicit_risk = getattr(analysis, "risk_level", None)
+            risk_signals = dict(getattr(analysis, "risk_signals", {}) or {})
         risk_score = float(risk_signals.get("score", 0.0) or 0.0)
         categories = risk_signals.get("categories", []) or []
 
@@ -514,6 +523,12 @@ class CortexExecutionDecider:
             risk_score = max(risk_score, 0.5)
         if "admin_scope" in categories:
             risk_score = max(risk_score, 0.4)
+
+        risk_signals["score"] = risk_score
+        if hasattr(analysis, "__setitem__"):
+            analysis["risk_signals"] = risk_signals
+        else:
+            analysis.risk_signals = risk_signals
 
         if risk_score >= 0.8:
             return RiskLevel.CRITICAL

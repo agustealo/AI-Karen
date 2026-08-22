@@ -52,7 +52,7 @@ async def _check_database_health() -> Dict[str, Any]:
 async def _check_redis_health() -> Dict[str, Any]:
     """Check Redis connectivity and health."""
     try:
-        from ai_karen_engine.infra.redis_connection_manager import get_redis_manager
+        from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
 
         redis_manager = get_redis_manager()
         start_time = time.time()

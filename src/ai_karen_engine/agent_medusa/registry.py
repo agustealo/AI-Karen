@@ -32,6 +32,9 @@ class MedusaRegistry:
             agent_id="analyst",
             name="Analyst Specialist",
             description="Analyzes complex requests and provides structured insights.",
+            implementation_id="karen.agent.analyst.native",
+            prompt_contract_id="karen.agent.analyst.intent",
+            prompt_version="v1",
             capabilities=[
                 AgentCapability(type=AgentCapabilityType.REASONING, name="Analysis", description="Structured analysis"),
                 AgentCapability(type=AgentCapabilityType.DATA_ANALYSIS, name="Data Analysis", description="Analyzing data sets")
@@ -44,6 +47,9 @@ class MedusaRegistry:
             agent_id="researcher",
             name="Researcher Specialist",
             description="Performs deep research using available tools and memory.",
+            implementation_id="karen.agent.researcher.native",
+            prompt_contract_id="karen.agent.researcher.synthesis",
+            prompt_version="v1",
             capabilities=[
                 AgentCapability(type=AgentCapabilityType.RESEARCH, name="Deep Research", description="Web and memory research"),
                 AgentCapability(type=AgentCapabilityType.WEB_BROWSING, name="Web Browsing", description="Accessing web information")
@@ -82,6 +88,35 @@ class MedusaRegistry:
     async def list_agents(self) -> List[AgentRegistration]:
         """List all registered agents."""
         return list(self._agents.values())
+
+    async def get_agent_health(
+        self,
+        agent_id: str,
+        capability_health: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Derive agent health from capability_dependencies (A18).
+
+        An agent may be registered but unusable if a required upstream
+        capability is unavailable. `capability_health(cap) -> bool` is an
+        injectable checker (defaults to "all healthy"). Returns a record the
+        UI can use to show DEGRADED instead of falsely AVAILABLE.
+        """
+        reg = self._agents.get(agent_id)
+        if reg is None:
+            return {"exists": False}
+        deps = getattr(reg, "capability_dependencies", []) or []
+        missing = [
+            dep for dep in deps
+            if capability_health is not None and not capability_health(dep)
+        ]
+        return {
+            "exists": True,
+            "agent_id": agent_id,
+            "status": reg.status,
+            "lifecycle_state": reg.lifecycle_state,
+            "healthy": not missing,
+            "missing_dependencies": missing,
+        }
 
 _registry: Optional[MedusaRegistry] = None
 

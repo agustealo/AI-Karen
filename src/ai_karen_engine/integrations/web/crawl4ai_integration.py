@@ -308,7 +308,7 @@ class Crawl4AIIntegration:
         urls: Sequence[str],
         bypass_cache: Optional[bool] = None,
         timeout_seconds: Optional[float] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[CrawlResult]:
         """
         Fetch multiple URLs concurrently with bounded concurrency.
 
@@ -325,7 +325,7 @@ class Crawl4AIIntegration:
         ]
 
         results = await self.fetch_requests(requests)
-        return [result.to_dict() for result in results]
+        return results
 
     async def fetch_requests(self, requests: Sequence[CrawlRequest]) -> List[CrawlResult]:
         """

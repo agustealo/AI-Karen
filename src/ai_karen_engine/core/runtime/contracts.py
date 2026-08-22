@@ -46,6 +46,130 @@ class ExecutionBudget:
     max_external_requests: int = 5
 
 
+class ExecutionBudgetMeter:
+    """Tracks consumption against an ExecutionBudget for one request.
+
+    One meter per request. The runtime owner increments counters as
+    resources are consumed and checks limits before each operation.
+    """
+
+    def __init__(self, budget: ExecutionBudget) -> None:
+        self._budget = budget
+        self._model_calls = 0
+        self._reasoning_steps = 0
+        self._tool_calls = 0
+        self._agent_turns = 0
+        self._external_requests = 0
+        self._input_tokens = 0
+        self._output_tokens = 0
+        self._start_ms: float = 0.0
+        self._exhausted = False
+
+    def start(self) -> None:
+        self._start_ms = __import__("time").time() * 1000.0
+
+    def check_duration(self) -> bool:
+        if self._exhausted:
+            return False
+        elapsed = __import__("time").time() * 1000.0 - self._start_ms
+        return elapsed < self._budget.max_duration_ms
+
+    def consume_model_call(self) -> bool:
+        if self._exhausted:
+            return False
+        self._model_calls += 1
+        if self._model_calls > self._budget.max_model_calls:
+            self._exhausted = True
+            return False
+        return True
+
+    def consume_reasoning_step(self) -> bool:
+        if self._exhausted:
+            return False
+        self._reasoning_steps += 1
+        if self._reasoning_steps > self._budget.max_reasoning_steps:
+            self._exhausted = True
+            return False
+        return True
+
+    def consume_tool_call(self) -> bool:
+        if self._exhausted:
+            return False
+        self._tool_calls += 1
+        if self._tool_calls > self._budget.max_tool_calls:
+            self._exhausted = True
+            return False
+        return True
+
+    def consume_agent_turn(self) -> bool:
+        if self._exhausted:
+            return False
+        self._agent_turns += 1
+        if self._agent_turns > self._budget.max_agent_turns:
+            self._exhausted = True
+            return False
+        return True
+
+    def consume_external_request(self) -> bool:
+        if self._exhausted:
+            return False
+        self._external_requests += 1
+        if self._external_requests > self._budget.max_external_requests:
+            self._exhausted = True
+            return False
+        return True
+
+    def add_input_tokens(self, count: int) -> bool:
+        if self._exhausted:
+            return False
+        self._input_tokens += count
+        if self._input_tokens > self._budget.max_input_tokens:
+            self._exhausted = True
+            return False
+        return True
+
+    def add_output_tokens(self, count: int) -> bool:
+        if self._exhausted:
+            return False
+        self._output_tokens += count
+        if self._output_tokens > self._budget.max_output_tokens:
+            self._exhausted = True
+            return False
+        return True
+
+    @property
+    def exhausted(self) -> bool:
+        return self._exhausted
+
+    @property
+    def model_calls(self) -> int:
+        return self._model_calls
+
+    @property
+    def reasoning_steps(self) -> int:
+        return self._reasoning_steps
+
+    @property
+    def tool_calls(self) -> int:
+        return self._tool_calls
+
+    @property
+    def agent_turns(self) -> int:
+        return self._agent_turns
+
+    @property
+    def external_requests(self) -> int:
+        return self._external_requests
+
+    @property
+    def input_tokens(self) -> int:
+        return self._input_tokens
+
+    @property
+    def output_tokens(self) -> int:
+        return self._output_tokens
+
+
 @dataclass(slots=True)
 class DecisionProvenance:
     """Provenance for any decision made in the control plane."""

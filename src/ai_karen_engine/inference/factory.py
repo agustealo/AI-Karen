@@ -33,7 +33,7 @@ class InferenceServiceConfig:
         enable_model_store: bool = True,
         model_store_db_path: str = "~/.kari/models/model_store.db",
         # Performance settings
-        auto_select_optimal_runtime: bool = True,
+        auto_select_optimal_runtime: bool = False,
     ):
         self.enable_local_gguf = enable_local_gguf
         self.enable_transformers = enable_transformers
@@ -106,17 +106,12 @@ class InferenceServiceFactory:
         try:
             from ai_karen_engine.inference.transformers_runtime import TransformersRuntime
 
-            # Default fallback model path if none provided
+            # Model path must be provided by caller or resolved from
+            # canonical model discovery (ModelDiscoveryService), not
+            # hardcoded local fallbacks.
             if not model_path:
-                # Try to find a local instructor model - prioritize verified working models
-                default_paths = [
-                    "models/transformers/Qwen--Qwen3.5-0.8B",
-                    "models/transformers/deepseek-ai--DeepSeek-R1-Distill-Qwen-1.5B",
-                ]
-                for p in default_paths:
-                    if Path(p).exists():
-                        model_path = p
-                        break
+                from ai_karen_engine.config.config_manager import get_default_model
+                model_path = get_default_model("builtin_transformers")
 
             runtime = TransformersRuntime(
                 model_path=model_path,
@@ -193,47 +188,24 @@ class InferenceServiceFactory:
 
     def select_optimal_runtime(self, model_format: str) -> Optional[str]:
         """
-        Select the optimal runtime for a given model format.
+        DEPRECATED: Runtime selection authority belongs to ProviderRouter
+        in core/model_runtime. This method exists only for backward compatibility
+        during migration and will be removed.
 
-        Args:
-            model_format: Model format (gguf, safetensors, etc.)
-
-        Returns:
-            Runtime name or None
+        Do not call this from new code. Route model execution through
+        ModelManager / ProviderRouter instead.
         """
+        import warnings
+        warnings.warn(
+            "InferenceServiceFactory.select_optimal_runtime is deprecated. "
+            "Use core/model_runtime ModelManager for runtime selection.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         if not self.config.auto_select_optimal_runtime:
             return None
 
-        # Format-to-runtime mapping
-        runtime_preferences = {
-            "gguf": ["transformers"], # Use Transformers if GGUF is provided, or rely on other providers
-            "safetensors": ["transformers"],
-            "fp16": ["transformers"],
-            "bf16": ["transformers"],
-            "int8": ["transformers"],
-            "int4": ["transformers"],
-        }
-
-        preferred_runtimes = runtime_preferences.get(model_format.lower(), [])
-        available_runtimes = self.get_available_runtimes()
-
-        # Return first available preferred runtime
-        for runtime in preferred_runtimes:
-            if runtime in available_runtimes:
-                logger.info(
-                    f"Selected {runtime} as optimal runtime for {model_format} format"
-                )
-                return runtime
-
-        # Fallback to any available runtime
-        if available_runtimes:
-            fallback = available_runtimes[0]
-            logger.info(
-                f"Using fallback runtime {fallback} for {model_format} format"
-            )
-            return fallback
-
-        logger.warning(f"No runtime available for {model_format} format")
         return None
 
     def create_all_runtimes(self) -> Dict[str, Any]:

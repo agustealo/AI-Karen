@@ -88,7 +88,7 @@ def _runtime_metadata_from_orchestrator_response(
             ),
         },
     )
-    metadata.setdefault("model", requested_model or "orchestrated")
+    metadata.setdefault("model", getattr(response, "actual_model", None) or getattr(response, "model", None))
     return metadata
 
 
@@ -115,35 +115,9 @@ class ChatMessage(BaseModel):
     @field_validator("content")
     @classmethod
     def validate_content(cls, v):
-        """Validate message content for security issues"""
+        """Validate message content for structural correctness."""
         if not isinstance(v, str):
             raise ValueError("Content must be a string")
-
-        # Check for injection patterns
-        dangerous_patterns = [
-            r"<script[^>]*>.*?</script>",  # XSS
-            r"javascript:",  # JavaScript protocol
-            r"vbscript:",  # VBScript protocol
-            r"onload\s*=",  # Event handlers
-            r"onerror\s*=",  # Event handlers
-            r"SELECT\s+.*\s+FROM",  # SQL injection
-            r"DROP\s+TABLE",  # SQL injection
-            r"INSERT\s+INTO",  # SQL injection
-            r"UPDATE\s+.*\s+SET",  # SQL injection
-            r"DELETE\s+FROM",  # SQL injection
-            r"exec\s*\(",  # Code execution
-            r"system\s*\(",  # System command execution
-            r"subprocess\.",  # Subprocess calls
-            r"os\.",  # OS module access
-            r"__import__",  # Python import
-            r"eval\s*\(",  # Code evaluation
-        ]
-
-        content_lower = v.lower()
-        for pattern in dangerous_patterns:
-            if re.search(pattern, content_lower, re.IGNORECASE):
-                raise ValueError(f"Potentially dangerous content detected: {pattern}")
-
         return v.strip()
 
 
@@ -588,7 +562,7 @@ async def create_chat_response(
             correlation_id=correlation_id,
             response_data={
                 "response_id": response_id,
-                "model": preferred_model or "orchestrated",
+                "model": response_metadata.get("actual_model") or preferred_model or "unknown",
                 "processing_time": processing_time,
             },
         )
@@ -596,7 +570,7 @@ async def create_chat_response(
         return ChatResponse(
             response_id=response_id,
             content=result.answer,
-            model=preferred_model or "orchestrated",
+            model=response_metadata.get("actual_model") or preferred_model or "unknown",
             usage=(response_metadata.get("llm") or {}).get("usage", {}),
             metadata=response_metadata,
             timestamp=datetime.utcnow(),

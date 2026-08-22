@@ -10,7 +10,10 @@ import aiohttp
 import json
 from urllib.parse import urlencode, quote_plus
 
+from ai_karen_engine.services.search.web_search_defaults import DEFAULT_SEARXNG_INSTANCES
+
 logger = logging.getLogger(__name__)
+
 
 class SearchTool:
     """
@@ -27,7 +30,7 @@ class SearchTool:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.searxng_url = self.config.get('searxng_url', 'http://localhost:8080')
-        self.fallback_url = "https://searxng.nicfab.eu" # Public fallback
+        self.fallback_url = self.config.get('searxng_fallback_url') or (DEFAULT_SEARXNG_INSTANCES[0] if DEFAULT_SEARXNG_INSTANCES else None)
         self.timeout = self.config.get('timeout', 15)
         self.max_results = self.config.get('max_results', 10)
         self.default_category = self.config.get('default_category', 'general')

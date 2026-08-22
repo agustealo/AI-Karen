@@ -6,8 +6,6 @@ from ai_karen_engine.extensions.platform.core.host.base import (
     ExtensionContext,
 )
 
-from ..search_client import WebSearchClient
-
 logger = logging.getLogger(__name__)
 
 
@@ -16,8 +14,12 @@ class BaseWebSearchModeHandler(ExtensionBase):
     Base class for web search mode handlers.
 
     Provides shared helper methods for query normalization, type coercion,
-    and manifest access. Mode-specific handlers inherit from this class
-    and implement prepare() and execute() methods.
+    manifest access, and strategy construction. Mode-specific handlers inherit
+    from this class and implement prepare() and execute() methods.
+
+    This base class intentionally does NOT own network clients, provider
+    routing, fallbacks, sessions, or HTTP concerns. All execution flows
+    through the canonical InternetCapabilityService.
     """
 
     MODE = "base"
@@ -26,49 +28,18 @@ class BaseWebSearchModeHandler(ExtensionBase):
 
     def __init__(self, manifest: Any, context: ExtensionContext):
         super().__init__(manifest, context)
-        self._search_client: Optional[WebSearchClient] = None
 
     async def initialize(self) -> None:
-        """Initialize the web search client."""
-        # Build settings from manifest and config
-        settings = self._get_search_settings()
-        self._search_client = WebSearchClient(settings)
+        """Initialize handler strategy state."""
         logger.debug(
-            f"Initialized web search client for {self.__class__.__name__}",
-            extra={
-                "handler": self.__class__.__name__,
-                "configured": self._search_client.is_configured(),
-                "providers": self._search_client.get_available_providers(),
-            },
+            "Initialized web search mode handler for %s",
+            self.__class__.__name__,
+            extra={"handler": self.__class__.__name__},
         )
 
     async def shutdown(self) -> None:
         """Shutdown and cleanup resources."""
-        if self._search_client:
-            # Note: Client uses async context manager, but we can't close it here
-            # The client session will be managed during search operations
-            self._search_client = None
-
-    def _get_search_client(self) -> Optional[WebSearchClient]:
-        """Get the web search client instance."""
-        return self._search_client
-
-    def _get_search_settings(self) -> Dict[str, Any]:
-        """Build search settings from manifest and system config."""
-        settings = {}
-
-        # Try to read from manifest settings
-        manifest_settings = getattr(self.manifest, "settings", None)
-        if isinstance(manifest_settings, dict):
-            settings.update(manifest_settings.get("search", {}))
-
-        # Try to read API keys from config
-        if hasattr(self.context, "config"):
-            config = getattr(self.context, "config", None)
-            if isinstance(config, dict):
-                settings.update(config.get("web_search", {}))
-
-        return settings
+        return None
 
     async def execute_hook(self, hook_point, context):
         payload = self._extract_context_payload(context)

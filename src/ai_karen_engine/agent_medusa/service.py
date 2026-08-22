@@ -4,6 +4,8 @@ from .contracts.runtime_request import RuntimeRequest
 from .contracts.runtime_response import RuntimeResponse, ResponseStatus
 from .coordinator.medusa_coordinator import MedusaCoordinator
 from .registry import get_medusa_registry
+from .catalog import AgentCatalogService, AgentDescriptor
+from .contracts.safe_error import to_safe_response
 from .telemetry.metrics import get_medusa_metrics
 from .telemetry.tracing import get_medusa_tracer
 from .safety import get_safety_manager
@@ -21,6 +23,7 @@ class AgentMedusaService:
         self.tracer = get_medusa_tracer()
         self.safety = get_safety_manager()
         self.auth = AuthContextAdapter()
+        self.catalog = AgentCatalogService(self.registry)
         self._initialized = False
 
     async def initialize(self):
@@ -32,6 +35,33 @@ class AgentMedusaService:
         # Additional initialization logic if needed
         self._initialized = True
         logger.info("AgentMedusaService initialized")
+
+    async def list_agent_catalog(
+        self,
+        *,
+        tenant_visible_ids: Optional[Any] = None,
+        rbac_visible_ids: Optional[Any] = None,
+        policy_eligible_ids: Optional[Any] = None,
+        include_disabled: bool = False,
+        capability_health: Optional[Any] = None,
+        admin: bool = False,
+    ) -> List["AgentDescriptor"]:
+        """Backend-driven, filtered agent catalog for the UI (A19 / A20).
+
+        Intersects registered agents with tenant/RBAC/policy-eligible sets
+        supplied by upstream authority. Normal users see usable agents;
+        admins see all with diagnostic status.
+        """
+        if not self._initialized:
+            await self.initialize()
+        return await self.catalog.list_agents(
+            tenant_visible_ids=set(tenant_visible_ids) if tenant_visible_ids else None,
+            rbac_visible_ids=set(rbac_visible_ids) if rbac_visible_ids else None,
+            policy_eligible_ids=set(policy_eligible_ids) if policy_eligible_ids else None,
+            include_disabled=include_disabled,
+            capability_health=capability_health,
+            admin=admin,
+        )
 
     async def execute(self, request: RuntimeRequest) -> RuntimeResponse:
         """Execute a request through the Medusa agent system."""
@@ -69,11 +99,7 @@ class AgentMedusaService:
             logger.error(f"AgentMedusaService execution error: {e}", exc_info=True)
             self.tracer.add_event(trace.trace_id, "error", str(e))
             self.tracer.end_trace(trace.trace_id, success=False)
-            return RuntimeResponse(
-                request_id=request.request_id,
-                status=ResponseStatus.ERROR,
-                content=f"Internal agent error: {str(e)}"
-            )
+            return to_safe_response(e, correlation_id=correlation_id)
 
     # Compatibility methods for migration
     async def execute_task(self, task: Any, execution_mode: Any = None) -> Any:

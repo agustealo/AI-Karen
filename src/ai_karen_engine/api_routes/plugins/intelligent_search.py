@@ -140,8 +140,8 @@ class CrawlDiagnosticsSchema(BaseModel):
 class IntelligentSearchResponse(BaseModel):
     """Response model for intelligent search."""
 
-    plugin_id: str = "intelligent_search"
-    plugin_version: str = "0.1.0"
+    plugin_id: str
+    plugin_version: str
     status: str = Field(..., description="ok, partial, degraded, or error")
     query: str
     mode: str
@@ -157,8 +157,8 @@ class IntelligentSearchResponse(BaseModel):
 class CapabilitiesResponse(BaseModel):
     """Response model for plugin capabilities."""
 
-    plugin_id: str = "intelligent_search"
-    plugin_version: str = "0.1.0"
+    plugin_id: str
+    plugin_version: str
     enabled: bool
     permissions: List[str]
     available_modes: List[str] = Field(
@@ -188,7 +188,7 @@ class CapabilitiesResponse(BaseModel):
 class StatusResponse(BaseModel):
     """Response model for plugin status."""
 
-    plugin_id: str = "intelligent_search"
+    plugin_id: str
     status: str  # ready, running, degraded, error, disabled
     version: str
     uptime_seconds: float
@@ -206,6 +206,8 @@ def _normalize_plugin_result(
     mode: str,
     request_id: str,
     correlation_id: str,
+    plugin_id: str = "intelligent_search",
+    plugin_version: str = "0.0.0",
 ) -> IntelligentSearchResponse:
     """Normalize plugin execution result to response schema."""
     # Extract results from plugin result
@@ -301,8 +303,8 @@ def _normalize_plugin_result(
         )
 
     return IntelligentSearchResponse(
-        plugin_id="intelligent_search",
-        plugin_version="0.1.0",
+        plugin_id=plugin_id,
+        plugin_version=plugin_version,
         status=status,
         query=query,
         mode=mode,
@@ -397,6 +399,8 @@ async def run_intelligent_search(
             mode=request.mode,
             request_id=request_id,
             correlation_id=correlation_id,
+            plugin_id=plugin_info.id if hasattr(plugin_info, 'id') else "intelligent_search",
+            plugin_version=plugin_info.version if hasattr(plugin_info, 'version') else "0.0.0",
         )
 
         return response
@@ -443,7 +447,7 @@ async def get_intelligent_search_status(
         metrics = plugin_service.get_metrics()
 
         return StatusResponse(
-            plugin_id="intelligent_search",
+            plugin_id=plugin_info.id if hasattr(plugin_info, 'id') else "intelligent_search",
             status=plugin_info.status.value,
             version=plugin_info.version,
             uptime_seconds=metrics.get("uptime_seconds", 0.0),
@@ -500,8 +504,8 @@ async def get_intelligent_search_capabilities(
             crawl_available = False
 
         return CapabilitiesResponse(
-            plugin_id="intelligent_search",
-            plugin_version="0.1.0",
+            plugin_id=plugin_info.id if hasattr(plugin_info, 'id') else "intelligent_search",
+            plugin_version=plugin_info.version if hasattr(plugin_info, 'version') else "0.0.0",
             enabled=plugin_info.enabled,
             permissions=getattr(plugin_info, "permissions", []),
             available_modes=["basic", "advanced", "unrestricted"],

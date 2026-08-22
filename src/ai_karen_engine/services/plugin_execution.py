@@ -9,7 +9,6 @@ import builtins
 import inspect
 import logging
 import re
-import resource
 import sys
 import time
 import traceback
@@ -25,6 +24,11 @@ from concurrent.futures import (
     ThreadPoolExecutor,
     TimeoutError,
 )
+
+try:
+    import resource as resource_module
+except ModuleNotFoundError:
+    resource_module = None
 
 try:
     from pydantic import BaseModel, ConfigDict, Field
@@ -213,26 +217,28 @@ class PluginSandbox:
     
     def _setup_resource_limits(self):
         """Set up resource limits."""
+        if resource_module is None:
+            return
         try:
             # Memory limit
-            if hasattr(resource, 'RLIMIT_AS'):
+            if hasattr(resource_module, 'RLIMIT_AS'):
                 memory_limit = self.resource_limits.max_memory_mb * 1024 * 1024
-                resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
+                resource_module.setrlimit(resource_module.RLIMIT_AS, (memory_limit, memory_limit))
             
             # CPU time limit
-            if hasattr(resource, 'RLIMIT_CPU'):
+            if hasattr(resource_module, 'RLIMIT_CPU'):
                 cpu_limit = self.resource_limits.max_cpu_time_seconds
-                resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit))
+                resource_module.setrlimit(resource_module.RLIMIT_CPU, (cpu_limit, cpu_limit))
             
             # File descriptor limit
-            if hasattr(resource, 'RLIMIT_NOFILE'):
+            if hasattr(resource_module, 'RLIMIT_NOFILE'):
                 fd_limit = self.resource_limits.max_file_descriptors
-                resource.setrlimit(resource.RLIMIT_NOFILE, (fd_limit, fd_limit))
+                resource_module.setrlimit(resource_module.RLIMIT_NOFILE, (fd_limit, fd_limit))
             
             # Process limit
-            if hasattr(resource, 'RLIMIT_NPROC'):
+            if hasattr(resource_module, 'RLIMIT_NPROC'):
                 proc_limit = self.resource_limits.max_processes
-                resource.setrlimit(resource.RLIMIT_NPROC, (proc_limit, proc_limit))
+                resource_module.setrlimit(resource_module.RLIMIT_NPROC, (proc_limit, proc_limit))
                 
         except Exception as e:
             logger.warning(f"Failed to set resource limits: {e}")

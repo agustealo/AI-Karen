@@ -5,6 +5,8 @@ This service manages plugin metadata, discovery, validation, and registration
 for the AI Karen engine plugin system.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging

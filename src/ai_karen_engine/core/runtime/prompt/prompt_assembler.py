@@ -475,6 +475,8 @@ def get_prompt_assembler() -> PromptAssembler:
     global _prompt_assembler
     if _prompt_assembler is None:
         _prompt_assembler = PromptAssembler()
+        if not _prompt_assembler.registry.list_definitions():
+            register_default_prompts(_prompt_assembler.registry)
     return _prompt_assembler
 
 
@@ -520,6 +522,31 @@ def register_default_prompts(registry: Optional[PromptRegistry] = None) -> Promp
             name="Extension Default",
             description="Default extension prompt contract",
             system_instructions="You are Karen. Integrate extension outputs safely.",
+            token_budget=4096,
+        ),
+        PromptDefinition(
+            prompt_id="karen.agent.analyst.intent",
+            version="v1",
+            name="Analyst Intent",
+            description="Analyst specialist intent-classification and query-structuring prompt",
+            system_instructions=(
+                "Analyze the following user query for Karen AI. "
+                "Detect the primary intent (e.g., weather, information, task) and extract key terms.\n\n"
+                "User Query: {query}\n\n"
+                "Respond with a JSON object:\n"
+                "{{\n  \"intent\": \"string\",\n  \"key_terms\": [\"list\", \"of\", \"terms\"],\n  \"requires_research\": boolean\n}}"
+            ),
+            token_budget=4096,
+        ),
+        PromptDefinition(
+            prompt_id="karen.agent.researcher.synthesis",
+            version="v1",
+            name="Researcher Synthesis",
+            description="Researcher specialist findings-synthesis prompt",
+            system_instructions=(
+                "As a Researcher Agent, summarize the following tool findings for the query: \"{query}\"\n\n"
+                "Findings:\n{findings}"
+            ),
             token_budget=4096,
         ),
     ]

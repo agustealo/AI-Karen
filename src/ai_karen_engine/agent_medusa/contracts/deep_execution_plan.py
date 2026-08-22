@@ -16,22 +16,36 @@ class PlanStep:
     id: str = field(default_factory=lambda: str(uuid4()))
     description: str = ""
     agent_specialist: str = ""  # e.g., "researcher", "coder", "analyst"
+    agent_version: Optional[str] = None  # pinned registration version for reproducibility
     input_data: Dict[str, Any] = field(default_factory=dict)
     dependencies: List[str] = field(default_factory=list) # IDs of steps that must finish first
     status: StepStatus = StepStatus.PENDING
     output_data: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
-    
+
+    # Authorized side-effect surface for this step (validated pre-execution)
+    required_tools: List[str] = field(default_factory=list)
+    required_plugins: List[str] = field(default_factory=list)
+
+    # Prompt contract the specialist must load for this step (A10 / reproducibility)
+    prompt_contract_id: Optional[str] = None
+    prompt_version: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
             "description": self.description,
             "agent_specialist": self.agent_specialist,
+            "agent_version": self.agent_version,
             "input_data": self.input_data,
             "dependencies": self.dependencies,
             "status": self.status.value,
             "output_data": self.output_data,
-            "error": self.error
+            "error": self.error,
+            "required_tools": self.required_tools,
+            "required_plugins": self.required_plugins,
+            "prompt_contract_id": self.prompt_contract_id,
+            "prompt_version": self.prompt_version,
         }
 
 @dataclass

@@ -34,6 +34,7 @@ from prometheus_client import Counter, Histogram
 
 from ..search.search_query_planner import SearchQueryPlanner
 from ..search.search_result_processor import SearchResultProcessor
+from ..search.web_search_provider_registry import WebSearchProviderRegistry
 from ...integrations.web.crawl4ai_integration import Crawl4AIIntegration
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,11 @@ class InternetSearchRequest:
     bypass_cache: bool = False
     timeout_seconds: float = 30.0
     crawl_concurrency: int = 5
+    crawl_enabled: bool = False
+    crawl_max_pages: Optional[int] = None
+    crawl_max_depth: Optional[int] = None
+    sources: Optional[List[str]] = None
+    content_limits: Optional[Dict[str, Any]] = None
     extraction: Optional[Dict[str, Any]] = None
 
     @classmethod
@@ -150,6 +156,11 @@ class InternetSearchRequest:
             bypass_cache=bool(safe_payload.get("bypass_cache", False)),
             timeout_seconds=timeout_seconds,
             crawl_concurrency=crawl_concurrency,
+            crawl_enabled=bool(safe_payload.get("crawl", {}).get("enabled", False) if isinstance(safe_payload.get("crawl"), dict) else safe_payload.get("crawl_enabled", False)),
+            crawl_max_pages=safe_payload.get("crawl", {}).get("max_pages") if isinstance(safe_payload.get("crawl"), dict) else safe_payload.get("crawl_max_pages"),
+            crawl_max_depth=safe_payload.get("crawl", {}).get("max_depth") if isinstance(safe_payload.get("crawl"), dict) else safe_payload.get("crawl_max_depth"),
+            sources=safe_payload.get("sources"),
+            content_limits=safe_payload.get("content_limits"),
             extraction=safe_payload.get("extraction"),
         )
 
@@ -167,6 +178,11 @@ class InternetSearchRequest:
             "time_range": self.time_range,
             "published_after": self.published_after,
             "published_before": self.published_before,
+            "crawl_enabled": self.crawl_enabled,
+            "crawl_max_pages": self.crawl_max_pages,
+            "crawl_max_depth": self.crawl_max_depth,
+            "sources": self.sources,
+            "content_limits": self.content_limits,
         }
         return {key: value for key, value in values.items() if value is not None}
 
@@ -218,6 +234,7 @@ class InternetCapabilityService:
         processor: Optional[SearchResultProcessor] = None,
         search_client: Optional[AsyncSearchClient] = None,
         search_client_factory: Optional[Any] = None,
+        provider_registry: Optional[WebSearchProviderRegistry] = None,
         default_max_urls: int = 5,
         max_expanded_queries: int = 2,
     ) -> None:
@@ -226,6 +243,7 @@ class InternetCapabilityService:
         self.processor = processor or SearchResultProcessor()
         self.search_client = search_client
         self.search_client_factory = search_client_factory
+        self.provider_registry = provider_registry or WebSearchProviderRegistry()
         self.default_max_urls = max(1, min(int(default_max_urls), 25))
         self.max_expanded_queries = max(1, min(int(max_expanded_queries), 5))
 
@@ -705,14 +723,21 @@ class InternetCapabilityService:
             return client
 
         try:
-            from ...clients.web_search.client import WebSearchClient
+            from ai_karen_engine.clients.web_search.client import WebSearchClient
 
-            return WebSearchClient()
+            settings = {}
+            if self.provider_registry is not None:
+                settings = {
+                    "search": {
+                        name: self.provider_registry.get_config(name)
+                        for name in self.provider_registry.descriptors
+                    }
+                }
+            return WebSearchClient(settings=settings)
         except Exception as exc:
             raise RuntimeError(
                 "No internet search client is configured. "
-                "Inject search_client/search_client_factory or provide "
-                "src/ai_karen_engine/clients/web_search/client.py::WebSearchClient."
+                "Inject search_client/search_client_factory or provider_registry."
             ) from exc
 
     def _authorize(self, context: InternetExecutionContext) -> None:

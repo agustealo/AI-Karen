@@ -6,10 +6,12 @@ Production-ready inference system with support for multiple runtimes:
 - Core Helpers: Utility models
 
 Features:
-- Automatic runtime selection based on model format
 - Unified model store for all models
 - Factory pattern for centralized initialization
 - Health monitoring and resource tracking
+
+NOTE: Runtime selection authority belongs to core/model_runtime ModelManager
+/ ProviderRouter. This package provides execution adapters only.
 """
 
 try:
@@ -42,16 +44,6 @@ from .factory import (
     get_model_store,
 )
 
-# Import dependencies for FastAPI dependency injection
-from .dependencies import (
-    get_transformers_runtime_dependency,
-    get_model_store_dependency,
-    get_inference_factory_dependency,
-    get_inference_health_check,
-    get_optimal_runtime,
-    get_any_available_runtime,
-)
-
 __all__ = [
     "TransformersRuntime",
     "VLLMRuntime",
@@ -65,11 +57,4 @@ __all__ = [
     # Factory convenience functions
     "get_transformers_runtime",
     "get_model_store",
-    # Dependencies (FastAPI)
-    "get_transformers_runtime_dependency",
-    "get_model_store_dependency",
-    "get_inference_factory_dependency",
-    "get_inference_health_check",
-    "get_optimal_runtime",
-    "get_any_available_runtime",
 ]
