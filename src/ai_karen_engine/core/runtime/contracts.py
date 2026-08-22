@@ -165,3 +165,127 @@ class CapabilityDescriptor:
     supports_streaming: bool = False
     supports_interrupt: bool = False
     health_state: str = "healthy"
+
+
+@dataclass(slots=True)
+class ExecutionRequirements:
+    """CORTEX-produced requirements before RuntimePolicy evaluation.
+
+    This is the signal contract between IntelligenceRuntime/CORTEX and
+    RuntimePolicy. It carries raw capability and topology signals.
+    """
+
+    request_id: str
+    correlation_id: str
+    intent: str = "general_assist"
+    intent_confidence: float = 0.0
+
+    required_capabilities: List[str] = field(default_factory=list)
+    forbidden_capabilities: List[str] = field(default_factory=list)
+
+    topology_signals: Dict[str, Any] = field(default_factory=dict)
+    reasoning_depth: str = "standard"
+
+    memory_recall_required: bool = False
+    memory_write_allowed: bool = True
+    memory_scope: str = "session"
+    memory_top_k: int = 10
+    memory_classes: List[str] = field(default_factory=list)
+
+    tool_requirements: List[str] = field(default_factory=list)
+    plugin_candidates: List[str] = field(default_factory=list)
+
+    requires_human_gate: bool = False
+    requires_resumability: bool = False
+    requires_parallel_execution: bool = False
+    requires_agent_delegation: bool = False
+
+    max_steps: int = 10
+    time_budget_ms: int = 30000
+    token_budget: int = 4096
+
+    workflow_id: Optional[str] = None
+    workflow_version: str = "v1"
+
+    risk_signals: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class RuntimeCapabilitiesSnapshot:
+    """Backend-confirmed capability snapshot for UI/transport consumption."""
+
+    available_providers: List[str] = field(default_factory=list)
+    available_models: List[str] = field(default_factory=list)
+    available_tools: List[str] = field(default_factory=list)
+    available_workflows: List[str] = field(default_factory=list)
+    available_agents: List[str] = field(default_factory=list)
+    available_reasoning_modes: List[str] = field(default_factory=list)
+
+    degraded_state: bool = False
+    degradation_reason: Optional[str] = None
+
+    runtime_mode: str = "normal"
+    maintenance_active: bool = False
+
+
+@dataclass(slots=True)
+class GenerationRequest:
+    """Canonical request for any model generation.
+
+    All generation paths (Direct, Reasoning, LangGraph, Medusa, Plugin)
+    must normalize external inputs into this object before invoking
+    PromptRuntime.
+    """
+
+    request_id: str
+    correlation_id: str
+
+    prompt_contract_id: Optional[str] = None
+    prompt_version: Optional[str] = None
+
+    messages: List[Dict[str, Any]] = field(default_factory=list)
+    context_sections: List[Dict[str, Any]] = field(default_factory=list)
+
+    required_capabilities: List[str] = field(default_factory=list)
+    forbidden_capabilities: List[str] = field(default_factory=list)
+
+    provider_constraints: Dict[str, Any] = field(default_factory=dict)
+    model_constraints: Dict[str, Any] = field(default_factory=dict)
+
+    temperature: float = 0.7
+    max_tokens: Optional[int] = None
+
+    response_schema: Dict[str, Any] = field(default_factory=dict)
+    streaming: bool = False
+
+    policy_decision_id: Optional[str] = None
+
+    execution_context: Optional[ExecutionContext] = None
+    budget: Optional[ExecutionBudget] = None
+
+
+class ActionExecutionGate:
+    """Side-effect enforcement point for all external mutations.
+
+    Any component that mutates the outside world (tool actions, plugin actions,
+    emails, filesystem writes, external APIs, memory writes, admin operations,
+    agent actions) must pass through this gate.
+
+    The gate checks the AuthorizedExecutionPlan. It does not decide policy itself.
+    """
+
+    @staticmethod
+    async def authorize(plan: AuthorizedExecutionPlan, action: str) -> bool:
+        """Check whether the authorized plan permits the requested action."""
+        if plan is None:
+            return False
+        if not plan.degraded_allowed and plan.degradation_state and plan.degradation_state.degraded:
+            return False
+        allowed_tools = set(plan.allowed_tools)
+        allowed_plugins = set(plan.allowed_plugins)
+        allowed_agents = set(plan.allowed_agents)
+        if action in allowed_tools or action in allowed_plugins or action in allowed_agents:
+            return True
+        if not plan.allowed_capabilities:
+            return False
+        return any(cap in plan.allowed_capabilities for cap in ["*", action])
