@@ -27,10 +27,12 @@ import hashlib
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+from ai_karen_engine.core.runtime.contracts import ExecutionBudget
 from ai_karen_engine.core.runtime.prompt.prompt_contract import (
     PromptAssemblyRequest,
     PromptAssemblyResult,
     PromptDefinition,
+    PromptTruncationEvent,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,6 +77,10 @@ def get_prompt_registry() -> PromptRegistry:
     return _PROMPT_REGISTRY_INSTANCE
 
 
+class PromptAssemblyError(Exception):
+    """Raised when prompt assembly cannot complete due to budget or resolution failure."""
+
+
 class PromptAssembler:
     """Assembles canonical prompts from trusted runtime components."""
 
@@ -84,11 +90,16 @@ class PromptAssembler:
     async def assemble(self, request: PromptAssemblyRequest) -> PromptAssemblyResult:
         """Assemble prompt from request inputs."""
         prompt_definition = self._resolve_prompt_definition(request)
+        if prompt_definition is None and request.prompt_version is not None:
+            raise PromptAssemblyError(
+                f"PromptDefinition not found: {request.prompt_id}@{request.prompt_version}"
+            )
+
         effective_request = self._apply_prompt_definition(request, prompt_definition)
 
-        token_budget = effective_request.token_budget or (prompt_definition.token_budget if prompt_definition else 4096)
-        sections, truncation_events = self._build_sections(effective_request, token_budget)
-        messages, token_estimate = self._assemble_messages(sections, effective_request, token_budget)
+        budget = self._resolve_budget(effective_request, prompt_definition)
+        sections, truncation_events = self._build_sections(effective_request, budget)
+        messages, token_estimate = self._assemble_messages(sections, effective_request, budget)
 
         prompt_hash = hashlib.sha256(
             str({
@@ -126,6 +137,22 @@ class PromptAssembler:
             },
         )
 
+    def _resolve_budget(
+        self,
+        request: PromptAssemblyRequest,
+        prompt_definition: Optional[PromptDefinition],
+    ) -> ExecutionBudget:
+        """Resolve the effective execution budget for prompt assembly."""
+        if isinstance(request.token_budget, ExecutionBudget):
+            return request.token_budget
+        total_budget = request.token_budget or (prompt_definition.token_budget if prompt_definition else 4096)
+        max_output = max(1, total_budget // 4)
+        max_input = max(0, total_budget - max_output)
+        return ExecutionBudget(
+            max_input_tokens=max_input,
+            max_output_tokens=max_output,
+        )
+
     def _resolve_prompt_definition(self, request: PromptAssemblyRequest) -> Optional[PromptDefinition]:
         """Resolve the best matching PromptDefinition from the registry."""
         prompt_id = request.prompt_id
@@ -145,11 +172,9 @@ class PromptAssembler:
         if not prompt_definition:
             return request
 
-        merged_system_policy = prompt_definition.system_policy or request.system_policy
-        merged_tenant_policy = prompt_definition.tenant_policy or request.tenant_policy
-        merged_persona = dict(prompt_definition.persona)
+        merged_persona = dict(prompt_definition.persona_defaults)
         merged_persona.update(request.persona or {})
-        merged_profile = dict(prompt_definition.profile)
+        merged_profile = dict(prompt_definition.profile_defaults)
         merged_profile.update(request.profile or {})
         merged_tool_contracts = list(prompt_definition.tool_contracts or [])
         merged_tool_contracts.extend(request.tool_contracts or [])
@@ -157,8 +182,9 @@ class PromptAssembler:
         merged_output_schema.update(request.output_schema or {})
 
         return PromptAssemblyRequest(
-            system_policy=request.system_policy or merged_system_policy,
-            tenant_policy=request.tenant_policy or merged_tenant_policy,
+            system_policy=request.system_policy,
+            tenant_policy=request.tenant_policy,
+            system_instructions=request.system_instructions or prompt_definition.system_instructions,
             persona=merged_persona,
             profile=merged_profile,
             memory_items=request.memory_items,
@@ -176,11 +202,11 @@ class PromptAssembler:
     def _build_sections(
         self,
         request: PromptAssemblyRequest,
-        token_budget: int,
-    ) -> Tuple[List[Tuple[str, str, int]], List[str]]:
+        budget: ExecutionBudget,
+    ) -> Tuple[List[Tuple[str, str, int]], List[PromptTruncationEvent]]:
         """Build ordered prompt sections with token estimates."""
         sections: List[Tuple[str, str, int]] = []
-        truncation_events: List[str] = []
+        truncation_events: List[PromptTruncationEvent] = []
 
         system_blocks = self._build_system_blocks(request)
         if system_blocks:
@@ -196,6 +222,16 @@ class PromptAssembler:
         if cortex_blocks:
             content = "\n".join(cortex_blocks)
             sections.append(("cortex", content, self._estimate_tokens(content)))
+
+        profile_blocks = self._build_profile_blocks(request)
+        if profile_blocks:
+            content = "\n".join(profile_blocks)
+            sections.append(("profile", content, self._estimate_tokens(content)))
+
+        provider_capability_blocks = self._build_provider_capability_blocks(request)
+        if provider_capability_blocks:
+            content = "\n".join(provider_capability_blocks)
+            sections.append(("provider_capabilities", content, self._estimate_tokens(content)))
 
         memory_blocks, memory_refs = self._build_memory_blocks(request)
         if memory_blocks:
@@ -222,8 +258,7 @@ class PromptAssembler:
             content = "\n".join(user_blocks)
             sections.append(("user", content, self._estimate_tokens(content)))
 
-        reserved_output_tokens = 1024
-        available_budget = max(0, token_budget - reserved_output_tokens)
+        available_budget = budget.max_input_tokens
         truncated_sections, truncation_events = self._enforce_token_budget(sections, available_budget)
 
         return truncated_sections, truncation_events
@@ -232,7 +267,7 @@ class PromptAssembler:
         self,
         sections: List[Tuple[str, str, int]],
         request: PromptAssemblyRequest,
-        token_budget: int,
+        budget: ExecutionBudget,
     ) -> Tuple[List[Dict[str, Any]], int]:
         """Convert ordered sections into provider messages."""
         messages: List[Dict[str, Any]] = []
@@ -245,13 +280,14 @@ class PromptAssembler:
                 total_tokens += estimated_tokens
                 continue
 
-            if total_tokens + estimated_tokens > token_budget:
+            if total_tokens + estimated_tokens > budget.max_input_tokens:
                 break
             messages.append({"role": "system", "content": content})
             total_tokens += estimated_tokens
 
         for msg in request.messages:
             messages.append(dict(msg))
+            total_tokens += self._estimate_tokens(str(msg.get("content", "")))
 
         return messages, total_tokens
 
@@ -259,14 +295,14 @@ class PromptAssembler:
         self,
         sections: List[Tuple[str, str, int]],
         available_budget: int,
-    ) -> Tuple[List[Tuple[str, str, int]], List[str]]:
+    ) -> Tuple[List[Tuple[str, str, int]], List[PromptTruncationEvent]]:
         """Truncate lower-priority sections to fit within token budget."""
         protected = {"system", "output", "user"}
-        truncation_order = ["tool", "workflow", "memory", "cortex", "persona"]
+        truncation_order = ["tool", "workflow", "memory", "profile", "provider_capabilities", "cortex", "persona"]
 
         total = sum(tokens for _, _, tokens in sections)
         truncated = list(sections)
-        events: List[str] = []
+        events: List[PromptTruncationEvent] = []
 
         if total <= available_budget:
             return truncated, events
@@ -279,10 +315,26 @@ class PromptAssembler:
                 if role != section_role or role in protected:
                     continue
                 truncated.pop(index)
-                events.append(f"truncated_{role}")
+                events.append(PromptTruncationEvent(
+                    section=role,
+                    reason="token_budget",
+                    original_tokens=tokens,
+                    remaining_tokens=max(0, available_budget - total),
+                    items_removed=1,
+                ))
                 total -= tokens
                 if total <= available_budget:
                     break
+
+        remaining_total = sum(tokens for _, _, tokens in truncated)
+        if remaining_total > available_budget:
+            protected_sections = [s for s in truncated if s[0] in protected]
+            if protected_sections:
+                raise PromptAssemblyError(
+                    f"Protected prompt sections exceed available token budget. "
+                    f"Required={remaining_total}, available={available_budget}. "
+                    f"Sections={[s[0] for s in protected_sections]}"
+                )
 
         return truncated, events
 
@@ -292,6 +344,8 @@ class PromptAssembler:
             blocks.append(request.system_policy)
         if request.tenant_policy:
             blocks.append(request.tenant_policy)
+        if request.system_instructions:
+            blocks.append(request.system_instructions)
         return blocks
 
     def _build_persona_blocks(self, request: PromptAssemblyRequest) -> List[str]:
@@ -311,6 +365,22 @@ class PromptAssembler:
         confidence = request.cortex_intent.get("intent_confidence")
         if intent:
             blocks.append(f"Execution context: intent={intent}, confidence={confidence}")
+        return blocks
+
+    def _build_profile_blocks(self, request: PromptAssemblyRequest) -> List[str]:
+        if not request.profile:
+            return []
+        blocks = []
+        for key, value in request.profile.items():
+            blocks.append(f"Profile: {key}={value}")
+        return blocks
+
+    def _build_provider_capability_blocks(self, request: PromptAssemblyRequest) -> List[str]:
+        if not request.provider_capabilities:
+            return []
+        blocks = []
+        for key, value in request.provider_capabilities.items():
+            blocks.append(f"{key}={value}")
         return blocks
 
     def _build_memory_blocks(self, request: PromptAssemblyRequest) -> tuple[List[str], List[str]]:
@@ -417,7 +487,7 @@ def register_default_prompts(registry: Optional[PromptRegistry] = None) -> Promp
             version="v1",
             name="Karen Chat Default",
             description="Default chat prompt contract",
-            system_prompt="You are Karen, a helpful assistant.",
+            system_instructions="You are Karen, a helpful assistant.",
             token_budget=4096,
         ),
         PromptDefinition(
@@ -425,7 +495,7 @@ def register_default_prompts(registry: Optional[PromptRegistry] = None) -> Promp
             version="v1",
             name="Karen Chat Reasoning",
             description="Reasoning-optimized chat prompt contract",
-            system_prompt="You are Karen. Think step by step before answering.",
+            system_instructions="You are Karen. Think step by step before answering.",
             token_budget=4096,
         ),
         PromptDefinition(
@@ -433,7 +503,7 @@ def register_default_prompts(registry: Optional[PromptRegistry] = None) -> Promp
             version="v1",
             name="Workflow Default",
             description="Default workflow prompt contract",
-            system_prompt="You are Karen. Follow the workflow steps carefully.",
+            system_instructions="You are Karen. Follow the workflow steps carefully.",
             token_budget=4096,
         ),
         PromptDefinition(
@@ -441,7 +511,7 @@ def register_default_prompts(registry: Optional[PromptRegistry] = None) -> Promp
             version="v1",
             name="Tool Use",
             description="Tool-use prompt contract",
-            system_prompt="You are Karen. Use available tools when needed.",
+            system_instructions="You are Karen. Use available tools when needed.",
             token_budget=4096,
         ),
         PromptDefinition(
@@ -449,7 +519,7 @@ def register_default_prompts(registry: Optional[PromptRegistry] = None) -> Promp
             version="v1",
             name="Extension Default",
             description="Default extension prompt contract",
-            system_prompt="You are Karen. Integrate extension outputs safely.",
+            system_instructions="You are Karen. Integrate extension outputs safely.",
             token_budget=4096,
         ),
     ]

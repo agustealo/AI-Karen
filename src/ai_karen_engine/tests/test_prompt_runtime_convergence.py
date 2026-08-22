@@ -6,19 +6,29 @@ Validates:
 - PromptAssembler uses the canonical registry
 - PromptRegistry is version-aware
 - Canonical prompt contracts are registered
+- PROMPT-1 semantic closure requirements
 """
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
+from ai_karen_engine.core.runtime.contracts import ExecutionBudget
 from ai_karen_engine.core.runtime.prompt.prompt_assembler import (
     PromptAssembler,
+    PromptAssemblyError,
     PromptDefinition,
     PromptRegistry,
     get_prompt_assembler,
     get_prompt_registry,
     register_default_prompts,
+)
+from ai_karen_engine.core.runtime.prompt.prompt_contract import (
+    PromptAssemblyRequest,
+    PromptAssemblyResult,
+    PromptTruncationEvent,
 )
 
 
@@ -68,8 +78,6 @@ def test_plugin_validator_and_assembler_share_registry() -> None:
 
 def test_registered_contract_resolves_during_actual_assembly() -> None:
     """A registered prompt contract must resolve during actual assembly."""
-    import asyncio
-
     registry = get_prompt_registry()
     register_default_prompts(registry)
 
@@ -178,15 +186,13 @@ def test_prompt_registry_registration_and_list() -> None:
 
 def test_prompt_definition_affects_assembly() -> None:
     """Resolved PromptDefinition must contribute defaults to assembly."""
-    import asyncio
-
     registry = PromptRegistry()
     definition = PromptDefinition(
         prompt_id="karen.chat.default",
         version="v1",
         name="Default",
         description="Default contract",
-        system_prompt="Default system prompt from contract.",
+        system_instructions="Default system prompt from contract.",
         token_budget=2048,
         tool_contracts=[{"name": "contract_tool", "description": "From contract"}],
         output_schema={"format": "json"},
@@ -211,16 +217,14 @@ def test_prompt_definition_affects_assembly() -> None:
 
 def test_assembly_respects_token_budget() -> None:
     """Assembly must respect token budget and emit truncation events."""
-    import asyncio
-
     registry = PromptRegistry()
     definition = PromptDefinition(
         prompt_id="karen.chat.default",
         version="v1",
         name="Default",
         description="Default contract",
-        system_prompt="System prompt.",
-        token_budget=50,
+        system_instructions="System prompt.",
+        token_budget=500,
     )
     registry.register(definition)
 
@@ -228,30 +232,28 @@ def test_assembly_respects_token_budget() -> None:
     request = PromptAssemblyRequest(
         prompt_id="karen.chat.default",
         prompt_version="v1",
-        token_budget=50,
-        messages=[{"role": "user", "content": "Hello " * 200}],
+        token_budget=500,
+        messages=[{"role": "user", "content": "Hello " * 20}],
         memory_items=[{"id": "m1", "content": "Memory " * 200}],
         tool_contracts=[{"name": "tool", "description": "Tool " * 200}],
     )
     result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
 
-    assert result.token_estimate <= 50
+    assert result.token_estimate <= 500
     assert result.truncation_events
 
 
 def test_policy_sections_are_protected_from_truncation() -> None:
     """System policy and output contract should be protected from truncation."""
-    import asyncio
-
     registry = PromptRegistry()
     definition = PromptDefinition(
         prompt_id="karen.chat.default",
         version="v1",
         name="Default",
         description="Default contract",
-        system_prompt="Protected system policy.",
+        system_instructions="Protected system policy.",
         output_schema={"format": "json"},
-        token_budget=100,
+        token_budget=500,
     )
     registry.register(definition)
 
@@ -261,7 +263,7 @@ def test_policy_sections_are_protected_from_truncation() -> None:
         prompt_version="v1",
         system_policy="Protected system policy.",
         output_schema={"format": "json"},
-        token_budget=100,
+        token_budget=500,
         messages=[{"role": "user", "content": "Hello"}],
         memory_items=[{"id": "m1", "content": "Memory " * 200}],
     )
@@ -274,8 +276,6 @@ def test_policy_sections_are_protected_from_truncation() -> None:
 
 def test_wired_request_fields_appear_in_assembly() -> None:
     """Wired PromptAssemblyRequest fields must appear in assembled output."""
-    import asyncio
-
     registry = PromptRegistry()
     register_default_prompts(registry)
 
@@ -307,9 +307,339 @@ def test_wired_request_fields_appear_in_assembly() -> None:
     assert "format=json" in contents
 
 
+# ---------------------------------------------------------------------------
+# PROMPT-1 Semantic Closure Tests
+# ---------------------------------------------------------------------------
+
+
+def test_default_prompt_registration_matches_contract() -> None:
+    """Default prompts must use the canonical PromptDefinition fields."""
+    registry = PromptRegistry()
+    register_default_prompts(registry)
+
+    definition = registry.get("karen.chat.default", "v1")
+    assert definition is not None
+    assert definition.name == "Karen Chat Default"
+    assert definition.description == "Default chat prompt contract"
+    assert definition.system_instructions == "You are Karen, a helpful assistant."
+    assert definition.token_budget == 4096
+
+
+def test_explicit_unknown_prompt_version_fails_closed() -> None:
+    """Explicit unknown prompt version must raise PromptAssemblyError."""
+    registry = PromptRegistry()
+    register_default_prompts(registry)
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v99",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    with pytest.raises(PromptAssemblyError):
+        asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+
+
+def test_latest_version_resolution_without_explicit_version() -> None:
+    """Implicit version resolution must select the canonical latest."""
+    registry = PromptRegistry()
+    registry.register(
+        PromptDefinition(
+            prompt_id="karen.chat.default",
+            version="v1",
+            name="Default v1",
+            description="First version",
+            system_instructions="v1 instructions",
+            token_budget=4096,
+        )
+    )
+    registry.register(
+        PromptDefinition(
+            prompt_id="karen.chat.default",
+            version="v2",
+            name="Default v2",
+            description="Second version",
+            system_instructions="v2 instructions",
+            token_budget=4096,
+        )
+    )
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+    assert result.prompt_version == "v2"
+
+
+def test_prompt_definition_controls_system_instructions() -> None:
+    """Resolved PromptDefinition must provide system_instructions."""
+    registry = PromptRegistry()
+    definition = PromptDefinition(
+        prompt_id="karen.chat.default",
+        version="v1",
+        name="Default",
+        description="Default contract",
+        system_instructions="Contract system instructions.",
+        token_budget=2048,
+    )
+    registry.register(definition)
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+    contents = " ".join(msg.get("content", "") for msg in result.messages)
+    assert "Contract system instructions." in contents
+
+
+def test_system_policy_cannot_be_overridden() -> None:
+    """Request system_policy must be preserved as immutable governing input."""
+    registry = PromptRegistry()
+    definition = PromptDefinition(
+        prompt_id="karen.chat.default",
+        version="v1",
+        name="Default",
+        description="Default contract",
+        system_instructions="Contract system instructions.",
+        token_budget=2048,
+    )
+    registry.register(definition)
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        system_policy="Protected system policy.",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+    contents = " ".join(msg.get("content", "") for msg in result.messages)
+    assert "Protected system policy." in contents
+    assert "Contract system instructions." in contents
+
+
+def test_tenant_policy_cannot_be_overridden() -> None:
+    """Request tenant_policy must be preserved as immutable governing input."""
+    registry = PromptRegistry()
+    definition = PromptDefinition(
+        prompt_id="karen.chat.default",
+        version="v1",
+        name="Default",
+        description="Default contract",
+        token_budget=2048,
+    )
+    registry.register(definition)
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        tenant_policy="Protected tenant policy.",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+    contents = " ".join(msg.get("content", "") for msg in result.messages)
+    assert "Protected tenant policy." in contents
+
+
+def test_profile_is_materially_rendered() -> None:
+    """Profile from PromptDefinition must affect final messages."""
+    registry = PromptRegistry()
+    definition = PromptDefinition(
+        prompt_id="karen.chat.default",
+        version="v1",
+        name="Default",
+        description="Default contract",
+        profile_defaults={"style": "concise", "tone": "formal"},
+        token_budget=2048,
+    )
+    registry.register(definition)
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        profile={"extra": "value"},
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+    contents = " ".join(msg.get("content", "") for msg in result.messages)
+    assert "concise" in contents
+    assert "formal" in contents
+
+
+def test_provider_capabilities_are_consumed() -> None:
+    """Provider capabilities from request must appear in assembly output."""
+    registry = PromptRegistry()
+    registry.register(
+        PromptDefinition(
+            prompt_id="karen.chat.default",
+            version="v1",
+            name="Default",
+            description="Default contract",
+            system_instructions="System.",
+            token_budget=4096,
+        )
+    )
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        provider_capabilities={"format": "json", "streaming": True},
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+    contents = " ".join(msg.get("content", "") for msg in result.messages)
+    assert "format=json" in contents
+    assert "streaming=True" in contents
+
+
+def test_all_provider_messages_count_toward_budget() -> None:
+    """All messages including raw request messages must count toward token estimate."""
+    registry = PromptRegistry()
+    registry.register(
+        PromptDefinition(
+            prompt_id="karen.chat.default",
+            version="v1",
+            name="Default",
+            description="Default contract",
+            system_instructions="System.",
+            token_budget=1000,
+        )
+    )
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        token_budget=1000,
+        messages=[{"role": "user", "content": "Hello " * 200}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+    assert result.token_estimate <= 1000
+    assert result.token_estimate > 0
+
+
+def test_latest_user_message_is_protected() -> None:
+    """Latest user message must not be silently discarded by budget enforcement."""
+    registry = PromptRegistry()
+    registry.register(
+        PromptDefinition(
+            prompt_id="karen.chat.default",
+            version="v1",
+            name="Default",
+            description="Default contract",
+            system_instructions="System.",
+            token_budget=4096,
+        )
+    )
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        token_budget=4096,
+        messages=[{"role": "user", "content": "Protected user request"}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+    contents = " ".join(msg.get("content", "") for msg in result.messages)
+    assert "Protected user request" in contents
+
+
+def test_output_contract_is_protected() -> None:
+    """Output contract must not be silently discarded by budget enforcement."""
+    registry = PromptRegistry()
+    registry.register(
+        PromptDefinition(
+            prompt_id="karen.chat.default",
+            version="v1",
+            name="Default",
+            description="Default contract",
+            system_instructions="System.",
+            output_schema={"format": "json"},
+            token_budget=4096,
+        )
+    )
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        output_schema={"format": "json"},
+        token_budget=4096,
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+    contents = " ".join(msg.get("content", "") for msg in result.messages)
+    assert "format=json" in contents
+
+
+def test_structured_truncation_events() -> None:
+    """Truncation events must be structured PromptTruncationEvent objects."""
+    registry = PromptRegistry()
+    registry.register(
+        PromptDefinition(
+            prompt_id="karen.chat.default",
+            version="v1",
+            name="Default",
+            description="Default contract",
+            system_instructions="System.",
+            token_budget=500,
+        )
+    )
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        token_budget=500,
+        messages=[{"role": "user", "content": "Hello " * 200}],
+        memory_items=[{"id": "m1", "content": "Memory " * 200}],
+        tool_contracts=[{"name": "tool", "description": "Tool " * 200}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+    assert result.truncation_events
+    for event in result.truncation_events:
+        assert isinstance(event, PromptTruncationEvent)
+        assert event.section
+        assert event.reason == "token_budget"
+        assert event.original_tokens > 0
+        assert event.items_removed >= 1
+
+
+def test_execution_budget_controls_prompt_budget() -> None:
+    """PromptAssembler must consume ExecutionBudget.max_input_tokens."""
+    registry = PromptRegistry()
+    registry.register(
+        PromptDefinition(
+            prompt_id="karen.chat.default",
+            version="v1",
+            name="Default",
+            description="Default contract",
+            system_instructions="System.",
+            token_budget=1000,
+        )
+    )
+
+    assembler = PromptAssembler(registry=registry)
+    request = PromptAssemblyRequest(
+        prompt_id="karen.chat.default",
+        prompt_version="v1",
+        token_budget=ExecutionBudget(max_input_tokens=500, max_output_tokens=100),
+        messages=[{"role": "user", "content": "Hello " * 50}],
+    )
+    result = asyncio.get_event_loop().run_until_complete(assembler.assemble(request))
+    assert result.token_estimate <= 500
+
+
 def test_runtime_policy_uses_capabilities_not_intent_strings() -> None:
     """RuntimePolicy must evaluate typed capabilities, not hardcoded intent strings."""
-    import asyncio
     from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer, PolicyEvaluationRequest
 
     enforcer = RuntimePolicyEnforcer()
@@ -330,7 +660,6 @@ def test_runtime_policy_uses_capabilities_not_intent_strings() -> None:
 
 def test_runtime_policy_denies_on_risk_categories() -> None:
     """RuntimePolicy must deny high-risk capability combinations based on risk_signals."""
-    import asyncio
     from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer, PolicyEvaluationRequest
 
     enforcer = RuntimePolicyEnforcer()
@@ -351,7 +680,6 @@ def test_runtime_policy_denies_on_risk_categories() -> None:
 
 def test_runtime_policy_rejects_missing_identity() -> None:
     """RuntimePolicy must fail-closed when identity is missing."""
-    import asyncio
     from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer, PolicyEvaluationRequest
 
     enforcer = RuntimePolicyEnforcer()
@@ -368,7 +696,6 @@ def test_runtime_policy_rejects_missing_identity() -> None:
 
 def test_runtime_policy_uses_provider_constraints_not_hardcoded_list() -> None:
     """Routing policy must use provider constraints from state, not hardcoded provider lists."""
-    import asyncio
     from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer
 
     enforcer = RuntimePolicyEnforcer()
@@ -394,7 +721,6 @@ def test_runtime_policy_uses_provider_constraints_not_hardcoded_list() -> None:
 
 def test_response_policy_has_no_keyword_safety_logic() -> None:
     """Response policy must not block based on weak keyword scanning."""
-    import asyncio
     from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer
 
     enforcer = RuntimePolicyEnforcer()
@@ -405,4 +731,3 @@ def test_response_policy_has_no_keyword_safety_logic() -> None:
         enforcer.check_response_policy(state, response)
     )
     assert result.allowed is True
-

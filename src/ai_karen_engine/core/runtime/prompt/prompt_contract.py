@@ -12,11 +12,23 @@ from typing import Any, Dict, List, Optional
 
 
 @dataclass
+class PromptTruncationEvent:
+    """Structured record of a truncation event during prompt assembly."""
+
+    section: str
+    reason: str
+    original_tokens: int
+    remaining_tokens: int
+    items_removed: int
+
+
+@dataclass
 class PromptAssemblyRequest:
     """Inputs for prompt assembly."""
 
     system_policy: str = ""
     tenant_policy: str = ""
+    system_instructions: str = ""
     persona: Dict[str, Any] = field(default_factory=dict)
     profile: Dict[str, Any] = field(default_factory=dict)
     memory_items: List[Dict[str, Any]] = field(default_factory=list)
@@ -42,7 +54,7 @@ class PromptAssemblyResult:
     included_memory_refs: List[str] = field(default_factory=list)
     included_tool_contracts: List[str] = field(default_factory=list)
     token_estimate: int = 0
-    truncation_events: List[str] = field(default_factory=list)
+    truncation_events: List[PromptTruncationEvent] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -52,11 +64,13 @@ class PromptDefinition:
 
     prompt_id: str
     version: str
-    system_policy: str = ""
-    tenant_policy: str = ""
-    persona: Dict[str, Any] = field(default_factory=dict)
-    profile: Dict[str, Any] = field(default_factory=dict)
+    name: str = ""
+    description: str = ""
+    system_instructions: str = ""
+    persona_defaults: Dict[str, Any] = field(default_factory=dict)
+    profile_defaults: Dict[str, Any] = field(default_factory=dict)
     tool_contracts: List[Dict[str, Any]] = field(default_factory=list)
     output_schema: Dict[str, Any] = field(default_factory=dict)
     token_budget: int = 4096
+    allowed_overrides: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)

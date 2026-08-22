@@ -74,7 +74,9 @@ class ChatRuntime:
             memory_recall_meta = await self._recall_memory(request, decision)
 
         try:
-            if decision.is_graph_required:
+            if decision.topology.value == "reasoning":
+                text, provider_meta = await self._run_reasoning(request, decision)
+            elif decision.is_graph_required:
                 text, provider_meta = await self._run_graph(request, decision)
             else:
                 text, provider_meta = await self._run_simple(request, decision)
@@ -138,9 +140,13 @@ class ChatRuntime:
 
         streamed_text = ""
         gen = (
-            self._run_graph_stream(request, decision)
-            if decision.is_graph_required
-            else self._run_simple_stream(request, decision)
+            self._run_reasoning_stream(request, decision)
+            if decision.topology.value == "reasoning"
+            else (
+                self._run_graph_stream(request, decision)
+                if decision.is_graph_required
+                else self._run_simple_stream(request, decision)
+            )
         )
         async for chunk in gen:
             if chunk.type == "content":
@@ -382,6 +388,116 @@ class ChatRuntime:
         async for chunk in get_workflow_runtime().stream(request, decision):
             yield chunk
 
+    async def _run_reasoning(
+        self, request: ChatExecutionRequest, decision: ExecutionDecision
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Reasoning topology path: routed through ReasoningExecutor."""
+        from ai_karen_engine.core.reasoning.contracts import (
+            ReasoningBudget,
+            ReasoningEvidence,
+            ReasoningRequest,
+        )
+        from ai_karen_engine.core.reasoning.executor import get_reasoning_executor
+        from ai_karen_engine.core.runtime.contracts import (
+            AuthorizedExecutionPlan,
+            ExecutionBudget,
+            ExecutionContext,
+            ExecutionTopology,
+        )
+
+        ctx = request.context
+        memory_context = (ctx.metadata or {}).get("memory_context", {})
+        recall_items = memory_context.get("recall") or []
+
+        evidence = [
+            ReasoningEvidence(
+                evidence_id=str(item.get("id", f"mem-{idx}")),
+                type="memory",
+                source="memory_recall",
+                source_ref=str(item.get("timestamp", "")),
+                content=str(item.get("content", "")),
+                relevance=0.5,
+                confidence=0.5,
+                tenant_id=ctx.tenant_id,
+            )
+            for idx, item in enumerate(recall_items[: decision.memory_top_k])
+        ]
+
+        canonical_request = ReasoningRequest(
+            request_id=ctx.request_id,
+            correlation_id=ctx.correlation_id,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            conversation_id=ctx.conversation_id,
+            objective=self._extract_user_message(request.messages),
+            reasoning_modes=list(decision.required_capabilities) or ["synthesis"],
+            evidence=evidence,
+            constraints={
+                "reasoning_depth": decision.reasoning_depth,
+                "tool_requirements": list(decision.tool_requirements),
+                "plugin_candidates": list(decision.plugin_candidates),
+            },
+            policy_decision_id=decision.policy_decision_id or "",
+            budget=ReasoningBudget(
+                max_reasoning_steps=decision.max_steps,
+                max_duration_ms=decision.time_budget_ms,
+            ),
+            metadata={
+                "correlation_id": ctx.correlation_id,
+                "request_id": ctx.request_id,
+            },
+        )
+
+        plan = AuthorizedExecutionPlan(
+            execution_id=f"reasoning-{ctx.request_id}",
+            policy_decision_id=decision.policy_decision_id or "",
+            topology=ExecutionTopology.REASONING,
+            allowed_capabilities=list(decision.required_capabilities) or ["model.generate"],
+            allowed_tools=list(decision.tool_requirements),
+            allowed_plugins=list(decision.plugin_candidates),
+            memory_scope=decision.memory_scope,
+            budget=ExecutionBudget(
+                max_duration_ms=decision.time_budget_ms,
+                max_model_calls=decision.max_steps,
+                max_tool_calls=len(decision.tool_requirements),
+                max_reasoning_steps=decision.max_steps,
+            ),
+            reasoning_modes=list(decision.required_capabilities) or ["synthesis"],
+        )
+
+        context = ExecutionContext(
+            request_id=ctx.request_id,
+            correlation_id=ctx.correlation_id,
+            user_id=ctx.user_id,
+            tenant_id=ctx.tenant_id,
+            session_id=ctx.session_id,
+            conversation_id=ctx.conversation_id,
+            policy_decision_id=decision.policy_decision_id,
+            budget=plan.budget,
+        )
+
+        executor = get_reasoning_executor()
+        result = await executor.execute(canonical_request, plan, context)
+
+        text = result.summary or ""
+        if not text and result.hypotheses:
+            text = "; ".join(h.statement for h in result.hypotheses[:3])
+
+        provider_meta = {
+            "requested_provider": request.preferred_provider,
+            "requested_model": request.preferred_model,
+            "actual_provider": "reasoning_executor",
+            "actual_model": "canonical",
+            "runtime_engine": "reasoning",
+            "response_source": "reasoning",
+            "fallback_level": 0,
+            "degraded_mode": result.status in ("failed", "budget_exhausted"),
+            "degradation_reason": result.diagnostics.get("error") if result.status == "failed" else None,
+            "reasoning_id": result.reasoning_id,
+            "reasoning_status": result.status,
+        }
+        return text, provider_meta
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -404,7 +520,7 @@ class ChatRuntime:
         recall_items = memory_context.get("recall", [])
 
         assembly_request = PromptAssemblyRequest(
-            prompt_id="karen-chat",
+            prompt_id="karen.chat.default",
             prompt_version="v1",
             memory_items=recall_items if decision.memory_recall_required else [],
             tool_contracts=[
