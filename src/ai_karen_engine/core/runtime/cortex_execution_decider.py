@@ -9,10 +9,7 @@ from ai_karen_engine.core.runtime.execution_decision import (
     RuntimeExecutionMode,
     RiskLevel,
 )
-from ai_karen_engine.core.cortex.analysis.spacy_analyzer import (
-    SpacyAnalyzer,
-    create_spacy_analyzer,
-)
+from ai_karen_engine.core.intelligence import get_intelligence_runtime
 
 # Safety escape hatch: force every request through the graph workflow path.
 _FORCE_GRAPH_ENV = "KARI_RUNTIME_FORCE_GRAPH"
@@ -26,7 +23,7 @@ class CortexExecutionDecider:
 
     CORTEX decides *what kind* of execution a request needs. It inspects
     trusted authenticated context, analyzes request content through the
-    CORTEX analysis pipeline, and returns an :class:`ExecutionDecision`.
+    IntelligenceRuntime analysis pipeline, and returns an :class:`ExecutionDecision`.
 
     It does NOT execute anything: no provider call, no graph invocation, no
     memory recall. The runtime consumes the decision to route execution.
@@ -41,7 +38,7 @@ class CortexExecutionDecider:
             if force_graph is not None
             else os.environ.get(_FORCE_GRAPH_ENV, "false").lower() in ("1", "true", "yes")
         )
-        self._analyzer = create_spacy_analyzer()
+        self._intelligence = get_intelligence_runtime()
 
     async def decide(self, request: ChatExecutionRequest) -> ExecutionDecision:
         meta = request.metadata or {}
@@ -234,47 +231,18 @@ class CortexExecutionDecider:
     async def _analyze_request(self, text: str, ctx: ChatExecutionRequest.context) -> Dict[str, Any]:
         """Run CORTEX analysis pipeline on request content."""
         if not text or not text.strip():
-            return {
-                "intent": "general_assist",
-                "intent_confidence": 0.0,
-                "tool_requirements": [],
-                "plugin_candidates": [],
-                "required_capabilities": [],
-                "forbidden_capabilities": [],
-                "memory_recall_required": False,
-                "memory_write_denied": False,
-                "memory_scope": "session",
-                "memory_top_k": 10,
-                "memory_classes": [],
-                "requires_human_gate": False,
-                "requires_resumability": False,
-                "requires_parallel_execution": False,
-                "agent_delegation": False,
-                "max_steps": 10,
-                "time_budget_ms": 30000,
-                "token_budget": 4096,
-                "reasoning_depth": "standard",
-                "workflow_required": False,
-                "workflow_id": None,
-                "risk_signals": [],
-            }
+            return self._default_analysis()
 
         try:
-            from ai_karen_engine.core.cortex.analysis.spacy_analyzer import AnalysisContext
-            analysis_ctx = AnalysisContext(
-                user_id=ctx.user_id,
-                session_id=ctx.session_id,
-                roles=list(ctx.roles or []),
-            )
-            result = await self._analyzer.analyze_comprehensive(text, analysis_ctx)
+            analysis = await self._intelligence.analyze(text, {"user_id": ctx.user_id, "session_id": ctx.session_id})
 
-            intent_value = result.intent.primary_intent.value if result.intent else "general_assist"
-            confidence = result.intent.confidence if result.intent else 0.0
+            intent_value = analysis.intent or "general_assist"
+            confidence = analysis.intent_confidence or 0.0
 
-            topology = self._infer_topology_from_analysis(result)
-            capabilities = self._infer_capabilities_from_analysis(result)
-            memory_policy = self._infer_memory_policy_from_analysis(result)
-            workflow = self._infer_workflow_from_analysis(result)
+            topology = self._infer_topology_from_analysis(analysis)
+            capabilities = self._infer_capabilities_from_analysis(analysis)
+            memory_policy = self._infer_memory_policy_from_analysis(analysis)
+            workflow = self._infer_workflow_from_analysis(analysis)
 
             return {
                 "intent": intent_value,
@@ -302,33 +270,36 @@ class CortexExecutionDecider:
             }
         except Exception as exc:
             logger.warning("CORTEX analysis failed, using safe defaults: %s", exc)
-            return {
-                "intent": "general_assist",
-                "intent_confidence": 0.0,
-                "tool_requirements": [],
-                "plugin_candidates": [],
-                "required_capabilities": [],
-                "forbidden_capabilities": [],
-                "memory_recall_required": False,
-                "memory_write_denied": False,
-                "memory_scope": "session",
-                "memory_top_k": 10,
-                "memory_classes": [],
-                "requires_human_gate": False,
-                "requires_resumability": False,
-                "requires_parallel_execution": False,
-                "agent_delegation": False,
-                "max_steps": 10,
-                "time_budget_ms": 30000,
-                "token_budget": 4096,
-                "reasoning_depth": "standard",
-                "workflow_required": False,
-                "workflow_id": None,
-                "risk_signals": [],
-            }
+            return self._default_analysis()
+
+    def _default_analysis(self) -> Dict[str, Any]:
+        return {
+            "intent": "general_assist",
+            "intent_confidence": 0.0,
+            "tool_requirements": [],
+            "plugin_candidates": [],
+            "required_capabilities": [],
+            "forbidden_capabilities": [],
+            "memory_recall_required": False,
+            "memory_write_denied": False,
+            "memory_scope": "session",
+            "memory_top_k": 10,
+            "memory_classes": [],
+            "requires_human_gate": False,
+            "requires_resumability": False,
+            "requires_parallel_execution": False,
+            "agent_delegation": False,
+            "max_steps": 10,
+            "time_budget_ms": 30000,
+            "token_budget": 4096,
+            "reasoning_depth": "standard",
+            "workflow_required": False,
+            "workflow_id": None,
+            "risk_signals": [],
+        }
 
     def _infer_topology_from_analysis(self, analysis) -> Dict[str, Any]:
-        """Infer execution topology signals from CORTEX analysis result."""
+        """Infer execution topology signals from intelligence analysis result."""
         topology: Dict[str, Any] = {
             "tool_requirements": [],
             "plugin_candidates": [],
@@ -346,10 +317,8 @@ class CortexExecutionDecider:
             "system_command": False,
         }
 
-        intent = getattr(analysis.intent, "primary_intent", None)
-        intent_value = intent.value if intent else "general_assist"
-        sentiment = getattr(analysis.sentiment, "primary_sentiment", None)
-        sentiment_value = sentiment.value if sentiment else "neutral"
+        intent_value = getattr(analysis, "intent", "general_assist") or "general_assist"
+        confidence = getattr(analysis, "intent_confidence", 0.0) or 0.0
 
         graph_intents = {
             "debug_error", "architecture_design", "deployment_help",
@@ -363,10 +332,7 @@ class CortexExecutionDecider:
             topology["system_command"] = True
             topology["filesystem_write"] = True
 
-        if sentiment_value in {"urgent", "critical", "time_sensitive"}:
-            topology["requires_human_gate"] = True
-
-        if analysis.confidence < 0.5:
+        if confidence < 0.5:
             topology["requires_resumability"] = True
             topology["reasoning_depth"] = "deep"
 
@@ -376,8 +342,7 @@ class CortexExecutionDecider:
         """Infer capability requirements from analysis."""
         capabilities: Dict[str, Any] = {"required": [], "forbidden": []}
 
-        intent = getattr(analysis.intent, "primary_intent", None)
-        intent_value = intent.value if intent else "general_assist"
+        intent_value = getattr(analysis, "intent", "general_assist") or "general_assist"
 
         write_intents = {"architecture_design", "deployment_help", "content_creation"}
         if intent_value in write_intents:
@@ -399,8 +364,8 @@ class CortexExecutionDecider:
             "classes": [],
         }
 
-        intent = getattr(analysis.intent, "primary_intent", None)
-        intent_value = intent.value if intent else "general_assist"
+        intent_value = getattr(analysis, "intent", "general_assist") or "general_assist"
+        confidence = getattr(analysis, "intent_confidence", 0.0) or 0.0
 
         memory_intents = {
             "personal_advice", "learning_path", "tutorial_request",
@@ -411,7 +376,7 @@ class CortexExecutionDecider:
             policy["scope"] = "user"
             policy["top_k"] = 15
 
-        if analysis.confidence < 0.3:
+        if confidence < 0.3:
             policy["recall_required"] = True
 
         return policy
@@ -420,8 +385,7 @@ class CortexExecutionDecider:
         """Infer workflow requirements from analysis."""
         workflow: Dict[str, Any] = {"required": False, "workflow_id": None}
 
-        intent = getattr(analysis.intent, "primary_intent", None)
-        intent_value = intent.value if intent else "general_assist"
+        intent_value = getattr(analysis, "intent", "general_assist") or "general_assist"
 
         workflow_map = {
             "debug_error": "repo_debug",
