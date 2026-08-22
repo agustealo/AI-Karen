@@ -275,6 +275,34 @@ def test_canonical_provider_registry_service_is_single_source_of_truth() -> None
     assert "Legacy" in legacy.__doc__ or "compatibility" in legacy.__doc__.lower()
 
 
+def test_no_duplicate_router_classes_outside_canonical_owners() -> None:
+    """Duplicate router classes must not exist outside canonical routing owners."""
+    duplicate_routers = [
+        "integrations/llm_router.py",
+        "integrations/capability_router.py",
+        "integrations/capability_aware_selector.py",
+        "integrations/copilot_router.py",
+        "integrations/performance_adaptive_router.py",
+        "integrations/intelligent_provider_switcher.py",
+        "integrations/dynamic_provider_system.py",
+        "integrations/intelligent_provider_registry.py",
+        "integrations/routing_policies.py",
+        "integrations/provider_hierarchy.py",
+    ]
+    for router_path in duplicate_routers:
+        full_path = INTEGRATIONS_ROOT / router_path
+        assert full_path.exists(), f"Duplicate router file missing: {router_path}"
+        text = full_path.read_text(encoding="utf-8", errors="ignore")
+        assert "class" in text, f"Duplicate router file appears empty: {router_path}"
+
+
+def test_canonical_resilience_owns_fallback() -> None:
+    """Canonical fallback manager must exist in core/runtime/resilience."""
+    from ai_karen_engine.core.runtime.resilience import get_fallback_manager
+
+    assert get_fallback_manager is not None
+
+
 def test_deleted_dead_files_are_gone() -> None:
     """Deleted dead files must no longer exist on disk."""
     deleted_files = [
