@@ -742,23 +742,18 @@ class InternetCapabilityService:
                 raise RuntimeError("Configured search_client_factory returned None.")
             return client
 
-        try:
-            from ai_karen_engine.clients.web_search.client import WebSearchClient
-
-            settings = {}
-            if self.provider_registry is not None:
-                settings = {
-                    "search": {
-                        name: self.provider_registry.get_config(name)
-                        for name in self.provider_registry.descriptors
-                    }
+        settings = {}
+        if self.provider_registry is not None:
+            settings = {
+                "search": {
+                    name: self.provider_registry.get_config(name)
+                    for name in self.provider_registry.descriptors
                 }
-            return WebSearchClient(settings=settings)
-        except Exception as exc:
-            raise RuntimeError(
-                "No internet search client is configured. "
-                "Inject search_client/search_client_factory or provider_registry."
-            ) from exc
+            }
+        raise RuntimeError(
+            "No internet search client is configured. "
+            "Inject search_client/search_client_factory or provider_registry."
+        )
 
     async def _authorize(
         self,
