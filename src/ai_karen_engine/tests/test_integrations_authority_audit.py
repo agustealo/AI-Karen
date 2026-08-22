@@ -349,3 +349,13 @@ def test_deleted_dead_files_are_gone() -> None:
     for filename in deleted_files:
         path = INTEGRATIONS_ROOT / filename
         assert not path.exists(), f"Deleted file still exists: {path}"
+
+
+def test_deleted_unused_subpackages_are_gone() -> None:
+    """Deleted unused subpackages must no longer exist on disk."""
+    deleted_subpackages = [
+        "llm",
+    ]
+    for subpackage in deleted_subpackages:
+        path = INTEGRATIONS_ROOT / subpackage
+        assert not path.exists(), f"Deleted subpackage still exists: {path}"
