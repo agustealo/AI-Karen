@@ -595,8 +595,8 @@ class EntityExtractionEngine:
         retry=retry_if_exception_type(Exception),
     )
     async def extract(self, text: str, context: AnalysisContext) -> Dict[str, Any]:
-        parsed: ParsedMessage = await self.spacy.parse_text(text)
-        ents = [{"text": e.text, "label": e.label_} for e in parsed.doc.ents] if getattr(parsed, "doc", None) else []
+        parsed: ParsedMessage = await self.spacy.parse_message(text)
+        ents = [{"text": text, "label": label} for text, label in parsed.entities]
         meta: Dict[str, Any] = {"confidence": 0.6 + 0.1 * min(len(ents), 3)}
         if any(e["label"] in ("ORG", "PRODUCT", "LANGUAGE") for e in ents):
             meta["domain_hint"] = "tech/business"

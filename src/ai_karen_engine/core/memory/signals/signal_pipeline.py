@@ -9,8 +9,9 @@ import logging
 from typing import Optional
 
 from .signal_models import ExtractionResult
-from .extraction_service import SpacyExtractionService
+from .memory_signal_extractor import MemorySignalExtractor
 from .signal_rules import RuleBasedExtractor
+from .spacy_service import SpacyService
 from ...runtime.resilience import get_safe_stage_runner
 
 from ai_karen_engine.core.logging import get_logger
@@ -21,12 +22,13 @@ class SignalPipeline:
     
     def __init__(self):
         self.safe_runner = get_safe_stage_runner()
-        self.spacy_service = SpacyExtractionService()
+        self.spacy_service = SpacyService()
+        self.memory_extractor = MemorySignalExtractor(self.spacy_service)
         self.rule_extractor = RuleBasedExtractor()
         
         # Attempt to initialize spaCy
         try:
-            self.spacy_service.initialize()
+            self.spacy_service.parse_message("")
         except Exception as e:
             logger.info(f"Could not initialize spaCy, pipeline will degrade to rule-based fallback. Error: {e}")
             
@@ -44,7 +46,7 @@ class SignalPipeline:
             # Run the primary spaCy extraction via Safe Stage Runner
             # The runner handles timeouts, breakers, and fallbacks
             def spacy_wrapper(t: str):
-                return self.spacy_service.extract(t)
+                return self.memory_extractor.extract(t)
 
             extracted_data = await self.safe_runner.run_stage(
                 stage_name="spacy",
