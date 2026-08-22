@@ -41,7 +41,6 @@ from ai_karen_engine.integrations.dependencies import (
 
 __all__ = [
     # Legacy compatibility
-    "AutomationManager",
     "LocalRPAClient",
     "LLMProfileRouter",
     "ProviderRegistry",
@@ -84,10 +83,6 @@ __all__ = [
 
 
 def __getattr__(name):
-    if name == "AutomationManager":
-        from ai_karen_engine.integrations.automation_manager import AutomationManager as _AutomationManager
-
-        return _AutomationManager
     if name == "LocalRPAClient":
         from ai_karen_engine.integrations.local_rpa_client import LocalRPAClient as _LocalRPAClient
 
