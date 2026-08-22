@@ -12,9 +12,6 @@ from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.services.plugin_discovery import (
     PluginRegistry,
-    PluginMetadata,
-    PluginStatus,
-    PluginType,
     get_plugin_registry,
     initialize_plugin_registry,
 )
@@ -78,7 +75,7 @@ class PluginService:
 
     async def discover_plugins(
         self, force_refresh: bool = False
-    ) -> Dict[str, PluginMetadata]:
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Discover available plugins.
 
@@ -145,10 +142,9 @@ class PluginService:
 
         registry = self._get_registry()
         results = {}
-        discovered_plugins = registry.get_plugins_by_status(PluginStatus.DISCOVERED)
+        discovered_plugins = registry.get_plugins_by_status("discovered")
 
-        for plugin_metadata in discovered_plugins:
-            plugin_name = plugin_metadata.manifest.name
+        for plugin_name, plugin_metadata in discovered_plugins.items():
             try:
                 success = await self.validate_and_register_plugin(plugin_name)
                 results[plugin_name] = success
@@ -217,20 +213,20 @@ class PluginService:
         await self._ensure_initialized()
         return await self._get_execution_engine().cancel_execution(request_id)
 
-    def get_plugin(self, plugin_name: str) -> Optional[PluginMetadata]:
+    def get_plugin(self, plugin_name: str) -> Optional[Dict[str, Any]]:
         """Get plugin metadata by name."""
         if not self.initialized or not self.registry:
             return None
         return self.registry.get_plugin(plugin_name)
 
-    async def get_plugin_info(self, plugin_name: str) -> Optional[PluginMetadata]:
+    async def get_plugin_info(self, plugin_name: str) -> Optional[Dict[str, Any]]:
         """Get plugin information by name (async version for API compatibility)."""
         await self._ensure_initialized()
         return self.get_plugin(plugin_name)
 
     async def list_plugins(
         self, category: Optional[str] = None, enabled_only: bool = False
-    ) -> List[PluginMetadata]:
+    ) -> List[Dict[str, Any]]:
         """List plugins with optional filtering."""
         await self._ensure_initialized()
 
@@ -240,32 +236,31 @@ class PluginService:
             plugins = self.get_available_plugins()
 
         if enabled_only:
-            # Filter to only enabled plugins (assuming registered plugins are enabled)
-            plugins = [p for p in plugins if p.status == PluginStatus.REGISTERED]
+            plugins = [p for p in plugins if p.get("status") == "registered"]
 
         return plugins
 
-    def get_plugins_by_category(self, category: str) -> List[PluginMetadata]:
+    def get_plugins_by_category(self, category: str) -> List[Dict[str, Any]]:
         """Get plugins by category."""
         if not self.initialized or not self.registry:
             return []
         return self.registry.get_plugins_by_category(category)
 
-    def get_plugins_by_type(self, plugin_type: PluginType) -> List[PluginMetadata]:
+    def get_plugins_by_type(self, plugin_type: str) -> List[Dict[str, Any]]:
         """Get plugins by type."""
         if not self.initialized or not self.registry:
             return []
         return self.registry.get_plugins_by_type(plugin_type)
 
-    def get_plugins_by_status(self, status: PluginStatus) -> List[PluginMetadata]:
+    def get_plugins_by_status(self, status: str) -> List[Dict[str, Any]]:
         """Get plugins by status."""
         if not self.initialized or not self.registry:
             return []
         return self.registry.get_plugins_by_status(status)
 
-    def get_available_plugins(self) -> List[PluginMetadata]:
+    def get_available_plugins(self) -> List[Dict[str, Any]]:
         """Get all available (registered) plugins."""
-        return self.get_plugins_by_status(PluginStatus.REGISTERED)
+        return self.get_plugins_by_status("registered")
 
     def get_active_executions(self) -> List[ExecutionResult]:
         """Get list of active executions."""
@@ -367,9 +362,7 @@ class PluginService:
         plugin = self.get_plugin(plugin_name)
         if not plugin:
             return False
-        from ai_karen_engine.services.plugin_discovery import PluginStatus
-
-        plugin.status = PluginStatus.DISABLED
+        plugin["status"] = "disabled"
         logger.info(f"Plugin {plugin_name} disabled")
         return True
 
@@ -378,9 +371,7 @@ class PluginService:
         plugin = self.get_plugin(plugin_name)
         if not plugin:
             return False
-        from ai_karen_engine.services.plugin_discovery import PluginStatus
-
-        plugin.status = PluginStatus.REGISTERED
+        plugin["status"] = "registered"
         logger.info(f"Plugin {plugin_name} enabled")
         return True
 
@@ -480,20 +471,24 @@ async def get_plugin_marketplace_info() -> Dict[str, Any]:
     stats = service.get_service_stats()
     registry_stats = stats.get("registry_stats", {})
 
+    available_plugins = []
+    for plugin in service.get_available_plugins():
+        manifest = plugin.get("manifest")
+        if manifest is None:
+            continue
+        available_plugins.append({
+            "name": getattr(manifest, "name", ""),
+            "version": getattr(manifest, "version", ""),
+            "description": getattr(manifest, "description", ""),
+            "category": getattr(manifest, "category", "general"),
+            "type": getattr(manifest, "plugin_type", None) or getattr(manifest, "category", "custom"),
+            "author": getattr(manifest, "author", ""),
+        })
+
     return {
         "total_plugins": registry_stats.get("total_plugins", 0),
         "by_category": registry_stats.get("by_category", {}),
         "by_type": registry_stats.get("by_type", {}),
         "by_status": registry_stats.get("by_status", {}),
-        "available_plugins": [
-            {
-                "name": plugin.manifest.name,
-                "version": plugin.manifest.version,
-                "description": plugin.manifest.description,
-                "category": plugin.manifest.category,
-                "type": plugin.manifest.plugin_type.value,
-                "author": plugin.manifest.author,
-            }
-            for plugin in service.get_available_plugins()
-        ],
+        "available_plugins": available_plugins,
     }

@@ -7,6 +7,7 @@ adding prompt-first capabilities.
 
 The manifest supports:
 - Prompt-first plugin development (system/user prompt templates)
+- Typed prompt contract references (DEFAULT, CUSTOM, NONE)
 - Full lifecycle management (install, uninstall, enable, disable, update, restore)
 - UI materialization via icon naming conventions
 - Marketplace integration with metadata
@@ -85,6 +86,14 @@ class ExtensionRole(str, Enum):
     GUEST = "guest"
 
 
+class PromptMode(str, Enum):
+    """Prompt contract mode for extensions."""
+
+    DEFAULT = "default"
+    CUSTOM = "custom"
+    NONE = "none"
+
+
 # Prompt-First Models
 class PromptTemplateConfig(BaseModel):
     """Configuration for prompt templates."""
@@ -102,6 +111,10 @@ class ExtensionPromptFiles(BaseModel):
     templates: Dict[str, str] = Field(default_factory=dict)
     templates_config: Dict[str, PromptTemplateConfig] = Field(default_factory=dict)
     prompt_first: bool = True
+    mode: PromptMode = PromptMode.DEFAULT
+    contract_id: Optional[str] = None
+    action_contracts: Dict[str, Dict[str, str]] = Field(default_factory=dict)
+    allowed_overrides: List[str] = Field(default_factory=list)
 
 
 # Capability Models
@@ -113,6 +126,7 @@ class ExtensionCapabilities(BaseModel):
     provides_background_tasks: bool = False
     provides_webhooks: bool = False
     prompt_first: bool = True
+    allowed_prompt_overrides: List[str] = Field(default_factory=list)
 
 
 class ExtensionDependencies(BaseModel):
@@ -307,6 +321,14 @@ class ExtensionManifest(BaseModel):
                     ),
                     "provides_webhooks": False,
                     "prompt_first": True,
+                    "allowed_prompt_overrides": data.get("allowed_prompt_overrides", []),
+                },
+                "prompt_files": {
+                    "prompt_first": True,
+                    "mode": data.get("prompt_mode", PromptMode.DEFAULT.value),
+                    "contract_id": data.get("prompt_contract_id"),
+                    "action_contracts": data.get("action_prompt_contracts", {}),
+                    "allowed_overrides": data.get("allowed_prompt_overrides", []),
                 },
                 "rbac": {
                     "default_enabled": data.get("default_enabled", True),
@@ -376,6 +398,7 @@ class ExtensionManifestAPI(BaseModel):
     api_version: str = "1.0"
     kari_min_version: str = "0.4.0"
     capabilities: Dict[str, Any] = {}
+    prompt_files: Dict[str, Any] = {}
     marketplace: Dict[str, Any] = {}
 
     model_config = ConfigDict(extra="allow")
@@ -430,6 +453,7 @@ __all__ = [
     "HookPoint",
     "Permission",
     "ExtensionRole",
+    "PromptMode",
     # Constants
     "SEMVER_PATTERN",
     "NAME_PATTERN",

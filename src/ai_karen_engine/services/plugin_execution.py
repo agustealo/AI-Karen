@@ -37,13 +37,6 @@ try:
 except ImportError:
     from ai_karen_engine.pydantic_stub import BaseModel, ConfigDict, Field, validator
 
-from ai_karen_engine.services.plugin_discovery import (
-    PluginManifest,
-    PluginMetadata,
-    PluginRegistry,
-    PluginStatus,
-    get_plugin_registry,
-)
 from ai_karen_engine.extensions.platform.core.manifest import ExtensionContext, ExtensionManifest
 
 logger = logging.getLogger(__name__)
@@ -347,7 +340,7 @@ class PluginExecutionEngine:
             if not plugin_metadata:
                 raise ValueError(f"Plugin '{request.plugin_name}' not found")
 
-            if plugin_metadata.status not in [PluginStatus.REGISTERED, PluginStatus.LOADED, PluginStatus.ACTIVE]:
+            if plugin_metadata.get("status") not in ["registered", "loaded", "active"]:
                 raise ValueError(f"Plugin '{request.plugin_name}' is not available for execution")
             
             # Validate and sanitize input
@@ -454,16 +447,14 @@ class PluginExecutionEngine:
     
     async def _execute_direct(
         self, 
-        plugin_metadata: PluginMetadata, 
+        plugin_metadata: Dict[str, Any], 
         parameters: Dict[str, Any],
         resource_limits: ResourceLimits,
         security_policy: SecurityPolicy
     ) -> Any:
         """Execute plugin directly in current context."""
-        # Load plugin entrypoint
         entry_point = await self._load_plugin_entrypoint(plugin_metadata)
         
-        # Execute with sandbox
         with PluginSandbox(resource_limits, security_policy) as sandbox:
             if asyncio.iscoroutinefunction(entry_point):
                 return await sandbox.run_async(entry_point, parameters)
@@ -472,7 +463,7 @@ class PluginExecutionEngine:
     
     async def _execute_in_thread(
         self,
-        plugin_metadata: PluginMetadata,
+        plugin_metadata: Dict[str, Any],
         parameters: Dict[str, Any],
         resource_limits: ResourceLimits,
         security_policy: SecurityPolicy,
@@ -509,7 +500,7 @@ class PluginExecutionEngine:
     
     async def _execute_in_process(
         self,
-        plugin_metadata: PluginMetadata,
+        plugin_metadata: Dict[str, Any],
         parameters: Dict[str, Any],
         resource_limits: ResourceLimits,
         security_policy: SecurityPolicy,
@@ -542,7 +533,6 @@ class PluginExecutionEngine:
         try:
             result = await asyncio.wait_for(wrapped_future, timeout=timeout_seconds)
 
-            # Check if result contains error
             if isinstance(result, dict) and "error" in result:
                 raise Exception(result["error"])
 
@@ -554,7 +544,7 @@ class PluginExecutionEngine:
     
     async def _execute_in_sandbox(
         self,
-        plugin_metadata: PluginMetadata,
+        plugin_metadata: Dict[str, Any],
         parameters: Dict[str, Any],
         resource_limits: ResourceLimits,
         security_policy: SecurityPolicy,
@@ -582,40 +572,38 @@ class PluginExecutionEngine:
             request_id
         )
     
-    async def _load_plugin_entrypoint(self, plugin_metadata: PluginMetadata):
+    async def _load_plugin_entrypoint(self, plugin_metadata: Dict[str, Any]):
         """Load plugin entrypoint asynchronously and handle initialization."""
         entrypoint_obj = self._load_plugin_entrypoint_sync(plugin_metadata)
         
-        # If the entrypoint is a method of an ExtensionBase instance,
-        # we need to ensure the instance is initialized.
         instance = getattr(entrypoint_obj, "__self__", None)
-        logger.debug(f"_load_plugin_entrypoint for {plugin_metadata.manifest.name}, instance found: {instance is not None}")
+        manifest = plugin_metadata.get("manifest")
+        logger.debug(f"_load_plugin_entrypoint for {getattr(manifest, 'name', 'unknown')}, instance found: {instance is not None}")
         
         if instance:
-            # Robust check for ExtensionBase-like objects
             is_ext = hasattr(instance, "initialize") and hasattr(instance, "is_initialized")
             if is_ext:
                 try:
                     if not instance.is_initialized():
-                        logger.info(f"Initializing extension instance for {plugin_metadata.manifest.name}")
+                        logger.info(f"Initializing extension instance for {getattr(manifest, 'name', 'unknown')}")
                         await instance.initialize()
-                        # Some base classes might not set the flag correctly in the public method
                         if hasattr(instance, "_is_initialized"):
                             instance._is_initialized = True
                     else:
-                        logger.debug(f"Extension instance for {plugin_metadata.manifest.name} already initialized")
+                        logger.debug(f"Extension instance for {getattr(manifest, 'name', 'unknown')} already initialized")
                 except Exception as e:
-                    logger.error(f"Failed to initialize extension {plugin_metadata.manifest.name}: {e}")
+                    logger.error(f"Failed to initialize extension {getattr(manifest, 'name', 'unknown')}: {e}")
         
         return entrypoint_obj
     
-    def _load_plugin_entrypoint_sync(self, plugin_metadata: PluginMetadata):
+    def _load_plugin_entrypoint_sync(self, plugin_metadata: Dict[str, Any]):
         """Load plugin entrypoint synchronously."""
-        plugin_path = plugin_metadata.path
+        plugin_path = plugin_metadata["path"]
         init_path = plugin_path / "__init__.py"
         handler_path = plugin_path / "handler.py"
-        package_name = f"plugin_{plugin_metadata.manifest.name.replace('-', '_').replace('.', '_')}"
-        entrypoint = getattr(plugin_metadata.manifest, "entry_point", None) or "run"
+        manifest = plugin_metadata["manifest"]
+        package_name = f"plugin_{manifest.name.replace('-', '_').replace('.', '_')}"
+        entrypoint = getattr(manifest, "entrypoint", None) or "run"
 
         if not init_path.exists() or not handler_path.exists():
             raise ImportError(f"Cannot load plugin package from {plugin_path}")
@@ -639,7 +627,7 @@ class PluginExecutionEngine:
             module_name, attr_name = entrypoint.split(":", 1)
             if module_name != "handler":
                 raise ImportError(
-                    f"Unsupported entrypoint module '{module_name}' for {plugin_metadata.manifest.name}"
+                    f"Unsupported entrypoint module '{module_name}' for {manifest.name}"
                 )
 
             entrypoint_obj = getattr(handler_module, attr_name, None)
@@ -649,15 +637,7 @@ class PluginExecutionEngine:
                 )
 
             if inspect.isclass(entrypoint_obj):
-                manifest_data = {}
-                if hasattr(plugin_metadata.manifest, "model_dump"):
-                    manifest_data = plugin_metadata.manifest.model_dump(mode="python")
-                elif isinstance(plugin_metadata.manifest, dict):
-                    manifest_data = dict(plugin_metadata.manifest)
-
-                if hasattr(plugin_metadata.manifest, "model_extra") and plugin_metadata.manifest.model_extra:
-                    manifest_data.update(plugin_metadata.manifest.model_extra)
-
+                manifest_data = manifest.to_dict() if hasattr(manifest, "to_dict") else {}
                 if isinstance(manifest_data.get("dependencies"), list):
                     manifest_data["dependencies"] = {
                         "plugins": manifest_data.get("dependencies", []),
@@ -671,9 +651,7 @@ class PluginExecutionEngine:
                         "system_services": [],
                     }
 
-                if isinstance(manifest_data.get("rbac"), dict):
-                    pass
-                else:
+                if not isinstance(manifest_data.get("rbac"), dict):
                     manifest_data["rbac"] = {
                         "allowed_roles": manifest_data.get("required_roles", ["user"]),
                         "default_enabled": manifest_data.get("default_enabled", True),
@@ -707,20 +685,18 @@ class PluginExecutionEngine:
     async def _validate_and_sanitize_input(
         self,
         parameters: Dict[str, Any],
-        plugin_metadata: PluginMetadata
+        plugin_metadata: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Validate and sanitize plugin input parameters."""
-        # Basic validation
         if not isinstance(parameters, dict):
             raise ValueError("Plugin parameters must be a dictionary")
 
-        # Size limit check
         import json
         param_size = len(json.dumps(parameters, default=str))
-        if param_size > 1024 * 1024:  # 1MB limit
+        if param_size > 1024 * 1024:
             raise ValueError("Plugin parameters too large")
 
-        manifest = plugin_metadata.manifest
+        manifest = plugin_metadata["manifest"]
         extras = getattr(manifest, "model_extra", {}) or {}
         schema = extras.get("parameters") or extras.get("input_schema") or {}
         allow_additional = extras.get("allow_additional_parameters", True)
@@ -767,7 +743,7 @@ class PluginExecutionEngine:
         name: str,
         value: Any,
         rules: Dict[str, Any],
-        manifest: PluginManifest
+        manifest: Any,
     ) -> Any:
         """Apply manifest rules to a parameter value."""
 
@@ -859,7 +835,7 @@ class PluginExecutionEngine:
         name: str,
         value: Any,
         expected_type: str,
-        manifest: PluginManifest
+        manifest: Any,
     ) -> Any:
         """Coerce a parameter value into the expected manifest type."""
 
@@ -883,11 +859,10 @@ class PluginExecutionEngine:
 
         if not target_type:
             logger.warning(
-                "Unknown parameter type '%s' in manifest '%s'", expected_type, manifest.name
+                "Unknown parameter type '%s' in manifest '%s'", expected_type, getattr(manifest, "name", "unknown")
             )
             return value
 
-        # Handle common coercions for primitive types
         if normalized_type in {"string", "str"}:
             return str(value)
 
@@ -928,11 +903,10 @@ class PluginExecutionEngine:
     async def _validate_and_sanitize_output(
         self,
         result: Any,
-        plugin_metadata: PluginMetadata,
+        plugin_metadata: Dict[str, Any],
         resource_limits: ResourceLimits
     ) -> Any:
         """Validate and sanitize plugin output."""
-        # Size limit check
         import json
         try:
             result_json = json.dumps(result, default=str)

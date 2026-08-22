@@ -27,101 +27,20 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-class PluginStatus(str, Enum):
-    """Plugin status enumeration."""
-    DISCOVERED = "discovered"
-    VALIDATED = "validated"
-    REGISTERED = "registered"
-    LOADED = "loaded"
-    ACTIVE = "active"
-    DISABLED = "disabled"
-    ERROR = "error"
-
-
-class PluginType(str, Enum):
-    """Plugin type enumeration."""
-    CORE = "core"
-    AUTOMATION = "automation"
-    AI = "ai"
-    INTEGRATION = "integration"
-    EXAMPLE = "example"
-    CUSTOM = "custom"
-
-
-@dataclass
-class PluginDependency:
-    """Plugin dependency specification."""
-    name: str
-    version: Optional[str] = None
-    optional: bool = False
-    min_version: Optional[str] = None
-    max_version: Optional[str] = None
-
-
-@dataclass
-class PluginCompatibility:
-    """Plugin compatibility requirements."""
-    python_version: Optional[str] = None
-    karen_version: Optional[str] = None
-    os_platforms: List[str] = field(default_factory=list)
-    required_packages: List[str] = field(default_factory=list)
-
-
-class PluginManifest(BaseModel):
-    """Plugin manifest model for validation."""
-    model_config = ConfigDict(extra="allow")
-    
-    # Basic plugin information
-    name: str
-    version: str
-    description: str
-    author: str
-    license: str = "MIT"
-    
-    # Plugin configuration
-    plugin_api_version: str = "1.0"
-    plugin_type: PluginType = PluginType.CUSTOM
-    module: Optional[str] = None
-    entry_point: str = "run"
-    entrypoint: Optional[str] = None
-    
-    # Security and permissions
-    required_roles: List[str] = Field(default_factory=lambda: ["user"])
-    trusted_ui: bool = False
-    enable_external_workflow: bool = False
-    sandbox_required: bool = True
-    
-    # Dependencies and compatibility
-    dependencies: List[Dict[str, Any]] = Field(default_factory=list)
-    compatibility: Dict[str, Any] = Field(default_factory=dict)
-    
-    # Metadata
-    tags: List[str] = Field(default_factory=list)
-    category: str = "general"
-    intent: Optional[str] = None
-    
-    @field_validator('plugin_api_version')
-    @classmethod
-    def validate_api_version(cls, v):
-        """Validate plugin API version."""
-        supported_versions = ["1.0", "1.1"]
-        if v not in supported_versions:
-            raise ValueError(f"Unsupported plugin API version: {v}")
-        return v
-
-
-@dataclass
-class PluginMetadata:
-    """Complete plugin metadata."""
-    manifest: PluginManifest
-    path: Path
-    status: PluginStatus = PluginStatus.DISCOVERED
-    error_message: Optional[str] = None
-    last_updated: datetime = field(default_factory=datetime.utcnow)
-    checksum: Optional[str] = None
-    load_time: Optional[float] = None
-    dependencies_resolved: bool = False
-    compatibility_checked: bool = False
+from ai_karen_engine.extensions.platform.core.manifest import (
+    ExtensionManifest,
+    ExtensionStatus,
+    ExtensionCapabilities,
+    ExtensionPermissions,
+    ExtensionResources,
+    ExtensionDependencies,
+    ExtensionRBAC,
+    ExtensionUIConfig,
+    ExtensionAPIConfig,
+    ExtensionBackgroundTask,
+    ExtensionMarketplaceInfo,
+    PromptMode,
+)
 
 
 class PluginRegistry:
@@ -216,14 +135,12 @@ class PluginRegistry:
         logger.info(f"Discovered {len(discovered_plugins)} plugins")
         return discovered_plugins
     
-    async def _discover_in_path(self, base_path: Path, plugin_type: Optional[PluginType] = None) -> Dict[str, PluginMetadata]:
+    async def _discover_in_path(self, base_path: Path, plugin_type: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
         """Discover plugins in a specific path."""
         discovered = {}
         
         logger.debug(f"Scanning for plugins in: {base_path}")
         
-        # Optimized discovery: only look at immediate subdirectories first.
-        # Most plugins are at base_path/plugin-name/plugin_manifest.json
         try:
             if not base_path.exists():
                 return {}
@@ -237,65 +154,49 @@ class PluginRegistry:
                     try:
                         plugin_metadata = await self._load_plugin_metadata(manifest_path, plugin_type)
                         if plugin_metadata:
-                            logger.info(f"Successfully loaded plugin: {plugin_metadata.manifest.name}")
-                            discovered[plugin_metadata.manifest.name] = plugin_metadata
+                            logger.info(f"Successfully loaded plugin: {plugin_metadata['name']}")
+                            discovered[plugin_metadata["name"]] = plugin_metadata
                     except Exception as e:
                         logger.error(f"Failed to load plugin from {manifest_path}: {e}")
-                        # Create error metadata
-                        error_metadata = PluginMetadata(
-                            manifest=PluginManifest(
-                                name=f"error_{item.name}",
-                                version="0.0.0",
-                                description="Failed to load plugin",
-                                author="unknown",
-                                module="unknown"
-                            ),
-                            path=item,
-                            status=PluginStatus.ERROR,
-                            error_message=str(e)
-                        )
-                        discovered[error_metadata.manifest.name] = error_metadata
+                        discovered[f"error_{item.name}"] = {
+                            "name": f"error_{item.name}",
+                            "version": "0.0.0",
+                            "description": "Failed to load plugin",
+                            "author": "unknown",
+                            "path": item,
+                            "status": "error",
+                            "error_message": str(e),
+                        }
         except Exception as e:
             logger.error(f"Error scanning directory {base_path}: {e}")
         
         return discovered
     
-    async def _load_plugin_metadata(self, manifest_path: Path, default_type: Optional[PluginType] = None) -> Optional[PluginMetadata]:
+    async def _load_plugin_metadata(self, manifest_path: Path, default_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Load plugin metadata from manifest file."""
         try:
-            # Read manifest
             with open(manifest_path, 'r', encoding='utf-8') as f:
                 manifest_data = json.load(f)
 
-            # Normalize legacy / canonical entrypoint fields.
-            if 'entrypoint' in manifest_data and 'entry_point' not in manifest_data:
-                manifest_data['entry_point'] = manifest_data['entrypoint']
+            manifest_data.setdefault('entry_point', manifest_data.get('entrypoint'))
+            if default_type and 'plugin_type' not in manifest_data:
+                manifest_data['plugin_type'] = default_type
             
-            # Set default plugin type if not specified
-            if 'plugin_type' not in manifest_data and default_type:
-                manifest_data['plugin_type'] = default_type.value
-            
-            # Validate manifest
             try:
-                manifest = PluginManifest(**manifest_data)
+                manifest = ExtensionManifest.from_dict(manifest_data)
             except Exception as ve:
                 logger.error(f"Manifest validation failed for {manifest_path}: {ve}")
-                # Log the data for debugging
                 logger.debug(f"Manifest data: {manifest_data}")
                 return None
             
-            # Calculate checksum
             checksum = await self._calculate_plugin_checksum(manifest_path.parent)
             
-            # Create metadata
-            metadata = PluginMetadata(
-                manifest=manifest,
-                path=manifest_path.parent,
-                status=PluginStatus.DISCOVERED,
-                checksum=checksum
-            )
-            
-            return metadata
+            return {
+                "manifest": manifest,
+                "path": manifest_path.parent,
+                "status": "discovered",
+                "checksum": checksum,
+            }
             
         except Exception as e:
             logger.error(f"Failed to load plugin metadata from {manifest_path}: {e}")
@@ -476,39 +377,134 @@ class PluginRegistry:
         
         return True
     
-    async def _validate_compatibility(self, metadata: PluginMetadata) -> bool:
-        """Validate plugin compatibility requirements."""
+    async def _validate_plugin_files(self, metadata: Dict[str, Any]) -> bool:
+        """Validate required plugin files exist."""
+        plugin_path = metadata["path"]
+        
+        manifest_path = plugin_path / "plugin_manifest.json"
+        if not manifest_path.exists():
+            return False
+        
+        handler_path = plugin_path / "handler.py"
+        if not handler_path.exists():
+            return False
+        
+        init_path = plugin_path / "__init__.py"
+        if not init_path.exists():
+            logger.warning(f"Plugin {metadata['name']} missing __init__.py")
+        
+        return True
+    
+    async def _validate_plugin_module(self, metadata: Dict[str, Any]) -> bool:
+        """Validate plugin module can be imported."""
         try:
-            compat_data = metadata.manifest.compatibility
-            if not compat_data:
-                return True
+            plugin_path = metadata["path"]
+            manifest = metadata["manifest"]
+            package_name = f"plugin_{manifest.name.replace('-', '_').replace('.', '_')}"
+            init_path = plugin_path / "__init__.py"
+            handler_path = plugin_path / "handler.py"
+            entrypoint = getattr(manifest, "entrypoint", None) or "run"
+
+            if not init_path.exists() or not handler_path.exists():
+                return False
+
+            package_spec = importlib.util.spec_from_file_location(
+                package_name,
+                init_path,
+                submodule_search_locations=[str(plugin_path)],
+            )
+
+            if package_spec is None or package_spec.loader is None:
+                return False
+
+            package_module = importlib.util.module_from_spec(package_spec)
+            sys.modules[package_name] = package_module
+            package_spec.loader.exec_module(package_module)
+
+            handler_module = importlib.import_module(f"{package_name}.handler")
+
+            if ":" in entrypoint:
+                module_name, attr_name = entrypoint.split(":", 1)
+                if module_name != "handler" or not hasattr(handler_module, attr_name):
+                    logger.error(
+                        "Plugin %s missing entrypoint: %s",
+                        manifest.name,
+                        entrypoint,
+                    )
+                    return False
+            elif not hasattr(handler_module, entrypoint):
+                logger.error(
+                    "Plugin %s missing entrypoint: %s",
+                    manifest.name,
+                    entrypoint,
+                )
+                return False
+
+            return True
+        except Exception as e:
+            logger.error(f"Plugin module validation failed: {e}")
+            return False
+    
+    async def _validate_dependencies(self, metadata: Dict[str, Any]) -> bool:
+        """Validate plugin dependencies are satisfied."""
+        manifest = metadata["manifest"]
+        dependencies = getattr(manifest, "dependencies", None)
+        if not dependencies:
+            return True
+
+        try:
+            for dep in dependencies:
+                dep_name = dep.get("name") if isinstance(dep, dict) else getattr(dep, "name", None)
+                if not dep_name:
+                    continue
+
+                if dep_name not in self.plugins:
+                    optional = dep.get("optional", False) if isinstance(dep, dict) else getattr(dep, "optional", False)
+                    if not optional:
+                        logger.error(f"Required dependency {dep_name} not found for plugin {manifest.name}")
+                        return False
+            return True
+        except Exception as e:
+            logger.error(f"Dependency validation failed: {e}")
+            return False
+    
+    async def _validate_compatibility(self, metadata: Dict[str, Any]) -> bool:
+        """Validate plugin compatibility requirements."""
+        manifest = metadata["manifest"]
+        compatibility = getattr(manifest, "compatibility", None)
+        if not compatibility:
+            return True
+        
+        try:
+            if isinstance(compatibility, dict):
+                python_version = compatibility.get("python_version")
+                os_platforms = compatibility.get("os_platforms", [])
+                required_packages = compatibility.get("required_packages", [])
+            else:
+                python_version = getattr(compatibility, "python_version", None)
+                os_platforms = getattr(compatibility, "os_platforms", []) or []
+                required_packages = getattr(compatibility, "required_packages", []) or []
             
-            compatibility = PluginCompatibility(**compat_data)
-            
-            # Check Python version
-            if compatibility.python_version:
+            if python_version:
                 current_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-                if current_version != compatibility.python_version:
-                    logger.warning(f"Python version mismatch for {metadata.manifest.name}")
+                if current_version != python_version:
+                    logger.warning(f"Python version mismatch for {manifest.name}")
             
-            # Check OS platform
-            if compatibility.os_platforms:
+            if os_platforms:
                 import platform
                 current_os = platform.system().lower()
-                if current_os not in [p.lower() for p in compatibility.os_platforms]:
-                    logger.error(f"OS platform {current_os} not supported by {metadata.manifest.name}")
+                if current_os not in [p.lower() for p in os_platforms]:
+                    logger.error(f"OS platform {current_os} not supported by {manifest.name}")
                     return False
             
-            # Check required packages
-            for package in compatibility.required_packages:
+            for package in required_packages:
                 try:
                     importlib.import_module(package)
                 except ImportError:
-                    logger.error(f"Required package {package} not available for {metadata.manifest.name}")
+                    logger.error(f"Required package {package} not available for {manifest.name}")
                     return False
             
             return True
-            
         except Exception as e:
             logger.error(f"Compatibility validation failed: {e}")
             return False
@@ -528,17 +524,15 @@ class PluginRegistry:
             return False
         
         metadata = self.plugins[plugin_name]
+        status = metadata.get("status")
         
-        if metadata.status != PluginStatus.VALIDATED:
+        if status != "validated":
             logger.error(f"Plugin {plugin_name} must be validated before registration")
             return False
         
         try:
-            # Update status
-            metadata.status = PluginStatus.REGISTERED
-            metadata.last_updated = datetime.utcnow()
+            metadata["status"] = "registered"
             
-            # Update indices
             self._update_indices()
             
             self.metrics["plugins_registered"] += 1
@@ -547,8 +541,8 @@ class PluginRegistry:
             
         except Exception as e:
             logger.error(f"Plugin registration failed for {plugin_name}: {e}")
-            metadata.status = PluginStatus.ERROR
-            metadata.error_message = str(e)
+            metadata["status"] = "error"
+            metadata["error_message"] = str(e)
             return False
     
     def _update_indices(self):
@@ -557,35 +551,30 @@ class PluginRegistry:
         self.plugins_by_type.clear()
         
         for plugin_name, metadata in self.plugins.items():
-            # Index by category
-            category = metadata.manifest.category
-            if category not in self.plugins_by_category:
-                self.plugins_by_category[category] = []
-            self.plugins_by_category[category].append(plugin_name)
+            manifest = metadata["manifest"]
+            category = getattr(manifest, "category", "general")
+            self.plugins_by_category.setdefault(category, []).append(plugin_name)
             
-            # Index by type
-            plugin_type = metadata.manifest.plugin_type
-            if plugin_type not in self.plugins_by_type:
-                self.plugins_by_type[plugin_type] = []
-            self.plugins_by_type[plugin_type].append(plugin_name)
+            plugin_type = getattr(manifest, "plugin_type", None) or getattr(manifest, "category", "custom")
+            self.plugins_by_type.setdefault(plugin_type, []).append(plugin_name)
     
-    def get_plugin(self, plugin_name: str) -> Optional[PluginMetadata]:
+    def get_plugin(self, plugin_name: str) -> Optional[Dict[str, Any]]:
         """Get plugin metadata by name."""
         return self.plugins.get(plugin_name)
     
-    def get_plugins_by_category(self, category: str) -> List[PluginMetadata]:
+    def get_plugins_by_category(self, category: str) -> List[Dict[str, Any]]:
         """Get plugins by category."""
         plugin_names = self.plugins_by_category.get(category, [])
         return [self.plugins[name] for name in plugin_names]
     
-    def get_plugins_by_type(self, plugin_type: PluginType) -> List[PluginMetadata]:
+    def get_plugins_by_type(self, plugin_type: str) -> List[Dict[str, Any]]:
         """Get plugins by type."""
         plugin_names = self.plugins_by_type.get(plugin_type, [])
         return [self.plugins[name] for name in plugin_names]
     
-    def get_plugins_by_status(self, status: PluginStatus) -> List[PluginMetadata]:
+    def get_plugins_by_status(self, status: str) -> List[Dict[str, Any]]:
         """Get plugins by status."""
-        return [metadata for metadata in self.plugins.values() if metadata.status == status]
+        return [metadata for metadata in self.plugins.values() if metadata.get("status") == status]
     
     def get_registry_stats(self) -> Dict[str, Any]:
         """Get registry statistics."""
@@ -594,21 +583,20 @@ class PluginRegistry:
             "by_status": {},
             "by_type": {},
             "by_category": {},
-            "metrics": self.metrics.copy()
+            "metrics": self.metrics.copy(),
         }
         
-        # Count by status
         for metadata in self.plugins.values():
-            status = metadata.status.value
+            status = metadata.get("status", "unknown")
             stats["by_status"][status] = stats["by_status"].get(status, 0) + 1
-        
-        # Count by type
-        for plugin_type, plugin_names in self.plugins_by_type.items():
-            stats["by_type"][plugin_type.value] = len(plugin_names)
-        
-        # Count by category
-        for category, plugin_names in self.plugins_by_category.items():
-            stats["by_category"][category] = len(plugin_names)
+            
+            manifest = metadata.get("manifest")
+            if manifest is not None:
+                plugin_type = getattr(manifest, "plugin_type", None) or getattr(manifest, "category", "custom")
+                stats["by_type"][plugin_type] = stats["by_type"].get(plugin_type, 0) + 1
+                
+                category = getattr(manifest, "category", "general")
+                stats["by_category"][category] = stats["by_category"].get(category, 0) + 1
         
         return stats
 
@@ -648,3 +636,10 @@ async def initialize_plugin_registry(
         await _plugin_registry.discover_plugins()
     
     return _plugin_registry
+
+
+__all__ = [
+    "PluginRegistry",
+    "get_plugin_registry",
+    "initialize_plugin_registry",
+]

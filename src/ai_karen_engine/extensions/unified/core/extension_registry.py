@@ -16,7 +16,7 @@ import uuid
 from enum import Enum
 
 from ..database_models import ExtensionModel, ExtensionState
-from ..manifest import ExtensionManifest
+from ...platform.core.manifest import ExtensionManifest
 from ...platform.core.registry.database_service import ExtensionDatabaseService
 from ...platform.core.registry.discovery import ExtensionDiscoveryService
 from ...platform.core.registry.manifest_enforcer import ManifestStandardsEnforcer

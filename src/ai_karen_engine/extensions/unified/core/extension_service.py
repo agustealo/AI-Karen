@@ -80,7 +80,7 @@ class ExtensionService:
         """Install a new extension."""
         try:
             # Create manifest
-            from ..manifest import ExtensionManifest
+            from ...platform.core.manifest import ExtensionManifest
 
             manifest = ExtensionManifest.from_dict(manifest_data)
 

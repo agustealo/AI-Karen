@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from ..manifest import ExtensionManifest
+from ...platform.core.manifest import ExtensionManifest
 from ..database_models import ExtensionConfig as ExtensionConfigModel
 
 logger = logging.getLogger(__name__)
