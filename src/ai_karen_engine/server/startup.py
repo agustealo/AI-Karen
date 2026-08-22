@@ -246,9 +246,11 @@ async def init_ai_services(settings: Any) -> None:
                     "Model orchestrator plugin initialization failed: %s", str(e)
                 )
 
-            from ai_karen_engine.integrations.model_discovery import sync_registry
+            from ai_karen_engine.core.model_runtime.model_registry_writer import (
+                sync_model_registry_cache,
+            )
 
-            sync_registry()
+            sync_model_registry_cache()
 
             from ai_karen_engine.core.services.service_registry import initialize_services
 
@@ -376,11 +378,13 @@ def start_background_tasks(settings: Any) -> None:
     if settings.llm_refresh_interval > 0:
 
         async def _periodic_refresh() -> None:
-            from ai_karen_engine.integrations.model_discovery import sync_registry
+            from ai_karen_engine.core.model_runtime.model_registry_writer import (
+                sync_model_registry_cache,
+            )
 
             while True:
                 await asyncio.sleep(settings.llm_refresh_interval)
-                sync_registry()
+                sync_model_registry_cache()
 
         _registry_refresh_task = asyncio.create_task(_periodic_refresh())
         logger.info("Started model registry refresh task")

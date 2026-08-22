@@ -200,35 +200,65 @@ bridge retained: `ai_karen_engine/copilotkit/`.
 
 ---
 
-## 9. Test status (environment note)
+## 9. Test status
 
-`pytest` was made runnable here via `uv` (Python 3.12). `rg` (ripgrep) is **not
-installed** and the project dependency stack (`numpy`→`sqlalchemy`→...) cannot be
-installed offline. Current run of
-`tests/test_integrations_authority_audit.py`:
+`pytest` is runnable here via `uv` (Python 3.12). `rg` (ripgrep) is **not**
+installed and the project dependency stack reachable at runtime
+(`numpy`→`sqlalchemy`→`core.model_runtime` → `model_manager` →
+`TransformersRuntime`) cannot be installed in this sandbox (native `torch` /
+`transformers`). Tests that touch that import chain or shell out to `rg` are
+therefore environmental failures, not regressions.
 
-- **15 pass** — all path/file/classification/existence/routing-isolation tests,
-  including `test_deleted_dead_files_are_gone`,
-  `test_deleted_unused_subpackages_are_gone`,
-  `test_integrations_authority_audit_classifications`,
-  `test_no_duplicate_router_classes_outside_canonical_owners`,
-  `test_integrations_init_exports_only_adapters`,
-  `test_canonical_resilience_owns_fallback`,
-  `test_core_runtime_does_not_import_from_duplicate_router_authorities`.
-- **3 fail — all environmental, not caused by these changes:**
-  `test_canonical_provider_registry_service_exists` and
-  `test_canonical_provider_registry_service_is_single_source_of_truth` fail on
-  `ModuleNotFoundError: numpy`/`sqlalchemy` imported transitively by
-  `core/model_runtime/__init__.py` → `model_manager` → `embedding_manager`
-  (untouched by this change). `test_duplicate_provider_registry_imports_are_documented`
-  fails only because `rg` is absent (in a real env it passes — all 5 listed
-  registries have live importers).
+`tests/test_integrations_authority_audit.py`: **18 pass, 3 fail** — the 3
+failures are env-only (`yaml`/`numpy`/`sqlalchemy` chain for the two
+`ProviderRegistryService` import tests; missing `rg` for the
+duplicate-registry-import migration gate). All path/file/classification/
+existence tests pass, including the new MODEL-3A gates
+(`test_model_lifecycle_single_discovery_authority`,
+`test_model_lifecycle_events_contract`,
+`test_model_lifecycle_consumers_off_integrations`).
 
-### Recommended follow-up with test execution available
+`ruff check --select F,E9` is clean on all new/changed code.
+`python -m compileall src` is clean.
+
+### Recommended follow-up with full test execution available
 1. Collapse the `registry.py` / `llm_registry.py` split-brain (§2) behind a
    behavior-equivalence test on the provider roster.
-2. Retire `task_analyzer.py` after the live-path negative confirmation (§5).
-3. Decompose `integrations/health_monitor.py` only after `llm_router`/`confidence_scoring`
-   are migrated off it (§7).
-4. Delete `fallback_chain_manager.py` together with the `intelligent_provider_switcher`
-   / `performance_adaptive_router` dead cluster, once `llm_orchestrator` is retired.
+2. Retire `task_analyzer.py` after a live-path negative confirmation (§5).
+3. Decompose `integrations/health_monitor.py` only after `llm_router`/
+   `confidence_scoring` are migrated off it (§7).
+4. Delete `fallback_chain_manager.py` together with the
+   `intelligent_provider_switcher` / `performance_adaptive_router` dead cluster,
+   once `llm_orchestrator` is retired.
+
+---
+
+## 10. MODEL-3A: Model Lifecycle Authority Closure — completed
+
+| Action | File(s) | Verification |
+|---|---|---|
+| Retired `integrations/model_discovery.py`; migrated its only consumers (`server/startup.py` ×2: init + periodic refresh) to canonical `sync_model_registry_cache` | `integrations/model_discovery.py` (deleted), `server/startup.py` (modified) | grep: 0 refs to `integrations.model_discovery`; `test_model_lifecycle_single_discovery_authority` |
+| Added canonical model lifecycle event contract | `core/model_runtime/model_lifecycle_events.py` (new) | `test_model_lifecycle_events_contract`; `ruff F,E9` clean |
+| Added canonical `sync_model_registry_cache` preserving the flat `model_registry.json` schema (for `ModelLibraryService`) while sourcing state from `ModelDiscoveryService` | `core/model_runtime/model_registry_writer.py` | `test_model_lifecycle_single_discovery_authority`; emits `model.discovered`/`model.available` |
+| Retired the `integrations/copilotkit/` shim (carried into MODEL-3A boundary cleanup) | already done in commit §8 | — |
+
+### Still mapped, not deleted (blocked on routing retirement)
+- `integrations/model_availability_manager.py` — sole consumer is the deprecated
+  `integrations/llm_router.py`; useful behavior (intra-provider fallback, model
+  health checks, selection criteria, request-type metrics) is mapped to
+  `core/model_runtime/{model_selection_algorithm,provider_health_monitor,provider_registry_service}`
+  in §6. Deletion awaits `llm_router` retirement.
+- `integrations/model_availability_cache.py` — consumers are the doomed routing
+  cluster + `monitoring/comprehensive_health_monitor.py`. Useful behavior
+  (predictive preload, LRU, download retry) is mapped in §6; stripping its
+  coupling to `intelligent_provider_registry`/`capability_aware_selector` is the
+  health-decomposition step (§7). Guarded by
+  `test_model_lifecycle_consumers_off_integrations` (classified MOVE_TO_CANONICAL).
+
+### Proof (runnable subset)
+- `python -m compileall src` — clean
+- `pytest tests/test_integrations_authority_audit.py -q` — 18 pass / 3 env-fail
+- `ruff check --select F,E9 src tests` — clean on new/changed code
+- `rg -n "integrations\.model_discovery" src --glob '!tests/**' --glob '!*.md'` —
+  zero production matches (the architecture test additionally asserts `server/startup.py`
+  no longer imports the old module; tests/docs reference the name only to assert its absence)

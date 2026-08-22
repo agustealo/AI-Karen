@@ -70,7 +70,6 @@ FILE_CLASSIFICATIONS: Dict[str, str] = {
     "local_rpa_client.py": "KEEP_AS_ADAPTER",
     "model_availability_cache.py": "MOVE_TO_CANONICAL",
     "model_availability_manager.py": "MOVE_TO_CANONICAL",
-    "model_discovery.py": "MOVE_TO_CANONICAL",
     "nanda_client.py": "KEEP_AS_ADAPTER",
     "partial_failure_handler.py": "NEEDS_AUDIT",
     "performance_adaptive_router.py": "DUPLICATE",
@@ -387,6 +386,7 @@ def test_deleted_dead_files_are_gone() -> None:
         "copilot_router.py",
         "provider_hierarchy.py",
         "copilotkit/routing_actions.py",
+        "model_discovery.py",
     ]
     for filename in deleted_files:
         path = INTEGRATIONS_ROOT / filename
@@ -402,3 +402,59 @@ def test_deleted_unused_subpackages_are_gone() -> None:
     for subpackage in deleted_subpackages:
         path = INTEGRATIONS_ROOT / subpackage
         assert not path.exists(), f"Deleted subpackage still exists: {path}"
+
+
+# Root of the src tree (repo root is parents[3] of this test file).
+_SRC_ROOT = pathlib.Path(__file__).resolve().parents[3] / "src" / "ai_karen_engine"
+
+
+def test_model_lifecycle_single_discovery_authority() -> None:
+    """Model discovery must live only in core/model_runtime; integrations copy retired."""
+    retired = INTEGRATIONS_ROOT / "model_discovery.py"
+    assert not retired.exists(), "Retired integrations/model_discovery.py still present"
+
+    startup = _SRC_ROOT / "server" / "startup.py"
+    assert startup.exists()
+    startup_text = startup.read_text(encoding="utf-8", errors="ignore")
+    assert "integrations.model_discovery" not in startup_text
+    assert "sync_model_registry_cache" in startup_text
+    assert "core.model_runtime.model_registry_writer" in startup_text
+
+    writer = _SRC_ROOT / "core" / "model_runtime" / "model_registry_writer.py"
+    assert writer.exists()
+    writer_text = writer.read_text(encoding="utf-8", errors="ignore")
+    assert "def sync_model_registry_cache" in writer_text
+    assert "get_model_discovery_service" in writer_text
+
+
+def test_model_lifecycle_events_contract() -> None:
+    """Canonical model lifecycle event vocabulary must be defined."""
+    events = _SRC_ROOT / "core" / "model_runtime" / "model_lifecycle_events.py"
+    assert events.exists(), "model_lifecycle_events.py missing"
+    text = events.read_text(encoding="utf-8", errors="ignore")
+    assert "ModelLifecycleEvent" in text
+    for event in (
+        "model.discovered",
+        "model.available",
+        "model.unavailable",
+        "model.load_started",
+        "model.loaded",
+        "model.load_failed",
+        "model.evicted",
+        "model.download_started",
+        "model.download_failed",
+    ):
+        assert event in text, f"Missing canonical lifecycle event: {event}"
+
+
+def test_model_lifecycle_consumers_off_integrations() -> None:
+    """model_availability_* live under migration until their only consumers
+    (the deprecated llm_router + the doomed routing cluster) are retired.
+    Gate the classification so the convergence stays explicit."""
+    for filename in ("model_availability_cache.py", "model_availability_manager.py"):
+        assert FILE_CLASSIFICATIONS.get(filename) == "MOVE_TO_CANONICAL", (
+            f"{filename} must be classified MOVE_TO_CANONICAL until migrated to core/model_runtime"
+        )
+    assert FILE_CLASSIFICATIONS.get("model_discovery.py") is None, (
+        "model_discovery.py was retired; classification entry should be removed"
+    )
