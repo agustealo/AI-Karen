@@ -55,6 +55,17 @@ class PromptRegistry:
         return list(self._definitions.values())
 
 
+_PROMPT_REGISTRY_INSTANCE: Optional[PromptRegistry] = None
+
+
+def get_prompt_registry() -> PromptRegistry:
+    """Return the global PromptRegistry instance."""
+    global _PROMPT_REGISTRY_INSTANCE
+    if _PROMPT_REGISTRY_INSTANCE is None:
+        _PROMPT_REGISTRY_INSTANCE = PromptRegistry()
+    return _PROMPT_REGISTRY_INSTANCE
+
+
 class PromptAssembler:
     """Assembles canonical prompts from trusted runtime components."""
 

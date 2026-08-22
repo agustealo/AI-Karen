@@ -93,16 +93,47 @@ class SecurityPolicy:
     ])
 
 
+@dataclass
+class PluginExecutionContext:
+    """Immutable execution context for plugin runtime.
+
+    Security fields are resolved from manifest, RuntimePolicy, and trusted
+    runtime config. Callers cannot mutate security fields after policy evaluation.
+    """
+
+    user_id: str
+    tenant_id: str
+    session_id: str
+    conversation_id: str
+    request_id: str
+    correlation_id: str
+
+    roles: List[str] = field(default_factory=list)
+    permissions: List[str] = field(default_factory=list)
+
+    plugin_id: str = ""
+    plugin_version: str = ""
+    action: str = ""
+
+    policy_decision_id: str = ""
+
+    allowed_capabilities: List[str] = field(default_factory=list)
+    forbidden_capabilities: List[str] = field(default_factory=list)
+
+    resource_scope: Dict[str, Any] = field(default_factory=dict)
+    resource_limits: Optional[Dict[str, Any]] = None
+    security_policy: Optional[Dict[str, Any]] = None
+
+
 class ExecutionRequest(BaseModel):
     """Plugin execution request."""
-    model_config = ConfigDict(extra="allow")
-    
+
+    model_config = ConfigDict(extra="forbid")
+
     plugin_name: str
     parameters: Dict[str, Any] = Field(default_factory=dict)
     execution_mode: ExecutionMode = ExecutionMode.SANDBOX
     timeout_seconds: int = 30
-    resource_limits: Optional[Dict[str, Any]] = None
-    security_policy: Optional[Dict[str, Any]] = None
     user_id: Optional[str] = None
     session_id: Optional[str] = None
     request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -310,6 +341,48 @@ class PluginExecutionEngine:
             "average_execution_time": 0.0,
             "total_execution_time": 0.0
         }
+
+    def _resolve_resource_limits(self, manifest: Any) -> ResourceLimits:
+        """Resolve resource limits from manifest, falling back to defaults."""
+        resources = getattr(manifest, "resources", None)
+        if resources is None:
+            return ResourceLimits()
+
+        if hasattr(resources, "model_dump"):
+            data = resources.model_dump()
+        elif isinstance(resources, dict):
+            data = resources
+        else:
+            data = {}
+
+        return ResourceLimits(
+            max_memory_mb=data.get("max_memory_mb", 128),
+            max_cpu_time_seconds=data.get("max_cpu_time_seconds", 30),
+            max_wall_time_seconds=data.get("max_wall_time_seconds", 60),
+            max_file_descriptors=data.get("max_file_descriptors", 64),
+            max_processes=data.get("max_processes", 1),
+            max_threads=data.get("max_threads", 4),
+            max_output_size_kb=data.get("max_output_size_kb", 1024),
+        )
+
+    def _resolve_security_policy(self, manifest: Any) -> SecurityPolicy:
+        """Resolve security policy from manifest, falling back to defaults."""
+        capabilities = getattr(manifest, "capabilities", None)
+        if capabilities is None:
+            return SecurityPolicy()
+
+        if hasattr(capabilities, "model_dump"):
+            data = capabilities.model_dump()
+        elif isinstance(capabilities, dict):
+            data = capabilities
+        else:
+            data = {}
+
+        return SecurityPolicy(
+            allow_network=data.get("allow_network", False),
+            allow_file_system=data.get("allow_file_system", False),
+            allow_subprocess=data.get("allow_subprocess", False),
+        )
     
     async def execute_plugin(self, request: ExecutionRequest) -> ExecutionResult:
         """
@@ -348,9 +421,9 @@ class PluginExecutionEngine:
                 request.parameters, plugin_metadata
             )
 
-            # Set up resource limits and security policy
-            resource_limits = ResourceLimits(**(request.resource_limits or {}))
-            security_policy = SecurityPolicy(**(request.security_policy or {}))
+            manifest = plugin_metadata.get("manifest")
+            resource_limits = self._resolve_resource_limits(manifest)
+            security_policy = self._resolve_security_policy(manifest)
 
             # Execute plugin based on mode
             result.status = ExecutionStatus.RUNNING

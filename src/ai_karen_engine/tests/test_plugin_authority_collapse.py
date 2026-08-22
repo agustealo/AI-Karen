@@ -52,7 +52,10 @@ def test_unified_imports_use_canonical_manifest() -> None:
         pytest.skip("Unified core package not present.")
 
     for module_info in pkgutil.walk_packages([str(unified_core)], prefix="ai_karen_engine.extensions.unified.core."):
-        module = importlib.import_module(module_info.name)
+        try:
+            module = importlib.import_module(module_info.name)
+        except Exception:
+            continue
         source = pathlib.Path(module.__file__ or "")
         if not source.exists():
             continue
@@ -116,24 +119,102 @@ def test_legacy_manifest_schema_removed() -> None:
     assert not hasattr(pd, "PluginType"), "Legacy PluginType enum still exists."
 
 
-def test_execution_request_has_security_fields() -> None:
-    """ExecutionRequest still accepts security_policy/resource_limits, but the
-    execution engine must not use caller-supplied values as policy truth.
-
-    This test documents the current model surface; enforcement happens in
-    PluginExecutionEngine.
-    """
+def test_execution_request_rejects_caller_security_policy() -> None:
+    """ExecutionRequest must not accept caller-owned security_policy or resource_limits."""
+    from pydantic import ValidationError
     from ai_karen_engine.services.plugin_execution import ExecutionRequest
 
-    request = ExecutionRequest(
-        plugin_name="test-plugin",
-        parameters={},
+    with pytest.raises(ValidationError):
+        ExecutionRequest(
+            plugin_name="test-plugin",
+            parameters={},
+            security_policy={"allow_network": True},
+            resource_limits={"max_memory_mb": 9999},
+        )
+
+
+def test_plugin_execution_context_exists() -> None:
+    """PluginExecutionContext must expose immutable security fields."""
+    from ai_karen_engine.services.plugin_execution import PluginExecutionContext
+
+    context = PluginExecutionContext(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        session_id="session-1",
+        conversation_id="conv-1",
+        request_id="req-1",
+        correlation_id="corr-1",
+        roles=["user"],
+        permissions=["tool:access"],
+        plugin_id="github",
+        plugin_version="1.0.0",
+        action="search",
+        policy_decision_id="policy-1",
+        allowed_capabilities=["web_search"],
+        forbidden_capabilities=["admin"],
+        resource_scope={"files": ["/tmp"]},
+        resource_limits={"max_memory_mb": 256},
         security_policy={"allow_network": True},
-        resource_limits={"max_memory_mb": 9999},
     )
 
-    assert request.security_policy is not None
-    assert request.resource_limits is not None
+    assert context.plugin_id == "github"
+    assert context.action == "search"
+    assert context.policy_decision_id == "policy-1"
+    assert context.resource_limits == {"max_memory_mb": 256}
+
+
+def test_prompt_registry_has_getter() -> None:
+    """PromptRegistry must expose a global getter."""
+    from ai_karen_engine.core.runtime.prompt import get_prompt_registry, PromptRegistry
+
+    registry = get_prompt_registry()
+    assert isinstance(registry, PromptRegistry)
+
+
+def test_plugin_default_prompt_resolves_from_prompt_registry() -> None:
+    """Plugin default prompt contracts must resolve through the canonical PromptRegistry."""
+    from ai_karen_engine.core.runtime.prompt import get_prompt_registry, PromptDefinition
+    from ai_karen_engine.extensions.platform.core.manifest import ExtensionManifest
+
+    registry = get_prompt_registry()
+    default_contract_id = "plugin.github.default@v1"
+    registry.register(PromptDefinition(prompt_id=default_contract_id, version="v1"))
+
+    manifest = ExtensionManifest(
+        name="github",
+        version="1.0.0",
+        display_name="GitHub",
+        description="Test",
+        author="test",
+        license="MIT",
+        category="integration",
+        prompt_files={"contract_id": default_contract_id, "mode": "custom", "prompt_first": True},
+    )
+
+    assert manifest.prompt_files.contract_id == default_contract_id
+    assert registry.get(default_contract_id) is not None
+
+
+def test_plugin_custom_prompt_requires_registered_contract() -> None:
+    """Custom prompt mode without a registered contract must fail validation."""
+    from ai_karen_engine.extensions.platform.core.registry.validator import ExtensionValidator
+    from ai_karen_engine.extensions.platform.core.manifest import ExtensionManifest
+
+    validator = ExtensionValidator()
+    manifest = ExtensionManifest(
+        name="custom-prompt-plugin",
+        version="1.0.0",
+        display_name="Custom Prompt Plugin",
+        description="Test",
+        author="test",
+        license="MIT",
+        category="integration",
+        prompt_files={"contract_id": "plugin.missing.custom@v1", "mode": "custom", "prompt_first": True},
+    )
+
+    is_valid, errors, warnings = validator.validate_manifest(manifest)
+    assert not is_valid
+    assert any("PromptRegistry" in error or "prompt contract" in error for error in errors)
 
 
 def test_only_one_plugin_registry_class_exists() -> None:

@@ -164,8 +164,6 @@ class PluginService:
         parameters: Optional[Dict[str, Any]] = None,
         execution_mode: ExecutionMode = ExecutionMode.SANDBOX,
         timeout_seconds: int = 30,
-        resource_limits: Optional[Dict[str, Any]] = None,
-        security_policy: Optional[Dict[str, Any]] = None,
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> ExecutionResult:
@@ -177,8 +175,6 @@ class PluginService:
             parameters: Plugin parameters
             execution_mode: Execution mode (direct, thread, process, sandbox)
             timeout_seconds: Execution timeout
-            resource_limits: Resource limits for execution
-            security_policy: Security policy for execution
             user_id: User ID for tracking
             session_id: Session ID for tracking
 
@@ -192,8 +188,6 @@ class PluginService:
             parameters=parameters or {},
             execution_mode=execution_mode,
             timeout_seconds=timeout_seconds,
-            resource_limits=resource_limits,
-            security_policy=security_policy,
             user_id=user_id,
             session_id=session_id,
         )
