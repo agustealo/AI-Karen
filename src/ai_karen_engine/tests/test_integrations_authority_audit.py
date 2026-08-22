@@ -56,13 +56,9 @@ FILE_CLASSIFICATIONS: Dict[str, str] = {
     "capability_aware_selector.py": "DUPLICATE",
     "capability_router.py": "DUPLICATE",
     "confidence_scoring.py": "NEEDS_AUDIT",
-    "config_validator.py": "MOVE_TO_CANONICAL",
     "copilotkit_provider.py": "DUPLICATE",
     "copilot_router.py": "DUPLICATE",
-    "dependency_checker.py": "MOVE_TO_CANONICAL",
-    "diagnostic_prompt.py": "NEEDS_AUDIT",
     "dynamic_provider_system.py": "DUPLICATE",
-    "error_recovery.py": "NEEDS_AUDIT",
     "failure_pattern_analyzer.py": "NEEDS_AUDIT",
     "fallback_chain_manager.py": "DEAD",
     "health_monitor.py": "NEEDS_AUDIT",
@@ -76,7 +72,6 @@ FILE_CLASSIFICATIONS: Dict[str, str] = {
     "model_availability_cache.py": "MOVE_TO_CANONICAL",
     "model_availability_manager.py": "MOVE_TO_CANONICAL",
     "model_discovery.py": "MOVE_TO_CANONICAL",
-    "model_download_manager.py": "MOVE_TO_CANONICAL",
     "nanda_client.py": "KEEP_AS_ADAPTER",
     "partial_failure_handler.py": "NEEDS_AUDIT",
     "performance_adaptive_router.py": "DUPLICATE",
@@ -345,6 +340,11 @@ def test_deleted_dead_files_are_gone() -> None:
         "performance_router_init.py",
         "factory.py",
         "dependencies.py",
+        "config_validator.py",
+        "dependency_checker.py",
+        "diagnostic_prompt.py",
+        "error_recovery.py",
+        "model_download_manager.py",
     ]
     for filename in deleted_files:
         path = INTEGRATIONS_ROOT / filename
