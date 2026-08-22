@@ -34,6 +34,9 @@ class HookRegistration:
     source_name: Optional[str] = None
     registered_at: datetime = field(default_factory=datetime.utcnow)
     enabled: bool = True
+    trust_level: str = "observational"
+    criticality: str = "best_effort"
+    sequence: int = 0
 
     def __post_init__(self):
         """Validate hook registration data."""
@@ -41,6 +44,12 @@ class HookRegistration:
             raise ValueError("Handler must be callable")
         if not isinstance(self.priority, int) or self.priority < 0:
             raise ValueError("Priority must be a non-negative integer")
+        valid_trust = {"observational", "transformational", "side_effecting"}
+        if self.trust_level not in valid_trust:
+            raise ValueError(f"trust_level must be one of {valid_trust}")
+        valid_criticality = {"best_effort", "important", "critical"}
+        if self.criticality not in valid_criticality:
+            raise ValueError(f"criticality must be one of {valid_criticality}")
 
 
 @dataclass

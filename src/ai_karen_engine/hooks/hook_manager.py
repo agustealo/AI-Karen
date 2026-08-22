@@ -44,6 +44,10 @@ class HookManager:
         self.logger = logging.getLogger("hook_manager")
         self._execution_stats = defaultdict(int)
         self._enabled = True
+        self._registration_sequence = 0
+        self._hook_depth = 0
+        self._max_hook_depth = 5
+        self._active_hook_chains: Dict[str, List[str]] = {}
 
     async def register_hook(
         self,
@@ -53,6 +57,8 @@ class HookManager:
         conditions: Optional[Dict[str, Any]] = None,
         source_type: str = "custom",
         source_name: Optional[str] = None,
+        trust_level: str = "observational",
+        criticality: str = "best_effort",
     ) -> str:
         """
         Register a hook with the unified system.
@@ -64,6 +70,8 @@ class HookManager:
             conditions: Conditions for hook execution
             source_type: Type of source (plugin, extension, etc.)
             source_name: Name of the source
+            trust_level: observational, transformational, or side_effecting
+            criticality: best_effort, important, or critical
 
         Returns:
             Hook ID
@@ -73,6 +81,7 @@ class HookManager:
 
         hook_id = f"{source_type}_{hook_type}_{uuid.uuid4().hex[:8]}"
 
+        self._registration_sequence += 1
         registration = HookRegistration(
             id=hook_id,
             hook_type=hook_type,
@@ -81,11 +90,14 @@ class HookManager:
             conditions=conditions or {},
             source_type=source_type,
             source_name=source_name,
+            trust_level=trust_level,
+            criticality=criticality,
+            sequence=self._registration_sequence,
         )
 
-        # Add to hooks list and sort by priority
+        # Add to hooks list and sort by priority, then sequence for deterministic ordering
         self.hooks[hook_type].append(registration)
-        self.hooks[hook_type].sort(key=lambda x: x.priority)
+        self.hooks[hook_type].sort(key=lambda x: (x.priority, x.sequence))
 
         # Add to registry
         self.hook_registry[hook_id] = registration
@@ -178,6 +190,42 @@ class HookManager:
                 results=[],
             )
 
+        # Recursion protection
+        self._hook_depth += 1
+        if self._hook_depth > self._max_hook_depth:
+            self._hook_depth -= 1
+            self.logger.warning(
+                f"Hook recursion depth {self._hook_depth} exceeds maximum {self._max_hook_depth}. "
+                f"Skipping {context.hook_type} to prevent infinite loops."
+            )
+            return HookExecutionSummary(
+                hook_type=context.hook_type,
+                total_hooks=0,
+                successful_hooks=0,
+                failed_hooks=0,
+                total_execution_time_ms=0.0,
+                results=[],
+            )
+
+        # Track hook chain for cycle detection
+        chain_key = f"{context.hook_type}:{id(context)}"
+        if chain_key not in self._active_hook_chains:
+            self._active_hook_chains[chain_key] = []
+        self._active_hook_chains[chain_key].append(context.hook_type)
+
+        try:
+            return await self._execute_hooks(context, timeout_seconds)
+        finally:
+            self._hook_depth -= 1
+            self._active_hook_chains[chain_key].pop()
+            if not self._active_hook_chains[chain_key]:
+                del self._active_hook_chains[chain_key]
+
+    async def _execute_hooks(
+        self, context: HookContext, timeout_seconds: float
+    ) -> HookExecutionSummary:
+        """Internal hook execution after recursion checks pass."""
+
         hook_type = context.hook_type
         hooks_to_execute = self.hooks.get(hook_type, [])
 
@@ -256,6 +304,12 @@ class HookManager:
                 self.logger.warning(error_msg)
                 self._execution_stats[f"{hook_type}_timeout"] += 1
 
+                if hook_reg.criticality == "critical":
+                    self.logger.error(
+                        f"Critical hook {hook_reg.id} timed out — halting execution"
+                    )
+                    break
+
             except Exception as e:
                 execution_time = (time.time() - hook_start) * 1000
                 error_msg = f"Hook {hook_reg.id} failed: {str(e)}"
@@ -265,6 +319,12 @@ class HookManager:
 
                 self.logger.error(error_msg, exc_info=True)
                 self._execution_stats[f"{hook_type}_error"] += 1
+
+                if hook_reg.criticality == "critical":
+                    self.logger.error(
+                        f"Critical hook {hook_reg.id} failed — halting execution"
+                    )
+                    break
 
                 # Publish error event
                 try:

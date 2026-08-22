@@ -2,6 +2,37 @@
 Standard hook types for the unified hook system.
 """
 
+from __future__ import annotations
+
+from enum import Enum
+
+
+class HookTrustLevel(Enum):
+    """Trust classification for hook handlers.
+
+    OBSERVATIONAL: May read context, cannot alter execution.
+    TRANSFORMATIONAL: May augment metadata with typed inputs/outputs.
+    SIDE_EFFECTING: May perform I/O, network, memory mutation — requires
+        ActionExecutionGate authorization.
+    """
+
+    OBSERVATIONAL = "observational"
+    TRANSFORMATIONAL = "transformational"
+    SIDE_EFFECTING = "side_effecting"
+
+
+class HookCriticality(Enum):
+    """Criticality classification for hook failure handling.
+
+    BEST_EFFORT: Failure is logged, execution continues.
+    IMPORTANT: Execution continues degraded.
+    CRITICAL: Failure halts execution (rare — only for security invariants).
+    """
+
+    BEST_EFFORT = "best_effort"
+    IMPORTANT = "important"
+    CRITICAL = "critical"
+
 
 class HookTypes:
     """Standard hook types for chat enhancement and system integration."""
