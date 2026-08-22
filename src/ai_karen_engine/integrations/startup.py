@@ -35,11 +35,6 @@ def initialize_llm_providers() -> Dict[str, Any]:
             import ai_karen_engine.routing.actions  # noqa: F401
         except Exception as _e:
             logger.debug(f"KIRE actions not loaded: {_e}")
-        # Ensure CopilotKit routing actions shim is loaded
-        try:
-            import ai_karen_engine.integrations.copilotkit.routing_actions  # noqa: F401
-        except Exception as _e:
-            logger.debug(f"CopilotKit routing actions not loaded: {_e}")
 
         # Get list of registered providers (just registration, no health checks)
         providers = registry.list_providers()

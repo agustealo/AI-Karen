@@ -779,11 +779,7 @@ async def _log_audit_event(**kwargs: Any) -> None:
 def _ensure_routing_actions_registered() -> None:
     """Ensure routing actions are registered for the /start endpoint."""
     try:
-        from ai_karen_engine.integrations.copilotkit.routing_actions import (
-            ensure_kire_actions_registered,
-        )
-
-        ensure_kire_actions_registered()
+        import ai_karen_engine.routing.actions  # noqa: F401  — registers routing.* handlers in predictor registry
     except Exception:
         # Best-effort; if not present, action registry may be empty until lazily imported elsewhere
         pass
@@ -890,16 +886,7 @@ async def copilot_start_action(
     if handler is None:
         # Try late registration of routing actions, then re-check
         try:
-            from ai_karen_engine.integrations.copilotkit.routing_actions import (
-                ensure_kire_actions_registered,
-            )
-
-            ensure_kire_actions_registered()
-            # Also import actions directly for side-effects if available
-            try:
-                import ai_karen_engine.routing.actions  # noqa: F401
-            except Exception:
-                pass
+            import ai_karen_engine.routing.actions  # noqa: F401  — late-registers routing.* handlers in predictor registry
         except Exception:
             pass
         registry = _get_predictor_registry()

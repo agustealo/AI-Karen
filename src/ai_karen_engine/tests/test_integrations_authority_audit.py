@@ -24,7 +24,7 @@ from typing import Dict, List, Tuple
 import pytest
 
 
-INTEGRATIONS_ROOT = pathlib.Path(__file__).resolve().parents[1] / "ai_karen_engine" / "integrations"
+INTEGRATIONS_ROOT = pathlib.Path(__file__).resolve().parents[1] / "integrations"
 
 
 def _run_rg(pattern: str) -> List[Tuple[str, int]]:
@@ -52,12 +52,11 @@ def _run_rg(pattern: str) -> List[Tuple[str, int]]:
 
 
 FILE_CLASSIFICATIONS: Dict[str, str] = {
+    "__init__.py": "SHIM",
     "auth_manager.py": "DANGEROUS",
     "capability_aware_selector.py": "DUPLICATE",
     "capability_router.py": "DUPLICATE",
     "confidence_scoring.py": "NEEDS_AUDIT",
-    "copilotkit_provider.py": "DUPLICATE",
-    "copilot_router.py": "DUPLICATE",
     "dynamic_provider_system.py": "DUPLICATE",
     "failure_pattern_analyzer.py": "NEEDS_AUDIT",
     "fallback_chain_manager.py": "DEAD",
@@ -75,7 +74,6 @@ FILE_CLASSIFICATIONS: Dict[str, str] = {
     "nanda_client.py": "KEEP_AS_ADAPTER",
     "partial_failure_handler.py": "NEEDS_AUDIT",
     "performance_adaptive_router.py": "DUPLICATE",
-    "provider_hierarchy.py": "DUPLICATE",
     "provider_registry.py": "SHIM",
     "registry.py": "DUPLICATE",
     "routing_policies.py": "DUPLICATE",
@@ -86,6 +84,17 @@ FILE_CLASSIFICATIONS: Dict[str, str] = {
     "video_registry.py": "KEEP_AS_ADAPTER",
     "voice_providers.py": "KEEP_AS_ADAPTER",
     "voice_registry.py": "KEEP_AS_ADAPTER",
+    "providers/__init__.py": "KEEP_AS_ADAPTER",
+    "providers/base.py": "KEEP_AS_ADAPTER",
+    "providers/copilotkit_provider.py": "KEEP_AS_ADAPTER",
+    "providers/deepseek_provider.py": "KEEP_AS_ADAPTER",
+    "providers/fallback_provider.py": "KEEP_AS_ADAPTER",
+    "providers/gemini_provider.py": "KEEP_AS_ADAPTER",
+    "providers/huggingface_provider.py": "KEEP_AS_ADAPTER",
+    "providers/ollama_provider.py": "KEEP_AS_ADAPTER",
+    "providers/openai_compatible_provider.py": "KEEP_AS_ADAPTER",
+    "providers/openai_provider.py": "KEEP_AS_ADAPTER",
+    "web/crawl4ai_integration.py": "KEEP_AS_ADAPTER",
 }
 
 
@@ -95,7 +104,7 @@ def test_integrations_authority_audit_classifications() -> None:
     for path in INTEGRATIONS_ROOT.rglob("*.py"):
         if path.name.startswith("__pycache__"):
             continue
-        rel = str(path.relative_to(INTEGRATIONS_ROOT))
+        rel = path.relative_to(INTEGRATIONS_ROOT).as_posix()
         if rel not in FILE_CLASSIFICATIONS:
             missing.append(rel)
 
@@ -123,17 +132,14 @@ def test_duplicate_router_files_are_documented() -> None:
         "llm_router.py",
         "capability_router.py",
         "capability_aware_selector.py",
-        "copilot_router.py",
         "performance_adaptive_router.py",
         "intelligent_provider_switcher.py",
         "dynamic_provider_system.py",
         "intelligent_provider_registry.py",
         "routing_policies.py",
-        "provider_hierarchy.py",
         "llm_registry.py",
         "registry.py",
         "llm_profile_system.py",
-        "copilotkit_provider.py",
     ]
     for expected in expected_duplicates:
         assert expected in duplicates, f"Expected duplicate classification missing for {expected}"
@@ -256,16 +262,14 @@ def test_canonical_provider_registry_service_is_single_source_of_truth() -> None
 def test_no_duplicate_router_classes_outside_canonical_owners() -> None:
     """Duplicate router classes must not exist outside canonical routing owners."""
     duplicate_routers = [
-        "integrations/llm_router.py",
-        "integrations/capability_router.py",
-        "integrations/capability_aware_selector.py",
-        "integrations/copilot_router.py",
-        "integrations/performance_adaptive_router.py",
-        "integrations/intelligent_provider_switcher.py",
-        "integrations/dynamic_provider_system.py",
-        "integrations/intelligent_provider_registry.py",
-        "integrations/routing_policies.py",
-        "integrations/provider_hierarchy.py",
+        "llm_router.py",
+        "capability_router.py",
+        "capability_aware_selector.py",
+        "performance_adaptive_router.py",
+        "intelligent_provider_switcher.py",
+        "dynamic_provider_system.py",
+        "intelligent_provider_registry.py",
+        "routing_policies.py",
     ]
     for router_path in duplicate_routers:
         full_path = INTEGRATIONS_ROOT / router_path
@@ -289,13 +293,11 @@ def test_core_runtime_does_not_import_from_duplicate_router_authorities() -> Non
         "integrations.llm_router",
         "integrations.capability_router",
         "integrations.capability_aware_selector",
-        "integrations.copilot_router",
         "integrations.performance_adaptive_router",
         "integrations.intelligent_provider_switcher",
         "integrations.dynamic_provider_system",
         "integrations.intelligent_provider_registry",
         "integrations.routing_policies",
-        "integrations.provider_hierarchy",
     ]
 
     core_dirs = [
@@ -338,7 +340,6 @@ def test_duplicate_provider_registry_imports_are_documented() -> None:
         "integrations.llm_registry",
         "integrations.registry",
         "integrations.provider_registry",
-        "integrations.llm.llm_registry",
         "integrations.intelligent_provider_registry",
         "integrations.dynamic_provider_system",
     ]
@@ -382,6 +383,10 @@ def test_deleted_dead_files_are_gone() -> None:
         "error_recovery.py",
         "model_download_manager.py",
         "provider_status.py",
+        "copilotkit_provider.py",
+        "copilot_router.py",
+        "provider_hierarchy.py",
+        "copilotkit/routing_actions.py",
     ]
     for filename in deleted_files:
         path = INTEGRATIONS_ROOT / filename
@@ -392,6 +397,7 @@ def test_deleted_unused_subpackages_are_gone() -> None:
     """Deleted unused subpackages must no longer exist on disk."""
     deleted_subpackages = [
         "llm",
+        "copilotkit",
     ]
     for subpackage in deleted_subpackages:
         path = INTEGRATIONS_ROOT / subpackage
