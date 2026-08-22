@@ -233,3 +233,45 @@ def test_only_one_plugin_registry_class_exists() -> None:
         "Multiple PluginRegistry definitions found: "
         f"{registry_paths}. Canonical registry must be unique."
     )
+
+
+def test_cortex_never_executes_plugin() -> None:
+    """CORTEX must declare and enforce that it never executes plugins."""
+    from ai_karen_engine.core.runtime.cortex_execution_decider import (
+        CortexExecutionDecider,
+    )
+
+    decider = CortexExecutionDecider()
+    assert hasattr(decider, "cortex_never_executes")
+    assert decider.cortex_never_executes() is True
+
+
+def test_canonical_lifecycle_manager_is_exported() -> None:
+    """The canonical PluginLifecycleManager must be exported from the platform core."""
+    from ai_karen_engine.extensions.platform.core.plugin_lifecycle_manager import (
+        PluginLifecycleManager,
+    )
+
+    assert PluginLifecycleManager is not None
+
+
+def test_plugin_execution_uses_manifest_limits() -> None:
+    """PluginExecutionEngine must resolve resource limits from manifest, not caller."""
+    from ai_karen_engine.extensions.platform.core.manifest import ExtensionManifest
+    from ai_karen_engine.services.plugin_execution import PluginExecutionEngine
+
+    manifest = ExtensionManifest(
+        name="limited-plugin",
+        version="1.0.0",
+        display_name="Limited",
+        description="Test",
+        author="test",
+        license="MIT",
+        category="test",
+        resources={"max_memory_mb": 512, "max_cpu_percent": 5},
+    )
+
+    engine = PluginExecutionEngine(registry={})
+    limits = engine._resolve_resource_limits(manifest)
+    assert limits.max_memory_mb == 512
+    assert limits.max_cpu_percent == 5
