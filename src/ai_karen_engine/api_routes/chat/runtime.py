@@ -11,42 +11,43 @@ This module provides secure chat API endpoints with:
 
 import json
 import logging
-import time
-from typing import Dict, List, Optional, Any
-from datetime import datetime
-
-from fastapi import APIRouter, HTTPException, Depends, Request, BackgroundTasks
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
 import re
+import time
 import uuid
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from pydantic import BaseModel, Field, field_validator
 
-from ai_karen_engine.core.services.dependencies import bypass_user_context_func
-
-from ai_karen_engine.core.logging import get_logger
-from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
-    MaintenanceResponse,
-    EmergencyFallbackResponse,
-    DegradedResponse,
-    serialize_runtime_response,
-    runtime_response_http_status,
-    get_chat_runtime_control_plane,
-)
+from ai_karen_engine.core.logging import get_structured_logger
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
     ChatExecutionStatus,
 )
+from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
+    DegradedResponse,
+    EmergencyFallbackResponse,
+    MaintenanceResponse,
+    get_chat_runtime_control_plane,
+    runtime_response_http_status,
+    serialize_runtime_response,
+)
+from ai_karen_engine.core.services.dependencies import bypass_user_context_func
 from ai_karen_engine.models.shared_types import (
     CanonicalChatRequest,
     CanonicalChatResponse,
+    ChatStreamChunk,
 )
-from ai_karen_engine.utils.chat_helpers import normalize_session_id as normalize_chat_session_id
 from ai_karen_engine.services.streaming.stream_processor import AsyncStreamProcessor
-from ai_karen_engine.core.observability.metrics import get_metrics_manager
+from ai_karen_engine.utils.chat_helpers import (
+    normalize_session_id as normalize_chat_session_id,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -274,7 +275,9 @@ class ChatRuntimeHelper:
         """Validate provider/model against canonical runtime provider catalog."""
         if not provider and not model:
             return
-        from ai_karen_engine.api_routes.models.runtime_api import get_runtime_provider_catalog
+        from ai_karen_engine.api_routes.models.runtime_api import (
+            get_runtime_provider_catalog,
+        )
 
         catalog = await get_runtime_provider_catalog(current_user={"user_id":"system"})
         providers = {p.id: p for p in (catalog.providers or [])}
@@ -289,7 +292,9 @@ class ChatRuntimeHelper:
     async def get_user_provider_preferences() -> Dict[str, str]:
         """Get user's preferred provider and model from settings."""
         try:
-            from ai_karen_engine.services.formatting.settings_manager import get_settings_manager
+            from ai_karen_engine.services.formatting.settings_manager import (
+                get_settings_manager,
+            )
 
             settings = get_settings_manager()
             provider = settings.get_setting("provider")
@@ -520,12 +525,7 @@ async def create_chat_response(
         if request.stream:
             async def generate_stream():
                 async for chunk in get_chat_runtime().execute_stream(chat_request):
-                    payload = {
-                        "content": chunk.content,
-                        "metadata": chunk.metadata,
-                        "finished": chunk.type == "complete",
-                        "event_type": chunk.type,
-                    }
+                    payload = chunk.to_sse_payload()
                     yield f"data: {json.dumps(payload)}\n\n"
 
             return StreamingResponse(
@@ -594,6 +594,243 @@ async def create_chat_response(
             user_id=user.get("user_id") or "unknown",
             correlation_id=correlation_id,
             context="unexpected_error",
+        )
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+class ChatStreamRequest(BaseModel):
+    """Compact streaming request accepted by the canonical chat SSE route.
+
+    The client may convey *intent* (message, session_id, preferred provider/model)
+    but must never supply authoritative identity. ``user_id``, ``tenant_id``,
+    ``roles`` and ``permissions`` are resolved server-side from the auth layer.
+    """
+
+    message: str = Field(
+        ..., min_length=1, max_length=10000, description="User message content"
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        max_length=100,
+        description="Session identifier",
+    )
+    preferred_llm_provider: Optional[str] = Field(
+        default=None, max_length=100, description="Canonical preferred provider ID."
+    )
+    preferred_model: Optional[str] = Field(
+        default=None, max_length=200, description="Canonical preferred model ID."
+    )
+    temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
+    max_tokens: Optional[int] = Field(default=None, ge=1)
+    stream: Optional[bool] = Field(default=True, description="Forced to True on this endpoint")
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, v):
+        if not isinstance(v, str):
+            raise ValueError("Message must be a string")
+        return v.strip()
+
+
+def _build_chat_execution_request_from_stream_payload(
+    request: ChatStreamRequest,
+    user: Dict[str, Any],
+    session_id: str,
+    correlation_id: str,
+    response_id: str,
+    user_preferences: Optional[Dict[str, str]] = None,
+) -> ChatExecutionRequest:
+    """Construct a canonical ChatExecutionRequest from a compact stream payload.
+
+    Identity (user_id, tenant_id, roles, permissions) is taken **only** from the
+    server-side ``user`` dependency. Client-supplied values for those fields are
+    intentionally ignored.
+    """
+    preferred_provider = (
+        request.preferred_llm_provider
+        or (user_preferences or {}).get("provider")
+    )
+    preferred_model = (
+        request.preferred_model
+        or (user_preferences or {}).get("model")
+    )
+
+    conversation_id = normalize_chat_session_id(session_id)
+
+    messages = [
+        {
+            "content": SecurityValidator.validate_user_input(request.message),
+            "message_type": "user",
+        }
+    ]
+
+    return ChatExecutionRequest(
+        messages=messages,
+        context=ChatExecutionContext(
+            user_id=user["user_id"],
+            tenant_id=str(user.get("tenant_id") or "default"),
+            session_id=session_id,
+            conversation_id=conversation_id,
+            request_id=response_id,
+            correlation_id=correlation_id,
+            roles=list(user.get("roles") or []),
+            permissions=list(user.get("permissions") or []),
+        ),
+        preferred_provider=preferred_provider,
+        preferred_model=preferred_model,
+        temperature=request.temperature,
+        max_tokens=request.max_tokens,
+        stream=True,
+        metadata={"transport": "sse"},
+    )
+
+
+@router.post("/stream")
+async def stream_chat_response(
+    request: ChatStreamRequest,
+    http_request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """
+    Canonical SSE streaming chat endpoint backed by ``ChatRuntime.execute_stream``.
+
+    This is the single streaming ingress for the UI. CopilotKit and other
+    transports also normalize into the same ``ChatExecutionRequest``.
+    """
+    start_time = time.time()
+    correlation_id = http_request.headers.get("X-Correlation-Id", str(uuid.uuid4()))
+    response_id = str(uuid.uuid4())
+    structured_logger = get_structured_logger()
+
+    try:
+        session_id = SecurityValidator.sanitize_session_id(request.session_id)
+
+        # 1. Control-plane gate short-circuit before invoking the runtime.
+        gate = await ChatRuntimeHelper.gate_request()
+        if gate is not None:
+            structured_logger.log_event(
+                event="chat_stream_gated",
+                user_id=user["user_id"],
+                details={
+                    "endpoint": "/api/chat/stream",
+                    "correlation_id": correlation_id,
+                    "session_id": session_id,
+                    "gate_status": gate.status_code,
+                },
+            )
+            payload = json.loads(gate.body) if isinstance(gate, JSONResponse) else {}
+            async def stream_gate():
+                yield f"data: {json.dumps({'type': 'status', 'content': payload.get('message', 'Service unavailable'), 'correlation_id': correlation_id, 'metadata': payload})}\n\n"
+                yield f"data: {json.dumps({'type': 'complete', 'content': '', 'correlation_id': correlation_id, 'metadata': {'gate': True}})}\n\n"
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(
+                stream_gate(),
+                media_type="text/event-stream",
+                status_code=gate.status_code,
+                headers={
+                    "X-Correlation-Id": correlation_id,
+                    "X-Response-Id": response_id,
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Retry-After": str(getattr(gate, "headers", {}).get("Retry-After", "30")),
+                },
+            )
+
+        user_preferences = await ChatRuntimeHelper.get_user_provider_preferences()
+
+        chat_request = _build_chat_execution_request_from_stream_payload(
+            request,
+            user,
+            session_id,
+            correlation_id,
+            response_id,
+            user_preferences,
+        )
+
+        conversation_id = chat_request.context.conversation_id or session_id
+
+        structured_logger.log_event(
+            event="chat_stream_started",
+            user_id=user["user_id"],
+            details={
+                "endpoint": "/api/chat/stream",
+                "correlation_id": correlation_id,
+                "response_id": response_id,
+                "session_id": session_id,
+                "conversation_id": conversation_id,
+                "preferred_provider": chat_request.preferred_provider,
+                "preferred_model": chat_request.preferred_model,
+            },
+        )
+
+        async def generate_stream():
+            sequence_counter = 0
+
+            initial_status = ChatStreamChunk(
+                type="status",
+                content="Initializing request...",
+                correlation_id=correlation_id,
+                metadata={"status": "initializing", "transport": "sse"},
+                event_id=str(uuid.uuid4()),
+                sequence=sequence_counter,
+                request_id=response_id,
+                response_id=response_id,
+                conversation_id=conversation_id,
+                timestamp=datetime.utcnow(),
+            )
+            sequence_counter += 1
+            yield f"data: {json.dumps(initial_status.to_sse_payload())}\n\n"
+
+            async for chunk in get_chat_runtime().execute_stream(chat_request):
+                enriched = ChatStreamChunk(
+                    type=chunk.type,
+                    content=chunk.content,
+                    correlation_id=chunk.correlation_id or correlation_id,
+                    metadata=chunk.metadata or {},
+                    event_id=chunk.event_id or str(uuid.uuid4()),
+                    sequence=sequence_counter,
+                    request_id=chunk.request_id or response_id,
+                    response_id=chunk.response_id or response_id,
+                    conversation_id=chunk.conversation_id or conversation_id,
+                    timestamp=chunk.timestamp or datetime.utcnow(),
+                )
+                sequence_counter += 1
+                yield f"data: {json.dumps(enriched.to_sse_payload())}\n\n"
+
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/event-stream",
+            headers={
+                "X-Correlation-Id": correlation_id,
+                "X-Response-Id": response_id,
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        structured_logger.log_error(
+            error=str(e),
+            endpoint="/api/chat/stream",
+            user_id=user.get("user_id") or "unknown",
+            correlation_id=correlation_id,
+            context="validation_error",
+        )
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        structured_logger.log_error(
+            error=str(e),
+            endpoint="/api/chat/stream",
+            user_id=user.get("user_id") or "unknown",
+            correlation_id=correlation_id,
+            context="unexpected_error",
+            details={"duration_ms": (time.time() - start_time) * 1000.0},
         )
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -776,5 +1013,4 @@ async def health_check():
         }
 
 
-# Import StreamingResponse for streaming endpoints
-from fastapi.responses import StreamingResponse
+__all__ = ["router"]

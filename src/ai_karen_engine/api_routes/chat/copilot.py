@@ -1,81 +1,55 @@
 import json
-import asyncio
-import os
-import inspect
 import logging
+import os
 import time
 import uuid
-import re
 from typing import Any, Dict, List, Optional
-from typing import TYPE_CHECKING
-from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse, StreamingResponse
 
-from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
-    get_chat_runtime_control_plane,
-    DegradedResponse,
-    DegradedCapabilities,
-    EmergencyFallbackResponse,
-    serialize_runtime_response,
-    runtime_response_http_status,
-    RuntimeConstants,
-)
-from ai_karen_engine.core.runtime.degraded_mode import generate_degraded_mode_response
-from ai_karen_engine.core.services.dependencies import bypass_user_context_func
-from ai_karen_engine.models.shared_types import (
-    CanonicalChatRequest,
-    CanonicalChatResponse,
-)
-from ai_karen_engine.utils.chat_helpers import (
-    normalize_session_id as _normalize_session_id,
-    resolve_user_context as _resolve_user_context,
-    json_safe as _json_safe,
-    strip_internal_analysis_leakage as _strip_internal_analysis_leakage,
-    finalize_user_visible_text as _finalize_user_visible_text,
-    is_low_information_content as _is_low_information_content,
-    extract_stream_text as _extract_stream_text,
-    normalize_processing_status as _normalize_processing_status,
-)
 from ai_karen_engine.config.config_manager import (
     get_chat_response_mode,
     get_chat_streaming_transport,
-    is_streaming_enabled,
-    is_non_streaming_enabled,
 )
-
-from pydantic import BaseModel, ConfigDict, Field
-
-
-def _is_placeholder_response(response_text: str) -> bool:
-    """Detect if orchestrator response contains static placeholder text that should trigger fallback."""
-    text = str(response_text or "").strip()
-    if not text or _is_low_information_content(text):
-        return True
-
-    lowered = text.lower()
-
-    # IMPORTANT: do not treat all short responses as placeholders.
-    # Legitimate replies like "Hi!" or "Yes." must pass through.
-    known_prefixes = (
-        "service is temporarily operating with limited capabilities",
-        "i understand you're asking about:",
-        "i'm currently operating with limited capabilities",
-        "limited assistant with:",
-        "error: generation failed",
-    )
-    if any(lowered.startswith(prefix) for prefix in known_prefixes):
-        return True
-
-    # Detect known synthetic long-form scaffolds that should not be returned as final user content.
-    if (
-        "the requested topic" in lowered
-        and lowered.count("a reliable approach to") >= 3
-    ):
-        return True
-
-    return False
+from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
+    ChatExecutionContext,
+    ChatExecutionRequest,
+    ChatExecutionStatus,
+)
+from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
+    DegradedCapabilities,
+    DegradedResponse,
+    EmergencyFallbackResponse,
+    get_chat_runtime_control_plane,
+    runtime_response_http_status,
+    serialize_runtime_response,
+)
+from ai_karen_engine.core.runtime.degraded_mode import generate_degraded_mode_response
+from ai_karen_engine.core.services.dependencies import bypass_user_context_func
+from ai_karen_engine.utils.chat_helpers import (
+    extract_stream_text as _extract_stream_text,
+)
+from ai_karen_engine.utils.chat_helpers import (
+    finalize_user_visible_text as _finalize_user_visible_text,
+)
+from ai_karen_engine.utils.chat_helpers import (
+    is_production_env as _is_production_env,
+)
+from ai_karen_engine.utils.chat_helpers import (
+    json_safe as _json_safe,
+)
+from ai_karen_engine.utils.chat_helpers import (
+    normalize_processing_status as _normalize_processing_status,
+)
+from ai_karen_engine.utils.chat_helpers import (
+    normalize_session_id as _normalize_session_id,
+)
+from ai_karen_engine.utils.chat_helpers import (
+    resolve_user_context as _resolve_user_context,
+)
 
 
 def _finalize_runtime_payload_text(
@@ -89,40 +63,6 @@ def _finalize_runtime_payload_text(
         if isinstance(value, str) and value.strip():
             updated[key] = _finalize_user_visible_text(value, user_message)
     return updated
-
-
-async def _retry_orchestrator_without_preferred_provider(
-    *,
-    orchestrator,
-    user_message: str,
-    user_id: str,
-    session_id: str,
-    correlation_id: str,
-    request_config: Dict[str, Any],
-):
-    """Retry orchestration once without a pinned provider/model.
-
-    This keeps the response live when the requested provider is unavailable
-    but other healthy providers still exist.
-    """
-    from langchain_core.messages import HumanMessage
-
-    retry_config = dict(request_config or {})
-    retry_config.pop("preferred_llm_provider", None)
-    retry_config.pop("preferred_model", None)
-
-    retry_state = await orchestrator.process(
-        messages=[HumanMessage(content=user_message)],
-        user_id=user_id,
-        session_id=session_id,
-        config={
-            "streaming_enabled": False,
-            "correlation_id": correlation_id,
-            "request_config": retry_config,
-        },
-    )
-    retry_text = _extract_response_text_from_state(retry_state)
-    return retry_state, retry_text
 
 
 def _build_degraded_sse_events(
@@ -335,6 +275,54 @@ class AssistResponse(BaseModel):
     correlation_id: str
 
 
+def _build_chat_execution_request_from_assist_request(
+    *,
+    request: "AssistRequest",
+    user: Dict[str, Any],
+    conversation_id: str,
+    correlation_id: str,
+    response_id: str,
+    stream: bool = False,
+    request_config_metadata: Optional[Dict[str, Any]] = None,
+) -> ChatExecutionRequest:
+    """Construct a canonical ChatExecutionRequest from an AssistRequest.
+
+    Identity (user_id, tenant_id, roles, permissions) is taken only from
+    the server-side ``user`` dependency; ``request.user_id`` is intentionally
+    not trusted for execution.
+    """
+    preferred_provider = (
+        request.preferred_provider or request.preferred_llm_provider
+    )
+    messages = [{"role": "user", "content": request.message}]
+
+    return ChatExecutionRequest(
+        messages=messages,
+        context=ChatExecutionContext(
+            user_id=user["user_id"],
+            tenant_id=str(user.get("tenant_id") or request.org_id or "default"),
+            session_id=request.session_id,
+            conversation_id=conversation_id,
+            request_id=response_id,
+            correlation_id=correlation_id,
+            roles=list(user.get("roles") or []),
+            permissions=list(user.get("permissions") or []),
+        ),
+        preferred_provider=preferred_provider,
+        preferred_model=request.preferred_model,
+        stream=stream,
+        metadata={
+            "surface": "copilot",
+            "top_k": request.top_k,
+            "context": _json_safe(request.context or {}),
+            "preferred_lln_provider": request.preferred_lln_provider,
+            "preferred_provider": request.preferred_provider,
+            "preferred_model": request.preferred_model,
+            **(request_config_metadata or {}),
+        },
+    )
+
+
 class StartActionRequest(BaseModel):
     action: str = Field(
         ..., description="Registered action/predictor name, e.g. routing.select"
@@ -372,99 +360,6 @@ def _assist_response_json(
             "correlation_id": correlation_id,
         },
     )
-
-
-async def _build_degraded_assist_response(
-    *,
-    degraded: DegradedResponse,
-    user_message: str,
-    correlation_id: str,
-    status_code: int = 200,
-    is_fallback: bool = False,
-    fallback_provider: Optional[str] = None,
-    fallback_model: Optional[str] = None,
-) -> JSONResponse:
-    """Return a useful degraded assistant payload (not just a mode banner)."""
-    payload = serialize_runtime_response(degraded) or {}
-    shim = await generate_degraded_mode_response(user_message)
-    shim_answer = str(
-        (
-            shim.get("final")
-            or shim.get("message")
-            or shim.get("response")
-            or shim.get("answer")
-            or ""
-        )
-    ).strip()
-    answer = shim_answer or degraded.message
-
-    # Use distinct metadata based on whether this is a fallback or static degraded response
-    if is_fallback and fallback_provider and fallback_model:
-        # This is a degraded LLM success (actual AI content from fallback)
-        metadata = {
-            "runtime": payload,
-            "mode": payload.get("mode", "degraded"),
-            "degraded_mode": True,
-            "capabilities": vars(degraded.capabilities)
-            if degraded.capabilities
-            else {},
-            "is_minimal": getattr(degraded, "is_minimal", True),
-            "retry_after_seconds": getattr(degraded, "retry_after_seconds", 30),
-            "system_status_code": getattr(degraded, "system_status_code", 503),
-            "support_hint": getattr(degraded, "support_hint", ""),
-            "llm": {
-                "provider": fallback_provider,
-                "model_name": fallback_model,
-                "source": "degraded_fallback_llm",
-                "is_degraded": True,
-                "fallback_level": "nlp_service",
-                "failure_reason": degraded.message,
-            },
-        }
-    else:
-        # This is a static fallback response
-        metadata = {
-            "runtime": payload,
-            "mode": payload.get("mode", "degraded"),
-            "degraded_mode": True,
-            "capabilities": vars(degraded.capabilities)
-            if degraded.capabilities
-            else {},
-            "is_minimal": getattr(degraded, "is_minimal", True),
-            "retry_after_seconds": getattr(degraded, "retry_after_seconds", 30),
-            "system_status_code": getattr(degraded, "system_status_code", 503),
-            "support_hint": getattr(degraded, "support_hint", ""),
-            "llm": {
-                "provider": None,
-                "model_name": None,
-                "source": "runtime_control_plane",
-                "is_degraded": True,
-                "fallback_level": "degraded",
-                "failure_reason": degraded.message,
-            },
-        }
-
-    return _assist_response_json(
-        answer=answer,
-        structured_content={},
-        actions=[],
-        metadata=metadata,
-        correlation_id=correlation_id,
-        status_code=status_code,
-    )
-
-
-def _extract_response_text_from_state(state: Dict[str, Any]) -> str:
-    """Pull user-visible text from orchestrator state or formatted envelopes."""
-    formatted_response = state.get("formatted_response")
-    if formatted_response is not None:
-        if hasattr(formatted_response, "data"):
-            data = getattr(formatted_response, "data") or {}
-            return str(data.get("response") or data.get("content") or "")
-        if isinstance(formatted_response, dict):
-            data = formatted_response.get("data") or {}
-            return str(data.get("response") or data.get("content") or "")
-    return str(state.get("response") or state.get("llm_response") or "")
 
 
 def _normalize_runtime_truth_metadata(
@@ -702,31 +597,13 @@ def _normalize_runtime_truth_metadata(
     return normalized
 
 
-from ai_karen_engine.models.shared_types import (
-    CanonicalChatRequest,
-    CanonicalChatResponse,
-)
-from ai_karen_engine.utils.chat_helpers import (
-    normalize_session_id,
-    resolve_user_context,
-    json_safe,
-    is_production_env,
-)
-
-
-async def _get_chat_orchestrator():
-    """Return orchestrator via canonical chat runtime."""
-    raise RuntimeError(
-        "Legacy orchestrator path retired. Migrate copilot execution to "
-        "ChatRuntime.execute() or LangGraph workflow executor."
-    )
-
-
 def _get_predictor_registry():
     """Return the predictor registry with graceful fallback."""
 
     try:
-        from ai_karen_engine.core.cortex.predictors import predictor_registry as registry
+        from ai_karen_engine.core.cortex.predictors import (
+            predictor_registry as registry,
+        )
 
         return registry
     except Exception:
@@ -737,7 +614,9 @@ def _get_audit_logger():
     """Lazily import the audit logger to avoid heavy startup costs."""
 
     try:
-        from ai_karen_engine.services.audit.audit_logger import get_audit_logger as _getter
+        from ai_karen_engine.services.audit.audit_logger import (
+            get_audit_logger as _getter,
+        )
 
         return _getter()
     except Exception:
@@ -942,7 +821,7 @@ async def copilot_assist(
     http_request: Request,
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Copilot assist endpoint using runtime control plane."""
+    """Copilot assist endpoint normalized through the canonical chat runtime."""
     start_time = time.time()
     correlation_id = get_correlation_id(http_request) or f"copilot_{int(time.time())}"
 
@@ -950,16 +829,16 @@ async def copilot_assist(
         "Copilot assist request received",
         extra={
             "correlation_id": correlation_id,
-            "user_id": request.user_id,
+            "user_id": user.get("user_id"),
             "message_length": len(request.message),
         },
     )
 
-    degraded_continuation_response: Optional[DegradedResponse] = None
     conversation_id = _normalize_session_id(request.session_id)
     if not conversation_id:
         conversation_id = str(uuid.uuid4())
-    actual_mode, transport, should_stream = _resolve_actual_response_mode(
+
+    actual_mode, transport, _ = _resolve_actual_response_mode(
         request.response_mode,
         None,
     )
@@ -973,141 +852,90 @@ async def copilot_assist(
     )
 
     try:
-        response = await get_chat_runtime_control_plane().get_runtime_response(
-            user_id=request.user_id,
+        control_response = await get_chat_runtime_control_plane().get_runtime_response(
+            user_id=user["user_id"],
             message=request.message,
             session_id=request.session_id,
             correlation_id=correlation_id,
         )
 
-        if response is not None:
-            if isinstance(response, EmergencyFallbackResponse):
-                payload = serialize_runtime_response(response) or {}
+        if control_response is not None:
+            if isinstance(control_response, EmergencyFallbackResponse):
+                payload = serialize_runtime_response(control_response) or {}
                 payload["correlation_id"] = correlation_id
-                status_code = runtime_response_http_status(response) or 503
+                status_code = runtime_response_http_status(control_response) or 503
                 return JSONResponse(
                     status_code=status_code,
                     content=payload,
                     headers={"X-Correlation-Id": correlation_id},
                 )
-            if isinstance(response, DegradedResponse):
-                degraded_continuation_response = response
-            else:
-                payload = serialize_runtime_response(response) or {}
+            if isinstance(control_response, DegradedResponse):
+                payload = await _build_live_degraded_payload(
+                    request.message, control_response, correlation_id
+                )
                 payload = _finalize_runtime_payload_text(payload, request.message)
                 payload["correlation_id"] = correlation_id
-                status_code = runtime_response_http_status(response) or 503
-                return JSONResponse(
-                    status_code=status_code,
-                    content=payload,
-                    headers={"X-Correlation-Id": correlation_id},
-                )
-
-        from ai_karen_engine.core.runtime.chat_runtime_control_plane import get_chat_runtime_control_plane
-        runtime_plane = await get_chat_runtime_control_plane()
-        runtime_status = runtime_plane.get_status()
-        if runtime_status.get("mode") != "normal":
-            fallback_payload = await _build_router_fallback_assist_payload(
-                request=request,
-                correlation_id=correlation_id,
-                conversation_id=conversation_id,
-                start_time=start_time,
-                request_config_metadata=request_config_metadata,
-                actual_mode=actual_mode,
-                transport="json",
-                failure=RuntimeError(
-                    f"runtime_mode_{runtime_status.get('mode', 'unknown')}"
-                ),
-            )
-            if fallback_payload is not None:
                 return _assist_response_json(
-                    answer=fallback_payload["answer"],
-                    structured_content=fallback_payload["structured_content"],
+                    answer=str(
+                        payload.get("final")
+                        or payload.get("message")
+                        or payload.get("response")
+                        or payload.get("answer")
+                        or ""
+                    ).strip()
+                    or control_response.message,
+                    structured_content={},
                     actions=[],
-                    metadata=fallback_payload["metadata"],
+                    metadata={
+                        "runtime": serialize_runtime_response(control_response) or {},
+                        "mode": "degraded",
+                        "degraded_mode": True,
+                        "capabilities": vars(control_response.capabilities)
+                        if control_response.capabilities
+                        else {},
+                        "is_minimal": getattr(control_response, "is_minimal", True),
+                        "retry_after_seconds": getattr(control_response, "retry_after_seconds", 30),
+                        "system_status_code": getattr(control_response, "system_status_code", 503),
+                        "support_hint": getattr(control_response, "support_hint", ""),
+                        "llm": {
+                            "provider": None,
+                            "model_name": None,
+                            "source": "runtime_control_plane",
+                            "is_degraded": True,
+                            "fallback_level": "degraded",
+                            "failure_reason": control_response.message,
+                        },
+                    },
                     correlation_id=correlation_id,
-                    status_code=200,
+                    status_code=runtime_response_http_status(control_response) or 200,
                 )
 
-        orchestrator = await _get_chat_orchestrator()
-
-        from langchain_core.messages import HumanMessage
-
-        user_messages = [HumanMessage(content=request.message)]
-        allow_public_copilot = os.getenv("ALLOW_PUBLIC_COPILOT", "false").lower() in ("1", "true", "yes")
-
-        final_state = await orchestrator.process(
-            messages=user_messages,
-            user_id=request.user_id,
-            session_id=conversation_id,
-            config={
-                "streaming_enabled": False,
-                "correlation_id": correlation_id,
-                "auth_context": {
-                    "allow_anonymous": allow_public_copilot,
-                },
-                "request_config": {
-                    "surface": "copilot",
-                    "top_k": request.top_k,
-                    "context": _json_safe(request.context or {}),
-                    "preferred_llm_provider": request.preferred_llm_provider,
-                    "preferred_model": request.preferred_model,
-                    **request_config_metadata,
-                },
-            },
-        )
-        response_text = _extract_response_text_from_state(final_state)
-        should_retry_without_preferred = (
-            not response_text or _is_placeholder_response(response_text)
-        )
-        if should_retry_without_preferred:
-            request_config = {
-                "surface": "copilot",
-                "top_k": request.top_k,
-                "context": _json_safe(request.context or {}),
-                "preferred_llm_provider": request.preferred_llm_provider,
-                "preferred_model": request.preferred_model,
-            }
-            retry_state, retry_text = await _retry_orchestrator_without_preferred_provider(
-                orchestrator=orchestrator,
-                user_message=request.message,
-                user_id=request.user_id,
-                session_id=conversation_id,
-                correlation_id=correlation_id,
-                request_config=request_config,
-            )
-            if retry_text and not _is_placeholder_response(retry_text):
-                final_state = retry_state
-                response_text = retry_text
-            elif retry_text and not response_text:
-                final_state = retry_state
-                response_text = retry_text
-            elif degraded_continuation_response is not None:
-                # ONLY overwrite with degraded placeholder if we don't have a real response yet
-                if not response_text or _is_placeholder_response(response_text):
-                    live_payload = await _build_live_degraded_payload(
-                        request.message,
-                        degraded_continuation_response,
-                        correlation_id,
-                    )
-                    response_text = _extract_stream_text(live_payload) or response_text
-                
-                # Capture metadata from live payload if available (merge instead of overwrite)
-                final_state["response_metadata"] = final_state.get("response_metadata") or {}
-                final_state["degraded_mode"] = True
-        response_metadata: Dict[str, Any] = _json_safe(final_state.get("telemetry") or {})
-        response_metadata.update(_json_safe(final_state.get("response_metadata") or {}))
-        response_metadata.setdefault("status", "success")
-        response_metadata.setdefault("processing_time", time.time() - start_time)
-        response_metadata.setdefault("conversation_id", conversation_id)
-        response_metadata.setdefault("used_fallback", bool(final_state.get("used_fallback", False)))
-        response_metadata.setdefault("llm", response_metadata.get("llm", {}))
-        # Add response mode metadata
-        response_metadata.update(request_config_metadata)
-        response_metadata = _normalize_runtime_truth_metadata(
-            metadata=response_metadata,
+        chat_request = _build_chat_execution_request_from_assist_request(
             request=request,
-            final_state=final_state,
+            user=user,
+            conversation_id=conversation_id,
+            correlation_id=correlation_id,
+            response_id=str(uuid.uuid4()),
+            request_config_metadata=request_config_metadata,
+        )
+
+        result = await get_chat_runtime().execute(chat_request)
+
+        if result.status == ChatExecutionStatus.GATE and result.gate_response is not None:
+            gate = result.gate_response
+            payload = serialize_runtime_response(gate) or {}
+            status_code = runtime_response_http_status(gate) or 503
+            return JSONResponse(
+                status_code=status_code,
+                content=payload,
+                headers={"X-Correlation-Id": correlation_id},
+            )
+
+        runtime_meta = result.metadata.to_dict()
+        copilot_metadata = _normalize_runtime_truth_metadata(
+            metadata={"llm": runtime_meta, **runtime_meta},
+            request=request,
+            final_state=None,
             correlation_id=correlation_id,
             conversation_id=conversation_id,
             start_time=start_time,
@@ -1118,7 +946,7 @@ async def copilot_assist(
         )
 
         action_models: List[SuggestedAction] = []
-        for action in final_state.get("actions") or []:
+        for action in result.actions or []:
             if not isinstance(action, dict):
                 continue
             params_value = action.get("params")
@@ -1140,19 +968,17 @@ async def copilot_assist(
             )
 
         return _assist_response_json(
-            answer=response_text,
-            structured_content=_json_safe(
-                final_state.get("structured_content") or {}
-            ),
+            answer=result.answer,
+            structured_content=_json_safe(result.structured_content or {}),
             actions=action_models,
-            metadata=response_metadata,
+            metadata=copilot_metadata,
             correlation_id=correlation_id,
             status_code=200,
         )
 
     except Exception as e:
         logger.exception(
-            "Copilot assist orchestration failed; trying provider router fallback: %s",
+            "Copilot assist orchestration failed: %s",
             e,
             extra={"correlation_id": correlation_id},
         )
@@ -1209,7 +1035,7 @@ async def copilot_assist_stream(
     http_request: Request,
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Streaming copilot assist endpoint with real-time processing status via SSE."""
+    """Streaming copilot assist endpoint normalized through the canonical chat runtime."""
     correlation_id = (
         get_correlation_id(http_request) or f"copilot_stream_{int(time.time())}"
     )
@@ -1219,12 +1045,11 @@ async def copilot_assist_stream(
         "Copilot assist stream request received",
         extra={
             "correlation_id": correlation_id,
-            "user_id": request.user_id,
+            "user_id": user.get("user_id"),
             "message_length": len(request.message),
         },
     )
 
-    degraded_continuation_response: Optional[DegradedResponse] = None
     conversation_id = _normalize_session_id(request.session_id)
     if not conversation_id:
         conversation_id = str(uuid.uuid4())
@@ -1232,19 +1057,8 @@ async def copilot_assist_stream(
     actual_mode, transport, should_stream = _resolve_actual_response_mode(
         request.response_mode, None
     )
-    # Unify preferred provider/model selection
     requested_provider = request.preferred_provider or request.preferred_llm_provider
     requested_model = request.preferred_model
-
-    logger.info(
-        "Chat request received",
-        extra={
-            "correlation_id": correlation_id,
-            "requested_provider": requested_provider,
-            "requested_model": requested_model,
-            "user_id": request.user_id,
-        }
-    )
 
     request_config_metadata = _build_request_config_metadata(
         requested_mode=request.response_mode or get_chat_response_mode(),
@@ -1255,31 +1069,63 @@ async def copilot_assist_stream(
         preferred_model=requested_model,
     )
 
+    async def stream_control_plane_fallback(
+        degraded: Optional[DegradedResponse],
+        fallback_payload: Optional[Dict[str, Any]],
+    ):
+        events: List[Dict[str, Any]] = []
+        if fallback_payload is not None:
+            events = _build_router_fallback_sse_events(fallback_payload, correlation_id)
+        elif degraded is not None:
+            live_payload = await _build_live_degraded_payload(
+                request.message, degraded, correlation_id
+            )
+            events = _build_degraded_sse_events(
+                live_payload,
+                correlation_id,
+                requested_provider=requested_provider,
+                requested_model=requested_model,
+            )
+        else:
+            emergency_payload = serialize_runtime_response(
+                EmergencyFallbackResponse()
+            ) or {}
+            emergency_payload["correlation_id"] = correlation_id
+            events = _build_degraded_sse_events(
+                emergency_payload,
+                correlation_id,
+                requested_provider=requested_provider,
+                requested_model=requested_model,
+            )
+        for event in events:
+            yield f"data: {json.dumps(event)}\n\n"
+        yield "data: [DONE]\n\n"
+
     try:
-        response = await get_chat_runtime_control_plane().get_runtime_response(
-            user_id=request.user_id,
+        control_response = await get_chat_runtime_control_plane().get_runtime_response(
+            user_id=user["user_id"],
             message=request.message,
             session_id=request.session_id,
             correlation_id=correlation_id,
         )
 
-        if response is not None:
-            if isinstance(response, EmergencyFallbackResponse):
-                payload = serialize_runtime_response(response) or {}
+        if control_response is not None:
+            if isinstance(control_response, EmergencyFallbackResponse):
+                payload = serialize_runtime_response(control_response) or {}
                 payload["correlation_id"] = correlation_id
 
-                async def stream_emergency_fallback():
+                async def stream_emergency():
                     for event in _build_degraded_sse_events(
-                        payload, 
+                        payload,
                         correlation_id,
-                        requested_provider=request.preferred_llm_provider,
-                        requested_model=request.preferred_model
+                        requested_provider=requested_provider,
+                        requested_model=requested_model,
                     ):
                         yield f"data: {json.dumps(event)}\n\n"
                     yield "data: [DONE]\n\n"
 
                 return StreamingResponse(
-                    stream_emergency_fallback(),
+                    stream_emergency(),
                     media_type="text/event-stream",
                     headers={
                         "Cache-Control": "no-cache",
@@ -1288,26 +1134,177 @@ async def copilot_assist_stream(
                     },
                 )
 
-            if isinstance(response, DegradedResponse):
-                degraded_continuation_response = response
+            if isinstance(control_response, DegradedResponse):
+                degraded_continuation_response = control_response
 
-        from ai_karen_engine.core.runtime.chat_runtime_control_plane import get_chat_runtime_control_plane
         runtime_plane = await get_chat_runtime_control_plane()
         runtime_status = runtime_plane.get_status()
         if runtime_status.get("mode") != "normal":
-            async def stream_runtime_router_fallback():
-                initial_payload = {
-                    "type": "status",
-                    "content": "Selecting provider...",
+            fallback_payload = await _build_router_fallback_assist_payload(
+                request=request,
+                correlation_id=correlation_id,
+                conversation_id=conversation_id,
+                start_time=start_time,
+                request_config_metadata=request_config_metadata,
+                actual_mode=actual_mode,
+                transport="sse",
+                failure=RuntimeError(
+                    f"runtime_mode_{runtime_status.get('mode', 'unknown')}"
+                ),
+                streaming_enabled=True,
+            )
+            return StreamingResponse(
+                stream_control_plane_fallback(
+                    degraded_continuation_response, fallback_payload
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Correlation-Id": correlation_id,
+                },
+            )
+
+        chat_request = _build_chat_execution_request_from_assist_request(
+            request=request,
+            user=user,
+            conversation_id=conversation_id,
+            correlation_id=correlation_id,
+            response_id=str(uuid.uuid4()),
+            stream=True,
+            request_config_metadata=request_config_metadata,
+        )
+
+        async def generate_stream():
+            initial_payload = {
+                "type": "status",
+                "content": _PROCESSING_STATUS_MESSAGES.get(
+                    "initializing",
+                    "Karen is initializing the request pipeline...",
+                ),
+                "correlation_id": correlation_id,
+                "metadata": {
+                    "status": "initializing",
+                    "status_message": _PROCESSING_STATUS_MESSAGES.get(
+                        "initializing",
+                        "Karen is initializing the request pipeline...",
+                    ),
+                    **request_config_metadata,
+                },
+            }
+            yield f"data: {json.dumps(initial_payload)}\n\n"
+
+            selection_payload = {
+                "type": "status",
+                "content": "Selecting provider...",
+                "correlation_id": correlation_id,
+                "metadata": {
+                    "status": "provider_selection",
+                    "requested_provider": requested_provider,
+                    "requested_model": requested_model,
+                    **request_config_metadata,
+                },
+            }
+            yield f"data: {json.dumps(selection_payload)}\n\n"
+
+            last_metadata: Dict[str, Any] = {}
+            final_content = ""
+            fallback_status_emitted = False
+
+            try:
+                async for chunk in get_chat_runtime().execute_stream(chat_request):
+                    metadata = dict(chunk.metadata or {})
+                    metadata = _normalize_runtime_truth_metadata(
+                        metadata=metadata,
+                        request=request,
+                        final_state=None,
+                        correlation_id=correlation_id,
+                        conversation_id=conversation_id,
+                        start_time=start_time,
+                        request_config_metadata=request_config_metadata,
+                        streaming_enabled=True,
+                        transport=transport,
+                        actual_response_mode=actual_mode,
+                    )
+                    last_metadata = metadata
+                    llm_metadata = metadata.get("llm") or {}
+                    actual_provider = llm_metadata.get("actual_provider")
+                    if (
+                        not fallback_status_emitted
+                        and requested_provider
+                        and actual_provider
+                        and str(requested_provider).lower() != str(actual_provider).lower()
+                    ):
+                        failure_payload = {
+                            "type": "status",
+                            "content": "Requested provider unavailable; trying fallback.",
+                            "correlation_id": correlation_id,
+                            "metadata": {
+                                **metadata,
+                                "status": "provider_failed",
+                                "fallback_next": actual_provider,
+                            },
+                        }
+                        yield f"data: {json.dumps(failure_payload)}\n\n"
+                        selected_payload = {
+                            "type": "status",
+                            "content": f"Fallback provider selected: {actual_provider}",
+                            "correlation_id": correlation_id,
+                            "metadata": {
+                                **metadata,
+                                "status": "fallback_provider_selected",
+                            },
+                        }
+                        yield f"data: {json.dumps(selected_payload)}\n\n"
+                        fallback_status_emitted = True
+
+                    event_type = chunk.type
+                    if event_type == "error":
+                        payload_type = "error"
+                    elif event_type == "complete":
+                        payload_type = "complete"
+                    elif metadata.get("status") and not chunk.content:
+                        payload_type = "status"
+                    else:
+                        payload_type = "content"
+
+                    if chunk.content:
+                        final_content += chunk.content
+
+                    yield f"data: {json.dumps({'type': payload_type, 'content': chunk.content, 'correlation_id': correlation_id, 'metadata': metadata})}\n\n"
+
+                complete_metadata = _normalize_runtime_truth_metadata(
+                    metadata=last_metadata,
+                    request=request,
+                    final_state=None,
+                    correlation_id=correlation_id,
+                    conversation_id=conversation_id,
+                    start_time=start_time,
+                    request_config_metadata=request_config_metadata,
+                    streaming_enabled=True,
+                    transport=transport,
+                    actual_response_mode=actual_mode,
+                )
+                complete_payload = {
+                    "type": "complete",
+                    "content": "",
                     "correlation_id": correlation_id,
                     "metadata": {
-                        "status": "provider_selection",
-                        "requested_provider": request.preferred_llm_provider,
-                        "requested_model": request.preferred_model,
-                        **request_config_metadata,
+                        **complete_metadata,
+                        "status": "completed",
+                        "content_length": len(final_content),
                     },
                 }
-                yield f"data: {json.dumps(initial_payload)}\n\n"
+                yield f"data: {json.dumps(complete_payload)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            except Exception as stream_error:
+                logger.error(
+                    "Streaming error in copilot assist: %s",
+                    stream_error,
+                    extra={"correlation_id": correlation_id},
+                )
+
                 fallback_payload = await _build_router_fallback_assist_payload(
                     request=request,
                     correlation_id=correlation_id,
@@ -1316,51 +1313,52 @@ async def copilot_assist_stream(
                     request_config_metadata=request_config_metadata,
                     actual_mode=actual_mode,
                     transport="sse",
-                    failure=RuntimeError(
-                        f"runtime_mode_{runtime_status.get('mode', 'unknown')}"
-                    ),
+                    failure=stream_error,
                     streaming_enabled=True,
                 )
                 if fallback_payload is not None:
-                    events = _build_router_fallback_sse_events(
+                    for event in _build_router_fallback_sse_events(
                         fallback_payload, correlation_id
-                    )[1:]
-                elif degraded_continuation_response is not None:
+                    ):
+                        yield f"data: {json.dumps(event)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+                if degraded_continuation_response is not None:
                     degraded_payload = await _build_live_degraded_payload(
                         request.message,
                         degraded_continuation_response,
                         correlation_id,
                     )
-                    events = _build_degraded_sse_events(
-                        degraded_payload, 
+                    for event in _build_degraded_sse_events(
+                        degraded_payload,
                         correlation_id,
-                        requested_provider=request.preferred_llm_provider,
-                        requested_model=request.preferred_model
-                    )
-                else:
-                    emergency_payload = serialize_runtime_response(
-                        EmergencyFallbackResponse()
-                    ) or {}
-                    emergency_payload["correlation_id"] = correlation_id
-                    events = _build_degraded_sse_events(
-                        emergency_payload, 
-                        correlation_id,
-                        requested_provider=request.preferred_llm_provider,
-                        requested_model=request.preferred_model
-                    )
-                for event in events:
-                    yield f"data: {json.dumps(event)}\n\n"
-                yield "data: [DONE]\n\n"
+                        requested_provider=requested_provider,
+                        requested_model=requested_model,
+                    ):
+                        yield f"data: {json.dumps(event)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
 
-            return StreamingResponse(
-                stream_runtime_router_fallback(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Correlation-Id": correlation_id,
-                },
-            )
+                error_payload = {
+                    "type": "error",
+                    "content": "Streaming error: " + str(stream_error),
+                    "correlation_id": correlation_id,
+                    "metadata": {"error_type": "stream_error"},
+                }
+                yield f"data: {json.dumps(error_payload)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Correlation-Id": correlation_id,
+            },
+        )
 
     except Exception as runtime_exc:
         logger.error(
@@ -1386,60 +1384,10 @@ async def copilot_assist_stream(
             support_hint="Please try again in a few moments",
         )
 
-    try:
-        orchestrator = await _get_chat_orchestrator()
-    except Exception as exc:
-        logger.error(
-            "Stream setup: orchestrator unavailable: %s",
-            exc,
-            extra={"correlation_id": correlation_id},
-        )
-        fallback_payload = await _build_router_fallback_assist_payload(
-            request=request,
-            correlation_id=correlation_id,
-            conversation_id=conversation_id,
-            start_time=start_time,
-            request_config_metadata=request_config_metadata,
-            actual_mode=actual_mode,
-            transport="sse",
-            failure=exc,
-            streaming_enabled=True,
-        )
-
-        async def stream_router_fallback():
-            if fallback_payload is not None:
-                events = _build_router_fallback_sse_events(
-                    fallback_payload, correlation_id
-                )
-            elif degraded_continuation_response is not None:
-                degraded_payload = await _build_live_degraded_payload(
-                    request.message,
-                    degraded_continuation_response,
-                    correlation_id,
-                )
-                events = _build_degraded_sse_events(
-                    degraded_payload, 
-                    correlation_id,
-                    requested_provider=request.preferred_llm_provider,
-                    requested_model=request.preferred_model
-                )
-            else:
-                emergency_payload = serialize_runtime_response(
-                    EmergencyFallbackResponse()
-                ) or {}
-                emergency_payload["correlation_id"] = correlation_id
-                events = _build_degraded_sse_events(
-                    emergency_payload, 
-                    correlation_id,
-                    requested_provider=request.preferred_llm_provider,
-                    requested_model=request.preferred_model
-                )
-            for event in events:
-                yield f"data: {json.dumps(event)}\n\n"
-            yield "data: [DONE]\n\n"
-
         return StreamingResponse(
-            stream_router_fallback(),
+            stream_control_plane_fallback(
+                degraded_continuation_response, None
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -1447,232 +1395,6 @@ async def copilot_assist_stream(
                 "X-Correlation-Id": correlation_id,
             },
         )
-
-    from langchain_core.messages import HumanMessage
-
-    async def generate_stream():
-        try:
-            initial_payload = {
-                "type": "status",
-                "content": _PROCESSING_STATUS_MESSAGES.get(
-                    "initializing",
-                    "Karen is initializing the request pipeline...",
-                ),
-                "correlation_id": correlation_id,
-                "metadata": {
-                    "status": "initializing",
-                    "status_message": _PROCESSING_STATUS_MESSAGES.get(
-                        "initializing",
-                        "Karen is initializing the request pipeline...",
-                    ),
-                    **request_config_metadata,
-                },
-            }
-            yield f"data: {json.dumps(initial_payload)}\n\n"
-
-            selection_payload = {
-                "type": "status",
-                "content": "Selecting provider...",
-                "correlation_id": correlation_id,
-                "metadata": {
-                    "status": "provider_selection",
-                    "requested_provider": request.preferred_llm_provider,
-                    "requested_model": request.preferred_model,
-                    **request_config_metadata,
-                },
-            }
-            yield f"data: {json.dumps(selection_payload)}\n\n"
-
-            user_messages = [HumanMessage(content=request.message)]
-            allow_public_copilot = os.getenv("ALLOW_PUBLIC_COPILOT", "false").lower() in ("1", "true", "yes")
-            last_metadata: Dict[str, Any] = {}
-            final_content = ""
-            fallback_status_emitted = False
-
-            async for chunk in orchestrator.stream_process(
-                messages=user_messages,
-                user_id=request.user_id,
-                session_id=conversation_id,
-                config={
-                    "streaming_enabled": True,
-                    "correlation_id": correlation_id,
-                    "auth_context": {
-                        "allow_anonymous": allow_public_copilot,
-                    },
-                    "request_config": {
-                        "surface": "copilot",
-                        "top_k": request.top_k,
-                        "context": _json_safe(request.context or {}),
-                        "preferred_llm_provider": request.preferred_llm_provider,
-                        "preferred_model": request.preferred_model,
-                        **request_config_metadata,
-                    },
-                },
-            ):
-                content = ""
-                metadata: Dict[str, Any] = {}
-                if isinstance(chunk, dict):
-                    for state_update in chunk.values():
-                        if not isinstance(state_update, dict):
-                            continue
-                        if "formatted_response" in state_update:
-                            content = _extract_response_text_from_state(state_update)
-                            metadata = state_update.get("response_metadata") or {}
-                        elif "llm_response" in state_update:
-                            content = str(state_update.get("llm_response") or "")
-                            metadata = state_update.get("response_metadata") or {}
-                        elif "error" in state_update:
-                            content = str(state_update.get("error") or "")
-                            metadata = {"error": state_update.get("error")}
-                elif hasattr(chunk, "content"):
-                    content = str(getattr(chunk, "content") or "")
-                    metadata = getattr(chunk, "metadata") or {}
-                elif isinstance(chunk, str):
-                    content = chunk
-
-                if content or metadata:
-                    if metadata:
-                        metadata = _normalize_runtime_truth_metadata(
-                            metadata=metadata,
-                            request=request,
-                            final_state=None,
-                            correlation_id=correlation_id,
-                            conversation_id=conversation_id,
-                            start_time=start_time,
-                            request_config_metadata=request_config_metadata,
-                            streaming_enabled=True,
-                            transport=transport,
-                            actual_response_mode=actual_mode,
-                        )
-                        last_metadata = metadata
-                        llm_metadata = metadata.get("llm") or {}
-                        requested_provider = llm_metadata.get("requested_provider")
-                        actual_provider = llm_metadata.get("actual_provider")
-                        if (
-                            not fallback_status_emitted
-                            and requested_provider
-                            and actual_provider
-                            and str(requested_provider).lower() != str(actual_provider).lower()
-                        ):
-                            failure_payload = {
-                                "type": "status",
-                                "content": "Requested provider unavailable; trying fallback.",
-                                "correlation_id": correlation_id,
-                                "metadata": {
-                                    **metadata,
-                                    "status": "provider_failed",
-                                    "fallback_next": actual_provider,
-                                },
-                            }
-                            yield f"data: {json.dumps(failure_payload)}\n\n"
-                            selected_payload = {
-                                "type": "status",
-                                "content": f"Fallback provider selected: {actual_provider}",
-                                "correlation_id": correlation_id,
-                                "metadata": {
-                                    **metadata,
-                                    "status": "fallback_provider_selected",
-                                },
-                            }
-                            yield f"data: {json.dumps(selected_payload)}\n\n"
-                            fallback_status_emitted = True
-                    if content:
-                        final_content += content
-                    event_type = "status" if metadata.get("status") and not content else "content"
-                    payload = {
-                        "type": event_type,
-                        "content": content,
-                        "correlation_id": correlation_id,
-                        "metadata": metadata,
-                    }
-                    yield f"data: {json.dumps(payload)}\n\n"
-
-            complete_metadata = _normalize_runtime_truth_metadata(
-                metadata=last_metadata,
-                request=request,
-                final_state=None,
-                correlation_id=correlation_id,
-                conversation_id=conversation_id,
-                start_time=start_time,
-                request_config_metadata=request_config_metadata,
-                streaming_enabled=True,
-                transport=transport,
-                actual_response_mode=actual_mode,
-            )
-            complete_payload = {
-                "type": "complete",
-                "content": "",
-                "correlation_id": correlation_id,
-                "metadata": {
-                    **complete_metadata,
-                    "status": "completed",
-                    "content_length": len(final_content),
-                },
-            }
-            yield f"data: {json.dumps(complete_payload)}\n\n"
-            yield "data: [DONE]\n\n"
-
-        except Exception as stream_error:
-            logger.error(
-                "Streaming error in copilot assist: %s",
-                stream_error,
-                extra={"correlation_id": correlation_id},
-            )
-
-            fallback_payload = await _build_router_fallback_assist_payload(
-                request=request,
-                correlation_id=correlation_id,
-                conversation_id=conversation_id,
-                start_time=start_time,
-                request_config_metadata=request_config_metadata,
-                actual_mode=actual_mode,
-                transport="sse",
-                failure=stream_error,
-                streaming_enabled=True,
-            )
-            if fallback_payload is not None:
-                for event in _build_router_fallback_sse_events(
-                    fallback_payload, correlation_id
-                ):
-                    yield f"data: {json.dumps(event)}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-
-            if degraded_continuation_response:
-                fallback_payload = await _build_live_degraded_payload(
-                    request.message,
-                    degraded_continuation_response,
-                    correlation_id,
-                )
-                for event in _build_degraded_sse_events(
-                    fallback_payload, 
-                    correlation_id,
-                    requested_provider=request.preferred_llm_provider,
-                    requested_model=request.preferred_model
-                ):
-                    yield f"data: {json.dumps(event)}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-
-            error_payload = {
-                "type": "error",
-                "content": "Streaming error: " + str(stream_error),
-                "correlation_id": correlation_id,
-                "metadata": {"error_type": "stream_error"},
-            }
-            yield f"data: {json.dumps(error_payload)}\n\n"
-            yield "data: [DONE]\n\n"
-            return
-
-    return StreamingResponse(
-        generate_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Correlation-Id": correlation_id,
-        },
-    )
 
 
 __all__ = ["router"]
