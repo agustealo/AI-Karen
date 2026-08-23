@@ -21,6 +21,7 @@ from ai_karen_engine.services.database.repositories.artifact_store import (
     ArtifactUploadRequest,
     RepositoryResult,
 )
+from ai_karen_engine.services.database.repositories.observability import instrument_repository
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class SupabaseArtifactStore(ArtifactStore):
     async def _session(self) -> AsyncSession:
         return self._session_factory()
 
+    @instrument_repository(operation="health_check", repository="SupabaseArtifactStore")
     async def health_check(self) -> RepositoryResult:
         try:
             async with await self._session() as session:
@@ -44,6 +46,7 @@ class SupabaseArtifactStore(ArtifactStore):
             logger.error("ArtifactStore health check failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="upload", repository="SupabaseArtifactStore")
     async def upload(self, request: ArtifactUploadRequest) -> RepositoryResult[Artifact]:
         start = time.perf_counter()
         try:
@@ -120,6 +123,7 @@ class SupabaseArtifactStore(ArtifactStore):
             logger.error("upload failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="download", repository="SupabaseArtifactStore")
     async def download(self, artifact_id: str, tenant_id: str) -> RepositoryResult[BinaryIO]:
         start = time.perf_counter()
         try:
@@ -148,9 +152,11 @@ class SupabaseArtifactStore(ArtifactStore):
             logger.error("download failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="get_metadata", repository="SupabaseArtifactStore")
     async def get_metadata(self, artifact_id: str, tenant_id: str) -> RepositoryResult[Optional[Artifact]]:
         return await self._get_metadata(artifact_id, tenant_id)
 
+    @instrument_repository(operation="list_artifacts", repository="SupabaseArtifactStore")
     async def list_artifacts(
         self, tenant_id: str, conversation_id: Optional[str] = None, message_id: Optional[str] = None
     ) -> RepositoryResult[Sequence[Artifact]]:
@@ -186,6 +192,7 @@ class SupabaseArtifactStore(ArtifactStore):
             logger.error("list_artifacts failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="delete", repository="SupabaseArtifactStore")
     async def delete(self, artifact_id: str, tenant_id: str) -> RepositoryResult[bool]:
         start = time.perf_counter()
         try:

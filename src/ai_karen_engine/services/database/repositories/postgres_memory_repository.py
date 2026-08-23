@@ -22,6 +22,7 @@ from ai_karen_engine.services.database.repositories.memory_repository import (
     MemoryRepository,
     RepositoryResult,
 )
+from ai_karen_engine.services.database.repositories.observability import instrument_repository
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class PostgresMemoryRepository(MemoryRepository):
     async def _session(self) -> AsyncSession:
         return self._session_factory()
 
+    @instrument_repository(operation="health_check", repository="PostgresMemoryRepository")
     async def health_check(self) -> RepositoryResult:
         try:
             async with await self._session() as session:
@@ -47,6 +49,7 @@ class PostgresMemoryRepository(MemoryRepository):
             logger.error("MemoryRepository health check failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="store_memory", repository="PostgresMemoryRepository")
     async def store_memory(self, item: MemoryItem) -> RepositoryResult[str]:
         start = time.perf_counter()
         try:
@@ -103,6 +106,7 @@ class PostgresMemoryRepository(MemoryRepository):
             logger.error("store_memory failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="update_memory", repository="PostgresMemoryRepository")
     async def update_memory(self, item: MemoryItem) -> RepositoryResult[bool]:
         start = time.perf_counter()
         try:
@@ -142,6 +146,7 @@ class PostgresMemoryRepository(MemoryRepository):
             logger.error("update_memory failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="delete_memory", repository="PostgresMemoryRepository")
     async def delete_memory(self, memory_id: str, tenant_id: str) -> RepositoryResult[bool]:
         start = time.perf_counter()
         try:
@@ -158,6 +163,7 @@ class PostgresMemoryRepository(MemoryRepository):
             logger.error("delete_memory failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="get_memory", repository="PostgresMemoryRepository")
     async def get_memory(self, memory_id: str, tenant_id: str) -> RepositoryResult[Optional[MemoryItem]]:
         try:
             async with await self._session() as session:
@@ -183,6 +189,7 @@ class PostgresMemoryRepository(MemoryRepository):
             logger.error("get_memory failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="list_by_scope", repository="PostgresMemoryRepository")
     async def list_by_scope(self, query: MemoryQuery) -> RepositoryResult[List[MemoryItem]]:
         start = time.perf_counter()
         try:
@@ -231,6 +238,7 @@ class PostgresMemoryRepository(MemoryRepository):
             logger.error("list_by_scope failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="search_semantic", repository="PostgresMemoryRepository")
     async def search_semantic(
         self, query: MemoryQuery, embedding: List[float]
     ) -> RepositoryResult[List[HybridSearchResult]]:
@@ -287,6 +295,7 @@ class PostgresMemoryRepository(MemoryRepository):
             logger.error("search_semantic failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="search_keyword", repository="PostgresMemoryRepository")
     async def search_keyword(self, query: MemoryQuery) -> RepositoryResult[List[HybridSearchResult]]:
         start = time.perf_counter()
         try:
@@ -341,6 +350,7 @@ class PostgresMemoryRepository(MemoryRepository):
             logger.error("search_keyword failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="search_hybrid", repository="PostgresMemoryRepository")
     async def search_hybrid(
         self, query: MemoryQuery, embedding: List[float]
     ) -> RepositoryResult[List[HybridSearchResult]]:
@@ -407,6 +417,7 @@ class PostgresMemoryRepository(MemoryRepository):
             logger.error("search_hybrid failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="count", repository="PostgresMemoryRepository")
     async def count(self, tenant_id: str, user_id: Optional[str] = None) -> RepositoryResult[int]:
         try:
             async with await self._session() as session:

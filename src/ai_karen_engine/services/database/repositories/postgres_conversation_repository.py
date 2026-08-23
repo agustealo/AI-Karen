@@ -22,6 +22,7 @@ from ai_karen_engine.services.database.repositories.conversation_repository impo
     Message,
     RepositoryResult,
 )
+from ai_karen_engine.services.database.repositories.observability import instrument_repository
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ class PostgresConversationRepository(ConversationRepository):
     async def _session(self) -> AsyncSession:
         return self._session_factory()
 
+    @instrument_repository(operation="health_check", repository="PostgresConversationRepository")
     async def health_check(self) -> RepositoryResult:
         try:
             async with await self._session() as session:
@@ -51,6 +53,7 @@ class PostgresConversationRepository(ConversationRepository):
             logger.error("ConversationRepository health check failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="create_conversation", repository="PostgresConversationRepository")
     async def create_conversation(self, conversation: Conversation) -> RepositoryResult[str]:
         start = time.perf_counter()
         try:
@@ -87,6 +90,7 @@ class PostgresConversationRepository(ConversationRepository):
             logger.error("create_conversation failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="get_conversation", repository="PostgresConversationRepository")
     async def get_conversation(self, conversation_id: str, tenant_id: str) -> RepositoryResult[Optional[Conversation]]:
         try:
             async with await self._session() as session:
@@ -110,6 +114,7 @@ class PostgresConversationRepository(ConversationRepository):
             logger.error("get_conversation failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="list_conversations", repository="PostgresConversationRepository")
     async def list_conversations(self, query: ConversationQuery) -> RepositoryResult[Sequence[Conversation]]:
         start = time.perf_counter()
         try:
@@ -152,6 +157,7 @@ class PostgresConversationRepository(ConversationRepository):
             logger.error("list_conversations failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="update_conversation", repository="PostgresConversationRepository")
     async def update_conversation(self, conversation: Conversation) -> RepositoryResult[bool]:
         start = time.perf_counter()
         try:
@@ -188,6 +194,7 @@ class PostgresConversationRepository(ConversationRepository):
             logger.error("update_conversation failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="delete_conversation", repository="PostgresConversationRepository")
     async def delete_conversation(self, conversation_id: str, tenant_id: str) -> RepositoryResult[bool]:
         start = time.perf_counter()
         try:
@@ -209,6 +216,7 @@ class PostgresConversationRepository(ConversationRepository):
             logger.error("delete_conversation failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="add_message", repository="PostgresConversationRepository")
     async def add_message(self, message: Message) -> RepositoryResult[str]:
         start = time.perf_counter()
         try:
@@ -242,6 +250,7 @@ class PostgresConversationRepository(ConversationRepository):
             logger.error("add_message failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="get_messages", repository="PostgresConversationRepository")
     async def get_messages(
         self, conversation_id: str, tenant_id: str, limit: int = 100, offset: int = 0
     ) -> RepositoryResult[List[Message]]:
@@ -277,6 +286,7 @@ class PostgresConversationRepository(ConversationRepository):
             logger.error("get_messages failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="update_message", repository="PostgresConversationRepository")
     async def update_message(self, message: Message) -> RepositoryResult[bool]:
         start = time.perf_counter()
         try:
@@ -306,6 +316,7 @@ class PostgresConversationRepository(ConversationRepository):
             logger.error("update_message failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(operation="delete_message", repository="PostgresConversationRepository")
     async def delete_message(self, message_id: str, tenant_id: str) -> RepositoryResult[bool]:
         start = time.perf_counter()
         try:
