@@ -200,3 +200,6 @@ core.*
 
 # Platform specific
 .fuse_hidden*
+
+# Playwright browser binaries (downloaded via `playwright install`)
+.playwright/
