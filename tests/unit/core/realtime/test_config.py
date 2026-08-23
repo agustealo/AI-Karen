@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 import pytest
 
-from ai_karen_engine.core.config.supabase.keys import (
-    SupabaseKeyConfig,
-    load_supabase_key_config,
+from ai_karen_engine.config.database import (
+    SupabaseSettings as SupabaseKeyConfig,
+    get_database_settings as load_supabase_key_config,
 )
 
 
@@ -34,10 +34,13 @@ def test_load_supabase_key_config_from_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SUPABASE_PROJECT_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "anon-key")
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "secret-key")
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
     config = load_supabase_key_config()
-    assert config.project_url == "https://example.supabase.co"
-    assert config.publishable_key == "anon-key"
-    assert config.secret_key == "secret-key"
+    assert config.supabase.project_url == "https://example.supabase.co"
+    assert config.supabase.publishable_key == "anon-key"
+    assert config.supabase.secret_key == "secret-key"
 
 
 def test_load_supabase_key_config_legacy_aliases(monkeypatch: pytest.MonkeyPatch):
@@ -45,7 +48,7 @@ def test_load_supabase_key_config_legacy_aliases(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret-key")
     config = load_supabase_key_config()
-    assert config.project_url == "https://example.supabase.co"
-    assert config.publishable_key == "anon-key"
-    assert config.secret_key == "secret-key"
-    assert config.has_legacy_keys is True
+    assert config.supabase.project_url == "https://example.supabase.co"
+    assert config.supabase.publishable_key == "anon-key"
+    assert config.supabase.secret_key == "secret-key"
+    assert config.supabase.has_legacy_keys is True

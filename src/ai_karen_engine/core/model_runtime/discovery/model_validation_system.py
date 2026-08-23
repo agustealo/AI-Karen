@@ -11,7 +11,7 @@ from ai_karen_engine.core.model_runtime.model_validation import (
     ModelValidationResult,
     validate_model_record,
 )
-from ai_karen_engine.services.models.discovery.model_discovery_engine import (
+from ai_karen_engine.core.model_runtime.discovery.model_discovery_engine import (
     ModelInfo,
     ModelStatus,
     ModelType,

@@ -25,7 +25,7 @@ class RouterSelectNode:
 
         try:
             # Local import to avoid circular dependency
-            from ai_karen_engine.services.models.routing.llm_router_service import ChatRequest
+            from ai_karen_engine.core.model_runtime.routing.llm_router_service import ChatRequest
 
             messages = state.get("messages", [])
             if not messages:
@@ -151,3 +151,4 @@ async def router_select_node(
     """Convenience wrapper for RouterSelectNode"""
     node = RouterSelectNode(llm_router, profile_manager)
     return await node(state)
+

@@ -1,8 +1,8 @@
 import pytest
 
 from ai_karen_engine.core.model_runtime.runtime_contracts import ProviderRouteDecision
-from ai_karen_engine.services.models.routing.llm_router_service import ChatRequest
-from ai_karen_engine.services.provider_runtime import ProviderRuntime
+from ai_karen_engine.core.model_runtime.routing.llm_router_service import ChatRequest
+from ai_karen_engine.core.runtime.provider_runtime import ProviderRuntime
 
 
 class _FakeProviderInfo:
@@ -152,3 +152,4 @@ async def test_execute_chat_emergency_static_when_no_provider_selected():
     assert result.actual_model is None
     assert result.fallback_level == 99
     assert result.provider_attempts[0]["error_type"] == "provider_missing"
+

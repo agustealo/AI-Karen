@@ -4,7 +4,7 @@ import logging
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from ai_karen_engine.services.provider_runtime import ProviderRuntime
+from ai_karen_engine.core.runtime.provider_runtime import ProviderRuntime
 from ai_karen_engine.core.model_runtime.runtime_contracts import ProviderExecutionResult, ProviderRouteDecision
 from .response_contracts import ResponseContract
 from .response_prompt_builder import ResponsePromptBuilder
@@ -22,7 +22,7 @@ class ResponseSynthesizer:
         self.validator = ResponseValidator()
 
     async def synthesize(self, contract: ResponseContract, *, user_preferences: dict[str, Any] | None = None, conversation_id: str | None = None, stream: bool = False) -> tuple[str, dict[str, Any]]:
-        from ai_karen_engine.services.models.routing.llm_router_service import ChatRequest
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import ChatRequest
         
         prefs = user_preferences or {}
         
@@ -158,3 +158,4 @@ class ResponseSynthesizer:
             "latency_ms": result.latency_ms,
             "correlation_id": result.correlation_id,
         }
+

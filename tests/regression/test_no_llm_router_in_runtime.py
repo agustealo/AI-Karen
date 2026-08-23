@@ -22,7 +22,7 @@ def test_degraded_mode_no_llm_router():
             mock_build.return_value = {"answer": "Mocked answer"}
             
             # This should NOT call LLMRouter
-            with patch("ai_karen_engine.services.models.routing.llm_router_service.LLMRouter") as mock_router:
+            with patch("ai_karen_engine.core.model_runtime.routing.llm_router_service.LLMRouter") as mock_router:
                 import asyncio
                 asyncio.run(generate_degraded_mode_response("hello"))
                 
@@ -40,9 +40,10 @@ def test_control_plane_no_llm_router():
         mock_generate.return_value.engine_id = "builtin"
         
         # This should NOT call LLMRouter
-        with patch("ai_karen_engine.services.models.routing.llm_router_service.LLMRouter") as mock_router:
+        with patch("ai_karen_engine.core.model_runtime.routing.llm_router_service.LLMRouter") as mock_router:
             import asyncio
             asyncio.run(probe.check())
             
             assert mock_router.call_count == 0
             assert mock_generate.call_count == 1
+

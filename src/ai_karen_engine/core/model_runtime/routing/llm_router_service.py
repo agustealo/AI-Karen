@@ -1276,7 +1276,7 @@ class LLMRouter:
             raise RuntimeError("No suitable provider available")
 
         # 2. Execute via ProviderRuntime (Handles retries and fallbacks)
-        from ai_karen_engine.services.provider_runtime import ProviderRuntime
+        from ai_karen_engine.core.runtime.provider_runtime import ProviderRuntime
         runtime = ProviderRuntime(self)
         
         async for chunk in runtime.stream_execute(selection, request, user_preferences):
@@ -3266,3 +3266,4 @@ def get_llm_router() -> LLMRouter:
     if _router_instance is None:
         _router_instance = LLMRouter.default()
     return _router_instance
+

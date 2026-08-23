@@ -11,7 +11,7 @@ class TestFallbackChain:
     @pytest.mark.asyncio
     async def test_gemini_to_vllm_fallback(self):
         """Test fallback from Gemini to vLLM when Gemini fails."""
-        from ai_karen_engine.services.models.routing.llm_router_service import (
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import (
             LLMRouter,
             ChatRequest,
         )
@@ -64,7 +64,7 @@ class TestFallbackChain:
     @pytest.mark.asyncio
     async def test_vllm_to_transformers_fallback(self):
         """Test fallback from vLLM to Transformers when vLLM fails."""
-        from ai_karen_engine.services.models.routing.llm_router_service import (
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import (
             LLMRouter,
             ChatRequest,
         )
@@ -113,7 +113,7 @@ class TestFallbackChain:
     @pytest.mark.asyncio
     async def test_all_providers_fail_returns_emergency(self):
         """Test that emergency response is returned when all providers fail."""
-        from ai_karen_engine.services.models.routing.llm_router_service import (
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import (
             LLMRouter,
             ChatRequest,
         )
@@ -156,7 +156,7 @@ class TestFallbackChain:
     @pytest.mark.asyncio
     async def test_metadata_reflects_actual_provider(self):
         """Test that metadata accurately shows which provider actually responded."""
-        from ai_karen_engine.services.models.routing.llm_router_service import (
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import (
             LLMRouter,
             ChatRequest,
         )
@@ -198,7 +198,7 @@ class TestFallbackChain:
     @pytest.mark.asyncio
     async def test_fallback_chain_order(self):
         """Test that fallback chain follows correct order: vLLM -> Transformers -> emergency."""
-        from ai_karen_engine.services.models.routing.llm_router_service import (
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import (
             LLMRouter,
         )
         
@@ -214,7 +214,7 @@ class TestFallbackChain:
     @pytest.mark.asyncio
     async def test_successful_primary_provider_no_fallback(self):
         """Test that fallback is NOT triggered when primary provider succeeds."""
-        from ai_karen_engine.services.models.routing.llm_router_service import (
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import (
             LLMRouter,
             ChatRequest,
         )
@@ -327,7 +327,7 @@ class TestMetadataAccuracy:
     @pytest.mark.asyncio
     async def test_metadata_includes_all_required_fields(self):
         """Test that fallback metadata includes all required fields."""
-        from ai_karen_engine.services.models.routing.llm_router_service import (
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import (
             LLMRouter,
             ChatRequest,
         )
@@ -370,3 +370,4 @@ class TestMetadataAccuracy:
                     assert field in metadata, f"Missing required field: {field}"
 
 # Made with Bob
+

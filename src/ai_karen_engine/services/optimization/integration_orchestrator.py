@@ -19,7 +19,7 @@ from datetime import datetime
 from ai_karen_engine.services.orchestration.reasoning_preservation_layer import (
     get_reasoning_preservation_layer, ReasoningComponent
 )
-from ai_karen_engine.services.models.management.model_management_service import (
+from ai_karen_engine.core.model_runtime.management.model_management_service import (
     get_integrated_model_manager, initialize_integrated_model_management
 )
 from ai_karen_engine.services.database.cache.integrated_cache_system import (

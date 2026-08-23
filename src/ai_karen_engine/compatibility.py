@@ -98,10 +98,10 @@ class CompatibilityImportManager:
                 "ai_karen_engine.plugins.sandbox_fail": "ai_karen_engine.plugins.router",
             },
             "integrations": {
-                "ai_karen_engine.plugins.llm_manager": "ai_karen_engine.services.models.routing.llm_router_service",
+                "ai_karen_engine.plugins.llm_manager": "ai_karen_engine.core.model_runtime.routing.llm_router_service",
             },
             "ai": {
-                "ai_karen_engine.plugins.llm_services": "ai_karen_engine.services.models.routing.llm_router_service",
+                "ai_karen_engine.plugins.llm_services": "ai_karen_engine.core.model_runtime.routing.llm_router_service",
             }
         }
     
@@ -291,3 +291,4 @@ __all__ = [
     "is_migration_complete",
     "get_migration_progress",
 ]
+

@@ -440,7 +440,7 @@ class TestVLLMRuntimeIntegration:
     @pytest.mark.asyncio
     async def test_vllm_in_fallback_chain(self):
         """Test that VLLMRuntime properly integrates with the fallback chain."""
-        from ai_karen_engine.services.models.routing.llm_router_service import LLMRouter, ChatRequest
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import LLMRouter, ChatRequest
 
         router = LLMRouter()
         request = ChatRequest(
@@ -536,3 +536,4 @@ class TestVLLMRuntimeIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+

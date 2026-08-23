@@ -10,7 +10,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from ai_karen_engine.services.models.routing.llm_router_service import (
+from ai_karen_engine.core.model_runtime.routing.llm_router_service import (
     LLMRouter,
     ChatRequest,
     ProviderPriority,
@@ -423,3 +423,4 @@ class TestProviderPriorities:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+

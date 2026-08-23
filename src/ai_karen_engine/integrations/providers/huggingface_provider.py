@@ -361,7 +361,7 @@ class HuggingFaceProvider(LLMProviderBase):
 
             # Add Model Library compatibility check
             try:
-                from ai_karen_engine.services.models.compatibility.provider_model_compatibility import ProviderModelCompatibilityService
+                from ai_karen_engine.core.model_runtime.compatibility.provider_model_compatibility import ProviderModelCompatibilityService
                 compatibility_service = ProviderModelCompatibilityService()
                 validation = compatibility_service.validate_provider_model_setup("huggingface")
                 
@@ -412,3 +412,4 @@ class HuggingFaceProvider(LLMProviderBase):
             return self.get_models()
         except Exception:
             return [self.model]
+

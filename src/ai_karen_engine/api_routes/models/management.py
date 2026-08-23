@@ -30,7 +30,7 @@ from ai_karen_engine.inference.model_store import get_model_store
 from ai_karen_engine.integrations.dynamic_provider_system import get_dynamic_provider_manager
 from ai_karen_engine.integrations.registry import get_registry
 from ai_karen_engine.services.scheduling.job_manager import get_job_manager
-from ai_karen_engine.services.models.management.system_model_manager import get_system_model_manager
+from ai_karen_engine.core.model_runtime.management.system_model_manager import get_system_model_manager
 from ai_karen_engine.utils.dependency_checks import import_fastapi, import_pydantic
 
 APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks = import_fastapi(
@@ -3081,3 +3081,4 @@ async def get_supported_huggingface_formats():
             "production": "Use GGUF Q4_K_M for balanced performance and size"
         }
     }
+

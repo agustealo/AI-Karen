@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.services.response import ResponseSanitizer
-from ai_karen_engine.services.provider_runtime import ProviderRuntime
+from ai_karen_engine.core.runtime.provider_runtime import ProviderRuntime
 from ai_karen_engine.core.model_runtime.runtime_contracts import ProviderExecutionResult
 from ..contracts.orchestration_state import LangGraphOrchestrationState
 
@@ -90,7 +90,7 @@ class ResponseSynthesisNode:
         if route_decision and self._provider_runtime:
             try:
                 # Local import to avoid circular dependency
-                from ai_karen_engine.services.models.routing.llm_router_service import ChatRequest
+                from ai_karen_engine.core.model_runtime.routing.llm_router_service import ChatRequest
 
                 cortex = state.get("cortex")
                 intent = "general.chat"
@@ -309,3 +309,4 @@ async def response_synth_node(
     """Convenience wrapper for LangGraph orchestration."""
     node = ResponseSynthesisNode(llm_router=llm_router)
     return await node(state)
+

@@ -25,7 +25,7 @@ from ai_karen_engine.learning.training_data_manager import TrainingDataManager
 from ai_karen_engine.inference.huggingface_service import (
     get_enhanced_huggingface_service,
 )
-from ai_karen_engine.services.models.management.system_model_manager import SystemModelManager
+from ai_karen_engine.core.model_runtime.management.system_model_manager import SystemModelManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -525,3 +525,4 @@ async def get_basic_training_status():
     except Exception as e:
         logger.error(f"Failed to get basic training status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+

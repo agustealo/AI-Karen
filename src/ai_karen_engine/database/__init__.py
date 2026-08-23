@@ -4,10 +4,12 @@ Database package for AI-Karen multi-tenant architecture.
 
 Provides production-ready database services:
 - Multi-tenant database client with connection pooling
-- Multi-database support (MySQL, MongoDB, Firestore)
 - Migration management
 - Conversation, memory, and tenant managers
 - Factory for centralized initialization
+
+NOTE: Multi-database support (MySQL, MongoDB, Firestore) has been retired.
+Supabase/PostgreSQL is the canonical relational data spine.
 """
 
 from contextlib import asynccontextmanager
@@ -50,19 +52,6 @@ from ai_karen_engine.database.dependencies import (
     DatabaseTransaction,
     get_database_transaction,
 )
-
-# Import multi-database configuration and factory
-from ai_karen_engine.database.multi_db_config import (
-    DatabaseType,
-    MySQLConfig,
-    MongoDBConfig,
-    FirestoreConfig,
-    MultiDatabaseConfig,
-    MultiDatabaseConfigLoader,
-    load_multi_database_config,
-)
-
-from ai_karen_engine.database.multi_db_factory import DatabaseConnectionFactory
 
 _default_client: Optional[MultiTenantPostgresClient] = None
 _import_error: Optional[Exception] = None
@@ -130,13 +119,10 @@ __all__ = [
     "get_current_tenant_id",
     "DatabaseTransaction",
     "get_database_transaction",
-    # Multi-Database Support
-    "DatabaseType",
-    "MySQLConfig",
-    "MongoDBConfig",
-    "FirestoreConfig",
-    "MultiDatabaseConfig",
-    "MultiDatabaseConfigLoader",
-    "load_multi_database_config",
-    "DatabaseConnectionFactory",
+    # Canonical persistence config
+    "DatabaseSettings",
+    "SupabaseSettings",
+    "PostgresSettings",
+    "get_database_settings",
+    "refresh_database_settings",
 ]

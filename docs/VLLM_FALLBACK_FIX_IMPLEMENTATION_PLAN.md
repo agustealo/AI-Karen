@@ -318,7 +318,7 @@ class TestFallbackChain:
     @pytest.mark.asyncio
     async def test_gemini_to_vllm_fallback(self):
         """Test fallback from Gemini to vLLM when Gemini fails."""
-        from ai_karen_engine.services.models.routing.llm_router_service import (
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import (
             LLMRouter,
             ChatRequest,
         )

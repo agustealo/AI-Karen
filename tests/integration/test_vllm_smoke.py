@@ -248,7 +248,7 @@ class TestVLLMRouting:
     
     def test_vllm_in_fallback_chain(self):
         """Test that vLLM is in the fallback chain."""
-        from ai_karen_engine.services.models.routing.llm_router_service import LLMRouter
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import LLMRouter
         
         router = LLMRouter()
         
@@ -263,7 +263,7 @@ class TestVLLMRouting:
     
     def test_vllm_alias_normalization(self):
         """Test that vLLM aliases normalize correctly."""
-        from ai_karen_engine.services.models.routing.llm_router_service import LLMRouter
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import LLMRouter
         
         router = LLMRouter()
         
@@ -275,7 +275,7 @@ class TestVLLMRouting:
     
     def test_vllm_has_local_priority(self):
         """Test that vLLM has LOCAL priority."""
-        from ai_karen_engine.services.models.routing.llm_router_service import (
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import (
             LLMRouter,
             ProviderPriority
         )
@@ -316,3 +316,4 @@ if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
 # Made with Bob
+

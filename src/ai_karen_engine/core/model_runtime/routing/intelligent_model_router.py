@@ -25,7 +25,7 @@ from ai_karen_engine.core.model_runtime.model_discovery_service import (
     get_model_discovery_service,
 )
 from ai_karen_engine.core.model_runtime.provider_registry_service import get_provider_registry_service, ProviderCapability
-from ai_karen_engine.services.models.discovery.model_discovery_engine import (
+from ai_karen_engine.core.model_runtime.discovery.model_discovery_engine import (
     ModelInfo,
     ModelType,
     ModalityType,

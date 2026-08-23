@@ -19,11 +19,11 @@ from ai_karen_engine.core.model_runtime.model_discovery_service import (
     ModelDiscoveryService,
     DiscoveryStatus,
 )
-from ai_karen_engine.services.models.routing.intelligent_model_router import (
+from ai_karen_engine.core.model_runtime.routing.intelligent_model_router import (
     get_model_router,
     ModelRouter,
 )
-from ai_karen_engine.services.models.recommendation.model_recommendation_engine import (
+from ai_karen_engine.core.model_runtime.recommendation.model_recommendation_engine import (
     get_recommendation_engine,
     RecommendationRequest,
     FilterRequest,
@@ -729,3 +729,4 @@ async def get_model_recommendations_for_task(
         raise HTTPException(
             status_code=500, detail=f"Failed to get recommendations: {str(ex)}"
         )
+

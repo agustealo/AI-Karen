@@ -163,7 +163,7 @@ class LangGraphOrchestrator:
         self._tool_service: Optional[ToolService] = tool_service
 
         # Local import to avoid circular dependency
-        from ai_karen_engine.services.models.routing.llm_router_service import LLMRouter
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import LLMRouter
 
         self._llm_router: LLMRouter = llm_router or LLMRouter()
         self._profile_manager: ProfileManager = profile_manager or ProfileManager()
@@ -1110,3 +1110,4 @@ def get_default_orchestrator() -> LangGraphOrchestrator:
     if default_orchestrator is None:
         default_orchestrator = create_orchestrator()
     return default_orchestrator
+

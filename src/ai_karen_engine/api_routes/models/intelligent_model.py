@@ -17,8 +17,8 @@ from ai_karen_engine.core.errors.handlers import handle_api_exception
 from ai_karen_engine.services.intelligent_model_router import (
     get_model_router, initialize_model_router, RoutingStrategy
 )
-from ai_karen_engine.services.models.management.model_connection_manager import get_connection_manager
-from ai_karen_engine.services.models.recommendation.model_recommendation_engine import (
+from ai_karen_engine.core.model_runtime.management.model_connection_manager import get_connection_manager
+from ai_karen_engine.core.model_runtime.recommendation.model_recommendation_engine import (
     get_recommendation_engine, RecommendationRequest, FilterRequest,
     RecommendationStrategy, FilterCriteria
 )
@@ -612,3 +612,4 @@ async def get_compatibility_matrix(recommendation_engine=Depends(get_recommendat
 
 # Add import for time
 import time
+

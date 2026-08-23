@@ -18,13 +18,13 @@ from enum import Enum
 import weakref
 import inspect
 
-from ai_karen_engine.services.models.routing.intelligent_model_router import (
+from ai_karen_engine.core.model_runtime.routing.intelligent_model_router import (
     ModelRouter, RoutingDecision, get_model_router
 )
-from ai_karen_engine.services.models.management.model_connection_manager import (
+from ai_karen_engine.core.model_runtime.management.model_connection_manager import (
     ModelConnectionManager, get_connection_manager
 )
-from ai_karen_engine.services.models.recommendation.model_recommendation_engine import (
+from ai_karen_engine.core.model_runtime.recommendation.model_recommendation_engine import (
     ModelRecommendationEngine, get_recommendation_engine
 )
 from ai_karen_engine.core.model_runtime.model_discovery_service import get_model_discovery_service
@@ -708,3 +708,4 @@ def preserve_reasoning_component(component: Any, component_type: ReasoningCompon
     else:
         logger.warning(f"Unknown component type: {component_type}")
         return component
+

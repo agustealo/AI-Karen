@@ -28,7 +28,7 @@ from ai_karen_engine.services.training.training_interface import (
 )
 from ai_karen_engine.inference.huggingface_service import EnhancedHuggingFaceService
 from ai_karen_engine.learning.training_data_manager import TrainingDataManager
-from ai_karen_engine.services.models.management.system_model_manager import SystemModelManager
+from ai_karen_engine.core.model_runtime.management.system_model_manager import SystemModelManager
 
 logger = logging.getLogger(__name__)
 
@@ -461,3 +461,4 @@ def _job_to_response(job: TrainingJob) -> TrainingJobResponse:
         logs=job.logs,
         metrics=job.metrics
     )
+

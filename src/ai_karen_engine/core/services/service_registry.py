@@ -957,7 +957,7 @@ def get_model_library_service() -> Any:
 
     with _model_library_service_lock:
         if _model_library_service is None:
-            from ai_karen_engine.services.models.discovery.model_library_service import (
+            from ai_karen_engine.core.model_runtime.discovery.model_library_service import (
                 ModelLibraryService,
             )
 
@@ -1268,3 +1268,4 @@ async def get_performance_adaptive_router() -> Any:
     """Get PerformanceAdaptiveRouter service instance."""
     registry = get_service_registry()
     return await registry.get_service("performance_adaptive_router")
+

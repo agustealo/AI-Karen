@@ -28,7 +28,7 @@ from ai_karen_engine.error_tracking import get_model_orchestrator_error_tracker
 from ai_karen_engine.health import get_model_orchestrator_health_checker
 from ai_karen_engine.monitoring import get_model_orchestrator_metrics
 from ai_karen_engine.core.model_runtime.model_download_control_service import get_model_download_control_service
-from ai_karen_engine.services.models.management.model_orchestrator_service import (
+from ai_karen_engine.core.model_runtime.management.model_orchestrator_service import (
     ModelOrchestratorService,
     ModelOrchestratorError,
     ModelSummary,
@@ -1954,3 +1954,4 @@ async def error_trends(
     except Exception as e:
         logger.error(f"Failed to get error trends: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+

@@ -49,11 +49,11 @@ class CanonicalGenerationExecutor:
     """
 
     async def generate(self, request: GenerationRequest) -> str:
-        from ai_karen_engine.services.models.routing.llm_router_service import (
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import (
             get_llm_router,
             ChatRequest,
         )
-        from ai_karen_engine.services.provider_runtime import ProviderRuntime
+        from ai_karen_engine.core.runtime.provider_runtime import ProviderRuntime
 
         router = get_llm_router()
         chat_request = ChatRequest(
@@ -195,3 +195,4 @@ class ToolBridge:
         from ...core.runtime.contracts import ActionExecutionGate
 
         return await ActionExecutionGate.authorize(plan, tool_name)
+

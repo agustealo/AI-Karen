@@ -327,7 +327,7 @@ def _build_provider_entry(
 
     model_library_info: Dict[str, Any] = {}
     try:
-        from ai_karen_engine.services.models.compatibility.provider_model_compatibility import ProviderModelCompatibilityService
+        from ai_karen_engine.core.model_runtime.compatibility.provider_model_compatibility import ProviderModelCompatibilityService
 
         compatibility_service = ProviderModelCompatibilityService()
         validation = compatibility_service.validate_provider_model_setup(name)
@@ -1009,7 +1009,7 @@ async def get_provider_model_suggestions(
         
         # Use the compatibility service to get suggestions
         try:
-            from ai_karen_engine.services.models.compatibility.provider_model_compatibility import ProviderModelCompatibilityService
+            from ai_karen_engine.core.model_runtime.compatibility.provider_model_compatibility import ProviderModelCompatibilityService
             compatibility_service = ProviderModelCompatibilityService()
             suggestions = compatibility_service.get_provider_model_suggestions(provider_name)
             
@@ -1073,7 +1073,7 @@ async def get_integration_status(registry=Depends(get_llm_registry)):
                 
                 # Get model compatibility info
                 try:
-                    from ai_karen_engine.services.models.compatibility.provider_model_compatibility import ProviderModelCompatibilityService
+                    from ai_karen_engine.core.model_runtime.compatibility.provider_model_compatibility import ProviderModelCompatibilityService
                     compatibility_service = ProviderModelCompatibilityService()
                     validation = compatibility_service.validate_provider_model_setup(provider_name)
                     
@@ -1178,7 +1178,7 @@ async def get_provider_model_recommendations(
         
         # Get recommendations from Model Library compatibility service
         try:
-            from ai_karen_engine.services.models.compatibility.provider_model_compatibility import ProviderModelCompatibilityService
+            from ai_karen_engine.core.model_runtime.compatibility.provider_model_compatibility import ProviderModelCompatibilityService
             compatibility_service = ProviderModelCompatibilityService()
             
             # Get comprehensive suggestions
@@ -1971,3 +1971,4 @@ async def get_notification_stream():
         status_code=404, 
         detail="Real-time notification stream not implemented yet"
     )
+

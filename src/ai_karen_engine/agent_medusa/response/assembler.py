@@ -45,7 +45,7 @@ class ResponseAssembler:
 
         from ai_karen_engine.services.response.response_contracts import ResponseContract
         from ai_karen_engine.services.response.response_synthesizer import ResponseSynthesizer
-        from ai_karen_engine.services.models.routing.llm_router_service import get_llm_router
+        from ai_karen_engine.core.model_runtime.routing.llm_router_service import get_llm_router
 
         contract = ResponseContract(
             purpose="medusa_synthesis",
@@ -67,3 +67,4 @@ class ResponseAssembler:
             agent_trace=agent_trace,
             metadata={**(metadata or {}), "synthesis": synth_metadata},
         )
+

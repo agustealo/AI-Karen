@@ -10,7 +10,7 @@ from ai_karen_engine.core.model_runtime.runtime_contracts import (
     ProviderExecutionResult,
 )
 if TYPE_CHECKING:
-    from ai_karen_engine.services.models.routing.llm_router_service import ChatRequest, LLMRouter
+    from ai_karen_engine.core.model_runtime.routing.llm_router_service import ChatRequest, LLMRouter
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class ProviderRuntime:
 
     def __init__(self, router: Optional["LLMRouter"] = None):
         if router is None:
-            from ai_karen_engine.services.models.routing.llm_router_service import LLMRouter
+            from ai_karen_engine.core.model_runtime.routing.llm_router_service import LLMRouter
             router = LLMRouter()
         self.router = router
 
@@ -561,3 +561,4 @@ class ProviderRuntime:
             correlation_id=correlation_id,
             provider_attempts=provider_attempts,
         )
+

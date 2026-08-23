@@ -449,7 +449,7 @@ class DeepseekProvider(LLMProviderBase):
 
             # Add Model Library compatibility check
             try:
-                from ai_karen_engine.services.models.compatibility.provider_model_compatibility import (
+                from ai_karen_engine.core.model_runtime.compatibility.provider_model_compatibility import (
                     ProviderModelCompatibilityService,
                 )
 
@@ -563,3 +563,4 @@ class DeepseekProvider(LLMProviderBase):
         except Exception as ex:
             logger.warning(f"Token counting failed: {ex}. Using rough estimation.")
             return len(text.split()) * 1.3  # Rough estimation
+

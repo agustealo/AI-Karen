@@ -168,7 +168,7 @@ docker compose restart api
 ```python
 # test_fallback.py
 import asyncio
-from ai_karen_engine.services.models.routing.llm_router_service import LLMRouter
+from ai_karen_engine.core.model_runtime.routing.llm_router_service import LLMRouter
 
 async def test():
     router = LLMRouter()
