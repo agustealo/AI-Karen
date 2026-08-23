@@ -64,7 +64,33 @@ Tuning env:
 
 ## 🎯 Recent Updates
 
-### v2.1.0 - Enhanced Authentication & Validation System (Latest)
+### v2.2.0 - Observability Convergence (Latest)
+
+AI-Karen observability has been refactored into a deliberate, lightweight layer:
+
+- **Prometheus** is now the canonical numeric metrics backend
+- **Grafana** is optional and moved behind the `observability` Compose profile
+- New metrics added for ML inference, personalization, adaptive runtime, memory, agents, tools, and database health
+- Prometheus/Grafana images are pinned to validated versions
+- Grafana admin password no longer has an insecure default
+- Alert rules expanded for runtime, database, ML, and agent/tool failures
+
+**Quick start with observability:**
+```bash
+docker compose --profile observability up
+```
+
+**CPU-only mode:**
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
+```
+
+**WSL2 NVIDIA setup:**
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup_wsl2_nvidia.ps1
+```
+
+### v2.1.0 - Enhanced Authentication & Validation System
 
 AI-Karen now features a comprehensive enhanced authentication and validation system with username-based login, advanced security features, and configurable validation rules.
 
@@ -207,6 +233,12 @@ pip install -r requirements.txt
 # start the full default stack, including the built-in vLLM service
 docker compose up
 
+# start with observability stack (Prometheus + Grafana)
+docker compose --profile observability up
+
+# CPU-only mode (WSL2 without NVIDIA Container Toolkit)
+docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
+
 # initialize core tables and default admin user
 python create_tables.py
 python create_admin_user.py  # follow prompts
@@ -220,11 +252,18 @@ The default compose stack includes:
 - Redis
 - Elasticsearch
 - Milvus
-- Prometheus
-- Grafana
 - the FastAPI API
 - the Next.js UI
 - the built-in `vllm` service when launched with `--profile vllm`
+
+Observability services are **opt-in** via the `observability` profile:
+
+- Prometheus
+- Grafana
+
+```bash
+docker compose --profile observability up
+```
 
 Optional services remain optional and are still launched by profile when you need them:
 
@@ -387,6 +426,41 @@ If you are using local GGUF or Transformers-backed paths on a CUDA box, set the 
 
 The repo also includes `.env.cuda` for shell-based CUDA runs. Source it before `python start.py` if you want the built-in vLLM runtime to target CUDA endpoints outside Docker.
 
+### WSL2 NVIDIA GPU Setup
+
+For WSL2 hosts, AI-Karen provides automated NVIDIA Container Toolkit setup scripts:
+
+**From Windows PowerShell (Administrator):**
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup_wsl2_nvidia.ps1
+```
+
+**From inside WSL2 (Ubuntu/Debian):**
+```bash
+sudo bash scripts/setup_wsl2_nvidia.sh
+```
+
+After setup, restart WSL2 and Docker Desktop:
+```bash
+wsl --shutdown
+```
+
+Verify GPU access:
+```bash
+nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
+```
+
+### CPU-Only Mode
+
+If you don't have an NVIDIA GPU or want to run without GPU acceleration:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
+```
+
+The `docker-compose.cpu.yml` override removes all NVIDIA device requirements from services.
+
 ## Access URLs
 
 - **Frontend**: http://localhost:8010 (Web UI)
@@ -394,7 +468,9 @@ The repo also includes `.env.cuda` for shell-based CUDA runs. Source it before `
 - **Authentication Status**: http://localhost:8000/api/auth/status
 - **Health Check**: http://localhost:8000/health
 - **API Base**: http://localhost:8000/api
-- **Monitoring**: http://localhost:9090 (Prometheus)
+- **Metrics**: http://localhost:8000/metrics
+- **Prometheus**: http://localhost:9090 (when observability profile is active)
+- **Grafana**: http://localhost:3001 (when observability profile is active)
 - **Database**: localhost:5434 (PostgreSQL)
 
 **Default Login Credentials:**
@@ -570,7 +646,7 @@ See [Enhanced Authentication Migration Guide](ENHANCED_AUTH_MIGRATION_README.md)
 │  (Next.js)      │   (Tauri)       │
 │  Port: 9002     │  Native App     │
 └─────────────────┴─────────────────┘
-                              │
+                               │
 ┌─────────────────────────────────────────────────────────────────┐
 │                     FastAPI Backend                             │
 │                      Port: 8000                                 │
@@ -580,7 +656,7 @@ See [Enhanced Authentication Migration Guide](ENHANCED_AUTH_MIGRATION_README.md)
 │  • Multi-tenant Support         • Health Monitoring            │
 │  • Prometheus Metrics           • Event Bus                    │
 └─────────────────────────────────────────────────────────────────┘
-                              │
+                               │
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Database Layer                               │
 ├─────────────┬─────────────┬─────────────┬─────────────┬─────────┤
@@ -588,6 +664,14 @@ See [Enhanced Authentication Migration Guide](ENHANCED_AUTH_MIGRATION_README.md)
 │ Port: 5433  │ Port: 6379  │Port: 19530  │ Port: 9200   │ Local   │
 │ (Metadata)  │ (Cache)     │ (Vectors)   │ (Search)     │(Analytics)│
 └─────────────┴─────────────┴─────────────┴─────────────┴─────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    Observability Layer                          │
+│              Profile: observability (opt-in)                    │
+├─────────────────────────────────────────────────────────────────┤
+│  • Prometheus (metrics)       • Grafana (dashboards)           │
+│  • Alert Rules                • Health Metrics                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Architectural Principles
@@ -624,6 +708,16 @@ export ELASTICSEARCH_URL=http://localhost:9200
 export MILVUS_HOST=localhost
 export MILVUS_PORT=19530
 ```
+
+### Observability Development
+
+When developing metrics locally, ensure `prometheus_client` is installed:
+
+```bash
+pip install prometheus_client
+```
+
+The metrics system uses a safe registration pattern to avoid duplicate metric errors. New metrics should be registered through `ai_karen_engine.core.observability.metrics.MetricsManager`.
 
 ### Development Commands
 
@@ -703,6 +797,9 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 cp .env.example .env
 # Edit .env with production values
 docker compose --env-file .env up -d
+
+# With observability stack
+docker compose --profile observability up -d
 ```
 
 ### Kubernetes Deployment
@@ -738,6 +835,10 @@ helm install ai-karen ./charts/kari/ \
 | `KARI_ECO_MODE` | Skip heavy NLP model loading | `false` |
 | `KARI_MEMORY_SURPRISE_THRESHOLD` | Novelty threshold for storing memory | `0.85` |
 | `KARI_DISABLE_MEMORY_SURPRISE_FILTER` | Disable surprise filtering to store all memories | `false` |
+| `USE_GPU` | Enable GPU acceleration (requires WSL2 NVIDIA setup) | `true` |
+| `PROMETHEUS_IMAGE` | Prometheus Docker image | `prom/prometheus:v2.47.0` |
+| `GRAFANA_IMAGE` | Grafana Docker image | `grafana/grafana:9.5.2` |
+| `GRAFANA_ADMIN_PASSWORD` | Grafana admin password (must be set explicitly) | — |
 
 ---
 
@@ -845,6 +946,77 @@ curl -X POST http://localhost:8000/plugins/reload
 
 ## Monitoring & Observability
 
+### Observability Stack
+
+AI-Karen includes a complete observability stack that is **optional by default**:
+
+```bash
+# Start only the minimal runtime
+docker compose up
+
+# Start with observability stack (Prometheus + Grafana)
+docker compose --profile observability up
+```
+
+**Observability components:**
+- **Prometheus** (`v2.47.0`) — Canonical numeric metrics backend
+- **Grafana** (`9.5.2`) — Optional dashboards and operations UI
+
+**Key URLs (when observability profile is active):**
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3001
+
+**Grafana credentials:**
+- Set `GRAFANA_ADMIN_PASSWORD` in `.env` (no default password for security)
+- Provisioned with Prometheus datasource and health dashboards
+
+### Metrics
+
+The system exposes comprehensive Prometheus metrics at `/metrics`:
+
+**Runtime metrics:**
+- `karen_requests_total` — Total HTTP requests by method, endpoint, status
+- `karen_request_duration_seconds` — Request latency histogram
+- `karen_requests_inflight` — Current in-flight requests
+- `karen_degraded_requests_total` — Requests served in degraded mode
+
+**ML/Intelligence metrics:**
+- `karen_ml_inference_seconds` — ML inference latency by task, model, status
+- `karen_ml_predictions_total` — Total ML predictions
+- `karen_ml_fallback_total` — ML fallback events
+- `karen_ml_model_load_failures_total` — Model load failures
+- `karen_ml_shadow_disagreement_total` — Shadow model disagreements
+
+**Personalization metrics:**
+- `karen_personalization_evidence_total` — Personalization evidence events
+- `karen_personalization_updates_total` — Model updates
+- `karen_personalization_contradictions_total` — Contradictions detected
+- `karen_personalization_snapshot_seconds` — Snapshot build latency
+
+**Adaptive intelligence metrics:**
+- `karen_adaptive_recommendations_total` — Adaptive recommendations
+- `karen_adaptive_ranking_seconds` — Ranking latency
+- `karen_adaptive_candidate_count` — Candidates considered
+- `karen_adaptive_shadow_disagreement_total` — Shadow disagreements
+- `karen_suggestions_total` — Suggestions emitted
+
+**Database/Redis metrics:**
+- `karen_postgres_health` — PostgreSQL health status
+- `karen_redis_health` — Redis health status
+- `karen_db_query_seconds` — Database query latency
+- `karen_queue_depth` — Internal queue depth
+
+**Agent/Tool metrics:**
+- `karen_agent_execution_total` — Agent executions by status
+- `karen_agent_execution_seconds` — Agent execution latency
+- `karen_tool_execution_total` — Tool executions by status
+
+**Model orchestrator metrics:**
+- `kari_model_operations_total` — Model operations
+- `kari_model_operation_duration_seconds` — Operation duration
+- `kari_model_download_bytes_total` — Download throughput
+- `kari_model_storage_usage_bytes` — Storage usage
+
 ### Health Checks
 
 ```bash
@@ -865,30 +1037,6 @@ curl http://localhost:8000/metrics
 
 # Service-specific health
 curl http://localhost:8000/api/services/postgres/health
-```
-
-### Metrics
-
-The system exposes Prometheus metrics at `/metrics/prometheus`:
-
-* HTTP request metrics
-* Database connection metrics
-* Plugin execution metrics
-* Memory usage metrics
-* AI model performance metrics
-
-### Logging
-
-Structured logging with configurable levels. The server runs at `INFO` level by
-default and prints `Greetings, the logs are ready for review` once startup
-completes.
-
-```bash
-# Increase verbosity if needed
-export LOG_LEVEL=DEBUG
-
-# View logs
-docker compose logs -f api
 ```
 
 ---
@@ -919,21 +1067,45 @@ Run these scripts to automatically diagnose and fix common issues:
 
 ### Common Issues
 
-#### Database Connection Issues
+#### WSL2 NVIDIA GPU Setup
 
-**Problem**: `Connection refused` errors for databases
+**Problem**: `nvidia-container-cli: initialization error: WSL environment detected but no adapters were found`
 
-**Solution**:
-```bash
-# Check service status
-docker compose ps
+**Solution**: Run the automated WSL2 NVIDIA setup script from Windows PowerShell (Administrator):
 
-# Restart services
-docker compose restart postgres redis
-
-# Check logs
-docker compose logs postgres
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup_wsl2_nvidia.ps1
 ```
+
+Or from inside WSL2 (Ubuntu/Debian):
+
+```bash
+sudo bash scripts/setup_wsl2_nvidia.sh
+```
+
+Then restart WSL2 and Docker Desktop:
+
+```bash
+wsl --shutdown
+```
+
+Verify the setup:
+
+```bash
+nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
+```
+
+### CPU-Only Mode
+
+If you don't have an NVIDIA GPU or want to run without GPU acceleration:
+
+```bash
+# CPU-only mode (no GPU requirements)
+docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
+```
+
+The `docker-compose.cpu.yml` override removes all NVIDIA device requirements from services.
 
 #### Authentication Issues
 
@@ -1113,6 +1285,10 @@ See [LICENSE.md](LICENSE.md) and [LICENSE-commercial.txt](LICENSE-commercial.txt
 - [Database Documentation](docker/database/README.md) - Multi-database setup
 - [Plugin Documentation](plugin_marketplace/README.md) - Plugin development guide
 - [Extension Documentation](extensions/README.md) - Extension system overview
+
+### Setup Scripts
+- [WSL2 NVIDIA Setup](scripts/README.md) - GPU acceleration setup for WSL2
+- [Database Scripts](docker/scripts/README.md) - Database initialization and migration
 
 ### Authentication Documentation
 - [Enhanced Authentication Migration Guide](ENHANCED_AUTH_MIGRATION_README.md) - Complete migration guide with new features

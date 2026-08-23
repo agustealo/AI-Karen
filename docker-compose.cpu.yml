@@ -1,0 +1,28 @@
+services:
+  api:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ""
+      NVIDIA_DRIVER_CAPABILITIES: ""
+    deploy:
+      resources:
+        reservations:
+          devices: []
+
+  local-gguf:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ""
+      NVIDIA_DRIVER_CAPABILITIES: ""
+
+  vllm:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ""
+      NVIDIA_DRIVER_CAPABILITIES: ""
+    deploy:
+      resources:
+        reservations:
+          devices: []
+
+  ollama:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ""
+      NVIDIA_DRIVER_CAPABILITIES: ""

@@ -50,32 +50,74 @@ KAREN_API_URL=http://localhost:8000 \
 
 ---
 
+### 🚀 setup_wsl2_nvidia.sh / setup_wsl2_nvidia.ps1
+
+**Purpose:** Automated WSL2 NVIDIA Container Toolkit setup for GPU acceleration in Docker
+
+**What it does:**
+- Installs NVIDIA Container Toolkit inside WSL2
+- Configures Docker runtime for GPU access
+- Enables Docker Desktop WSL2 backend
+- Verifies `nvidia-smi` and Docker runtime detection
+
+**Usage (Linux/WSL2):**
+```bash
+sudo bash scripts/setup_wsl2_nvidia.sh
+```
+
+**Usage (Windows PowerShell - Administrator):**
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup_wsl2_nvidia.ps1
+```
+
+**After setup:**
+```bash
+wsl --shutdown
+# Then restart Docker Desktop
+```
+
+**Verify GPU access:**
+```bash
+nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
+```
+
+**Prerequisites:**
+- NVIDIA GPU with latest Windows driver installed
+- WSL2 with a Linux distro (Ubuntu recommended)
+- Docker Desktop with WSL2 integration enabled
+
+**Related:**
+- CPU-only mode: `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up`
+
+---
+
 ## Adding New Scripts
 
 When adding new scripts to this directory:
 
 1. **Make executable:**
-   ```bash
-   chmod +x scripts/your_script.sh
-   ```
+    ```bash
+    chmod +x scripts/your_script.sh
+    ```
 
 2. **Add shebang:**
-   ```bash
-   #!/usr/bin/env bash
-   set -euo pipefail
-   ```
+    ```bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ```
 
 3. **Document in this README:**
-   - Purpose
-   - Usage
-   - Environment variables
-   - Exit codes
+    - Purpose
+    - Usage
+    - Environment variables
+    - Exit codes
 
 4. **Follow conventions:**
-   - Use color codes for output (see audit_runtime_vllm.sh)
-   - Generate reports in markdown format
-   - Support environment-based configuration
-   - Provide helpful error messages
+    - Use color codes for output (see audit_runtime_vllm.sh)
+    - Generate reports in markdown format
+    - Support environment-based configuration
+    - Provide helpful error messages
 
 ---
 
@@ -85,6 +127,7 @@ When adding new scripts to this directory:
 - **Quick Start:** `docs/VLLM_AUDIT_QUICKSTART.md`
 - **Test Suite:** `tests/integration/test_vllm_smoke.py`
 - **Summary:** `VLLM_AUDIT_SUMMARY.md`
+- **WSL2 NVIDIA Setup:** `scripts/setup_wsl2_nvidia.sh` or `scripts/setup_wsl2_nvidia.ps1`
 
 ---
 
@@ -94,3 +137,4 @@ For issues or questions:
 - Review documentation in `docs/`
 - Check Karen logs: `logs/karen_api.log`
 - Run diagnostics: `./scripts/audit_runtime_vllm.sh`
+- WSL2 GPU issues: Run `./scripts/setup_wsl2_nvidia.sh`

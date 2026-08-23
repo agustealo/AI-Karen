@@ -1,4 +1,18 @@
 # docker-compose.yml
+#
+# GPU mode (default):
+#   docker compose up
+#
+# CPU-only mode (WSL2 without NVIDIA Container Toolkit):
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
+#
+# Observability mode:
+#   docker compose --profile observability up
+#
+# WSL2 NVIDIA setup:
+#   powershell -ExecutionPolicy Bypass -File scripts/setup_wsl2_nvidia.ps1
+#   Or from inside WSL: sudo bash scripts/setup_wsl2_nvidia.sh
+#
 services:
 
   # ──────────────────────────────────────────────────────────────────────
@@ -505,9 +519,6 @@ services:
         reservations:
           memory: 2G      # Reserve 2GB minimum
           cpus: '2.0'     # Reserve 2 CPU cores
-          devices:
-            - driver: nvidia
-              capabilities: [gpu]
     networks:
       - ai-karen-net
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -46,6 +47,12 @@ from .persistence.repository import PersonalizationRepository
 
 logger = logging.getLogger(__name__)
 
+try:
+    from ai_karen_engine.monitoring.personalization_metrics import get_personalization_metrics
+    _personalization_metrics = get_personalization_metrics()
+except Exception:
+    _personalization_metrics = None
+
 
 class UserModelRuntime:
     """Single runtime authority for KAREN personalization."""
@@ -75,12 +82,25 @@ class UserModelRuntime:
         return self._current_state[key]
 
     async def get_snapshot(self, user_id: str, tenant_id: str) -> UserStateSnapshot:
+        start = time.perf_counter()
         state = self._get_current_state(user_id, tenant_id)
         prefs = self.repository.list_preferences(user_id, tenant_id)
         behaviors = self.behavior_store.list_for_user(user_id, tenant_id)
         goals = self.goal_store.list_for_user(user_id, tenant_id)
         builder = SnapshotBuilder(user_id, tenant_id)
-        return builder.build(state, prefs, behaviors, goals)
+        snapshot = builder.build(state, prefs, behaviors, goals)
+        duration = time.perf_counter() - start
+
+        if _personalization_metrics is not None:
+            try:
+                _personalization_metrics.record_snapshot(
+                    status="success",
+                    duration_seconds=duration,
+                )
+            except Exception:
+                pass
+
+        return snapshot
 
     async def ingest_evidence(self, evidence: PreferenceEvidence) -> Optional[PreferenceRecord]:
         if not self.evidence_store.add(evidence):
@@ -122,12 +142,29 @@ class UserModelRuntime:
             if evidence.polarity == "negative":
                 record, contradiction = PreferenceLifecycle.contradict(record, evidence.observed_value, evidence.confidence)
                 self.repository.save_preference(record)
+                if _personalization_metrics is not None:
+                    category, _ = PreferenceCatalog.parse_key(evidence.preference_key)
+                    _personalization_metrics.record_contradiction(
+                        preference_category=category,
+                    )
                 return record
 
         new_confidence = self.evidence_store.compute_confidence(evidence.preference_key, record.confidence)
         record.confidence = new_confidence
         record = PreferenceLifecycle.promote(record, new_confidence)
         self.repository.save_preference(record)
+
+        if _personalization_metrics is not None:
+            category, _ = PreferenceCatalog.parse_key(evidence.preference_key)
+            _personalization_metrics.record_evidence(
+                preference_category=category,
+                source_type=evidence.source_type.value,
+            )
+            _personalization_metrics.record_update(
+                preference_category=category,
+                status="success",
+            )
+
         return record
 
     async def ingest_outcome(self, outcome: Any) -> List[BehaviorPattern]:

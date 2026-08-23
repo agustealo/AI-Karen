@@ -27,3 +27,92 @@ groups:
         annotations:
           summary: "Prometheus config reload failed"
           description: "Prometheus could not reload its configuration successfully."
+
+  - name: ai-karen-runtime-alerts
+    rules:
+      - alert: HighRequestLatency
+        expr: histogram_quantile(0.95, sum(rate(kari_http_request_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP request latency"
+          description: "95th percentile latency is above 1s for 5 minutes."
+
+      - alert: HighErrorRate
+        expr: sum(rate(kari_http_errors_total[5m])) by (job) / sum(rate(kari_http_requests_total[5m])) by (job) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP error rate"
+          description: "Error rate is above 5% for 5 minutes."
+
+      - alert: DegradedModeActive
+        expr: sum(rate(kari_degraded_requests_total[10m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "KAREN serving degraded requests"
+          description: "Requests are being served in degraded mode."
+
+  - name: ai-karen-database-alerts
+    rules:
+      - alert: PostgresUnhealthy
+        expr: karen_postgres_health == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is unhealthy"
+          description: "KAREN has detected PostgreSQL is unhealthy."
+
+      - alert: RedisUnhealthy
+        expr: karen_redis_health == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is unhealthy"
+          description: "KAREN has detected Redis is unhealthy."
+
+  - name: ai-karen-ml-alerts
+    rules:
+      - alert: HighMLFallbackRate
+        expr: sum(rate(karen_ml_fallback_total[10m])) by (prediction_task) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High ML fallback rate"
+          description: "ML fallback rate is above 10% for a prediction task."
+
+      - alert: MLModelLoadFailures
+        expr: sum(rate(karen_ml_model_load_failures_total[10m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ML model load failures detected"
+          description: "ML model load failures have occurred in the last 10 minutes."
+
+  - name: ai-karen-agent-alerts
+    rules:
+      - alert: AgentExecutionFailures
+        expr: sum(rate(karen_agent_execution_total{status="failure"}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent execution failures detected"
+          description: "Agent failure rate is above 10%."
+
+      - alert: ToolExecutionFailures
+        expr: sum(rate(karen_tool_execution_total{status="failure"}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tool execution failures detected"
+          description: "Tool failure rate is above 10%."
