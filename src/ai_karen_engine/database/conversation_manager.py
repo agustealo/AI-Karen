@@ -19,6 +19,7 @@ from ai_karen_engine.database.client import MultiTenantPostgresClient
 from ai_karen_engine.database.id_types import coerce_user_id
 from ai_karen_engine.database.memory_manager import MemoryManager, MemoryQuery
 from ai_karen_engine.database.models import TenantConversation, TenantMessage
+from ai_karen_engine.services.database.repositories import Message as CanonicalMessage
 from ai_karen_engine.models.usage_service import UsageService
 
 logger = logging.getLogger(__name__)
@@ -221,7 +222,6 @@ class ConversationManager:
                     raise RuntimeError(f"Failed to create conversation: {result.error}")
 
                 if initial_message:
-                    from ai_karen_engine.services.database.repositories import Message as CanonicalMessage
                     message = CanonicalMessage(
                         id=str(uuid.uuid4()),
                         conversation_id=conversation_id,
