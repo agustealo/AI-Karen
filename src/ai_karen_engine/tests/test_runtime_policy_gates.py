@@ -1,42 +1,170 @@
-from ai_karen_engine.core.cortex.runtime_policy import RuntimePolicyDecision
+"""
+Runtime Policy Gates — Architecture boundary and security proofs.
+
+Validates that:
+- CORTEX cannot manufacture AuthorizedExecutionPlan
+- ExecutionRequirements cannot authorize itself
+- RuntimePolicyEnforcer is the sole policy→AuthorizedExecutionPlan owner
+- RuntimePolicyEnforcer is the single typed authorization entry point
+"""
+
+from __future__ import annotations
+
+import inspect
+import os
+
+import pytest
+
+from ai_karen_engine.core.cortex.contracts import CortexOutput
+from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionRequirements
+from ai_karen_engine.core.runtime.policy import (
+    PolicyDecision,
+    PolicyEvaluationRequest,
+    PolicyReasonCode,
+    ProviderConstraints,
+    RuntimePolicyEnforcer,
+)
 
 
-def test_runtime_policy_decision_defaults():
-    decision = RuntimePolicyDecision.from_cortex({})
-    assert decision.requires_deep_reasoning is False
-    assert decision.requires_medusa is False
-    assert decision.policy_token
+# ---------------------------------------------------------------------------
+# Architecture boundary proofs (RUNTIME-SPINE-1A + 1B)
+# ---------------------------------------------------------------------------
 
 
-def test_runtime_policy_decision_from_cortex_flags():
-    decision = RuntimePolicyDecision.from_cortex(
-        {"requires_deep_reasoning": True, "requires_medusa": True}
+def test_cortex_output_cannot_create_authorized_execution_plan():
+    """CortexOutput must not be able to produce AuthorizedExecutionPlan."""
+    assert not hasattr(CortexOutput, "to_authorized_plan")
+
+    import ai_karen_engine.core.cortex.contracts as cortex_contracts
+    source = inspect.getsource(cortex_contracts)
+    assert "AuthorizedExecutionPlan" not in source
+
+
+def test_execution_requirements_cannot_authorize():
+    """ExecutionRequirements must not authorize itself."""
+    assert not hasattr(ExecutionRequirements, "authorize")
+    assert not hasattr(ExecutionRequirements, "to_authorized_plan")
+
+    import ai_karen_engine.core.runtime.contracts as runtime_contracts
+    source = inspect.getsource(runtime_contracts)
+    assert "RuntimePolicyEnforcer" not in source
+
+
+def test_runtime_policy_enforcer_is_only_authorization_owner():
+    """RuntimePolicyEnforcer (via PolicyDecision) is the sole AuthorizedExecutionPlan owner."""
+    import ai_karen_engine.core.runtime.policy.runtime_policy as policy_module
+    source = inspect.getsource(policy_module)
+    assert "def to_authorized_plan" in source
+
+    assert not os.path.exists(
+        os.path.join(
+            os.path.dirname(policy_module.__file__),
+            "..",
+            "cortex",
+            "runtime_policy.py",
+        )
     )
-    assert decision.requires_deep_reasoning is True
-    assert decision.requires_medusa is True
 
 
-def test_reasoning_executor_is_single_owner():
-    """ReasoningExecutor is the single execution owner for core/reasoning."""
-    from ai_karen_engine.core.reasoning.executor import ReasoningExecutor
+def test_cortex_runtime_policy_module_removed():
+    """core/cortex/runtime_policy.py must not exist."""
+    import ai_karen_engine.core.cortex as cortex_pkg
+    cortex_dir = os.path.dirname(cortex_pkg.__file__)
+    assert not os.path.exists(os.path.join(cortex_dir, "runtime_policy.py"))
 
-    executor = ReasoningExecutor()
-    assert executor is not None
+
+@pytest.mark.asyncio
+async def test_runtime_policy_enforcer_is_authorization_authority():
+    """RuntimePolicyEnforcer is the single typed authorization entry point."""
+    enforcer = RuntimePolicyEnforcer()
+    assert hasattr(enforcer, "evaluate")
+
+    request = PolicyEvaluationRequest(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        requested_capabilities=["web_search"],
+    )
+    decision = await enforcer.evaluate(request)
+    assert decision is not None
+    assert hasattr(decision, "decision_id")
+    assert hasattr(decision, "allowed")
+    assert hasattr(decision, "provider_constraints")
+    assert hasattr(decision, "resource_constraints")
+    assert hasattr(decision, "evaluated_at")
 
 
-def test_kire_kro_integration_is_retired():
-    """KIREKROIntegration must raise on any operation."""
-    from ai_karen_engine.core.cortex.kire_kro_integration import KIREKROIntegration
+def test_policy_decision_to_authorized_plan_is_unique_owner():
+    """Only PolicyDecision.to_authorized_plan may create AuthorizedExecutionPlan from policy."""
+    plan = PolicyDecision(
+        decision_id="policy-1",
+        policy_version="v1",
+        allowed=True,
+    ).to_authorized_plan()
+    assert isinstance(plan, AuthorizedExecutionPlan)
+    assert plan.execution_id == "policy-1"
+    assert plan.policy_decision_id == "policy-1"
 
-    integration = KIREKROIntegration()
-    import asyncio
 
-    async def _check() -> None:
-        try:
-            await integration.initialize()
-        except RuntimeError as exc:
-            assert "retired" in str(exc).lower()
-            return
-        raise AssertionError("KIREKROIntegration.initialize() did not raise")
+# ---------------------------------------------------------------------------
+# Security proofs
+# ---------------------------------------------------------------------------
 
-    asyncio.run(_check())
+
+@pytest.mark.asyncio
+async def test_missing_tenant_denies():
+    """Missing tenant must deny."""
+    enforcer = RuntimePolicyEnforcer()
+    request = PolicyEvaluationRequest(
+        user_id="user-1",
+        tenant_id="",
+    )
+    decision = await enforcer.evaluate(request)
+    assert decision.allowed is False
+    assert PolicyReasonCode.MISSING_IDENTITY in decision.reason_codes
+
+
+@pytest.mark.asyncio
+async def test_missing_user_denies():
+    """Missing user where required must deny."""
+    enforcer = RuntimePolicyEnforcer()
+    request = PolicyEvaluationRequest(
+        user_id="",
+        tenant_id="tenant-1",
+    )
+    decision = await enforcer.evaluate(request)
+    assert decision.allowed is False
+    assert PolicyReasonCode.MISSING_IDENTITY in decision.reason_codes
+
+
+@pytest.mark.asyncio
+async def test_forbidden_capability_denies():
+    """Forbidden capability must deny."""
+    enforcer = RuntimePolicyEnforcer()
+    request = PolicyEvaluationRequest(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        requested_capabilities=["admin"],
+        forbidden_capabilities=["admin"],
+    )
+    decision = await enforcer.evaluate(request)
+    assert decision.allowed is False
+    assert PolicyReasonCode.CAPABILITY_CONFLICT in decision.reason_codes
+
+
+@pytest.mark.asyncio
+async def test_external_provider_prohibited():
+    """External provider must be prohibited when policy says so."""
+    enforcer = RuntimePolicyEnforcer()
+    request = PolicyEvaluationRequest(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        provider_constraints=ProviderConstraints(
+            eligible_providers=["local"],
+            forbidden_providers=["external"],
+            external_allowed=False,
+        ),
+    )
+    decision = await enforcer.evaluate(request)
+    assert decision.provider_constraints is not None
+    assert decision.provider_constraints.external_allowed is False
+    assert "external" in decision.provider_constraints.forbidden_providers
