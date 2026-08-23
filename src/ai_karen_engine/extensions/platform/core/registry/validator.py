@@ -246,7 +246,7 @@ class ExtensionValidator:
                     self.errors.append(f"Invalid version specification: {version_spec}")
 
         # Validate system service dependencies
-        valid_services = {"postgres", "redis", "elasticsearch", "milvus"}
+        valid_services = {"postgres", "redis"}
         for service in system_services:
             if service not in valid_services:
                 self.warnings.append(f"Unknown system service dependency: {service}")
@@ -546,7 +546,7 @@ class ExtensionValidator:
             )
 
             # Check for required memory dependencies
-            required_services = ["postgres", "milvus", "redis"]
+            required_services = ["postgres", "redis"]
             declared_services = manifest.dependencies.system_services
 
             missing_services = [
@@ -689,12 +689,6 @@ class ExtensionValidator:
                     self.warnings.append(
                         "Extension uses PostgreSQL. Ensure all queries include tenant filtering (org_id, user_id) "
                         "to maintain data isolation."
-                    )
-
-                if "milvus" in manifest.dependencies.system_services:
-                    self.warnings.append(
-                        "Extension uses Milvus vector store. Ensure all vector operations include tenant metadata "
-                        "filtering to prevent cross-tenant data leakage."
                     )
 
     def _validate_security_compliance(self, manifest: ExtensionManifest) -> None:

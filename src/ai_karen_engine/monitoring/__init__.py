@@ -41,11 +41,6 @@ from .structured_logging_service import (
     get_structured_logging_service,
 )
 
-from .zvec_metrics import (
-    ZvecMetricsCollector,
-    ZvecMonitoringService,
-)
-
 from .extensions import (
     ExtensionMetricsCollector,
     ExtensionAlertManager,
@@ -106,9 +101,6 @@ __all__ = [
     "get_metrics_service",
     "StructuredLoggingService",
     "get_structured_logging_service",
-    # ZVEC Metrics
-    "ZvecMetricsCollector",
-    "ZvecMonitoringService",
     # Extension Monitoring
     "ExtensionMetricsCollector",
     "ExtensionAlertManager",
@@ -137,4 +129,8 @@ __all__ = [
     "get_platform_monitoring_status",
     "monitor_platform_endpoint",
     "monitor_platform_operation",
+    "get_monitoring_service",
 ]
+
+
+get_monitoring_service = get_metrics_service

@@ -140,7 +140,7 @@ class ReasoningEvidenceAdapter:
                     bundle.context_hits.append(hit)
                 elif metadata.get("graph_path") or metadata.get("relationship"):
                     bundle.graph_hits.append(hit)
-                elif store_name in {"lexical", "elasticsearch", "text"} or metadata_filter:
+                elif store_name in {"lexical", "text"} or metadata_filter:
                     bundle.lexical_hits.append(hit)
                 else:
                     bundle.dense_hits.append(hit)

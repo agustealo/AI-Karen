@@ -258,11 +258,6 @@ class DatabaseOptimizationService(BaseService):
             if redis_metrics:
                 self.metrics_history.append(redis_metrics)
             
-            # Get Milvus metrics (if available)
-            milvus_metrics = await self._collect_milvus_metrics()
-            if milvus_metrics:
-                self.metrics_history.append(milvus_metrics)
-            
         except Exception as e:
             self.logger.error(f"Error collecting metrics: {e}")
     
@@ -334,30 +329,6 @@ class DatabaseOptimizationService(BaseService):
             
         except Exception as e:
             self.logger.error(f"Error collecting Redis metrics: {e}")
-            return None
-    
-    async def _collect_milvus_metrics(self) -> Optional[ConnectionPoolMetrics]:
-        """Collect Milvus connection metrics."""
-        try:
-            # This would be implemented based on Milvus client capabilities
-            # For now, return basic metrics
-            return ConnectionPoolMetrics(
-                timestamp=datetime.now(timezone.utc),
-                database_name="milvus",
-                pool_size=1,  # Milvus typically uses single connection
-                active_connections=1,
-                idle_connections=0,
-                overflow_connections=0,
-                failed_connections=0,
-                avg_connection_time_ms=0,
-                max_connection_time_ms=0,
-                total_queries=0,
-                slow_queries=0,
-                connection_errors=[]
-            )
-            
-        except Exception as e:
-            self.logger.error(f"Error collecting Milvus metrics: {e}")
             return None
     
     async def _check_alerts(self) -> None:

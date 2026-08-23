@@ -106,8 +106,6 @@ class CircuitBreakerRegistry:
         defaults = [
             "spacy",
             "distilbert",
-            "milvus_retrieval",
-            "elasticsearch",
             "leangraph_projection",
             "profile_synthesis",
             "echocore_batch",

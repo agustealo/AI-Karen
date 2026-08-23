@@ -2,7 +2,7 @@
 Memory Tiers - Multi-tier memory management for EchoCore
 
 Provides three tiers of memory storage:
-- ShortTermMemory: Vector-based fast recall (Milvus)
+- ShortTermMemory: Vector-based fast recall (in-memory)
 - LongTermMemory: OLAP analytics and trends (DuckDB)
 - PersistentMemory: Relational storage (PostgreSQL)
 """

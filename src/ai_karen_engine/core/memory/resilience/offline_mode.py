@@ -3,7 +3,6 @@ Offline Mode Indicator
 
 Phase 2: Provides offline status and capabilities for frontend integration.
 - Detects offline state (no server connectivity)
-- Tracks Zvec offline RAG capability
 - Provides API for frontend to show offline indicator
 - Sync status tracking (for Phase 3)
 
@@ -15,8 +14,7 @@ Frontend Integration:
 
 Use Cases:
 1. User disconnects from network → Show offline indicator
-2. Zvec provides offline RAG → Show "Local search available"
-3. Sync status → Show "Last synced: 5 min ago"
+2. Sync status → Show "Last synced: 5 min ago"
 """
 
 from __future__ import annotations
@@ -43,7 +41,6 @@ class OfflineMode:
     
     Features:
     - Connectivity checks (configurable endpoints)
-    - Zvec capability detection
     - Sync status tracking
     - Graceful degradation
     - Frontend API
@@ -54,7 +51,6 @@ class OfflineMode:
         check_interval: int = 30,  # seconds
         check_timeout: int = 3,  # seconds
         health_endpoints: Optional[List[str]] = None,
-        enable_zvec: bool = True,
     ):
         """
         Initialize offline mode detector.
@@ -63,7 +59,6 @@ class OfflineMode:
             check_interval: How often to check connectivity (seconds)
             check_timeout: Timeout for health checks (seconds)
             health_endpoints: List of URLs to check
-            enable_zvec: Whether Zvec offline RAG is available
         """
         self.check_interval = check_interval
         self.check_timeout = check_timeout
@@ -71,13 +66,11 @@ class OfflineMode:
             "https://www.google.com",
             "https://api.github.com",
         ]
-        self.enable_zvec = enable_zvec
         
         # State
         self.is_offline = False
         self.last_check = None
         self.last_sync = None
-        self.zvec_available = False
         self._running = False
         self._task: Optional[asyncio.Task] = None
         
@@ -173,32 +166,22 @@ class OfflineMode:
             Dict with status information
             {
                 "is_offline": bool,
-                "zvec_available": bool,
                 "last_check": ISO timestamp,
                 "last_sync": ISO timestamp,
                 "capabilities": List[str],
             }
         """
         capabilities = []
-        if self.enable_zvec and self.zvec_available:
-            capabilities.append("offline_rag")
-            capabilities.append("local_search")
         if not self.is_offline:
             capabilities.append("server_search")
             capabilities.append("cloud_sync")
         
         return {
             "is_offline": self.is_offline,
-            "zvec_available": self.zvec_available,
             "last_check": self.last_check.isoformat() if self.last_check else None,
             "last_sync": self.last_sync.isoformat() if self.last_sync else None,
             "capabilities": capabilities,
         }
-    
-    def update_zvec_availability(self, available: bool) -> None:
-        """Update Zvec availability (called by Zvec adapter)."""
-        self.zvec_available = available
-        logger.info(f"[OfflineMode] Zvec available: {available}")
     
     def update_last_sync(self, timestamp: Optional[datetime] = None) -> None:
         """Update last sync timestamp (for Phase 3)."""
@@ -234,7 +217,6 @@ def get_offline_mode(
     check_interval: int = 30,
     check_timeout: int = 3,
     health_endpoints: Optional[List[str]] = None,
-    enable_zvec: bool = True,
 ) -> OfflineMode:
     """
     Get or create global offline mode instance.
@@ -243,7 +225,6 @@ def get_offline_mode(
         check_interval: How often to check connectivity (seconds)
         check_timeout: Timeout for health checks (seconds)
         health_endpoints: List of URLs to check
-        enable_zvec: Whether Zvec offline RAG is available
         
     Returns:
         OfflineMode instance
@@ -255,7 +236,6 @@ def get_offline_mode(
             check_interval=check_interval,
             check_timeout=check_timeout,
             health_endpoints=health_endpoints,
-            enable_zvec=enable_zvec,
         )
         logger.info("[OfflineMode] Created global offline mode instance")
     
@@ -264,5 +244,9 @@ def get_offline_mode(
 
 __all__ = [
     "OfflineMode",
+    "OfflineModeManager",
     "get_offline_mode",
 ]
+
+
+OfflineModeManager = OfflineMode

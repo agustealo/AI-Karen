@@ -455,7 +455,7 @@ class MemoryRuntimeManager:
                         )
                     )
 
-                    stores = ["redis", "milvus", "elasticsearch", "duckdb"]
+                    stores = ["redis", "duckdb"]
                     if self.flags.is_enabled(
                         "graph_relationships_enabled", tenant_id, user_id
                     ):
@@ -583,7 +583,7 @@ class MemoryRuntimeManager:
                 
                 # Update status for all stores handled by the manager
                 # In a more advanced version, manager would return per-store success
-                for store_name in ("redis", "milvus", "elasticsearch", "leangraph", "duckdb"):
+                for store_name in ("redis", "leangraph", "duckdb"):
                     await self._update_projection_status(
                         event_id, store_name, "completed"
                     )

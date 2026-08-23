@@ -40,8 +40,6 @@ class FallbackManager:
     def _initialize_default_fallbacks(self):
         self.register_fallback("spacy", self._spacy_fallback)
         self.register_fallback("distilbert", self._distilbert_fallback)
-        self.register_fallback("milvus_retrieval", self._empty_list_fallback)
-        self.register_fallback("elasticsearch", self._empty_list_fallback)
         self.register_fallback("leangraph_projection", self._boolean_false_fallback)
         self.register_fallback("profile_synthesis", self._empty_dict_fallback)
         self.register_fallback("echocore_batch", self._boolean_false_fallback)

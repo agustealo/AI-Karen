@@ -21,8 +21,7 @@ except Exception:  # pragma: no cover
     M_SR_LAT = M_SR_INGEST = M_SR_RESULTS = _Noop()
 
 from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
-from ai_karen_engine.core.model_runtime.milvus_client import MilvusClient
-from ai_karen_engine.core.reasoning.retrieval.vector_stores import VectorStore, MilvusClientAdapter, Result
+from ai_karen_engine.core.reasoning.retrieval.vector_stores import VectorStore, Result
 
 
 logger = logging.getLogger("ai_karen.reasoning.sr")
@@ -68,7 +67,7 @@ class SRHealth:
 class SoftReasoningEngine:
     """Kari SR: retrieval + novelty heuristics with dual-embedding and recency reweight.
 
-    - VectorStore adapters (Milvus default, others via adapter)
+    - VectorStore adapters (injected; Milvus retired)
     - Dual-embedding: fast prefilter + precise rerank
     - Recency-aware score: s' = α * sim + (1-α) * recency
     - TTL and novelty gate for ingestion
@@ -86,8 +85,9 @@ class SoftReasoningEngine:
         ttl_seconds: Optional[float] = None,  # legacy arg support
     ) -> None:
         self.embeddings = embeddings or EmbeddingManager()
-        # Default to your local Milvus client behind an adapter (local-first)
-        self.store: VectorStore = store or MilvusClientAdapter(MilvusClient(ttl_seconds=ttl_seconds or 3600.0))
+        # Vector store is injected by the caller; Milvus is retired and no longer
+        # used as a local-first default.
+        self.store: Optional[VectorStore] = store
         self.recall = recall or RecallConfig()
         self.writeback = writeback or WritebackConfig()
         self._last_query_ms: float = 0.0
@@ -131,7 +131,7 @@ class SoftReasoningEngine:
 
         # Proceed with upsert using precise vector for better future recall
         vec_precise = self._embed_precise(text)
-        rid = self.store.upsert(vec_precise, {"text": text, **meta})
+        rid = self.store.upsert(vec_precise, {"text": text, **meta}) if self.store else None
         self._last_ingest_time = now
         if _METRICS: M_SR_INGEST.labels(reason="ingested").inc()
         try:
@@ -174,7 +174,7 @@ class SoftReasoningEngine:
             payloads.append({"text": text, **meta})
             ids.append(None)  # placeholder; some stores don't return ids
 
-        if vectors:
+        if vectors and self.store:
             try:
                 upsert_ids = self.store.batch_upsert(vectors, payloads)
                 for i, uid in enumerate(upsert_ids):
@@ -204,6 +204,9 @@ class SoftReasoningEngine:
         t0 = time.time()
         try:
             if not text:
+                return []
+
+            if self.store is None:
                 return []
 
             # Fast prefilter
@@ -248,12 +251,13 @@ class SoftReasoningEngine:
 
     def prune(self) -> int:
         """Best-effort TTL prune if the underlying store is locally accessible.
-        For MilvusClient (your in-memory default), we examine _data.
         Returns count of removed items.
         """
         removed = 0
         try:
-            m = getattr(self.store, "_m", None)  # MilvusClientAdapter._m
+            if self.store is None:
+                return 0
+            m = getattr(self.store, "_m", None)
             data = getattr(m, "_data", None)
             if isinstance(data, dict):
                 now = time.time()

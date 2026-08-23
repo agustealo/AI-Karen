@@ -72,7 +72,7 @@ class DatabaseOperationsService:
 
     async def _get_storage_tiers_health(self) -> List[StorageTierHealth]:
         """Aggregate health data for all storage tiers."""
-        tiers: List[TierName] = ["postgres", "redis", "milvus", "elasticsearch", "duckdb", "leangraph"]
+        tiers: List[TierName] = ["postgres", "redis", "duckdb", "leangraph"]
         health_results = []
         
         for tier in tiers:

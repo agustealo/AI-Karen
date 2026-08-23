@@ -21,7 +21,6 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from ai_karen_engine.core.model_runtime.embedding_manager import record_metric
-from ai_karen_engine.core.model_runtime.milvus_client import MilvusClient
 
 try:
     import faiss  # type: ignore

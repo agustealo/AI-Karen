@@ -7,8 +7,6 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from ai_karen_engine.clients.database.elastic_client import ElasticClient
-from ai_karen_engine.clients.database.milvus_client import MilvusClient
 from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
 from ai_karen_engine.core.memory.graph.service import get_leangraph_service
 from ai_karen_engine.core.runtime.resilience import get_safe_stage_runner
@@ -33,15 +31,13 @@ logger = get_logger(__name__)
 class HybridRetrievalRouter:
     def __init__(self) -> None:
         self.safe_runner = get_safe_stage_runner()
-        self.milvus = MilvusClient(collection="memory_ledger_semantic")
-        self.elastic = ElasticClient(index="memory_ledger_lexical")
         self.redis = get_redis_manager()
         self.leangraph = get_leangraph_service()
 
     async def recall(self, query: MemoryQuery) -> List[MemoryEntry]:
         start = time.time()
         correlation_id = str(uuid.uuid4())
-        emit_memory_event("memory.recall.started", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "stores_queried": ["redis", "milvus", "elasticsearch"]})
+        emit_memory_event("memory.recall.started", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "stores_queried": ["redis"]})
         if not query.tenant_id or not query.user_id:
             logger.warning("memory.recall.degraded", extra={"reason": "missing_tenant_or_user"})
             emit_memory_event("memory.recall.degraded", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "degraded": True, "degradation_reason": "missing_tenant_or_user"})
@@ -51,10 +47,8 @@ class HybridRetrievalRouter:
         activation = decide_activation_mode(query=query.text or "", latency_budget_ms=300)
         emit_memory_event("memory.activation.completed", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "memory_activation_mode": activation.mode.value, "token_budget": activation.top_k})
 
-        should_query_semantic = activation.mode.value in {"fast", "deep", "graph", "profile"}
         should_query_lexical = activation.mode.value in {"fast", "deep", "procedural", "profile"}
         hot: List[MemoryEntry] = []
-        dense: List[MemoryEntry] = []
         lexical: List[MemoryEntry] = []
         if activation.mode.value != "none":
             emit_memory_event("memory.recall.store.started", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "stores_queried": ["redis"]})
@@ -62,22 +56,6 @@ class HybridRetrievalRouter:
                 "memory_fast_recall", "memory_learning_enabled", self._query_redis, query, tenant_id=str(query.tenant_id), user_id=str(query.user_id)
             ) or []
             emit_memory_event("memory.recall.store.completed", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "stores_queried": ["redis"], "result_count": len(hot)})
-        store_tasks = []
-        stores = []
-        if should_query_semantic:
-            stores.append("milvus")
-            store_tasks.append(asyncio.create_task(self.safe_runner.run_stage("memory_dense_recall", "memory_learning_enabled", self._query_milvus, query, tenant_id=str(query.tenant_id), user_id=str(query.user_id))))
-        if should_query_lexical:
-            stores.append("elasticsearch")
-            store_tasks.append(asyncio.create_task(self.safe_runner.run_stage("memory_lexical_recall", "memory_learning_enabled", self._query_elastic, query, tenant_id=str(query.tenant_id), user_id=str(query.user_id))))
-        if stores:
-            emit_memory_event("memory.recall.store.started", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "stores_queried": stores})
-            store_results = await asyncio.gather(*store_tasks)
-            if should_query_semantic:
-                dense = (store_results[0] if store_results else []) or []
-            if should_query_lexical:
-                lexical = (store_results[-1] if store_results else []) or []
-            emit_memory_event("memory.recall.store.completed", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "stores_queried": stores, "result_count": len(dense) + len(lexical)})
 
         graph: List[MemoryEntry] = []
         if activation.include_graph:
@@ -101,7 +79,6 @@ class HybridRetrievalRouter:
 
         fused = reciprocal_rank_fusion({
             "hot": hot,
-            "dense": dense,
             "lexical": lexical,
             "graph": graph,
             "profile": profile,
@@ -136,7 +113,7 @@ class HybridRetrievalRouter:
                 "activation_mode": activation.mode.value,
             },
         )
-        emit_memory_event("memory.recall.completed", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "memory_activation_mode": activation.mode.value, "stores_queried": ["redis", "milvus", "elasticsearch"] + (["graph"] if activation.include_graph else []), "result_count": len(fused), "selected_count": len(ranked)})
+        emit_memory_event("memory.recall.completed", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "memory_activation_mode": activation.mode.value, "stores_queried": ["redis"] + (["graph"] if activation.include_graph else []), "result_count": len(fused), "selected_count": len(ranked)})
         return ranked
 
     async def _query_redis(self, query: MemoryQuery) -> List[MemoryEntry]:
@@ -147,20 +124,6 @@ class HybridRetrievalRouter:
             return []
         content = str(data.get("summary") or data.get("last_message") or data)
         return [self._entry(query, content, "redis", MemoryType.EPISODIC, semantic=0.3, lexical=0.4)]
-
-    async def _query_milvus(self, query: MemoryQuery) -> List[MemoryEntry]:
-        try:
-            hits = self.milvus.search(query.text or "", tenant_id=str(query.tenant_id), user_id=str(query.user_id), top_k=query.top_k * 2)
-        except Exception:
-            return []
-        out: List[MemoryEntry] = []
-        for h in hits or []:
-            out.append(self._entry(query, str(h.get("content") or h.get("text") or ""), "milvus", MemoryType.SEMANTIC, semantic=float(h.get("score", 0.6))))
-        return out
-
-    async def _query_elastic(self, query: MemoryQuery) -> List[MemoryEntry]:
-        hits = self.elastic.search(user_id=str(query.user_id), query=str(query.text or ""), limit=query.top_k * 2, tenant_id=str(query.tenant_id))
-        return [self._entry(query, str(h.get("result") or h.get("query") or ""), "elasticsearch", MemoryType.EPISODIC, lexical=0.7) for h in hits]
 
     async def _query_graph(self, query: MemoryQuery) -> List[MemoryEntry]:
         if not query.text:

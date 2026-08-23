@@ -7,7 +7,6 @@ from .adapters import (
 )
 from .vector_stores import (
     LlamaIndexVectorAdapter,
-    MilvusClientAdapter,
     VectorStore,
 )
 
@@ -18,7 +17,6 @@ __all__ = [
     "SRCompositeRetriever",
     "SRRetriever",
     "LlamaIndexVectorAdapter",
-    "MilvusClientAdapter",
     "VectorStore",
 ]
 

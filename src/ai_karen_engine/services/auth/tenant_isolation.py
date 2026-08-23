@@ -1,6 +1,6 @@
 """
 Multi-Tenant Data Isolation Service - Phase 4.1.c
-Implements tenant filtering at vector store (Milvus) and SQL layers with security incident logging.
+Implements tenant filtering at SQL layers with security incident logging.
 """
 
 import logging
@@ -171,7 +171,7 @@ class SecurityIncidentLogger:
         pass
 
 class VectorStoreTenantFilter:
-    """Handles tenant filtering for vector store operations (Milvus)"""
+    """Handles tenant filtering for vector store operations."""
     
     def __init__(self):
         self.logger = logging.getLogger(f"{__name__}.VectorStoreTenantFilter")

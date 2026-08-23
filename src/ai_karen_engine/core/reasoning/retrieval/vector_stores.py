@@ -37,40 +37,6 @@ class StoreInfo:
     details: Dict[str, Any]
 
 
-# ------- Default adapters (wrapping your existing clients) -------
-
-class MilvusClientAdapter(VectorStore):
-    """Wraps your internal MilvusClient to the VectorStore protocol."""
-
-    def __init__(self, underlying: Any) -> None:
-        # Expected API: upsert(vector, payload) -> id
-        #               search(vector, top_k, metadata_filter) -> [{"id","score","payload"}]
-        #               delete(ids)
-        #               _data: internal map for TTL/maintenance (optional)
-        self._m = underlying
-
-    def upsert(self, vector: List[float], payload: Dict[str, Any]) -> Any:
-        return self._m.upsert(vector, payload)
-
-    def batch_upsert(self, vectors: List[List[float]], payloads: List[Dict[str, Any]]) -> List[Any]:
-        ids: List[Any] = []
-        for v, p in zip(vectors, payloads):
-            ids.append(self._m.upsert(v, p))
-        return ids
-
-    def search(self, vector: List[float], *, top_k: int = 10, metadata_filter: Optional[Dict[str, Any]] = None) -> List[Result]:
-        return self._m.search(vector, top_k=top_k, metadata_filter=metadata_filter)
-
-    def delete(self, ids: Iterable[Any]) -> None:
-        self._m.delete(list(ids))
-
-    def count(self) -> int:
-        try:
-            return len(getattr(self._m, "_data", {}))
-        except Exception:
-            return 0
-
-
 # ------- Optional: LlamaIndex adapter as a VectorStore (SR layer) -------
 
 class LlamaIndexVectorAdapter(VectorStore):

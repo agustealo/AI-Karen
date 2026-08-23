@@ -10,7 +10,7 @@ Key Features:
 - Admission Policy: Intelligent filtering based on reward and novelty
 - Multi-Tenant Isolation: Secure tenant-specific case storage
 - Observability: Comprehensive metrics and health monitoring
-- Storage Integration: Postgres + Milvus + Redis for optimal performance
+- Storage Integration: Postgres + Redis for optimal performance
 
 Architecture:
 - Case Types: Immutable dataclasses for type-safe case representation
@@ -26,7 +26,7 @@ Usage Example:
     )
 
     # Initialize components
-    store = CaseStore(pg, milvus, redis)
+    store = CaseStore(pg, redis)
     retriever = CaseRetriever(store, embedder, reranker)
     policy = AdmissionPolicy(AdmissionConfig(min_reward=0.6))
     hooks = PlannerHooks(retriever, embedder, store, reward_adapters)

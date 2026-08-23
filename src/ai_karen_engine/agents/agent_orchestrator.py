@@ -491,7 +491,6 @@ class AgentOrchestrator(BaseService):
                         UnifiedMemoryService,
                     )
                     from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
-                    from ai_karen_engine.core.model_runtime.milvus_client import MilvusClient
                     from ai_karen_engine.database.client import (
                         MultiTenantPostgresClient,
                     )
@@ -499,13 +498,11 @@ class AgentOrchestrator(BaseService):
                     # These would normally be injected via dependency injection
                     # For now, we'll create placeholder instances
                     db_client = None  # Would be injected
-                    milvus_client = None  # Would be injected
                     embedding_manager = None  # Would be injected
 
-                    if all([db_client, milvus_client, embedding_manager]):
+                    if all([db_client, embedding_manager]):
                         service = UnifiedMemoryService(
                             db_client=db_client,
-                            milvus_client=milvus_client,
                             embedding_manager=embedding_manager,
                         )
                         logger.info("UnifiedMemoryService discovered and initialized")

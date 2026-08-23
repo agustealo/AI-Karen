@@ -30,7 +30,6 @@ class CaseMemoryMetrics:
     
     # Storage metrics
     postgres_operations_total: int = 0
-    milvus_operations_total: int = 0
     redis_operations_total: int = 0
     
     # Error metrics
@@ -179,8 +178,6 @@ class CaseMemoryObserver:
         
         if storage_type == 'postgres':
             self.metrics.postgres_operations_total += 1
-        elif storage_type == 'milvus':
-            self.metrics.milvus_operations_total += 1
         elif storage_type == 'redis':
             self.metrics.redis_operations_total += 1
         
@@ -220,7 +217,6 @@ class CaseMemoryObserver:
             },
             'storage': {
                 'postgres_operations': self.metrics.postgres_operations_total,
-                'milvus_operations': self.metrics.milvus_operations_total,
                 'redis_operations': self.metrics.redis_operations_total,
                 'errors': self.metrics.storage_errors_total
             },

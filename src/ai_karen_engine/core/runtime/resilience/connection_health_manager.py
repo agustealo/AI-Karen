@@ -35,8 +35,6 @@ class ConnectionType(str, Enum):
     """Connection type enumeration"""
     DATABASE = "database"
     REDIS = "redis"
-    MILVUS = "milvus"
-    ELASTICSEARCH = "elasticsearch"
 
 
 @dataclass
@@ -367,8 +365,6 @@ class ConnectionHealthManager:
         feature_map = {
             "redis": ["caching", "session_persistence", "rate_limiting"],
             "database": ["data_persistence", "user_management", "audit_logging"],
-            "milvus": ["vector_search", "memory_similarity", "semantic_search"],
-            "elasticsearch": ["full_text_search", "log_aggregation", "analytics"],
         }
         
         if service_name in self.health_status:

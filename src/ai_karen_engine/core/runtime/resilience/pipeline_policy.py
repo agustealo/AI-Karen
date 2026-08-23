@@ -20,8 +20,6 @@ class PipelinePolicy:
         self._policies: Dict[str, StagePolicy] = {
             "spacy": StagePolicy(timeout_seconds=2.0, max_retries=1, sensitivity_class="normal"),
             "distilbert": StagePolicy(timeout_seconds=3.0, max_retries=1, sensitivity_class="normal"),
-            "milvus_retrieval": StagePolicy(timeout_seconds=2.5, max_retries=2, sensitivity_class="normal"),
-            "elasticsearch": StagePolicy(timeout_seconds=2.0, max_retries=2, sensitivity_class="normal"),
             "leangraph_projection": StagePolicy(timeout_seconds=5.0, max_retries=3, sensitivity_class="high"),
             "profile_synthesis": StagePolicy(timeout_seconds=10.0, max_retries=1, sensitivity_class="high"),
             "echocore_batch": StagePolicy(timeout_seconds=300.0, max_retries=0, sensitivity_class="high"),

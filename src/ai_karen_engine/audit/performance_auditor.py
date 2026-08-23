@@ -141,7 +141,7 @@ class ServiceDiscovery:
             'database': ['db', 'database', 'postgres', 'sqlite'],
             'api': ['api', 'routes', 'fastapi', 'server'],
             'monitoring': ['monitoring', 'metrics', 'health'],
-            'memory': ['memory', 'cache', 'milvus'],
+            'memory': ['memory', 'cache', 'vector'],
             'chat': ['chat', 'conversation', 'copilot'],
             'security': ['security', 'rbac', 'audit'],
             'extensions': ['extension', 'plugin', 'marketplace'],

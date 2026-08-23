@@ -430,14 +430,12 @@ class ServiceRegistry:
                         from ai_karen_engine.core.model_runtime.embedding_manager import (
                             EmbeddingManager,
                         )
-                        from ai_karen_engine.core.model_runtime.milvus_client import MilvusClient
                         from ai_karen_engine.database.client import (
                             MultiTenantPostgresClient,
                         )
 
                         instance = WebUIMemoryService(
                             db_client=MultiTenantPostgresClient(),
-                            milvus_client=MilvusClient(),
                             embedding_manager=EmbeddingManager(),
                         )
                         logger.info("Created production WebUIMemoryService")
@@ -450,14 +448,12 @@ class ServiceRegistry:
                         from ai_karen_engine.core.model_runtime.embedding_manager import (
                             EmbeddingManager,
                         )
-                        from ai_karen_engine.core.model_runtime.milvus_client import MilvusClient
                         from ai_karen_engine.database.client import (
                             MultiTenantPostgresClient,
                         )
 
                         instance = UnifiedMemoryService(
                             db_client=MultiTenantPostgresClient(),
-                            milvus_client=MilvusClient(),
                             embedding_manager=EmbeddingManager(),
                         )
                     except Exception as e:

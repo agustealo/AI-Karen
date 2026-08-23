@@ -83,7 +83,6 @@ __all__ = [
     "SRCompositeRetriever",
     "VectorStore",
     "Result",
-    "MilvusClientAdapter",
     "LlamaIndexVectorAdapter",
     "ReasoningEvidenceAdapter",
     "EvidenceBundle",
@@ -116,6 +115,7 @@ __all__ = [
     "MetacognitionStrategy",
     "get_default_strategies",
     "get_default_executor",
+    "ReasoningEngine",
 ]
 
 _EXPORTS = {
@@ -192,7 +192,6 @@ _EXPORTS = {
     "SRCompositeRetriever": ("ai_karen_engine.core.reasoning.retrieval.adapters", "SRCompositeRetriever"),
     "VectorStore": ("ai_karen_engine.core.reasoning.retrieval.vector_stores", "VectorStore"),
     "Result": ("ai_karen_engine.core.reasoning.retrieval.adapters", "Result"),
-    "MilvusClientAdapter": ("ai_karen_engine.core.reasoning.retrieval.vector_stores", "MilvusClientAdapter"),
     "LlamaIndexVectorAdapter": ("ai_karen_engine.core.reasoning.retrieval.vector_stores", "LlamaIndexVectorAdapter"),
     "ReasoningEvidenceAdapter": ("ai_karen_engine.core.reasoning.retrieval.adapters", "ReasoningEvidenceAdapter"),
     "EvidenceBundle": ("ai_karen_engine.core.reasoning.retrieval.adapters", "EvidenceBundle"),
@@ -239,3 +238,6 @@ def __getattr__(name: str) -> Any:
     module_name, attr_name = _EXPORTS[name]
     module = import_module(module_name)
     return getattr(module, attr_name)
+
+
+from ai_karen_engine.agents.agent_reasoning import ReasoningEngine

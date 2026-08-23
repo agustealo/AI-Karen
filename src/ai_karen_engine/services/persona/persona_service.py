@@ -22,11 +22,6 @@ from ai_karen_engine.models.persona_models import (
     VerbosityEnum,
 )
 
-try:
-    from ai_karen_engine.clients.database.milvus_client import MilvusClient
-except Exception:  # pragma: no cover - optional vector dependency
-    MilvusClient = None  # type: ignore[assignment]
-
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +35,6 @@ class PersonaService:
         except Exception as exc:
             logger.warning("Failed to ensure persona tables exist during service init: %s", exc)
         self.nlp_analyzer = nlp_analyzer or self._create_default_nlp_analyzer()
-        self._persona_vector_client = self._create_persona_vector_client()
 
         self._persona_cache: Dict[str, Persona] = {}
         self._user_preferences_cache: Dict[str, UserPersonaPreferences] = {}
@@ -57,16 +51,6 @@ class PersonaService:
         except ImportError:
             logger.warning("NLP style analyzer not available, using mock analyzer")
             return MockNLPAnalyzer()
-
-    def _create_persona_vector_client(self):
-        """Create a persona embedding client when the vector stack is available."""
-        if MilvusClient is None:
-            return None
-        try:
-            return MilvusClient()
-        except Exception as exc:
-            logger.warning("Persona vector client unavailable: %s", exc)
-            return None
 
     @staticmethod
     def _cache_key(user_id: str, tenant_id: str) -> str:
@@ -322,47 +306,6 @@ class PersonaService:
             )
         return int(result.rowcount or 0)
 
-    async def _sync_persona_embedding(
-        self,
-        user_id: str,
-        tenant_id: str,
-        persona: Persona,
-        *,
-        persona_type: str = "custom",
-        is_active: bool = True,
-        confidence_score: float = 1.0,
-    ) -> None:
-        """Project the active persona into the persona vector collection when available."""
-        if self._persona_vector_client is None:
-            return
-        try:
-            vec = self._persona_vector_client.embed_persona(
-                {
-                    "name": persona.name,
-                    "bio": persona.description or persona.system_prompt,
-                    "tags": list(persona.domain_knowledge),
-                }
-            )
-            self._persona_vector_client.upsert_persona_embedding(
-                user_id=user_id,
-                vec=vec,
-                tenant_id=tenant_id,
-                metadata=self._persona_embedding_metadata(persona, tenant_id, persona_type),
-                persona_type=persona_type,
-                is_active=is_active,
-                confidence_score=confidence_score,
-            )
-        except Exception as exc:
-            logger.warning("Persona embedding sync failed for %s: %s", persona.id, exc)
-
-    async def _delete_persona_embedding(self, user_id: str) -> None:
-        if self._persona_vector_client is None:
-            return
-        try:
-            self._persona_vector_client.delete_persona_embedding(user_id)
-        except Exception as exc:
-            logger.warning("Persona embedding cleanup failed for %s: %s", user_id, exc)
-
     async def create_persona(
         self,
         user_id: str,
@@ -386,14 +329,6 @@ class PersonaService:
 
         self._persona_cache[persona.id] = persona
         self._user_preferences_cache[self._cache_key(user_id, tenant_id)] = preferences
-        if preferences.active_persona_id == persona.id:
-            await self._sync_persona_embedding(
-                user_id,
-                tenant_id,
-                persona,
-                persona_type="system" if persona.is_system_persona else "custom",
-                is_active=True,
-            )
         logger.info("Created persona '%s' for user %s", persona.name, user_id)
         return persona
 
@@ -434,14 +369,6 @@ class PersonaService:
 
         self._persona_cache[persona_id] = updated_persona
         self._user_preferences_cache[self._cache_key(user_id, tenant_id)] = preferences
-        if preferences.active_persona_id == persona_id:
-            await self._sync_persona_embedding(
-                user_id,
-                tenant_id,
-                updated_persona,
-                persona_type="system" if updated_persona.is_system_persona else "custom",
-                is_active=True,
-            )
         logger.info("Updated persona '%s' for user %s", updated_persona.name, user_id)
         return updated_persona
 
@@ -461,7 +388,6 @@ class PersonaService:
         ]
         if preferences.active_persona_id == persona_id:
             preferences.active_persona_id = None
-            await self._delete_persona_embedding(user_id)
         preferences.updated_at = datetime.utcnow()
         await self._save_user_preferences(user_id, tenant_id, preferences)
 
@@ -537,20 +463,6 @@ class PersonaService:
             active_persona = await self.get_persona(preferences.active_persona_id, user_id, tenant_id)
             if active_persona is None:
                 raise ValueError(f"Persona {preferences.active_persona_id} not found")
-
-        if preferences.active_persona_id != previous_active_persona_id:
-            if preferences.active_persona_id:
-                active_persona = await self.get_persona(preferences.active_persona_id, user_id, tenant_id)
-                if active_persona:
-                    await self._sync_persona_embedding(
-                        user_id,
-                        tenant_id,
-                        active_persona,
-                        persona_type="system" if active_persona.is_system_persona else "custom",
-                        is_active=True,
-                    )
-            else:
-                await self._delete_persona_embedding(user_id)
 
         preferences.updated_at = datetime.utcnow()
         await self._save_user_preferences(user_id, tenant_id, preferences)

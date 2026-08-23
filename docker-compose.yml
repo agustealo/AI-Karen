@@ -36,42 +36,6 @@ services:
       - ai-karen-net
 
   # ──────────────────────────────────────────────────────────────────────
-  # Elasticsearch
-  # ──────────────────────────────────────────────────────────────────────
-  elasticsearch:
-    container_name: ai-karen-elasticsearch
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.9.0
-    restart: unless-stopped
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
-      # Disk watermark settings to prevent cluster issues
-      - cluster.routing.allocation.disk.threshold_enabled=true
-      - cluster.routing.allocation.disk.watermark.low=85%
-      - cluster.routing.allocation.disk.watermark.high=90%
-      - cluster.routing.allocation.disk.watermark.flood_stage=95%
-    ports:
-      - "9200:9200"
-    volumes:
-      - es_data:/usr/share/elasticsearch/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-          cpus: '2.0'
-        reservations:
-          memory: 2G
-          cpus: '1.0'
-    networks:
-      - ai-karen-net
-
-  # ──────────────────────────────────────────────────────────────────────
   # Redis
   # ──────────────────────────────────────────────────────────────────────
   redis:
@@ -100,140 +64,6 @@ services:
         reservations:
           memory: 512M
           cpus: '0.25'
-    networks:
-      - ai-karen-net
-
-  # ──────────────────────────────────────────────────────────────────────
-  # Milvus Dependencies: Etcd
-  # ──────────────────────────────────────────────────────────────────────
-  milvus-etcd:
-    container_name: ai-karen-milvus-etcd
-    image: quay.io/coreos/etcd:v3.5.5
-    restart: unless-stopped
-    command: >
-      sh -c "
-        chmod 700 /etcd 2>/dev/null || true &&
-        etcd --config-file /etc/etcd/etcd.conf.yml
-      "
-    volumes:
-      - etcd_data:/etcd
-      - ./docker/etcd.conf.yml:/etc/etcd/etcd.conf.yml:ro
-    healthcheck:
-      test: ["CMD-SHELL", "etcdctl endpoint health"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: '0.5'
-        reservations:
-          memory: 256M
-          cpus: '0.25'
-    networks:
-      - ai-karen-net
-
-  # ──────────────────────────────────────────────────────────────────────
-  # Milvus Dependencies: MinIO
-  # ──────────────────────────────────────────────────────────────────────
-  milvus-minio:
-    container_name: ai-karen-minio
-    image: minio/minio:latest
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      # Use the new MinIO environment variables
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    command: minio server /data --console-address ":9001"
-    ports:
-      - "9000:9000"   # MinIO API
-      - "9001:9001"   # Console
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsSL http://localhost:9000/minio/health/live || exit 1"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '1.0'
-        reservations:
-          memory: 512M
-          cpus: '0.5'
-    networks:
-      - ai-karen-net
-
-  # ──────────────────────────────────────────────────────────────────────
-  # Milvus Vector DB (Standalone)
-  # ──────────────────────────────────────────────────────────────────────
-  milvus:
-    container_name: ai-karen-milvus
-    image: milvusdb/milvus:v2.4.8
-    restart: unless-stopped
-    # Explicitly run Milvus in standalone mode (prevents tini from running without a child)
-    command: ["milvus", "run", "standalone"]
-    depends_on:
-      milvus-etcd:
-        condition: service_healthy
-      milvus-minio:
-        condition: service_healthy
-    env_file:
-      - .env
-    environment:
-      ETCD_ENDPOINTS:           milvus-etcd:2379
-      MINIO_ADDRESS:            milvus-minio:9000
-      MINIO_ACCESS_KEY_ID:      ${MINIO_ACCESS_KEY}
-      MINIO_SECRET_ACCESS_KEY:  ${MINIO_SECRET_KEY}
-      DEPLOY_MODE:              standalone
-      # Add environment variables to clean stale metadata and data
-      CLEAN_STALE_META:         "true"
-      # Enable standalone mode explicitly
-      STANDALONE:              "true"
-      # Enable all components
-      ENABLE_ROOTCOORD:         "true"
-      ENABLE_QUERYCOORD:        "true"
-      ENABLE_DATACOORD:        "true"
-      ENABLE_INDEXCOORD:        "true"
-      ENABLE_QUERYNODE:         "true"
-      ENABLE_PROXY:            "true"
-      # Session management settings to prevent shutdowns
-      SESSION_TTL:             "60"
-      SESSION_KEEPALIVE_INTERVAL: "10"
-      SESSION_KEEPALIVE_TIMEOUT: "5"
-      # Graceful shutdown settings
-      GRACEFUL_STOP_TIMEOUT:   "60"
-    ports:
-      - "19531:19530"   # gRPC API (changed from 19530 to avoid conflict)
-      - "9091:9091"     # HTTP (health)
-      - "19121:19121"   # Prometheus exporter
-      - "30001:30001"   # RootCoord
-      - "30002:30002"   # DataCoord
-      - "30003:30003"   # QueryCoord
-      - "21123:21123"   # QueryNode (added to fix connectivity issues)
-      - "21124:21124"   # DataNode (added to fix port conflict)
-    volumes:
-      - milvus_data:/var/lib/milvus
-      - ./docker/milvus.yaml:/milvus/configs/milvus.yaml:ro  # Mount custom configuration
-    healthcheck:
-      test: ["CMD-SHELL", "timeout 10s bash -c '</dev/tcp/localhost/19531' || exit 1"]
-      interval: 30s
-      timeout: 15s
-      retries: 10
-      start_period: 600s  # Increased from 300s to allow more time for initialization
-    deploy:
-      resources:
-        limits:
-          memory: 4G      # Increased memory limit
-          cpus: '2.0'     # Increased CPU limit
-        reservations:
-          memory: 2G      # Increased memory reservation
-          cpus: '1.0'     # Increased CPU reservation
     networks:
       - ai-karen-net
 
@@ -513,8 +343,6 @@ services:
     depends_on:
       prometheus:
         condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:3000/api/health || exit 1"]
       interval: 30s
@@ -601,21 +429,8 @@ services:
       DB_USER: "${POSTGRES_USER}"
       DB_PASSWORD: "${POSTGRES_PASSWORD}"
       DB_NAME: "${POSTGRES_DB}"
-      ELASTICSEARCH_HOST: "elasticsearch"
-      ELASTICSEARCH_PORT: "9200"
-      MILVUS_HOST: "milvus"
-      MILVUS_PORT: "19531"
-      VECTOR_DB_HOST: "milvus"
-      VECTOR_DB_PORT: "19531"
       # Enable/disable database services (set to false for faster development)
-      KARI_ENABLE_VECTOR_DB: "true"  # Milvus vector database
-      KARI_ENABLE_ELASTICSEARCH: "true"  # Elasticsearch for document search
       KARI_ENABLE_DUCKDB: "true"  # DuckDB for local analytics
-      # Wait for Milvus to report healthy before enabling vector features (seconds)
-      MILVUS_HEALTH_WAIT_SECONDS: "180"
-      MILVUS_HEALTH_HOST: "milvus"
-      MILVUS_HEALTH_PORT: "9091"
-      MILVUS_HEALTH_PATH: "/healthz"
       
       # --- Authentication hardening & monitoring ---
       AUTH_RATE_LIMIT_STORAGE: "redis"
@@ -703,11 +518,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
       redis:
-        condition: service_healthy
-      milvus:
         condition: service_healthy
       prometheus:
         condition: service_started
@@ -802,17 +613,7 @@ services:
 volumes:
   postgres_data:
     driver: local
-  es_data:
-    driver: local
   redis_data:
-    driver: local
-  etcd_data:
-    driver: local
-  minio_data:
-    driver: local
-  milvus_data:
-    driver: local
-  web_node_modules:
     driver: local
   web_next_cache:
     driver: local

@@ -9,8 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,29 +56,29 @@ class PostgresMemoryRepository(MemoryRepository):
                 embedding_vector_json = json.dumps(item.embedding) if item.embedding else None
                 content_tsv = item.content
                 user_id = item.user_id or ""
-                result = await session.execute(
+                _ = await session.execute(
                     text(
                         """
                         INSERT INTO memory_items
-                            (id, tenant_id, user_id, conversation_id, scope, kind,
-                             content, content_tsv, embedding_vector,
+                            (memory_id, tenant_id, user_id, conversation_id, scope, kind,
+                             content, content_tsv, embeddings,
                              importance, confidence, source_type, source_ref,
                              expires_at, metadata, created_at, updated_at)
                         VALUES
-                            (:id, :tenant_id, :user_id, :conversation_id, :scope, :kind,
-                             :content, :content_tsv, :embedding_vector,
+                            (:memory_id, :tenant_id, :user_id, :conversation_id, :scope, :kind,
+                             :content, :content_tsv, :embeddings,
                              :importance, :confidence, :source_type, :source_ref,
                              :expires_at, :metadata, :created_at, :updated_at)
-                        ON CONFLICT (id) DO UPDATE SET
+                        ON CONFLICT (memory_id) DO UPDATE SET
                             content = EXCLUDED.content,
-                            embedding_vector = EXCLUDED.embedding_vector,
+                            embeddings = EXCLUDED.embeddings,
                             importance = EXCLUDED.importance,
                             confidence = EXCLUDED.confidence,
                             updated_at = EXCLUDED.updated_at
                         """
                     ),
                     {
-                        "id": item.id,
+                        "memory_id": item.id,
                         "tenant_id": item.tenant_id,
                         "user_id": user_id,
                         "conversation_id": item.conversation_id,
@@ -87,7 +86,7 @@ class PostgresMemoryRepository(MemoryRepository):
                         "kind": item.memory_type,
                         "content": item.content,
                         "content_tsv": content_tsv,
-                        "embedding_vector": embedding_vector_json,
+                        "embeddings": embedding_vector_json,
                         "importance": item.importance,
                         "confidence": item.confidence,
                         "source_type": item.source_type,
@@ -117,20 +116,20 @@ class PostgresMemoryRepository(MemoryRepository):
                         """
                         UPDATE memory_items
                         SET content = :content,
-                            embedding_vector = :embedding_vector,
+                            embeddings = :embeddings,
                             importance = :importance,
                             confidence = :confidence,
                             updated_at = :updated_at,
                             expires_at = :expires_at,
                             metadata = :metadata
-                        WHERE id = :id AND tenant_id = :tenant_id
+                        WHERE memory_id = :memory_id AND tenant_id = :tenant_id
                         """
                     ),
                     {
-                        "id": item.id,
+                        "memory_id": item.id,
                         "tenant_id": item.tenant_id,
                         "content": item.content,
-                        "embedding_vector": embedding_vector_json,
+                        "embeddings": embedding_vector_json,
                         "importance": item.importance,
                         "confidence": item.confidence,
                         "updated_at": item.updated_at,
@@ -152,7 +151,7 @@ class PostgresMemoryRepository(MemoryRepository):
         try:
             async with await self._session() as session:
                 await session.execute(
-                    text("DELETE FROM memory_items WHERE id = :id AND tenant_id = :tenant_id"),
+                    text("DELETE FROM memory_items WHERE memory_id = :id AND tenant_id = :tenant_id"),
                     {"id": memory_id, "tenant_id": tenant_id},
                 )
                 await session.commit()
@@ -170,12 +169,12 @@ class PostgresMemoryRepository(MemoryRepository):
                 result = await session.execute(
                     text(
                         """
-                        SELECT id, tenant_id, user_id, conversation_id, scope, kind,
-                               content, embedding_vector, importance, confidence,
+                        SELECT memory_id, tenant_id, user_id, conversation_id, scope, kind,
+                               content, embeddings, importance, confidence,
                                source_type, source_ref, expires_at, metadata,
                                created_at, updated_at
                         FROM memory_items
-                        WHERE id = :id AND tenant_id = :tenant_id
+                        WHERE memory_id = :id AND tenant_id = :tenant_id
                         """
                     ),
                     {"id": memory_id, "tenant_id": tenant_id},
@@ -215,8 +214,8 @@ class PostgresMemoryRepository(MemoryRepository):
 
             where = " AND ".join(clauses)
             sql = f"""
-                SELECT id, tenant_id, user_id, conversation_id, scope, kind,
-                       content, embedding_vector, importance, confidence,
+                SELECT memory_id, tenant_id, user_id, conversation_id, scope, kind,
+                       content, embeddings, importance, confidence,
                        source_type, source_ref, expires_at, metadata,
                        created_at, updated_at
                 FROM memory_items
@@ -245,7 +244,7 @@ class PostgresMemoryRepository(MemoryRepository):
         start = time.perf_counter()
         try:
             embedding_json = json.dumps(embedding)
-            clauses = ["tenant_id = :tenant_id", "embedding_vector IS NOT NULL"]
+            clauses = ["tenant_id = :tenant_id", "embeddings IS NOT NULL"]
             params: Dict[str, Any] = {"tenant_id": query.tenant_id, "embedding": embedding_json}
 
             if query.user_id:
@@ -260,14 +259,14 @@ class PostgresMemoryRepository(MemoryRepository):
 
             where = " AND ".join(clauses)
             sql = f"""
-                SELECT id, tenant_id, user_id, conversation_id, scope, kind,
-                       content, embedding_vector, importance, confidence,
+                SELECT memory_id, tenant_id, user_id, conversation_id, scope, kind,
+                       content, embeddings, importance, confidence,
                        source_type, source_ref, expires_at, metadata,
                        created_at, updated_at,
-                       1 - (embedding_vector <=> :embedding::vector) AS semantic_score
+                      1 - (embeddings <=> :embedding::vector) AS semantic_score
                 FROM memory_items
                 WHERE {where}
-                ORDER BY embedding_vector <=> :embedding::vector
+                ORDER BY embeddings <=> :embedding::vector
                 LIMIT :limit
             """
             params["limit"] = query.top_k
@@ -314,8 +313,8 @@ class PostgresMemoryRepository(MemoryRepository):
 
             where = " AND ".join(clauses)
             sql = f"""
-                SELECT id, tenant_id, user_id, conversation_id, scope, kind,
-                       content, embedding_vector, importance, confidence,
+                SELECT memory_id, tenant_id, user_id, conversation_id, scope, kind,
+                       content, embeddings, importance, confidence,
                        source_type, source_ref, expires_at, metadata,
                        created_at, updated_at,
                        ts_rank(content_tsv, websearch_to_tsquery('english', :query)) AS lexical_score
@@ -357,7 +356,7 @@ class PostgresMemoryRepository(MemoryRepository):
         start = time.perf_counter()
         try:
             embedding_json = json.dumps(embedding)
-            clauses = ["tenant_id = :tenant_id", "embedding_vector IS NOT NULL"]
+            clauses = ["tenant_id = :tenant_id", "embeddings IS NOT NULL"]
             params: Dict[str, Any] = {
                 "tenant_id": query.tenant_id,
                 "embedding": embedding_json,
@@ -376,17 +375,17 @@ class PostgresMemoryRepository(MemoryRepository):
 
             where = " AND ".join(clauses)
             sql = f"""
-                SELECT id, tenant_id, user_id, conversation_id, scope, kind,
-                       content, embedding_vector, importance, confidence,
+                SELECT memory_id, tenant_id, user_id, conversation_id, scope, kind,
+                       content, embeddings, importance, confidence,
                        source_type, source_ref, expires_at, metadata,
                        created_at, updated_at,
-                       1 - (embedding_vector <=> :embedding::vector) AS semantic_score,
+                       1 - (embeddings <=> :embedding::vector) AS semantic_score,
                        ts_rank(content_tsv, websearch_to_tsquery('english', :query)) AS lexical_score
                 FROM memory_items
                 WHERE {where}
                   AND content_tsv @@ websearch_to_tsquery('english', :query)
                 ORDER BY
-                    (0.6 * (1 - (embedding_vector <=> :embedding::vector))
+                    (0.6 * (1 - (embeddings <=> :embedding::vector))
                      + 0.4 * ts_rank(content_tsv, websearch_to_tsquery('english', :query))) DESC
                 LIMIT :limit
             """
@@ -435,13 +434,13 @@ class PostgresMemoryRepository(MemoryRepository):
 
     def _row_to_item(self, row: Any) -> MemoryItem:
         embedding = None
-        if row.embedding_vector:
+        if row.embeddings:
             try:
-                embedding = json.loads(row.embedding_vector)
+                embedding = json.loads(row.embeddings)
             except (TypeError, ValueError):
                 embedding = None
         return MemoryItem(
-            id=str(row.id),
+            id=str(row.memory_id),
             tenant_id=str(row.tenant_id) if row.tenant_id else "",
             user_id=str(row.user_id) if row.user_id else "",
             conversation_id=str(row.conversation_id) if row.conversation_id else None,

@@ -21,7 +21,6 @@ class FeatureFlags:
             "memory_profile_corrections_enabled": True,
             "graph_relationships_enabled": True,
             "profile_synthesis_enabled": True,
-            "elasticsearch_hybrid_enabled": True,
             "echocore_enabled": True,
             "reasoning_enabled": True,
             "reasoning_retrieval_enabled": True,

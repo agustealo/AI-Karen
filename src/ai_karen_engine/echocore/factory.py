@@ -255,7 +255,6 @@ class EchoCoreFactory:
     def create_memory_manager(
         self,
         user_id: str,
-        milvus_client: Optional[Any] = None,
         duckdb_client: Optional[Any] = None,
         postgres_client: Optional[Any] = None
     ) -> MemoryManager:
@@ -264,7 +263,6 @@ class EchoCoreFactory:
 
         Args:
             user_id: User identifier
-            milvus_client: Optional MilvusClient instance
             duckdb_client: Optional DuckDBClient instance
             postgres_client: Optional PostgresClient instance
 
@@ -281,21 +279,17 @@ class EchoCoreFactory:
             persistent = None
 
             if self.config.enable_memory_tiers:
-                # Short-term memory
                 short_term = ShortTermMemory(
                     user_id=user_id,
-                    milvus_client=milvus_client,
                     decay_half_life_hours=self.config.decay_half_life_hours,
                     max_memories=self.config.max_short_term_memories
                 )
 
-                # Long-term memory
                 long_term = LongTermMemory(
                     user_id=user_id,
                     duckdb_client=duckdb_client
                 )
 
-                # Persistent memory
                 persistent = PersistentMemory(
                     user_id=user_id,
                     postgres_client=postgres_client
@@ -408,20 +402,18 @@ class EchoCoreFactory:
 
         Args:
             user_id: User identifier
-            **db_clients: Optional database clients (milvus_client, duckdb_client, postgres_client)
+            **db_clients: Optional database clients (duckdb_client, postgres_client)
 
         Returns:
             Dictionary of all components
         """
         # Extract database clients
-        milvus_client = db_clients.get("milvus_client")
         duckdb_client = db_clients.get("duckdb_client")
         postgres_client = db_clients.get("postgres_client")
 
         # Create memory manager (which creates memory tiers)
         memory_manager = self.create_memory_manager(
             user_id,
-            milvus_client=milvus_client,
             duckdb_client=duckdb_client,
             postgres_client=postgres_client
         )

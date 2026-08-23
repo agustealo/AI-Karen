@@ -66,20 +66,6 @@ class RedisConfig:
 
 
 @dataclass
-class VectorDBConfig:
-    """Vector database configuration."""
-
-    provider: str = "milvus"  # milvus, pinecone, weaviate
-    host: str = "ai-karen-milvus"
-    port: int = 19531
-    collection_name: str = "ai_karen_memories"
-    dimension: int = 1536
-    metric_type: str = "COSINE"
-    index_type: str = "IVF_FLAT"
-    nlist: int = 1024
-
-
-@dataclass
 class ChatConfig:
     """Chat response configuration."""
 
@@ -231,7 +217,6 @@ class AIKarenConfig:
     theme: str = "dark"
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
-    vector_db: VectorDBConfig = field(default_factory=VectorDBConfig)
     chat: ChatConfig = field(default_factory=ChatConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     services: ServiceConfig = field(default_factory=ServiceConfig)
@@ -488,10 +473,6 @@ def _create_config_object(config_dict: Dict[str, Any]) -> AIKarenConfig:
         )
     if "redis" in data:
         data["redis"] = RedisConfig(**_filter_kwargs(RedisConfig, data["redis"]))
-    if "vector_db" in data:
-        data["vector_db"] = VectorDBConfig(
-            **_filter_kwargs(VectorDBConfig, data["vector_db"])
-        )
 
     if "llm" in data:
         llm_data = data["llm"].copy()
@@ -806,7 +787,6 @@ __all__ = [
     "ChatConfig",
     "DatabaseConfig",
     "RedisConfig",
-    "VectorDBConfig",
     "ServiceConfig",
     "SecurityConfig",
     "MonitoringConfig",

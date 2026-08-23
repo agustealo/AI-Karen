@@ -1,7 +1,7 @@
 """
 Database Consistency Validation System
 
-Comprehensive validation system for database consistency across PostgreSQL, Redis, and Milvus.
+Comprehensive validation system for database consistency across PostgreSQL and Redis.
 Includes health checking, cross-database reference integrity validation, data cleanup,
 and migration validation.
 
@@ -26,7 +26,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.database.client import DatabaseClient
 from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
-from ai_karen_engine.core.model_runtime.milvus_client import MilvusClient
 from ai_karen_engine.database.models import (
     Base,
     TenantConversation,
@@ -57,7 +56,6 @@ class DatabaseType(str, Enum):
 
     POSTGRESQL = "postgresql"
     REDIS = "redis"
-    MILVUS = "milvus"
 
 
 @dataclass
@@ -128,7 +126,6 @@ class DatabaseConsistencyValidator:
         # Database managers
         self.db_client = DatabaseClient()
         self.redis_manager = get_redis_manager()
-        self._milvus_client: Optional[MilvusClient] = None  # Lazy loaded
 
         # Validation state
         self._validation_start_time: Optional[datetime] = None
@@ -154,14 +151,6 @@ class DatabaseConsistencyValidator:
                 "example",
             ],
         }
-
-    @property
-    def milvus_client(self) -> MilvusClient:
-        """Lazy load Milvus client only when needed for validation"""
-        if self._milvus_client is None:
-            logger.info("Lazy loading Milvus client for database consistency validator")
-            self._milvus_client = MilvusClient()
-        return self._milvus_client
 
     async def validate_all(self) -> ConsistencyReport:
         """
@@ -231,9 +220,6 @@ class DatabaseConsistencyValidator:
 
         # Redis health check
         await self._check_redis_health()
-
-        # Milvus health check
-        await self._check_milvus_health()
 
     async def _check_postgresql_health(self) -> None:
         """Check PostgreSQL database health"""
@@ -392,68 +378,11 @@ class DatabaseConsistencyValidator:
                 )
             )
 
-    async def _check_milvus_health(self) -> None:
-        """Check Milvus database health"""
-        start_time = time.time()
-
-        try:
-            # Test basic connectivity
-            await self.milvus_client.connect()
-            health_info = await self.milvus_client.health_check()
-
-            response_time = (time.time() - start_time) * 1000
-
-            # Determine status based on health info
-            status = ValidationStatus.HEALTHY
-            if health_info.get("status") != "healthy":
-                status = ValidationStatus.WARNING
-            if response_time > 1000:  # > 1 second
-                status = ValidationStatus.WARNING
-
-            self._database_health.append(
-                DatabaseHealthStatus(
-                    database=DatabaseType.MILVUS,
-                    is_connected=True,
-                    response_time_ms=response_time,
-                    status=status,
-                    metadata={
-                        "health_info": health_info,
-                        "records": health_info.get("records", "0"),
-                    },
-                )
-            )
-
-        except Exception as e:
-            logger.error(f"Milvus health check failed: {e}")
-            self._database_health.append(
-                DatabaseHealthStatus(
-                    database=DatabaseType.MILVUS,
-                    is_connected=False,
-                    response_time_ms=0,
-                    status=ValidationStatus.CRITICAL,
-                    error_message=str(e),
-                )
-            )
-
-            self._validation_issues.append(
-                ValidationIssue(
-                    database=DatabaseType.MILVUS,
-                    severity=ValidationStatus.CRITICAL,
-                    category="connectivity",
-                    description="Milvus connection failed",
-                    details={"error": str(e)},
-                    recommendation="Check Milvus connection settings and ensure Milvus is running",
-                )
-            )
-
     async def _validate_cross_database_references(self) -> None:
         """Validate cross-database reference integrity"""
         logger.info("Validating cross-database reference integrity")
 
         try:
-            # Check PostgreSQL -> Milvus references
-            await self._validate_postgres_milvus_references()
-
             # Check Redis cache consistency
             await self._validate_redis_cache_consistency()
 
@@ -468,68 +397,6 @@ class DatabaseConsistencyValidator:
                     severity=ValidationStatus.CRITICAL,
                     category="cross_reference",
                     description=f"Cross-database validation failed: {str(e)}",
-                    details={"error": str(e)},
-                )
-            )
-
-    async def _validate_postgres_milvus_references(self) -> None:
-        """Validate references between PostgreSQL and Milvus"""
-        try:
-            async with self.db_client.get_async_session() as session:
-                # Get memory items that should have embeddings
-                result = await session.execute(
-                    select(TenantMemoryItem.id, TenantMemoryItem.content)
-                    .where(TenantMemoryItem.embedding.is_(None))
-                    .limit(100)
-                )
-                missing_embeddings = result.fetchall()
-
-                if missing_embeddings:
-                    self._validation_issues.append(
-                        ValidationIssue(
-                            database=DatabaseType.POSTGRESQL,
-                            severity=ValidationStatus.WARNING,
-                            category="missing_embeddings",
-                            description=f"Found {len(missing_embeddings)} memory items without embeddings",
-                            details={"count": len(missing_embeddings)},
-                            recommendation="Run embedding generation for missing items",
-                            auto_fixable=True,
-                        )
-                    )
-
-                # Check for conversations without memory entries
-                result = await session.execute(
-                    text("""
-                        SELECT c.id, c.title 
-                        FROM conversations c
-                        LEFT JOIN memory_items m ON c.user_id::text = m.scope
-                        WHERE m.id IS NULL
-                        AND c.created_at < NOW() - INTERVAL '1 day'
-                        LIMIT 50
-                    """)
-                )
-                orphaned_conversations = result.fetchall()
-
-                if orphaned_conversations:
-                    self._validation_issues.append(
-                        ValidationIssue(
-                            database=DatabaseType.POSTGRESQL,
-                            severity=ValidationStatus.WARNING,
-                            category="orphaned_conversations",
-                            description=f"Found {len(orphaned_conversations)} conversations without memory entries",
-                            details={"count": len(orphaned_conversations)},
-                            recommendation="Review and potentially archive old conversations",
-                        )
-                    )
-
-        except Exception as e:
-            logger.error(f"PostgreSQL-Milvus validation failed: {e}")
-            self._validation_issues.append(
-                ValidationIssue(
-                    database=DatabaseType.POSTGRESQL,
-                    severity=ValidationStatus.WARNING,
-                    category="cross_reference",
-                    description=f"PostgreSQL-Milvus validation failed: {str(e)}",
                     details={"error": str(e)},
                 )
             )
@@ -891,13 +758,6 @@ class DatabaseConsistencyValidator:
                 "degraded_mode": redis_info.get("degraded_mode", False),
                 "memory_cache_size": redis_info.get("memory_cache_size", 0),
                 "connection_failures": redis_info.get("connection_failures", 0),
-            }
-
-            # Milvus metrics
-            health_info = await self.milvus_client.health_check()
-            metrics["milvus"] = {
-                "status": health_info.get("status", "unknown"),
-                "records": health_info.get("records", "0"),
             }
 
         except Exception as e:

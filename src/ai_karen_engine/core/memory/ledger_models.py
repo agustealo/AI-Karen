@@ -175,12 +175,12 @@ class ContradictionEvent(Base):
 
 
 class ProjectionStatus(Base):
-    """Tracks the fan-out projection of events to Redis, Milvus, Elastic, LeanGraph, DuckDB."""
+    """Tracks the fan-out projection of events to Redis, LeanGraph, DuckDB."""
     __tablename__ = "projection_status"
 
     projection_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     event_id = Column(UUID(as_uuid=True), ForeignKey("memory_event.event_id", ondelete="CASCADE"), nullable=False)
-    target_store = Column(String(50), nullable=False) # 'redis', 'milvus', 'elasticsearch', 'leangraph', 'duckdb'
+    target_store = Column(String(50), nullable=False) # 'redis', 'leangraph', 'duckdb'
     
     status = Column(String(50), default="pending") # 'pending', 'completed', 'failed'
     retry_count = Column(BigInteger, default=0)

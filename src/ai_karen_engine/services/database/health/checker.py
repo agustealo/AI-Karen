@@ -1,7 +1,7 @@
 """
 Database Health Checker
 
-Comprehensive health checker that validates PostgreSQL, Redis, and Milvus connections.
+Comprehensive health checker that validates PostgreSQL and Redis connections.
 Integrates with all database validation services to provide a unified health status.
 
 Requirements: 2.1
@@ -18,7 +18,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.services.database_connection_manager import get_database_manager
 from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
-from ai_karen_engine.core.model_runtime.milvus_client import MilvusClient
 from ai_karen_engine.services.database_consistency_validator import (
     get_database_consistency_validator,
     ValidationStatus,
@@ -89,7 +88,6 @@ class DatabaseHealthChecker:
         # Database managers
         self.db_manager = get_database_manager()
         self.redis_manager = get_redis_manager()
-        self._milvus_client: Optional[MilvusClient] = None  # Lazy loaded
 
         # Validation services
         self.consistency_validator = get_database_consistency_validator()
@@ -108,14 +106,6 @@ class DatabaseHealthChecker:
         except Exception as e:
             logger.error(f"Failed to initialize database health checker: {e}")
             return False
-
-    @property
-    def milvus_client(self) -> MilvusClient:
-        """Lazy load Milvus client only when needed for health checks"""
-        if self._milvus_client is None:
-            logger.info("Lazy loading Milvus client for database health checker")
-            self._milvus_client = MilvusClient()
-        return self._milvus_client
 
     async def check_health(
         self, include_detailed_validation: bool = False
@@ -237,10 +227,6 @@ class DatabaseHealthChecker:
         redis_status = await self._check_redis_connection()
         connections.append(redis_status)
 
-        # Milvus health check
-        milvus_status = await self._check_milvus_connection()
-        connections.append(milvus_status)
-
         return connections
 
     async def _check_postgresql_connection(self) -> DatabaseConnectionStatus:
@@ -353,45 +339,6 @@ class DatabaseHealthChecker:
                 degraded_mode=True,
             )
 
-    async def _check_milvus_connection(self) -> DatabaseConnectionStatus:
-        """Check Milvus connection health"""
-        start_time = time.time()
-
-        try:
-            # Test basic connectivity
-            await self.milvus_client.connect()
-            health_info = await self.milvus_client.health_check()
-
-            response_time = (time.time() - start_time) * 1000
-
-            # Determine status
-            status = ValidationStatus.HEALTHY
-            if health_info.get("status") != "healthy":
-                status = ValidationStatus.WARNING
-            if response_time > 1000:  # > 1 second
-                status = ValidationStatus.WARNING
-
-            return DatabaseConnectionStatus(
-                database=DatabaseType.MILVUS,
-                is_connected=True,
-                response_time_ms=response_time,
-                status=status,
-                metadata={
-                    "health_info": health_info,
-                    "records": health_info.get("records", "0"),
-                },
-            )
-
-        except Exception as e:
-            logger.error(f"Milvus health check failed: {e}")
-            return DatabaseConnectionStatus(
-                database=DatabaseType.MILVUS,
-                is_connected=False,
-                response_time_ms=0,
-                status=ValidationStatus.CRITICAL,
-                error_message=str(e),
-            )
-
     async def _check_migration_status(self) -> MigrationStatus:
         """Check database migration status"""
         try:
@@ -436,16 +383,6 @@ class DatabaseHealthChecker:
                 "memory_cache_size": redis_info.get("memory_cache_size", 0),
                 "connection_failures": redis_info.get("connection_failures", 0),
             }
-
-            # Milvus metrics
-            try:
-                health_info = await self.milvus_client.health_check()
-                metrics["milvus"] = {
-                    "status": health_info.get("status", "unknown"),
-                    "records": health_info.get("records", "0"),
-                }
-            except Exception:
-                metrics["milvus"] = {"status": "error", "records": "0"}
 
         except Exception as e:
             logger.error(f"Performance metrics collection failed: {e}")
@@ -552,17 +489,10 @@ class DatabaseHealthChecker:
             pg_connected = not self.db_manager.is_degraded()
             redis_connected = not self.redis_manager.is_degraded()
 
-            # Test Milvus quickly
-            milvus_connected = True
-            try:
-                await self.milvus_client.connect()
-            except Exception:
-                milvus_connected = False
-
             # Determine overall status
             if not pg_connected:
                 overall_status = "critical"
-            elif not redis_connected or not milvus_connected:
+            elif not redis_connected:
                 overall_status = "degraded"
             else:
                 overall_status = "healthy"
@@ -573,7 +503,6 @@ class DatabaseHealthChecker:
                 "databases": {
                     "postgresql": "connected" if pg_connected else "disconnected",
                     "redis": "connected" if redis_connected else "degraded",
-                    "milvus": "connected" if milvus_connected else "disconnected",
                 },
                 "uptime_seconds": time.time() - self._start_time,
             }

@@ -34,7 +34,6 @@ matplotlib
 neo4j
 PyJWT
 markdown
-pymilvus
 pytesseract
 pymupdf
 bs4

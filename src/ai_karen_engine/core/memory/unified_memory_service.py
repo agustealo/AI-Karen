@@ -25,7 +25,6 @@ from ai_karen_engine.core.memory.retrieval.curated_recall import (
     is_curated_memory_metadata,
 )
 from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
-from ai_karen_engine.core.model_runtime.milvus_client import MilvusClient
 from ai_karen_engine.database.client import MultiTenantPostgresClient
 from ai_karen_engine.database.memory_manager import (
     MemoryEntry,
@@ -131,14 +130,12 @@ class UnifiedMemoryService:
     def __init__(
         self,
         db_client: MultiTenantPostgresClient,
-        milvus_client: MilvusClient,
         embedding_manager: EmbeddingManager,
         redis_client: Optional[Any] = None,
         policy_manager: Optional[MemoryPolicyManager] = None,
     ):
         """Initialize unified memory service"""
         self.db_client = db_client
-        self.milvus_client = milvus_client
         self.embedding_manager = embedding_manager
         self.redis_client = redis_client
 
@@ -149,7 +146,6 @@ class UnifiedMemoryService:
         # Initialize base memory manager for compatibility
         self.base_manager = MemoryManager(
             db_client=db_client,
-            milvus_client=milvus_client,
             embedding_manager=embedding_manager,
             redis_client=redis_client,
         )
@@ -433,34 +429,6 @@ class UnifiedMemoryService:
                 # Generate new embedding
                 new_embedding = await self.embedding_manager.get_embedding(new_content)
 
-                # Update vector store
-                collection_name = self.base_manager._get_collection_name(tenant_id)
-
-                # Delete old vector
-                await self.milvus_client.delete(
-                    collection_name=collection_name,
-                    filter_expr=f"memory_id == '{memory_id}'",
-                )
-
-                # Insert new vector
-                vector_metadata = {
-                    "memory_id": memory_id,
-                    "scope": f"user:{updated_metadata.get('user_id', 'unknown')}",
-                    "kind": "memory",
-                    "timestamp": time.time(),
-                    **{
-                        k: v
-                        for k, v in updated_metadata.items()
-                        if k not in ["content", "embedding"]
-                    },
-                }
-
-                await self.milvus_client.insert(
-                    collection_name=collection_name,
-                    vectors=[new_embedding.tolist()],
-                    metadata=[vector_metadata],
-                )
-
                 # Update content in metadata
                 updated_metadata["content"] = new_content
                 updated_metadata["embedding_updated"] = True
@@ -544,13 +512,6 @@ class UnifiedMemoryService:
             if hard_delete:
                 # 3a. Hard deletion - completely remove from all storage layers
 
-                # Delete from vector store
-                collection_name = self.base_manager._get_collection_name(tenant_id)
-                await self.milvus_client.delete(
-                    collection_name=collection_name,
-                    filter_expr=f"memory_id == '{memory_id}'",
-                )
-
                 # Delete from PostgreSQL
                 async with self.db_client.get_async_session() as session:
                     from sqlalchemy import delete
@@ -602,13 +563,6 @@ class UnifiedMemoryService:
                         .values(metadata=updated_metadata, updated_at=datetime.utcnow())
                     )
                     await session.commit()
-
-                # Remove from vector store (soft deleted memories shouldn't appear in searches)
-                collection_name = self.base_manager._get_collection_name(tenant_id)
-                await self.milvus_client.delete(
-                    collection_name=collection_name,
-                    filter_expr=f"memory_id == '{memory_id}'",
-                )
 
                 logger.info(
                     f"Soft deletion completed: {memory_id}",
@@ -1256,14 +1210,10 @@ class UnifiedMemoryService:
     async def health_check(self) -> Dict[str, Any]:
         """Check the health of the memory service and its dependencies."""
         db_healthy = await self.db_client.check_health()
-        milvus_healthy = await self.milvus_client.check_health()
-        
-        is_healthy = db_healthy and milvus_healthy
-        
+
         return {
-            "status": "healthy" if is_healthy else "unhealthy",
+            "status": "healthy" if db_healthy else "unhealthy",
             "db_healthy": db_healthy,
-            "milvus_healthy": milvus_healthy,
             "metrics": self.get_service_metrics()
         }
 

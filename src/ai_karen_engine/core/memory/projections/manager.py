@@ -6,11 +6,9 @@ Orchestrates multiple projection workers to fan out memory events.
 
 import asyncio
 from typing import Dict, Any, Optional
-from ai_karen_engine.core.logging import get_logger
+import logging
 
 from .base import ProjectionWorker
-from .milvus_worker import MilvusWorker
-from .elastic_worker import ElasticWorker
 from .redis_worker import RedisWorker
 from .leangraph_worker import LeanGraphWorker
 from .duckdb_worker import DuckDBWorker
@@ -23,8 +21,6 @@ class ProjectionManager:
 
     def __init__(self):
         self.workers: Dict[str, ProjectionWorker] = {
-            "milvus": MilvusWorker(),
-            "elasticsearch": ElasticWorker(),
             "redis": RedisWorker(),
             "leangraph": LeanGraphWorker(),
             "duckdb": DuckDBWorker()
@@ -42,15 +38,10 @@ class ProjectionManager:
 
         tasks = []
         for store_name, worker in self.workers.items():
-            # Use specific flag for each projection store if desired, 
-            # or generic feature flags.
             flag_name = f"{store_name}_enabled"
             if store_name == "leangraph":
                 flag_name = "graph_relationships_enabled"
-            elif store_name == "elasticsearch":
-                flag_name = "elasticsearch_hybrid_enabled"
 
-            # Projection task
             tasks.append(
                 self.safe_runner.run_stage(
                     stage_name=f"{store_name}_projection",
@@ -63,10 +54,8 @@ class ProjectionManager:
                 )
             )
 
-        # Execute projections concurrently
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Log results
         for idx, (store_name, _) in enumerate(self.workers.items()):
             res = results[idx]
             if isinstance(res, Exception):
@@ -76,7 +65,6 @@ class ProjectionManager:
             else:
                 logger.debug(f"Projection to {store_name} successful for event {event_id}")
 
-# Singleton instance
 projection_manager = ProjectionManager()
 
 def get_projection_manager() -> ProjectionManager:

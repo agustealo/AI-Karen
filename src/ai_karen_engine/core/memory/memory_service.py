@@ -26,7 +26,6 @@ from ai_karen_engine.core.memory.retrieval.curated_recall import (
     filter_curated_memories,
 )
 from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
-from ai_karen_engine.core.model_runtime.milvus_client import MilvusClient
 from ai_karen_engine.database.client import MultiTenantPostgresClient
 from ai_karen_engine.database.memory_manager import (
     MemoryEntry,
@@ -447,7 +446,6 @@ class WebUIMemoryService(UnifiedMemoryService):
     def __init__(
         self,
         db_client: Optional[MultiTenantPostgresClient] = None,
-        milvus_client: Optional[MilvusClient] = None,
         embedding_manager: Optional[EmbeddingManager] = None,
         redis_client: Optional[Any] = None,
         policy_manager: Optional[Any] = None,
@@ -457,16 +455,13 @@ class WebUIMemoryService(UnifiedMemoryService):
         if base_memory_manager is None:
             db_client = db_client or MultiTenantPostgresClient()
             embedding_manager = embedding_manager or EmbeddingManager()
-            milvus_client = milvus_client or MilvusClient()
         else:
             db_client = base_memory_manager.db_client
             embedding_manager = base_memory_manager.embedding_manager
-            milvus_client = base_memory_manager.milvus_client
             redis_client = getattr(base_memory_manager, "redis_client", redis_client)
 
         super().__init__(
             db_client=db_client,
-            milvus_client=milvus_client,
             embedding_manager=embedding_manager,
             redis_client=redis_client,
             policy_manager=policy_manager,
@@ -1192,9 +1187,13 @@ class WebUIMemoryService(UnifiedMemoryService):
 
 __all__ = [
     "WebUIMemoryService",
+    "MemoryService",
     "WebUIMemoryEntry",
     "WebUIMemoryQuery",
     "MemoryType",
     "UISource",
     "MemoryContextBuilder",
 ]
+
+
+MemoryService = WebUIMemoryService
