@@ -1,6 +1,18 @@
-"""Lightweight ElasticSearch client with optional in-memory fallback and lazy loading."""
+"""Lightweight ElasticSearch client with optional in-memory fallback and lazy loading.
+
+DEPRECATED: Elasticsearch is on the retirement path under DATA-CONVERGE-1.
+Use MemoryRepository via PostgresMemoryRepository (PostgreSQL FTS + pgvector) instead.
+"""
 
 from __future__ import annotations
+
+import warnings
+warnings.warn(
+    "ElasticClient is deprecated and will be removed in DATA-CONVERGE-1. "
+    "Migrate to MemoryRepository (PostgresMemoryRepository + PostgreSQL FTS + pgvector).",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import os
 import logging

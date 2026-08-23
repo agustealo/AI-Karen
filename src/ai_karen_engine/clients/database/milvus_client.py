@@ -2,7 +2,18 @@
 MilvusClient: Handles all vector memory for Kari via Milvus 2.x (pymilvus).
 Persona embeddings, upserts, deletes, recall, cosine similarity.
 Updated with async contract compatibility methods and lazy loading for performance.
+
+DEPRECATED: Milvus is on the retirement path under DATA-CONVERGE-1.
+Use MemoryRepository via PostgresMemoryRepository instead.
 """
+
+import warnings
+warnings.warn(
+    "MilvusClient is deprecated and will be removed in DATA-CONVERGE-1. "
+    "Migrate to MemoryRepository (PostgresMemoryRepository + pgvector).",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import queue
 import os

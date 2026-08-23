@@ -182,10 +182,23 @@ class TenantMemoryItem(Base):
     kind = Column(String(255), nullable=False)
     content = Column(Text, nullable=False)
     embedding = Column(ARRAY(Float), nullable=True)
+    embedding_vector = Column("embedding_vector", Text, nullable=True)
     item_metadata = Column("metadata", JSON, default={})
+    tenant_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    user_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    conversation_id = Column(UUID(as_uuid=True), nullable=True)
+    importance = Column(Float, nullable=True, default=0.5)
+    confidence = Column(Float, nullable=True, default=1.0)
+    source_type = Column(String(100), nullable=True, default="system")
+    source_ref = Column(String(255), nullable=True)
+    expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    __table_args__ = (Index("idx_memory_items_scope_kind", "scope", "kind"),)
+    __table_args__ = (
+        Index("idx_memory_items_scope_kind", "scope", "kind"),
+        Index("idx_memory_items_tenant_user", "tenant_id", "user_id", "created_at"),
+    )
 
     def __repr__(self):
         return f"<TenantMemoryItem(id={self.id}, scope='{self.scope}', kind='{self.kind}')>"

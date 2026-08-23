@@ -2,7 +2,18 @@
 Elasticsearch Projection Worker for AI Karen Memory System.
 
 Projects memory assertions into Elasticsearch for lexical and hybrid retrieval.
+
+DEPRECATED: Elasticsearch is on the retirement path under DATA-CONVERGE-1.
+Lexical search is handled by PostgreSQL FTS via MemoryRepository.
 """
+
+import warnings
+warnings.warn(
+    "ElasticWorker is deprecated and will be removed in DATA-CONVERGE-1. "
+    "Lexical search is now handled by PostgreSQL FTS via MemoryRepository.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import asyncio
 from typing import Any, Dict, Optional

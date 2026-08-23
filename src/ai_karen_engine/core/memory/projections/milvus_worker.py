@@ -2,7 +2,18 @@
 Milvus Projection Worker for AI Karen Memory System.
 
 Projects memory assertions into the Milvus vector database for semantic retrieval.
+
+DEPRECATED: Milvus is on the retirement path under DATA-CONVERGE-1.
+Memory assertions are stored directly in PostgreSQL memory_items with pgvector.
 """
+
+import warnings
+warnings.warn(
+    "MilvusWorker is deprecated and will be removed in DATA-CONVERGE-1. "
+    "Memory is now stored directly in PostgreSQL via MemoryRepository.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import asyncio
 from typing import Any, Dict, Optional

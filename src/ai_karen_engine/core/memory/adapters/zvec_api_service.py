@@ -4,7 +4,18 @@ Business logic layer connecting API endpoints to Zvec components.
 
 This service provides the bridge between the REST API endpoints and the
 underlying Zvec orchestration, sync, monitoring, and conflict resolution systems.
+
+DEPRECATED: Zvec is on the retirement path under DATA-CONVERGE-1.
+Memory operations should use MemoryRepository.
 """
+
+import warnings
+warnings.warn(
+    "ZvecApiService is deprecated and will be removed in DATA-CONVERGE-1. "
+    "Use MemoryRepository for memory operations.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import asyncio
 from datetime import datetime, timedelta
