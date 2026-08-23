@@ -30,17 +30,6 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 try:
-    from ai_karen_engine.core.memory.adapters.zvec_neurovault_adapter import (
-        ZvecNeuroVaultAdapter,
-    )
-    from ai_karen_engine.core.memory.sync_protocol import (
-        ZvecMilvusSync,
-        SyncDirection,
-        ConflictResolution,
-    )
-    from ai_karen_engine.core.memory.concurrency_manager import (
-        MultiUserConcurrencyManager,
-    )
     from ai_karen_engine.core.memory.resilience.offline_mode import OfflineMode
     from ai_karen_engine.monitoring.zvec_metrics import (
         ZvecMetricsCollector,
@@ -51,7 +40,6 @@ try:
 except ImportError as e:
     logger.warning(f"Zvec components not available: {e}")
     ZVEC_AVAILABLE = False
-    # Create stub classes for type checking
     ZvecNeuroVaultAdapter = None  # type: ignore
     ZvecMilvusSync = None  # type: ignore
     MultiUserConcurrencyManager = None  # type: ignore

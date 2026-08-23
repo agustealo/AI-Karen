@@ -337,19 +337,20 @@ class RedisProbe:
 
     async def check(self) -> DependencyHealth:
         start = time.time()
-        from ai_karen_engine.core.memory.redis_connection_manager import (
-            get_redis_manager,
-        )
+        try:
+            from ai_karen_engine.core.memory.redis_connection_manager import (
+                get_redis_manager,
+            )
 
-        manager = get_redis_manager()
-        health = await manager.health_check()
-        degraded_mode = bool(health.get("degraded_mode"))
-        healthy = bool(health.get("healthy"))
-        if healthy:
-            status = DependencyStatus.HEALTHY
-            reason = None
-        else:
-            status = DependencyStatus.UNHEALTHY
+            manager = get_redis_manager()
+            health = await manager.health_check()
+            degraded_mode = bool(health.get("degraded_mode"))
+            healthy = bool(health.get("healthy"))
+            if healthy:
+                status = DependencyStatus.HEALTHY
+                reason = None
+            else:
+                status = DependencyStatus.UNHEALTHY
                 reason = (
                     "Redis degraded mode active"
                     if degraded_mode

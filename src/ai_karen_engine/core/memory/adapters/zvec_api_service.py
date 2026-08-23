@@ -19,19 +19,6 @@ logger = get_logger(__name__)
 # =============================================================================
 
 try:
-    from ai_karen_engine.core.memory.adapters.zvec_neurovault_adapter import (
-        ZvecNeuroVaultAdapter,
-    )
-    from ai_karen_engine.core.memory.sync_protocol import (
-        ZvecMilvusSync,
-        SyncDirection,
-        SyncQueue,
-        ConflictResolution,
-        ConflictType as SyncConflictType,
-    )
-    from ai_karen_engine.core.memory.concurrency_manager import (
-        MultiUserConcurrencyManager,
-    )
     from ai_karen_engine.core.memory.resilience.offline_mode import OfflineMode
     from ai_karen_engine.monitoring.zvec_metrics import (
         ZvecMetricsCollector,
