@@ -181,7 +181,7 @@
   },
   {
     "name": "ollama",
-    "provider_class": "OllamaProvider",
+    "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Ollama",
     "supports_streaming": true,
     "supports_embeddings": false,

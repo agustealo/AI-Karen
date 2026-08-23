@@ -1,0 +1,27 @@
+project_id = "karen-local"
+org_id = "karen-org"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "realtime", "graphql_public"]
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[realtime]
+enabled = true
+
+[storage]
+enabled = true
+
+[auth]
+enabled = false
+
+[analytics]
+enabled = false
+
+[functions]
+enabled = false
