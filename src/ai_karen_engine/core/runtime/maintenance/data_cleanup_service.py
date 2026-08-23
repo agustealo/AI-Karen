@@ -69,7 +69,8 @@ class DataCleanupService:
         self.backup_directory.mkdir(exist_ok=True)
         
         # Database managers
-        self.db_manager = get_database_manager()
+        from ai_karen_engine.database.client import get_database_client
+        self.db_client = get_database_client()
         self.redis_manager = get_redis_manager()
         
         # Demo/test patterns to identify and remove

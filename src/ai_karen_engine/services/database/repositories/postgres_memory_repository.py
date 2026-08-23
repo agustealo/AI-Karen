@@ -384,9 +384,7 @@ class PostgresMemoryRepository(MemoryRepository):
                 FROM memory_items
                 WHERE {where}
                   AND content_tsv @@ websearch_to_tsquery('english', :query)
-                ORDER BY
-                    (0.6 * (1 - (embeddings <=> :embedding::vector))
-                     + 0.4 * ts_rank(content_tsv, websearch_to_tsquery('english', :query))) DESC
+                ORDER BY created_at DESC
                 LIMIT :limit
             """
             params["limit"] = query.top_k

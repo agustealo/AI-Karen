@@ -50,7 +50,7 @@ from ai_karen_engine.utils.chat_helpers import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/chat", tags=["chat"])
+router = APIRouter(tags=["chat"])
 security = HTTPBearer()
 
 

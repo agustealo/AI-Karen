@@ -22,10 +22,6 @@ class DatabaseServiceConfig:
         enable_conversation_manager: bool = True,
         enable_memory_manager: bool = True,
         enable_tenant_manager: bool = True,
-        # Canonical repository settings (DATA-CONVERGE-1)
-        enable_canonical_memory_repository: bool = False,
-        enable_canonical_conversation_repository: bool = False,
-        enable_canonical_artifact_store: bool = False,
         # Performance settings
         pool_size: int = 10,
         max_overflow: int = 20,
@@ -42,10 +38,6 @@ class DatabaseServiceConfig:
         self.enable_conversation_manager = enable_conversation_manager
         self.enable_memory_manager = enable_memory_manager
         self.enable_tenant_manager = enable_tenant_manager
-
-        self.enable_canonical_memory_repository = enable_canonical_memory_repository
-        self.enable_canonical_conversation_repository = enable_canonical_conversation_repository
-        self.enable_canonical_artifact_store = enable_canonical_artifact_store
 
         self.pool_size = pool_size
         self.max_overflow = max_overflow
@@ -76,6 +68,7 @@ class DatabaseServiceFactory:
                 MultiTenantPostgresClient,
                 DatabaseClient,
             )
+            from ai_karen_engine.integrations.supabase_client import get_supabase_platform
 
             if self.config.enable_multi_tenant:
                 client = MultiTenantPostgresClient()
@@ -85,6 +78,9 @@ class DatabaseServiceFactory:
                 client = DatabaseClient()
                 self._services["database_client"] = client
                 logger.info("Standard database client created successfully")
+
+            platform = get_supabase_platform()
+            self._services["supabase_platform"] = platform
 
             return client
 
@@ -213,18 +209,9 @@ class DatabaseServiceFactory:
 
     def create_canonical_repositories(self):
         """Create canonical DATA-CONVERGE-1 repositories."""
-        if not any(
-            [
-                self.config.enable_canonical_memory_repository,
-                self.config.enable_canonical_conversation_repository,
-                self.config.enable_canonical_artifact_store,
-            ]
-        ):
-            return None
-
         try:
             from ai_karen_engine.services.database.repositories import RepositoryFactory
-            from ai_karen_engine.database.client import MultiTenantPostgresClient
+            from ai_karen_engine.integrations.supabase_client import get_supabase_platform
 
             db_client = self.get_service("database_client")
             if not db_client:
@@ -238,29 +225,21 @@ class DatabaseServiceFactory:
                 logger.error("Cannot create canonical repositories: session factory unavailable")
                 return None
 
-            storage_client = None
-            if self.config.enable_canonical_artifact_store:
-                try:
-                    from ai_karen_engine.integrations.supabase_client import get_supabase_client
-                    storage_client = get_supabase_client()
-                except Exception as exc:
-                    logger.warning("Supabase client unavailable for ArtifactStore: %s", exc)
+            supabase_platform = get_supabase_platform()
+            storage_client = supabase_platform.storage
 
             factory = RepositoryFactory(
                 session_factory=session_factory,
                 storage_client=storage_client,
             )
 
-            if self.config.enable_canonical_memory_repository:
-                self._services["memory_repository"] = factory.create_memory_repository()
-                if "memory_manager" in self._services and hasattr(self._services["memory_manager"], "memory_repository"):
-                    self._services["memory_manager"].memory_repository = self._services["memory_repository"]
+            self._services["memory_repository"] = factory.create_memory_repository()
+            if "memory_manager" in self._services and hasattr(self._services["memory_manager"], "memory_repository"):
+                self._services["memory_manager"].memory_repository = self._services["memory_repository"]
 
-            if self.config.enable_canonical_conversation_repository:
-                self._services["conversation_repository"] = factory.create_conversation_repository()
+            self._services["conversation_repository"] = factory.create_conversation_repository()
 
-            if self.config.enable_canonical_artifact_store:
-                self._services["artifact_store"] = factory.create_artifact_store()
+            self._services["artifact_store"] = factory.create_artifact_store()
 
             logger.info("Canonical repositories created successfully")
             return factory
@@ -287,18 +266,14 @@ class DatabaseServiceFactory:
                 logger.error("Cannot initialize database: client creation failed")
                 return False
 
-            # Create tables
-            try:
-                db_client.create_tables()
-                logger.info("Database tables created/verified")
-            except Exception as e:
-                logger.warning(f"Table creation failed (may already exist): {e}")
-
             # Run migrations
             if self.config.enable_migrations:
                 migration_manager = self.get_service("migration_manager")
                 if not migration_manager:
                     migration_manager = self.create_migration_manager()
+
+            # Initialize canonical repositories and Supabase platform
+            self.create_canonical_repositories()
 
             # Seed initial data if needed
             try:
@@ -340,6 +315,7 @@ class DatabaseServiceFactory:
         self.create_conversation_manager()
         self.create_memory_manager()
         self.create_tenant_manager()
+        self.create_canonical_repositories()
 
         logger.info(f"All database services created: {list(self._services.keys())}")
         return self._services

@@ -106,9 +106,7 @@ class DatabaseConfig:
         """Initialize database connection with service-isolated configuration"""
         try:
             # Import here to avoid circular imports
-            from ai_karen_engine.services.database_connection_manager import (
-                initialize_database_manager
-            )
+            from ai_karen_engine.database.client import get_database_client
             from ai_karen_engine.services.database_health_monitor import (
                 initialize_database_health_monitor,
                 get_database_health_monitor,
@@ -134,15 +132,8 @@ class DatabaseConfig:
             # Initialize service-isolated database manager first
             await self._initialize_service_isolated_manager()
 
-            # Initialize legacy database manager for backward compatibility
-            self._database_manager = await initialize_database_manager(
-                database_url=self.settings.database_url,
-                pool_size=self.settings.db_pool_size,
-                max_overflow=self.settings.db_max_overflow,
-                pool_recycle=self.settings.db_pool_recycle,
-                pool_pre_ping=self.settings.db_pool_pre_ping,
-                echo=self.settings.db_echo,
-            )
+            # Initialize canonical database client for backward compatibility
+            self._database_manager = get_database_client()
 
             # Initialize database health monitor but DON'T start monitoring yet (lazy)
             self._database_health_monitor = await initialize_database_health_monitor(

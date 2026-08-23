@@ -29,9 +29,6 @@ class DatabaseConfig:
     pool_size: int = 10
     max_overflow: int = 20
     enable_redis: bool = True
-    enable_canonical_memory_repository: bool = False
-    enable_canonical_conversation_repository: bool = False
-    enable_canonical_artifact_store: bool = False
 
 
 class DatabaseIntegrationManager:
@@ -71,7 +68,6 @@ class DatabaseIntegrationManager:
                 await self._initialize_redis()
             
             await self._initialize_managers()
-            self.db_client.create_shared_tables()
             
             self._initialized = True
             logger.info("Database integration manager initialized successfully")
@@ -132,18 +128,22 @@ class DatabaseIntegrationManager:
             embedding_manager=self.embedding_manager
         )
         
-        if self.config.enable_canonical_memory_repository or self.config.enable_canonical_conversation_repository:
-            try:
-                from ai_karen_engine.services.database.repositories import RepositoryFactory
-                session_factory = getattr(self.db_client, "get_async_session", None)
-                if session_factory:
-                    repo_factory = RepositoryFactory(session_factory=session_factory)
-                    if self.config.enable_canonical_memory_repository:
-                        self.memory_repository = repo_factory.create_memory_repository()
-                    if self.config.enable_canonical_conversation_repository:
-                        self.conversation_repository = repo_factory.create_conversation_repository()
-            except Exception as exc:
-                logger.warning("Failed to initialize canonical repositories: %s", exc)
+        try:
+            from ai_karen_engine.services.database.repositories import RepositoryFactory
+            from ai_karen_engine.integrations.supabase_client import get_supabase_platform
+            
+            session_factory = getattr(self.db_client, "get_async_session", None)
+            if session_factory:
+                supabase_platform = get_supabase_platform()
+                repo_factory = RepositoryFactory(
+                    session_factory=session_factory,
+                    storage_client=supabase_platform.storage,
+                )
+                self.memory_repository = repo_factory.create_memory_repository()
+                self.conversation_repository = repo_factory.create_conversation_repository()
+                self.artifact_store = repo_factory.create_artifact_store()
+        except Exception as exc:
+            logger.warning("Failed to initialize canonical repositories: %s", exc)
         
         self.memory_manager = MemoryManager(
             db_client=self.db_client,

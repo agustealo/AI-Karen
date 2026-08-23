@@ -208,14 +208,12 @@ def create_app() -> FastAPI:
             # Check connection health with enhanced database information
             connection_status = {}
             try:
-                from ai_karen_engine.services.database_connection_manager import (
-                    get_database_manager,
-                )
+                from ai_karen_engine.database.client import get_database_client
                 from ai_karen_engine.core.memory.redis_connection_manager import (
                     get_redis_manager,
                 )
 
-                db_manager = get_database_manager()
+                db_client = get_database_client()
                 redis_manager = get_redis_manager()
 
                 # Get detailed database status
@@ -223,7 +221,7 @@ def create_app() -> FastAPI:
 
                 connection_status = {
                     "database": {
-                        "status": "degraded" if db_manager.is_degraded() else "healthy",
+                        "status": "degraded" if db_client.is_degraded() else "healthy",
                         "pool_info": db_health.get("pool_info", {}),
                         "configuration": db_health.get("configuration", {}),
                         "connection_failures": db_health.get("connection_failures", 0),

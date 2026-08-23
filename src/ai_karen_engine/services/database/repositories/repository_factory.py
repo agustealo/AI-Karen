@@ -36,11 +36,9 @@ class RepositoryFactory:
         self,
         session_factory,
         storage_client=None,
-        use_chat_tables: bool = False,
     ):
         self._session_factory = session_factory
         self._storage_client = storage_client
-        self._use_chat_tables = use_chat_tables
         self._memory: Optional[MemoryRepository] = None
         self._conversation: Optional[ConversationRepository] = None
         self._artifact: Optional[ArtifactStore] = None
@@ -55,7 +53,6 @@ class RepositoryFactory:
         if self._conversation is None:
             self._conversation = PostgresConversationRepository(
                 session_factory=self._session_factory,
-                use_chat_tables=self._use_chat_tables,
             )
             logger.info("Canonical ConversationRepository initialized (PostgreSQL)")
         return self._conversation

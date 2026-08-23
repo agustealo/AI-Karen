@@ -20,7 +20,7 @@ import random
 import json
 
 from ai_karen_engine.core.services.base import BaseService, ServiceConfig
-from ai_karen_engine.services.database_connection_manager import get_database_manager
+from ai_karen_engine.database.client import get_database_client
 from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
 from ai_karen_engine.services.database.health.checker import DatabaseHealthChecker
 
@@ -127,7 +127,7 @@ class DatabaseOptimizationService(BaseService):
         self.alert_thresholds = config.config.get("alert_thresholds", {})
         
         # Service dependencies
-        self.db_manager = get_database_manager()
+        self.db_client = get_database_client()
         self.redis_manager = get_redis_manager()
         self.health_checker = DatabaseHealthChecker()
         
@@ -164,7 +164,7 @@ class DatabaseOptimizationService(BaseService):
         self.logger.info("Initializing Database Optimization Service")
         
         # Initialize dependencies
-        await self.db_manager.initialize()
+        await self.db_client.initialize()
         await self.redis_manager.initialize()
         await self.health_checker.initialize()
         
@@ -211,7 +211,7 @@ class DatabaseOptimizationService(BaseService):
                 return False
             
             # Check database connectivity
-            return await self.db_manager.async_health_check()
+            return await self.db_client.async_health_check()
         except Exception as e:
             self.logger.error(f"Health check failed: {e}")
             return False
@@ -264,7 +264,7 @@ class DatabaseOptimizationService(BaseService):
     async def _collect_database_metrics(self) -> Optional[ConnectionPoolMetrics]:
         """Collect PostgreSQL connection pool metrics."""
         try:
-            pool_info = self.db_manager._get_pool_metrics()
+            pool_info = self.db_client._get_pool_metrics()
             
             if not pool_info.get("sync_pool"):
                 return None
@@ -279,7 +279,7 @@ class DatabaseOptimizationService(BaseService):
             
             # Test connection performance
             start_time = time.time()
-            connection_successful = await self.db_manager.async_health_check()
+            connection_successful = await self.db_client.async_health_check()
             connection_time_ms = (time.time() - start_time) * 1000
             
             return ConnectionPoolMetrics(

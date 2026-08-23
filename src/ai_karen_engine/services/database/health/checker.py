@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from ai_karen_engine.core.logging import get_logger
-from ai_karen_engine.services.database_connection_manager import get_database_manager
+from ai_karen_engine.database.client import get_database_client
 from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
 from ai_karen_engine.services.database_consistency_validator import (
     get_database_consistency_validator,
@@ -86,7 +86,7 @@ class DatabaseHealthChecker:
 
     def __init__(self):
         # Database managers
-        self.db_manager = get_database_manager()
+        self.db_client = get_database_client()
         self.redis_manager = get_redis_manager()
 
         # Validation services
@@ -234,7 +234,7 @@ class DatabaseHealthChecker:
         start_time = time.time()
 
         try:
-            async with self.db_manager.async_session_scope() as session:
+            async with self.db_client.async_session_scope() as session:
                 # Test basic connectivity
                 result = await session.execute(text("SELECT version()"))
                 version = result.scalar()
@@ -263,7 +263,7 @@ class DatabaseHealthChecker:
                 status = ValidationStatus.WARNING
             if long_queries > 0:
                 status = ValidationStatus.WARNING
-            if self.db_manager.is_degraded():
+            if self.db_client.is_degraded():
                 status = ValidationStatus.CRITICAL
 
             return DatabaseConnectionStatus(
@@ -273,10 +273,10 @@ class DatabaseHealthChecker:
                 status=status,
                 version=version,
                 connection_count=connection_count,
-                degraded_mode=self.db_manager.is_degraded(),
+                degraded_mode=self.db_client.is_degraded(),
                 metadata={
                     "long_running_queries": long_queries,
-                    "pool_metrics": self.db_manager._get_pool_metrics(),
+                    "pool_metrics": self.db_client._get_pool_metrics(),
                 },
             )
 
@@ -354,8 +354,8 @@ class DatabaseHealthChecker:
 
         try:
             # PostgreSQL metrics
-            if self.db_manager and not self.db_manager.is_degraded():
-                async with self.db_manager.async_session_scope() as session:
+            if self.db_client and not self.db_client.is_degraded():
+                async with self.db_client.async_session_scope() as session:
                     # Database size
                     result = await session.execute(
                         text("SELECT pg_database_size(current_database())")
@@ -373,7 +373,7 @@ class DatabaseHealthChecker:
                     metrics["postgresql"] = {
                         "database_size_bytes": db_size,
                         "active_connections": active_connections,
-                        "pool_metrics": self.db_manager._get_pool_metrics(),
+                    "pool_metrics": self.db_client._get_pool_metrics(),
                     }
 
             # Redis metrics
@@ -486,7 +486,7 @@ class DatabaseHealthChecker:
         """
         try:
             # Quick connection tests
-            pg_connected = not self.db_manager.is_degraded()
+            pg_connected = not self.db_client.is_degraded()
             redis_connected = not self.redis_manager.is_degraded()
 
             # Determine overall status

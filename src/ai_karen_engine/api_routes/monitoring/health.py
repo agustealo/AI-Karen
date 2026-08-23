@@ -403,12 +403,10 @@ async def _build_degraded_mode_status() -> Dict[str, Any]:
 
     # Database check
     try:
-        from ai_karen_engine.services.database_connection_manager import (
-            get_database_manager,
-        )
+        from ai_karen_engine.database.client import get_database_client
 
-        db_manager = get_database_manager()
-        if db_manager.is_degraded():
+        db_client = get_database_client()
+        if db_client.is_degraded():
             degraded_components.append("database")
     except Exception:
         degraded_components.append("database")

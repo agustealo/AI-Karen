@@ -13,12 +13,18 @@ from ai_karen_engine.database.models import Tenant
 
 logger = logging.getLogger(__name__)
 
-# Ordered SQL migration files
+# Ordered SQL migration files (filenames, not stems)
 SCHEMA_MIGRATIONS: List[str] = [
     "001_agui_chat_core.sql",
     "003_persona_persistence.sql",
     "004_chat_runtime_control_plane.sql",
     "005_fix_auth_user_schema.sql",
+    "006_populate_missing_profile_fields.sql",
+    "007_memory_ledger.sql",
+    "008_memory_convergence.sql",
+    "009_conversation_tenant_scoping.sql",
+    "010_row_level_security.sql",
+    "011_schema_corrections.sql",
 ]
 
 
@@ -83,7 +89,8 @@ class MigrationManager:
                 }
                 applied = self._bootstrap_existing_schema(conn, applied)
                 for filename in self.migration_files:
-                    if filename in applied:
+                    version = filename[:-4]  # strip .sql
+                    if version in applied:
                         continue
                     path = Path(self.migrations_dir) / filename
                     sql = path.read_text()
@@ -92,7 +99,7 @@ class MigrationManager:
                         text(
                             "INSERT INTO schema_migrations (version) VALUES (:version)"
                         ),
-                        {"version": filename},
+                        {"version": version},
                     )
             logger.info("Applied pending schema migrations")
             return True
@@ -102,7 +109,7 @@ class MigrationManager:
 
     def _bootstrap_existing_schema(self, conn: Any, applied: set[str]) -> set[str]:
         """Mark legacy baseline migrations as applied when their tables already exist."""
-        if "001_agui_chat_core.sql" not in applied:
+        if "001_agui_chat_core" not in applied:
             auth_users_exists = conn.execute(
                 text("SELECT to_regclass('public.auth_users')")
             ).scalar()
@@ -111,10 +118,10 @@ class MigrationManager:
                     text(
                         "INSERT INTO schema_migrations (version) VALUES (:version) ON CONFLICT DO NOTHING"
                     ),
-                    {"version": "001_agui_chat_core.sql"},
+                    {"version": "001_agui_chat_core"},
                 )
                 applied = set(applied)
-                applied.add("001_agui_chat_core.sql")
+                applied.add("001_agui_chat_core")
         return applied
 
     def rollback_migration(self, revision: str) -> bool:
@@ -127,7 +134,7 @@ class MigrationManager:
         history: List[Dict[str, Any]] = []
         previous: Optional[str] = None
         for filename in self.migration_files:
-            revision = filename.split("_", 1)[0]
+            revision = filename[:-4]  # strip .sql
             message = filename[len(revision) + 1 : -4]
             history.append(
                 {
@@ -176,7 +183,7 @@ class MigrationManager:
                 }
                 applied = self._bootstrap_existing_schema(session, applied)
                 status["pending_migrations"] = len(
-                    [f for f in self.migration_files if f not in applied]
+                    [f for f in self.migration_files if f[:-4] not in applied]
                 )
 
             status["health"] = "healthy" if self.client.health_check() else "unhealthy"

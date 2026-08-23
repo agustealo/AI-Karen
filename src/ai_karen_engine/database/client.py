@@ -8,10 +8,9 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import QueuePool
 from contextlib import contextmanager, asynccontextmanager
-from typing import Generator, AsyncGenerator, Dict, Any, Optional
-import asyncio
+from typing import Generator, AsyncGenerator, Any, Optional
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from dataclasses import dataclass, field
 
 import os
@@ -235,6 +234,10 @@ class DatabaseClient:
             logger.error(f"Database health check failed: {e}")
             return False
     
+    def is_degraded(self) -> bool:
+        """Return True if the database is not healthy."""
+        return not self.health_check()
+    
     def comprehensive_health_check(self) -> DatabaseHealthStatus:
         """Perform comprehensive database health check with metrics"""
         start_time = time.time()
@@ -311,7 +314,7 @@ class DatabaseClient:
             
             # Log detailed startup results
             sanitized_url = self._sanitize_database_url(settings.database_url)
-            logger.info(f"Database startup health check completed successfully:")
+            logger.info("Database startup health check completed successfully:")
             logger.info(f"  - Database URL: {sanitized_url}")
             logger.info(f"  - Response time: {response_time_ms:.2f}ms")
             for check in checks:
@@ -331,7 +334,7 @@ class DatabaseClient:
             
             # Log detailed failure information
             sanitized_url = self._sanitize_database_url(settings.database_url)
-            logger.error(f"Database startup health check failed:")
+            logger.error("Database startup health check failed:")
             logger.error(f"  - Database URL: {sanitized_url}")
             logger.error(f"  - Error: {error_msg}")
             logger.error(f"  - Response time: {response_time_ms:.2f}ms")
@@ -397,6 +400,13 @@ class DatabaseClient:
                 logger.error(f"DatabaseClient: Error committing async session: {e}", exc_info=True)
                 await session.rollback()
                 raise
+    
+    async_session_scope = get_async_session
+    _get_pool_metrics = _get_connection_pool_metrics
+
+    def initialize(self) -> None:
+        """No-op compatibility method. DatabaseClient auto-initializes on instantiation."""
+        return None
     
     async def async_health_check(self) -> bool:
         """Check database connectivity asynchronously"""

@@ -2,7 +2,7 @@
 Migration Validator Service
 
 Service for validating database migration status and ensuring all schemas are up to date.
-Checks migration consistency across PostgreSQL, Redis, and Milvus.
+Checks migration consistency across PostgreSQL and Redis.
 
 Requirements: 2.5
 """
@@ -104,7 +104,8 @@ class MigrationValidator:
 
     def __init__(self, migrations_directory: str = "src/ai_karen_engine/database/migrations"):
         self.migrations_directory = Path(migrations_directory)
-        self.db_manager = get_database_manager()
+        from ai_karen_engine.database.client import get_database_client
+        self.db_client = get_database_client()
         
         # Expected tables from SQLAlchemy models
         self.expected_tables = self._get_expected_tables()
@@ -219,7 +220,7 @@ class MigrationValidator:
     async def _get_current_migration(self) -> Optional[MigrationInfo]:
         """Get current migration version"""
         try:
-            async with self.db_manager.async_session_scope() as session:
+            async with self.db_client.async_session_scope() as session:
                 # Check if alembic_version table exists
                 result = await session.execute(
                     text("""
@@ -306,7 +307,7 @@ class MigrationValidator:
     async def _validate_schema(self) -> SchemaValidationResult:
         """Validate database schema against expected models"""
         try:
-            async with self.db_manager.async_session_scope() as session:
+            async with self.db_client.async_session_scope() as session:
                 # Get actual tables in database
                 result = await session.execute(
                     text("""
@@ -531,7 +532,7 @@ class MigrationValidator:
                 # Create missing tables using SQLAlchemy
                 try:
                     # This will create all tables defined in Base.metadata
-                    await self.db_manager.create_tables_async()
+                    await self.db_client.create_tables_async()
                     
                     results["tables_created"] = list(schema_validation.missing_tables)
                     results["message"] = f"Created {len(schema_validation.missing_tables)} tables"
@@ -571,7 +572,7 @@ class MigrationValidator:
         }
         
         try:
-            async with self.db_manager.async_session_scope() as session:
+            async with self.db_client.async_session_scope() as session:
                 # Check if table exists
                 result = await session.execute(
                     text("""
