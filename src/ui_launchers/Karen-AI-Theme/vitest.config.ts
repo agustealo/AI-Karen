@@ -10,7 +10,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['tests/**/*.test.{ts,tsx}'],
+    include: ['tests/**/*.test.{ts,tsx}', 'src/realtime/tests/**/*.test.{ts,tsx}'],
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
     globals: true,
