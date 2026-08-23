@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import FastAPI
 
@@ -16,6 +16,12 @@ from ai_karen_engine.server.optimized_startup import (
     cleanup_optimization_components,
     load_plugins_optimized,
 )
+
+from ai_karen_engine.core.runtime.contracts import RuntimeCapabilitiesSnapshot
+from ai_karen_engine.core.observability.emitter import get_observability_emitter
+from ai_karen_engine.core.observability.contracts import RuntimeEventType
+from ai_karen_engine.core.observability.context import get_observability_context
+from ai_karen_engine.core.model_runtime.provider_health_monitor import HealthStatus
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +326,137 @@ async def ensure_core_services_initialized() -> None:
 
         await initialize_services()
         _core_services_initialized = True
+
+
+async def run_canonical_runtime_bootstrap(settings: Any, app: Optional[FastAPI] = None) -> Dict[str, Any]:
+    """Canonical runtime bootstrap sequence.
+
+    1. load + validate central config
+    2. initialize observability context
+    3. initialize ProviderRegistryService
+    4. register configured ProviderEndpoints
+    5. run model discovery
+    6. synchronize model inventory
+    7. initialize provider adapters lazily
+    8. initialize health service
+    9. take initial health snapshot
+    10. construct RuntimeCapabilitiesSnapshot
+    11. initialize ChatRuntime
+    12. mark application ready
+    """
+    emitter = get_observability_emitter()
+    emitter.emit(RuntimeEventType.RUNTIME_STARTUP_STARTED)
+
+    try:
+        # 1. config already loaded as `settings` by caller
+
+        # 2. observability context is initialized lazily via get_observability_context()
+
+        # 3. ProviderRegistryService
+        from ai_karen_engine.core.model_runtime.provider_registry_service import (
+            get_provider_registry_service,
+        )
+        registry = get_provider_registry_service()
+
+        # 4. register configured ProviderEndpoints from settings
+        configured = getattr(settings, "providers", None) or {}
+        for provider_id, endpoint_data in configured.items():
+            try:
+                registry.register_configured_endpoint(
+                    {
+                        "provider_id": provider_id,
+                        **endpoint_data,
+                    }
+                )
+            except Exception as exc:
+                logger.warning("Failed to register configured provider %s: %s", provider_id, exc)
+
+        # 5-6. model discovery + inventory sync
+        try:
+            from ai_karen_engine.core.model_runtime.model_registry_writer import (
+                sync_model_registry_cache,
+            )
+            sync_model_registry_cache()
+        except Exception as exc:
+            logger.warning("Model registry sync failed: %s", exc)
+
+        # 7. provider adapters are initialized lazily on first use
+
+        # 8. health service is owned by ProviderRegistryService
+
+        # 9. initial health snapshot
+        try:
+            from ai_karen_engine.core.model_runtime.provider_health_monitor import (
+                get_health_monitor,
+            )
+            health_monitor = get_health_monitor()
+            all_health = health_monitor.get_all_provider_health()
+            healthy_count = sum(
+                1 for info in all_health.values()
+                if info.health_status in {
+                    HealthStatus.HEALTHY,
+                    HealthStatus.DEGRADED,
+                }
+            )
+            logger.info(
+                "Initial health snapshot: %d/%d providers healthy/degraded",
+                healthy_count,
+                len(all_health),
+            )
+        except Exception as exc:
+            logger.warning("Initial health snapshot failed: %s", exc)
+
+        # 10. RuntimeCapabilitiesSnapshot
+        try:
+            available_providers = registry.get_available_providers()
+            available_models: List[str] = []
+            for provider_id in available_providers:
+                try:
+                    available_models.extend(
+                        registry.get_registered_models(provider_id, healthy_only=False)
+                    )
+                except Exception:
+                    pass
+            snapshot = RuntimeCapabilitiesSnapshot(
+                available_providers=available_providers,
+                available_models=available_models,
+                available_tools=[],
+                available_workflows=[],
+                available_agents=[],
+                available_reasoning_modes=[],
+                degraded_state=False,
+                runtime_mode="normal",
+            )
+            if app is not None:
+                app.state.runtime_capabilities = snapshot
+            emitter.emit(RuntimeEventType.RUNTIME_CAPABILITIES_READY)
+        except Exception as exc:
+            logger.warning("Runtime capabilities snapshot failed: %s", exc)
+
+        # 11. ChatRuntime
+        try:
+            from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
+            get_chat_runtime()
+        except Exception as exc:
+            logger.warning("ChatRuntime initialization failed: %s", exc)
+
+        # 12. mark ready
+        emitter.emit(RuntimeEventType.RUNTIME_STARTUP_COMPLETED)
+        logger.info("Canonical runtime bootstrap completed")
+
+        return {
+            "status": "success",
+            "providers_registered": len(registry.list_provider_endpoints()),
+            "providers_available": len(registry.get_available_providers()),
+        }
+
+    except Exception as exc:
+        emitter.emit(RuntimeEventType.RUNTIME_STARTUP_FAILED, status="error")
+        logger.error("Canonical runtime bootstrap failed: %s", exc, exc_info=True)
+        return {
+            "status": "error",
+            "error": str(exc),
+        }
 
 
 async def cleanup_ai_services() -> None:
@@ -928,46 +1065,9 @@ def register_startup_tasks(app: FastAPI) -> None:
     @app.on_event("startup")
     async def _init_llm_providers() -> None:
         try:
-            fast = os.getenv(
-                "KARI_FAST_STARTUP", os.getenv("FAST_STARTUP", "true")
-            ).lower() in ("1", "true", "yes")
-
-            from ai_karen_engine.integrations.startup import initialize_llm_providers
-
-            if fast:
-                logger.info(
-                    "⚡ Fast startup: deferring LLM provider initialization to background"
-                )
-
-                async def _bg_init() -> None:
-                    try:
-                        result = await asyncio.to_thread(initialize_llm_providers)
-                        logger.info(
-                            "LLM providers initialized (background)",
-                            extra={
-                                "total": result.get("total_providers"),
-                                "healthy": result.get("healthy_providers"),
-                                "available": result.get("available_providers"),
-                            },
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Background LLM provider initialization failed: %s", e
-                        )
-
-                asyncio.create_task(_bg_init())
-            else:
-                result = initialize_llm_providers()
-                logger.info(
-                    "LLM providers initialized",
-                    extra={
-                        "total": result.get("total_providers"),
-                        "healthy": result.get("healthy_providers"),
-                        "available": result.get("available_providers"),
-                    },
-                )
+            await run_canonical_runtime_bootstrap(settings, app)
         except Exception as e:
-            logger.warning("LLM provider initialization skipped: %s", e)
+            logger.warning("Canonical runtime bootstrap skipped: %s", e)
 
     @app.on_event("startup")
     async def _init_memory_service() -> None:

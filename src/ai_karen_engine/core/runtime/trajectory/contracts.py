@@ -67,6 +67,10 @@ class ExecutionTrajectory:
     prompt_version: str | None = None
     prompt_hash: str | None = None
 
+    router_version: str | None = None
+    intelligence_rules_version: str | None = None
+    policy_version: str | None = None
+
     requested_provider: str | None = None
     requested_model: str | None = None
 

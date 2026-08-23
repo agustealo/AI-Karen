@@ -1,21 +1,28 @@
 """
 Provider Health Monitor Service
 
-This service monitors the health status of various AI providers and services
-to provide context-aware error responses and intelligent routing decisions.
+Canonical provider health authority. Owns observed health state only.
+Does not choose alternatives or make routing decisions.
+
+Ownership:
+    ProviderRegistryService   -> who exists
+    ProviderHealthMonitor     -> observed health state
+    RuntimeResilience         -> failure/retry/fallback decisions
+    ProviderRouter            -> consumes health during selection
+    Observability             -> records health transitions and failures
 """
 
-import asyncio
+from __future__ import annotations
+
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict
+from typing import Any, Dict, List, Optional, Set
+from dataclasses import dataclass, field
 from enum import Enum
 
-from ai_karen_engine.services.cache import get_provider_cache
-
 from ai_karen_engine.core.logging import get_logger
+
 logger = get_logger(__name__)
 
 
@@ -29,358 +36,293 @@ class HealthStatus(str, Enum):
 
 @dataclass
 class ProviderHealthInfo:
-    """Extended provider health information"""
-    name: str
-    status: HealthStatus
-    last_check: datetime
-    response_time: Optional[float] = None
-    error_message: Optional[str] = None
+    """Canonical provider health state contract.
+
+    Avoid free-form error strings as the primary machine contract.
+    """
+
+    provider_id: str
+    configured: bool = False
+    available: bool = False
+    health_status: HealthStatus = HealthStatus.UNKNOWN
+
+    last_checked_at: Optional[datetime] = None
+    latency_ms: Optional[float] = None
     consecutive_failures: int = 0
     success_rate: float = 1.0
-    last_success: Optional[datetime] = None
-    last_failure: Optional[datetime] = None
-    metadata: Optional[Dict[str, Any]] = None
+    last_success_at: Optional[datetime] = None
+    last_failure_at: Optional[datetime] = None
+
+    error_code: Optional[str] = None
+    error_type: Optional[str] = None
+
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class ProviderHealthMonitor:
-    """Service for monitoring provider health status"""
-    
-    def __init__(self, check_interval: int = 300):  # 5 minutes default
+    """Single authority for observed provider health state."""
+
+    def __init__(
+        self,
+        registry: Any = None,
+        check_interval: int = 300,
+        cache_ttl: int = 300,
+    ) -> None:
         self.check_interval = check_interval
-        self._health_cache: Dict[str, ProviderHealthInfo] = {}
-        self._cache_ttl = 300  # 5 minutes
+        self._cache_ttl = cache_ttl
         self._monitoring_active = False
-        self._enhanced_cache = get_provider_cache()
-        self._known_providers = [
-            "builtin_vllm",
-            "builtin_transformers",
-            "openai",
-            "anthropic",
-            "google",
-            "huggingface",
-            "cohere",
-        ]
-    
-    def get_provider_health(self, provider_name: str) -> Optional[ProviderHealthInfo]:
+
+        self._registry = registry
+        self._health_cache: Dict[str, ProviderHealthInfo] = {}
+
+        self._prev_statuses: Dict[str, HealthStatus] = {}
+
+    def _get_provider_ids(self) -> List[str]:
+        """Return the current provider inventory from the registry."""
+        if self._registry is None:
+            return []
+        try:
+            return self._registry.get_all_provider_names()
+        except Exception:
+            return []
+
+    def get_provider_health(self, provider_id: str) -> ProviderHealthInfo:
+        """Get health state for a provider.
+
+        Returns a ProviderHealthInfo with UNKNOWN status if not yet checked.
         """
-        Get cached health status for a provider with enhanced caching
-        
-        Args:
-            provider_name: Name of the provider to check
-            
-        Returns:
-            ProviderHealthInfo if available, None otherwise
-        """
-        provider_key = provider_name.lower()
-        
-        # Check enhanced cache first
-        cached_health = self._enhanced_cache.get_provider_health(provider_key)
-        if cached_health:
-            return ProviderHealthInfo(
-                name=cached_health["name"],
-                status=HealthStatus(cached_health["status"]),
-                last_check=datetime.fromisoformat(cached_health["last_check"]),
-                response_time=cached_health.get("response_time"),
-                error_message=cached_health.get("error_message"),
-                consecutive_failures=cached_health.get("consecutive_failures", 0),
-                success_rate=cached_health.get("success_rate", 1.0),
-                last_success=datetime.fromisoformat(cached_health["last_success"]) if cached_health.get("last_success") else None,
-                last_failure=datetime.fromisoformat(cached_health["last_failure"]) if cached_health.get("last_failure") else None,
-                metadata=cached_health.get("metadata")
-            )
-        
-        # Fallback to legacy cache
-        if provider_key in self._health_cache:
-            health_info = self._health_cache[provider_key]
-            
-            # Check if cache is still valid
-            cache_age = (datetime.utcnow() - health_info.last_check).total_seconds()
+        provider_key = provider_id.lower()
+        cached = self._health_cache.get(provider_key)
+        if cached is not None:
+            cache_age = (datetime.utcnow() - cached.last_checked_at).total_seconds()
             if cache_age < self._cache_ttl:
-                return health_info
-            else:
-                logger.debug(f"Health cache expired for {provider_name}")
-        
-        # Return unknown status if not cached or expired
+                return cached
+            logger.debug("Health cache expired for %s", provider_id)
+
         return ProviderHealthInfo(
-            name=provider_name,
-            status=HealthStatus.UNKNOWN,
-            last_check=datetime.utcnow(),
-            metadata={"cache_miss": True}
+            provider_id=provider_id,
+            health_status=HealthStatus.UNKNOWN,
+            last_checked_at=datetime.utcnow(),
+            metadata={"cache_miss": True},
         )
-    
+
     def update_provider_health(
         self,
-        provider_name: str,
+        provider_id: str,
         is_healthy: bool,
         response_time: Optional[float] = None,
-        error_message: Optional[str] = None
+        error_code: Optional[str] = None,
+        error_type: Optional[str] = None,
+        error_message: Optional[str] = None,
     ) -> None:
-        """
-        Update health status for a provider
-        
-        Args:
-            provider_name: Name of the provider
-            is_healthy: Whether the provider is currently healthy
-            response_time: Response time in seconds
-            error_message: Error message if unhealthy
-        """
-        provider_key = provider_name.lower()
+        """Update observed health state for a provider."""
+        provider_key = provider_id.lower()
         now = datetime.utcnow()
-        
-        # Get existing health info or create new
-        if provider_key in self._health_cache:
-            health_info = self._health_cache[provider_key]
+
+        existing = self._health_cache.get(provider_key)
+        if existing is not None:
+            health_info = existing
         else:
             health_info = ProviderHealthInfo(
-                name=provider_name,
-                status=HealthStatus.UNKNOWN,
-                last_check=now,
-                consecutive_failures=0,
-                success_rate=1.0
+                provider_id=provider_id,
+                last_checked_at=now,
             )
-        
-        # Capture previous status for change detection
-        prev_status = health_info.status if 'health_info' in locals() else HealthStatus.UNKNOWN
 
-        # Update health status
+        prev_status = health_info.health_status
+
         if is_healthy:
-            health_info.status = HealthStatus.HEALTHY
+            health_info.health_status = HealthStatus.HEALTHY
             health_info.consecutive_failures = 0
-            health_info.last_success = now
-            health_info.error_message = None
+            health_info.last_success_at = now
+            health_info.error_code = None
+            health_info.error_type = None
         else:
             health_info.consecutive_failures += 1
-            health_info.last_failure = now
-            health_info.error_message = error_message
-            
-            # Determine status based on failure count
+            health_info.last_failure_at = now
+            health_info.error_code = error_code
+            health_info.error_type = error_type
             if health_info.consecutive_failures >= 5:
-                health_info.status = HealthStatus.UNHEALTHY
+                health_info.health_status = HealthStatus.UNHEALTHY
             elif health_info.consecutive_failures >= 2:
-                health_info.status = HealthStatus.DEGRADED
+                health_info.health_status = HealthStatus.DEGRADED
             else:
-                health_info.status = HealthStatus.HEALTHY
-        
-        # Update timing information
-        health_info.last_check = now
-        health_info.response_time = response_time
-        
-        # Calculate success rate (simple moving average over last 10 attempts)
-        # This is a simplified implementation - in production you'd want more sophisticated metrics
-        if hasattr(health_info, '_recent_attempts'):
-            health_info._recent_attempts.append(is_healthy)
-            if len(health_info._recent_attempts) > 10:
-                health_info._recent_attempts.pop(0)
-        else:
-            health_info._recent_attempts = [is_healthy]
-        
-        health_info.success_rate = sum(health_info._recent_attempts) / len(health_info._recent_attempts)
-        
-        # Cache the updated health info in both caches
-        self._health_cache[provider_key] = health_info
-        
-        # Cache in enhanced cache as well
-        health_dict = {
-            "name": health_info.name,
-            "status": health_info.status.value,
-            "last_check": health_info.last_check.isoformat(),
-            "response_time": health_info.response_time,
-            "error_message": health_info.error_message,
-            "consecutive_failures": health_info.consecutive_failures,
-            "success_rate": health_info.success_rate,
-            "last_success": health_info.last_success.isoformat() if health_info.last_success else None,
-            "last_failure": health_info.last_failure.isoformat() if health_info.last_failure else None,
-            "metadata": health_info.metadata
-        }
-        
-        self._enhanced_cache.cache_provider_health(provider_key, health_dict)
-        
-        logger.debug(f"Updated health for {provider_name}: {health_info.status.value}")
+                health_info.health_status = HealthStatus.HEALTHY
 
-        # Invalidate routing cache on status change
-        # KIRE retired: routing cache invalidation is owned by RuntimeResilience.
+        health_info.last_checked_at = now
+        health_info.latency_ms = response_time * 1000.0 if response_time is not None else None
+
+        if error_message and not health_info.metadata:
+            health_info.metadata = {}
+        if error_message:
+            health_info.metadata["last_error_message"] = error_message
+
+        if not hasattr(health_info, "_recent_attempts"):
+            health_info._recent_attempts: List[bool] = []
+        health_info._recent_attempts.append(is_healthy)
+        if len(health_info._recent_attempts) > 10:
+            health_info._recent_attempts.pop(0)
+        health_info.success_rate = sum(health_info._recent_attempts) / len(health_info._recent_attempts)
+
+        self._health_cache[provider_key] = health_info
+
+        self._emit_transition_if_changed(provider_id, prev_status, health_info.health_status)
+
+        logger.debug(
+            "Updated health for %s: %s", provider_id, health_info.health_status.value
+        )
+
+    def _emit_transition_if_changed(
+        self,
+        provider_id: str,
+        prev_status: HealthStatus,
+        new_status: HealthStatus,
+    ) -> None:
+        """Emit observability events on meaningful health transitions."""
+        if prev_status == new_status:
+            return
+
+        transition = (prev_status, new_status)
+        meaningful = {
+            (HealthStatus.HEALTHY, HealthStatus.DEGRADED),
+            (HealthStatus.DEGRADED, HealthStatus.UNHEALTHY),
+            (HealthStatus.UNHEALTHY, HealthStatus.HEALTHY),
+            (HealthStatus.UNKNOWN, HealthStatus.HEALTHY),
+            (HealthStatus.UNKNOWN, HealthStatus.UNHEALTHY),
+            (HealthStatus.DEGRADED, HealthStatus.HEALTHY),
+        }
+        if transition not in meaningful:
+            return
+
+        event_type = None
+        if new_status == HealthStatus.UNHEALTHY:
+            event_type = "provider.unavailable"
+        elif new_status == HealthStatus.DEGRADED:
+            event_type = "provider.health.changed"
+        elif new_status == HealthStatus.HEALTHY:
+            event_type = "provider.available"
+
+        if event_type is None:
+            return
+
         try:
-            pass
+            from ai_karen_engine.core.observability.emitter import get_observability_emitter
+            from ai_karen_engine.core.observability.contracts import RuntimeEventType
+
+            emitter = get_observability_emitter()
+            if event_type == "provider.available":
+                emitter.emit(
+                    RuntimeEventType.PROVIDER_ATTEMPT_COMPLETED,
+                    provider=provider_id,
+                    status="recovered",
+                    metadata={
+                        "previous_status": prev_status.value,
+                        "new_status": new_status.value,
+                    },
+                )
+            elif event_type == "provider.unavailable":
+                emitter.emit(
+                    RuntimeEventType.PROVIDER_ATTEMPT_FAILED,
+                    provider=provider_id,
+                    status="unavailable",
+                    metadata={
+                        "previous_status": prev_status.value,
+                        "new_status": new_status.value,
+                    },
+                )
+            else:
+                emitter.emit(
+                    RuntimeEventType.RUNTIME_DEGRADED,
+                    provider=provider_id,
+                    degraded_mode=True,
+                    status=new_status.value,
+                    metadata={
+                        "previous_status": prev_status.value,
+                        "new_status": new_status.value,
+                    },
+                )
         except Exception:
             pass
-    
-    def get_all_provider_health(self) -> Dict[str, ProviderHealthInfo]:
-        """Get health status for all known providers"""
-        result = {}
-        
-        for provider in self._known_providers:
-            health_info = self.get_provider_health(provider)
-            if health_info:
-                result[provider] = health_info
-        
-        return result
-    
-    def get_healthy_providers(self) -> List[str]:
-        """Get list of currently healthy providers"""
-        healthy_providers = []
-        
-        for provider in self._known_providers:
-            health_info = self.get_provider_health(provider)
-            if health_info and health_info.status == HealthStatus.HEALTHY:
-                healthy_providers.append(provider)
-        
-        return healthy_providers
-    
-    def get_alternative_providers(self, failed_provider: str) -> List[str]:
-        """
-        Get list of alternative providers when one fails
-        
-        Args:
-            failed_provider: The provider that failed
-            
-        Returns:
-            List of alternative healthy providers
-        """
-        alternatives = []
-        failed_provider_key = failed_provider.lower()
-        
-        for provider in self._known_providers:
-            if provider.lower() != failed_provider_key:
-                health_info = self.get_provider_health(provider)
-                if health_info and health_info.status in [HealthStatus.HEALTHY, HealthStatus.DEGRADED]:
-                    alternatives.append(provider)
-        
-        # Sort by success rate (best first)
-        alternatives.sort(
-            key=lambda p: self.get_provider_health(p).success_rate,
-            reverse=True
-        )
-        
-        return alternatives
-    
+
     def record_provider_interaction(
         self,
         provider_name: str,
         success: bool,
         response_time: Optional[float] = None,
-        error_message: Optional[str] = None
+        error_message: Optional[str] = None,
     ) -> None:
-        """
-        Record the result of an interaction with a provider
-        
-        This method should be called after each API call to track provider health
-        
-        Args:
-            provider_name: Name of the provider
-            success: Whether the interaction was successful
-            response_time: Response time in seconds
-            error_message: Error message if failed
-        """
+        """Record the result of an interaction with a provider."""
         self.update_provider_health(
-            provider_name=provider_name,
+            provider_id=provider_name,
             is_healthy=success,
             response_time=response_time,
-            error_message=error_message
+            error_message=error_message,
         )
-    
-    def get_provider_recommendations(self, error_context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Get provider recommendations based on current health status
-        
-        Args:
-            error_context: Context about the error that occurred
-            
-        Returns:
-            Dictionary with recommendations and alternatives
-        """
-        failed_provider = error_context.get("provider_name")
-        
-        recommendations = {
-            "failed_provider": failed_provider,
-            "alternatives": [],
-            "health_summary": {},
-            "suggestions": []
-        }
-        
-        if failed_provider:
-            # Get alternatives
-            alternatives = self.get_alternative_providers(failed_provider)
-            recommendations["alternatives"] = alternatives[:3]  # Top 3 alternatives
-            
-            # Add specific suggestions based on failure type
-            failed_health = self.get_provider_health(failed_provider)
-            if failed_health:
-                if failed_health.status == HealthStatus.UNHEALTHY:
-                    recommendations["suggestions"].append(
-                        f"{failed_provider} is currently experiencing issues. Try using {alternatives[0] if alternatives else 'an alternative provider'}."
-                    )
-                elif failed_health.consecutive_failures > 0:
-                    recommendations["suggestions"].append(
-                        f"{failed_provider} has had recent issues. Consider switching to a backup provider."
-                    )
-        
-        # Add general health summary
-        all_health = self.get_all_provider_health()
-        recommendations["health_summary"] = {
-            name: {
-                "status": info.status.value,
-                "success_rate": info.success_rate,
-                "last_check": info.last_check.isoformat() if info.last_check else None
-            }
-            for name, info in all_health.items()
-        }
-        
-        return recommendations
-    
+
+    def get_all_provider_health(self) -> Dict[str, ProviderHealthInfo]:
+        """Get health state for all providers known to the registry."""
+        result: Dict[str, ProviderHealthInfo] = {}
+        for provider_id in self._get_provider_ids():
+            result[provider_id] = self.get_provider_health(provider_id)
+        return result
+
+    def get_healthy_providers(self) -> List[str]:
+        """Get providers currently in healthy or degraded state."""
+        healthy: List[str] = []
+        for provider_id in self._get_provider_ids():
+            info = self.get_provider_health(provider_id)
+            if info and info.health_status in {HealthStatus.HEALTHY, HealthStatus.DEGRADED}:
+                healthy.append(provider_id)
+        return healthy
+
     def clear_cache(self) -> None:
-        """Clear the health status cache"""
+        """Clear the health state cache."""
         self._health_cache.clear()
-        self._enhanced_cache.cache.clear()
+        self._prev_statuses.clear()
         logger.info("Provider health cache cleared")
-    
+
     def get_cache_stats(self) -> Dict[str, Any]:
-        """Get statistics about the health cache"""
+        """Get statistics about the health cache."""
         now = datetime.utcnow()
-        
-        stats = {
+        stats: Dict[str, Any] = {
             "total_providers": len(self._health_cache),
             "healthy_count": 0,
             "degraded_count": 0,
             "unhealthy_count": 0,
             "unknown_count": 0,
             "cache_age_seconds": {},
-            "average_response_time": None
+            "average_latency_ms": None,
         }
-        
-        response_times = []
-        
-        for provider_name, health_info in self._health_cache.items():
-            # Count by status
-            if health_info.status == HealthStatus.HEALTHY:
+
+        response_times: List[float] = []
+        for provider_name, info in self._health_cache.items():
+            if info.health_status == HealthStatus.HEALTHY:
                 stats["healthy_count"] += 1
-            elif health_info.status == HealthStatus.DEGRADED:
+            elif info.health_status == HealthStatus.DEGRADED:
                 stats["degraded_count"] += 1
-            elif health_info.status == HealthStatus.UNHEALTHY:
+            elif info.health_status == HealthStatus.UNHEALTHY:
                 stats["unhealthy_count"] += 1
             else:
                 stats["unknown_count"] += 1
-            
-            # Track cache age
-            cache_age = (now - health_info.last_check).total_seconds()
-            stats["cache_age_seconds"][provider_name] = cache_age
-            
-            # Collect response times
-            if health_info.response_time:
-                response_times.append(health_info.response_time)
-        
-        # Calculate average response time
+
+            if info.last_checked_at:
+                stats["cache_age_seconds"][provider_name] = (
+                    now - info.last_checked_at
+                ).total_seconds()
+
+            if info.latency_ms is not None:
+                response_times.append(info.latency_ms)
+
         if response_times:
-            stats["average_response_time"] = sum(response_times) / len(response_times)
-        
+            stats["average_latency_ms"] = sum(response_times) / len(response_times)
+
         return stats
 
 
-# Global instance for easy access
-_health_monitor = None
+_health_monitor: Optional[ProviderHealthMonitor] = None
 
 
 def get_health_monitor() -> ProviderHealthMonitor:
-    """Get the global provider health monitor instance"""
+    """Get the global provider health monitor instance."""
     global _health_monitor
     if _health_monitor is None:
         _health_monitor = ProviderHealthMonitor()
@@ -388,20 +330,20 @@ def get_health_monitor() -> ProviderHealthMonitor:
 
 
 def record_provider_success(provider_name: str, response_time: Optional[float] = None) -> None:
-    """Convenience function to record a successful provider interaction"""
+    """Convenience function to record a successful provider interaction."""
     monitor = get_health_monitor()
     monitor.record_provider_interaction(
         provider_name=provider_name,
         success=True,
-        response_time=response_time
+        response_time=response_time,
     )
 
 
 def record_provider_failure(provider_name: str, error_message: str) -> None:
-    """Convenience function to record a failed provider interaction"""
+    """Convenience function to record a failed provider interaction."""
     monitor = get_health_monitor()
     monitor.record_provider_interaction(
         provider_name=provider_name,
         success=False,
-        error_message=error_message
+        error_message=error_message,
     )

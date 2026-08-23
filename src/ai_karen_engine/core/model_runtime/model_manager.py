@@ -67,7 +67,7 @@ class ModelManager:
     ) -> None:
         self.registry = registry or get_provider_registry_service()
         self.selector = selector
-        self.health_monitor = health_monitor or ProviderHealthMonitor()
+        self.health_monitor = health_monitor or ProviderHealthMonitor(registry=self.registry)
         self.fallback_manager = fallback_manager or get_resilience_fallback_manager()
         self.embedding_manager = embedding_manager or EmbeddingManager()
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}

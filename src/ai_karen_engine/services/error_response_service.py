@@ -27,6 +27,9 @@ from ai_karen_engine.core.model_runtime.provider_health_monitor import (
     ProviderHealthInfo,
     HealthStatus,
 )
+from ai_karen_engine.core.model_runtime.provider_registry_service import (
+    get_provider_registry_service,
+)
 from ai_karen_engine.services.cache import get_response_cache, get_request_deduplicator
 from ai_karen_engine.services.audit.audit_logging import get_audit_logger
 from ai_karen_engine.services.response import ResponseContract, ResponsePromptBuilder, ResponseSanitizer
@@ -522,9 +525,9 @@ class ErrorResponseService:
                             HealthStatus.UNHEALTHY,
                         ]:
                             health_monitor = get_health_monitor()
-                            alternatives = health_monitor.get_alternative_providers(
+                            alternatives = get_provider_registry_service().get_provider_recommendations(
                                 provider_name
-                            )
+                            ).get("alternatives", [])
                             if alternatives:
                                 response_data["next_steps"].append(
                                     f"Try using {alternatives[0]} as an alternative provider"
@@ -894,10 +897,10 @@ class ErrorResponseService:
                     HealthStatus.DEGRADED,
                     HealthStatus.UNHEALTHY,
                 ]:
-                    health_monitor = get_health_monitor()
-                    alternatives = health_monitor.get_alternative_providers(
+                    registry = get_provider_registry_service()
+                    alternatives = registry.get_provider_recommendations(
                         context.provider_name
-                    )
+                    ).get("alternatives", [])
                     if alternatives:
                         response_data["next_steps"].append(
                             f"Try using {alternatives[0]} as an alternative provider"
@@ -1182,10 +1185,10 @@ class ErrorResponseService:
                 }
 
                 # Get alternative providers
-                health_monitor = get_health_monitor()
-                alternatives = health_monitor.get_alternative_providers(
+                registry = get_provider_registry_service()
+                alternatives = registry.get_provider_recommendations(
                     context.provider_name
-                )
+                ).get("alternatives", [])
                 analysis_context["alternative_providers"] = alternatives or []
 
         # Add additional context data
@@ -1552,8 +1555,8 @@ Respond with only the JSON object, no additional text."""
     def get_provider_fallback_suggestions(self, failed_provider: str) -> List[str]:
         """Get suggestions for alternative providers when one fails"""
         try:
-            health_monitor = get_health_monitor()
-            alternatives = health_monitor.get_alternative_providers(failed_provider)
+            registry = get_provider_registry_service()
+            alternatives = registry.get_provider_recommendations(failed_provider).get("alternatives", [])
             return alternatives[:3]  # Return top 3 alternatives
         except Exception as e:
             self.logger.warning(f"Failed to get provider alternatives: {e}")

@@ -64,7 +64,19 @@ def _load_module(name: str, path: pathlib.Path):
             UNHEALTHY = "unhealthy"
             UNKNOWN = "unknown"
 
+        class ProviderHealthMonitor:
+            def __init__(self, registry=None, check_interval=300, cache_ttl=300):
+                self._registry = registry
+                self.check_interval = check_interval
+                self._cache_ttl = cache_ttl
+                self._health_cache = {}
+                self._prev_statuses = {}
+
+            def get_all_provider_names(self):
+                return []
+
         phm_mod.HealthStatus = HealthStatus
+        phm_mod.ProviderHealthMonitor = ProviderHealthMonitor
         sys.modules[phm_pkg] = phm_mod
 
     spec = importlib.util.spec_from_file_location(name, path)
@@ -87,7 +99,7 @@ def test_provider_registry_service_owns_provider_state(
     """ProviderRegistryService must maintain its own provider registration state."""
     ProviderRegistryService = provider_registry_service_module.ProviderRegistryService
 
-    registry = ProviderRegistryService(seed_from_legacy=False)
+    registry = ProviderRegistryService()
     assert hasattr(registry, "_provider_registrations")
     assert isinstance(registry._provider_registrations, dict)
 
@@ -128,24 +140,18 @@ def test_provider_registry_service_returns_registered_providers(
     ProviderRegistryService = provider_registry_service_module.ProviderRegistryService
     ModelInfo = provider_registry_service_module.ModelInfo
 
-    # Mock the LLMRouter lazy load to avoid deep import chain in test env
-    mock_router = MagicMock()
-    mock_router.provider_health = {}
-    with patch.object(
-        ProviderRegistryService, "_get_llm_router", return_value=mock_router
-    ):
-        registry = ProviderRegistryService(seed_from_legacy=False)
+    registry = ProviderRegistryService()
 
-        class DummyProvider:
-            def generate_text(self, prompt: str) -> str:
-                return ""
+    class DummyProvider:
+        def generate_text(self, prompt: str) -> str:
+            return ""
 
-        registry.register_provider(
-            "dummy_test_provider",
-            DummyProvider,
-            description="Test provider",
-            models=[ModelInfo(name="dummy-v1")],
-        )
+    registry.register_provider(
+        "dummy_test_provider",
+        DummyProvider,
+        description="Test provider",
+        models=[ModelInfo(name="dummy-v1")],
+    )
 
     assert "dummy_test_provider" in registry.get_all_provider_names()
     models = registry.get_registered_models("dummy_test_provider", healthy_only=False)
@@ -159,26 +165,20 @@ def test_provider_registry_service_returns_model_capabilities(
     ProviderRegistryService = provider_registry_service_module.ProviderRegistryService
     ProviderCapability = provider_registry_service_module.ProviderCapability
 
-    # Mock the LLMRouter lazy load to avoid deep import chain in test env
-    mock_router = MagicMock()
-    mock_router.provider_health = {}
-    with patch.object(
-        ProviderRegistryService, "_get_llm_router", return_value=mock_router
-    ):
-        registry = ProviderRegistryService(seed_from_legacy=False)
+    registry = ProviderRegistryService()
 
-        class DummyProvider:
-            def generate_text(self, prompt: str) -> str:
-                return ""
+    class DummyProvider:
+        def generate_text(self, prompt: str) -> str:
+            return ""
 
-            def get_embeddings(self, text: str) -> list[float]:
-                return []
+        def get_embeddings(self, text: str) -> list[float]:
+            return []
 
-        registry.register_provider(
-            "capability_test_provider",
-            DummyProvider,
-            description="Test provider with capabilities",
-        )
+    registry.register_provider(
+        "capability_test_provider",
+        DummyProvider,
+        description="Test provider with capabilities",
+    )
 
     status = registry.get_provider_status("capability_test_provider")
     assert status is not None

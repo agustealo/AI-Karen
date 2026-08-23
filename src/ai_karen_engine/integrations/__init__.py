@@ -54,7 +54,6 @@ __all__ = [
 def __getattr__(name: str) -> Any:
     deprecated_legacy = {
         "AutomationManager",
-        "LLMProfileRouter",
         "ProviderRegistry",
         "ModelInfo",
         "DummyVoiceProvider",
@@ -70,9 +69,6 @@ def __getattr__(name: str) -> Any:
             name,
         )
 
-    if name == "LLMProfileRouter":
-        from ai_karen_engine.integrations.llm_router import LLMProfileRouter as _LLMProfileRouter
-        return _LLMProfileRouter
     if name in {"ProviderRegistry", "ModelInfo", "get_provider_registry"}:
         from ai_karen_engine.integrations.provider_registry import (
             ProviderRegistry as _ProviderRegistry,

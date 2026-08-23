@@ -35,6 +35,15 @@ class RuntimeEventType(str, Enum):
     FALLBACK_APPLIED = "fallback.applied"
     RUNTIME_DEGRADED = "runtime.degraded"
 
+    PROVIDER_HEALTH_CHANGED = "provider.health.changed"
+    PROVIDER_AVAILABLE = "provider.available"
+    PROVIDER_UNAVAILABLE = "provider.unavailable"
+
+    RUNTIME_STARTUP_STARTED = "runtime.startup.started"
+    RUNTIME_STARTUP_COMPLETED = "runtime.startup.completed"
+    RUNTIME_STARTUP_FAILED = "runtime.startup.failed"
+    RUNTIME_CAPABILITIES_READY = "runtime.capabilities.ready"
+
     PLUGIN_STARTED = "plugin.started"
     PLUGIN_COMPLETED = "plugin.completed"
     PLUGIN_FAILED = "plugin.failed"

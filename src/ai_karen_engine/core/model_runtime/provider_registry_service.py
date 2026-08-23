@@ -127,10 +127,12 @@ class ProviderRegistryService:
             endpoint.provider_id: endpoint for endpoint in BUILTIN_PROVIDER_ENDPOINTS
         }
 
-        # Keep LLMRouter lazy so simple registry queries do not initialize the
-        # broader routing stack unless health data is actually needed.
+        # Canonical health state owner — no dependency on integrations routing
+        from ai_karen_engine.core.model_runtime.provider_health_monitor import (
+            ProviderHealthMonitor,
+        )
+        self.health_monitor = ProviderHealthMonitor(registry=self)
         self.llm_router = None
-        self.health_monitor = None  # Deprecated - kept for compatibility
 
         self._lock = threading.RLock()
         self._fallback_chains: Dict[str, FallbackChain] = {}
@@ -139,19 +141,6 @@ class ProviderRegistryService:
 
         # Initialize default fallback chains
         self._setup_default_fallback_chains()
-
-        # Don't start old health monitoring - use LLMRouter's health
-        self._monitoring_task = None
-
-    def _get_llm_router(self):
-        """Lazy-load the router used for provider health snapshots."""
-        if self.llm_router is None:
-            from ai_karen_engine.services.models.routing.llm_router_service import (
-                LLMRouter,
-            )
-
-            self.llm_router = LLMRouter()
-        return self.llm_router
 
     def _setup_default_fallback_chains(self):
         """Setup default fallback chains for Karen's local-first runtime."""
@@ -424,15 +413,13 @@ class ProviderRegistryService:
         if requires_api_key:
             has_api_key = self._check_api_key_availability(name)
 
-        # Get health status from LLMRouter
-        health_status = HealthStatus.HEALTHY  # Default to healthy
-        llm_router = self._get_llm_router()
-        if name in llm_router.provider_health:
-            llm_health = llm_router.provider_health[name]
-            if llm_health.is_healthy:
-                health_status = HealthStatus.HEALTHY
-            else:
-                health_status = HealthStatus.UNHEALTHY
+        # Get health status from canonical health monitor
+        health_status = HealthStatus.HEALTHY
+        try:
+            info = self.health_monitor.get_provider_health(name)
+            health_status = info.health_status
+        except Exception:
+            pass
 
         # Determine availability - consider UNKNOWN as potentially available
         is_available = has_api_key and (
@@ -448,7 +435,7 @@ class ProviderRegistryService:
             health_status=health_status,
             capabilities=capabilities,
             last_check=datetime.utcnow(),
-            error_message=None,  # LLMRouter doesn't provide error messages in the same way
+            error_message=None,
         )
 
     def _check_api_key_availability(self, provider_name: str) -> bool:

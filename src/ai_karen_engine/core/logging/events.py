@@ -10,6 +10,10 @@ class RuntimeEvents(str, Enum):
     STAGE_COMPLETED = "runtime.stage.completed"
     STAGE_FAILED = "runtime.stage.failed"
     DEGRADED = "runtime.degraded"
+    STARTUP_STARTED = "runtime.startup.started"
+    STARTUP_COMPLETED = "runtime.startup.completed"
+    STARTUP_FAILED = "runtime.startup.failed"
+    CAPABILITIES_READY = "runtime.capabilities.ready"
 
 class ExpressionEvents(str, Enum):
     TASK_STARTED = "expression.task.started"
@@ -34,6 +38,9 @@ class ProviderEvents(str, Enum):
     EXHAUSTED = "provider.exhausted"
     POLICY_REJECTED = "provider.policy.rejected"
     CIRCUIT_OPEN = "provider.circuit.open"
+    HEALTH_CHANGED = "provider.health.changed"
+    AVAILABLE = "provider.available"
+    UNAVAILABLE = "provider.unavailable"
 
 
 class RoutingEvents(str, Enum):

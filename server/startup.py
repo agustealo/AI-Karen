@@ -283,48 +283,10 @@ def register_startup_tasks(app: FastAPI) -> None:
     @app.on_event("startup")
     async def _init_llm_providers() -> None:
         try:
-            import os
-            import asyncio
-
-            fast = os.getenv(
-                "KARI_FAST_STARTUP", os.getenv("FAST_STARTUP", "true")
-            ).lower() in ("1", "true", "yes")
-            from ai_karen_engine.integrations.startup import initialize_llm_providers
-
-            if fast:
-                logger.info(
-                    "⚡ Fast startup: deferring LLM provider initialization to background"
-                )
-
-                async def _bg_init():
-                    try:
-                        result = initialize_llm_providers()
-                        logger.info(
-                            "LLM providers initialized (background)",
-                            extra={
-                                "total": result.get("total_providers"),
-                                "healthy": result.get("healthy_providers"),
-                                "available": result.get("available_providers"),
-                            },
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Background LLM provider initialization failed: {e}"
-                        )
-
-                asyncio.create_task(_bg_init())
-            else:
-                result = initialize_llm_providers()
-                logger.info(
-                    "LLM providers initialized",
-                    extra={
-                        "total": result.get("total_providers"),
-                        "healthy": result.get("healthy_providers"),
-                        "available": result.get("available_providers"),
-                    },
-                )
+            from ai_karen_engine.server.startup import run_canonical_runtime_bootstrap
+            await run_canonical_runtime_bootstrap(_get_settings(), app)
         except Exception as e:
-            logger.warning(f"LLM provider initialization skipped: {e}")
+            logger.warning(f"Canonical runtime bootstrap skipped: {e}")
 
     @app.on_event("startup")
     async def _init_memory_service() -> None:
