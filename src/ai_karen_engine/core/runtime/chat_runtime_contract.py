@@ -267,5 +267,4 @@ class CanonicalChatResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Detailed execution and model metadata")
     telemetry: Dict[str, Any] = Field(default_factory=dict, description="Telemetry payload for frontend/runtime inspection")
     error: Optional[str] = Field(None, description="Error message if failed")
-    error_type: Optional[ErrorType] = Field(None, description="Error classification")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Response creation timestamp")

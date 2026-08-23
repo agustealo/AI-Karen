@@ -148,10 +148,10 @@ class WorkflowRuntime:
         converted: List[BaseMessage] = []
         for msg in messages:
             content = str(msg.get("content") or "")
-            message_type = str(msg.get("message_type") or "user").lower()
-            if message_type == "assistant":
+            role = str(msg.get("role") or msg.get("message_type") or "user").lower()
+            if role == "assistant":
                 converted.append(AIMessage(content=content))
-            elif message_type == "system":
+            elif role == "system":
                 converted.append(SystemMessage(content=content))
             else:
                 converted.append(HumanMessage(content=content))

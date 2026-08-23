@@ -75,6 +75,10 @@ class ChatRuntime:
         self._outcome_recorder = OutcomeRecorder()
         self._emitter = get_observability_emitter()
 
+    async def get_orchestrator(self) -> Any:
+        """Return the graph orchestrator adapter for health/availability checks."""
+        return get_workflow_runtime()
+
     async def execute(self, request: ChatExecutionRequest) -> ChatExecutionResult:
         start = time.time()
         ctx = request.context
@@ -843,6 +847,9 @@ class ChatRuntime:
 
         if memory_meta:
             md.extra.update({k: v for k, v in memory_meta.items() if k not in md.extra})
+
+        if md.fallback_level and md.fallback_level > 0:
+            md.used_fallback = True
 
         md.extra.update(
             {k: v for k, v in normalized.items() if k not in _CANONICAL_META_KEYS}

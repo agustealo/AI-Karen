@@ -34,6 +34,7 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     serialize_runtime_response,
     get_chat_runtime_control_plane,
 )
+from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.core.runtime.chat_runtime_contract import CanonicalChatRequest
 from ai_karen_engine.services.streaming.stream_processor import AsyncStreamProcessor
 from ai_karen_engine.services.streaming.websocket_gateway import WebSocketGateway
@@ -131,15 +132,16 @@ class StreamMetricsResponse(BaseModel):
 
 # Dependency injection functions
 def get_runtime_service():
-    """Get runtime control plane for gating requests."""
-    return get_chat_runtime_control_plane()
+    """Get canonical chat runtime service for the WebSocket gateway."""
+    return get_chat_runtime()
 
 
 async def get_websocket_gateway(
     runtime_service=Depends(get_runtime_service),
 ) -> WebSocketGateway:
     """Get WebSocket gateway instance."""
-    return WebSocketGateway(None)
+    orchestrator = await runtime_service.get_orchestrator()
+    return WebSocketGateway(orchestrator)
 
 
 def get_stream_processor() -> AsyncStreamProcessor:
