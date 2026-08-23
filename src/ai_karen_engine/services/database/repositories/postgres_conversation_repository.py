@@ -31,14 +31,12 @@ class PostgresConversationRepository(ConversationRepository):
     """PostgreSQL conversation repository.
 
     Canonical source is the `conversations` + `messages` tables.
-    During convergence, `chat_conversations` + `chat_messages` are
-    also supported for read-through.
     """
 
-    def __init__(self, session_factory, use_chat_tables: bool = False):
+    def __init__(self, session_factory):
         self._session_factory = session_factory
-        self._conversation_table = "chat_conversations" if use_chat_tables else "conversations"
-        self._message_table = "chat_messages" if use_chat_tables else "messages"
+        self._conversation_table = "conversations"
+        self._message_table = "messages"
 
     async def _session(self) -> AsyncSession:
         return self._session_factory()
