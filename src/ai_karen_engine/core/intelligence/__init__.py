@@ -5,6 +5,10 @@ from ai_karen_engine.core.intelligence.contracts import (
     IntelligenceSignal,
     SignalSourceType,
     SignalType,
+    TaskAmbiguity,
+    TaskComplexity,
+    TaskRisk,
+    TaskSignature,
 )
 from ai_karen_engine.core.intelligence.intelligence_runtime import (
     IntelligenceRuntime,
@@ -13,9 +17,13 @@ from ai_karen_engine.core.intelligence.intelligence_runtime import (
 
 __all__ = [
     "IntelligenceAnalysisResult",
+    "IntelligenceRuntime",
     "IntelligenceSignal",
     "SignalSourceType",
     "SignalType",
-    "IntelligenceRuntime",
+    "TaskAmbiguity",
+    "TaskComplexity",
+    "TaskRisk",
+    "TaskSignature",
     "get_intelligence_runtime",
 ]

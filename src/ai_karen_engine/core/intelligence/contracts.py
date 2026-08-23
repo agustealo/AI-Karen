@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class SignalSourceType(str, Enum):
@@ -54,7 +54,7 @@ class IntelligenceSignal:
     latency_ms: float = 0.0
 
     feature_version: str = "v1"
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     encoder_model: str = ""
     inference_method: str = ""
@@ -67,23 +67,23 @@ class IntelligenceAnalysisResult:
     intent: str = "general_assist"
     intent_confidence: float = 0.0
 
-    entities: List[Dict[str, Any]] = field(default_factory=list)
-    key_phrases: List[str] = field(default_factory=list)
-    topics: List[str] = field(default_factory=list)
+    entities: list[dict[str, Any]] = field(default_factory=list)
+    key_phrases: list[str] = field(default_factory=list)
+    topics: list[str] = field(default_factory=list)
 
-    embedding_ref: Optional[str] = None
-    semantic_features: Dict[str, Any] = field(default_factory=dict)
+    embedding_ref: str | None = None
+    semantic_features: dict[str, Any] = field(default_factory=dict)
 
     task_complexity: str = "simple"
     memory_relevance: float = 0.0
 
-    topology_signals: Dict[str, Any] = field(default_factory=dict)
-    risk_signals: Dict[str, Any] = field(default_factory=dict)
-    capability_hints: Dict[str, Any] = field(default_factory=dict)
+    topology_signals: dict[str, Any] = field(default_factory=dict)
+    risk_signals: dict[str, Any] = field(default_factory=dict)
+    capability_hints: dict[str, Any] = field(default_factory=dict)
 
-    signals: List[IntelligenceSignal] = field(default_factory=list)
+    signals: list[IntelligenceSignal] = field(default_factory=list)
 
-    signal_provenance: Dict[str, Any] = field(default_factory=dict)
+    signal_provenance: dict[str, Any] = field(default_factory=dict)
     latency_ms: float = 0.0
     degraded: bool = False
 
@@ -129,20 +129,20 @@ class TaskSignature:
     """
 
     intent: str = "general_assist"
-    domains: List[str] = field(default_factory=list)
-    entities: List[str] = field(default_factory=list)
-    topics: List[str] = field(default_factory=list)
-    semantic_embedding: Optional[List[float]] = None
+    domains: list[str] = field(default_factory=list)
+    entities: list[str] = field(default_factory=list)
+    topics: list[str] = field(default_factory=list)
+    semantic_embedding: list[float] | None = None
 
     complexity: TaskComplexity = TaskComplexity.SIMPLE
     ambiguity: TaskAmbiguity = TaskAmbiguity.CLEAR
     novelty: float = 0.0
     risk: TaskRisk = TaskRisk.LOW
 
-    tool_requirements: List[str] = field(default_factory=list)
-    reasoning_requirements: List[str] = field(default_factory=list)
+    tool_requirements: list[str] = field(default_factory=list)
+    reasoning_requirements: list[str] = field(default_factory=list)
 
     collaboration_value: float = 0.0
     verification_value: float = 0.0
 
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
