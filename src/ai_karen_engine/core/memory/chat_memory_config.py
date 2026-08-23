@@ -122,7 +122,7 @@ class ProductionAuthSettings(BaseSettings):
 
     # Database & Redis URLs
     database_url: str = Field(
-        "postgresql://karen_user:karen_secure_pass_change_me@localhost:5432/ai_karen",
+        "postgresql://postgres:postgres@localhost:54322/postgres",
         json_schema_extra={"env": ["POSTGRES_URL", "DATABASE_URL"]},
     )
     redis_url: str = Field(
@@ -215,7 +215,7 @@ class ProductionSettings(BaseSettings):
 
     # DB & Redis
     database_url: str = Field(
-        "postgresql://karen_user:karen_secure_pass_change_me@localhost:5432/ai_karen",
+        "postgresql://postgres:postgres@localhost:54322/postgres",
         json_schema_extra={"env": ["POSTGRES_URL", "DATABASE_URL"]},
     )
     redis_url: str = Field(

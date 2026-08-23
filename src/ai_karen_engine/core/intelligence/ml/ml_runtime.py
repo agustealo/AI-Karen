@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from ai_karen_engine.core.intelligence.features import IntelligenceFeatures
@@ -12,6 +13,7 @@ from ai_karen_engine.core.intelligence.ml.contracts import (
     SemanticEncoding,
 )
 from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
+from ai_karen_engine.monitoring.ml_metrics import get_ml_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,7 @@ class MLRuntime:
         self._encoders: dict[str, SemanticEncoder] = {}
         self._predictors: dict[PredictionTask, Any] = {}
         self._initialized = False
+        self._ml_metrics = get_ml_metrics()
 
     async def initialize(self) -> None:
         if self._initialized:
@@ -45,9 +48,21 @@ class MLRuntime:
         if encoder is None:
             return None
         try:
-            return await encoder.encode(text)
+            start = time.perf_counter()
+            result = await encoder.encode(text)
+            duration = time.perf_counter() - start
+            if result is not None:
+                self._ml_metrics.record_inference(
+                    prediction_task="encode",
+                    model_id=result.model_id or model_id,
+                    model_version=result.model_version or "unknown",
+                    status="success",
+                    duration_seconds=duration,
+                )
+            return result
         except Exception as exc:
             logger.debug("MLRuntime encode failed: %s", exc)
+            self._ml_metrics.record_model_load_failure(model_id, type(exc).__name__)
             return None
 
     async def encode_batch(self, texts: list[str], model_id: str = "default") -> list[SemanticEncoding | None]:
@@ -55,9 +70,22 @@ class MLRuntime:
         if encoder is None:
             return [None] * len(texts)
         try:
-            return await encoder.encode_batch(texts)
+            start = time.perf_counter()
+            results = await encoder.encode_batch(texts)
+            duration = time.perf_counter() - start
+            success_count = sum(1 for r in results if r is not None)
+            if success_count:
+                self._ml_metrics.record_inference(
+                    prediction_task="encode_batch",
+                    model_id=model_id,
+                    model_version="unknown",
+                    status="success",
+                    duration_seconds=duration,
+                )
+            return results
         except Exception as exc:
             logger.debug("MLRuntime encode_batch failed: %s", exc)
+            self._ml_metrics.record_model_load_failure(model_id, type(exc).__name__)
             return [None] * len(texts)
 
     async def predict(self, features: IntelligenceFeatures, task: PredictionTask) -> Prediction | None:
@@ -65,9 +93,25 @@ class MLRuntime:
         if predictor is None:
             return None
         try:
-            return await predictor.predict(features)
+            start = time.perf_counter()
+            result = await predictor.predict(features)
+            duration = time.perf_counter() - start
+            if result is not None:
+                self._ml_metrics.record_inference(
+                    prediction_task=task.value,
+                    model_id=getattr(result, "model_id", "unknown") or "unknown",
+                    model_version=getattr(result, "model_version", "unknown") or "unknown",
+                    status="success",
+                    duration_seconds=duration,
+                )
+            return result
         except Exception as exc:
             logger.debug("MLRuntime predict failed for %s: %s", task, exc)
+            self._ml_metrics.record_fallback(
+                prediction_task=task.value,
+                model_id="unknown",
+                fallback_reason=type(exc).__name__,
+            )
             return None
 
     async def predict_batch(self, features_list: list[IntelligenceFeatures], task: PredictionTask) -> list[Prediction | None]:
@@ -75,9 +119,26 @@ class MLRuntime:
         if predictor is None:
             return [None] * len(features_list)
         try:
-            return await predictor.predict_batch(features_list)
+            start = time.perf_counter()
+            results = await predictor.predict_batch(features_list)
+            duration = time.perf_counter() - start
+            success_count = sum(1 for r in results if r is not None)
+            if success_count:
+                self._ml_metrics.record_inference(
+                    prediction_task=f"{task.value}_batch",
+                    model_id="unknown",
+                    model_version="unknown",
+                    status="success",
+                    duration_seconds=duration,
+                )
+            return results
         except Exception as exc:
             logger.debug("MLRuntime predict_batch failed for %s: %s", task, exc)
+            self._ml_metrics.record_fallback(
+                prediction_task=f"{task.value}_batch",
+                model_id="unknown",
+                fallback_reason=type(exc).__name__,
+            )
             return [None] * len(features_list)
 
     async def health(self) -> dict[str, Any]:

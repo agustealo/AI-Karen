@@ -80,6 +80,18 @@ def initialize_metrics() -> Dict[str, Any]:
             "Extension uptime in seconds",
             ["extension_name"]
         )
+        
+        # Runtime metrics
+        metrics['REQUESTS_INFLIGHT'] = manager.register_gauge(
+            "kari_requests_inflight",
+            "Current number of in-flight HTTP requests",
+            ["method", "path"]
+        )
+        metrics['DEGRADED_REQUESTS_TOTAL'] = manager.register_counter(
+            "kari_degraded_requests_total",
+            "Total requests served in degraded mode",
+            ["reason"]
+        )
     
     return metrics
 
@@ -97,3 +109,7 @@ EXTENSION_BACKGROUND_TASKS = _http_metrics['EXTENSION_BACKGROUND_TASKS']
 EXTENSION_API_CALLS = _http_metrics['EXTENSION_API_CALLS']
 EXTENSION_ERRORS = _http_metrics['EXTENSION_ERRORS']
 EXTENSION_UPTIME = _http_metrics['EXTENSION_UPTIME']
+
+# Runtime metrics
+REQUESTS_INFLIGHT = _http_metrics['REQUESTS_INFLIGHT']
+DEGRADED_REQUESTS_TOTAL = _http_metrics['DEGRADED_REQUESTS_TOTAL']

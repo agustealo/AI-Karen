@@ -77,7 +77,7 @@ jobs:
     needs: lint
     services:
       postgres:
-        image: postgres:15-alpine
+        image: pgvector/pgvector:pg15
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres

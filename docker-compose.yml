@@ -2,40 +2,6 @@
 services:
 
   # ──────────────────────────────────────────────────────────────────────
-  # PostgreSQL
-  # ──────────────────────────────────────────────────────────────────────
-  postgres:
-    container_name: ai-karen-postgres
-    image: postgres:15-alpine
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      POSTGRES_USER:    ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB:      ${POSTGRES_DB}
-    ports:
-      - "${POSTGRES_PORT:-5433}:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./data/migrations/postgres:/docker-entrypoint-initdb.d
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-postgres}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-          cpus: '2.0'
-        reservations:
-          memory: 1G
-          cpus: '0.5'
-    networks:
-      - ai-karen-net
-
-  # ──────────────────────────────────────────────────────────────────────
   # Redis
   # ──────────────────────────────────────────────────────────────────────
   redis:
@@ -289,8 +255,10 @@ services:
   # ──────────────────────────────────────────────────────────────────────
   prometheus:
     container_name: ai-karen-prometheus
-    image: prom/prometheus:latest
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v2.47.0}
     restart: unless-stopped
+    profiles:
+      - observability
     volumes:
       - ./config_assets/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./config_assets/monitoring/alerts/alert_rules.yml:/etc/prometheus/alert_rules.yml
@@ -326,10 +294,12 @@ services:
   # ──────────────────────────────────────────────────────────────────────
   grafana:
     container_name: ai-karen-grafana
-    image: grafana/grafana:9.5.2
+    image: ${GRAFANA_IMAGE:-grafana/grafana:9.5.2}
     restart: unless-stopped
+    profiles:
+      - observability
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
       - GF_PROVISIONING_PATH=/etc/grafana/provisioning
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_AUTH_ANONYMOUS_ENABLED=false
@@ -420,15 +390,15 @@ services:
       KARI_SKIP_AUTO_INIT: "false"
       ALLOW_PUBLIC_COPILOT: "${ALLOW_PUBLIC_COPILOT:-false}"
 
-      # Use service hostnames for in-network connectivity
-      DATABASE_URL: "postgresql://karen_user:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
-      POSTGRES_URL: "postgresql+asyncpg://karen_user:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
-      AUTH_DATABASE_URL: "postgresql+asyncpg://karen_user:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
-      DB_HOST: "postgres"
-      DB_PORT: "5432"
-      DB_USER: "${POSTGRES_USER}"
-      DB_PASSWORD: "${POSTGRES_PASSWORD}"
-      DB_NAME: "${POSTGRES_DB}"
+      # Canonical database via Supabase PostgreSQL
+      DATABASE_URL: "postgresql://postgres:postgres@host.docker.internal:54322/postgres"
+      POSTGRES_URL: "postgresql+asyncpg://postgres:postgres@host.docker.internal:54322/postgres"
+      AUTH_DATABASE_URL: "postgresql+asyncpg://postgres:postgres@host.docker.internal:54322/postgres"
+      DB_HOST: "host.docker.internal"
+      DB_PORT: "54322"
+      DB_USER: "postgres"
+      DB_PASSWORD: "postgres"
+      DB_NAME: "postgres"
       # Enable/disable database services (set to false for faster development)
       KARI_ENABLE_DUCKDB: "true"  # DuckDB for local analytics
       
@@ -516,12 +486,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
-      prometheus:
-        condition: service_started
     healthcheck:
       # Check simple /health 200 (binds quickly with fast startup)
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"]
@@ -602,8 +568,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
     networks:
       - ai-karen-net
 
@@ -611,8 +575,6 @@ services:
 # Named Volumes
 # ──────────────────────────────────────────────────────────────────────
 volumes:
-  postgres_data:
-    driver: local
   redis_data:
     driver: local
   web_next_cache:

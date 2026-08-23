@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -41,6 +42,41 @@ def configure_middleware(
         same_site="lax",
         https_only=settings.https_redirect,
     )
+
+    # Prometheus HTTP metrics middleware
+    @app.middleware("http")
+    async def prometheus_metrics_middleware(request: Request, call_next):
+        method = request.method
+        path = request.url.path
+        start_time = time.perf_counter()
+        
+        try:
+            response = await call_next(request)
+            status = str(response.status_code)
+            duration = time.perf_counter() - start_time
+            
+            try:
+                request_count.labels(method=method, path=path, status=status).inc()
+                request_latency.labels(method=method, path=path).observe(duration)
+            except Exception:
+                pass
+            
+            if response.status_code >= 400:
+                try:
+                    error_count.labels(method=method, path=path, error_type=status).inc()
+                except Exception:
+                    pass
+            
+            return response
+        except Exception as exc:
+            duration = time.perf_counter() - start_time
+            try:
+                request_count.labels(method=method, path=path, status="500").inc()
+                request_latency.labels(method=method, path=path).observe(duration)
+                error_count.labels(method=method, path=path, error_type=type(exc).__name__).inc()
+            except Exception:
+                pass
+            raise
 
     # Resolve CORS origins from multiple sources for compatibility
     # Priority: explicit env CORS_ORIGINS -> env KARI_CORS_ORIGINS -> settings -> defaults

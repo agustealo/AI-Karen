@@ -15,6 +15,12 @@ import logging
 
 from ai_karen_engine.core.services.base import BaseService, ServiceConfig
 
+try:
+    from ai_karen_engine.monitoring.agent_metrics_prometheus import get_agent_prometheus_metrics
+    _AGENT_PROMETHEUS_METRICS = get_agent_prometheus_metrics()
+except Exception:
+    _AGENT_PROMETHEUS_METRICS = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -114,6 +120,13 @@ class AgentMetrics(BaseService):
             # Keep only the last 1000 records
             if len(self._agent_execution_times[agent_id]) > 1000:
                 self._agent_execution_times[agent_id] = self._agent_execution_times[agent_id][-1000:]
+        
+        if _AGENT_PROMETHEUS_METRICS is not None:
+            _AGENT_PROMETHEUS_METRICS.record_agent_execution(
+                agent_id=agent_id,
+                status="success",
+                duration_seconds=execution_time,
+            )
     
     async def record_agent_success(self, agent_id: str) -> None:
         """
@@ -124,6 +137,13 @@ class AgentMetrics(BaseService):
         """
         with self._lock:
             self._agent_success_rates[agent_id]["success"] += 1
+        
+        if _AGENT_PROMETHEUS_METRICS is not None:
+            _AGENT_PROMETHEUS_METRICS.record_agent_execution(
+                agent_id=agent_id,
+                status="success",
+                duration_seconds=0.0,
+            )
     
     async def record_agent_failure(self, agent_id: str) -> None:
         """
@@ -134,6 +154,13 @@ class AgentMetrics(BaseService):
         """
         with self._lock:
             self._agent_success_rates[agent_id]["failure"] += 1
+        
+        if _AGENT_PROMETHEUS_METRICS is not None:
+            _AGENT_PROMETHEUS_METRICS.record_agent_execution(
+                agent_id=agent_id,
+                status="failure",
+                duration_seconds=0.0,
+            )
     
     async def record_agent_throughput(self, agent_id: str, tasks_processed: int) -> None:
         """
@@ -406,6 +433,12 @@ class AgentMetrics(BaseService):
         """
         with self._lock:
             self._tool_usage_counts[agent_id][tool_id] += 1
+        
+        if _AGENT_PROMETHEUS_METRICS is not None:
+            _AGENT_PROMETHEUS_METRICS.record_tool_execution(
+                tool_id=tool_id,
+                status="success",
+            )
     
     async def record_tool_execution_time(self, tool_id: str, execution_time: float) -> None:
         """
@@ -421,6 +454,12 @@ class AgentMetrics(BaseService):
             # Keep only the last 1000 records
             if len(self._tool_execution_times[tool_id]) > 1000:
                 self._tool_execution_times[tool_id] = self._tool_execution_times[tool_id][-1000:]
+        
+        if _AGENT_PROMETHEUS_METRICS is not None:
+            _AGENT_PROMETHEUS_METRICS.record_tool_execution(
+                tool_id=tool_id,
+                status="success",
+            )
     
     async def record_tool_success(self, tool_id: str) -> None:
         """
@@ -431,6 +470,12 @@ class AgentMetrics(BaseService):
         """
         with self._lock:
             self._tool_error_rates[tool_id]["success"] += 1
+        
+        if _AGENT_PROMETHEUS_METRICS is not None:
+            _AGENT_PROMETHEUS_METRICS.record_tool_execution(
+                tool_id=tool_id,
+                status="success",
+            )
     
     async def record_tool_failure(self, tool_id: str) -> None:
         """
@@ -441,6 +486,12 @@ class AgentMetrics(BaseService):
         """
         with self._lock:
             self._tool_error_rates[tool_id]["failure"] += 1
+        
+        if _AGENT_PROMETHEUS_METRICS is not None:
+            _AGENT_PROMETHEUS_METRICS.record_tool_execution(
+                tool_id=tool_id,
+                status="failure",
+            )
     
     async def get_tool_usage_metrics(self, agent_id: Optional[str] = None, tool_id: Optional[str] = None) -> Dict[str, Any]:
         """

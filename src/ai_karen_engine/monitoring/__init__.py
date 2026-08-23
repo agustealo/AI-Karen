@@ -73,6 +73,36 @@ from .startup_integration import (
     monitor_platform_operation,
 )
 
+from .runtime_metrics import (
+    RuntimeMetrics,
+    get_runtime_metrics,
+)
+
+from .ml_metrics import (
+    MLMetrics,
+    get_ml_metrics,
+)
+
+from .personalization_metrics import (
+    PersonalizationMetrics,
+    get_personalization_metrics,
+)
+
+from .adaptive_metrics import (
+    AdaptiveMetrics,
+    get_adaptive_metrics,
+)
+
+from .database_metrics import (
+    DatabaseMetrics,
+    get_database_metrics,
+)
+
+from .agent_metrics_prometheus import (
+    AgentPrometheusMetrics,
+    get_agent_prometheus_metrics,
+)
+
 __all__ = [
     # Metrics
     "get_model_orchestrator_metrics",
@@ -130,6 +160,24 @@ __all__ = [
     "monitor_platform_endpoint",
     "monitor_platform_operation",
     "get_monitoring_service",
+    # Runtime Metrics
+    "RuntimeMetrics",
+    "get_runtime_metrics",
+    # ML Metrics
+    "MLMetrics",
+    "get_ml_metrics",
+    # Personalization Metrics
+    "PersonalizationMetrics",
+    "get_personalization_metrics",
+    # Adaptive Metrics
+    "AdaptiveMetrics",
+    "get_adaptive_metrics",
+    # Database Metrics
+    "DatabaseMetrics",
+    "get_database_metrics",
+    # Agent Prometheus Metrics
+    "AgentPrometheusMetrics",
+    "get_agent_prometheus_metrics",
 ]
 
 

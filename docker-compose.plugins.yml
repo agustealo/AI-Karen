@@ -139,9 +139,11 @@ services:
 
   # Prometheus Monitoring
   prometheus:
-    image: prom/prometheus:latest
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v2.47.0}
     container_name: karen-plugins-prometheus
     restart: unless-stopped
+    profiles:
+      - observability
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -159,13 +161,15 @@ services:
 
   # Grafana Dashboard
   grafana:
-    image: grafana/grafana:latest
+    image: ${GRAFANA_IMAGE:-grafana/grafana:9.5.2}
     container_name: karen-plugins-grafana
     restart: unless-stopped
+    profiles:
+      - observability
     depends_on:
       - prometheus
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin_password_change_in_production}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: false
       GF_SERVER_ROOT_URL: https://grafana.karen.ai
       GF_INSTALL_PLUGINS: grafana-piechart-panel,grafana-worldmap-panel

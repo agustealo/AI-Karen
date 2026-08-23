@@ -79,6 +79,7 @@ from ai_karen_engine.api_routes.tools.code_execution import (
     router as code_execution_router,
 )
 from ai_karen_engine.api_routes.chat.conversation import router as conversation_router
+from ai_karen_engine.api_routes.artifacts import router as artifacts_router
 from ai_karen_engine.api_routes.content.communications import (
     router as communications_center_router,
 )
@@ -415,6 +416,11 @@ def wire_routers(app: FastAPI, settings: Settings) -> None:
         logger.info("💬 Conversation router loaded successfully")
     except Exception as e:
         logger.error(f"Failed to include conversation router: {e}", exc_info=True)
+    try:
+        app.include_router(artifacts_router, prefix="/api/artifacts", tags=["artifacts"])
+        logger.info("📦 Artifacts router loaded successfully")
+    except Exception as e:
+        logger.error(f"Failed to include artifacts router: {e}", exc_info=True)
     app.include_router(plugin_router, prefix="/api/plugins", tags=["plugins"])
     app.include_router(plugin_store_router, prefix="/api", tags=["plugin-store"])
     app.include_router(plugin_public_router, tags=["plugins-public"])

@@ -78,9 +78,9 @@ required_env_vars = {
     "KARI_MODEL_SIGNING_KEY": "dev-signing-key-1234567890abcdef",
     "SECRET_KEY": "super-secret-key-change-me",
     "AUTH_SECRET_KEY": "your-super-secret-jwt-key-change-in-production",
-    "DATABASE_URL": "postgresql://karen_user:karen_secure_pass_change_me@localhost:5432/ai_karen",
-    "POSTGRES_URL": "postgresql+asyncpg://karen_user:karen_secure_pass_change_me@localhost:5432/ai_karen",
-    "AUTH_DATABASE_URL": "postgresql+asyncpg://karen_user:karen_secure_pass_change_me@localhost:5432/ai_karen",
+    "DATABASE_URL": "postgresql://postgres:postgres@localhost:54322/postgres",
+    "POSTGRES_URL": "postgresql+asyncpg://postgres:postgres@localhost:54322/postgres",
+    "AUTH_DATABASE_URL": "postgresql+asyncpg://postgres:postgres@localhost:54322/postgres",
     # Provide a dev-friendly default with password to avoid AUTH warnings.
     # Override in your environment for real deployments.
     "REDIS_URL": "redis://:dev-redis-pass@localhost:6379/0",
@@ -117,7 +117,7 @@ class Settings(BaseSettings):
     # Long-lived token settings for API stability
     long_lived_token_expire_hours: int = 24  # 24 hours for long-lived tokens
     enable_long_lived_tokens: bool = True
-    database_url: str = "postgresql://user:password@localhost:5432/kari_prod"
+    database_url: str = "postgresql://postgres:postgres@localhost:54322/postgres"
     kari_cors_origins: str = Field(
         default="http://localhost:8010,http://127.0.0.1:8010,http://localhost:8020,http://127.0.0.1:8020,http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000",
         alias="cors_origins",

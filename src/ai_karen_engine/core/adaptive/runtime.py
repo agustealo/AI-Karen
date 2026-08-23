@@ -23,6 +23,7 @@ from ai_karen_engine.core.adaptive.contracts import (
 from ai_karen_engine.core.adaptive.ranking.baseline import RuleBasedAdaptivePolicy
 from ai_karen_engine.core.adaptive.suggestions.engine import SuggestionEngine
 from ai_karen_engine.core.observability.context import get_observability_context
+from ai_karen_engine.monitoring.adaptive_metrics import get_adaptive_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ class AdaptiveRuntime:
         self._suggestion_engine = suggestion_engine or SuggestionEngine()
         self._evidence_provider = evidence_provider
         self._shadow_mode = True
+        self._adaptive_metrics = get_adaptive_metrics()
 
     async def recommend(
         self,
@@ -124,6 +126,24 @@ class AdaptiveRuntime:
             len(filtered),
         )
 
+        try:
+            task_type = getattr(task_signature, "task_type", "unknown") or "unknown"
+            self._adaptive_metrics.record_recommendation(
+                task_type=task_type,
+                execution_path="recommend",
+                status="success",
+            )
+            self._adaptive_metrics.record_ranking(
+                task_type=task_type,
+                duration_seconds=latency_ms / 1000.0,
+            )
+            self._adaptive_metrics.record_candidate_count(
+                task_type=task_type,
+                count=len(filtered),
+            )
+        except Exception:
+            pass
+
         return recommendations
 
     async def generate_suggestions(
@@ -134,12 +154,23 @@ class AdaptiveRuntime:
         system_capabilities: SystemCapabilitySnapshot,
     ) -> list[Any]:
         """Generate user-facing suggestions separate from execution recommendations."""
-        return await self._suggestion_engine.generate(
+        suggestions = await self._suggestion_engine.generate(
             task_signature=task_signature,
             user_state=user_state,
             behavior_patterns=behavior_patterns,
             system_capabilities=system_capabilities,
         )
+        try:
+            task_type = getattr(task_signature, "task_type", "unknown") or "unknown"
+            for suggestion in suggestions:
+                suggestion_type = getattr(suggestion, "suggestion_type", "unknown") or "unknown"
+                self._adaptive_metrics.record_suggestion(
+                    suggestion_type=suggestion_type,
+                    status="emitted",
+                )
+        except Exception:
+            pass
+        return suggestions
 
     def _capabilities_from_snapshot(
         self, snapshot: SystemCapabilitySnapshot

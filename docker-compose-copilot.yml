@@ -158,8 +158,10 @@ services:
   # ──────────────────────────────────────────────────────────────────────────────
   prometheus-copilot:
     container_name: ai-karen-copilot-prometheus
-    image: prom/prometheus:latest
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v2.47.0}
     restart: unless-stopped
+    profiles:
+      - observability
     volumes:
       - ./config_assets/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./config_assets/monitoring/alerts/alert_rules.yml:/etc/prometheus/alert_rules.yml
@@ -174,10 +176,12 @@ services:
   # ──────────────────────────────────────────────────────────────────────────────
   grafana-copilot:
     container_name: ai-karen-copilot-grafana
-    image: grafana/grafana:9.5.2
+    image: ${GRAFANA_IMAGE:-grafana/grafana:9.5.2}
     restart: unless-stopped
+    profiles:
+      - observability
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
       - GF_PROVISIONING_PATH=/etc/grafana/provisioning
     ports:
       - "3001:3000"

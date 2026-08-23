@@ -21,13 +21,22 @@ async def _check_database_health() -> Dict[str, Any]:
         from ai_karen_engine.services.database_connection_manager import (
             get_database_manager,
         )
+        from ai_karen_engine.monitoring.database_metrics import get_database_metrics
 
         db_manager = get_database_manager()
+        db_metrics = get_database_metrics()
         start_time = time.time()
 
         # Perform a simple query to test connectivity
         is_connected = await db_manager.test_connection()
         response_time = (time.time() - start_time) * 1000
+
+        db_metrics.set_postgres_health(is_connected and not db_manager.is_degraded())
+        db_metrics.record_query(
+            database="postgres",
+            operation="health_check",
+            duration_seconds=response_time / 1000.0,
+        )
 
         return {
             "status": "healthy"
@@ -41,6 +50,11 @@ async def _check_database_health() -> Dict[str, Any]:
         }
     except Exception as e:
         logger.warning(f"Database health check failed: {e}")
+        try:
+            from ai_karen_engine.monitoring.database_metrics import get_database_metrics
+            get_database_metrics().set_postgres_health(False)
+        except Exception:
+            pass
         return {
             "status": "unhealthy",
             "connected": False,
@@ -53,13 +67,22 @@ async def _check_redis_health() -> Dict[str, Any]:
     """Check Redis connectivity and health."""
     try:
         from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
+        from ai_karen_engine.monitoring.database_metrics import get_database_metrics
 
         redis_manager = get_redis_manager()
+        db_metrics = get_database_metrics()
         start_time = time.time()
 
         # Test Redis connectivity
         is_connected = await redis_manager.test_connection()
         response_time = (time.time() - start_time) * 1000
+
+        db_metrics.set_redis_health(is_connected and not redis_manager.is_degraded())
+        db_metrics.record_query(
+            database="redis",
+            operation="health_check",
+            duration_seconds=response_time / 1000.0,
+        )
 
         return {
             "status": "healthy"
@@ -71,6 +94,11 @@ async def _check_redis_health() -> Dict[str, Any]:
         }
     except Exception as e:
         logger.warning(f"Redis health check failed: {e}")
+        try:
+            from ai_karen_engine.monitoring.database_metrics import get_database_metrics
+            get_database_metrics().set_redis_health(False)
+        except Exception:
+            pass
         return {
             "status": "unhealthy",
             "connected": False,
