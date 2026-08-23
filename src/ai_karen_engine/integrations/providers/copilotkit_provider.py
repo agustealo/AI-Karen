@@ -14,28 +14,7 @@ try:
     COPILOTKIT_AVAILABLE = True
 except ImportError:
     COPILOTKIT_AVAILABLE = False
-    # Check if we should attempt to install CopilotKit
-    try:
-        from ai_karen_engine.core.runtime.initialization import initialize_system
-        import asyncio
-        import os
-        
-        # Only attempt installation if explicitly requested
-        if os.getenv("KARI_INSTALL_COPILOTKIT", "false").lower() == "true":
-            logger.info("CopilotKit not found but installation requested - initializing system...")
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(initialize_system())
-                else:
-                    asyncio.run(initialize_system())
-            except RuntimeError:
-                logger.info("CopilotKit installation will be handled during system initialization")
-        else:
-            logger.debug("CopilotKit not available - using fallback mode (set KARI_INSTALL_COPILOTKIT=true to auto-install)")
-            
-    except ImportError:
-        logger.debug("CopilotKit not available - using fallback mode")
+    logger.debug("CopilotKit not available - using fallback mode")
 
 
 class CopilotKitProvider(BaseLLMProvider, HookMixin):

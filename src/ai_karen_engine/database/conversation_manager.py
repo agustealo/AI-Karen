@@ -16,33 +16,12 @@ from sqlalchemy import delete, func, select, update
 
 from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
 from ai_karen_engine.database.client import MultiTenantPostgresClient
+from ai_karen_engine.database.id_types import coerce_user_id
 from ai_karen_engine.database.memory_manager import MemoryManager, MemoryQuery
 from ai_karen_engine.database.models import TenantConversation, TenantMessage
 from ai_karen_engine.models.usage_service import UsageService
 
 logger = logging.getLogger(__name__)
-
-
-def normalize_user_id(user_id: str) -> uuid.UUID:
-    """Convert any user identifier into a UUID for storage.
-
-    The conversation persistence layer historically expected UUID user IDs, but
-    the simplified authentication layer can emit human-readable IDs (e.g.
-    "admin").  To support both forms consistently we deterministically derive a
-    UUID when a value is not already in UUID format.  This keeps database
-    schemas happy while allowing the rest of the stack to keep using the
-    original identifier.
-    """
-
-    if not user_id:
-        # Fall back to a stable UUID for missing identifiers to avoid crashes
-        return uuid.uuid5(uuid.NAMESPACE_URL, "ai-karen:user:anonymous")
-
-    try:
-        return uuid.UUID(str(user_id))
-    except (ValueError, TypeError, AttributeError):
-        # Derive a deterministic UUID based on the provided identifier
-        return uuid.uuid5(uuid.NAMESPACE_URL, f"ai-karen:user:{user_id}")
 
 
 class MessageRole(Enum):
@@ -288,7 +267,7 @@ class ConversationManager:
             )
 
             # Store in database
-            normalized_user_id = normalize_user_id(user_id)
+            normalized_user_id = coerce_user_id(user_id)
 
             async with self.db_client.get_async_session() as session:
                 db_conversation = TenantConversation(
@@ -371,7 +350,7 @@ class ConversationManager:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Conversation:
         """Ensure a durable conversation record exists for the supplied identifier."""
-        normalized_user_id = normalize_user_id(user_id)
+        normalized_user_id = coerce_user_id(user_id)
         conversation_uuid = uuid.UUID(str(conversation_id))
         conversation_metadata = metadata or {}
 
@@ -888,7 +867,7 @@ class ConversationManager:
             List of conversations
         """
         try:
-            normalized_user_id = normalize_user_id(user_id)
+            normalized_user_id = coerce_user_id(user_id)
 
             async with self.db_client.get_async_session() as session:
                 query = (
@@ -1126,7 +1105,7 @@ class ConversationManager:
                 # Base query
                 base_query = select(TenantConversation)
                 if user_id:
-                    normalized_user_id = normalize_user_id(user_id)
+                    normalized_user_id = coerce_user_id(user_id)
                     base_query = base_query.where(
                         TenantConversation.user_id == normalized_user_id
                     )
@@ -1168,7 +1147,7 @@ class ConversationManager:
                     )
                 )
                 if user_id:
-                    normalized_user_id = normalize_user_id(user_id)
+                    normalized_user_id = coerce_user_id(user_id)
                     msg_query = msg_query.where(
                         TenantConversation.user_id == normalized_user_id
                     )

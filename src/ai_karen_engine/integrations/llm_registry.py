@@ -760,12 +760,16 @@ class LLMRegistry:
         if not spec.enabled:
             logger.debug("Skipping provider '%s' because it is disabled", resolved_name)
             return None
+
+        # Auto-register local endpoints from canonical registry if not already registered
+        if resolved_name not in self._registrations:
+            self._register_local_endpoint_if_available(resolved_name, spec)
+
         for attempt in range(max_retries):
             try:
                 resolved_name = self._resolve_provider_alias(name)
                 if resolved_name not in self._registrations:
                     if attempt < max_retries - 1:
-                        # Provider not found, but maybe it's being registered in another thread
                         time.sleep(retry_delay)
                         continue
                     else:
@@ -1187,6 +1191,42 @@ class LLMRegistry:
         logger.info(
             f"Registry state after ensuring built-in providers: {list(self._registrations.keys())}"
         )
+
+    def _register_local_endpoint_if_available(self, provider_name: str, spec: Any) -> None:
+        """Auto-register a local endpoint from canonical registry if not already registered."""
+        with _registry_lock:
+            if provider_name in self._registrations:
+                return
+
+            try:
+                from ai_karen_engine.core.model_runtime.provider_registry_service import (
+                    get_provider_registry_service,
+                )
+                registry_service = get_provider_registry_service()
+                endpoint = registry_service.get_provider_endpoint(provider_name)
+                if not endpoint:
+                    return
+
+                provider_class = self._get_provider_class_from_spec(spec)
+                if provider_class is None:
+                    return
+
+                self.register_provider(
+                    provider_name,
+                    provider_class,
+                    description=f"OpenAI-compatible endpoint: {endpoint.display_name}",
+                    supports_streaming=endpoint.supports_streaming,
+                    supports_embeddings=endpoint.supports_embeddings,
+                    requires_api_key=spec.requires_api_key,
+                    default_model=spec.default_model or "",
+                )
+                logger.info(
+                    f"Auto-registered local endpoint: {provider_name}"
+                )
+            except Exception as e:
+                logger.debug(
+                    f"Could not auto-register local endpoint {provider_name}: {e}"
+                )
 
     def ensure_registry_consistency(self) -> None:
         """Ensure registry consistency and fix any missing providers."""

@@ -371,6 +371,33 @@ async def run_canonical_runtime_bootstrap(settings: Any, app: Optional[FastAPI] 
             except Exception as exc:
                 logger.warning("Failed to register configured provider %s: %s", provider_id, exc)
 
+        # 4b. Sync local OpenAI-compatible endpoints from ProviderRegistryService into LLMRegistry
+        try:
+            from ai_karen_engine.integrations.llm_registry import get_registry, LLMRegistry
+            from ai_karen_engine.core.model_runtime.provider_registry_service import get_provider_registry_service
+            from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpointType
+            from ai_karen_engine.integrations.providers.openai_compatible_provider import OpenAICompatibleProvider
+
+            llm_registry = get_registry()
+            canonical_registry = get_provider_registry_service()
+            for endpoint in canonical_registry.list_provider_endpoints():
+                if endpoint.endpoint_type == ProviderEndpointType.OPENAI_COMPATIBLE and endpoint.base_url:
+                    try:
+                        llm_registry.register_provider(
+                            name=endpoint.provider_id,
+                            provider_class=OpenAICompatibleProvider,
+                            description=f"Synced local endpoint: {endpoint.display_name}",
+                            supports_streaming=endpoint.supports_streaming,
+                            supports_embeddings=endpoint.supports_embeddings,
+                            requires_api_key=False,
+                            default_model=endpoint.default_model or "",
+                        )
+                        logger.info(f"Synced local endpoint to LLMRegistry: {endpoint.provider_id}")
+                    except Exception as exc:
+                        logger.debug(f"Local endpoint sync skipped for {endpoint.provider_id}: {exc}")
+        except Exception as exc:
+            logger.warning("Local endpoint sync failed: %s", exc)
+
         # 5-6. model discovery + inventory sync
         try:
             from ai_karen_engine.core.model_runtime.model_registry_writer import (

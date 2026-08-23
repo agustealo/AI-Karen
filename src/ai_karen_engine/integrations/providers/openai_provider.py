@@ -87,13 +87,19 @@ class OpenAIProvider(LLMProviderBase):
             self.openai = openai
 
             if not self.api_key:
-                if self.provider_name in ["builtin_vllm", "builtin_transformers"]:
-                    # Local deployments may not require auth. Use a
-                    # placeholder key so the OpenAI client can initialize.
+                if self.provider_name in [
+                    "builtin_vllm",
+                    "builtin_transformers",
+                    "ollama",
+                    "lmstudio-desktop",
+                    "ollama-local",
+                    "llamacpp-server",
+                    "local_gguf",
+                ]:
                     self.api_key = "EMPTY"
                     logger.info(
                         "No %s API key provided; initializing unauthenticated local client",
-                        self.display_name
+                        self.display_name,
                     )
                 else:
                     self.initialization_error = (
