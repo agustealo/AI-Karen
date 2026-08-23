@@ -1,7 +1,6 @@
 import asyncio
 from typing import Any, Dict, List, Optional
 
-from ai_karen_engine.clients.database.duckdb_client import DuckDBClient
 from ai_karen_engine.auth.auth_middleware import (
     get_current_user as bypass_user_context_func,
 )
@@ -23,24 +22,8 @@ BaseModel = import_pydantic("BaseModel")
 
 router = APIRouter()
 
-# Shared DuckDB client instance for dependency injection (lazy loaded)
-_db_client: Optional[DuckDBClient] = None
-
 # Global auth service instance (will be initialized lazily)
 auth_service_instance: AuthService = None
-
-
-def get_db() -> DuckDBClient:
-    """
-    Dependency that provides a DuckDB client instance (lazy loaded).
-
-    Client is only instantiated on first request, not at module import time.
-    This prevents unnecessary database initialization at server startup.
-    """
-    global _db_client
-    if _db_client is None:
-        _db_client = DuckDBClient()
-    return _db_client
 
 
 async def get_auth_service_instance() -> AuthService:
@@ -49,13 +32,6 @@ async def get_auth_service_instance() -> AuthService:
     if auth_service_instance is None:
         auth_service_instance = await get_auth_service()
     return auth_service_instance
-
-
-class UserProfile(BaseModel):
-    user_id: str
-    name: str | None = None
-    email: str | None = None
-    preferences: Dict[str, Any] = {}
 
 
 class CreateUserRequest(BaseModel):
@@ -168,54 +144,6 @@ error_responses = {
     429: {"model": ErrorResponse},
     500: {"model": ErrorResponse},
 }
-
-
-@router.get(
-    "/users/{user_id}/profile",
-    response_model=UserProfile,
-    status_code=200,
-    responses=error_responses,
-)
-async def get_profile(
-    user_id: str,
-    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
-    db: DuckDBClient = Depends(get_db),
-) -> UserProfile:
-    # Only allow access to own profile or for admin roles
-    if current_user.get("user_id") != user_id and not _has_role(current_user, "admin"):
-        raise HTTPException(
-            status_code=403,
-            detail=error_detail("Not authorized to access this profile"),
-        )
-
-    profile = await asyncio.to_thread(db.get_profile, user_id)
-    if profile is None:
-        raise HTTPException(status_code=404, detail=error_detail("Profile not found"))
-    return UserProfile(user_id=user_id, **profile)
-
-
-@router.put(
-    "/users/{user_id}/profile",
-    response_model=UserProfile,
-    status_code=200,
-    responses=error_responses,
-)
-async def save_profile(
-    user_id: str,
-    profile: UserProfile,
-    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
-    db: DuckDBClient = Depends(get_db),
-) -> UserProfile:
-    # Only allow modifications to own profile or for admin roles
-    if current_user.get("user_id") != user_id and not _has_role(current_user, "admin"):
-        raise HTTPException(
-            status_code=403,
-            detail=error_detail("Not authorized to modify this profile"),
-        )
-
-    data = profile.dict(exclude={"user_id"})
-    await asyncio.to_thread(db.save_profile, user_id, data)
-    return UserProfile(user_id=user_id, **data)
 
 
 @router.post(

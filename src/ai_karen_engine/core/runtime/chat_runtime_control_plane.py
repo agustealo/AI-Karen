@@ -337,36 +337,19 @@ class RedisProbe:
 
     async def check(self) -> DependencyHealth:
         start = time.time()
-        try:
-            # Prefer the production Redis client path used by the chat stack.
-            try:
-                from ai_karen_engine.clients.factory import get_redis_client
+        from ai_karen_engine.core.memory.redis_connection_manager import (
+            get_redis_manager,
+        )
 
-                client = get_redis_client()
-                elapsed = (time.time() - start) * 1000
-                if bool(client and hasattr(client, "health") and client.health()):
-                    return DependencyHealth(
-                        name=self.name,
-                        status=DependencyStatus.HEALTHY,
-                        response_time_ms=elapsed,
-                    )
-            except Exception:
-                pass
-
-            # Fall back to the legacy manager path where older health probes still report.
-            from ai_karen_engine.core.memory.redis_connection_manager import (
-                get_redis_manager,
-            )
-
-            manager = get_redis_manager()
-            health = await manager.health_check()
-            degraded_mode = bool(health.get("degraded_mode"))
-            healthy = bool(health.get("healthy"))
-            if healthy:
-                status = DependencyStatus.HEALTHY
-                reason = None
-            else:
-                status = DependencyStatus.UNHEALTHY
+        manager = get_redis_manager()
+        health = await manager.health_check()
+        degraded_mode = bool(health.get("degraded_mode"))
+        healthy = bool(health.get("healthy"))
+        if healthy:
+            status = DependencyStatus.HEALTHY
+            reason = None
+        else:
+            status = DependencyStatus.UNHEALTHY
                 reason = (
                     "Redis degraded mode active"
                     if degraded_mode

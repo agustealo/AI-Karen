@@ -7,7 +7,7 @@ including extraction, scoring, admission, projection, and EchoCore health.
 
 import logging
 from typing import Dict, Any
-from ai_karen_engine.core.operations.metrics_manager import get_metrics_manager
+from ai_karen_engine.core.observability.metrics import get_metrics_manager
 
 logger = logging.getLogger(__name__)
 

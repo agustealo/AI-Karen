@@ -46,7 +46,7 @@ from ai_karen_engine.models.shared_types import (
 )
 from ai_karen_engine.utils.chat_helpers import normalize_session_id as normalize_chat_session_id
 from ai_karen_engine.services.streaming.stream_processor import AsyncStreamProcessor
-from ai_karen_engine.core.operations.metrics_manager import get_metrics_manager
+from ai_karen_engine.core.observability.metrics import get_metrics_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])

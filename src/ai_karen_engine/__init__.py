@@ -5,10 +5,7 @@ import importlib
 
 
 def __getattr__(name):
-    if name == "SLMPool":
-        from ai_karen_engine.clients.slm_pool import SLMPool as _SLMPool
 
-        return _SLMPool
     if name == "LLMOrchestrator":
         from ai_karen_engine.llm_orchestrator import LLMOrchestrator as _LO
 
@@ -29,14 +26,7 @@ def __getattr__(name):
         from ai_karen_engine.clients.transformers.lnm_client import LNMClient as _LC
 
         return _LC
-    if name == "BasicClassifier":
-        from ai_karen_engine.clients.nlp.basic_classifier import BasicClassifier as _BC
 
-        return _BC
-    if name == "SpaCyClient":
-        from ai_karen_engine.clients.nlp.spacy_client import SpaCyClient as _SC
-
-        return _SC
     if name == "AutomationManager":
         from ai_karen_engine.automation_manager import AutomationManager as _AM
 
@@ -64,7 +54,6 @@ def __getattr__(name):
 
 
 __all__ = [
-    "SLMPool",
     "LLMOrchestrator",
     "NightlyFineTuner",
     "AutomationManager",
@@ -74,7 +63,5 @@ __all__ = [
     "ModelManager",
     "EchoCore",
     "LNMClient",
-    "BasicClassifier",
-    "SpaCyClient",
     "DocumentStore",
 ]

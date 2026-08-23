@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from enum import Enum
 
-from ai_karen_engine.core.operations.metrics_manager import get_metrics_manager
+from ai_karen_engine.core.observability.metrics import get_metrics_manager
 
 logger = logging.getLogger(__name__)
 

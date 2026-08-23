@@ -4,28 +4,12 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ai_karen_engine.clients.database.duckdb_client import DuckDBClient
 from ai_karen_engine.utils.dependency_checks import import_fastapi, import_pydantic
 
 APIRouter, HTTPException = import_fastapi("APIRouter", "HTTPException")
 BaseModel = import_pydantic("BaseModel")
 
 router = APIRouter()
-
-# Lazy-loaded DuckDB client (not instantiated at module import)
-_db_client: Optional[DuckDBClient] = None
-
-def _get_db() -> DuckDBClient:
-    """
-    Get or create DuckDB client (lazy loaded).
-
-    Client is only instantiated on first request, not at module import time.
-    This prevents unnecessary database initialization at server startup.
-    """
-    global _db_client
-    if _db_client is None:
-        _db_client = DuckDBClient()
-    return _db_client
 
 ANNOUNCE_PATH = Path(__file__).resolve().parents[3] / "data" / "announcements.json"
 
@@ -35,13 +19,6 @@ class Announcement(BaseModel):
     title: str
     body: Optional[str] = None
     created_at: Optional[str] = None
-
-
-class UserProfile(BaseModel):
-    user_id: str
-    name: Optional[str] = None
-    email: Optional[str] = None
-    preferences: Dict[str, Any] = {}
 
 
 @router.get("/health")
@@ -56,12 +33,3 @@ def list_announcements(limit: int = 10) -> List[Announcement]:
     else:
         data = []
     return [Announcement(**a) for a in data[:limit]]
-
-
-@router.get("/users/{user_id}/profile", response_model=UserProfile)
-def get_profile(user_id: str) -> UserProfile:
-    db = _get_db()  # Lazy load on first use
-    profile = db.get_profile(user_id)
-    if profile is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
-    return UserProfile(user_id=user_id, **profile)

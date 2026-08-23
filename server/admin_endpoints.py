@@ -229,7 +229,7 @@ def register_admin_endpoints(app: FastAPI, settings: Settings) -> None:
             
             # Try to get validation metrics if available
             try:
-                from ai_karen_engine.core.metrics_manager import get_metrics_manager
+                from ai_karen_engine.core.observability.metrics import get_metrics_manager
                 metrics_manager = get_metrics_manager()
                 
                 # Get validation-related metrics

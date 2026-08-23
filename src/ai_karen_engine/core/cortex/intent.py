@@ -7,13 +7,6 @@ Kari CORTEX Intent Resolution Core
 
 from typing import Tuple, Dict, Any
 
-# Import your basic classifier and/or external models here
-try:
-    from ai_karen_engine.clients.nlp.basic_classifier import classify_intent
-except ImportError:
-    classify_intent = None  # Fallback
-
-# Optional: map of known basic intents
 BASIC_INTENT_MAP = {
     "hello": "greeting",
     "hi": "greeting",
@@ -45,15 +38,6 @@ def resolve_intent(query: str, user_ctx: Dict[str, Any]) -> Tuple[str, Dict[str,
     """
     q = query.lower().strip()
 
-    # 1. Try custom classifier (if present)
-    if classify_intent:
-        result = classify_intent(q, user_ctx)
-        if isinstance(result, dict) and "intent" in result:
-            return result["intent"], result.get("meta", {})
-        elif isinstance(result, str):
-            return result, {}
-    
-    # 2. Fallback: Simple rules
     for key, intent in BASIC_INTENT_MAP.items():
         if key in q:
             return intent, {"match": "fallback", "pattern": key}
