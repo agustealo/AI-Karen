@@ -270,8 +270,8 @@ class LLMRouter:
 
     def __init__(self, registry: Optional[Any] = None):
         """Initialize Enhanced LLM Router"""
-        # Local import to avoid circular dependency
-        from ai_karen_engine.integrations.llm_registry import get_registry
+        # TEMP-MIGRATION: local import to avoid circular dependency during services/models -> core/model_runtime convergence
+        from ai_karen_engine.integrations.llm_registry import get_registry  # TEMP-MIGRATION
 
         self.registry: Any = registry or get_registry()
         self.provider_health: Dict[str, ProviderHealth] = {}

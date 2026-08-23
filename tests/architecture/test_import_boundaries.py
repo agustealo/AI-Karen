@@ -249,7 +249,6 @@ FORBIDDEN_SERVICES_IMPORTS: list[tuple[str, str]] = [
 ]
 
 FORBIDDEN_PARALLEL_SERVICES_IMPORTS: list[tuple[str, str]] = [
-    ("services", "services.models"),
     ("services", "services.orchestration"),
     ("services", "services.memory"),
     ("services", "services.plugin_"),
@@ -261,7 +260,6 @@ FORBIDDEN_PARALLEL_SERVICES_IMPORTS: list[tuple[str, str]] = [
     ("services", "services.formatting"),
     ("services", "services.monitoring"),
     ("services", "services.caching"),
-    ("services", "services.provider_runtime"),
 ]
 
 
@@ -356,3 +354,15 @@ def test_no_root_level_database_shims() -> None:
             f"Compatibility shim {shim} still exists at services/ root. "
             f"Remove it and update importers to the canonical path."
         )
+
+
+def test_models_subtree_migrated_to_core() -> None:
+    """services/models/ and services/provider_runtime.py must be removed."""
+    assert not (SERVICES_DIR / "models").exists(), (
+        "services/models/ still exists. "
+        "Migrate to core/model_runtime/ and update importers."
+    )
+    assert not (SERVICES_DIR / "provider_runtime.py").exists(), (
+        "services/provider_runtime.py still exists. "
+        "Migrate to core/runtime/provider_runtime.py and update importers."
+    )

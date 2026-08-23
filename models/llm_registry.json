@@ -19,9 +19,9 @@
     "supports_embeddings": false,
     "requires_api_key": false,
     "default_model": "auto",
-    "health_status": "unknown",
-    "last_health_check": null,
-    "error_message": null
+    "health_status": "unhealthy",
+    "last_health_check": 1787528565.4611278,
+    "error_message": "'coroutine' object has no attribute 'get'"
   },
   {
     "name": "openai",
@@ -187,9 +187,9 @@
     "supports_embeddings": false,
     "requires_api_key": false,
     "default_model": "deepseek-r1:1.5b",
-    "health_status": "unknown",
-    "last_health_check": null,
-    "error_message": null
+    "health_status": "unhealthy",
+    "last_health_check": 1787528565.4626038,
+    "error_message": "'coroutine' object has no attribute 'get'"
   },
   {
     "name": "together",
