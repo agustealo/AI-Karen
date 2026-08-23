@@ -7,72 +7,61 @@ from typing import Any
 from .base import BaseExpressionEngine
 from ..contracts import ExpressionResult, ExpressionTask
 from ...model_runtime.provider_policy import evaluate_provider_policy, normalize_provider_id
+from ...model_runtime.runtime_engine import EndpointKind
 
 logger = logging.getLogger(__name__)
 
 
 class OpenAICompatibleEngine(BaseExpressionEngine):
     """
-    Engine that routes to external local servers or remote cloud APIs
-    using the existing provider/model system.
+    Engine that routes to local or remote OpenAI-compatible endpoints
+    using the canonical endpoint registry.
     """
 
     async def generate(self, task: ExpressionTask) -> ExpressionResult:
         started = time.perf_counter()
-        
-        # Determine engine category from ID
-        # self.engine_id is set during registry instantiation (local or cloud)
+
         is_cloud = self.engine_id == "cloud"
-        
-        # Get all configured providers and filter by category
-        from ai_karen_engine.core.model_runtime import get_provider_registry_service
+
+        from ai_karen_engine.core.model_runtime.provider_registry_service import (
+            get_provider_registry_service,
+        )
         registry = get_provider_registry_service()
-        
-        # Find best provider for this engine category
+
         provider_id = self._resolve_provider(task, is_cloud, registry)
         if not provider_id:
-             return self._failure_result(task, started, "no_suitable_provider_found")
+            return self._failure_result(task, started, "no_suitable_provider_found")
 
         model = task.preferred_model
         if model == "auto":
-             model = None
-        
+            model = None
+
         try:
-            # Use central registry to get the provider instance
             from ai_karen_engine.integrations.llm_registry import get_provider
-            
-            # Resolve endpoint settings from registry
-            from ai_karen_engine.core.model_runtime import get_provider_registry_service
-            registry_service = get_provider_registry_service()
-            endpoint = registry_service.get_provider_endpoint(provider_id)
-            
-            # Get provider instance. Central registry handles API key resolution from 
-            # environment or encrypted secrets if not explicitly passed.
+
+            endpoint = registry.get_provider_endpoint(provider_id)
             provider = get_provider(
-                provider_id, 
+                provider_id,
                 model=model,
-                base_url=endpoint.base_url if endpoint else None
+                base_url=endpoint.base_url if endpoint else None,
             )
-            
+
             if not provider:
                 return self._failure_result(task, started, f"provider_not_found:{provider_id}")
 
             prompt = self._extract_prompt(task.messages)
-            
-            # Check if generate_text_async exists, fallback to generate_text or generate
+
             if hasattr(provider, "generate_text_async"):
-                 text = await provider.generate_text_async(prompt, messages=task.messages, max_tokens=task.max_tokens, temperature=task.temperature)
+                text = await provider.generate_text_async(prompt, messages=task.messages, max_tokens=task.max_tokens, temperature=task.temperature)
             elif hasattr(provider, "generate_text"):
-                 # Offload sync call
-                 import asyncio
-                 loop = asyncio.get_running_loop()
-                 text = await loop.run_in_executor(None, lambda: provider.generate_text(prompt, messages=task.messages, max_tokens=task.max_tokens, temperature=task.temperature))
+                import asyncio
+                loop = asyncio.get_running_loop()
+                text = await loop.run_in_executor(None, lambda: provider.generate_text(prompt, messages=task.messages, max_tokens=task.max_tokens, temperature=task.temperature))
             else:
-                 # Generic generate
-                 import asyncio
-                 loop = asyncio.get_running_loop()
-                 text = await loop.run_in_executor(None, lambda: provider.generate(prompt, **{"messages": task.messages, "max_tokens": task.max_tokens, "temperature": task.temperature}))
-            
+                import asyncio
+                loop = asyncio.get_running_loop()
+                text = await loop.run_in_executor(None, lambda: provider.generate(prompt, **{"messages": task.messages, "max_tokens": task.max_tokens, "temperature": task.temperature}))
+
             actual_provider = provider_id
             actual_model = getattr(provider, "model", model)
             attempts = []
@@ -98,38 +87,30 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
         )
 
     def _resolve_provider(self, task: ExpressionTask, is_cloud: bool, registry: Any) -> str | None:
-        """Finds the best healthy provider matching the engine category."""
-        target_class = "external_provider_option" if is_cloud else "local_provider_option"
-        
-        # Get current policy settings
-        from ..settings import get_expression_settings
-        expr_settings = get_expression_settings()
-        external_enabled = expr_settings.policies.allow_external_engines
-        
-        # 1. Try preferred provider if it matches category
-        if task.preferred_provider:
-            decision = evaluate_provider_policy(
-                task.preferred_provider,
-                local_enabled=True,
-                external_enabled=external_enabled
-            )
-            if decision.classification == target_class:
-                return decision.provider
-        
-        # 2. Find any healthy provider in this category
-        for p_id in registry.get_all_provider_names():
-            decision = evaluate_provider_policy(
-                p_id,
-                local_enabled=True,
-                external_enabled=external_enabled
-            )
-            if decision.classification == target_class:
-                # Check health
-                status = registry.get_provider_status(p_id)
-                if status and status.is_available:
-                    return p_id
-                    
-        return None
+        """Find the best healthy provider matching the engine category."""
+        required_caps = {"chat_completion", "text_generation"}
+
+        preferred = str(task.preferred_provider or "").strip().lower()
+        if preferred and preferred != "auto":
+            decision = evaluate_provider_policy(preferred)
+            endpoint = registry.get_provider_endpoint(decision.provider)
+            if endpoint and endpoint.enabled:
+                cap_lower = {c.lower() for c in endpoint.capabilities}
+                if required_caps.issubset(cap_lower):
+                    status = registry.get_provider_status(decision.provider)
+                    if not status or status.is_available:
+                        return decision.provider
+
+        targets = registry.resolve_capable_targets(
+            required_capabilities=required_caps,
+            healthy_only=True,
+        )
+        if is_cloud:
+            targets = [t for t in targets if t.kind == EndpointKind.CLOUD_PROVIDER]
+        else:
+            targets = [t for t in targets if t.kind != EndpointKind.CLOUD_PROVIDER]
+
+        return targets[0].provider_id if targets else None
 
     def _failure_result(self, task: ExpressionTask, started: float, reason: str, provider: str = "unknown") -> ExpressionResult:
         return ExpressionResult(

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 def _emit_routing_event(event_name: str, **kwargs):
     """Emit a routing observability event using structured logging."""
-    logger.event(event_name, **kwargs)
+    logger.info("%s %s", event_name, kwargs)
 
 class ExpressionGateway:
     def __init__(self, settings: Any | None = None):
@@ -62,9 +62,9 @@ class ExpressionGateway:
              target_engine = None
              if decision.classification == "builtin_engine":
                   target_engine = decision.provider
-             elif decision.classification == "local_provider_option":
+             elif decision.classification == "local_openai_endpoint":
                   target_engine = "local"
-             elif decision.classification == "external_provider_option":
+             elif decision.classification == "cloud_provider":
                   target_engine = "cloud"
 
              if target_engine:

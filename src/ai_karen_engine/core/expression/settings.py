@@ -36,6 +36,7 @@ class ExpressionSettings:
     local_first_mode: bool = True
     provider_fallback_policy: str = "ordered"
     third_party_endpoint_url: str | None = None
+    deployment_profile: str = "desktop_local"
 
     @classmethod
     def load_from_config(cls) -> ExpressionSettings:
@@ -43,7 +44,6 @@ class ExpressionSettings:
         try:
             from ai_karen_engine.config.config_manager import config_manager
             
-            # Get the expression block from config
             expr_cfg = config_manager.get_config_value("expression", default={})
             print(f"DEBUG: Loaded expr_cfg: {expr_cfg}")
             
@@ -54,6 +54,7 @@ class ExpressionSettings:
             settings.active_engine = expr_cfg.get("active_engine", settings.active_engine)
             settings.engine_fallback_order = expr_cfg.get("fallback_order", settings.engine_fallback_order)
             settings.local_first_mode = expr_cfg.get("local_first_mode", settings.local_first_mode)
+            settings.deployment_profile = expr_cfg.get("deployment_profile", settings.deployment_profile)
             
             # Update granular engine configuration
             persistent_engines = expr_cfg.get("engines", {})

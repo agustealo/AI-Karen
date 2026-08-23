@@ -25,6 +25,12 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import (
     ProviderEndpointType,
 )
 from ai_karen_engine.core.model_runtime.provider_health_monitor import HealthStatus
+from ai_karen_engine.core.model_runtime.runtime_engine import (
+    EndpointKind,
+    EndpointProtocol,
+    Locality,
+    RuntimeEngine,
+)
 
 logger = get_logger(__name__)
 
@@ -105,10 +111,10 @@ class ProviderRegistryService:
     Provider registry service with health monitoring and graceful fallbacks
     """
     CANONICAL_PROVIDER_ALIASES: Dict[str, str] = {
-        "local": "local_gguf",
-        "llama_cpp": "local_gguf",
-        "llama.cpp": "local_gguf",
-        "local_gguf": "local_gguf",
+        "local": "lmstudio-desktop",
+        "llama_cpp": "llamacpp-server",
+        "llama.cpp": "llamacpp-server",
+        "local_gguf": "llamacpp-server",
         "transformers": "builtin_transformers",
         "hf_transformers": "builtin_transformers",
         "hugging_face": "builtin_transformers",
@@ -118,6 +124,9 @@ class ProviderRegistryService:
         "nano_vllm": "builtin_vllm",
         "nano-vllm": "builtin_vllm",
         "builtin_vllm": "builtin_vllm",
+        "lm_studio": "lmstudio-desktop",
+        "lmstudio": "lmstudio-desktop",
+        "ollama": "ollama-local",
     }
 
     def __init__(self):
@@ -142,48 +151,193 @@ class ProviderRegistryService:
         # Initialize default fallback chains
         self._setup_default_fallback_chains()
 
+        # Register default local OpenAI-compatible endpoints
+        self.register_default_local_endpoints()
+
     def _setup_default_fallback_chains(self):
         """Setup default fallback chains for Karen's local-first runtime."""
 
-        # Text generation fallback chain - vLLM and Transformers only
+        # Text generation fallback chain - builtin vLLM first, then local endpoints
         self._fallback_chains["text_generation"] = FallbackChain(
             primary="builtin_vllm",
-            fallbacks=["builtin_transformers", "fallback"],
+            fallbacks=["lmstudio-desktop", "llamacpp-server", "ollama-local", "fallback"],
             capability_required=ProviderCapability.TEXT_GENERATION,
             max_fallback_attempts=3,
         )
 
-        # Chat completion fallback chain - vLLM and Transformers only
+        # Chat completion fallback chain - builtin vLLM first, then local endpoints
         self._fallback_chains["chat_completion"] = FallbackChain(
             primary="builtin_vllm",
-            fallbacks=["builtin_transformers", "fallback"],
+            fallbacks=["lmstudio-desktop", "llamacpp-server", "ollama-local", "fallback"],
             capability_required=ProviderCapability.CHAT_COMPLETION,
             max_fallback_attempts=3,
         )
 
-        # Local-first fallback chain - vLLM and Transformers only
+        # Local-first fallback chain - prefer local OpenAI-compatible endpoints
         self._fallback_chains["local_first"] = FallbackChain(
-            primary="builtin_vllm",
-            fallbacks=["builtin_transformers", "fallback"],
-            capability_required=ProviderCapability.TEXT_GENERATION,
+            primary="lmstudio-desktop",
+            fallbacks=["llamacpp-server", "ollama-local", "builtin_vllm", "fallback"],
+            capability_required=ProviderCapability.CHAT_COMPLETION,
             max_fallback_attempts=3,
         )
 
-        # Degraded runtime fallback chain - vLLM and Transformers only
+        # Degraded runtime fallback chain
         self._fallback_chains["degraded_runtime"] = FallbackChain(
             primary="builtin_vllm",
-            fallbacks=["builtin_transformers", "fallback"],
+            fallbacks=["lmstudio-desktop", "llamacpp-server", "fallback"],
             capability_required=ProviderCapability.TEXT_GENERATION,
             max_fallback_attempts=3,
         )
 
-        # Embeddings fallback chain - can still use cloud for embeddings
+        # Embeddings fallback chain - Transformers for specialized ML, HuggingFace as fallback
         self._fallback_chains["embeddings"] = FallbackChain(
             primary="builtin_transformers",
             fallbacks=["huggingface"],
             capability_required=ProviderCapability.EMBEDDINGS,
             max_fallback_attempts=2,
         )
+
+    def register_default_local_endpoints(self) -> None:
+        """Register default local OpenAI-compatible endpoints if not already present."""
+        with self._lock:
+            self._register_lmstudio_endpoint()
+            self._register_ollama_endpoint()
+            self._register_llamacpp_endpoint()
+
+    def _register_lmstudio_endpoint(self) -> None:
+        if "lmstudio-desktop" in self._provider_endpoints:
+            return
+        endpoint = ProviderEndpoint(
+            provider_id="lmstudio-desktop",
+            display_name="LM Studio",
+            endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+            base_url="http://localhost:1234/v1",
+            builtin=False,
+            tenant_scoped=False,
+            timeout_seconds=60.0,
+            supports_streaming=True,
+            supports_embeddings=True,
+            supports_models_endpoint=True,
+            fallback_eligible=True,
+            capabilities=(
+                "chat",
+                "streaming",
+                "responses_api",
+                "tools",
+                "structured_output",
+                "vision",
+                "embeddings",
+            ),
+            default_model=None,
+            kind=EndpointKind.LOCAL_ENDPOINT,
+            protocol=EndpointProtocol.OPENAI_COMPATIBLE,
+            runtime_engine=RuntimeEngine.LMSTUDIO,
+            locality=Locality.LOCAL,
+        )
+        self.register_provider_endpoint(endpoint)
+
+    def _register_ollama_endpoint(self) -> None:
+        if "ollama-local" in self._provider_endpoints:
+            return
+        endpoint = ProviderEndpoint(
+            provider_id="ollama-local",
+            display_name="Ollama",
+            endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+            base_url="http://localhost:11434/v1",
+            builtin=False,
+            tenant_scoped=False,
+            timeout_seconds=120.0,
+            supports_streaming=True,
+            supports_embeddings=True,
+            supports_models_endpoint=True,
+            fallback_eligible=True,
+            capabilities=("chat", "streaming", "tools", "embeddings"),
+            default_model=None,
+            kind=EndpointKind.LOCAL_ENDPOINT,
+            protocol=EndpointProtocol.OPENAI_COMPATIBLE,
+            runtime_engine=RuntimeEngine.OLLAMA,
+            locality=Locality.LOCAL,
+        )
+        self.register_provider_endpoint(endpoint)
+
+    def _register_llamacpp_endpoint(self) -> None:
+        if "llamacpp-server" in self._provider_endpoints:
+            return
+        endpoint = ProviderEndpoint(
+            provider_id="llamacpp-server",
+            display_name="llama.cpp Server",
+            endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+            base_url="http://localhost:8080/v1",
+            builtin=False,
+            tenant_scoped=False,
+            timeout_seconds=60.0,
+            supports_streaming=True,
+            supports_embeddings=True,
+            supports_models_endpoint=True,
+            fallback_eligible=True,
+            capabilities=(
+                "chat",
+                "streaming",
+                "responses_api",
+                "tools",
+                "structured_output",
+                "vision",
+                "embeddings",
+            ),
+            default_model=None,
+            kind=EndpointKind.LOCAL_ENDPOINT,
+            protocol=EndpointProtocol.OPENAI_COMPATIBLE,
+            runtime_engine=RuntimeEngine.LLAMACPP,
+            locality=Locality.LOCAL,
+        )
+        self.register_provider_endpoint(endpoint)
+
+    def resolve_capable_targets(
+        self,
+        required_capabilities: Set[str],
+        kind: Optional[EndpointKind] = None,
+        healthy_only: bool = True,
+    ) -> List[ProviderEndpoint]:
+        """Find endpoints matching required capabilities."""
+        targets: List[ProviderEndpoint] = []
+        for endpoint in self._provider_endpoints.values():
+            if not endpoint.enabled:
+                continue
+            if kind is not None and endpoint.kind != kind:
+                continue
+            if healthy_only:
+                status = self.get_provider_status(endpoint.provider_id)
+                if status and not status.is_available:
+                    continue
+            cap_lower = {c.lower() for c in endpoint.capabilities}
+            if required_capabilities and not required_capabilities.issubset(cap_lower):
+                continue
+            targets.append(endpoint)
+        targets.sort(key=lambda e: e.metadata.get("priority", 50))
+        return targets
+
+    def select_best_target(
+        self,
+        required_capabilities: Set[str],
+        kind: Optional[EndpointKind] = None,
+        preferred_target_id: Optional[str] = None,
+        healthy_only: bool = True,
+    ) -> Optional[ProviderEndpoint]:
+        """Select the best available target for required capabilities."""
+        if preferred_target_id:
+            endpoint = self._provider_endpoints.get(preferred_target_id)
+            if endpoint and endpoint.enabled:
+                cap_lower = {c.lower() for c in endpoint.capabilities}
+                if required_capabilities.issubset(cap_lower):
+                    status = self.get_provider_status(preferred_target_id)
+                    if not healthy_only or (status and status.is_available):
+                        return endpoint
+        targets = self.resolve_capable_targets(
+            required_capabilities=required_capabilities,
+            kind=kind,
+            healthy_only=healthy_only,
+        )
+        return targets[0] if targets else None
 
     def _endpoint_to_capabilities(
         self, endpoint: ProviderEndpoint

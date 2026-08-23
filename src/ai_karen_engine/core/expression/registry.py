@@ -29,7 +29,7 @@ def get_engine(engine_id: str, engine_type: str | None = None):
     if decision.classification == "builtin_engine" or engine_id == "builtin":
         return BuiltinProviderEngine()
         
-    if decision.classification in ("local_provider_option", "external_provider_option") or engine_id in ("local", "cloud"):
+    if decision.classification in ("local_openai_endpoint", "cloud_provider") or engine_id in ("local", "cloud"):
         engine = OpenAICompatibleEngine()
         engine.engine_id = engine_id
         return engine

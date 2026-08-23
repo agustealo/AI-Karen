@@ -54,12 +54,6 @@ class ProviderExecutionSpec:
 
 
 BUILTIN_RUNTIME_SPECS: Dict[str, Dict[str, str]] = {
-    "builtin_transformers": {
-        "runtime_engine": "transformers",
-        "adapter_class": "TransformersRuntime",
-        "adapter_module": "ai_karen_engine.inference.transformers_runtime",
-        "execution_family": "builtin_runtime",
-    },
     "builtin_vllm": {
         "runtime_engine": "vllm",
         "adapter_class": "VLLMRuntime",
@@ -68,15 +62,40 @@ BUILTIN_RUNTIME_SPECS: Dict[str, Dict[str, str]] = {
     },
 }
 
+SPECIALIZED_RUNTIME_SPECS: Dict[str, Dict[str, str]] = {
+    "builtin_transformers": {
+        "runtime_engine": "transformers",
+        "adapter_class": "TransformersRuntime",
+        "adapter_module": "ai_karen_engine.inference.transformers_runtime",
+        "execution_family": "specialized_runtime",
+    },
+}
+
+LOCAL_ENDPOINT_SPECS: Dict[str, Dict[str, str]] = {
+    "lmstudio-desktop": {
+        "runtime_engine": "lmstudio",
+        "adapter_class": "OpenAICompatibleProvider",
+        "adapter_module": "ai_karen_engine.integrations.providers.openai_compatible_provider",
+        "execution_family": "openai_compatible",
+    },
+    "ollama-local": {
+        "runtime_engine": "ollama",
+        "adapter_class": "OpenAICompatibleProvider",
+        "adapter_module": "ai_karen_engine.integrations.providers.openai_compatible_provider",
+        "execution_family": "openai_compatible",
+    },
+    "llamacpp-server": {
+        "runtime_engine": "llamacpp",
+        "adapter_class": "OpenAICompatibleProvider",
+        "adapter_module": "ai_karen_engine.integrations.providers.openai_compatible_provider",
+        "execution_family": "openai_compatible",
+    },
+}
+
 FIRST_CLASS_PROVIDER_SPECS: Dict[str, Dict[str, str]] = {
     "gemini": {
         "runtime_engine": "gemini",
         "adapter_class": "GeminiProvider",
-        "execution_family": "first_class_adapter",
-    },
-    "ollama": {
-        "runtime_engine": "ollama",
-        "adapter_class": "OllamaProvider",
         "execution_family": "first_class_adapter",
     },
     "deepseek": {
@@ -171,6 +190,101 @@ def resolve_provider_execution(provider_id: str) -> Optional[ProviderExecutionSp
     manager = get_provider_config_manager()
     config = manager.get_provider(canonical_id)
 
+    # Check spec mappings first for endpoints that may not be in config manager
+    if canonical_id in BUILTIN_RUNTIME_SPECS:
+        spec = BUILTIN_RUNTIME_SPECS[canonical_id]
+        adapter_class = spec["adapter_class"]
+        adapter_module = spec["adapter_module"]
+        execution_family = spec["execution_family"]
+        runtime_engine = spec["runtime_engine"]
+        notes = "Built-in runtime."
+        requires_api_key = _provider_requires_api_key(config) if config else False
+        api_key_env_var = _provider_api_key_env_var(config) if config else None
+        configured = manager.is_provider_configured(canonical_id) if config else False
+        return ProviderExecutionSpec(
+            provider_id=canonical_id,
+            display_name=config.display_name if config else canonical_id,
+            provider_type=config.provider_type.value if config else "builtin",
+            runtime_engine=runtime_engine,
+            adapter_class=adapter_class,
+            adapter_module=adapter_module,
+            execution_family=execution_family,
+            configured=configured,
+            enabled=bool(config.enabled) if config else True,
+            requires_api_key=requires_api_key,
+            api_key_env_var=api_key_env_var,
+            requires_base_url=False,
+            base_url=None,
+            default_model=config.default_model if config else None,
+            supports_model_discovery=True,
+            supports_streaming="streaming" in (config.capabilities if config else []),
+            supports_embeddings="embeddings" in (config.capabilities if config else []),
+            notes=notes,
+        )
+
+    if canonical_id in SPECIALIZED_RUNTIME_SPECS:
+        spec = SPECIALIZED_RUNTIME_SPECS[canonical_id]
+        adapter_class = spec["adapter_class"]
+        adapter_module = spec["adapter_module"]
+        execution_family = spec["execution_family"]
+        runtime_engine = spec["runtime_engine"]
+        notes = "Specialized runtime. Not in normal generative-serving fallback chain."
+        requires_api_key = _provider_requires_api_key(config) if config else False
+        api_key_env_var = _provider_api_key_env_var(config) if config else None
+        configured = manager.is_provider_configured(canonical_id) if config else False
+        return ProviderExecutionSpec(
+            provider_id=canonical_id,
+            display_name=config.display_name if config else canonical_id,
+            provider_type=config.provider_type.value if config else "builtin",
+            runtime_engine=runtime_engine,
+            adapter_class=adapter_class,
+            adapter_module=adapter_module,
+            execution_family=execution_family,
+            configured=configured,
+            enabled=bool(config.enabled) if config else True,
+            requires_api_key=requires_api_key,
+            api_key_env_var=api_key_env_var,
+            requires_base_url=False,
+            base_url=None,
+            default_model=config.default_model if config else None,
+            supports_model_discovery=True,
+            supports_streaming="streaming" in (config.capabilities if config else []),
+            supports_embeddings="embeddings" in (config.capabilities if config else []),
+            notes=notes,
+        )
+
+    if canonical_id in LOCAL_ENDPOINT_SPECS:
+        spec = LOCAL_ENDPOINT_SPECS[canonical_id]
+        adapter_class = spec["adapter_class"]
+        adapter_module = spec["adapter_module"]
+        execution_family = spec["execution_family"]
+        runtime_engine = spec["runtime_engine"]
+        notes = "Local OpenAI-compatible endpoint."
+        requires_api_key = _provider_requires_api_key(config) if config else False
+        api_key_env_var = _provider_api_key_env_var(config) if config else None
+        configured = manager.is_provider_configured(canonical_id) if config else False
+        base_url = _provider_base_url(config) if config else None
+        return ProviderExecutionSpec(
+            provider_id=canonical_id,
+            display_name=config.display_name if config else canonical_id,
+            provider_type=config.provider_type.value if config else "local",
+            runtime_engine=runtime_engine,
+            adapter_class=adapter_class,
+            adapter_module=adapter_module,
+            execution_family=execution_family,
+            configured=configured,
+            enabled=bool(config.enabled) if config else True,
+            requires_api_key=requires_api_key,
+            api_key_env_var=api_key_env_var,
+            requires_base_url=True,
+            base_url=base_url,
+            default_model=config.default_model if config else None,
+            supports_model_discovery=True,
+            supports_streaming=True,
+            supports_embeddings=True,
+            notes=notes,
+        )
+
     if not config:
         return None
 
@@ -178,15 +292,7 @@ def resolve_provider_execution(provider_id: str) -> Optional[ProviderExecutionSp
     api_key_env_var = _provider_api_key_env_var(config)
     configured = manager.is_provider_configured(canonical_id)
 
-    if canonical_id in BUILTIN_RUNTIME_SPECS:
-        spec = BUILTIN_RUNTIME_SPECS[canonical_id]
-        adapter_class = spec["adapter_class"]
-        adapter_module = spec["adapter_module"]
-        execution_family = spec["execution_family"]
-        runtime_engine = spec["runtime_engine"]
-        notes = "Built-in runtime. It does not belong in integrations/providers."
-
-    elif canonical_id in FIRST_CLASS_PROVIDER_SPECS:
+    if canonical_id in FIRST_CLASS_PROVIDER_SPECS:
         spec = FIRST_CLASS_PROVIDER_SPECS[canonical_id]
         adapter_class = spec["adapter_class"]
         adapter_module = _resolve_adapter_module(adapter_class)
