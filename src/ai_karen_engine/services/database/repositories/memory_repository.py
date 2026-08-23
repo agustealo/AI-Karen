@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 from .base import Repository, RepositoryResult
 
@@ -22,6 +22,10 @@ class MemoryItem:
     content: str = ""
     content_tsv: Optional[str] = None
     embedding: Optional[List[float]] = None
+    embedding_model: str = "unknown"
+    embedding_version: str = "v1"
+    embedding_dimension: int = 0
+    embedded_at: datetime = field(default_factory=datetime.utcnow)
     importance: float = 0.5
     confidence: float = 1.0
     source_type: str = "system"
@@ -41,6 +45,10 @@ class MemoryItem:
             "content": self.content,
             "content_tsv": self.content_tsv,
             "embedding": self.embedding,
+            "embedding_model": self.embedding_model,
+            "embedding_version": self.embedding_version,
+            "embedding_dimension": self.embedding_dimension,
+            "embedded_at": self.embedded_at.isoformat() if self.embedded_at else None,
             "importance": self.importance,
             "confidence": self.confidence,
             "source_type": self.source_type,

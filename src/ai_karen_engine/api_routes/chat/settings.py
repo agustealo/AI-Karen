@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ai_karen_engine.core.services.dependencies import bypass_user_context_func
 from ai_karen_engine.services.audit.audit_logger import get_audit_logger
-from ai_karen_engine.models.secret_manager import get_secret_manager
+from ai_karen_engine.core.security.secrets.secrets import get_secret_manager
 from ai_karen_engine.services.formatting.settings_manager import get_settings_manager
 
 logger = logging.getLogger(__name__)

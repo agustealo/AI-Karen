@@ -20,7 +20,7 @@ from ai_karen_engine.database.id_types import coerce_user_id
 from ai_karen_engine.database.memory_manager import MemoryManager, MemoryQuery
 from ai_karen_engine.database.models import TenantConversation, TenantMessage
 from ai_karen_engine.services.database.repositories import Message as CanonicalMessage
-from ai_karen_engine.models.usage_service import UsageService
+from ai_karen_engine.services.usage.service import UsageService
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +246,25 @@ class ConversationManager:
                     self.metrics["avg_response_time"] * 0.9 + response_time * 0.1
                 )
                 logger.info(f"Created conversation {conversation_id} for user {user_id} (canonical)")
+
+                # Publish realtime event (adapter integration)
+                try:
+                    from ai_karen_engine.services.database.repositories.realtime_accessor import (
+                        publish_conversation_event,
+                    )
+                    await publish_conversation_event(
+                        tenant_id=str(tenant_id),
+                        conversation_id=conversation_id,
+                        event_name="conversation.created",
+                        payload={
+                            "conversation_id": conversation_id,
+                            "user_id": user_id,
+                            "title": title,
+                        },
+                    )
+                except Exception as exc:
+                    logger.debug("Realtime publish skipped: %s", exc)
+
                 return Conversation(
                     id=conversation_id,
                     user_id=user_id,
@@ -333,6 +352,25 @@ class ConversationManager:
             )
 
             logger.info(f"Created conversation {conversation_id} for user {user_id}")
+
+            # Publish realtime event (adapter integration)
+            try:
+                from ai_karen_engine.services.database.repositories.realtime_accessor import (
+                    publish_conversation_event,
+                )
+                await publish_conversation_event(
+                    tenant_id=str(tenant_id),
+                    conversation_id=conversation_id,
+                    event_name="conversation.created",
+                    payload={
+                        "conversation_id": conversation_id,
+                        "user_id": user_id,
+                        "title": title,
+                    },
+                )
+            except Exception as exc:
+                logger.debug("Realtime publish skipped: %s", exc)
+
             return conversation
 
         except Exception as e:

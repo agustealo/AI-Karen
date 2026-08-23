@@ -5,7 +5,7 @@ Configuration models for NLP services (spaCy and DistilBERT).
 from __future__ import annotations
 
 import os
-from typing import List
+
 try:
     from pydantic import BaseModel, ConfigDict, Field
 except ImportError:
@@ -34,17 +34,19 @@ class SpacyConfig(BaseModel):
             "enable_fallback": True,
             "cache_size": 1000,
             "cache_ttl": 3600,
-            "download_missing": download_missing_env
+            "download_missing": download_missing_env,
+            "local_model_root": "models/spacy",
         }
         defaults.update(data)
         super().__init__(**defaults)
     
     model_name: str = "en_core_web_sm"
-    disabled_components: List[str] = ["textcat"]  # Keep parser enabled for dependency parsing
+    disabled_components: list[str] = ["textcat"]  # Keep parser enabled for dependency parsing
     enable_fallback: bool = True
     cache_size: int = 1000
     cache_ttl: int = 3600
     download_missing: bool = True
+    local_model_root: str = "models/spacy"
     enabled: bool = True
 
 

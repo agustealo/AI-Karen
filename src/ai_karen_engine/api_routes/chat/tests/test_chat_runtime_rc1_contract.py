@@ -842,7 +842,7 @@ def test_simple_chat_never_invokes_langgraph():
 
 
 def test_chat_stream_chunk_accepts_enum_and_string_types():
-    from ai_karen_engine.models.shared_types import ChatStreamChunk, ChatStreamEventType
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk, ChatStreamEventType
 
     enum_chunk = ChatStreamChunk(
         type=ChatStreamEventType.CONTENT,
@@ -862,7 +862,7 @@ def test_chat_stream_chunk_accepts_enum_and_string_types():
 
 
 def test_chat_stream_chunk_serializes_canonical_fields():
-    from ai_karen_engine.models.shared_types import ChatStreamChunk, ChatStreamEventType
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk, ChatStreamEventType
     from datetime import datetime, timezone
 
     chunk = ChatStreamChunk(
@@ -1010,7 +1010,7 @@ def test_execute_stream_emits_error_on_gate():
 
 
 def test_canonical_stream_chunk_event_types_are_valid():
-    from ai_karen_engine.models.shared_types import ChatStreamEventType
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamEventType
 
     expected = {"status", "content", "tool", "citation", "approval", "warning", "error", "complete"}
     actual = {member.value for member in ChatStreamEventType}

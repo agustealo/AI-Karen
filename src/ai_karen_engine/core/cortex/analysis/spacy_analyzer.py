@@ -29,7 +29,7 @@ from ai_karen_engine.core.cortex.routing_intents import resolve_routing_intent
 from ai_karen_engine.core.memory.signals.distilbert_service import DistilBertService
 from ai_karen_engine.core.memory.signals.spacy_service import SpacyService, ParsedMessage
 from ai_karen_engine.core.reasoning.synthesis import MetacognitiveMonitor
-from ai_karen_engine.models.persona_models import SYSTEM_PERSONAS
+from ai_karen_engine.core.persona.contracts import SYSTEM_PERSONAS
 
 logger = logging.getLogger(__name__)
 

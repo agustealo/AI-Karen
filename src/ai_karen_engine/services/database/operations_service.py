@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import uuid
 
-from ai_karen_engine.models.database_operations import (
+from ai_karen_engine.services.database.health_contracts import (
     DatabaseOperationsOverview,
     StorageTierHealth,
     MemoryWritebackHealth,

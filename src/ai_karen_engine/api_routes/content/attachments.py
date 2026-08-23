@@ -22,7 +22,7 @@ from ai_karen_engine.services.tooling.file_attachment_service import (
     ProcessingCapability,
 )
 from ai_karen_engine.core.logging import get_logger
-from ai_karen_engine.models.web_api_error_responses import (
+from ai_karen_engine.services.error_response_schemas import (
     WebAPIErrorCode,
     create_service_error_response,
     create_validation_error_response,

@@ -43,7 +43,7 @@ from ai_karen_engine.core.memory.profile_synthesis.profile_manager import (
     ProfileManager,
 )
 from ai_karen_engine.services.tooling.tool_service import ToolInput, ToolOutput, ToolService
-from ai_karen_engine.models.shared_types import ToolType
+from ai_karen_engine.core.runtime.chat_runtime_contract import ToolType
 from ai_karen_engine.core.memory.memory_service import (
     MemoryType,
     UISource,

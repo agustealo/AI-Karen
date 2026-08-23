@@ -76,6 +76,26 @@ class ConversationService:
             )
 
             logger.info(f"Created conversation {conversation_id} for user {user_id}")
+
+            # Publish realtime event (adapter integration)
+            try:
+                from ai_karen_engine.services.database.repositories.realtime_accessor import (
+                    publish_conversation_event,
+                )
+                await publish_conversation_event(
+                    tenant_id=user_id,
+                    conversation_id=conversation_id,
+                    event_name="conversation.created",
+                    payload={
+                        "conversation_id": conversation_id,
+                        "user_id": user_id,
+                        "title": title,
+                        "provider_id": provider_id,
+                    },
+                )
+            except Exception as exc:
+                logger.debug("Realtime publish skipped: %s", exc)
+
             return conversation
 
         except Exception as e:

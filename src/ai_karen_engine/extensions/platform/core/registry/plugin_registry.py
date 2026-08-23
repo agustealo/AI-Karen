@@ -47,11 +47,11 @@ class PluginRegistry:
     async def initialize(self):
         """Initialize registry and perform initial discovery scan."""
         try:
-            # Create database tables if they don't exist and session is available
-            if self.db_session:
+            # Table creation is owned by migrations; skip runtime DDL in production.
+            if False and self.db_session:
                 await self._create_tables()
             else:
-                logger.warning("No database session available, using in-memory storage")
+                logger.info("Skipping runtime table creation; using migrations")
 
             # Perform initial discovery and sync with database
             await self.refresh()

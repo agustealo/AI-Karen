@@ -5,16 +5,15 @@ Coordinates extraction through the Safe Stage Runner.
 """
 
 import time
-import logging
-from typing import Optional
-
-from .signal_models import ExtractionResult
-from .memory_signal_extractor import MemorySignalExtractor
-from .signal_rules import RuleBasedExtractor
-from .spacy_service import SpacyService
-from ...runtime.resilience import get_safe_stage_runner
 
 from ai_karen_engine.core.logging import get_logger
+
+from ...runtime.resilience import get_safe_stage_runner
+from .memory_signal_extractor import MemorySignalExtractor
+from .signal_models import ExtractionResult
+from .signal_rules import RuleBasedExtractor
+from .spacy_service import SpacyService
+
 logger = get_logger(__name__)
 
 class SignalPipeline:
@@ -27,16 +26,14 @@ class SignalPipeline:
         self.rule_extractor = RuleBasedExtractor()
         
         # Attempt to initialize spaCy
-        try:
-            self.spacy_service.parse_message("")
-        except Exception as e:
-            logger.info(f"Could not initialize spaCy, pipeline will degrade to rule-based fallback. Error: {e}")
+        if self.spacy_service.fallback_mode:
+            logger.info("spaCy not available, pipeline will degrade to rule-based fallback.")
             
     async def process_text(
         self, 
         text: str,
-        tenant_id: Optional[str] = None,
-        user_id: Optional[str] = None
+        tenant_id: str | None = None,
+        user_id: str | None = None
     ) -> ExtractionResult:
         """Process text through the resilient extraction pipeline."""
         start_time = time.time()

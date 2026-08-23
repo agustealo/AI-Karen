@@ -2,7 +2,7 @@ import logging
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Header
 from ai_karen_engine.auth.session import get_current_user
-from ai_karen_engine.models.database_operations import DatabaseOperationsOverview
+from ai_karen_engine.services.database.health_contracts import DatabaseOperationsOverview
 from ai_karen_engine.services.database.operations_service import get_database_operations_service
 
 logger = logging.getLogger(__name__)

@@ -2,13 +2,12 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
-from ai_karen_engine.models.automation import (
+from ai_karen_engine.core.automation.contracts import (
     AgentAutomation,
     AgentRun,
     AutomationDraft,
     ExecutionStatus,
     AutomationTrigger,
-    AutomationTriggerType,
 )
 
 logger = logging.getLogger(__name__)

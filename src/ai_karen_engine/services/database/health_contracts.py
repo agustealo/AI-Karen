@@ -3,9 +3,8 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 from typing import Any, Literal
 
-
 HealthStatus = Literal["healthy", "degraded", "unavailable", "disabled", "unknown"]
-TierName = Literal["postgres", "redis", "milvus", "elasticsearch", "duckdb", "leangraph", "minio"]
+TierName = Literal["postgres", "redis", "duckdb", "leangraph", "minio"]
 
 
 class StorageTierHealth(BaseModel):

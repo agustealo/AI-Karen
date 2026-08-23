@@ -12,7 +12,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionRequest,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
-from ai_karen_engine.models.shared_types import ChatStreamChunk as _SharedChatStreamChunk
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk as _SharedChatStreamChunk
 
 logger = get_logger(__name__)
 

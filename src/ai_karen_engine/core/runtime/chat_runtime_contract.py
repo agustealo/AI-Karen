@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -171,3 +172,100 @@ class ChatExecutionResult:
     sources: List[Dict[str, Any]] = field(default_factory=list)
     attachments: List[Dict[str, Any]] = field(default_factory=list)
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
+
+
+try:
+    from pydantic import BaseModel, ConfigDict, Field
+except ImportError:
+    from ai_karen_engine.pydantic_stub import BaseModel, ConfigDict, Field
+
+
+class ChatStreamChunk(BaseModel):
+    """Granular output chunk for streaming responses."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    type: ChatStreamEventType = Field(
+        ..., description="Event type. Canonical values live in ChatStreamEventType."
+    )
+    content: str = Field("", description="The text fragment or status update")
+    correlation_id: str = Field(..., description="Request tracking identifier")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Optional chunk metadata")
+
+    event_id: Optional[str] = Field(
+        None, description="Unique identifier for this chunk/event"
+    )
+    sequence: Optional[int] = Field(
+        None, description="Monotonically increasing chunk sequence number"
+    )
+    request_id: Optional[str] = Field(
+        None, description="Identifies the originating request"
+    )
+    response_id: Optional[str] = Field(
+        None, description="Identifies the runtime response"
+    )
+    conversation_id: Optional[str] = Field(
+        None, description="Conversation context identifier"
+    )
+    timestamp: Optional[datetime] = Field(
+        None, description="When this chunk was emitted"
+    )
+
+    def to_sse_payload(self) -> Dict[str, Any]:
+        """Serialize to a transport-agnostic dict suitable for SSE data lines."""
+        return {
+            "type": self.type.value if isinstance(self.type, ChatStreamEventType) else self.type,
+            "content": self.content,
+            "correlation_id": self.correlation_id,
+            "metadata": self.metadata,
+            "event_id": self.event_id,
+            "sequence": self.sequence,
+            "request_id": self.request_id,
+            "response_id": self.response_id,
+            "conversation_id": self.conversation_id,
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+        }
+
+
+class CanonicalChatRequest(BaseModel):
+    """Input payload for the canonical chat orchestration runtime."""
+    model_config = ConfigDict(protected_namespaces=())
+
+    request_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Stable request identifier")
+    correlation_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Cross-service correlation identifier")
+    tenant_id: Optional[str] = Field(None, description="Tenant identifier when available")
+    message: str = Field(..., description="The user's message content")
+    user_id: str = Field(..., description="Unique user identifier")
+    org_id: Optional[str] = Field(None, description="Organization or Tenant ID")
+    conversation_id: str = Field(..., description="Active conversation context ID")
+    session_id: Optional[str] = Field(None, description="Optional session tracking ID")
+    message_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Stable user message identifier")
+    attachments: List[Dict[str, Any]] = Field(default_factory=list, description="Associated file or media links")
+    include_context: bool = Field(True, description="Whether to perform RAG recall")
+    metadata: Dict[str, Any] = Field(default_factory=list, description="Additional request-specific metadata")
+    streaming: bool = Field(False, description="Whether to return a stream generator")
+    stream: bool = Field(False, description="Alias for streaming")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Request creation timestamp")
+
+
+class CanonicalChatResponse(BaseModel):
+    """Terminal output from the canonical orchestration runtime."""
+    model_config = ConfigDict(protected_namespaces=())
+
+    request_id: Optional[str] = Field(None, description="Source request identifier")
+    response: str = Field(..., description="The final generated response")
+    correlation_id: str = Field(..., description="Request tracking identifier")
+    conversation_id: Optional[str] = Field(None, description="Conversation identifier")
+    assistant_message_id: Optional[str] = Field(None, description="Persisted assistant message identifier")
+    processing_time: float = Field(..., description="Total execution time in seconds")
+    status: ChatExecutionStatus = Field(..., description="Terminal processing state")
+    used_fallback: bool = Field(False, description="Whether a fallback model was used")
+    context_used: bool = Field(False, description="Whether RAG context was utilized")
+    execution_path: Optional[str] = Field(None, description="Execution path selected by the orchestrator")
+    structured_content: Dict[str, Any] = Field(default_factory=dict, description="Rich JSON output or application state")
+    actions: List[Dict[str, Any]] = Field(default_factory=list, description="Suggested or triggered automation actions")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Detailed execution and model metadata")
+    telemetry: Dict[str, Any] = Field(default_factory=dict, description="Telemetry payload for frontend/runtime inspection")
+    error: Optional[str] = Field(None, description="Error message if failed")
+    error_type: Optional[ErrorType] = Field(None, description="Error classification")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Response creation timestamp")

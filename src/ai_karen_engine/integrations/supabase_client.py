@@ -8,7 +8,6 @@ to the data layer.
 
 from __future__ import annotations
 
-import logging
 import os
 from typing import Any, Dict, Optional
 
@@ -22,7 +21,8 @@ class SupabasePlatformClient:
 
     def __init__(self):
         self._storage: Optional[Any] = None
-        self._realtime: Optional[Any] = None
+        self._realtime_client: Optional[Any] = None
+        self._publisher: Optional[Any] = None
         self._queue: Optional[Any] = None
         self._url: Optional[str] = None
         self._key: Optional[str] = None
@@ -34,9 +34,14 @@ class SupabasePlatformClient:
         return self._storage
 
     @property
-    def realtime(self) -> Optional[Any]:
-        """Return initialized Supabase Realtime capability."""
-        return self._realtime
+    def realtime_client(self) -> Optional[Any]:
+        """Return raw Supabase Realtime client capability."""
+        return self._realtime_client
+
+    @property
+    def publisher(self) -> Optional[Any]:
+        """Return initialized RealtimePublisher."""
+        return self._publisher
 
     @property
     def queue(self) -> Optional[Any]:
@@ -66,6 +71,14 @@ class SupabasePlatformClient:
         self._url = url or os.getenv("SUPABASE_URL")
         self._key = key or os.getenv("SUPABASE_ANON_KEY")
 
+        try:
+            from ai_karen_engine.services.database.repositories.noop_queue_client import NoopQueueClient
+            self._queue = NoopQueueClient()
+            logger.info("Supabase Queue capability initialized (noop)")
+        except Exception as exc:
+            logger.warning("Supabase Queue initialization failed: %s", exc)
+            self._queue = None
+
         if not self._url or not self._key:
             logger.info("Supabase platform not configured; platform capabilities disabled")
             self._initialized = True
@@ -76,24 +89,26 @@ class SupabasePlatformClient:
 
             client = create_client(self._url, self._key)
             self._storage = client.storage
+            self._realtime_client = client
             logger.info("Supabase Storage capability initialized")
         except Exception as exc:
             logger.warning("Supabase Storage initialization failed: %s", exc)
             self._storage = None
+            self._realtime_client = None
 
         try:
-            self._realtime = None
-            logger.info("Supabase Realtime capability deferred to publisher adapter")
+            if self._realtime_client is not None:
+                from ai_karen_engine.services.database.repositories.supabase_realtime_publisher import (
+                    SupabaseRealtimePublisher,
+                )
+                self._publisher = SupabaseRealtimePublisher(self._realtime_client)
+                logger.info("Supabase Realtime publisher initialized")
+            else:
+                self._publisher = None
+                logger.info("Supabase Realtime publisher skipped: client not available")
         except Exception as exc:
-            logger.warning("Supabase Realtime initialization failed: %s", exc)
-            self._realtime = None
-
-        try:
-            self._queue = None
-            logger.info("Supabase Queue capability deferred to durable queue adapter")
-        except Exception as exc:
-            logger.warning("Supabase Queue initialization failed: %s", exc)
-            self._queue = None
+            logger.warning("Supabase Realtime publisher initialization failed: %s", exc)
+            self._publisher = None
 
         self._initialized = True
         return True
@@ -103,7 +118,8 @@ class SupabasePlatformClient:
         return {
             "initialized": self._initialized,
             "storage": self._storage is not None,
-            "realtime": self._realtime is not None,
+            "realtime_client": self._realtime_client is not None,
+            "publisher": self._publisher is not None,
             "queue": self._queue is not None,
             "url": self._url,
         }
@@ -111,7 +127,8 @@ class SupabasePlatformClient:
     def reset(self) -> None:
         """Reset platform state for tests or shutdown."""
         self._storage = None
-        self._realtime = None
+        self._realtime_client = None
+        self._publisher = None
         self._queue = None
         self._url = None
         self._key = None

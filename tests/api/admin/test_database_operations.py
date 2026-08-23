@@ -6,7 +6,7 @@ import uuid
 # Mock the service
 class MockDatabaseOperationsService:
     async def get_overview(self, correlation_id: str):
-        from ai_karen_engine.models.database_operations import DatabaseOperationsOverview
+        from ai_karen_engine.services.database.health_contracts import DatabaseOperationsOverview
         return DatabaseOperationsOverview(
             status="healthy",
             generated_at="2026-05-02T12:00:00Z",

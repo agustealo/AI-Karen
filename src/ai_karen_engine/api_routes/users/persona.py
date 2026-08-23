@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ai_karen_engine.core.services.dependencies import bypass_user_context_func
 from ai_karen_engine.services.persona.persona_service import get_persona_service
-from ai_karen_engine.models.persona_models import (
+from ai_karen_engine.core.persona.contracts import (
     LanguageEnum,
     PersonaStyleOverride,
     ToneEnum,
@@ -477,7 +477,7 @@ async def list_system_personas() -> List[PersonaResponse]:
     """List all built-in system personas (public endpoint)"""
 
     try:
-        from ai_karen_engine.models.persona_models import SYSTEM_PERSONAS
+        from ai_karen_engine.core.persona.contracts import SYSTEM_PERSONAS
 
         return [PersonaResponse(**persona.dict()) for persona in SYSTEM_PERSONAS]
 

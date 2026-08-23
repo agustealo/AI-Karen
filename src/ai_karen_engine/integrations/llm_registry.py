@@ -947,7 +947,7 @@ class LLMRegistry:
             from ai_karen_engine.config.llm_provider_config import (
                 get_provider_config_manager,
             )
-            from ai_karen_engine.models.secret_manager import get_secret_manager
+            from ai_karen_engine.core.security.secrets.secrets import get_secret_manager
         except Exception:
             return resolved
 

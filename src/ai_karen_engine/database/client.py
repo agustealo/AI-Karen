@@ -154,16 +154,16 @@ class DatabaseClient:
                 logger.error(error_msg)
             raise
     
-    def create_tables(self):
-        """Create all database tables"""
-        
-        try:
-            Base.metadata.create_all(bind=self.engine)
-            logger.info("Database tables created successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to create database tables: {e}")
-            raise
+    def create_tables(self) -> None:
+        """No-op in production.
+
+        Table creation is owned by migrations. This method remains
+        for backwards compatibility during DATA-CONVERGE-1.
+        """
+        logger.warning(
+            "DatabaseClient.create_tables() is a no-op in production. "
+            "Use migrations to manage schema."
+        )
 
     async def cleanup(self):
         """Close database engines and free resources (async)."""
@@ -504,9 +504,15 @@ class MultiTenantPostgresClient(DatabaseClient):
         return self.get_session()
 
     def create_shared_tables(self) -> None:
-        """Create all shared application tables and persona persistence tables."""
-        self.create_tables()
-        self.create_persona_tables()
+        """No-op in production.
+
+        Table creation is owned by migrations. This method remains
+        for backwards compatibility during DATA-CONVERGE-1.
+        """
+        logger.warning(
+            "DatabaseClient.create_shared_tables() is a no-op in production. "
+            "Use migrations to manage schema."
+        )
 
     def create_persona_tables(self) -> None:
         """Create persona-related persistence tables used by the chat personalization flow."""
@@ -772,12 +778,20 @@ def get_db_session_context() -> Generator[Session, None, None]:
 
 
 def create_database_tables():
-    """Create all database tables"""
+    """Create all database tables (development/test helper only)."""
+    logger.warning(
+        "create_database_tables() is a no-op in production. "
+        "Use migrations to manage schema."
+    )
     db_client.create_tables()
 
 
 def drop_database_tables():
-    """Drop all database tables"""
+    """Drop all database tables (development/test helper only)."""
+    logger.warning(
+        "drop_database_tables() is a no-op in production. "
+        "Use migrations to manage schema."
+    )
     db_client.drop_tables()
 
 

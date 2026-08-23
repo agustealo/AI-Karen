@@ -13,4 +13,5 @@ class SpacyConfig(BaseModel):
     cache_size: int = 1000
     cache_ttl: int = 3600
     download_missing: bool = True
+    local_model_root: str = "models/spacy"
     enabled: bool = True

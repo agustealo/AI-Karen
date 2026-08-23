@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import List, Optional, Tuple
 
-from ai_karen_engine.models.ag_ui_types import AGUIMemoryEntry, AGUIMemoryQuery
+from ai_karen_engine.api_routes.schemas.ag_ui import AGUIMemoryEntry, AGUIMemoryQuery
 from ai_karen_engine.core.memory.memory_service import WebUIMemoryEntry, WebUIMemoryQuery
 
 

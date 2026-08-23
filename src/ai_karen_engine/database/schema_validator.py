@@ -259,7 +259,7 @@ async def validate_and_migrate_schema(session: Any) -> Optional[Any]:
     except SchemaVersionError as e:
         # Import error response creator
         try:
-            from ai_karen_engine.models.web_api_error_responses import create_database_error_response
+             from ai_karen_engine.services.error_response_schemas import create_database_error_response
 
             return create_database_error_response(
                 error=e,
@@ -282,7 +282,7 @@ async def validate_and_migrate_schema(session: Any) -> Optional[Any]:
         # Unexpected error
         logger.error(f"Unexpected error during schema validation: {e}")
         try:
-            from ai_karen_engine.models.web_api_error_responses import create_database_error_response
+             from ai_karen_engine.services.error_response_schemas import create_database_error_response
 
             return create_database_error_response(
                 error=e,

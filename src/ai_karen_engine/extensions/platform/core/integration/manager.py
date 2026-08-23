@@ -1,7 +1,17 @@
 import logging
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("kari.plugin_manager")
+
+
+@dataclass
+class ExtensionExecutionResult:
+    extension_id: str
+    success: bool
+    data: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    execution_time_ms: Optional[int] = None
 
 
 class PluginManager:
@@ -76,7 +86,6 @@ class PluginManager:
         Returns:
             ExtensionExecutionResult with success status and data
         """
-        from ai_karen_engine.models.shared_types import ExtensionExecutionResult
         import time
 
         start_time = time.time()

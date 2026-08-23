@@ -1,6 +1,6 @@
 import pytest
 from ai_karen_engine.services.database.operations_service import DatabaseOperationsService
-from ai_karen_engine.models.database_operations import DatabaseOperationsOverview
+from ai_karen_engine.services.database.health_contracts import DatabaseOperationsOverview
 
 @pytest.mark.asyncio
 async def test_get_overview_structure():
@@ -17,7 +17,7 @@ async def test_get_overview_structure():
 async def test_collect_warnings():
     service = DatabaseOperationsService()
     
-    from ai_karen_engine.models.database_operations import StorageTierHealth, MemoryWritebackHealth, ProjectionHealth, MigrationHealth
+    from ai_karen_engine.services.database.health_contracts import StorageTierHealth, MemoryWritebackHealth, ProjectionHealth, MigrationHealth
     
     tiers = [StorageTierHealth(tier="postgres", status="degraded", enabled=True, connected=True, error_message="High latency", metadata={})]
     writeback = MemoryWritebackHealth(status="healthy", enabled=True)

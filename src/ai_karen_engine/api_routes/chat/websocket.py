@@ -34,7 +34,7 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     serialize_runtime_response,
     get_chat_runtime_control_plane,
 )
-from ai_karen_engine.models.shared_types import CanonicalChatRequest
+from ai_karen_engine.core.runtime.chat_runtime_contract import CanonicalChatRequest
 from ai_karen_engine.services.streaming.stream_processor import AsyncStreamProcessor
 from ai_karen_engine.services.streaming.websocket_gateway import WebSocketGateway
 

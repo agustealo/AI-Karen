@@ -5,6 +5,7 @@ import hashlib
 import logging
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from ai_karen_engine.core.intelligence.linguistic.contracts import (
@@ -91,18 +92,41 @@ class SpacyAnalyzer:
             logger.warning("spaCy not available, using fallback mode")
             self.fallback_mode = True
             return
-        try:
-            self.nlp = spacy.load(self.config.model_name, disable=self.config.disabled_components)
-        except OSError:
-            if self.config.download_missing:
+
+        local_model_root = Path(getattr(self.config, "local_model_root", "models/spacy"))
+        local_model_path = local_model_root / self.config.model_name
+
+        def _try_load_local(path: Path) -> bool:
+            if path.exists():
                 try:
-                    from spacy.cli import download
-                    download(self.config.model_name)
-                    self.nlp = spacy.load(self.config.model_name, disable=self.config.disabled_components)
-                except Exception:
-                    self.nlp = None
-            if self.nlp is None:
-                self.fallback_mode = True
+                    self.nlp = spacy.load(path, disable=self.config.disabled_components)
+                    logger.info("Loaded spaCy model from local path: %s", path)
+                    return True
+                except (OSError, ValueError) as exc:
+                    logger.warning("Failed to load local spaCy model from %s: %s", path, exc)
+            return False
+
+        if not _try_load_local(local_model_path):
+            try:
+                self.nlp = spacy.load(self.config.model_name, disable=self.config.disabled_components)
+            except OSError:
+                if self.config.download_missing:
+                    try:
+                        from spacy.cli import download
+                        download(self.config.model_name)
+                        self.nlp = spacy.load(self.config.model_name, disable=self.config.disabled_components)
+                    except Exception:
+                        self.nlp = None
+            if self.nlp is not None and local_model_root:
+                try:
+                    local_model_root.mkdir(parents=True, exist_ok=True)
+                    self.nlp.to_disk(local_model_path)
+                    logger.info("Saved spaCy model to local path: %s", local_model_path)
+                except OSError as exc:
+                    logger.warning("Failed to save spaCy model to %s: %s", local_model_path, exc)
+
+        if self.nlp is None:
+            self.fallback_mode = True
 
     async def parse(self, text: str) -> ParsedMessage:
         if not text or not text.strip():

@@ -62,16 +62,22 @@ class PostgresMemoryRepository(MemoryRepository):
                         INSERT INTO memory_items
                             (memory_id, tenant_id, user_id, conversation_id, scope, kind,
                              content, content_tsv, embeddings,
+                             embedding_model, embedding_version, embedding_dimension, embedded_at,
                              importance, confidence, source_type, source_ref,
                              expires_at, metadata, created_at, updated_at)
                         VALUES
                             (:memory_id, :tenant_id, :user_id, :conversation_id, :scope, :kind,
                              :content, :content_tsv, :embeddings,
+                             :embedding_model, :embedding_version, :embedding_dimension, :embedded_at,
                              :importance, :confidence, :source_type, :source_ref,
                              :expires_at, :metadata, :created_at, :updated_at)
                         ON CONFLICT (memory_id) DO UPDATE SET
                             content = EXCLUDED.content,
                             embeddings = EXCLUDED.embeddings,
+                            embedding_model = EXCLUDED.embedding_model,
+                            embedding_version = EXCLUDED.embedding_version,
+                            embedding_dimension = EXCLUDED.embedding_dimension,
+                            embedded_at = EXCLUDED.embedded_at,
                             importance = EXCLUDED.importance,
                             confidence = EXCLUDED.confidence,
                             updated_at = EXCLUDED.updated_at
@@ -87,6 +93,10 @@ class PostgresMemoryRepository(MemoryRepository):
                         "content": item.content,
                         "content_tsv": content_tsv,
                         "embeddings": embedding_vector_json,
+                        "embedding_model": item.embedding_model,
+                        "embedding_version": item.embedding_version,
+                        "embedding_dimension": item.embedding_dimension,
+                        "embedded_at": item.embedded_at,
                         "importance": item.importance,
                         "confidence": item.confidence,
                         "source_type": item.source_type,
@@ -445,6 +455,10 @@ class PostgresMemoryRepository(MemoryRepository):
             memory_type=str(row.kind or row.scope or "episodic"),
             content=str(row.content or ""),
             embedding=embedding,
+            embedding_model=str(row.embedding_model or "unknown"),
+            embedding_version=str(row.embedding_version or "v1"),
+            embedding_dimension=int(row.embedding_dimension or 0),
+            embedded_at=row.embedded_at,
             importance=float(row.importance or 0.5),
             confidence=float(row.confidence or 1.0),
             source_type=str(row.source_type or "system"),

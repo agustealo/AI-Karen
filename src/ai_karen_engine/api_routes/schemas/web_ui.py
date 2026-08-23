@@ -14,37 +14,22 @@ from datetime import datetime
 from enum import Enum
 
 
-class WebUIErrorCode(str, Enum):
-    """Error codes for web UI error responses."""
-
-    VALIDATION_ERROR = "VALIDATION_ERROR"
-    CHAT_PROCESSING_ERROR = "CHAT_PROCESSING_ERROR"
-    MEMORY_ERROR = "MEMORY_ERROR"
-    PLUGIN_ERROR = "PLUGIN_ERROR"
-    SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
-    AUTHENTICATION_ERROR = "AUTHENTICATION_ERROR"
-    INTERNAL_ERROR = "INTERNAL_ERROR"
+class FileType(str, Enum):
+    DOCUMENT = "document"
+    IMAGE = "image"
+    VIDEO = "video"
+    AUDIO = "audio"
+    ARCHIVE = "archive"
+    CODE = "code"
+    OTHER = "other"
 
 
-class WebUIErrorResponse(BaseModel):
-    """Standardized error response for web UI."""
-
-    error: str = Field(..., description="Error message")
-    message: str = Field(..., description="User-friendly message")
-    type: WebUIErrorCode = Field(..., description="Error type for frontend handling")
-    details: Optional[Dict[str, Any]] = Field(
-        None, description="Additional error details"
-    )
-    request_id: Optional[str] = Field(None, description="Request ID for tracking")
-    timestamp: str = Field(..., description="ISO timestamp")
-
-
-class ValidationErrorDetail(BaseModel):
-    """Validation error details."""
-
-    field: str = Field(..., description="Field name with validation error")
-    message: str = Field(..., description="Validation error message")
-    invalid_value: Any = Field(..., description="Invalid value that caused the error")
+class UISource(str, Enum):
+    WEB = "web"
+    DESKTOP = "desktop"
+    API = "api"
+    AG_UI = "ag_ui"
+    COPILOTKIT = "copilotkit"
 
 
 # Chat Processing Models
@@ -69,7 +54,6 @@ class ChatProcessRequest(BaseModel):
     @field_validator("message")
     @classmethod
     def validate_message(cls, v: str) -> str:
-        """Ensure message is non-empty and within length limits."""
         if not v or not v.strip():
             raise ValueError(
                 "Message cannot be empty or contain only whitespace"
@@ -83,7 +67,6 @@ class ChatProcessRequest(BaseModel):
     def validate_conversation_history(
         cls, v: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """Ensure conversation history entries have required structure."""
         for i, msg in enumerate(v):
             if not isinstance(msg, dict):
                 raise ValueError(
@@ -98,7 +81,6 @@ class ChatProcessRequest(BaseModel):
     @field_validator("user_settings")
     @classmethod
     def validate_user_settings(cls, v: Dict[str, Any]) -> Dict[str, Any]:
-        """Ensure user settings is a dictionary."""
         if not isinstance(v, dict):
             raise TypeError("User settings must be an object")
         return v
@@ -154,11 +136,9 @@ class WebUIMemoryQuery(BaseModel):
     @field_validator("text")
     @classmethod
     def validate_text(cls, v: str) -> str:
-        """Validate query text."""
         if not v or not v.strip():
             raise ValueError("Query text cannot be empty or contain only whitespace")
 
-        # Remove excessive whitespace
         cleaned_text = " ".join(v.strip().split())
 
         if len(cleaned_text) < 1:
@@ -171,7 +151,6 @@ class WebUIMemoryQuery(BaseModel):
     @field_validator("tags")
     @classmethod
     def validate_tags(cls, v: Optional[List[str]]) -> Optional[List[str]]:
-        """Validate tags list."""
         if v is None:
             return v
 
@@ -185,12 +164,12 @@ class WebUIMemoryQuery(BaseModel):
 
             cleaned_tag = tag.strip().lower()
             if not cleaned_tag:
-                continue  # Skip empty tags
+                continue
 
             if len(cleaned_tag) > 50:
                 raise ValueError("Tag length cannot exceed 50 characters")
 
-            if cleaned_tag not in validated_tags:  # Remove duplicates
+            if cleaned_tag not in validated_tags:
                 validated_tags.append(cleaned_tag)
 
         return validated_tags if validated_tags else None
@@ -200,7 +179,6 @@ class WebUIMemoryQuery(BaseModel):
     def validate_time_range(
         cls, v: Optional[List[datetime]]
     ) -> Optional[List[datetime]]:
-        """Validate time range."""
         if v is None:
             return v
 
@@ -217,7 +195,6 @@ class WebUIMemoryQuery(BaseModel):
         if start_time >= end_time:
             raise ValueError("Start time must be before end time")
 
-        # Check if time range is reasonable (not more than 1 year)
         time_diff = end_time - start_time
         if time_diff.days > 365:
             raise ValueError("Time range cannot exceed 365 days")
@@ -229,7 +206,6 @@ class WebUIMemoryQuery(BaseModel):
     def validate_metadata_filter(
         cls, v: Optional[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
-        """Validate metadata filter."""
         if v is None:
             return v
 
@@ -239,7 +215,6 @@ class WebUIMemoryQuery(BaseModel):
         if len(v) > 10:
             raise ValueError("Maximum 10 metadata filter keys allowed")
 
-        # Validate keys and values
         for key, value in v.items():
             if not isinstance(key, str):
                 raise ValueError("Metadata filter keys must be strings")
@@ -249,14 +224,11 @@ class WebUIMemoryQuery(BaseModel):
                     "Metadata filter key length cannot exceed 100 characters"
                 )
 
-            # Validate value types (allow basic JSON-serializable types)
             if not isinstance(value, (str, int, float, bool, type(None))):
                 if isinstance(value, (list, dict)):
-                    # Allow simple lists and dicts but limit depth
                     try:
                         import json
-
-                        json.dumps(value)  # Test if JSON serializable
+                        json.dumps(value)
                     except (TypeError, ValueError):
                         raise ValueError(
                             f"Metadata filter value for key '{key}' must be JSON serializable"
@@ -290,13 +262,11 @@ class WebUIMemoryEntry(BaseModel):
     @field_validator("timestamp")
     @classmethod
     def validate_timestamp(cls, v: int) -> int:
-        """Validate timestamp is a reasonable Unix timestamp in milliseconds."""
         if v < 0:
             raise ValueError("Timestamp cannot be negative")
 
-        # Check if timestamp is in reasonable range (after year 2000, before year 2100)
-        min_timestamp = 946684800000  # Jan 1, 2000 in milliseconds
-        max_timestamp = 4102444800000  # Jan 1, 2100 in milliseconds
+        min_timestamp = 946684800000
+        max_timestamp = 4102444800000
 
         if v < min_timestamp or v > max_timestamp:
             raise ValueError("Timestamp must be between year 2000 and 2100")
@@ -306,7 +276,6 @@ class WebUIMemoryEntry(BaseModel):
     @field_validator("content")
     @classmethod
     def validate_content(cls, v: str) -> str:
-        """Validate memory content."""
         if not v or not v.strip():
             raise ValueError("Memory content cannot be empty")
 
@@ -315,7 +284,6 @@ class WebUIMemoryEntry(BaseModel):
     @field_validator("tags")
     @classmethod
     def validate_tags(cls, v: List[str]) -> List[str]:
-        """Validate and clean tags."""
         if not v:
             return []
 
@@ -331,7 +299,6 @@ class WebUIMemoryEntry(BaseModel):
     @field_validator("similarity_score")
     @classmethod
     def validate_similarity_score(cls, v: Optional[float]) -> Optional[float]:
-        """Validate similarity score."""
         if v is None:
             return v
 
@@ -358,11 +325,9 @@ class WebUIMemoryQueryResponse(BaseModel):
     @field_validator("memories")
     @classmethod
     def validate_memories(cls, v: List[WebUIMemoryEntry]) -> List[WebUIMemoryEntry]:
-        """Validate memories list."""
         if v is None:
             return []
 
-        # Ensure it's a list
         if not isinstance(v, list):
             raise ValueError("Memories must be a list")
 
@@ -371,7 +336,6 @@ class WebUIMemoryQueryResponse(BaseModel):
     @field_validator("total_count")
     @classmethod
     def validate_total_count(cls, v: int) -> int:
-        """Validate total count."""
         if not isinstance(v, int):
             raise ValueError("Total count must be an integer")
 
@@ -383,14 +347,12 @@ class WebUIMemoryQueryResponse(BaseModel):
     @field_validator("query_time_ms")
     @classmethod
     def validate_query_time_ms(cls, v: float) -> float:
-        """Validate query time."""
         if not isinstance(v, (int, float)):
             raise ValueError("Query time must be a number")
 
         if v < 0:
             raise ValueError("Query time cannot be negative")
 
-        # Convert to float and round to reasonable precision
         return round(float(v), 2)
 
 
@@ -485,52 +447,3 @@ class WebUIHealthCheck(BaseModel):
     )
     timestamp: str = Field(..., description="Health check timestamp")
     uptime: float = Field(..., description="System uptime in seconds")
-
-
-def create_web_ui_error_response(
-    error_code: WebUIErrorCode,
-    message: str,
-    details: Optional[Dict[str, Any]] = None,
-    user_message: Optional[str] = None,
-    request_id: Optional[str] = None,
-) -> WebUIErrorResponse:
-    """Create standardized error response for web UI."""
-    return WebUIErrorResponse(
-        error=user_message or message,
-        message=message,
-        type=error_code,
-        details=details,
-        request_id=request_id,
-        timestamp=datetime.utcnow().isoformat(),
-    )
-
-
-def create_validation_error_response(
-    validation_errors: List[Dict[str, Any]], request_id: Optional[str] = None
-) -> WebUIErrorResponse:
-    """Create validation error response for web UI."""
-    error_details = []
-    for error in validation_errors:
-        # Extract field name from location path
-        loc = error.get("loc", ["unknown"])
-        if isinstance(loc, (list, tuple)) and len(loc) > 0:
-            field_name = str(loc[-1])  # Get the last element and convert to string
-        else:
-            field_name = "unknown"
-
-        error_details.append(
-            ValidationErrorDetail(
-                field=field_name,
-                message=error.get("msg", "Validation error"),
-                invalid_value=error.get("input", None),
-            )
-        )
-
-    return WebUIErrorResponse(
-        error="Request validation failed",
-        message="One or more fields have invalid values",
-        type=WebUIErrorCode.VALIDATION_ERROR,
-        details={"validation_errors": [detail.dict() for detail in error_details]},
-        request_id=request_id,
-        timestamp=datetime.utcnow().isoformat(),
-    )

@@ -35,6 +35,7 @@ class CronJobRequest(BaseModel):
     type: str = Field(..., description="'Task' or 'Sequence'")
     targetId: str = Field(..., description="The ID of the Task or Sequence to trigger")
     enabled: bool = Field(True, description="Whether this cron job is active")
+    action: str = Field("execute", description="'execute' or 'enqueue'")
 
 
 class CronJobResponse(CronJobRequest):
@@ -46,6 +47,7 @@ class CronJobResponse(CronJobRequest):
 # In-memory storage for demo and runtime
 _cron_db: Dict[str, Dict[str, Any]] = {}
 _cron_executor_task: Optional[asyncio.Task] = None
+_queue_worker_task: Optional[asyncio.Task] = None
 
 
 def get_cron_summary() -> Dict[str, Any]:
@@ -61,7 +63,7 @@ def get_cron_summary() -> Dict[str, Any]:
         # nextRun is a string like "2026-04-24 09:00 UTC"
         sorted_jobs = []
         for j in enabled_jobs:
-            nr = _get_next_run(j["schedule"])
+            nr = get_next_run(j["schedule"])
             if nr and nr != "Unknown" and "Invalid" not in nr:
                 try:
                     dt = datetime.strptime(nr, "%Y-%m-%d %H:%M UTC")
@@ -196,10 +198,30 @@ async def toggle_cron_job(
         raise HTTPException(status_code=500, detail=f"Failed to toggle cron job: {str(e)}")
 
 async def _run_cron_task(job: Dict[str, Any]):
-    """Internal helper to execute a cron job task."""
+    """Internal helper to execute or enqueue a cron job task."""
     target_id = job.get("targetId")
     job_type = job.get("type")
     cron_id = job.get("id")
+    action = job.get("action", "execute")
+
+    if action == "enqueue":
+        try:
+            from ai_karen_engine.services.database.repositories.queue_accessor import enqueue
+            queue_name = f"cron:{job_type.lower()}:{target_id}"
+            payload = {
+                "cron_id": cron_id,
+                "target_id": target_id,
+                "job_type": job_type,
+                "trigger": "cron",
+            }
+            item_id = await enqueue(queue_name, payload)
+            if item_id:
+                logger.info("Enqueued cron job %s as queue item %s", cron_id, item_id)
+            else:
+                logger.warning("Queue enqueue returned no item_id for cron job %s", cron_id)
+        except Exception as qe:
+            logger.error(f"Failed to enqueue cron job {cron_id}: {qe}")
+        return
 
     if job_type == "Task":
         try:
@@ -270,6 +292,63 @@ async def _cron_executor_loop():
             await asyncio.sleep(10)
 
 
+async def _queue_worker_loop():
+    """Background task to dequeue and execute queued cron work items."""
+    logger.info("[QUEUE] Background worker loop started")
+    worker_id = f"cron-worker-{uuid.uuid4().hex[:8]}"
+    while True:
+        try:
+            from ai_karen_engine.services.database.repositories.queue_accessor import get_queue_client
+            client = get_queue_client()
+            if client is None:
+                await asyncio.sleep(10)
+                continue
+
+            result = await client.dequeue("cron", worker_id)
+            if not result.success or not result.data:
+                await asyncio.sleep(5)
+                continue
+
+            item = result.data
+            logger.info("[QUEUE] Dequeued item %s from queue %s", item.id, item.queue)
+            try:
+                payload = item.payload or {}
+                target_id = payload.get("target_id")
+                job_type = payload.get("job_type")
+                cron_id = payload.get("cron_id")
+
+                if job_type == "Task":
+                    integration_service = get_agent_integration_service()
+                    await integration_service.initialize()
+                    from ai_karen_engine.api_routes.automation.tasks import _tasks_db
+                    task_def = _tasks_db.get(target_id)
+                    if task_def:
+                        from ai_karen_engine.agents.internal.agent_schemas import AgentTask
+                        runtime_task = AgentTask(
+                            task_id=f"queue_{item.id}",
+                            agent_id=str(task_def.get("primaryAgent") or ""),
+                            task_type=str(task_def.get("taskType") or "cron_task"),
+                            description=str(task_def.get("description") or ""),
+                            input_data={"task_id": target_id, "trigger": "queue", "queue_item_id": item.id},
+                            metadata={"source": "queue", "cron_id": cron_id}
+                        )
+                        await integration_service.execute_task(runtime_task, execution_mode=AgentExecutionMode.LANGGRAPH)
+                elif job_type in ["Sequence", "Job"]:
+                    job_service = get_job_service()
+                    cron_user = {"user_id": "system-cron", "roles": ["admin"]}
+                    await job_service.execute_job(target_id, user_context=cron_user)
+
+                await client.ack(item.queue, item.id)
+                logger.info("[QUEUE] Acknowledged item %s", item.id)
+            except Exception as e:
+                logger.error(f"[QUEUE] Failed to process item {item.id}: {e}")
+                await client.nack(item.queue, item.id, str(e))
+
+        except Exception as e:
+            logger.error(f"[QUEUE] Worker error: {e}")
+            await asyncio.sleep(10)
+
+
 @router.on_event("startup")
 async def _start_cron_executor() -> None:
     """Start the background cron executor once the application event loop is running."""
@@ -297,3 +376,32 @@ async def _stop_cron_executor() -> None:
         pass
     finally:
         _cron_executor_task = None
+
+
+@router.on_event("startup")
+async def _start_queue_worker() -> None:
+    """Start the background queue worker once the application event loop is running."""
+    global _queue_worker_task
+
+    if _queue_worker_task and not _queue_worker_task.done():
+        return
+
+    _queue_worker_task = asyncio.create_task(_queue_worker_loop())
+    logger.info("Queue worker background task started")
+
+
+@router.on_event("shutdown")
+async def _stop_queue_worker() -> None:
+    """Stop the background queue worker during application shutdown."""
+    global _queue_worker_task
+
+    if not _queue_worker_task:
+        return
+
+    _queue_worker_task.cancel()
+    try:
+        await _queue_worker_task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        _queue_worker_task = None

@@ -819,7 +819,7 @@ class LLMProviderConfigManager:
     def _read_secret_api_key(self, secret_name: str) -> Optional[str]:
         """Read a stored API key from the secret manager or environment."""
         try:
-            from ai_karen_engine.models.secret_manager import get_secret_manager
+             from ai_karen_engine.core.security.secrets.secrets import get_secret_manager
         except Exception:
             get_secret_manager = None  # type: ignore[assignment]
 

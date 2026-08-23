@@ -45,7 +45,7 @@ from ai_karen_engine.core.model_runtime.model_discovery_service import (
 )
 from ai_karen_engine.integrations.llm_registry import get_registry
 from ai_karen_engine.services.formatting.settings_manager import get_settings_manager
-from ai_karen_engine.models.secret_manager import get_secret_manager
+from ai_karen_engine.core.security.secrets.secrets import get_secret_manager
 
 logger = logging.getLogger(__name__)
 

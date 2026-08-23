@@ -8,7 +8,7 @@ try:
 except Exception:  # pragma: no cover - fallback for tests
     from ai_karen_engine.fastapi_stub import Request, Response
 
-from ai_karen_engine.models.usage_service import UsageService
+from ai_karen_engine.services.usage.service import UsageService
 
 
 async def error_counter_middleware(request: Request, call_next):

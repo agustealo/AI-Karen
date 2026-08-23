@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import text
 
 from ai_karen_engine.database.client import MultiTenantPostgresClient
-from ai_karen_engine.models.persona_models import (
+from ai_karen_engine.core.persona.contracts import (
     SYSTEM_PERSONAS,
     ChatStyleContext,
     Persona,
@@ -30,10 +30,6 @@ class PersonaService:
 
     def __init__(self, db_client: Optional[MultiTenantPostgresClient] = None, nlp_analyzer=None):
         self.db_client = db_client or MultiTenantPostgresClient()
-        try:
-            self.db_client.create_shared_tables()
-        except Exception as exc:
-            logger.warning("Failed to ensure persona tables exist during service init: %s", exc)
         self.nlp_analyzer = nlp_analyzer or self._create_default_nlp_analyzer()
 
         self._persona_cache: Dict[str, Persona] = {}

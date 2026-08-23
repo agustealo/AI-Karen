@@ -3,7 +3,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.services.scheduling.automation_service import get_automation_service, AutomationService
-from ai_karen_engine.models.automation import AgentRun
+from ai_karen_engine.core.automation.contracts import AgentRun
 
 logger = logging.getLogger(__name__)
 

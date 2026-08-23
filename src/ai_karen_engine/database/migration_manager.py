@@ -25,6 +25,8 @@ SCHEMA_MIGRATIONS: List[str] = [
     "009_conversation_tenant_scoping.sql",
     "010_row_level_security.sql",
     "011_schema_corrections.sql",
+    "012_embedding_provenance.sql",
+    "013_rls_expansion.sql",
 ]
 
 

@@ -71,9 +71,6 @@ class UserService(BaseService):
         try:
             self.logger.info("Initializing AuthUser Service")
 
-            # Ensure shared tables exist
-            self.db_client.create_shared_tables()  # type: ignore
-
             # Create default tenant if it doesn't exist
             await self._ensure_default_tenant()
 

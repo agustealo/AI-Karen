@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence, BinaryIO
+from typing import Any, Dict, Optional, Sequence, BinaryIO
 
 from .base import Repository, RepositoryResult
 
@@ -75,3 +75,21 @@ class ArtifactStore(Repository):
     @abstractmethod
     async def delete(self, artifact_id: str, tenant_id: str) -> RepositoryResult[bool]:
         """Delete an artifact (metadata + bytes)."""
+
+    @abstractmethod
+    async def archive(self, artifact_id: str, tenant_id: str) -> RepositoryResult[bool]:
+        """Soft-delete an artifact (retain metadata + bytes)."""
+
+    @abstractmethod
+    async def restore(self, artifact_id: str, tenant_id: str) -> RepositoryResult[bool]:
+        """Restore an archived artifact."""
+
+    @abstractmethod
+    async def list_archived(
+        self, tenant_id: str, conversation_id: Optional[str] = None, message_id: Optional[str] = None
+    ) -> RepositoryResult[Sequence[Artifact]]:
+        """List archived artifacts filtered by tenant and optional scope."""
+
+    @abstractmethod
+    async def purge(self, artifact_id: str, tenant_id: str) -> RepositoryResult[bool]:
+        """Permanently delete an archived artifact."""

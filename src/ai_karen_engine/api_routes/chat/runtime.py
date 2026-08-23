@@ -39,10 +39,9 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     serialize_runtime_response,
 )
 from ai_karen_engine.core.services.dependencies import bypass_user_context_func
-from ai_karen_engine.models.shared_types import (
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
     CanonicalChatRequest,
     CanonicalChatResponse,
-    ChatStreamChunk,
 )
 from ai_karen_engine.services.streaming.stream_processor import AsyncStreamProcessor
 from ai_karen_engine.utils.chat_helpers import (

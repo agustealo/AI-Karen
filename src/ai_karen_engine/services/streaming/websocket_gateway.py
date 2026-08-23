@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set
 
-from ai_karen_engine.models.shared_types import CanonicalChatRequest as ChatRequest
+from ai_karen_engine.core.runtime.chat_runtime_contract import CanonicalChatRequest as ChatRequest
 from ai_karen_engine.utils.chat_helpers import normalize_session_id as normalize_chat_session_id
 from ai_karen_engine.event_bus import get_event_bus
 

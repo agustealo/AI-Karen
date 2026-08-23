@@ -20,10 +20,9 @@ from ai_karen_engine.services.tooling.code_execution_service import (
 )
 from ai_karen_engine.core.services.dependencies import bypass_user_context_func
 from ai_karen_engine.core.logging import get_logger
-from ai_karen_engine.models.web_api_error_responses import (
+from ai_karen_engine.services.error_response_schemas import (
     WebAPIErrorCode,
     create_service_error_response,
-    get_http_status_for_error_code,
 )
 from ai_karen_engine.utils.dependency_checks import import_fastapi, import_pydantic
 

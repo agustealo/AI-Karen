@@ -48,6 +48,7 @@ RUN playwright install chromium && playwright install-deps chromium
 
 # Ensure common spaCy model is available in the image to avoid runtime downloads
 RUN python -m spacy download en_core_web_sm || true
+RUN mkdir -p /app/models/spacy && python -c "import spacy; nlp=spacy.load('en_core_web_sm'); nlp.to_disk('/app/models/spacy/en_core_web_sm')" || true
 
 # -----------------------------
 # Runtime-perf stage (OpenBLAS enabled)
@@ -70,6 +71,7 @@ RUN playwright install chromium && playwright install-deps chromium
 
 # Ensure common spaCy model is available in the image to avoid runtime downloads
 RUN python -m spacy download en_core_web_sm || true
+RUN mkdir -p /app/models/spacy && python -c "import spacy; nlp=spacy.load('en_core_web_sm'); nlp.to_disk('/app/models/spacy/en_core_web_sm')" || true
 
 # -----------------------------
 # Runtime-cuda stage (CUDA-enabled local GGUF build)
@@ -120,6 +122,7 @@ RUN pip install torch torchvision torchaudio --index-url https://download.pytorc
 RUN playwright install chromium && playwright install-deps chromium
 
 RUN python -m spacy download en_core_web_sm || true
+RUN mkdir -p /app/models/spacy && python -c "import spacy; nlp=spacy.load('en_core_web_sm'); nlp.to_disk('/app/models/spacy/en_core_web_sm')" || true
 
 # -----------------------------
 # Final stage (select by target)

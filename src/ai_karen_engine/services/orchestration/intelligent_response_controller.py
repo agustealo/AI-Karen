@@ -25,7 +25,7 @@ from collections import deque
 import gc
 import weakref
 
-from ai_karen_engine.models.shared_types import (
+from ai_karen_engine.core.automation.contracts import (
     DecideActionInput,
     DecideActionOutput,
     FlowInput,

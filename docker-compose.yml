@@ -619,11 +619,11 @@ volumes:
     driver: local
   web_npm_cache:
     driver: local
+  web_node_modules:
+    driver: local
   grafana_data:
     driver: local
   prometheus_data:
-    driver: local
-  models_data:
     driver: local
   logs_data:
     driver: local

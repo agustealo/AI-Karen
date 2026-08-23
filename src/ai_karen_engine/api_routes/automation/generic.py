@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.services.scheduling.automation_service import get_automation_service, AutomationService
-from ai_karen_engine.models.automation import (
+from ai_karen_engine.core.automation.contracts import (
     AgentAutomation,
     AgentRun,
     AutomationDraft,

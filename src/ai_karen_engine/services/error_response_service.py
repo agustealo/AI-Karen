@@ -17,7 +17,7 @@ try:
 except ImportError:
     from ai_karen_engine.pydantic_stub import BaseModel, ConfigDict, Field
 
-from ai_karen_engine.models.web_api_error_responses import WebAPIErrorCode
+from ai_karen_engine.services.error_response_schemas import WebAPIErrorCode
 from ai_karen_engine.core.model_runtime.provider_health_monitor import (
     get_health_monitor,
     ProviderHealthInfo,

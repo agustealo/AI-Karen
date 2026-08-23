@@ -13,7 +13,7 @@ from ai_karen_engine.core.services.dependencies import (
 )
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.database.conversation_manager import MessageRole, normalize_user_id
-from ai_karen_engine.models.web_api_error_responses import (
+from ai_karen_engine.services.error_response_schemas import (
     WebAPIErrorCode,
     create_generic_error_response,
     create_service_error_response,

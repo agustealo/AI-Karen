@@ -45,6 +45,4 @@ class UsageService:
                     )
                 session.commit()
         except Exception:
-            # Database unavailable, silently ignore usage tracking
-            # This prevents middleware failures when PostgreSQL is down
             pass
