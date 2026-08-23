@@ -27,15 +27,6 @@ except ImportError:
     REDIS_AVAILABLE = False
     logger.warning("[RBAC] RedisConnectionManager not available for caching")
 
-# Try to import database clients
-try:
-    from ai_karen_engine.clients.database.postgres_client import PostgresClient
-
-    POSTGRES_AVAILABLE = True
-except ImportError:
-    POSTGRES_AVAILABLE = False
-    logger.warning("[RBAC] PostgresClient not available")
-
 # Redis cache configuration
 RBAC_CACHE_TTL = 300  # 5 minutes
 RBAC_CACHE_KEY_PREFIX = "kari:rbac:plugin"
@@ -122,10 +113,6 @@ def _check_plugin_permission_postgres(user_ctx: Dict[str, Any], plugin_id: str) 
     Returns:
         True if permitted, False otherwise
     """
-    if not POSTGRES_AVAILABLE:
-        logger.warning("[RBAC] PostgresClient not available, denying by default")
-        return False
-
     try:
         # For now, implement basic logic
         # TODO: Implement full RBAC query against Postgres

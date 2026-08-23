@@ -17,7 +17,7 @@ from threading import RLock
 import asyncio
 from functools import wraps
 
-from ai_karen_engine.clients.database.redis_client import RedisClient
+from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager, RedisConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +72,9 @@ class CacheService:
     """
 
     def __init__(
-        self, redis_client: Optional[RedisClient] = None, prefix: str = "prod_cache"
+        self, redis_client: Optional[RedisConnectionManager] = None, prefix: str = "prod_cache"
     ):
-        self.redis = redis_client or RedisClient()
+        self.redis = redis_client or get_redis_manager()
         self.prefix = prefix
         self._local_cache: Dict[str, CacheEntry] = {}
         self._cache_lock = RLock()
@@ -190,8 +190,8 @@ class CacheService:
 
         # Check Redis cache
         try:
-            if self.redis and self.redis.r:
-                cached_data = self.redis.r.get(cache_key)
+            if self.redis and self.redis.health():
+                cached_data = await self.redis.get(cache_key)
                 if cached_data:
                     try:
                         # Handle both string and bytes data
@@ -208,7 +208,7 @@ class CacheService:
                                 else entry.expires_at
                             )
                             if datetime.now() > expires_at:
-                                self.redis.r.delete(cache_key)
+                                await self.redis.delete(cache_key)
                                 self._stats.misses += 1
                                 return default
 
@@ -225,7 +225,7 @@ class CacheService:
                         logger.warning(
                             f"Failed to deserialize cache entry {cache_key}: {e}"
                         )
-                        self.redis.r.delete(cache_key)
+                        await self.redis.delete(cache_key)
         except Exception as e:
             logger.warning(f"Redis cache get failed for {cache_key}: {e}")
 
@@ -272,7 +272,7 @@ class CacheService:
 
         try:
             # Store in Redis
-            if self.redis and self.redis.r:
+            if self.redis and self.redis.health():
                 entry_data = asdict(entry)
                 # Convert datetime objects to ISO strings for JSON serialization
                 if entry_data["created_at"]:
@@ -287,16 +287,16 @@ class CacheService:
                 serialized = json.dumps(entry_data, default=str)
 
                 if ttl > 0:
-                    self.redis.r.setex(cache_key, ttl, serialized)
+                    await self.redis.set(cache_key, serialized, ex=ttl)
                 else:
-                    self.redis.r.set(cache_key, serialized)
+                    await self.redis.set(cache_key, serialized)
 
                 # Store tags for invalidation
                 for tag in tags:
                     tag_key = f"{self.prefix}:tags:{tag}"
-                    self.redis.r.sadd(tag_key, cache_key)
+                    await self.redis.sadd(tag_key, cache_key)
                     if ttl > 0:
-                        self.redis.r.expire(
+                        await self.redis.expire(
                             tag_key, ttl + 3600
                         )  # Keep tags a bit longer
 
@@ -323,8 +323,8 @@ class CacheService:
 
         # Remove from Redis
         try:
-            if self.redis and self.redis.r:
-                return bool(self.redis.r.delete(cache_key))
+            if self.redis and self.redis.health():
+                return bool(await self.redis.delete(cache_key))
         except Exception as e:
             logger.warning(f"Failed to delete cache entry {cache_key}: {e}")
 
@@ -346,14 +346,14 @@ class CacheService:
         invalidated = 0
 
         try:
-            if self.redis and self.redis.r:
+            if self.redis and self.redis.health():
                 for tag in tags:
                     tag_key = f"{self.prefix}:tags:{tag}"
-                    cache_keys = self.redis.r.smembers(tag_key)
+                    cache_keys = await self.redis.smembers(tag_key)
 
                     if cache_keys:
                         # Delete cache entries
-                        deleted = self.redis.r.delete(*cache_keys)
+                        deleted = await self.redis.delete(*cache_keys)
                         invalidated += int(deleted)
 
                         # Remove from local cache
@@ -364,7 +364,7 @@ class CacheService:
                                 self._local_cache.pop(cache_key, None)
 
                     # Delete tag set
-                    self.redis.r.delete(tag_key)
+                    await self.redis.delete(tag_key)
 
         except Exception as e:
             logger.error(f"Failed to invalidate cache by tags {tags}: {e}")
@@ -378,10 +378,10 @@ class CacheService:
         cleared = 0
 
         try:
-            if self.redis and self.redis.r:
-                keys = self.redis.r.keys(pattern)
+            if self.redis and self.redis.health():
+                keys = await self.redis.keys(pattern)
                 if keys:
-                    cleared = int(self.redis.r.delete(*keys))
+                    cleared = int(await self.redis.delete(*keys))
 
                 # Clear from local cache
                 with self._cache_lock:

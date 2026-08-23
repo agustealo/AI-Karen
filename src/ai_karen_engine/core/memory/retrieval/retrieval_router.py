@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 
 from ai_karen_engine.clients.database.elastic_client import ElasticClient
 from ai_karen_engine.clients.database.milvus_client import MilvusClient
-from ai_karen_engine.clients.database.redis_client import RedisClient
+from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
 from ai_karen_engine.core.memory.graph.service import get_leangraph_service
 from ai_karen_engine.core.runtime.resilience import get_safe_stage_runner
 
@@ -35,7 +35,7 @@ class HybridRetrievalRouter:
         self.safe_runner = get_safe_stage_runner()
         self.milvus = MilvusClient(collection="memory_ledger_semantic")
         self.elastic = ElasticClient(index="memory_ledger_lexical")
-        self.redis = RedisClient()
+        self.redis = get_redis_manager()
         self.leangraph = get_leangraph_service()
 
     async def recall(self, query: MemoryQuery) -> List[MemoryEntry]:
@@ -140,9 +140,9 @@ class HybridRetrievalRouter:
         return ranked
 
     async def _query_redis(self, query: MemoryQuery) -> List[MemoryEntry]:
-        data = self.redis.get_session(str(query.tenant_id), str(query.user_id), session_id=query.session_id)
+        data = await self.redis.get_session(str(query.tenant_id), str(query.user_id), session_id=query.session_id)
         if not data:
-            data = self.redis.get_short_term(str(query.tenant_id), str(query.user_id))
+            data = await self.redis.get_short_term(str(query.tenant_id), str(query.user_id))
         if not data:
             return []
         content = str(data.get("summary") or data.get("last_message") or data)

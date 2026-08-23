@@ -5,7 +5,6 @@ import importlib
 
 
 def __getattr__(name):
-
     if name == "LLMOrchestrator":
         from ai_karen_engine.llm_orchestrator import LLMOrchestrator as _LO
 
@@ -26,7 +25,6 @@ def __getattr__(name):
         from ai_karen_engine.clients.transformers.lnm_client import LNMClient as _LC
 
         return _LC
-
     if name == "AutomationManager":
         from ai_karen_engine.automation_manager import AutomationManager as _AM
 
@@ -43,10 +41,6 @@ def __getattr__(name):
         from ai_karen_engine.plugins.router import AccessDenied as _AD
 
         return _AD
-    if name == "DocumentStore":
-        from ai_karen_engine.doc_store import DocumentStore as _DS
-
-        return _DS
     try:
         return importlib.import_module(f"{__name__}.{name}")
     except ImportError:
@@ -63,5 +57,4 @@ __all__ = [
     "ModelManager",
     "EchoCore",
     "LNMClient",
-    "DocumentStore",
 ]

@@ -11,16 +11,16 @@ from typing import Any, Dict, Optional
 from ai_karen_engine.core.logging import get_logger
 
 from .base import ProjectionWorker
-from ai_karen_engine.clients.database.redis_client import RedisClient
+from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager, RedisConnectionManager
 
 logger = logging.getLogger(__name__)
 
 class RedisWorker(ProjectionWorker):
     """Worker responsible for Redis hot-state projections."""
 
-    def __init__(self, client: Optional[RedisClient] = None, recent_limit: int = 20):
+    def __init__(self, client: Optional[RedisConnectionManager] = None, recent_limit: int = 20):
         super().__init__("redis")
-        self.client = client or RedisClient()
+        self.client = client or get_redis_manager()
         self.recent_limit = recent_limit
 
     @staticmethod
@@ -80,7 +80,7 @@ class RedisWorker(ProjectionWorker):
         Store the latest memory snapshot in Redis hot cache.
         """
         try:
-            if not self.client.r:
+            if not self.client.health():
                 logger.warning("Redis client not connected. Skipping projection.")
                 return False
 
@@ -91,40 +91,31 @@ class RedisWorker(ProjectionWorker):
             hot_record = self._build_hot_record(event_data, assertion_data)
             recent_key = f"{self.client.prefix}:hot_memory:{tenant_id}:{user_id}"
 
-            loop = asyncio.get_running_loop()
+            await self.client.set_short_term(
+                tenant_id,
+                user_id,
+                {
+                    "latest": hot_record,
+                    "updated_at": datetime.utcnow().isoformat(),
+                },
+            )
 
-            def redis_ops():
-                # Canonical hot-state snapshot for quick retrieval.
-                self.client.set_short_term(
+            if session_id:
+                await self.client.set_session(
                     tenant_id,
                     user_id,
                     {
                         "latest": hot_record,
+                        "recent": [hot_record],
                         "updated_at": datetime.utcnow().isoformat(),
                     },
+                    session_id=str(session_id),
+                    ttl_seconds=24 * 60 * 60,
                 )
 
-                # Session-scoped state when we have a session identifier.
-                if session_id:
-                    self.client.set_session(
-                        tenant_id,
-                        user_id,
-                        {
-                            "latest": hot_record,
-                            "recent": [hot_record],
-                            "updated_at": datetime.utcnow().isoformat(),
-                        },
-                        session_id=str(session_id),
-                        ttl_seconds=24 * 60 * 60,
-                    )
-
-                # Append to a bounded hot-memory stream for short-window inspection.
-                self.client.r.lpush(recent_key, json.dumps(hot_record, default=str))
-                self.client.r.ltrim(recent_key, 0, self.recent_limit - 1)
-                return True
-
-            success = await loop.run_in_executor(None, redis_ops)
-            return success
+            await self.client.lpush(recent_key, json.dumps(hot_record, default=str))
+            await self.client.ltrim(recent_key, 0, self.recent_limit - 1)
+            return True
 
         except Exception as e:
             logger.error(f"Error projecting to Redis for event {event_data.get('event_id')}: {e}")

@@ -8,10 +8,11 @@ Provides graceful Redis connection handling with:
 - Proper connection cleanup and resource management
 """
 
+import json
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 try:
     import redis.asyncio as redis
@@ -53,6 +54,7 @@ class RedisConnectionManager:
         socket_keepalive: bool = True,
         socket_keepalive_options: Optional[Dict[str, int]] = None,
         health_check_interval: int = 30,
+        prefix: str = "kari",
     ):
         self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379/0")
         self.max_connections = max_connections
@@ -60,6 +62,7 @@ class RedisConnectionManager:
         self.socket_keepalive = socket_keepalive
         self.socket_keepalive_options = socket_keepalive_options or {}
         self.health_check_interval = health_check_interval
+        self.prefix = prefix
 
         self._pool: Optional[ConnectionPool] = None
         self._client: Optional[Redis] = None
@@ -430,6 +433,118 @@ class RedisConnectionManager:
         for key in expired_keys:
             self._memory_cache.pop(key, None)
             self._cache_ttl.pop(key, None)
+
+    def _k(self, tenant_id: str, user_id: str, kind: str) -> str:
+        return f"kari:{tenant_id}:{user_id}:{kind}"
+
+    def _session_k(self, tenant_id: str, user_id: str, session_id: str, kind: str) -> str:
+        return f"kari:{tenant_id}:{user_id}:session:{session_id}:{kind}"
+
+    async def setex(self, key: str, ttl: int, value: str) -> bool:
+        return await self.set(key, value, ex=ttl)
+
+    async def sadd(self, key: str, member: str) -> int:
+        if self._degraded_mode or not self._client:
+            return 0
+        try:
+            result = await self._client.sadd(key, member)
+            return int(result)
+        except Exception as e:
+            logger.warning("Redis SADD failed for %s: %s", key, e)
+            await self._handle_connection_error(e)
+            return 0
+
+    async def keys(self, pattern: str) -> List[str]:
+        if self._degraded_mode or not self._client:
+            return []
+        try:
+            result = await self._client.keys(pattern)
+            return [str(k) for k in result]
+        except Exception as e:
+            logger.warning("Redis KEYS failed for %s: %s", pattern, e)
+            await self._handle_connection_error(e)
+            return []
+
+    async def lpush(self, key: str, value: str) -> int:
+        if self._degraded_mode or not self._client:
+            return 0
+        try:
+            result = await self._client.lpush(key, value)
+            return int(result)
+        except Exception as e:
+            logger.warning("Redis LPUSH failed for %s: %s", key, e)
+            await self._handle_connection_error(e)
+            return 0
+
+    async def ltrim(self, key: str, start: int, end: int) -> bool:
+        if self._degraded_mode or not self._client:
+            return False
+        try:
+            await self._client.ltrim(key, start, end)
+            return True
+        except Exception as e:
+            logger.warning("Redis LTRIM failed for %s: %s", key, e)
+            await self._handle_connection_error(e)
+            return False
+
+    async def smembers(self, key: str) -> List[str]:
+        if self._degraded_mode or not self._client:
+            return []
+        try:
+            result = await self._client.smembers(key)
+            return [str(m) for m in result]
+        except Exception as e:
+            logger.warning("Redis SMEMBERS failed for %s: %s", key, e)
+            await self._handle_connection_error(e)
+            return []
+
+    def health(self) -> bool:
+        """Sync health check for compatibility."""
+        return not self._degraded_mode and self._client is not None
+
+    async def set_short_term(self, tenant_id: str, user_id: str, data: Dict[str, Any]) -> bool:
+        key = self._k(tenant_id, user_id, "short_term")
+        return await self.set(key, json.dumps(data, default=str))
+
+    async def get_short_term(self, tenant_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        key = self._k(tenant_id, user_id, "short_term")
+        raw = await self.get(key)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    async def set_session(self, tenant_id: str, user_id: str, sess_data: Dict[str, Any], session_id: str, ttl_seconds: Optional[int] = None) -> bool:
+        key = self._session_k(tenant_id, user_id, session_id, "session")
+        kwargs: Dict[str, Any] = {}
+        if ttl_seconds is not None:
+            kwargs["ex"] = ttl_seconds
+        return await self.set(key, json.dumps(sess_data, default=str), **kwargs)
+
+    async def get_session(self, tenant_id: str, user_id: str, session_id: str) -> Optional[Dict[str, Any]]:
+        key = self._session_k(tenant_id, user_id, session_id, "session")
+        raw = await self.get(key)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    async def flush_short_term(self, tenant_id: str, user_id: str) -> int:
+        key = self._k(tenant_id, user_id, "short_term")
+        return await self.delete(key)
+
+    async def flush_long_term(self, tenant_id: str, user_id: str) -> int:
+        key = self._k(tenant_id, user_id, "long_term")
+        return await self.delete(key)
+
+    @property
+    def client(self) -> Optional[Redis]:
+        """Expose underlying async Redis client for advanced operations."""
+        return self._client
 
     async def close(self) -> None:
         """Close Redis connection and cleanup resources."""
