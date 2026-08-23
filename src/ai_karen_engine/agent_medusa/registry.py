@@ -12,6 +12,7 @@ class MedusaRegistry:
     def __init__(self):
         self._agents: Dict[str, AgentRegistration] = {}
         self._capability_index: Dict[AgentCapabilityType, List[str]] = {}
+        self._task_signature_index: Dict[str, List[str]] = {}
         self._initialized = False
         self.safety = get_safety_manager()
 
@@ -73,6 +74,13 @@ class MedusaRegistry:
                 self._capability_index[cap.type] = []
             if registration.agent_id not in self._capability_index[cap.type]:
                 self._capability_index[cap.type].append(registration.agent_id)
+        
+        # Update task signature index
+        for sig in getattr(registration, "task_signatures", []) or []:
+            if sig not in self._task_signature_index:
+                self._task_signature_index[sig] = []
+            if registration.agent_id not in self._task_signature_index[sig]:
+                self._task_signature_index[sig].append(registration.agent_id)
         
         logger.info(f"Registered agent: {registration.agent_id} ({registration.name})")
 

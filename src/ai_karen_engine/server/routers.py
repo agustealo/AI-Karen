@@ -429,7 +429,7 @@ def wire_routers(app: FastAPI, settings: Settings) -> None:
     app.include_router(ui_materialization_router, tags=["ui-materialization"])
     app.include_router(file_attachment_router, prefix="/api/files", tags=["files"])
     app.include_router(code_execution_router, prefix="/api/code", tags=["code"])
-    app.include_router(chat_runtime_router, prefix="/api", tags=["chat-runtime"])
+    app.include_router(chat_runtime_router, prefix="/api/chat", tags=["chat-runtime"])
     app.include_router(llm_router, prefix="/api/llm", tags=["llm"])
 
     # Mock provider routes removed for production

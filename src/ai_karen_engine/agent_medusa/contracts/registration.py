@@ -42,3 +42,4 @@ class AgentRegistration:
     resource_limits: Optional[ExecutionBudget] = None
     approval_rules: Dict[str, Any] = field(default_factory=dict)
     memory_scope: str = "session"
+    task_signatures: List[str] = field(default_factory=list)

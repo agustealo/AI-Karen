@@ -28,6 +28,7 @@ from ai_karen_engine.services.scheduling.scheduler_manager import (
 )
 from ai_karen_engine.learning.autonomous_learner import AutonomousLearner
 from ai_karen_engine.core.cortex.analysis import SpacyAnalyzer
+from ai_karen_engine.core.memory.signals.spacy_service import SpacyService
 from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
 
 # Simple auth imports
@@ -51,7 +52,7 @@ def get_scheduler_manager() -> SchedulerManager:
         try:
             memory_service = WebUIMemoryService()
             learner = AutonomousLearner(
-                spacy_analyzer=SpacyAnalyzer(),
+                spacy_analyzer=SpacyAnalyzer(spacy_service=SpacyService()),
                 memory_service=memory_service,
             )
             _global_scheduler_manager = SchedulerManager(

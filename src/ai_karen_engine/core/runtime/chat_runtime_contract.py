@@ -96,12 +96,17 @@ class ChatRuntimeMetadata:
 
     requested_provider: Optional[str] = None
     requested_model: Optional[str] = None
+    requested_target: Optional[str] = None
     actual_provider: Optional[str] = None
     actual_model: Optional[str] = None
+    actual_target: Optional[str] = None
     runtime_engine: Optional[str] = None
+    protocol: Optional[str] = None
+    locality: Optional[str] = None
     response_source: Optional[str] = None
 
     fallback_level: int = 0
+    fallback_reason: Optional[str] = None
     degraded_mode: bool = False
     degradation_reason: Optional[str] = None
 
@@ -123,11 +128,16 @@ class ChatRuntimeMetadata:
             "latency_ms": self.latency_ms,
             "requested_provider": self.requested_provider,
             "requested_model": self.requested_model,
+            "requested_target": self.requested_target,
             "actual_provider": self.actual_provider,
             "actual_model": self.actual_model,
+            "actual_target": self.actual_target,
             "runtime_engine": self.runtime_engine,
+            "protocol": self.protocol,
+            "locality": self.locality,
             "response_source": self.response_source,
             "fallback_level": self.fallback_level,
+            "fallback_reason": self.fallback_reason,
             "degraded_mode": self.degraded_mode,
             "degradation_reason": self.degradation_reason,
             "mode": self.mode,

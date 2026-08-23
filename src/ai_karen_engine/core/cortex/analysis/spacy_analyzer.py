@@ -230,14 +230,14 @@ class CircuitBreaker:
 class SpacyAnalyzer:
     def __init__(
         self,
-        spacy_service: Optional[SpacyService] = None,
+        spacy_service: SpacyService,
         business_rules: Optional[Dict[str, Any]] = None,
         performance_monitoring: bool = True,
         config: Optional[AnalyzerConfig] = None,
         embedding_lookup: Optional[Callable[[str], Awaitable[Dict[str, Any]]]] = None,
         entity_enrichment: Optional[Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None,
     ):
-        self.spacy_service = spacy_service or SpacyService()
+        self.spacy_service = spacy_service
         self.performance_monitoring = performance_monitoring
         self.config = config or AnalyzerConfig()
         self.business_rules = business_rules or self._load_default_business_rules()
@@ -765,7 +765,7 @@ class _LatencyTimer:
 # ===========================
 
 def create_spacy_analyzer(
-    spacy_service: Optional[SpacyService] = None,
+    spacy_service: SpacyService,
     business_rules: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ) -> SpacyAnalyzer:

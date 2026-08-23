@@ -22,6 +22,10 @@ LOCAL_OPENAI_ENDPOINTS: set[str] = {
     "llama_cpp",
     "llama.cpp",
     "local_gguf",
+    "lmstudio_desktop",
+    "ollama_local",
+    "llamacpp_server",
+    "llama_cpp_server",
 }
 
 CLOUD_PROVIDERS: set[str] = {

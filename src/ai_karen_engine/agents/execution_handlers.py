@@ -13,8 +13,6 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, AsyncGenerator, AsyncIterator, Dict, List, Optional
 
-from ai_karen_engine.core.model_runtime.model_manager import ModelManager
-
 from .models import (
     AgentConfig,
     AgentError,
@@ -27,6 +25,12 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _get_model_manager():
+    """Lazy import to avoid circular dependency."""
+    from ai_karen_engine.core.model_runtime.model_manager import ModelManager
+    return ModelManager
 
 
 class BaseExecutionHandler(ABC):
@@ -129,7 +133,7 @@ class NativeExecutionHandler(BaseExecutionHandler):
             provider = provider_result["provider"]
             
             # Execute the request
-            response_text = await ModelManager.invoke_provider(
+            response_text = await _get_model_manager().invoke_provider(
                 provider,
                 request.message,
                 context=request.context or {},

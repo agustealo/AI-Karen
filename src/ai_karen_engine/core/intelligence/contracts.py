@@ -86,3 +86,63 @@ class IntelligenceAnalysisResult:
     signal_provenance: Dict[str, Any] = field(default_factory=dict)
     latency_ms: float = 0.0
     degraded: bool = False
+
+
+# ===========================
+# Task Signature
+# ===========================
+
+class TaskComplexity(str, Enum):
+    """Canonical task complexity levels."""
+
+    SIMPLE = "simple"
+    MODERATE = "moderate"
+    COMPLEX = "complex"
+    EXPERT = "expert"
+
+
+class TaskAmbiguity(str, Enum):
+    """Canonical task ambiguity levels."""
+
+    CLEAR = "clear"
+    MODERATE = "moderate"
+    AMBIGUOUS = "ambiguous"
+    UNKNOWN = "unknown"
+
+
+class TaskRisk(str, Enum):
+    """Canonical task risk levels."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+@dataclass
+class TaskSignature:
+    """Canonical task representation for adaptive intelligence.
+
+    CORTEX produces this from raw user input. RuntimePolicy, MedusaRegistry,
+    and CapabilityGraph consume it to decide execution topology, agent/model
+    assignment, and skill selection.
+    """
+
+    intent: str = "general_assist"
+    domains: List[str] = field(default_factory=list)
+    entities: List[str] = field(default_factory=list)
+    topics: List[str] = field(default_factory=list)
+    semantic_embedding: Optional[List[float]] = None
+
+    complexity: TaskComplexity = TaskComplexity.SIMPLE
+    ambiguity: TaskAmbiguity = TaskAmbiguity.CLEAR
+    novelty: float = 0.0
+    risk: TaskRisk = TaskRisk.LOW
+
+    tool_requirements: List[str] = field(default_factory=list)
+    reasoning_requirements: List[str] = field(default_factory=list)
+
+    collaboration_value: float = 0.0
+    verification_value: float = 0.0
+
+    metadata: Dict[str, Any] = field(default_factory=dict)

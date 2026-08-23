@@ -45,7 +45,6 @@ def initialize_database_manager(config: Optional[Dict[str, Any]] = None, **kwarg
 
 __all__ = [
     "DatabaseConnectionManager",
-    "DatabaseConfig",
     "get_database_manager",
     "initialize_database_manager",
 ]
