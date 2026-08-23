@@ -24,7 +24,7 @@ from sqlalchemy import text, select, func
 from sqlalchemy.exc import SQLAlchemyError
 
 from ai_karen_engine.core.logging import get_logger
-from .database_connection_manager import get_database_manager
+from ai_karen_engine.database.client import DatabaseClient
 from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
 from ai_karen_engine.core.model_runtime.milvus_client import MilvusClient
 from ai_karen_engine.database.models import (
@@ -126,7 +126,7 @@ class DatabaseConsistencyValidator:
         self.validation_timeout = validation_timeout
 
         # Database managers
-        self.db_manager = get_database_manager()
+        self.db_client = DatabaseClient()
         self.redis_manager = get_redis_manager()
         self._milvus_client: Optional[MilvusClient] = None  # Lazy loaded
 
@@ -241,7 +241,7 @@ class DatabaseConsistencyValidator:
 
         try:
             # Test basic connectivity
-            async with self.db_manager.async_session_scope() as session:
+            async with self.db_client.get_async_session() as session:
                 result = await session.execute(text("SELECT version()"))
                 version = result.scalar()
 
@@ -279,7 +279,7 @@ class DatabaseConsistencyValidator:
                     connection_count=connection_count,
                     metadata={
                         "blocked_queries": blocked_queries,
-                        "degraded_mode": self.db_manager.is_degraded(),
+                        "degraded_mode": False,
                     },
                 )
             )
@@ -475,7 +475,7 @@ class DatabaseConsistencyValidator:
     async def _validate_postgres_milvus_references(self) -> None:
         """Validate references between PostgreSQL and Milvus"""
         try:
-            async with self.db_manager.async_session_scope() as session:
+            async with self.db_client.get_async_session() as session:
                 # Get memory items that should have embeddings
                 result = await session.execute(
                     select(TenantMemoryItem.id, TenantMemoryItem.content)
@@ -568,7 +568,7 @@ class DatabaseConsistencyValidator:
     async def _check_orphaned_records(self) -> None:
         """Check for orphaned records across databases"""
         try:
-            async with self.db_manager.async_session_scope() as session:
+            async with self.db_client.get_async_session() as session:
                 # Check for messages without conversations
                 result = await session.execute(
                     text("""
@@ -632,7 +632,7 @@ class DatabaseConsistencyValidator:
         logger.info("Validating migration status")
 
         try:
-            async with self.db_manager.async_session_scope() as session:
+            async with self.db_client.get_async_session() as session:
                 # Check if all expected tables exist
                 result = await session.execute(
                     text("""
@@ -784,7 +784,7 @@ class DatabaseConsistencyValidator:
     async def _check_demo_users_cleanup(self, recommendations: List[str]) -> None:
         """Check database for demo users that need cleanup"""
         try:
-            async with self.db_manager.async_session_scope() as session:
+            async with self.db_client.get_async_session() as session:
                 # Check for demo users in database
                 result = await session.execute(
                     select(AuthUser.email, AuthUser.user_id, AuthUser.full_name).where(
@@ -821,7 +821,7 @@ class DatabaseConsistencyValidator:
     async def _check_test_data_patterns(self, recommendations: List[str]) -> None:
         """Check for test data patterns in database"""
         try:
-            async with self.db_manager.async_session_scope() as session:
+            async with self.db_client.get_async_session() as session:
                 # Check for test memory items
                 result = await session.execute(
                     select(func.count(TenantMemoryItem.id)).where(
@@ -858,7 +858,7 @@ class DatabaseConsistencyValidator:
 
         try:
             # PostgreSQL metrics
-            async with self.db_manager.async_session_scope() as session:
+            async with self.db_client.get_async_session() as session:
                 # Database size
                 result = await session.execute(
                     text("SELECT pg_database_size(current_database())")
@@ -1055,7 +1055,7 @@ class DatabaseConsistencyValidator:
     async def _cleanup_demo_users(self, results: Dict[str, Any], dry_run: bool) -> None:
         """Clean up demo users from database"""
         try:
-            async with self.db_manager.async_session_scope() as session:
+            async with self.db_client.get_async_session() as session:
                 # Find demo users
                 result = await session.execute(
                     select(AuthUser).where(
@@ -1082,7 +1082,7 @@ class DatabaseConsistencyValidator:
     async def _cleanup_orphaned_records(self, results: Dict[str, Any]) -> None:
         """Clean up orphaned records from database"""
         try:
-            async with self.db_manager.async_session_scope() as session:
+            async with self.db_client.get_async_session() as session:
                 # Clean up orphaned messages
                 result = await session.execute(
                     text("""
@@ -1167,7 +1167,7 @@ class DatabaseConsistencyValidator:
         try:
             if issue.category == "orphaned_records":
                 if "orphaned messages" in issue.description:
-                    async with self.db_manager.async_session_scope() as session:
+                    async with self.db_client.get_async_session() as session:
                         result = await session.execute(
                             text("""
                                 DELETE FROM messages 
@@ -1178,7 +1178,7 @@ class DatabaseConsistencyValidator:
                         return True
 
                 elif "orphaned sessions" in issue.description:
-                    async with self.db_manager.async_session_scope() as session:
+                    async with self.db_client.get_async_session() as session:
                         result = await session.execute(
                             text("""
                                 DELETE FROM auth_sessions 

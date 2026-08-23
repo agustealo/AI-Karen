@@ -3,7 +3,18 @@
 Database Configuration for FastAPI Server.
 Handles database connection pool configuration, timeout settings, and graceful shutdown.
 Enhanced with service-isolated connection pools to prevent LLM runtime caching interference.
+
+DEPRECATED: Use ai_karen_engine.database.config.Settings instead.
+This module remains for backwards compatibility during DATA-CONVERGE-1.
 """
+
+import warnings
+warnings.warn(
+    "services.database.database_config is deprecated. "
+    "Use ai_karen_engine.database.config.Settings instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import asyncio
 import logging

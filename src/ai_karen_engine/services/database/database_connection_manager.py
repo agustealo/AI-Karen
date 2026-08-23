@@ -2,7 +2,20 @@
 Database Connection Manager
 
 This service manages database connections and pooling.
+
+DEPRECATED: Use ai_karen_engine.database.client.DatabaseClient or
+MultiTenantPostgresClient instead. This shim remains for backwards compatibility
+during DATA-CONVERGE-1.
 """
+
+import warnings
+warnings.warn(
+    "DatabaseConnectionManager is deprecated. "
+    "Use ai_karen_engine.database.client.DatabaseClient or "
+    "MultiTenantPostgresClient instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import logging
 import asyncio

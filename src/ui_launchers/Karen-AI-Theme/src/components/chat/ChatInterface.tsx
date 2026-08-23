@@ -1356,41 +1356,17 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         };
 
         const streamRequestPayload = {
-          user_id: user?.user_id || 'anonymous',
           message: userMessage.content,
-          top_k: 6,
-          context: isAuthenticated && user
-            ? {
-                authenticated_user: {
-                  user_id: user.user_id,
-                  email: user.email,
-                  full_name: user.full_name,
-                  tenant_id: user.tenant_id,
-                  roles: user.roles,
-                },
-                conversation_profile: {
-                  display_name: displayName,
-                  preferred_address_name: preferredAddressName || undefined,
-                  source: 'authenticated_profile',
-                },
-                recent_messages: recentMessages,
-              }
-            : {
-                conversation_profile: {
-                  display_name: displayName,
-                  preferred_address_name: preferredAddressName || undefined,
-                  source: displayName ? 'derived_profile' : 'unknown',
-                },
-                recent_messages: recentMessages,
-              },
+          session_id: sessionIdRef.current,
           preferred_llm_provider: preferredProvider,
           preferred_model: preferredModel,
-          preferred_provider: preferredProvider,
-          session_id: sessionIdRef.current,
+          temperature: 0.7,
+          max_tokens: undefined,
+          stream: true,
         };
 
       await apiClient.postStream(
-        '/api/copilot/assist/stream',
+        '/api/chat/stream',
         streamRequestPayload,
         {
           onStatus: (message, metadata) => {

@@ -15,6 +15,19 @@ from datetime import datetime
 from enum import Enum
 import uuid
 
+try:
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamEventType
+except ImportError:
+    class ChatStreamEventType(str, Enum):  # type: ignore[no-redef]
+        STATUS = "status"
+        CONTENT = "content"
+        TOOL = "tool"
+        CITATION = "citation"
+        APPROVAL = "approval"
+        WARNING = "warning"
+        ERROR = "error"
+        COMPLETE = "complete"
+
 
 class MessageRole(str, Enum):
     """Enum for message roles in conversations."""
@@ -289,13 +302,54 @@ class RetryConfig(BaseModel):
 
 
 class ChatStreamChunk(BaseModel):
-    """Granular output chunk for streaming responses."""
+    """Granular output chunk for streaming responses.
+
+    This is the canonical streaming contract: SSE, WebSocket, and CopilotKit
+    transports all serialize the same semantics. ``ChatStreamEventType``
+    (re-exported from the runtime contract) defines the ``type`` vocabulary.
+    """
     model_config = ConfigDict(protected_namespaces=())
 
-    type: str = Field(..., description="Chunk type: 'content', 'status', 'error', 'complete'")
+    type: ChatStreamEventType = Field(
+        ..., description="Event type. Canonical values live in ChatStreamEventType."
+    )
     content: str = Field("", description="The text fragment or status update")
     correlation_id: str = Field(..., description="Request tracking identifier")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Optional chunk metadata")
+
+    event_id: Optional[str] = Field(
+        None, description="Unique identifier for this chunk/event"
+    )
+    sequence: Optional[int] = Field(
+        None, description="Monotonically increasing chunk sequence number"
+    )
+    request_id: Optional[str] = Field(
+        None, description="Identifies the originating request"
+    )
+    response_id: Optional[str] = Field(
+        None, description="Identifies the runtime response"
+    )
+    conversation_id: Optional[str] = Field(
+        None, description="Conversation context identifier"
+    )
+    timestamp: Optional[datetime] = Field(
+        None, description="When this chunk was emitted"
+    )
+
+    def to_sse_payload(self) -> Dict[str, Any]:
+        """Serialize to a transport-agnostic dict suitable for SSE data lines."""
+        return {
+            "type": self.type.value if isinstance(self.type, ChatStreamEventType) else self.type,
+            "content": self.content,
+            "correlation_id": self.correlation_id,
+            "metadata": self.metadata,
+            "event_id": self.event_id,
+            "sequence": self.sequence,
+            "request_id": self.request_id,
+            "response_id": self.response_id,
+            "conversation_id": self.conversation_id,
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+        }
 
 
 class CanonicalChatRequest(BaseModel):

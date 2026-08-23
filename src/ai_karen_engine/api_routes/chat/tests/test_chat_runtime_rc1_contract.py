@@ -834,3 +834,184 @@ def test_simple_chat_never_invokes_langgraph():
         )
         assert result.answer == "hello from gateway"
         assert result.metadata.mode == "normal"
+
+
+# ----------------------------------------------------------------------
+# RC1.5 canonical streaming contract tests
+# ----------------------------------------------------------------------
+
+
+def test_chat_stream_chunk_accepts_enum_and_string_types():
+    from ai_karen_engine.models.shared_types import ChatStreamChunk, ChatStreamEventType
+
+    enum_chunk = ChatStreamChunk(
+        type=ChatStreamEventType.CONTENT,
+        content="hello",
+        correlation_id="cid",
+    )
+    assert enum_chunk.type == ChatStreamEventType.CONTENT
+    assert enum_chunk.to_sse_payload()["type"] == "content"
+
+    str_chunk = ChatStreamChunk(
+        type="content",
+        content="hello",
+        correlation_id="cid",
+    )
+    assert str_chunk.type.value == "content"
+    assert str_chunk.to_sse_payload()["type"] == "content"
+
+
+def test_chat_stream_chunk_serializes_canonical_fields():
+    from ai_karen_engine.models.shared_types import ChatStreamChunk, ChatStreamEventType
+    from datetime import datetime, timezone
+
+    chunk = ChatStreamChunk(
+        type=ChatStreamEventType.STATUS,
+        content="Initializing...",
+        correlation_id="cid",
+        metadata={"status": "initializing"},
+        event_id="evt-1",
+        sequence=0,
+        request_id="req-1",
+        response_id="resp-1",
+        conversation_id="conv-1",
+        timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    payload = chunk.to_sse_payload()
+    assert payload["type"] == "status"
+    assert payload["content"] == "Initializing..."
+    assert payload["correlation_id"] == "cid"
+    assert payload["event_id"] == "evt-1"
+    assert payload["sequence"] == 0
+    assert payload["request_id"] == "req-1"
+    assert payload["response_id"] == "resp-1"
+    assert payload["conversation_id"] == "conv-1"
+    assert payload["timestamp"] == "2026-01-01T00:00:00+00:00"
+
+
+def test_execute_stream_yields_complete_once():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    async def _run():
+        rt = ChatRuntime()
+        request = _make_request()
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+            new=AsyncMock(return_value=_FakeCP()),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
+            new=lambda: _FakeDecider(ExecutionDecision(
+                execution_mode=RuntimeExecutionMode.DIRECT,
+                graph_required=False,
+            )),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
+            new=_FakeGateway,
+        ), patch(
+            "ai_karen_engine.core.memory.get_memory_manager",
+        ) as mock_mem:
+            instance = mock_mem.return_value
+            instance.recall_context = AsyncMock(return_value={"results": [], "status": "success"})
+            instance.process_interaction = AsyncMock()
+            chunks = []
+            async for chunk in rt.execute_stream(request):
+                chunks.append(chunk)
+        complete_chunks = [c for c in chunks if c.type == "complete"]
+        assert len(complete_chunks) == 1
+        assert complete_chunks[0].content == ""
+
+    asyncio.get_event_loop().run_until_complete(_run())
+
+
+def test_execute_stream_preserves_canonical_identifiers():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    async def _run():
+        rt = ChatRuntime()
+        request = ChatExecutionRequest(
+            messages=[{"content": "hi", "message_type": "user"}],
+            context=ChatExecutionContext(
+                user_id="user-123",
+                tenant_id="tenant-456",
+                session_id="sess-789",
+                conversation_id="conv-abc",
+                request_id="req-def",
+                correlation_id="corr-ghi",
+                roles=["admin"],
+                permissions=["chat:write"],
+            ),
+        )
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+            new=AsyncMock(return_value=_FakeCP()),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
+            new=lambda: _FakeDecider(ExecutionDecision(
+                execution_mode=RuntimeExecutionMode.DIRECT,
+                graph_required=False,
+            )),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
+            new=_FakeGateway,
+        ), patch(
+            "ai_karen_engine.core.memory.get_memory_manager",
+        ) as mock_mem:
+            instance = mock_mem.return_value
+            instance.recall_context = AsyncMock(return_value={"results": [], "status": "success"})
+            instance.process_interaction = AsyncMock()
+            chunks = []
+            async for chunk in rt.execute_stream(request):
+                chunks.append(chunk)
+        for chunk in chunks:
+            assert chunk.correlation_id == "corr-ghi"
+            if chunk.request_id:
+                assert chunk.request_id == "req-def"
+            if chunk.response_id:
+                assert chunk.response_id == "req-def"
+            if chunk.conversation_id:
+                assert chunk.conversation_id == "conv-abc"
+
+    asyncio.get_event_loop().run_until_complete(_run())
+
+
+def test_execute_stream_emits_error_on_gate():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
+        MaintenanceResponse,
+        get_chat_runtime_control_plane,
+    )
+
+    degraded = MaintenanceResponse(
+        mode="maintenance",
+        message="Scheduled maintenance",
+        retry_after_seconds=30,
+        system_status_code=503,
+    )
+
+    class _GatedCP:
+        async def get_runtime_response(self, **kwargs):
+            return degraded
+
+    async def _run():
+        rt = ChatRuntime()
+        request = _make_request()
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+            new=AsyncMock(return_value=_GatedCP()),
+        ):
+            chunks = []
+            async for chunk in rt.execute_stream(request):
+                chunks.append(chunk)
+        assert len(chunks) == 1
+        assert chunks[0].type == "error"
+        assert "maintenance" in chunks[0].content.lower() or "unavailable" in chunks[0].content.lower()
+
+    asyncio.get_event_loop().run_until_complete(_run())
+
+
+def test_canonical_stream_chunk_event_types_are_valid():
+    from ai_karen_engine.models.shared_types import ChatStreamEventType
+
+    expected = {"status", "content", "tool", "citation", "approval", "warning", "error", "complete"}
+    actual = {member.value for member in ChatStreamEventType}
+    assert actual == expected

@@ -18,10 +18,16 @@ export class ApiError extends Error {
 }
 
 export interface StreamEvent {
-  type: 'status' | 'content' | 'error' | 'complete' | 'agent_step';
+  type: 'status' | 'content' | 'error' | 'complete' | 'agent_step' | 'tool' | 'citation' | 'warning' | 'approval';
   content: string;
   correlation_id: string;
   metadata?: Record<string, unknown>;
+  event_id?: string;
+  sequence?: number;
+  request_id?: string;
+  response_id?: string;
+  conversation_id?: string;
+  timestamp?: string;
 }
 
 export interface StreamingMetrics {
@@ -964,9 +970,8 @@ class ApiClient {
               collectedContent += parsed.content;
               lastContentChunkTime = Date.now();
               contentChunksReceived++;
-              // Prevent memory bloat with reasonable limits
-              if (collectedContent.length > 100000) { // 100k chars
-                collectedContent = collectedContent.slice(-50000); // Keep last 50k
+              if (collectedContent.length > 100000) {
+                collectedContent = collectedContent.slice(-50000);
               }
               callbacks?.onContent?.(parsed.content);
               break;
@@ -974,6 +979,9 @@ class ApiClient {
               cleanup();
               callbacks?.onError?.(parsed.content);
               return;
+            case 'warning':
+              callbacks?.onStatus?.(parsed.content, parsed.metadata);
+              break;
             case 'complete':
               cleanup();
               callbacks?.onComplete?.(parsed.metadata, parsed.content);

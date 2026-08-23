@@ -200,6 +200,9 @@ core.*
 
 # Platform specific
 .fuse_hidden*
+<<<<<<< HEAD
 
 # Playwright browser binaries (downloaded via `playwright install`)
 .playwright/
+=======
+>>>>>>> 945781a4 (fix: replace fitz with pymupdf and update .gitignore)

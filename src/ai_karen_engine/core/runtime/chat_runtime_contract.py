@@ -29,6 +29,24 @@ class ChatExecutionStatus(str, Enum):
     GATE = "gate"
 
 
+class ChatStreamEventType(str, Enum):
+    """Canonical, transport-agnostic event types emitted by ChatRuntime.execute_stream.
+
+    Every transport (SSE, WebSocket, CopilotKit, HTTP) serializes the same
+    semantics via ``ChatStreamChunk.type`` using this enum so the frontend
+    only needs one normalizer.
+    """
+
+    STATUS = "status"
+    CONTENT = "content"
+    TOOL = "tool"
+    CITATION = "citation"
+    APPROVAL = "approval"
+    WARNING = "warning"
+    ERROR = "error"
+    COMPLETE = "complete"
+
+
 @dataclass
 class ChatExecutionContext:
     """Stable request/tenant/session identity for one chat execution.
@@ -138,3 +156,8 @@ class ChatExecutionResult:
     actions: List[Dict[str, Any]] = field(default_factory=list)
     status: ChatExecutionStatus = ChatExecutionStatus.OK
     gate_response: Optional[Any] = None
+
+    citations: List[Dict[str, Any]] = field(default_factory=list)
+    sources: List[Dict[str, Any]] = field(default_factory=list)
+    attachments: List[Dict[str, Any]] = field(default_factory=list)
+    artifacts: List[Dict[str, Any]] = field(default_factory=list)
