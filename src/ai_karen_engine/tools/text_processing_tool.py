@@ -10,10 +10,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from collections import Counter
 import hashlib
 
+from ai_karen_engine.services.tooling.tool_service import BaseTool, ToolMetadata, ToolCategory, ToolParameter
+
 logger = logging.getLogger(__name__)
 
 
-class TextProcessingTool:
+class TextProcessingTool(BaseTool):
     """
     Production-grade text processing tool.
 
@@ -29,8 +31,123 @@ class TextProcessingTool:
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
+        super().__init__()
         self.config = config or {}
         self.max_text_length = self.config.get('max_text_length', 1_000_000)
+
+    def _create_metadata(self) -> ToolMetadata:
+        return ToolMetadata(
+            name="text_processing",
+            description="Process and analyze text (clean, tokenize, extract patterns, statistics)",
+            category=ToolCategory.ANALYTICS,
+            version="1.0.0",
+            author="AI Karen",
+            parameters=[
+                ToolParameter(
+                    name="operation",
+                    type=str,
+                    description="Operation to perform (clean, tokenize_words, tokenize_sentences, stats, extract_emails, extract_urls, similarity, hash)",
+                    required=True
+                ),
+                ToolParameter(
+                    name="text",
+                    type=str,
+                    description="Input text",
+                    required=True
+                ),
+                ToolParameter(
+                    name="text2",
+                    type=str,
+                    description="Second text (for similarity operation)",
+                    required=False
+                ),
+                ToolParameter(
+                    name="lowercase",
+                    type=bool,
+                    description="Convert to lowercase",
+                    required=False,
+                    default=False
+                ),
+                ToolParameter(
+                    name="remove_punctuation",
+                    type=bool,
+                    description="Remove punctuation",
+                    required=False,
+                    default=False
+                ),
+                ToolParameter(
+                    name="method",
+                    type=str,
+                    description="Method for operation (e.g., 'jaccard' for similarity)",
+                    required=False
+                )
+            ],
+            return_type=dict,
+            examples=[
+                {
+                    "description": "Get text statistics",
+                    "parameters": {
+                        "operation": "stats",
+                        "text": "This is a sample text for analysis."
+                    }
+                },
+                {
+                    "description": "Extract email addresses",
+                    "parameters": {
+                        "operation": "extract_emails",
+                        "text": "Contact us at info@example.com or support@example.org"
+                    }
+                }
+            ],
+            tags=["text", "nlp", "processing", "analysis"],
+            timeout=30
+        )
+
+    async def _execute(self, parameters: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Any:
+        operation = parameters["operation"]
+        text = parameters["text"]
+
+        if operation == "clean":
+            return await self.clean_text(
+                text,
+                remove_whitespace=True,
+                remove_punctuation=parameters.get("remove_punctuation", False),
+                lowercase=parameters.get("lowercase", False)
+            )
+
+        elif operation == "tokenize_words":
+            return await self.tokenize_words(
+                text,
+                lowercase=parameters.get("lowercase", True),
+                remove_punctuation=parameters.get("remove_punctuation", True)
+            )
+
+        elif operation == "tokenize_sentences":
+            return await self.tokenize_sentences(text)
+
+        elif operation == "stats":
+            return await self.get_text_stats(text)
+
+        elif operation == "extract_emails":
+            return await self.extract_emails(text)
+
+        elif operation == "extract_urls":
+            return await self.extract_urls(text)
+
+        elif operation == "extract_phones":
+            return await self.extract_phone_numbers(text)
+
+        elif operation == "similarity":
+            text2 = parameters["text2"]
+            method = parameters.get("method", "jaccard")
+            return await self.calculate_similarity(text, text2, method=method)
+
+        elif operation == "hash":
+            algorithm = parameters.get("algorithm", "sha256")
+            return await self.generate_text_hash(text, algorithm=algorithm)
+
+        else:
+            raise ValueError(f"Unknown operation: {operation}")
 
     async def clean_text(
         self,
@@ -40,19 +157,6 @@ class TextProcessingTool:
         remove_numbers: bool = False,
         lowercase: bool = False
     ) -> str:
-        """
-        Clean and normalize text.
-
-        Args:
-            text: Input text
-            remove_whitespace: Remove extra whitespace
-            remove_punctuation: Remove punctuation
-            remove_numbers: Remove numbers
-            lowercase: Convert to lowercase
-
-        Returns:
-            Cleaned text
-        """
         if len(text) > self.max_text_length:
             raise ValueError(f"Text too long: {len(text)} (max: {self.max_text_length})")
 
@@ -73,17 +177,6 @@ class TextProcessingTool:
         return result
 
     async def tokenize_sentences(self, text: str) -> List[str]:
-        """
-        Split text into sentences.
-
-        Args:
-            text: Input text
-
-        Returns:
-            List of sentences
-        """
-        # Simple sentence tokenization
-        # For production, consider using spacy or nltk
         sentences = re.split(r'[.!?]+', text)
         sentences = [s.strip() for s in sentences if s.strip()]
         return sentences
@@ -94,17 +187,6 @@ class TextProcessingTool:
         lowercase: bool = True,
         remove_punctuation: bool = True
     ) -> List[str]:
-        """
-        Split text into words.
-
-        Args:
-            text: Input text
-            lowercase: Convert to lowercase
-            remove_punctuation: Remove punctuation
-
-        Returns:
-            List of words
-        """
         if lowercase:
             text = text.lower()
 
@@ -115,50 +197,34 @@ class TextProcessingTool:
         return [w for w in words if w]
 
     async def count_words(self, text: str) -> int:
-        """Count words in text."""
         words = await self.tokenize_words(text)
         return len(words)
 
     async def count_sentences(self, text: str) -> int:
-        """Count sentences in text."""
         sentences = await self.tokenize_sentences(text)
         return len(sentences)
 
     async def count_characters(self, text: str, include_spaces: bool = True) -> int:
-        """Count characters in text."""
         if include_spaces:
             return len(text)
         else:
             return len(text.replace(' ', ''))
 
     async def get_text_stats(self, text: str) -> Dict[str, Any]:
-        """
-        Get comprehensive text statistics.
-
-        Args:
-            text: Input text
-
-        Returns:
-            Dictionary with text statistics
-        """
         words = await self.tokenize_words(text)
         sentences = await self.tokenize_sentences(text)
 
-        # Calculate statistics
         char_count = len(text)
         char_count_no_spaces = len(text.replace(' ', ''))
         word_count = len(words)
         sentence_count = len(sentences)
 
-        # Average word and sentence length
         avg_word_length = char_count_no_spaces / word_count if word_count > 0 else 0
         avg_sentence_length = word_count / sentence_count if sentence_count > 0 else 0
 
-        # Most common words
         word_freq = Counter(words)
         most_common_words = word_freq.most_common(10)
 
-        # Unique words
         unique_words = len(set(words))
         lexical_diversity = unique_words / word_count if word_count > 0 else 0
 
@@ -180,34 +246,19 @@ class TextProcessingTool:
         pattern: str,
         case_sensitive: bool = True
     ) -> List[str]:
-        """
-        Extract patterns using regex.
-
-        Args:
-            text: Input text
-            pattern: Regex pattern
-            case_sensitive: Case-sensitive matching
-
-        Returns:
-            List of matches
-        """
         flags = 0 if case_sensitive else re.IGNORECASE
         matches = re.findall(pattern, text, flags=flags)
         return matches
 
     async def extract_emails(self, text: str) -> List[str]:
-        """Extract email addresses from text."""
         pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
         return await self.extract_patterns(text, pattern)
 
     async def extract_urls(self, text: str) -> List[str]:
-        """Extract URLs from text."""
         pattern = r'https?://(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&/=]*)'
         return await self.extract_patterns(text, pattern)
 
     async def extract_phone_numbers(self, text: str) -> List[str]:
-        """Extract phone numbers from text."""
-        # Simple pattern for US-style phone numbers
         pattern = r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b'
         return await self.extract_patterns(text, pattern)
 
@@ -218,18 +269,6 @@ class TextProcessingTool:
         replacement: str,
         case_sensitive: bool = True
     ) -> str:
-        """
-        Replace pattern in text.
-
-        Args:
-            text: Input text
-            pattern: Regex pattern to find
-            replacement: Replacement string
-            case_sensitive: Case-sensitive matching
-
-        Returns:
-            Text with replacements
-        """
         flags = 0 if case_sensitive else re.IGNORECASE
         return re.sub(pattern, replacement, text, flags=flags)
 
@@ -239,17 +278,6 @@ class TextProcessingTool:
         max_length: int,
         suffix: str = '...'
     ) -> str:
-        """
-        Truncate text to maximum length.
-
-        Args:
-            text: Input text
-            max_length: Maximum length
-            suffix: Suffix to add if truncated
-
-        Returns:
-            Truncated text
-        """
         if len(text) <= max_length:
             return text
 
@@ -261,17 +289,6 @@ class TextProcessingTool:
         width: int = 80,
         break_long_words: bool = True
     ) -> List[str]:
-        """
-        Wrap text to specified width.
-
-        Args:
-            text: Input text
-            width: Line width
-            break_long_words: Break long words
-
-        Returns:
-            List of wrapped lines
-        """
         import textwrap
         wrapper = textwrap.TextWrapper(
             width=width,
@@ -286,17 +303,6 @@ class TextProcessingTool:
         text2: str,
         method: str = 'jaccard'
     ) -> float:
-        """
-        Calculate text similarity.
-
-        Args:
-            text1: First text
-            text2: Second text
-            method: Similarity method ('jaccard', 'cosine', 'levenshtein')
-
-        Returns:
-            Similarity score (0-1)
-        """
         if method == 'jaccard':
             words1 = set(await self.tokenize_words(text1))
             words2 = set(await self.tokenize_words(text2))
@@ -305,7 +311,6 @@ class TextProcessingTool:
             return intersection / union if union > 0 else 0.0
 
         elif method == 'cosine':
-            # Simple cosine similarity based on word counts
             words1 = await self.tokenize_words(text1)
             words2 = await self.tokenize_words(text2)
             freq1 = Counter(words1)
@@ -324,7 +329,6 @@ class TextProcessingTool:
             return dot_product / (magnitude1 * magnitude2)
 
         elif method == 'levenshtein':
-            # Normalized Levenshtein distance
             def levenshtein_distance(s1: str, s2: str) -> int:
                 if len(s1) < len(s2):
                     return levenshtein_distance(s2, s1)
@@ -355,16 +359,6 @@ class TextProcessingTool:
         text: str,
         algorithm: str = 'sha256'
     ) -> str:
-        """
-        Generate hash of text.
-
-        Args:
-            text: Input text
-            algorithm: Hash algorithm ('md5', 'sha1', 'sha256', 'sha512')
-
-        Returns:
-            Hex digest of hash
-        """
         if algorithm == 'md5':
             hasher = hashlib.md5()
         elif algorithm == 'sha1':
@@ -384,16 +378,6 @@ class TextProcessingTool:
         text: str,
         format_type: str = 'title'
     ) -> str:
-        """
-        Format text.
-
-        Args:
-            text: Input text
-            format_type: Format type ('title', 'sentence', 'upper', 'lower', 'capitalize')
-
-        Returns:
-            Formatted text
-        """
         if format_type == 'title':
             return text.title()
         elif format_type == 'sentence':
@@ -412,16 +396,6 @@ class TextProcessingTool:
         texts: List[str],
         case_sensitive: bool = False
     ) -> List[str]:
-        """
-        Remove duplicate texts from list.
-
-        Args:
-            texts: List of texts
-            case_sensitive: Case-sensitive comparison
-
-        Returns:
-            List with duplicates removed
-        """
         seen = set()
         result = []
 
@@ -434,14 +408,12 @@ class TextProcessingTool:
         return result
 
 
-# Singleton instance
 _text_processing_tool_instance = None
 
 
 def get_text_processing_tool(
     config: Optional[Dict[str, Any]] = None
 ) -> TextProcessingTool:
-    """Get or create singleton text processing tool instance."""
     global _text_processing_tool_instance
     if _text_processing_tool_instance is None:
         _text_processing_tool_instance = TextProcessingTool(config)

@@ -104,7 +104,7 @@ class TestHealthEndpoints:
         from health_endpoints import _check_database_health
         
         # Mock database manager
-        with patch('ai_karen_engine.services.database_connection_manager.get_database_manager') as mock_get_manager:
+        with patch('ai_karen_engine.services.database.database_connection_manager.get_database_manager') as mock_get_manager:
             mock_manager = Mock()
             mock_manager.test_connection.return_value = True
             mock_manager.is_degraded.return_value = False
@@ -236,7 +236,7 @@ class TestHealthEndpoints:
         from health_endpoints import _check_database_health
         
         # Mock database manager with exception
-        with patch('ai_karen_engine.services.database_connection_manager.get_database_manager') as mock_get_manager:
+        with patch('ai_karen_engine.services.database.database_connection_manager.get_database_manager') as mock_get_manager:
             mock_get_manager.side_effect = Exception("Connection failed")
             
             # Call the function
@@ -296,7 +296,7 @@ class TestHealthEndpointIntegration:
         from health_endpoints import _check_database_health
         
         # Mock database manager with exception
-        with patch('ai_karen_engine.services.database_connection_manager.get_database_manager') as mock_get_manager:
+        with patch('ai_karen_engine.services.database.database_connection_manager.get_database_manager') as mock_get_manager:
             mock_get_manager.side_effect = Exception("Connection failed")
             
             # Call the function

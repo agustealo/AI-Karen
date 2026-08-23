@@ -9,6 +9,9 @@ One config owner should support:
 Legacy aliases may be accepted temporarily with deprecation warning.
 Frontend receives only public/publishable credentials.
 Backend secret never enters browser bundle, logs, plugin prompt, agent context.
+
+DEPRECATED: Prefer ``ai_karen_engine.config.database.SupabaseSettings``.
+This shim remains for backward compatibility during DATA-CONVERGE-2.
 """
 
 from __future__ import annotations
@@ -21,6 +24,18 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+# --- Canonical config re-exports (DATA-CONVERGE-2) ---
+from ai_karen_engine.config.database import (  # noqa: F401
+    SupabaseSettings as _CanonicalSupabaseSettings,
+    PostgresSettings as _CanonicalPostgresSettings,
+    PoolSettings as _CanonicalPoolSettings,
+    DatabaseSettings as _CanonicalDatabaseSettings,
+    get_database_settings as _get_canonical_database_settings,
+    refresh_database_settings as _refresh_canonical_database_settings,
+)
+
+
+# Keep legacy class for backward compatibility
 @dataclass(frozen=True)
 class SupabaseKeyConfig:
     project_url: str = ""

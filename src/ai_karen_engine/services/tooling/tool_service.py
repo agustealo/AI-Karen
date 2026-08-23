@@ -642,7 +642,7 @@ class ToolService:
     def _bootstrap_builtin_tools(self) -> None:
         """Register built-in production tools so the registry is not empty on startup."""
         try:
-            from ai_karen_engine.tools.production_tools import get_production_tools
+            from ai_karen_engine.tools import get_production_tools
 
             for tool in get_production_tools():
                 if self.registry.get_tool(tool.metadata.name) is None:

@@ -32,9 +32,6 @@ from ai_karen_engine.core.logging import get_logger
 # Cognitive modules (now backed by the CORTEX contract layer)
 from ai_karen_engine.core.cortex import dispatch as cortex_dispatch
 from ai_karen_engine.core.memory.memory_runtime_manager import recall_context, update_memory
-# from ai_karen_engine.core.response.orchestrator import ResponseOrchestrator
-# from ai_karen_engine.core.reasoning.soft_reasoning_engine import SoftReasoningEngine
-# from ai_karen_engine.core.reasoning.ice_integration import PremiumICEWrapper
 
 
 class ResponseOrchestrator:

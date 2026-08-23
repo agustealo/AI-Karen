@@ -1,4 +1,4 @@
-from ai_karen_engine.core.response.response_validator import validate_response_text
+from ai_karen_engine.core.errors.response_validation import validate_response_text
 
 
 def test_reject_prompt_leakage_patterns():

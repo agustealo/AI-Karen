@@ -265,7 +265,7 @@ def create_app() -> FastAPI:
             # Check connection health with enhanced database information
             connection_status = {}
             try:
-                from ai_karen_engine.services.database_connection_manager import (
+                from ai_karen_engine.services.database.database_connection_manager import (
                     get_database_manager,
                 )
                 from ai_karen_engine.services.redis_connection_manager import (

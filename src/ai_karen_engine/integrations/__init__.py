@@ -53,7 +53,6 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     deprecated_legacy = {
-        "AutomationManager",
         "ProviderRegistry",
         "ModelInfo",
         "DummyVoiceProvider",

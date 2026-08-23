@@ -115,7 +115,7 @@ class AgentMedusaService:
         
         # Convert Medusa response back to AgentResponse-like object
         # This is a bit hacky but helps migration
-        from ai_karen_engine.core.data_models.agent_legacy import AgentResponse
+        from ai_karen_engine.agents.models import AgentResponse
         return AgentResponse(
             request_id=task.task_id,
             agent_id=task.agent_id,
@@ -135,7 +135,7 @@ class AgentMedusaService:
         )
         medusa_response = await self.execute(runtime_request)
         
-        from ai_karen_engine.core.data_models.agent_legacy import AgentResponse
+        from ai_karen_engine.agents.models import AgentResponse
         return AgentResponse(
             request_id=request.request_id,
             agent_id=medusa_response.agent_trace[0] if medusa_response.agent_trace else "medusa",

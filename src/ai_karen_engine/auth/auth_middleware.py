@@ -34,16 +34,10 @@ security = HTTPBearer()
 
 
 def _load_auth_jwt_secret() -> str:
-    """Resolve the JWT secret using the shared auth env precedence."""
-    import os
+    """Resolve the JWT secret using the shared config-layer precedence."""
+    from ai_karen_engine.config.config_manager import resolve_jwt_secret
 
-    secret = (
-        os.getenv("AUTH_JWT_SECRET_KEY")
-        or os.getenv("AUTH_SECRET_KEY")
-        or os.getenv("JWT_SECRET_KEY")
-        or os.getenv("JWT_SECRET")
-        or os.getenv("SECRET_KEY")
-    )
+    secret = resolve_jwt_secret()
 
     if not secret:
         env = os.getenv("ENVIRONMENT", "development").lower()

@@ -19,7 +19,7 @@ from .deployment_validator import DeploymentValidator, ValidationResult
 from ..core.service_lifecycle_manager import ServiceLifecycleManager
 from ..core.lazy_loading_controller import LazyLoadingController
 from ..core.resource_monitor import ResourceMonitor
-from ..core.operations.performance_metrics import PerformanceMetrics
+from ..core.observability.performance_metrics import PerformanceMetrics
 
 logger = logging.getLogger(__name__)
 

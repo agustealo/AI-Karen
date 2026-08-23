@@ -29,7 +29,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.sql import expression, func
 
-from ai_karen_engine.automation_manager.encryption_utils import (
+from ai_karen_engine.core.security.encryption_utils import (
     decrypt_data,
     encrypt_data,
 )

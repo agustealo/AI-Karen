@@ -4,6 +4,9 @@ Database Configuration Validation Module.
 This module provides centralized configuration management and validation
 for database connections, ensuring proper environment variable handling
 and clear error reporting for missing or invalid configurations.
+
+DEPRECATED: Prefer ``ai_karen_engine.config.database.DatabaseSettings``.
+This shim remains for backward compatibility during DATA-CONVERGE-2.
 """
 
 import os
@@ -14,6 +17,16 @@ from urllib.parse import urlparse, parse_qs
 import re
 
 from ai_karen_engine.config import Settings
+
+# --- Canonical config re-exports (DATA-CONVERGE-2) ---
+from ai_karen_engine.config.database import (  # noqa: F401
+    DatabaseSettings,
+    SupabaseSettings,
+    PostgresSettings,
+    PoolSettings,
+    get_database_settings,
+    refresh_database_settings,
+)
 
 logger = logging.getLogger(__name__)
 

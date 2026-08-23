@@ -16,6 +16,7 @@ from .deployment_config_manager import (
     ServiceConfig, DeploymentProfile, DeploymentMode, 
     ServiceClassification, ResourceRequirements
 )
+from .config_manager import resolve_jwt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -87,11 +88,11 @@ class DeploymentValidator:
         
         self.security_requirements = {
             'required_env_vars': [
-                'JWT_SECRET',
+                'AUTH_JWT_SECRET_KEY',
                 'DATABASE_PASSWORD'
             ],
             'forbidden_defaults': {
-                'JWT_SECRET': ['change-me', 'default', 'secret', ''],
+                'AUTH_JWT_SECRET_KEY': ['change-me', 'default', 'secret', ''],
                 'DATABASE_PASSWORD': ['', 'password', 'admin', 'root']
             }
         }
@@ -499,7 +500,7 @@ class DeploymentValidator:
                     ))
         
         # Check JWT secret strength
-        jwt_secret = os.getenv('JWT_SECRET', '')
+        jwt_secret = resolve_jwt_secret()
         if jwt_secret and len(jwt_secret) < 32:
             issues.append(ValidationIssue(
                 severity=ValidationSeverity.ERROR,

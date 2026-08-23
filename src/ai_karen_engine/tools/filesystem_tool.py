@@ -13,10 +13,12 @@ import aiofiles
 import hashlib
 from datetime import datetime
 
+from ai_karen_engine.services.tooling.tool_service import BaseTool, ToolMetadata, ToolCategory, ToolParameter
+
 logger = logging.getLogger(__name__)
 
 
-class FileSystemTool:
+class FileSystemTool(BaseTool):
     """
     Production-grade file system tool with safety checks.
 
@@ -31,40 +33,133 @@ class FileSystemTool:
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
+        super().__init__()
         self.config = config or {}
-        self.max_file_size = self.config.get('max_file_size', 100 * 1024 * 1024)  # 100MB
+        self.max_file_size = self.config.get('max_file_size', 100 * 1024 * 1024)
         self.allowed_paths = self.config.get('allowed_paths', [])
         self.forbidden_paths = self.config.get('forbidden_paths', ['/etc', '/sys', '/proc'])
         self.allow_absolute_paths = self.config.get('allow_absolute_paths', False)
         self.base_directory = self.config.get('base_directory', os.getcwd())
 
+    def _create_metadata(self) -> ToolMetadata:
+        return ToolMetadata(
+            name="filesystem",
+            description="Perform file system operations (read, write, list, delete, move, copy)",
+            category=ToolCategory.SYSTEM,
+            version="1.0.0",
+            author="AI Karen",
+            parameters=[
+                ToolParameter(
+                    name="operation",
+                    type=str,
+                    description="Operation to perform (read, write, list, delete, move, copy, info, mkdir)",
+                    required=True
+                ),
+                ToolParameter(
+                    name="path",
+                    type=str,
+                    description="File or directory path",
+                    required=True
+                ),
+                ToolParameter(
+                    name="content",
+                    type=str,
+                    description="Content to write (for write operation)",
+                    required=False
+                ),
+                ToolParameter(
+                    name="destination",
+                    type=str,
+                    description="Destination path (for move/copy operations)",
+                    required=False
+                ),
+                ToolParameter(
+                    name="pattern",
+                    type=str,
+                    description="Pattern for filtering (for list operation)",
+                    required=False
+                ),
+                ToolParameter(
+                    name="recursive",
+                    type=bool,
+                    description="Recursive operation",
+                    required=False,
+                    default=False
+                )
+            ],
+            return_type=dict,
+            examples=[
+                {
+                    "description": "Read file contents",
+                    "parameters": {
+                        "operation": "read",
+                        "path": "/path/to/file.txt"
+                    }
+                },
+                {
+                    "description": "List directory contents",
+                    "parameters": {
+                        "operation": "list",
+                        "path": "/path/to/directory",
+                        "pattern": "*.py",
+                        "recursive": True
+                    }
+                }
+            ],
+            tags=["filesystem", "file", "directory", "io"],
+            timeout=30
+        )
+
+    async def _execute(self, parameters: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Any:
+        operation = parameters["operation"]
+        path = parameters["path"]
+
+        if operation == "read":
+            return await self.read_file(path)
+
+        elif operation == "write":
+            content = parameters.get("content", "")
+            overwrite = parameters.get("overwrite", True)
+            return await self.write_file(path, content, overwrite=overwrite)
+
+        elif operation == "list":
+            pattern = parameters.get("pattern")
+            recursive = parameters.get("recursive", False)
+            return await self.list_directory(path, pattern=pattern, recursive=recursive)
+
+        elif operation == "delete":
+            return await self.delete_file(path)
+
+        elif operation == "move":
+            destination = parameters["destination"]
+            return await self.move_file(path, destination)
+
+        elif operation == "copy":
+            destination = parameters["destination"]
+            return await self.copy_file(path, destination)
+
+        elif operation == "info":
+            return await self.get_file_info(path)
+
+        elif operation == "mkdir":
+            parents = parameters.get("parents", True)
+            return await self.create_directory(path, parents=parents)
+
+        else:
+            raise ValueError(f"Unknown operation: {operation}")
+
     def _validate_path(self, path: Union[str, Path]) -> Path:
-        """
-        Validate and sanitize file path.
-
-        Args:
-            path: Path to validate
-
-        Returns:
-            Validated Path object
-
-        Raises:
-            ValueError: If path is invalid or forbidden
-        """
         path = Path(path)
 
-        # Check for directory traversal
         try:
             resolved = path.resolve()
         except Exception as e:
             raise ValueError(f"Invalid path: {e}")
 
-        # Check forbidden paths
         for forbidden in self.forbidden_paths:
             if str(resolved).startswith(forbidden):
                 raise ValueError(f"Access to forbidden path: {forbidden}")
 
-        # Check allowed paths if configured
         if self.allowed_paths:
             allowed = False
             for allowed_path in self.allowed_paths:
@@ -74,7 +169,6 @@ class FileSystemTool:
             if not allowed:
                 raise ValueError(f"Path not in allowed paths: {resolved}")
 
-        # Check absolute paths
         if not self.allow_absolute_paths and path.is_absolute():
             raise ValueError("Absolute paths not allowed")
 
@@ -86,17 +180,6 @@ class FileSystemTool:
         encoding: str = 'utf-8',
         max_size: Optional[int] = None
     ) -> str:
-        """
-        Read file contents.
-
-        Args:
-            path: File path
-            encoding: Text encoding
-            max_size: Maximum file size to read
-
-        Returns:
-            File contents as string
-        """
         validated_path = self._validate_path(path)
 
         if not validated_path.exists():
@@ -105,7 +188,6 @@ class FileSystemTool:
         if not validated_path.is_file():
             raise ValueError(f"Not a file: {validated_path}")
 
-        # Check file size
         file_size = validated_path.stat().st_size
         max_size_check = max_size or self.max_file_size
         if file_size > max_size_check:
@@ -127,30 +209,14 @@ class FileSystemTool:
         create_dirs: bool = True,
         overwrite: bool = True
     ) -> Dict[str, Any]:
-        """
-        Write content to file.
-
-        Args:
-            path: File path
-            content: Content to write
-            encoding: Text encoding
-            create_dirs: Create parent directories if needed
-            overwrite: Allow overwriting existing files
-
-        Returns:
-            Dictionary with write info
-        """
         validated_path = self._validate_path(path)
 
-        # Check if file exists and overwrite is allowed
         if validated_path.exists() and not overwrite:
             raise FileExistsError(f"File exists and overwrite=False: {validated_path}")
 
-        # Create parent directories
         if create_dirs:
             validated_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Write file
         async with aiofiles.open(validated_path, 'w', encoding=encoding) as f:
             await f.write(content)
 
@@ -170,18 +236,6 @@ class FileSystemTool:
         recursive: bool = False,
         include_hidden: bool = False
     ) -> List[Dict[str, Any]]:
-        """
-        List directory contents.
-
-        Args:
-            path: Directory path
-            pattern: Glob pattern filter
-            recursive: Recursively list subdirectories
-            include_hidden: Include hidden files
-
-        Returns:
-            List of file/directory info dictionaries
-        """
         validated_path = self._validate_path(path)
 
         if not validated_path.exists():
@@ -202,7 +256,6 @@ class FileSystemTool:
             paths = validated_path.iterdir()
 
         for item_path in paths:
-            # Skip hidden files if not included
             if not include_hidden and item_path.name.startswith('.'):
                 continue
 
@@ -221,15 +274,6 @@ class FileSystemTool:
         return results
 
     async def delete_file(self, path: Union[str, Path]) -> Dict[str, Any]:
-        """
-        Delete a file.
-
-        Args:
-            path: File path
-
-        Returns:
-            Dictionary with deletion info
-        """
         validated_path = self._validate_path(path)
 
         if not validated_path.exists():
@@ -254,16 +298,6 @@ class FileSystemTool:
         path: Union[str, Path],
         recursive: bool = False
     ) -> Dict[str, Any]:
-        """
-        Delete a directory.
-
-        Args:
-            path: Directory path
-            recursive: Recursively delete subdirectories
-
-        Returns:
-            Dictionary with deletion info
-        """
         validated_path = self._validate_path(path)
 
         if not validated_path.exists():
@@ -290,16 +324,6 @@ class FileSystemTool:
         source: Union[str, Path],
         destination: Union[str, Path]
     ) -> Dict[str, Any]:
-        """
-        Move/rename a file or directory.
-
-        Args:
-            source: Source path
-            destination: Destination path
-
-        Returns:
-            Dictionary with move info
-        """
         validated_source = self._validate_path(source)
         validated_dest = self._validate_path(destination)
 
@@ -321,16 +345,6 @@ class FileSystemTool:
         source: Union[str, Path],
         destination: Union[str, Path]
     ) -> Dict[str, Any]:
-        """
-        Copy a file.
-
-        Args:
-            source: Source file path
-            destination: Destination file path
-
-        Returns:
-            Dictionary with copy info
-        """
         validated_source = self._validate_path(source)
         validated_dest = self._validate_path(destination)
 
@@ -355,15 +369,6 @@ class FileSystemTool:
         }
 
     async def get_file_info(self, path: Union[str, Path]) -> Dict[str, Any]:
-        """
-        Get file metadata.
-
-        Args:
-            path: File path
-
-        Returns:
-            Dictionary with file metadata
-        """
         validated_path = self._validate_path(path)
 
         if not validated_path.exists():
@@ -371,7 +376,6 @@ class FileSystemTool:
 
         stat = validated_path.stat()
 
-        # Calculate file hash if it's a file
         file_hash = None
         if validated_path.is_file() and stat.st_size < self.max_file_size:
             hasher = hashlib.sha256()
@@ -401,17 +405,6 @@ class FileSystemTool:
         parents: bool = True,
         exist_ok: bool = True
     ) -> Dict[str, Any]:
-        """
-        Create a directory.
-
-        Args:
-            path: Directory path
-            parents: Create parent directories
-            exist_ok: Don't raise error if directory exists
-
-        Returns:
-            Dictionary with creation info
-        """
         validated_path = self._validate_path(path)
 
         validated_path.mkdir(parents=parents, exist_ok=exist_ok)
@@ -425,12 +418,10 @@ class FileSystemTool:
         }
 
 
-# Singleton instance
 _filesystem_tool_instance = None
 
 
 def get_filesystem_tool(config: Optional[Dict[str, Any]] = None) -> FileSystemTool:
-    """Get or create singleton filesystem tool instance."""
     global _filesystem_tool_instance
     if _filesystem_tool_instance is None:
         _filesystem_tool_instance = FileSystemTool(config)

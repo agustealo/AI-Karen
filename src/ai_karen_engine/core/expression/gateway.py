@@ -5,7 +5,7 @@ from .circuit_breakers import ExpressionCircuitBreakers
 from .observability import emit_expression_event
 from .registry import get_engine
 from ai_karen_engine.core.expression.settings import get_expression_settings, EngineConfig
-from ..response.response_validator import validate_response_text
+from ai_karen_engine.core.errors.response_validation import validate_response_text
 from ..model_runtime.provider_policy import evaluate_provider_policy
 from ai_karen_engine.core.logging.events import RoutingEvents, ProviderEvents
 

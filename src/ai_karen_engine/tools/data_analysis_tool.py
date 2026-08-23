@@ -11,10 +11,12 @@ from collections import Counter
 from datetime import datetime
 import json
 
+from ai_karen_engine.services.tooling.tool_service import BaseTool, ToolMetadata, ToolCategory, ToolParameter
+
 logger = logging.getLogger(__name__)
 
 
-class DataAnalysisTool:
+class DataAnalysisTool(BaseTool):
     """
     Production-grade data analysis tool.
 
@@ -28,29 +30,138 @@ class DataAnalysisTool:
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
+        super().__init__()
         self.config = config or {}
         self.max_dataset_size = self.config.get('max_dataset_size', 1_000_000)
+
+    def _create_metadata(self) -> ToolMetadata:
+        return ToolMetadata(
+            name="data_analysis",
+            description="Analyze data with statistical methods (statistics, aggregation, filtering, correlation)",
+            category=ToolCategory.ANALYTICS,
+            version="1.0.0",
+            author="AI Karen",
+            parameters=[
+                ToolParameter(
+                    name="operation",
+                    type=str,
+                    description="Operation to perform (statistics, count_values, filter, group_by, aggregate, sort, correlation, outliers, normalize)",
+                    required=True
+                ),
+                ToolParameter(
+                    name="data",
+                    type=list,
+                    description="Input data (list of numbers or dictionaries)",
+                    required=True
+                ),
+                ToolParameter(
+                    name="key",
+                    type=str,
+                    description="Key for grouping/sorting",
+                    required=False
+                ),
+                ToolParameter(
+                    name="filters",
+                    type=dict,
+                    description="Filters for data (field: value pairs)",
+                    required=False
+                ),
+                ToolParameter(
+                    name="aggregations",
+                    type=dict,
+                    description="Aggregations to perform (field: operation pairs)",
+                    required=False
+                ),
+                ToolParameter(
+                    name="method",
+                    type=str,
+                    description="Method for operation (e.g., 'iqr' for outliers)",
+                    required=False
+                )
+            ],
+            return_type=dict,
+            examples=[
+                {
+                    "description": "Calculate statistics",
+                    "parameters": {
+                        "operation": "statistics",
+                        "data": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+                    }
+                },
+                {
+                    "description": "Group and aggregate data",
+                    "parameters": {
+                        "operation": "aggregate",
+                        "data": [
+                            {"category": "A", "value": 10},
+                            {"category": "A", "value": 20},
+                            {"category": "B", "value": 15}
+                        ],
+                        "key": "category",
+                        "aggregations": {"value": "sum"}
+                    }
+                }
+            ],
+            tags=["data", "statistics", "analysis", "aggregation"],
+            timeout=30
+        )
+
+    async def _execute(self, parameters: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Any:
+        operation = parameters["operation"]
+        data = parameters["data"]
+
+        if operation == "statistics":
+            return await self.calculate_statistics(data)
+
+        elif operation == "count_values":
+            top_n = parameters.get("top_n")
+            return await self.count_values(data, top_n=top_n)
+
+        elif operation == "filter":
+            filters = parameters.get("filters", {})
+            return await self.filter_data(data, filters)
+
+        elif operation == "group_by":
+            key = parameters["key"]
+            return await self.group_by(data, key)
+
+        elif operation == "aggregate":
+            group_by = parameters["key"]
+            aggregations = parameters["aggregations"]
+            return await self.aggregate(data, group_by, aggregations)
+
+        elif operation == "sort":
+            key = parameters["key"]
+            reverse = parameters.get("reverse", False)
+            return await self.sort_data(data, key, reverse=reverse)
+
+        elif operation == "correlation":
+            if len(data) != 2:
+                raise ValueError("Correlation requires exactly 2 lists of values")
+            return await self.calculate_correlation(data[0], data[1])
+
+        elif operation == "outliers":
+            method = parameters.get("method", "iqr")
+            threshold = parameters.get("threshold", 1.5)
+            return await self.detect_outliers(data, method=method, threshold=threshold)
+
+        elif operation == "normalize":
+            method = parameters.get("method", "minmax")
+            return await self.normalize_data(data, method=method)
+
+        else:
+            raise ValueError(f"Unknown operation: {operation}")
 
     async def calculate_statistics(
         self,
         data: List[Union[int, float]]
     ) -> Dict[str, Any]:
-        """
-        Calculate statistical measures for numeric data.
-
-        Args:
-            data: List of numeric values
-
-        Returns:
-            Dictionary with statistical measures
-        """
         if not data:
             raise ValueError("Empty dataset")
 
         if len(data) > self.max_dataset_size:
             raise ValueError(f"Dataset too large: {len(data)} (max: {self.max_dataset_size})")
 
-        # Filter out non-numeric values
         numeric_data = [x for x in data if isinstance(x, (int, float))]
 
         if not numeric_data:
@@ -66,13 +177,11 @@ class DataAnalysisTool:
             'range': max(numeric_data) - min(numeric_data)
         }
 
-        # Add mode if possible
         try:
             result['mode'] = statistics.mode(numeric_data)
         except statistics.StatisticsError:
             result['mode'] = None
 
-        # Add standard deviation and variance
         if len(numeric_data) >= 2:
             result['stdev'] = statistics.stdev(numeric_data)
             result['variance'] = statistics.variance(numeric_data)
@@ -80,7 +189,6 @@ class DataAnalysisTool:
             result['stdev'] = None
             result['variance'] = None
 
-        # Add quartiles
         result['q1'] = statistics.quantiles(numeric_data, n=4)[0]
         result['q2'] = statistics.quantiles(numeric_data, n=4)[1]
         result['q3'] = statistics.quantiles(numeric_data, n=4)[2]
@@ -92,16 +200,6 @@ class DataAnalysisTool:
         data: List[Any],
         top_n: Optional[int] = None
     ) -> Dict[Any, int]:
-        """
-        Count occurrences of each value.
-
-        Args:
-            data: List of values
-            top_n: Return only top N most common
-
-        Returns:
-            Dictionary of value counts
-        """
         counter = Counter(data)
 
         if top_n:
@@ -113,16 +211,6 @@ class DataAnalysisTool:
         data: List[Dict[str, Any]],
         filters: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
-        """
-        Filter data based on conditions.
-
-        Args:
-            data: List of dictionaries
-            filters: Dictionary of field: value filters
-
-        Returns:
-            Filtered data
-        """
         result = []
 
         for item in data:
@@ -141,16 +229,6 @@ class DataAnalysisTool:
         data: List[Dict[str, Any]],
         key: str
     ) -> Dict[Any, List[Dict[str, Any]]]:
-        """
-        Group data by field value.
-
-        Args:
-            data: List of dictionaries
-            key: Field to group by
-
-        Returns:
-            Dictionary mapping key values to groups
-        """
         groups = {}
 
         for item in data:
@@ -170,17 +248,6 @@ class DataAnalysisTool:
         group_by: str,
         aggregations: Dict[str, str]
     ) -> List[Dict[str, Any]]:
-        """
-        Group and aggregate data.
-
-        Args:
-            data: List of dictionaries
-            group_by: Field to group by
-            aggregations: Dict of field: operation ('sum', 'avg', 'count', 'min', 'max')
-
-        Returns:
-            Aggregated results
-        """
         groups = await self.group_by(data, group_by)
         results = []
 
@@ -214,17 +281,6 @@ class DataAnalysisTool:
         key: str,
         reverse: bool = False
     ) -> List[Dict[str, Any]]:
-        """
-        Sort data by field.
-
-        Args:
-            data: List of dictionaries
-            key: Field to sort by
-            reverse: Sort in descending order
-
-        Returns:
-            Sorted data
-        """
         return sorted(data, key=lambda x: x.get(key, 0), reverse=reverse)
 
     async def pivot_table(
@@ -235,19 +291,6 @@ class DataAnalysisTool:
         values: str,
         aggfunc: str = 'sum'
     ) -> Dict[str, Any]:
-        """
-        Create a pivot table.
-
-        Args:
-            data: List of dictionaries
-            rows: Field for rows
-            columns: Field for columns
-            values: Field for values
-            aggfunc: Aggregation function ('sum', 'avg', 'count', 'min', 'max')
-
-        Returns:
-            Pivot table as nested dictionary
-        """
         pivot = {}
 
         for item in data:
@@ -266,7 +309,6 @@ class DataAnalysisTool:
 
             pivot[row_key][col_key].append(value)
 
-        # Apply aggregation
         result = {}
         for row_key, row_data in pivot.items():
             result[row_key] = {}
@@ -294,17 +336,6 @@ class DataAnalysisTool:
         method: str = 'iqr',
         threshold: float = 1.5
     ) -> Dict[str, Any]:
-        """
-        Detect outliers in numeric data.
-
-        Args:
-            data: List of numeric values
-            method: Detection method ('iqr', 'zscore')
-            threshold: Threshold for outlier detection
-
-        Returns:
-            Dictionary with outlier info
-        """
         numeric_data = [x for x in data if isinstance(x, (int, float))]
 
         if len(numeric_data) < 4:
@@ -314,7 +345,6 @@ class DataAnalysisTool:
         outlier_indices = []
 
         if method == 'iqr':
-            # Interquartile range method
             q1 = statistics.quantiles(numeric_data, n=4)[0]
             q3 = statistics.quantiles(numeric_data, n=4)[2]
             iqr = q3 - q1
@@ -327,7 +357,6 @@ class DataAnalysisTool:
                     outlier_indices.append(i)
 
         elif method == 'zscore':
-            # Z-score method
             mean = statistics.mean(numeric_data)
             stdev = statistics.stdev(numeric_data)
 
@@ -352,18 +381,6 @@ class DataAnalysisTool:
         range_min: float = 0.0,
         range_max: float = 1.0
     ) -> List[float]:
-        """
-        Normalize numeric data.
-
-        Args:
-            data: List of numeric values
-            method: Normalization method ('minmax', 'zscore')
-            range_min: Minimum value for minmax (default: 0.0)
-            range_max: Maximum value for minmax (default: 1.0)
-
-        Returns:
-            Normalized data
-        """
         numeric_data = [x for x in data if isinstance(x, (int, float))]
 
         if not numeric_data:
@@ -399,23 +416,12 @@ class DataAnalysisTool:
         x: List[Union[int, float]],
         y: List[Union[int, float]]
     ) -> float:
-        """
-        Calculate Pearson correlation coefficient.
-
-        Args:
-            x: First dataset
-            y: Second dataset
-
-        Returns:
-            Correlation coefficient (-1 to 1)
-        """
         if len(x) != len(y):
             raise ValueError("Datasets must have same length")
 
         if len(x) < 2:
             raise ValueError("Need at least 2 data points")
 
-        # Filter numeric values
         pairs = [(xi, yi) for xi, yi in zip(x, y)
                  if isinstance(xi, (int, float)) and isinstance(yi, (int, float))]
 
@@ -433,17 +439,6 @@ class DataAnalysisTool:
         required_fields: List[str],
         field_types: Optional[Dict[str, type]] = None
     ) -> Dict[str, Any]:
-        """
-        Validate data quality.
-
-        Args:
-            data: List of dictionaries
-            required_fields: List of required fields
-            field_types: Expected types for fields
-
-        Returns:
-            Data quality report
-        """
         field_types = field_types or {}
 
         total_records = len(data)
@@ -455,20 +450,17 @@ class DataAnalysisTool:
         for item in data:
             record_valid = True
 
-            # Check required fields
             for field in required_fields:
                 if field not in item or item[field] is None:
                     missing_fields[field] += 1
                     record_valid = False
 
-            # Check field types
             for field, expected_type in field_types.items():
                 if field in item and item[field] is not None:
                     if not isinstance(item[field], expected_type):
                         type_errors[field] += 1
                         record_valid = False
 
-            # Count null values
             for key, value in item.items():
                 if value is None:
                     null_values[key] = null_values.get(key, 0) + 1
@@ -487,14 +479,12 @@ class DataAnalysisTool:
         }
 
 
-# Singleton instance
 _data_analysis_tool_instance = None
 
 
 def get_data_analysis_tool(
     config: Optional[Dict[str, Any]] = None
 ) -> DataAnalysisTool:
-    """Get or create singleton data analysis tool instance."""
     global _data_analysis_tool_instance
     if _data_analysis_tool_instance is None:
         _data_analysis_tool_instance = DataAnalysisTool(config)

@@ -14,9 +14,28 @@ from datetime import datetime
 from dataclasses import dataclass, field
 
 import os
-from ai_karen_engine.core.memory.chat_memory_config import settings
 from ai_karen_engine.database.models import Base
 from ai_karen_engine.core.logging import get_logger
+
+# --- DATA-CONVERGE-2: canonical persistence config ---
+try:
+    from ai_karen_engine.config.database import get_database_settings
+    _db_settings = get_database_settings()
+    _postgres = _db_settings.postgres
+    _pool = _db_settings.pool
+    settings_database_url = _postgres.build_database_url()
+    settings_pool_size = _pool.pool_size
+    settings_max_overflow = _pool.max_overflow
+    settings_pool_recycle = _pool.pool_recycle
+    settings_pool_pre_ping = _pool.pool_pre_ping
+except Exception:
+    # Fallback to legacy chat_memory_config during migration
+    from ai_karen_engine.core.memory.chat_memory_config import settings
+    settings_database_url = settings.database_url
+    settings_pool_size = 10
+    settings_max_overflow = 20
+    settings_pool_recycle = 3600
+    settings_pool_pre_ping = True
 
 try:
     from ai_karen_engine.utils.error_formatter import ErrorFormatter, log_config_error
@@ -64,7 +83,7 @@ class DatabaseClient:
     
     def _initialize_engine(self):
         """Initialize SQLAlchemy engine with production settings"""
-        
+
         try:
             # SQL echo controllable via env to avoid noisy logs in dev
             sql_echo_env = os.getenv("SQL_ECHO") or os.getenv("KAREN_SQL_ECHO")
@@ -77,25 +96,25 @@ class DatabaseClient:
 
             # Create synchronous engine with connection pooling
             # Ensure sync URL uses psycopg2 driver, not asyncpg
-            sync_url = settings.database_url.replace('postgresql+asyncpg://', 'postgresql://')
+            sync_url = settings_database_url.replace('postgresql+asyncpg://', 'postgresql://')
             self.engine = create_engine(
                 sync_url,
                 poolclass=QueuePool,
-                pool_size=10,
-                max_overflow=20,
-                pool_pre_ping=True,
-                pool_recycle=3600,  # Recycle connections every hour
-                echo=sql_echo,  # Controlled by env to avoid noise
+                pool_size=settings_pool_size,
+                max_overflow=settings_max_overflow,
+                pool_pre_ping=settings_pool_pre_ping,
+                pool_recycle=settings_pool_recycle,
+                echo=sql_echo,
             )
 
             # Create async engine
-            async_url = settings.database_url if 'asyncpg' in settings.database_url else settings.database_url.replace('postgresql://', 'postgresql+asyncpg://')
+            async_url = settings_database_url if 'asyncpg' in settings_database_url else settings_database_url.replace('postgresql://', 'postgresql+asyncpg://')
             self.async_engine = create_async_engine(
                 async_url,
-                pool_size=10,
-                max_overflow=20,
-                pool_pre_ping=True,
-                pool_recycle=3600,
+                pool_size=settings_pool_size,
+                max_overflow=settings_max_overflow,
+                pool_pre_ping=settings_pool_pre_ping,
+                pool_recycle=settings_pool_recycle,
                 echo=sql_echo,
             )
             
@@ -133,7 +152,7 @@ class DatabaseClient:
                         "   3. Verify the URL format:\n"
                         "      DATABASE_URL=postgresql://user:pass@host:port/dbname\n"
                         "\n"
-                        f"ℹ️  Current DATABASE_URL: {getattr(settings, 'database_url', 'NOT SET')}"
+                        f"ℹ️  Current database URL: {settings_database_url}"
                     )
                 elif "Connection refused" in str(e):
                     error_msg += (

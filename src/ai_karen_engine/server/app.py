@@ -46,7 +46,7 @@ from ai_karen_engine.server.startup import (
     register_startup_tasks,
     register_shutdown_tasks,
 )
-from ai_karen_engine.services.database_config import get_database_config
+from ai_karen_engine.services.database.database_config import get_database_config
 from ai_karen_engine.server.admin_endpoints import register_admin_endpoints
 from ai_karen_engine.server.health_endpoints import register_health_endpoints
 from ai_karen_engine.server.security import validate_environment_security

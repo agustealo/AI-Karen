@@ -39,21 +39,13 @@ from ai_karen_engine.services.response import ResponseContract, ResponsePromptBu
 from ai_karen_engine.services.response.response_validator import ResponseValidator
 from ai_karen_engine.core.model_runtime.model_validation import infer_model_capabilities, ModelCapabilityProfile
 
-try:
-    from ai_karen_engine.core.operations.provider_metrics import (
-        ProviderEventType,
-        ProviderMetrics,
-        record_provider_event,
-        record_provider_fallback,
-    )
-    PROVIDER_METRICS_AVAILABLE = True
-except Exception:
-    # Gracefully handle missing provider metrics module
-    PROVIDER_METRICS_AVAILABLE = False
-    ProviderEventType = None  # type: ignore[assignment]
-    ProviderMetrics = None  # type: ignore[assignment]
-    record_provider_event = None  # type: ignore[assignment]
-    record_provider_fallback = None  # type: ignore[assignment]
+# Provider metrics were previously available via core.operations.provider_metrics
+# (which never existed). The observability module now provides metrics collection.
+PROVIDER_METRICS_AVAILABLE = False
+ProviderEventType = None
+ProviderMetrics = None
+record_provider_event = None
+record_provider_fallback = None
 
 try:  # pragma: no cover - SecretManager may require optional deps
     from ai_karen_engine.models.secret_manager import SecretManager

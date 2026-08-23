@@ -17,6 +17,30 @@ from ai_karen_engine.core.observability.emitter import (
     get_observability_emitter,
 )
 from ai_karen_engine.core.observability.redaction import redact_data, redact_text
+from ai_karen_engine.core.observability.performance_metrics import (
+    MetricType,
+    AlertSeverity,
+    PerformanceMetric,
+    SystemMetrics,
+    ServiceMetrics,
+    MetricsCollector,
+    PerformanceDashboard,
+    PerformanceBenchmark,
+    PerformanceMonitoringSystem,
+    PerformanceMetrics,
+    get_performance_monitoring_system,
+    initialize_performance_monitoring,
+    shutdown_performance_monitoring,
+)
+from ai_karen_engine.core.observability.regression_detection import (
+    RegressionDetector,
+    RegressionDetection,
+)
+from ai_karen_engine.core.observability.metrics import (
+    MetricsManager,
+    get_metrics_manager,
+    register_service_metrics,
+)
 
 __all__ = [
     "ObservabilityContext",
@@ -31,4 +55,22 @@ __all__ = [
     "redact_data",
     "redact_text",
     "set_observability_context",
+    "MetricType",
+    "AlertSeverity",
+    "PerformanceMetric",
+    "SystemMetrics",
+    "ServiceMetrics",
+    "MetricsCollector",
+    "PerformanceDashboard",
+    "PerformanceBenchmark",
+    "PerformanceMonitoringSystem",
+    "PerformanceMetrics",
+    "get_performance_monitoring_system",
+    "initialize_performance_monitoring",
+    "shutdown_performance_monitoring",
+    "RegressionDetector",
+    "RegressionDetection",
+    "MetricsManager",
+    "get_metrics_manager",
+    "register_service_metrics",
 ]

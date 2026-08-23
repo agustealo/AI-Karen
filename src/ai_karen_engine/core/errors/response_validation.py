@@ -1,3 +1,10 @@
+"""Response text validation — blocks prompt leakage and raw tool JSON.
+
+This function was migrated from core/response/response_validator.py during
+CORE-PRUNE-1. It validates that generated response text does not contain
+prompt-leakage patterns or raw tool-call JSON that should have been processed
+by the tool-use pipeline instead.
+"""
 from __future__ import annotations
 
 import json
@@ -24,6 +31,11 @@ def _looks_like_raw_tool_json(text: str) -> bool:
 
 
 def validate_response_text(text: str, *, allow_tool_json: bool = False) -> bool:
+    """Return True if *text* is a safe, user-facing response.
+
+    Returns False for empty strings, prompt-leakage patterns, or raw
+    tool-call JSON (unless *allow_tool_json* is True).
+    """
     if not text or not text.strip():
         return False
     low = text.lower().strip()

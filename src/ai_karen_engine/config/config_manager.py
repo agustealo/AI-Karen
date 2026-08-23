@@ -23,6 +23,17 @@ BACKUP_PATH = CONFIG_PATH.with_suffix(".bak")
 LOCK = threading.RLock()
 
 
+def resolve_jwt_secret() -> str:
+    return (
+        os.getenv("AUTH_JWT_SECRET_KEY")
+        or os.getenv("AUTH_SECRET_KEY")
+        or os.getenv("JWT_SECRET_KEY")
+        or os.getenv("JWT_SECRET")
+        or os.getenv("SECRET_KEY")
+        or ""
+    )
+
+
 # --- Dataclass Definitions (Consolidated from core.config_manager) ---
 
 
@@ -145,14 +156,7 @@ class SecurityConfig:
     """Security configuration."""
 
     jwt_secret: str = field(
-        default_factory=lambda: (
-            os.getenv("AUTH_JWT_SECRET_KEY")
-            or os.getenv("AUTH_SECRET_KEY")
-            or os.getenv("JWT_SECRET_KEY")
-            or os.getenv("JWT_SECRET")
-            or os.getenv("SECRET_KEY")
-            or "your-secret-key"
-        )
+        default_factory=resolve_jwt_secret
     )
     jwt_algorithm: str = "HS256"
     jwt_expiration: int = 3600  # seconds
@@ -374,13 +378,7 @@ def load_env_override(cfg: Dict[str, Any]):
         security = {}
         cfg["security"] = security
 
-    auth_secret = (
-        os.getenv("AUTH_JWT_SECRET_KEY")
-        or os.getenv("AUTH_SECRET_KEY")
-        or os.getenv("JWT_SECRET_KEY")
-        or os.getenv("JWT_SECRET")
-        or os.getenv("SECRET_KEY")
-    )
+    auth_secret = resolve_jwt_secret()
     if auth_secret:
         # Always override secret keys if present in environment
         security["jwt_secret"] = auth_secret

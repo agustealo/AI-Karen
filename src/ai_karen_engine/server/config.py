@@ -470,6 +470,18 @@ class Settings(BaseSettings):
 
         return base_config
 
+    # --- DATA-CONVERGE-2 bridge to canonical persistence config ---
+    @property
+    def database_settings(self):
+        """Access canonical ``PostgresSettings`` derived from environment."""
+        from ai_karen_engine.config.database import get_database_settings
+        return get_database_settings()
+
+    @property
+    def effective_database_url(self):
+        """Resolve database URL from canonical PostgresSettings."""
+        return self.database_settings.postgres.build_database_url()
+
     if isinstance(SettingsConfigDict, type):
         model_config = SettingsConfigDict(
             env_file=".env",

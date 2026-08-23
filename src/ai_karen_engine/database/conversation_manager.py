@@ -16,7 +16,7 @@ from sqlalchemy import delete, func, select, update
 
 from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
 from ai_karen_engine.database.client import MultiTenantPostgresClient
-from ai_karen_engine.database.id_types import coerce_user_id
+from ai_karen_engine.database.id_types import coerce_user_id as normalize_user_id
 from ai_karen_engine.database.memory_manager import MemoryManager, MemoryQuery
 from ai_karen_engine.database.models import TenantConversation, TenantMessage
 from ai_karen_engine.services.database.repositories import Message as CanonicalMessage

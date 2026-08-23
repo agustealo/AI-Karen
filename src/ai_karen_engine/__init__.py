@@ -21,14 +21,6 @@ def __getattr__(name):
         from ai_karen_engine.learning.echo_core import EchoCore as _EC
 
         return _EC
-    if name == "LNMClient":
-        from ai_karen_engine.clients.transformers.lnm_client import LNMClient as _LC
-
-        return _LC
-    if name == "AutomationManager":
-        from ai_karen_engine.automation_manager import AutomationManager as _AM
-
-        return _AM
     if name == "PluginRouter":
         from ai_karen_engine.plugins.router import PluginRouter as _PR
 
@@ -50,11 +42,9 @@ def __getattr__(name):
 __all__ = [
     "LLMOrchestrator",
     "NightlyFineTuner",
-    "AutomationManager",
     "PluginRouter",
     "PluginManager",
     "AccessDenied",
     "ModelManager",
     "EchoCore",
-    "LNMClient",
 ]

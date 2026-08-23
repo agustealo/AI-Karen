@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Iterable
 import hashlib
 
 from ai_karen_engine.core.logging import get_logger
-from ai_karen_engine.services.database_connection_manager import get_database_manager
+from ai_karen_engine.services.database.database_connection_manager import get_database_manager
 from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
 
 logger = get_logger(__name__)

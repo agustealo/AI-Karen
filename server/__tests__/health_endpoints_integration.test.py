@@ -320,7 +320,7 @@ class TestSpecificHealthEndpoints:
 class TestHealthCheckFunctions:
     """Test individual health check functions."""
 
-    @patch('ai_karen_engine.services.database_connection_manager.get_database_manager')
+    @patch('ai_karen_engine.services.database.database_connection_manager.get_database_manager')
     async def test_check_database_health_success(self, mock_get_manager):
         """Test database health check when successful."""
         from server.health_endpoints import _check_database_health
@@ -341,7 +341,7 @@ class TestHealthCheckFunctions:
         assert "response_time_ms" in result
         assert result["pool_size"] == 10
 
-    @patch('ai_karen_engine.services.database_connection_manager.get_database_manager')
+    @patch('ai_karen_engine.services.database.database_connection_manager.get_database_manager')
     async def test_check_database_health_failure(self, mock_get_manager):
         """Test database health check when failed."""
         from server.health_endpoints import _check_database_health

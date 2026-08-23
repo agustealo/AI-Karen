@@ -18,7 +18,7 @@ logger = logging.getLogger("kari")
 async def _check_database_health() -> Dict[str, Any]:
     """Check database connectivity and health."""
     try:
-        from ai_karen_engine.services.database_connection_manager import (
+        from ai_karen_engine.services.database.database_connection_manager import (
             get_database_manager,
         )
         from ai_karen_engine.monitoring.database_metrics import get_database_metrics

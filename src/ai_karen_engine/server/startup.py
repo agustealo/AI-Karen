@@ -58,7 +58,7 @@ async def init_database(app: Optional[FastAPI] = None) -> bool:
             logger.debug("Database initialization skipped: no FastAPI app provided")
             return False
 
-        from ai_karen_engine.services.database_config import get_database_config
+        from ai_karen_engine.services.database.database_config import get_database_config
 
         settings = _get_app_settings(app)
         db_config = get_database_config(settings)
@@ -712,8 +712,8 @@ async def init_extension_service_recovery(app: FastAPI) -> None:
         from ai_karen_engine.extensions.service_recovery import (
             initialize_extension_service_recovery_manager,
         )
-        from ai_karen_engine.services.database_config import get_database_config
-        from ai_karen_engine.services.enhanced_database_health_monitor import (
+        from ai_karen_engine.services.database.database_config import get_database_config
+        from ai_karen_engine.services.database.health.enhanced_monitor import (
             get_enhanced_database_health_monitor,
         )
 
@@ -1142,7 +1142,7 @@ def register_shutdown_tasks(app: FastAPI) -> None:
         try:
             logger.info("Starting database shutdown process")
 
-            from ai_karen_engine.services.database_config import get_database_config
+            from ai_karen_engine.services.database.database_config import get_database_config
 
             settings = _get_app_settings(app)
             db_config = get_database_config(settings)

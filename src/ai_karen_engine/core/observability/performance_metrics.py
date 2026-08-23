@@ -530,7 +530,7 @@ class _InMemoryRegressionDetector:
     """In-memory regression detector for backward compatibility."""
 
     def __init__(self, store: _InMemoryMetricsStore):
-        from ai_karen_engine.core.operations.regression_detection import RegressionDetector
+        from ai_karen_engine.core.observability.regression_detection import RegressionDetector
         self._detector = RegressionDetector()
         self._store = store
 

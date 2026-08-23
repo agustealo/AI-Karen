@@ -54,7 +54,7 @@ def register_admin_endpoints(app: FastAPI, settings: Settings) -> None:
     async def run_performance_audit():
         """Run a performance audit"""
         try:
-            from ai_karen_engine.audit.performance_auditor import PerformanceAuditor
+            from tools.performance_auditor import PerformanceAuditor
             
             auditor = PerformanceAuditor()
             await auditor.initialize()

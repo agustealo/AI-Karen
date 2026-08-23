@@ -107,7 +107,7 @@ class DatabaseConfig:
         try:
             # Import here to avoid circular imports
             from ai_karen_engine.database.client import get_database_client
-            from ai_karen_engine.services.database_health_monitor import (
+            from ai_karen_engine.services.database.health.monitor import (
                 initialize_database_health_monitor,
                 get_database_health_monitor,
             )

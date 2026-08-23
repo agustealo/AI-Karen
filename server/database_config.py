@@ -95,10 +95,10 @@ class DatabaseConfig:
         """Initialize database connection with service-isolated configuration"""
         try:
             # Import here to avoid circular imports
-            from ai_karen_engine.services.database_connection_manager import (
+            from ai_karen_engine.services.database.database_connection_manager import (
                 initialize_database_manager
             )
-            from ai_karen_engine.services.database_health_monitor import (
+            from ai_karen_engine.services.database.health.monitor import (
                 initialize_database_health_monitor,
                 get_database_health_monitor,
             )

@@ -1,5 +1,4 @@
 project_id = "karen-local"
-org_id = "karen-org"
 
 [api]
 enabled = true
@@ -21,7 +20,4 @@ enabled = true
 enabled = false
 
 [analytics]
-enabled = false
-
-[functions]
 enabled = false

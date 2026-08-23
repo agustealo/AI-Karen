@@ -150,13 +150,9 @@ class AuthService(BaseService):
 
     def _load_config_from_env(self) -> None:
         """Load configuration from environment variables."""
-        auth_secret = (
-            os.getenv("AUTH_JWT_SECRET_KEY")
-            or os.getenv("AUTH_SECRET_KEY")
-            or os.getenv("JWT_SECRET_KEY")
-            or os.getenv("JWT_SECRET")
-            or os.getenv("SECRET_KEY")
-        )
+        from ai_karen_engine.config.config_manager import resolve_jwt_secret
+
+        auth_secret = resolve_jwt_secret()
         if auth_secret:
             self.config.jwt_secret_key = auth_secret
 

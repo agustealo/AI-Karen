@@ -119,7 +119,7 @@ class TestFastAPIDatabaseIntegration:
     async def test_comprehensive_health_check_with_database(self, settings, mock_database_manager, mock_redis_manager):
         """Test comprehensive health check includes database information"""
         with patch('server.database_config.get_database_config') as mock_get_config:
-            with patch('ai_karen_engine.services.database_connection_manager.get_database_manager', 
+            with patch('ai_karen_engine.services.database.database_connection_manager.get_database_manager', 
                       return_value=mock_database_manager):
                 with patch('ai_karen_engine.services.redis_connection_manager.get_redis_manager',
                           return_value=mock_redis_manager):

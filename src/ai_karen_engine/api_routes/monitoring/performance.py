@@ -16,7 +16,7 @@ try:
 except ImportError:
     from ai_karen_engine.pydantic_stub import BaseModel, ConfigDict, Field
 
-from ai_karen_engine.core.operations.performance_metrics import (
+from ai_karen_engine.core.observability.performance_metrics import (
     get_performance_monitoring_system,
     PerformanceMetric,
     MetricType,
@@ -565,7 +565,7 @@ async def get_optimization_status():
 async def run_performance_audit():
     """Run a comprehensive performance audit."""
     try:
-        from ai_karen_engine.audit.performance_auditor import PerformanceAuditor
+        from tools.performance_auditor import PerformanceAuditor
         
         auditor = PerformanceAuditor()
         await auditor.initialize()
@@ -765,7 +765,7 @@ async def get_optimization_config():
 async def get_optimization_recommendations():
     """Get current optimization recommendations."""
     try:
-        from ai_karen_engine.audit.performance_auditor import PerformanceAuditor
+        from tools.performance_auditor import PerformanceAuditor
         
         auditor = PerformanceAuditor()
         await auditor.initialize()

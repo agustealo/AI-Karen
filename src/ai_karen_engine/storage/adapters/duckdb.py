@@ -1,14 +1,14 @@
 """
-DuckDBClient: Handles all structured user profiles, meta, history, and metrics.
-Local file; thread-safe for multiple ops. Uses DuckDB SQL with lazy loading.
+DuckDB adapter for analytical/local storage.
 """
 
 import duckdb
-import threading
 import json
-import os
 import logging
+import os
+import threading
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +19,9 @@ class DuckDBClient:
         self._lock = threading.Lock()
         self._initialized = False
 
-        # Check if DuckDB is disabled via environment variable
         self._enabled = os.getenv("KARI_ENABLE_DUCKDB", "true").lower() not in ("false", "0", "no")
         if not self._enabled:
             logger.info("DuckDB disabled via KARI_ENABLE_DUCKDB environment variable")
-
-        # Lazy loading: DO NOT call _ensure_tables() here!
-        # Tables will be created on first use via _ensure_initialized()
 
     def _get_conn(self):
         if not self._enabled:
@@ -33,13 +29,10 @@ class DuckDBClient:
         return duckdb.connect(self.db_path)
 
     def _ensure_initialized(self):
-        """Lazy table creation - only on first use"""
         if self._initialized:
             return
-
         if not self._enabled:
             raise RuntimeError("DuckDB is disabled. Set KARI_ENABLE_DUCKDB=true to enable.")
-
         logger.info(f"Initializing DuckDB tables at {self.db_path}")
         self._ensure_tables()
         self._initialized = True
@@ -77,15 +70,14 @@ class DuckDBClient:
                 );
             """)
 
-    # Profile CRUD
     def get_profile(self, user_id):
-        self._ensure_initialized()  # Lazy init on first use
+        self._ensure_initialized()
         with self._lock, self._get_conn() as conn:
             res = conn.execute("SELECT profile_json FROM profiles WHERE user_id = ?", (user_id,)).fetchone()
             return json.loads(res[0]) if res else None
 
     def update_profile(self, user_id, field, value):
-        self._ensure_initialized()  # Lazy init on first use
+        self._ensure_initialized()
         with self._lock, self._get_conn() as conn:
             cur = conn.execute("SELECT profile_json FROM profiles WHERE user_id = ?", (user_id,))
             res = cur.fetchone()
@@ -99,14 +91,13 @@ class DuckDBClient:
                 conn.execute("INSERT INTO profiles (user_id, profile_json, last_update) VALUES (?, ?, ?)", (user_id, profile_json, datetime.utcnow()))
 
     def create_profile(self, user_id, profile):
-        self._ensure_initialized()  # Lazy init on first use
+        self._ensure_initialized()
         with self._lock, self._get_conn() as conn:
             profile["last_update"] = datetime.utcnow().timestamp()
             conn.execute("INSERT INTO profiles (user_id, profile_json, last_update) VALUES (?, ?, ?)", (user_id, json.dumps(profile), datetime.utcnow()))
 
     def save_profile(self, user_id, profile):
-        """Insert or update an entire profile."""
-        self._ensure_initialized()  # Lazy init on first use
+        self._ensure_initialized()
         with self._lock, self._get_conn() as conn:
             profile["last_update"] = datetime.utcnow().timestamp()
             profile_json = json.dumps(profile)
@@ -123,13 +114,12 @@ class DuckDBClient:
                 )
 
     def delete_profile(self, user_id):
-        self._ensure_initialized()  # Lazy init on first use
+        self._ensure_initialized()
         with self._lock, self._get_conn() as conn:
             conn.execute("DELETE FROM profiles WHERE user_id = ?", (user_id,))
 
-    # History
     def append_profile_history(self, user_id, entry):
-        self._ensure_initialized()  # Lazy init on first use
+        self._ensure_initialized()
         with self._lock, self._get_conn() as conn:
             conn.execute(
                 "INSERT INTO profile_history (user_id, timestamp, field, old, new) VALUES (?, ?, ?, ?, ?)",
@@ -137,33 +127,31 @@ class DuckDBClient:
             )
 
     def get_profile_history(self, user_id):
-        self._ensure_initialized()  # Lazy init on first use
+        self._ensure_initialized()
         with self._lock, self._get_conn() as conn:
             res = conn.execute("SELECT timestamp, field, old, new FROM profile_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 100", (user_id,))
             rows = res.fetchall()
             return [{"timestamp": ts, "field": f, "old": json.loads(o), "new": json.loads(n)} for (ts, f, o, n) in rows]
 
     def profile_edit_count(self, user_id):
-        self._ensure_initialized()  # Lazy init on first use
+        self._ensure_initialized()
         with self._lock, self._get_conn() as conn:
             res = conn.execute("SELECT COUNT(*) FROM profile_history WHERE user_id = ?", (user_id,)).fetchone()
             return int(res[0]) if res else 0
 
-    # Memory ops
     def delete_long_term_memory(self, user_id):
-        self._ensure_initialized()  # Lazy init on first use
+        self._ensure_initialized()
         with self._lock, self._get_conn() as conn:
             conn.execute("DELETE FROM long_term_memory WHERE user_id = ?", (user_id,))
 
-    # Interactions (for metrics)
     def total_interactions(self, user_id):
-        self._ensure_initialized()  # Lazy init on first use
+        self._ensure_initialized()
         with self._lock, self._get_conn() as conn:
             res = conn.execute("SELECT COUNT(*) FROM profile_history WHERE user_id = ?", (user_id,)).fetchone()
             return int(res[0]) if res else 0
 
     def recent_interactions(self, user_id, window_days=7):
-        self._ensure_initialized()  # Lazy init on first use
+        self._ensure_initialized()
         cutoff = datetime.utcnow().timestamp() - window_days * 86400
         with self._lock, self._get_conn() as conn:
             res = conn.execute(
@@ -171,32 +159,19 @@ class DuckDBClient:
             ).fetchone()
             return int(res[0]) if res else 0
 
-    # Roles (RBAC)
     def get_user_roles(self, user_id):
-        self._ensure_initialized()  # Lazy init on first use
+        self._ensure_initialized()
         with self._lock, self._get_conn() as conn:
             res = conn.execute("SELECT role FROM user_roles WHERE user_id = ?", (user_id,)).fetchall()
             return [r[0] for r in res]
 
-    # Health
     def health(self):
-        """
-        Check DuckDB health status.
-        Returns True if healthy or if not yet initialized (lazy mode).
-        Only returns False if disabled or connection fails.
-        """
         try:
-            # If disabled, return False
             if not self._enabled:
                 return False
-
-            # If not yet initialized, return True (healthy = not yet needed)
-            # This prevents health checks from triggering lazy initialization
             if not self._initialized:
                 logger.debug("DuckDB client not yet initialized (lazy mode) - reporting as healthy")
                 return True
-
-            # If initialized, perform actual health check
             with self._get_conn() as conn:
                 conn.execute("SELECT 1")
             return True

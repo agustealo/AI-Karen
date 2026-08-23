@@ -12,36 +12,7 @@ def create_audit_sink(get_audit: Callable[[], Any] | None = None) -> Observabili
     Audit records must always be redacted and must include correlation
     identifiers so they can be joined with logs and traces.
     """
-    try:
-        if get_audit is None:
-            try:
-                from ai_karen_engine.audit import PerformanceAuditor
-
-                auditor = PerformanceAuditor()
-
-                def _emit(payload: dict[str, Any]) -> None:
-                    try:
-                        auditor.record(payload)
-                    except Exception:
-                        pass
-
-            except Exception:
-
-                def _emit(payload: dict[str, Any]) -> None:  # type: ignore[misc]
-                    pass
-
-        else:
-            auditor = get_audit()
-
-            def _emit(payload: dict[str, Any]) -> None:
-                try:
-                    auditor.record(payload)
-                except Exception:
-                    pass
-
-    except Exception:
-
-        def _emit(payload: dict[str, Any]) -> None:  # type: ignore[misc]
-            pass
+    def _emit(payload: dict[str, Any]) -> None:
+        pass
 
     return ObservabilitySink(name="audit", emit=_emit, redact=True)
