@@ -25,11 +25,71 @@ class MLRuntime:
         self._predictors: dict[PredictionTask, Any] = {}
         self._initialized = False
         self._ml_metrics = get_ml_metrics()
+        self._default_encoder_model_id = "default"
 
-    async def initialize(self) -> None:
+    async def initialize(self, encoder_config: Any = None) -> None:
         if self._initialized:
             return
         self._initialized = True
+        await self._wire_default_encoder(encoder_config)
+
+    async def _wire_default_encoder(self, encoder_config: Any = None) -> None:
+        encoder = await self._resolve_encoder(encoder_config)
+        if encoder is not None:
+            self.register_encoder(self._default_encoder_model_id, encoder)
+            logger.info("MLRuntime: registered default encoder %s", self._default_encoder_model_id)
+        else:
+            logger.warning("MLRuntime: no default encoder available; predictors will use heuristic fallback")
+
+    async def _resolve_encoder(self, encoder_config: Any = None) -> SemanticEncoder | None:
+        if encoder_config is not None:
+            return self._build_encoder_from_config(encoder_config)
+
+        manifest = self._registry.get_active("semantic_encoding")
+        if manifest is not None:
+            return self._build_encoder_from_manifest(manifest)
+
+        return self._build_default_encoder()
+
+    def _build_encoder_from_config(self, encoder_config: Any) -> SemanticEncoder | None:
+        try:
+            from ai_karen_engine.core.intelligence.ml.encoders.distilbert import DistilBertSemanticEncoder
+            return DistilBertSemanticEncoder(config=encoder_config, registry=self._registry)
+        except Exception as exc:
+            logger.error("MLRuntime: failed to build encoder from config: %s", exc)
+            self._ml_metrics.record_model_load_failure(getattr(encoder_config, "model_name", "unknown"), type(exc).__name__)
+            return None
+
+    def _build_encoder_from_manifest(self, manifest: Any) -> SemanticEncoder | None:
+        try:
+            from ai_karen_engine.core.intelligence.ml.encoders.distilbert import DistilBertSemanticEncoder
+            from ai_karen_engine.core.intelligence.ml.distilbert_config import DistilBertConfig
+            config = DistilBertConfig(
+                model_name=manifest.model_id,
+                local_model_root=str(manifest.artifact_path),
+            )
+            encoder = DistilBertSemanticEncoder(config=config, registry=self._registry)
+            if encoder.fallback_mode:
+                logger.warning("MLRuntime: encoder from manifest %s is in fallback mode", manifest.model_id)
+            return encoder
+        except Exception as exc:
+            logger.error("MLRuntime: failed to build encoder from manifest %s: %s", manifest.model_id, exc)
+            self._ml_metrics.record_model_load_failure(manifest.model_id, type(exc).__name__)
+            return None
+
+    def _build_default_encoder(self) -> SemanticEncoder | None:
+        try:
+            from ai_karen_engine.core.intelligence.ml.encoders.distilbert import DistilBertSemanticEncoder
+            from ai_karen_engine.core.intelligence.ml.distilbert_config import DistilBertConfig
+            config = DistilBertConfig()
+            encoder = DistilBertSemanticEncoder(config=config, registry=self._registry)
+            if encoder.fallback_mode:
+                logger.info("MLRuntime: default DistilBERT encoder running in fallback mode")
+            return encoder
+        except Exception as exc:
+            logger.error("MLRuntime: failed to build default encoder: %s", exc)
+            self._ml_metrics.record_model_load_failure("distilbert-base-uncased", type(exc).__name__)
+            return None
 
     def register_encoder(self, model_id: str, encoder: SemanticEncoder) -> None:
         self._encoders[model_id] = encoder
@@ -97,6 +157,8 @@ class MLRuntime:
             result = await predictor.predict(features)
             duration = time.perf_counter() - start
             if result is not None:
+                result.task = task
+                result.latency_ms = duration * 1000.0
                 self._ml_metrics.record_inference(
                     prediction_task=task.value,
                     model_id=getattr(result, "model_id", "unknown") or "unknown",
@@ -159,11 +221,16 @@ class MLRuntime:
         active_models = [m.model_id for m in self._registry.list_all() if m.status == ModelStatus.ACTIVE.value]
         shadow_models = [m.model_id for m in self._registry.list_all() if m.status == ModelStatus.SHADOW.value]
 
+        configured_encoder = self._registry.get_active("semantic_encoding")
+        encoder_missing = configured_encoder is not None and self._default_encoder_model_id not in self._encoders
+
         overall = "healthy"
         for h in list(encoder_health.values()) + list(predictor_health.values()):
             if isinstance(h, dict) and h.get("status") in ("degraded", "unavailable", "error"):
                 overall = "degraded"
                 break
+        if encoder_missing:
+            overall = "degraded"
 
         return {
             "encoders": encoder_health,
@@ -171,6 +238,8 @@ class MLRuntime:
             "registry": {
                 "active": active_models,
                 "shadow": shadow_models,
+                "configured_encoder": configured_encoder.model_id if configured_encoder else None,
+                "encoder_missing": encoder_missing,
             },
             "overall": overall,
         }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from ai_karen_engine.core.intelligence.ml.ml_runtime import MLRuntime
+from ai_karen_engine.core.intelligence.ml.contracts import PredictionTask
 from ai_karen_engine.core.intelligence.ml.predictors.intent import IntentPredictor
 from ai_karen_engine.core.intelligence.features import IntelligenceFeatures
 
@@ -27,7 +28,7 @@ async def test_ml_runtime_encode():
 async def test_ml_runtime_predict():
     runtime = MLRuntime()
     await runtime.initialize()
-    runtime.register_predictor("intent", IntentPredictor(runtime))
+    runtime.register_predictor(PredictionTask.INTENT, IntentPredictor(runtime))
     features = IntelligenceFeatures(text="Hello")
-    result = await runtime.predict(features, "intent")
-    assert result is None or result.task.value == "intent"
+    result = await runtime.predict(features, PredictionTask.INTENT)
+    assert result is None or result.task == PredictionTask.INTENT

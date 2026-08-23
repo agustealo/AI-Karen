@@ -27,7 +27,7 @@ class IntentPredictor(BasePredictor):
     async def predict(self, features: IntelligenceFeatures) -> Prediction:
         text = features.text
         if not text:
-            return Prediction(task=PredictionTask.INTENT, label="unknown", confidence=0.0, fallback_used=True)
+            return Prediction(task=PredictionTask.INTENT, label="unknown", confidence=0.0, fallback_used=True, inference_method="heuristic_fallback")
 
         # Try ML path first if encoder is healthy
         if self._semantic_encoder is not None:
@@ -43,15 +43,17 @@ class IntentPredictor(BasePredictor):
                             best_score = score
                             best_intent = intent
                 confidence = min(best_score * 1.1, 1.0)
+                model_id = getattr(self._semantic_encoder, 'config', None) and getattr(self._semantic_encoder.config, 'model_name', '')
                 return Prediction(
                     task=PredictionTask.INTENT,
                     label=best_intent,
                     probability=best_score,
                     confidence=confidence,
-                    model_id=getattr(self._semantic_encoder, 'config', None) and getattr(self._semantic_encoder.config, 'model_name', ''),
+                    model_id=model_id,
                     model_version="current",
                     feature_version=features.feature_version,
                     fallback_used=False,
+                    inference_method="embedding_similarity",
                 )
             except Exception as exc:
                 logger.debug("Intent ML prediction failed: %s", exc)
@@ -59,12 +61,12 @@ class IntentPredictor(BasePredictor):
         # Heuristic fallback
         lower = text.lower()
         if any(k in lower for k in ["what", "how", "why", "when", "where", "explain"]):
-            return Prediction(task=PredictionTask.INTENT, label="information_seeking", confidence=0.7, fallback_used=True)
+            return Prediction(task=PredictionTask.INTENT, label="information_seeking", confidence=0.7, fallback_used=True, inference_method="heuristic_fallback")
         if any(k in lower for k in ["help me", "can you", "please", "need to"]):
-            return Prediction(task=PredictionTask.INTENT, label="task_completion", confidence=0.6, fallback_used=True)
+            return Prediction(task=PredictionTask.INTENT, label="task_completion", confidence=0.6, fallback_used=True, inference_method="heuristic_fallback")
         if any(k in lower for k in ["problem", "issue", "error", "fix", "broken"]):
-            return Prediction(task=PredictionTask.INTENT, label="problem_solving", confidence=0.7, fallback_used=True)
-        return Prediction(task=PredictionTask.INTENT, label="social_interaction", confidence=0.4, fallback_used=True)
+            return Prediction(task=PredictionTask.INTENT, label="problem_solving", confidence=0.7, fallback_used=True, inference_method="heuristic_fallback")
+        return Prediction(task=PredictionTask.INTENT, label="social_interaction", confidence=0.4, fallback_used=True, inference_method="heuristic_fallback")
 
     def _cosine_similarity(self, v1: list[float], v2: list[float]) -> float:
         import numpy as np

@@ -56,4 +56,5 @@ class CapabilityPredictor(BasePredictor):
             confidence=max(scores.values()) if scores else 0.0,
             feature_version=features.feature_version,
             fallback_used=True,
+            inference_method="heuristic_fallback",
         )

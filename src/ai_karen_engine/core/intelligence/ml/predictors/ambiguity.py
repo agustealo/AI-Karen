@@ -51,4 +51,5 @@ class AmbiguityPredictor(BasePredictor):
             confidence=score,
             feature_version=features.feature_version,
             fallback_used=True,
+            inference_method="heuristic_fallback",
         )

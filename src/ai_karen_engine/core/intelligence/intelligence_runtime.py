@@ -28,6 +28,7 @@ from ai_karen_engine.core.intelligence.ml.predictors.intent import IntentPredict
 from ai_karen_engine.core.intelligence.ml.predictors.memory_relevance import (
     MemoryRelevancePredictor,
 )
+from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
 from ai_karen_engine.core.intelligence.task_signature_builder import (
     TaskSignatureBuilder,
 )
@@ -36,9 +37,10 @@ logger = logging.getLogger(__name__)
 
 
 class IntelligenceRuntime:
-    def __init__(self) -> None:
+    def __init__(self, registry: MLModelRegistry | None = None) -> None:
         self._linguistic = None
-        self._ml_runtime = MLRuntime()
+        self._registry = registry or MLModelRegistry()
+        self._ml_runtime = MLRuntime(registry=self._registry)
         self._builder = TaskSignatureBuilder()
         self._initialized = False
 
@@ -128,6 +130,27 @@ class IntelligenceRuntime:
             pred = await self._ml_runtime.predict(features, task)
             if pred is not None:
                 predictions[task] = pred
+                signals.append(IntelligenceSignal(
+                    signal_type=SignalType.INTENT if task == PredictionTask.INTENT else (
+                        SignalType.TOPIC if task == PredictionTask.DOMAIN else (
+                            SignalType.TASK_COMPLEXITY if task == PredictionTask.COMPLEXITY else (
+                                SignalType.TASK_COMPLEXITY if task == PredictionTask.AMBIGUITY else (
+                                    SignalType.MEMORY_RELEVANCE if task == PredictionTask.MEMORY_RELEVANCE else SignalType.RISK
+                                )
+                            )
+                        )
+                    ),
+                    value=pred.label or pred.value,
+                    confidence=pred.confidence,
+                    source_type=SignalSourceType.FALLBACK if pred.fallback_used else SignalSourceType.TRANSFORMER,
+                    source_id=f"MLPredictor.{task.value}",
+                    model_id=pred.model_id,
+                    model_version=pred.model_version,
+                    feature_version=pred.feature_version,
+                    fallback_used=pred.fallback_used,
+                    inference_method=pred.inference_method,
+                    latency_ms=pred.latency_ms,
+                ))
                 if task == PredictionTask.INTENT:
                     result.intent = pred.label or "general_assist"
                     result.intent_confidence = pred.confidence

@@ -59,4 +59,5 @@ class ComplexityPredictor(BasePredictor):
             confidence=confidence,
             feature_version=features.feature_version,
             fallback_used=fallback_used,
+            inference_method="heuristic_fallback",
         )

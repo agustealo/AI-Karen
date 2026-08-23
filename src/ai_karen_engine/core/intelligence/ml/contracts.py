@@ -32,6 +32,7 @@ class Prediction:
     calibrated: bool = False
     fallback_used: bool = False
     latency_ms: float = 0.0
+    inference_method: str = "unknown"
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

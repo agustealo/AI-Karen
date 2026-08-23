@@ -28,6 +28,7 @@ class MemoryRelevancePredictor(BasePredictor):
 
         score = heuristic_score
         fallback_used = True
+        inference_method = "heuristic_fallback"
 
         if self._semantic_encoder is not None:
             try:
@@ -41,6 +42,7 @@ class MemoryRelevancePredictor(BasePredictor):
                         semantic_score = float(np.dot(a1, a2) / (norm1 * norm2))
                         score = max(heuristic_score, semantic_score)
                         fallback_used = False
+                        inference_method = "embedding_similarity"
             except Exception as exc:
                 logger.debug("Memory relevance ML prediction failed: %s", exc)
 
@@ -52,4 +54,5 @@ class MemoryRelevancePredictor(BasePredictor):
             probability=score,
             feature_version=features.feature_version,
             fallback_used=fallback_used,
+            inference_method=inference_method,
         )

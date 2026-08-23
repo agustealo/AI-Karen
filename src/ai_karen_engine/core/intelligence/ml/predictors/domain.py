@@ -34,8 +34,8 @@ class DomainClassifier(BasePredictor):
             scores[domain] = score
 
         if not scores or max(scores.values()) == 0:
-            return Prediction(task=PredictionTask.DOMAIN, label="unknown", confidence=0.0, fallback_used=True)
+            return Prediction(task=PredictionTask.DOMAIN, label="unknown", confidence=0.0, fallback_used=True, inference_method="heuristic_fallback")
 
         best_domain = max(scores, key=scores.get)
         confidence = min(scores[best_domain] * 0.25, 1.0)
-        return Prediction(task=PredictionTask.DOMAIN, label=best_domain, confidence=confidence, fallback_used=True)
+        return Prediction(task=PredictionTask.DOMAIN, label=best_domain, confidence=confidence, fallback_used=True, inference_method="heuristic_fallback")
