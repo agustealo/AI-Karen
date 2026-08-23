@@ -36,6 +36,9 @@ class DatabaseConfig:
     enable_redis: bool = True
     enable_milvus: bool = True
     enable_elasticsearch: bool = True
+    enable_canonical_memory_repository: bool = False
+    enable_canonical_conversation_repository: bool = False
+    enable_canonical_artifact_store: bool = False
 
 
 class DatabaseIntegrationManager:
@@ -60,6 +63,11 @@ class DatabaseIntegrationManager:
         self.tenant_manager: Optional[TenantManager] = None
         self.memory_manager: Optional[MemoryManager] = None
         self.conversation_manager: Optional[ConversationManager] = None
+        
+        # Canonical repositories (DATA-CONVERGE-1)
+        self.memory_repository: Optional[Any] = None
+        self.conversation_repository: Optional[Any] = None
+        self.artifact_store: Optional[Any] = None
         
         # State
         self._initialized = False
@@ -273,13 +281,28 @@ class DatabaseIntegrationManager:
             embedding_manager=self.embedding_manager
         )
         
+        # Canonical repositories (DATA-CONVERGE-1)
+        if self.config.enable_canonical_memory_repository or self.config.enable_canonical_conversation_repository:
+            try:
+                from ai_karen_engine.services.database.repositories import RepositoryFactory
+                session_factory = getattr(self.db_client, "get_async_session", None)
+                if session_factory:
+                    repo_factory = RepositoryFactory(session_factory=session_factory)
+                    if self.config.enable_canonical_memory_repository:
+                        self.memory_repository = repo_factory.create_memory_repository()
+                    if self.config.enable_canonical_conversation_repository:
+                        self.conversation_repository = repo_factory.create_conversation_repository()
+            except Exception as exc:
+                logger.warning("Failed to initialize canonical repositories: %s", exc)
+        
         # Memory manager
         self.memory_manager = MemoryManager(
             db_client=self.db_client,
             milvus_client=self.milvus_client,
             embedding_manager=self.embedding_manager,
             redis_client=self.redis_client,
-            elasticsearch_client=self.elasticsearch_client
+            elasticsearch_client=self.elasticsearch_client,
+            memory_repository=self.memory_repository,
         )
         
         # Conversation manager

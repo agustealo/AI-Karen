@@ -159,6 +159,7 @@ class ConversationManager:
         db_client: MultiTenantPostgresClient,
         memory_manager: Optional[MemoryManager] = None,
         embedding_manager: Optional[EmbeddingManager] = None,
+        conversation_repository: Optional[Any] = None,
     ):
         """Initialize conversation manager.
 
@@ -166,10 +167,12 @@ class ConversationManager:
             db_client: Database client
             memory_manager: Memory manager for context integration
             embedding_manager: Embedding manager for conversation analysis
+            conversation_repository: Canonical ConversationRepository (preferred)
         """
         self.db_client = db_client
         self.memory_manager = memory_manager
         self.embedding_manager = embedding_manager
+        self.conversation_repository = conversation_repository
 
         # Configuration
         self.max_context_messages = 50
@@ -224,6 +227,58 @@ class ConversationManager:
             conversation_id = str(uuid.uuid4())
             messages: List[Message] = []
 
+            # Canonical repository path
+            if self.conversation_repository is not None:
+                from ai_karen_engine.services.database.repositories import Conversation as CanonicalConversation
+                conversation = CanonicalConversation(
+                    id=conversation_id,
+                    tenant_id=str(tenant_id),
+                    user_id=user_id,
+                    title=title,
+                    metadata=metadata or {},
+                )
+                result = await self.conversation_repository.create_conversation(conversation)
+                if not result.success:
+                    raise RuntimeError(f"Failed to create conversation: {result.error}")
+
+                if initial_message:
+                    from ai_karen_engine.services.database.repositories import Message as CanonicalMessage
+                    message = CanonicalMessage(
+                        id=str(uuid.uuid4()),
+                        conversation_id=conversation_id,
+                        tenant_id=str(tenant_id),
+                        role="user",
+                        content=initial_message,
+                    )
+                    msg_result = await self.conversation_repository.add_message(message)
+                    if msg_result.success:
+                        messages.append(
+                            Message(
+                                id=message.id,
+                                role=MessageRole.USER,
+                                content=initial_message,
+                                timestamp=datetime.utcnow(),
+                            )
+                        )
+
+                self.metrics["conversations_created"] += 1
+                response_time = time.time() - start_time
+                self.metrics["avg_response_time"] = (
+                    self.metrics["avg_response_time"] * 0.9 + response_time * 0.1
+                )
+                logger.info(f"Created conversation {conversation_id} for user {user_id} (canonical)")
+                return Conversation(
+                    id=conversation_id,
+                    user_id=user_id,
+                    title=title,
+                    messages=messages,
+                    metadata=metadata or {},
+                    is_active=True,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+
+            # Legacy path
             conversation = Conversation(
                 id=conversation_id,
                 user_id=user_id,
@@ -557,6 +612,49 @@ class ConversationManager:
             Conversation if found
         """
         try:
+            # Canonical repository path
+            if self.conversation_repository is not None:
+                from ai_karen_engine.services.database.repositories import ConversationQuery
+                query = ConversationQuery(tenant_id=str(tenant_id), limit=1)
+                result = await self.conversation_repository.list_conversations(query)
+                if not result.success or not result.data:
+                    return None
+
+                canonical_conv = result.data[0]
+                messages_result = await self.conversation_repository.get_messages(
+                    canonical_conv.id, canonical_conv.tenant_id
+                )
+                messages = []
+                if messages_result.success and messages_result.data:
+                    for msg in messages_result.data:
+                        messages.append(
+                            Message(
+                                id=msg.id,
+                                role=MessageRole(msg.role),
+                                content=msg.content,
+                                timestamp=msg.created_at,
+                                metadata=msg.metadata,
+                            )
+                        )
+
+                conversation = Conversation(
+                    id=canonical_conv.id,
+                    user_id=canonical_conv.user_id,
+                    title=canonical_conv.title,
+                    messages=messages,
+                    metadata=canonical_conv.metadata,
+                    is_active=canonical_conv.is_active,
+                    created_at=canonical_conv.created_at,
+                    updated_at=canonical_conv.updated_at,
+                )
+
+                if include_context and self.memory_manager and messages:
+                    await self._add_memory_context(tenant_id, conversation)
+
+                self.metrics["conversations_retrieved"] += 1
+                return conversation
+
+            # Legacy path
             async with self.db_client.get_async_session() as session:
                 result = await session.execute(
                     select(TenantConversation).where(
@@ -636,6 +734,33 @@ class ConversationManager:
             Added message
         """
         try:
+            # Canonical repository path
+            if self.conversation_repository is not None:
+                message = Message(
+                    id=str(uuid.uuid4()),
+                    role=role,
+                    content=content,
+                    timestamp=datetime.utcnow(),
+                    metadata=metadata or {},
+                    function_call=function_call,
+                    function_response=function_response,
+                )
+                canonical_msg = CanonicalMessage(
+                    id=message.id,
+                    conversation_id=conversation_id,
+                    tenant_id=str(tenant_id),
+                    role=message.role.value,
+                    content=message.content,
+                    metadata=message.metadata,
+                )
+                result = await self.conversation_repository.add_message(canonical_msg)
+                if not result.success:
+                    logger.error("Failed to add message via canonical repository: %s", result.error)
+                    return None
+                self.metrics["messages_added"] += 1
+                return message
+
+            # Legacy path
             message = Message(
                 id=str(uuid.uuid4()),
                 role=role,
@@ -840,6 +965,25 @@ class ConversationManager:
             True if successful
         """
         try:
+            # Canonical repository path
+            if self.conversation_repository is not None:
+                from ai_karen_engine.services.database.repositories import Conversation as CanonicalConversation
+                conv = CanonicalConversation(
+                    id=conversation_id,
+                    tenant_id=str(tenant_id),
+                    user_id="",
+                    title=title,
+                    metadata=metadata or {},
+                    is_active=is_active if is_active is not None else True,
+                )
+                result = await self.conversation_repository.update_conversation(conv)
+                if not result.success:
+                    logger.error("Failed to update conversation via canonical repository: %s", result.error)
+                    return False
+                logger.info(f"Updated conversation {conversation_id} (canonical)")
+                return True
+
+            # Legacy path
             updates = {"updated_at": datetime.utcnow()}
 
             if title is not None:
@@ -877,6 +1021,16 @@ class ConversationManager:
             True if successful
         """
         try:
+            # Canonical repository path
+            if self.conversation_repository is not None:
+                result = await self.conversation_repository.delete_conversation(conversation_id, str(tenant_id))
+                if not result.success:
+                    logger.error("Failed to delete conversation via canonical repository: %s", result.error)
+                    return False
+                logger.info(f"Deleted conversation {conversation_id} (canonical)")
+                return True
+
+            # Legacy path
             async with self.db_client.get_async_session() as session:
                 await session.execute(
                     delete(TenantConversation).where(

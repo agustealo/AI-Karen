@@ -15,7 +15,7 @@ class MemoryItem:
 
     id: str
     tenant_id: str
-    user_id: str
+    user_id: Optional[str] = None
     conversation_id: Optional[str] = None
     memory_type: str = "episodic"
     content: str = ""

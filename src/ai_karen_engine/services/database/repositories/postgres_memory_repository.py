@@ -53,6 +53,7 @@ class PostgresMemoryRepository(MemoryRepository):
             async with await self._session() as session:
                 embedding_vector_json = json.dumps(item.embedding) if item.embedding else None
                 content_tsv = item.content
+                user_id = item.user_id or ""
                 result = await session.execute(
                     text(
                         """
@@ -77,7 +78,7 @@ class PostgresMemoryRepository(MemoryRepository):
                     {
                         "id": item.id,
                         "tenant_id": item.tenant_id,
-                        "user_id": item.user_id,
+                        "user_id": user_id,
                         "conversation_id": item.conversation_id,
                         "scope": item.memory_type,
                         "kind": item.memory_type,

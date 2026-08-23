@@ -141,20 +141,23 @@ class MemoryManager:
         milvus_client: Optional[MilvusClient] = None,
         redis_client: Optional[Any] = None,
         elasticsearch_client: Optional[Any] = None,
+        memory_repository: Optional[Any] = None,
     ):
         """
         Args:
             db_client: Database client for metadata (async sessions)
             embedding_manager: Embedding generation manager (async)
-            milvus_client: Vector DB client (optional)
+            milvus_client: Vector DB client (optional, deprecated)
             redis_client: Redis for cache (optional, must be awaitable API)
-            elasticsearch_client: Elasticsearch client (optional, async API preferred)
+            elasticsearch_client: Elasticsearch client (optional, deprecated)
+            memory_repository: Canonical MemoryRepository (preferred)
         """
         self.db_client = db_client
         self.embedding_manager = embedding_manager
         self.milvus_client = milvus_client
         self.redis_client = redis_client
         self.elasticsearch_client = elasticsearch_client
+        self.memory_repository = memory_repository
 
         # Configuration
         self.default_ttl_hours = 24 * 7  # 1 week (retention handled externally)
@@ -235,6 +238,34 @@ class MemoryManager:
                 return None
 
             memory_id = str(uuid.uuid4())
+
+            # Canonical repository path
+            if self.memory_repository is not None:
+                from ai_karen_engine.services.database.repositories import MemoryItem
+                item = MemoryItem(
+                    id=memory_id,
+                    tenant_id=str(tenant_id),
+                    content=content,
+                    embedding=embedding.tolist(),
+                    memory_type=kind or scope,
+                    metadata=metadata or {},
+                )
+                result = await self.memory_repository.store_memory(item)
+                if not result.success:
+                    logger.warning("Canonical memory store failed: %s", result.error)
+                    return None
+                self.metrics["memories_stored"] = int(self.metrics["memories_stored"]) + 1
+                self.metrics["embeddings_generated"] = int(self.metrics["embeddings_generated"]) + 1
+                self.metrics["avg_embedding_time"] = self._roll(
+                    float(self.metrics["avg_embedding_time"]), emb_dt
+                )
+                total_dt = time.time() - start_time
+                logger.info(
+                    f"Stored memory {memory_id} for tenant={tenant_id} in {total_dt:.3f}s (canonical)"
+                )
+                return memory_id
+
+            # Legacy path
             memory_entry = MemoryItem(
                 id=memory_id,
                 content=content,
@@ -339,6 +370,49 @@ class MemoryManager:
         cache_key = self._get_cache_key(tenant_id, query)
 
         try:
+            # Canonical repository path
+            if self.memory_repository is not None:
+                await self._ensure_embedding_manager()
+                q_emb_raw = await self.embedding_manager.get_embedding(query.text)
+                q_emb = (
+                    np.array(q_emb_raw)
+                    if not isinstance(q_emb_raw, np.ndarray)
+                    else q_emb_raw
+                )
+                from ai_karen_engine.services.database.repositories import MemoryQuery as CanonicalMemoryQuery
+                canonical_query = CanonicalMemoryQuery(
+                    tenant_id=str(tenant_id),
+                    user_id=query.user_id,
+                    conversation_id=query.conversation_id,
+                    memory_type=query.kind,
+                    top_k=query.top_k,
+                    similarity_threshold=query.similarity_threshold,
+                    include_embeddings=query.include_embeddings,
+                )
+                result = await self.memory_repository.search_hybrid(canonical_query, q_emb.tolist())
+                if not result.success:
+                    logger.warning("Canonical memory query failed: %s", result.error)
+                    return []
+                memories = []
+                for hybrid_result in result.data:
+                    entry = MemoryEntry(
+                        id=hybrid_result.item.id,
+                        content=hybrid_result.item.content,
+                        embedding=np.array(hybrid_result.item.embedding) if hybrid_result.item.embedding else None,
+                        metadata=hybrid_result.item.metadata,
+                        scope=hybrid_result.item.memory_type,
+                        kind=hybrid_result.item.memory_type,
+                        similarity_score=hybrid_result.combined_score,
+                    )
+                    memories.append(entry)
+                self.metrics["memories_retrieved"] = int(self.metrics["memories_retrieved"]) + len(memories)
+                dt = time.time() - t0
+                self.metrics["avg_query_time"] = self._roll(
+                    float(self.metrics["avg_query_time"]), dt
+                )
+                return memories
+
+            # Legacy path
             # Ensure we have an embedding manager available
             await self._ensure_embedding_manager()
             # Cache
@@ -434,6 +508,12 @@ class MemoryManager:
     ) -> bool:
         """Delete a memory entry across vector DB, Postgres, ES, cache."""
         try:
+            # Canonical repository path
+            if self.memory_repository is not None:
+                result = await self.memory_repository.delete_memory(memory_id, str(tenant_id))
+                return result.success and bool(result.data)
+
+            # Legacy path
             # Vector DB
             if self.milvus_client:
                 try:
