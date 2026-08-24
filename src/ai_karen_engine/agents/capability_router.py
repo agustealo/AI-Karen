@@ -1,20 +1,33 @@
 """
 Agent Capability Router
 
-This module handles routing of requests to appropriate agents based on
-required capabilities, execution modes, and other criteria.
+.. deprecated::
+    The legacy capability router is deprecated. Capability routing is now handled
+    by ``ai_karen_engine.core.runtime.cortex_execution_decider`` and
+    ``ai_karen_engine.agent_medusa.planning.capability_planner``.
 """
 
 import logging
+import warnings
 from typing import Dict, List, Optional, Tuple
 
+warnings.warn(
+    "ai_karen_engine.agents.capability_router is deprecated. "
+    "Use ai_karen_engine.core.runtime and ai_karen_engine.agent_medusa instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
+from .lifecycle_manager import get_lifecycle_manager
 from .models import (
     AgentInfo,
     AgentExecutionMode,
     AgentCapability,
-    AgentRequest
+    AgentRequest,
+    AgentConfig,
+    AgentStatus,
+    AgentMetrics,
 )
-from .lifecycle_manager import get_lifecycle_manager
 
 logger = logging.getLogger(__name__)
 

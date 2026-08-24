@@ -7,6 +7,9 @@ Validates a plan BEFORE any side effect. Enforces:
 - every step's agent_id is authorized
 - every step's tools/plugins are authorized
 - budget feasibility (step count vs parallel/concurrency limits)
+- dependency chain validation
+- capability satisfaction
+- impossible execution chain detection
 
 This is the single validation gate referenced by AGENT-LIVE-1 A6 / P0-1.
 """
@@ -55,7 +58,6 @@ class PlanValidator:
         if len(plan.steps) > max_steps:
             errors.append(f"plan step count {len(plan.steps)} exceeds max {max_steps}")
 
-        # Unique IDs
         ids: Set[str] = set()
         for step in plan.steps:
             if not step.id:
@@ -65,7 +67,6 @@ class PlanValidator:
                 errors.append(f"duplicate step id: {step.id}")
             ids.add(step.id)
 
-        # Agent authorization + dependency integrity
         for step in plan.steps:
             if allowed_agents is not None and step.agent_specialist not in allowed_agents:
                 errors.append(
@@ -77,7 +78,6 @@ class PlanValidator:
                 elif dep not in ids:
                     errors.append(f"step {step.id} depends on unknown step: {dep}")
 
-        # Tool / plugin authorization per step
         if allowed_tools is not None or allowed_plugins is not None:
             for step in plan.steps:
                 for tool in step.required_tools or []:
@@ -87,10 +87,21 @@ class PlanValidator:
                     if allowed_plugins is not None and plugin not in allowed_plugins:
                         errors.append(f"step {step.id} requires unauthorized plugin: {plugin}")
 
-        # Cycle detection (DFS)
         cycle = self._detect_cycle(plan.steps)
         if cycle:
             errors.append(f"dependency cycle detected: {' -> '.join(cycle)}")
+
+        max_parallel = self._calculate_max_parallelism(plan)
+        if max_parallel > max_parallel_steps:
+            errors.append(
+                f"plan requires {max_parallel} parallel steps but max_parallelism is {max_parallel_steps}"
+            )
+
+        capability_errors = self._validate_capability_chains(plan)
+        errors.extend(capability_errors)
+
+        unsatisfied_inputs = self._validate_input_satisfaction(plan)
+        errors.extend(unsatisfied_inputs)
 
         return PlanValidationReport(valid=not errors, errors=errors)
 
@@ -122,3 +133,64 @@ class PlanValidator:
                 if res:
                     return res
         return None
+
+    def _calculate_max_parallelism(self, plan: DeepExecutionPlan) -> int:
+        """Calculate maximum parallel steps based on dependency constraints."""
+        step_map = {step.id: step for step in plan.steps}
+        completed: Set[str] = set()
+        max_parallel = 0
+
+        while len(completed) < len(plan.steps):
+            ready = [
+                step for step in plan.steps
+                if step.status.value == "pending" and
+                all(dep in completed for dep in step.dependencies)
+            ]
+            max_parallel = max(max_parallel, len(ready))
+            for step in ready:
+                completed.add(step.id)
+
+        return max_parallel
+
+    def _validate_capability_chains(self, plan: DeepExecutionPlan) -> List[str]:
+        """Validate that capability dependencies can be satisfied through the plan."""
+        errors: List[str] = []
+        step_map = {step.id: step for step in plan.steps}
+
+        for step in plan.steps:
+            if step.input_contract:
+                for required_input in step.input_contract.required_inputs:
+                    if required_input not in step_map:
+                        errors.append(
+                            f"step {step.id} requires input from unknown step: {required_input}"
+                        )
+
+                    dep_step = step_map.get(required_input)
+                    if dep_step and dep_step.output_contract:
+                        provided_outputs = set(dep_step.output_contract.outputs_provided or [])
+                        if not provided_outputs:
+                            errors.append(
+                                f"step {required_input} provides no outputs but is required by {step.id}"
+                            )
+
+        return errors
+
+    def _validate_input_satisfaction(self, plan: DeepExecutionPlan) -> List[str]:
+        """Validate that all required inputs will be satisfied by some step."""
+        errors: List[str] = []
+        step_map = {step.id: step for step in plan.steps}
+        all_provided_outputs: Set[str] = set()
+
+        for step in plan.steps:
+            if step.output_contract:
+                all_provided_outputs.update(step.output_contract.outputs_provided or [])
+
+        for step in plan.steps:
+            if step.input_contract:
+                for required_input in step.input_contract.required_inputs:
+                    if required_input not in all_provided_outputs:
+                        errors.append(
+                            f"step {step.id} requires input '{required_input}' but no step provides it"
+                        )
+
+        return errors

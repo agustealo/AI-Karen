@@ -160,7 +160,6 @@ except ImportError as e:
     TRAINING_DATA_AVAILABLE = False
     logger.warning(f"🚫 Training data routes not available: {e}")
 from ai_karen_engine.api_routes.auth.privacy import router as privacy_router
-from ai_karen_engine.api_routes.admin.runtime import router as maintenance_router
 from ai_karen_engine.extensions.platform.api_routes.ui_materialization_routes import (
     router as ui_materialization_router,
 )
@@ -466,7 +465,6 @@ def wire_routers(app: FastAPI, settings: Settings) -> None:
     app.include_router(user_data_router, prefix="/api", tags=["user-data"])
     app.include_router(settings_router)
     app.include_router(model_settings_router, prefix="/api", tags=["model-settings"])
-    app.include_router(maintenance_router, prefix="/api", tags=["maintenance"])
 
     # Multi-modal and AI enhancement routes
     if MULTIMODAL_AVAILABLE:

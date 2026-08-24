@@ -1,17 +1,21 @@
 """
 Agent Integration Service for CoPilot Architecture.
 
-This service provides integration between different agent execution modes:
-1. Native mode - Direct execution using the agent orchestrator
-2. DeepAgents mode - Execution using DeepAgents framework
-3. LangGraph mode - Execution using LangGraph framework
-
-The service handles:
-- Mode selection and switching
-- Task routing to appropriate execution modes
-- Result aggregation and normalization
-- Configuration management for different modes
+.. deprecated::
+    The legacy integration service is deprecated. Use ``ai_karen_engine.agent_medusa``
+    for canonical multi-agent execution, or ``ai_karen_engine.agents.integration_service``
+    for legacy UI compatibility only.
 """
+
+import logging
+import warnings
+
+warnings.warn(
+    "ai_karen_engine.agents.agent_integration_service is deprecated. "
+    "Use ai_karen_engine.agent_medusa instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import logging
 import asyncio

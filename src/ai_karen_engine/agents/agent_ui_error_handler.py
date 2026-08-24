@@ -1,21 +1,29 @@
 """
 Agent UI Service Error Handler
 
-This module provides comprehensive error handling for the Agent UI Service,
-including error classification, recovery strategies, and user-friendly error messages.
+.. deprecated::
+    The legacy UI error handler is deprecated. Error handling is provided by
+    the canonical runtime and Medusa failure policy.
 """
 
 import logging
 import traceback
+import warnings
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union, Callable, Awaitable
+
+warnings.warn(
+    "ai_karen_engine.agents.agent_ui_error_handler is deprecated.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from .agent_ui_models import (
     AgentUIError,
     ResponseMetadata,
     ContentType,
     LayoutType,
-    OutputProfile
+    OutputProfile,
 )
 
 

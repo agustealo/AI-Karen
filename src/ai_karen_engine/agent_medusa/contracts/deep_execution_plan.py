@@ -10,27 +10,56 @@ class StepStatus(str, Enum):
     FAILED = "failed"
     SKIPPED = "skipped"
 
+class DegradationLevel(str, Enum):
+    NONE = "none"
+    PARTIAL = "partial"
+    FULL = "full"
+
+@dataclass
+class StepInputContract:
+    """Defines what inputs a step requires from previous steps"""
+    required_inputs: List[str] = field(default_factory=list)
+    optional_inputs: List[str] = field(default_factory=list)
+    input_schema: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class StepOutputContract:
+    """Defines what outputs a step produces"""
+    outputs_provided: List[str] = field(default_factory=list)
+    output_schema: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class DegradationMetadata:
+    """Runtime degradation state for a step or plan"""
+    degraded: bool = False
+    degradation_reason: Optional[str] = None
+    affected_agent: Optional[str] = None
+    fallback_level: DegradationLevel = DegradationLevel.NONE
+    capabilities_lost: List[str] = field(default_factory=list)
+    original_requirement: Optional[str] = None
+
 @dataclass
 class PlanStep:
     """A single step in the DeepExecutionPlan"""
     id: str = field(default_factory=lambda: str(uuid4()))
     description: str = ""
-    agent_specialist: str = ""  # e.g., "researcher", "coder", "analyst"
-    agent_version: Optional[str] = None  # pinned registration version for reproducibility
+    agent_specialist: str = ""
+    agent_version: Optional[str] = None
     input_data: Dict[str, Any] = field(default_factory=dict)
-    dependencies: List[str] = field(default_factory=list) # IDs of steps that must finish first
+    dependencies: List[str] = field(default_factory=list)
     status: StepStatus = StepStatus.PENDING
     output_data: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
-    # Authorized side-effect surface for this step (validated pre-execution)
     required_tools: List[str] = field(default_factory=list)
     required_plugins: List[str] = field(default_factory=list)
 
-    # Prompt contract the specialist must load for this step (A10 / reproducibility)
     prompt_contract_id: Optional[str] = None
     prompt_version: Optional[str] = None
 
+    input_contract: Optional[StepInputContract] = None
+    output_contract: Optional[StepOutputContract] = None
+    degradation_metadata: Optional[DegradationMetadata] = None
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
@@ -46,6 +75,9 @@ class PlanStep:
             "required_plugins": self.required_plugins,
             "prompt_contract_id": self.prompt_contract_id,
             "prompt_version": self.prompt_version,
+            "input_contract": self.input_contract.__dict__ if self.input_contract else None,
+            "output_contract": self.output_contract.__dict__ if self.output_contract else None,
+            "degradation_metadata": self.degradation_metadata.__dict__ if self.degradation_metadata else None,
         }
 
 @dataclass
@@ -55,6 +87,8 @@ class DeepExecutionPlan:
     steps: List[PlanStep] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     is_complete: bool = False
+    degraded_mode: bool = False
+    degradation_metadata: Optional[DegradationMetadata] = None
     
     def get_next_runnable_steps(self) -> List[PlanStep]:
         """Returns steps that have no pending dependencies"""
@@ -70,5 +104,7 @@ class DeepExecutionPlan:
             "request_id": self.request_id,
             "steps": [step.to_dict() for step in self.steps],
             "metadata": self.metadata,
-            "is_complete": self.is_complete
+            "is_complete": self.is_complete,
+            "degraded_mode": self.degraded_mode,
+            "degradation_metadata": self.degradation_metadata.__dict__ if self.degradation_metadata else None,
         }

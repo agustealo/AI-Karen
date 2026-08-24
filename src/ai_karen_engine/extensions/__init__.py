@@ -1,30 +1,79 @@
 """
-Extensions Services Domain
+Canonical extension kernel for AI Karen.
 
-This domain contains all services related to extension management, execution, and orchestration.
-The extension system is now organized into:
-- platform: Extension platform framework (host, registry, integration, API routes)
-- plugins: User/community plugin packages
-- system_extensions: Built-in system extension packages
-- runtime: Engine-facing runtime behavior (loader, executor, auth, permissions, etc.)
+This package owns the full extension lifecycle:
+  manifest -> discovery -> registry -> lifecycle -> execution -> audit -> health
+
+No other module should bypass this kernel to load or execute extensions.
 """
 
-from .unified.core.extension_registry import ExtensionRegistry
-from .unified.core.extension_loader import ExtensionLoader
-from .unified.core.extension_config import ExtensionConfigManager
-from .unified.core.extension_permissions import ExtensionPermissions
-from .unified.core.extension_health_monitor import ExtensionHealthMonitor
-from .unified.core.extension_lifecycle_manager import ExtensionLifecycleManager
-from .unified.core.extension_service import ExtensionService
-from .unified.core.execution_substrate import ExtensionExecutionSubstrate
+from __future__ import annotations
+
+from ai_karen_engine.extensions.contracts import (
+    ExtensionCapability,
+    ExtensionDependency,
+    ExtensionExecutionRequest,
+    ExtensionExecutionContext,
+    ExtensionExecutionResult,
+    ExtensionHealth,
+    ExtensionHealthRecord,
+    ExtensionLifecycleState,
+    ExtensionManifest,
+    ExtensionPermissionGrant,
+    ExtensionRegistration,
+    ResponseSource,
+    SideEffectLevel,
+    TenantScope,
+)
+from ai_karen_engine.extensions.discovery import ExtensionDiscovery, ExtensionMetadata
+from ai_karen_engine.extensions.errors import (
+    ExtensionError,
+    ExtensionNotFoundError,
+    ExtensionNotRegisteredError,
+    ExtensionDisabledError,
+    ExtensionManifestError,
+    ExtensionValidationError,
+    ExtensionPermissionError,
+    ExtensionTimeoutError,
+    ExtensionExecutionEngineError,
+)
+from ai_karen_engine.extensions.executor import ExtensionExecutionService
+from ai_karen_engine.extensions.health import ExtensionHealthMonitor, ExtensionHealthRecord
+from ai_karen_engine.extensions.lifecycle import ExtensionLifecycleManager
+from ai_karen_engine.extensions.manifest import ExtensionManifestLoader
+from ai_karen_engine.extensions.permissions import ExtensionPermissionResolver
+from ai_karen_engine.extensions.registry import ExtensionRegistry
 
 __all__ = [
-    "ExtensionRegistry",
-    "ExtensionLoader",
-    "ExtensionConfigManager",
-    "ExtensionPermissions",
+    "ExtensionCapability",
+    "ExtensionDependency",
+    "ExtensionDiscovery",
+    "ExtensionError",
+    "ExtensionExecutionEngineError",
+    "ExtensionExecutionRequest",
+    "ExtensionExecutionContext",
+    "ExtensionExecutionResult",
+    "ExtensionHealth",
     "ExtensionHealthMonitor",
+    "ExtensionHealthRecord",
     "ExtensionLifecycleManager",
-    "ExtensionService",
-    "ExtensionExecutionSubstrate",
+    "ExtensionLifecycleState",
+    "ExtensionManifest",
+    "ExtensionManifestError",
+    "ExtensionManifestLoader",
+    "ExtensionMetadata",
+    "ExtensionNotFoundError",
+    "ExtensionNotRegisteredError",
+    "ExtensionDisabledError",
+    "ExtensionExecutionError",
+    "ExtensionTimeoutError",
+    "ExtensionPermissionError",
+    "ExtensionPermissionGrant",
+    "ExtensionPermissionResolver",
+    "ExtensionRegistration",
+    "ExtensionRegistry",
+    "ExtensionValidationError",
+    "ResponseSource",
+    "SideEffectLevel",
+    "TenantScope",
 ]

@@ -1,16 +1,25 @@
 """
 Agent Monitor service for monitoring agent activities and performance.
 
-This service provides monitoring capabilities for agents, tracking their activities,
-performance metrics, and health status.
+.. deprecated::
+    The legacy agent monitor is deprecated. Use ``ai_karen_engine.agent_medusa.telemetry``
+    for canonical metrics and tracing.
 """
 
 import asyncio
 import logging
+import warnings
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 
 from ai_karen_engine.core.services.base import BaseService, ServiceConfig
+
+warnings.warn(
+    "ai_karen_engine.agents.agent_monitor is deprecated. "
+    "Use ai_karen_engine.agent_medusa.telemetry instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = logging.getLogger(__name__)
 

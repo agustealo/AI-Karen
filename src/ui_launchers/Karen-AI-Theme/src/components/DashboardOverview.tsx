@@ -97,8 +97,8 @@ export default function DashboardOverview() {
     try {
       const [settingsRes, runtimeRes, dbRes, pluginsRes] = await Promise.all([
         apiClient.get<NormalizedRuntimeInventory>('/api/settings/model'),
-        apiClient.get<RuntimeStatusResponse>('/api/admin/runtime/status').catch(() => ({} as RuntimeStatusResponse)),
-        apiClient.get<DatabaseOverviewResponse>('/api/admin/database/overview').catch(() => ({} as DatabaseOverviewResponse)),
+        apiClient.get<RuntimeStatusResponse>('/api/system/status').catch(() => ({} as RuntimeStatusResponse)),
+        apiClient.get<DatabaseOverviewResponse>('/api/system/database/health').catch(() => ({} as DatabaseOverviewResponse)),
         apiClient.get<PluginManagementResponse>('/api/plugins/management/').catch(() => ({ plugins: [] })),
       ]);
 

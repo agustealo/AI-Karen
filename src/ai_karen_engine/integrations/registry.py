@@ -29,6 +29,16 @@ from typing import Any, Callable, Dict, List, Optional, Set, Type, Union
 
 logger = logging.getLogger(__name__)
 
+
+def _get_runtime_endpoints():
+    """Return central service endpoints if available."""
+    try:
+        from ai_karen_engine.config.runtime import get_runtime_settings
+
+        return get_runtime_settings().endpoints
+    except Exception:
+        return None
+
 # -----------------------------
 # Data Models
 # -----------------------------
@@ -519,12 +529,14 @@ class LLMRegistry:
                 break
 
         # Provider-specific configurations
+        endpoints = _get_runtime_endpoints()
         if provider_name == "openai":
             config.update(
                 {
                     "api_key": os.getenv("OPENAI_API_KEY", ""),
                     "base_url": os.getenv(
-                        "OPENAI_BASE_URL", "https://api.openai.com/v1"
+                        "OPENAI_BASE_URL",
+                        endpoints.openai_base_url if endpoints else "https://api.openai.com/v1",
                     ),
                     "organization": os.getenv("OPENAI_ORGANIZATION", ""),
                 }
@@ -535,6 +547,10 @@ class LLMRegistry:
                     "api_key": os.getenv(
                         "GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", "")
                     ),
+                    "base_url": os.getenv(
+                        "GEMINI_BASE_URL",
+                        endpoints.gemini_base_url if endpoints else "https://generativelanguage.googleapis.com/v1beta",
+                    ),
                 }
             )
         elif provider_name == "deepseek":
@@ -542,7 +558,8 @@ class LLMRegistry:
                 {
                     "api_key": os.getenv("DEEPSEEK_API_KEY", ""),
                     "base_url": os.getenv(
-                        "DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
+                        "DEEPSEEK_BASE_URL",
+                        endpoints.deepseek_base_url if endpoints else "https://api.deepseek.com/v1",
                     ),
                 }
             )
@@ -551,6 +568,10 @@ class LLMRegistry:
                 {
                     "api_key": os.getenv(
                         "HUGGINGFACE_API_KEY", os.getenv("HF_TOKEN", "")
+                    ),
+                    "base_url": os.getenv(
+                        "HUGGINGFACE_BASE_URL",
+                        endpoints.huggingface_base_url if endpoints else "https://api-inference.huggingface.co",
                     ),
                     "cache_dir": os.getenv("HF_CACHE_DIR", ""),
                 }

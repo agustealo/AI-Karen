@@ -1,17 +1,25 @@
 """
 Agent Task Router Service
 
-This service provides task routing capabilities for agents including:
-- Task classification and routing
-- Agent selection based on capabilities
-- Task distribution and load balancing
+.. deprecated::
+    The legacy task router is deprecated. Task routing is handled by
+    ``ai_karen_engine.core.runtime.cortex_execution_decider`` and
+    ``ai_karen_engine.agent_medusa.planning.capability_planner``.
 """
 
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 import logging
+import warnings
 
 from ai_karen_engine.core.services.base import BaseService, ServiceConfig
+
+warnings.warn(
+    "ai_karen_engine.agents.agent_task_router is deprecated. "
+    "Use ai_karen_engine.core.runtime and ai_karen_engine.agent_medusa instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = logging.getLogger(__name__)
 

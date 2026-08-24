@@ -1,8 +1,9 @@
 """
 Safety and security module for agent architecture system.
 
-This module provides comprehensive safety and security measures for agent operations,
-including input validation, threat detection, access control, and security event logging.
+.. deprecated::
+    The legacy safety module is deprecated. Safety checks are now handled by
+    ``ai_karen_engine.agent_medusa.safety`` and canonical policy enforcement.
 """
 
 import html
@@ -11,8 +12,16 @@ import logging
 import re
 import json
 import time
+import warnings
 from enum import Enum
 from typing import Dict, List, Any, Optional, Union, Tuple
+
+warnings.warn(
+    "ai_karen_engine.agents.safety is deprecated. "
+    "Use ai_karen_engine.agent_medusa.safety instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 

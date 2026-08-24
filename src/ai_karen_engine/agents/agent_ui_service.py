@@ -1,16 +1,25 @@
 """
 Agent UI Service
 
-This service provides the interface layer between the UI and the agent system.
-It handles UI interactions, task creation, and response formatting for the CoPilot architecture.
+.. deprecated::
+    The legacy UI service is deprecated. UI integration should use
+    ``ai_karen_engine.copilotkit`` or direct API routes.
 """
 
 import asyncio
 import logging
 import time
 import uuid
+import warnings
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union, AsyncGenerator
+
+warnings.warn(
+    "ai_karen_engine.agents.agent_ui_service is deprecated. "
+    "Use ai_karen_engine.copilotkit or direct API routes instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from ai_karen_engine.core.services.base import BaseService, ServiceConfig, ServiceStatus
 

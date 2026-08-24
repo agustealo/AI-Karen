@@ -1,18 +1,25 @@
 """
 Communication System for Agent Architecture.
 
-This module provides the necessary functionality to establish and manage communication
-channels between different systems in the agent architecture, enabling seamless
-interaction and data exchange between components.
+.. deprecated::
+    The legacy communication system is deprecated. Inter-component communication
+    is handled by the canonical runtime and Medusa event system.
 """
 
 import os
 import logging
 import asyncio
 import json
+import warnings
 from typing import Any, Dict, List, Optional, Union, Callable, Awaitable
 from datetime import datetime
 from enum import Enum
+
+warnings.warn(
+    "ai_karen_engine.agents.communication is deprecated.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 import traceback
 
 # Third-party modules

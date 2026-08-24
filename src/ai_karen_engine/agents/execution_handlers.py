@@ -1,17 +1,24 @@
 """
 Execution Mode Handlers for Agent Integration
 
-This module implements handlers for different agent execution modes:
-- Native: Direct LLM execution
-- LangGraph: Graph-based orchestration
-- DeepAgents: Advanced multi-agent system
+.. deprecated::
+    Legacy execution handlers are deprecated. Use ``ai_karen_engine.agent_medusa.adapters.frameworks``
+    for canonical framework adapters.
 """
 
 import asyncio
 import logging
+import warnings
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, AsyncGenerator, AsyncIterator, Dict, List, Optional
+
+warnings.warn(
+    "ai_karen_engine.agents.execution_handlers is deprecated. "
+    "Use ai_karen_engine.agent_medusa.adapters.frameworks instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from .models import (
     AgentConfig,

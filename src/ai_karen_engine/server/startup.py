@@ -6,7 +6,6 @@ from typing import Any, Dict, Optional
 
 from fastapi import FastAPI
 
-from ai_karen_engine.server.plugin_loader import load_plugins
 from ai_karen_engine.server.optimized_startup import (
     initialize_optimization_components,
     optimized_service_startup,
@@ -14,7 +13,6 @@ from ai_karen_engine.server.optimized_startup import (
     integrate_with_existing_logging,
     run_startup_audit,
     cleanup_optimization_components,
-    load_plugins_optimized,
 )
 
 from ai_karen_engine.core.runtime.contracts import RuntimeCapabilitiesSnapshot
@@ -213,7 +211,7 @@ async def init_ai_services(settings: Any) -> None:
 
             await initialize_performance_monitoring(settings)
             await integrate_with_existing_logging(settings)
-            await load_plugins_optimized(settings.plugin_dir, settings)
+            await initialize_extension_kernel(settings)
 
             logger.info("✅ Optimized AI services initialization completed")
             logger.info(
@@ -234,23 +232,7 @@ async def init_ai_services(settings: Any) -> None:
             )
 
             memory_manager.init_memory()
-            load_plugins(settings.plugin_dir)
-
-            try:
-                from ai_karen_engine.server.plugin_loader import ENABLED_PLUGINS
-
-                if "model_orchestrator" in ENABLED_PLUGINS:
-                    from plugin_marketplace.ai.model_orchestrator.service import (
-                        ModelOrchestratorService,
-                    )
-
-                    orchestrator_service = ModelOrchestratorService()
-                    await orchestrator_service.initialize()
-                    logger.info("Model orchestrator plugin initialized")
-            except Exception as e:
-                logger.warning(
-                    "Model orchestrator plugin initialization failed: %s", str(e)
-                )
+            await initialize_extension_kernel(settings)
 
             from ai_karen_engine.core.model_runtime.model_registry_writer import (
                 sync_model_registry_cache,
@@ -271,10 +253,10 @@ async def init_ai_services(settings: Any) -> None:
             svc.initialize()
             logger.info("LeanGraph relationship projection initialized")
         except Exception as graph_exc:
-            logger.warning("LeanGraph initialization degraded: %s", str(graph_exc))
+            logger.warning("LeanGraph initialization degraded: %s", graph_exc)
 
     except Exception as e:
-        logger.error("AI services initialization failed: %s", str(e))
+        logger.error("AI services initialization failed: %s", e)
 
         if lazy_loading_enabled or _optimization_enabled:
             logger.info("🔄 Falling back to minimal startup")
@@ -295,7 +277,7 @@ async def init_ai_services(settings: Any) -> None:
                 )
 
             except Exception as fallback_error:
-                logger.error("Minimal fallback also failed: %s", str(fallback_error))
+                logger.error("Minimal fallback also failed: %s", fallback_error)
                 logger.info("🔄 Last resort: basic initialization")
 
                 from ai_karen_engine.core.memory import (
@@ -444,6 +426,15 @@ async def run_canonical_runtime_bootstrap(settings: Any, app: Optional[FastAPI] 
                     )
                 except Exception:
                     pass
+            available_plugins: List[str] = []
+            try:
+                from ai_karen_engine.extensions.registry import ExtensionRegistry
+
+                extension_registry = ExtensionRegistry()
+                available_plugins = [r.manifest.id for r in extension_registry.list_enabled()]
+            except Exception:
+                pass
+
             snapshot = RuntimeCapabilitiesSnapshot(
                 available_providers=available_providers,
                 available_models=available_models,
@@ -451,6 +442,7 @@ async def run_canonical_runtime_bootstrap(settings: Any, app: Optional[FastAPI] 
                 available_workflows=[],
                 available_agents=[],
                 available_reasoning_modes=[],
+                available_plugins=available_plugins,
                 degraded_state=False,
                 runtime_mode="normal",
             )
@@ -533,6 +525,59 @@ def init_security(settings: Any) -> None:
     if settings.secret_key == "changeme" and settings.environment == "production":
         logger.critical("Insecure default secret key in production!")
     logger.info("Security components initialized")
+
+
+async def initialize_extension_kernel(settings: Any) -> None:
+    """Initialize the canonical extension kernel.
+
+    Replaces legacy plugin_loader and load_plugins_optimized.
+    """
+    try:
+        from ai_karen_engine.extensions.registry import ExtensionRegistry
+        from ai_karen_engine.extensions.discovery import ExtensionDiscovery
+        from ai_karen_engine.extensions.lifecycle import ExtensionLifecycleManager
+        from ai_karen_engine.extensions.manifest import ExtensionManifestLoader
+
+        plugin_dirs = getattr(settings, "plugin_dirs", None) or ["src/ai_karen_engine/extensions/plugins"]
+        directories = [Path(d) for d in plugin_dirs]
+
+        discovery = ExtensionDiscovery(directories=directories)
+        registry = ExtensionRegistry()
+        lifecycle = ExtensionLifecycleManager(registry=registry)
+        manifest_loader = ExtensionManifestLoader(extensions_root=directories[0] if directories else Path("src/ai_karen_engine/extensions/plugins"))
+
+        discovered = await discovery.discover(force_refresh=True)
+        for plugin_id, metadata in discovered.items():
+            if not metadata.is_valid or metadata.manifest is None:
+                continue
+
+            from ai_karen_engine.extensions.contracts import ExtensionRegistration, ExtensionLifecycleState
+
+            registration = ExtensionRegistration(
+                manifest=metadata.manifest,
+                state=ExtensionLifecycleState.DISCOVERED,
+                checksum=metadata.checksum,
+            )
+            try:
+                await registry.register(registration)
+                lifecycle.transition(plugin_id, ExtensionLifecycleState.VALIDATED)
+                lifecycle.transition(plugin_id, ExtensionLifecycleState.REGISTERED)
+                if metadata.manifest.enabled_by_default:
+                    lifecycle.transition(plugin_id, ExtensionLifecycleState.ENABLED)
+                    registration.state = ExtensionLifecycleState.ENABLED
+                else:
+                    registration.state = ExtensionLifecycleState.REGISTERED
+            except Exception as exc:
+                logger.warning("Extension registration failed for %s: %s", plugin_id, exc)
+                lifecycle.transition(plugin_id, ExtensionLifecycleState.FAILED, reason=str(exc))
+
+        logger.info(
+            "Extension kernel initialized: %d discovered, %d registered",
+            len(discovered),
+            len(registry.list_registered()),
+        )
+    except Exception as exc:
+        logger.warning("Extension kernel initialization failed: %s", exc)
 
 
 def start_background_tasks(settings: Any) -> None:

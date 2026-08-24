@@ -407,7 +407,7 @@ export default function AdminSettingsPage() {
     setUsersLoadError(null);
 
     try {
-      const response = await apiClient.get<BackendUserResponse[]>("/api/users");
+      const response = await apiClient.get<BackendUserResponse[]>("/api/admin/users");
 
       if (!Array.isArray(response)) {
         setUsersAuthRequired(true);
@@ -501,7 +501,7 @@ export default function AdminSettingsPage() {
 
       try {
         const response = await apiClient.get<UserMetricsResponse>(
-          `/api/users/${encodeURIComponent(editingUser.id)}/metrics?hours=168`,
+          `/api/admin/users/${encodeURIComponent(editingUser.id)}/metrics?hours=168`,
         );
 
         if (!mounted) {
@@ -626,7 +626,7 @@ export default function AdminSettingsPage() {
     try {
       const trimmedEmail = createForm.email.trim();
       const fallbackName = trimmedEmail.split("@")[0] || trimmedEmail;
-      const response = await apiClient.post<BackendUserResponse>("/api/users", {
+      const response = await apiClient.post<BackendUserResponse>("/api/admin/users", {
         email: trimmedEmail,
         password: createForm.password.trim(),
         full_name: createForm.name.trim() || fallbackName,
@@ -674,7 +674,7 @@ export default function AdminSettingsPage() {
 
     try {
       const response = await apiClient.put<BackendUserResponse>(
-        `/api/users/${encodeURIComponent(editingUser.id)}`,
+        `/api/admin/users/${encodeURIComponent(editingUser.id)}`,
         {
           full_name: editForm.name.trim(),
           roles: [toBackendRole(editForm.role)],
@@ -722,7 +722,7 @@ export default function AdminSettingsPage() {
 
     try {
       const response = await apiClient.put<BackendUserResponse>(
-        `/api/users/${encodeURIComponent(userId)}`,
+        `/api/admin/users/${encodeURIComponent(userId)}`,
         {
           is_active: nextActiveState,
         },
@@ -747,7 +747,7 @@ export default function AdminSettingsPage() {
     const targetUser = users.find((user) => user.id === userId);
 
     try {
-      await apiClient.delete(`/api/users/${encodeURIComponent(userId)}`);
+      await apiClient.delete(`/api/admin/users/${encodeURIComponent(userId)}`);
       await loadUsers();
 
       if (editingUser?.id === userId) {

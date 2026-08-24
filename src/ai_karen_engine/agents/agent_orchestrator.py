@@ -1,18 +1,23 @@
 """
 Agent Orchestrator Service
 
-This service provides agent management and orchestration capabilities including:
-- Agent lifecycle management
-- Task routing and distribution
-- Agent coordination and communication
-- Memory integration
-- AI reasoning capabilities
+.. deprecated::
+    The legacy agent orchestrator is deprecated. Use ``ai_karen_engine.agent_medusa``
+    and ``ai_karen_engine.core.runtime`` for canonical multi-agent execution.
 """
 
 import asyncio
 import logging
 import uuid
+import warnings
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
+
+warnings.warn(
+    "ai_karen_engine.agents.agent_orchestrator is deprecated. "
+    "Use ai_karen_engine.agent_medusa and ai_karen_engine.core.runtime instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 from datetime import datetime, timedelta
 from enum import Enum
 

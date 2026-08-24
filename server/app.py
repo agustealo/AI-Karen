@@ -62,9 +62,29 @@ except ImportError:
 # Initialize logging EARLY to ensure all subsequent imports use configured loggers
 # configure_logging() is called automatically on import of logging_setup
 
-# Global variables from original main.py
-ENABLED_PLUGINS = []
-PLUGIN_MAP = {}
+# Global variables removed: use canonical ExtensionRegistry instead
+
+
+def _model_orchestrator_plugin_loaded() -> bool:
+    try:
+        from ai_karen_engine.extensions.registry import ExtensionRegistry
+        from ai_karen_engine.extensions.contracts import ExtensionLifecycleState
+
+        registry = ExtensionRegistry()
+        registration = registry.get("model_orchestrator")
+        return registration is not None and registration.state == ExtensionLifecycleState.ENABLED
+    except Exception:
+        return False
+
+
+def _count_registered_extensions() -> int:
+    try:
+        from ai_karen_engine.extensions.registry import ExtensionRegistry
+
+        registry = ExtensionRegistry()
+        return len(registry.list_registered())
+    except Exception:
+        return 0
 
 
 def create_app() -> FastAPI:
@@ -353,14 +373,14 @@ def create_app() -> FastAPI:
                     "storage_healthy": orchestrator_health.get(
                         "storage_healthy", False
                     ),
-                    "plugin_loaded": "model_orchestrator" in ENABLED_PLUGINS,
+                    "plugin_loaded": _model_orchestrator_plugin_loaded(),
                     "last_check": orchestrator_health.get("timestamp"),
                 }
             except Exception as e:
                 model_orchestrator_status = {
                     "status": "error",
                     "error": str(e),
-                    "plugin_loaded": "model_orchestrator" in ENABLED_PLUGINS,
+                    "plugin_loaded": _model_orchestrator_plugin_loaded(),
                 }
 
             # Determine overall status including extension system
@@ -387,7 +407,7 @@ def create_app() -> FastAPI:
                 "extension_system": extension_status,
                 "models": model_status,
                 "model_orchestrator": model_orchestrator_status,
-                "plugins": len(ENABLED_PLUGINS),
+                "plugins": _count_registered_extensions(),
                 "fallback_systems": {
                     "analytics": "active",
                     "error_responses": "active",
@@ -472,11 +492,23 @@ def create_app() -> FastAPI:
     @app.get("/plugins", tags=["plugins"])
     async def list_plugins():
         """List all plugins with detailed status"""
-        return {
-            "enabled": sorted(ENABLED_PLUGINS),
-            "available": sorted(PLUGIN_MAP.keys()),
-            "count": len(PLUGIN_MAP),
-        }
+        try:
+            from ai_karen_engine.extensions.registry import ExtensionRegistry
+
+            registry = ExtensionRegistry()
+            registered = registry.list_registered()
+            enabled = registry.list_enabled()
+            return {
+                "enabled": sorted(r.manifest.id for r in enabled),
+                "available": sorted(r.manifest.id for r in registered),
+                "count": len(registered),
+            }
+        except Exception:
+            return {
+                "enabled": [],
+                "available": [],
+                "count": 0,
+            }
 
     # Add database health endpoint
     @app.get("/api/health/database", tags=["system"])

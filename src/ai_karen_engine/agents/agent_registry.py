@@ -1,8 +1,9 @@
 """
 Agent Registry service for managing agent registration and discovery.
 
-This service maintains a registry of all available agents in the system,
-their capabilities, and current status.
+.. deprecated::
+    The legacy agent registry is deprecated. Use ``ai_karen_engine.agent_medusa.registry``
+    for the canonical specialist registry.
 """
 
 import asyncio
@@ -10,9 +11,17 @@ import json
 import logging
 import threading
 import time
+import warnings
 from collections import defaultdict, deque
 from typing import Dict, Any, List, Optional, Set, Tuple, Union, Callable
 from datetime import datetime, timedelta
+
+warnings.warn(
+    "ai_karen_engine.agents.agent_registry is deprecated. "
+    "Use ai_karen_engine.agent_medusa.registry instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 from enum import Enum
 from uuid import uuid4
 import numpy as np

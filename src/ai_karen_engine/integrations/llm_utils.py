@@ -81,7 +81,12 @@ def _has_local_model() -> bool:
     """Return ``True`` when a local model appears to be available."""
 
     try:
-        model_dir = Path(os.getenv("AI_KAREN_LOCAL_MODEL_DIR", "models/local-gguf"))
+        try:
+            from ai_karen_engine.config.runtime import get_runtime_settings
+
+            model_dir = Path(get_runtime_settings().endpoints.models_dir) / "local-gguf"
+        except Exception:
+            model_dir = Path(os.getenv("AI_KAREN_LOCAL_MODEL_DIR", "models/local-gguf"))
         if not model_dir.exists():
             return False
         for path in model_dir.glob("*.gguf"):
@@ -259,10 +264,18 @@ class LLMUtils:
     def __init__(
         self,
         providers: Optional[Dict[str, LLMProviderBase]] = None,
-        default: str = "builtin_vllm",
+        default: Optional[str] = None,
         use_registry: bool = True,
         config: Optional[Dict[str, Any]] = None,
     ):
+        if default is None:
+            try:
+                from ai_karen_engine.config.runtime import get_runtime_settings
+
+                default = get_runtime_settings().llm.default_provider
+            except Exception:
+                default = "builtin_transformers"
+
         self.config = config or {}
         self.use_registry = use_registry
         self.default = default
@@ -936,7 +949,7 @@ class LLMUtils:
 # ========== Prompt-First Plugin API ==========
 def get_llm_manager(
     providers: Optional[Dict[str, LLMProviderBase]] = None,
-    default: str = "builtin_vllm",
+    default: Optional[str] = None,
     use_registry: bool = True,
 ) -> LLMUtils:
     return LLMUtils(providers, default=default, use_registry=use_registry)

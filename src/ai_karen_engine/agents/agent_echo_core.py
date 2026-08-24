@@ -1,15 +1,23 @@
 """
 Agent Echo Core Service
 
-This service provides core echo functionality for agents, allowing them to
-echo and process messages in various formats.
+.. deprecated::
+    The legacy echo core is deprecated. Echo/messaging functionality is now
+    handled by the canonical runtime and Medusa event system.
 """
 
 import asyncio
 import logging
+import warnings
 from typing import Any, Dict, List, Optional, Union
 
 from ai_karen_engine.core.services.base import BaseService, ServiceConfig, ServiceStatus
+
+warnings.warn(
+    "ai_karen_engine.agents.agent_echo_core is deprecated.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 class AgentEchoCore(BaseService):

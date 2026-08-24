@@ -167,6 +167,16 @@ except ImportError as e:
     logger.warning(f"🚫 Training data routes not available: {e}")
 from ai_karen_engine.api_routes.auth.privacy import router as privacy_router
 from ai_karen_engine.api_routes.admin.runtime import router as maintenance_router
+from ai_karen_engine.api_routes.admin.admin import router as admin_bootstrap_router
+from ai_karen_engine.api_routes.admin.users import router as admin_users_router
+from ai_karen_engine.api_routes.admin.tenants import router as admin_tenants_router
+from ai_karen_engine.api_routes.admin.providers import router as admin_providers_router
+from ai_karen_engine.api_routes.admin.plugins import router as admin_plugins_router
+from ai_karen_engine.api_routes.admin.audit import router as admin_audit_router
+from ai_karen_engine.api_routes.admin.health import router as admin_health_router
+from ai_karen_engine.api_routes.admin.features import router as admin_features_router
+from ai_karen_engine.api_routes.monitoring.system_status import router as system_status_router
+from ai_karen_engine.api_routes.admin.memory import router as admin_memory_router
 from ai_karen_engine.extensions.platform.api_routes.ui_materialization_routes import (
     router as ui_materialization_router,
 )
@@ -462,6 +472,7 @@ def wire_routers(app: FastAPI, settings: Settings) -> None:
     # Health router already defines a "/health" prefix, so mount it at the API root
     # to expose endpoints like "/api/health" and "/api/health/degraded-mode".
     app.include_router(health_router, prefix="/api", tags=["health"])
+    app.include_router(system_status_router, prefix="/api", tags=["system-status"])
     # Include providers health diagnostics
     app.include_router(providers_health_router)
     app.include_router(model_management_router, tags=["model-management"])
@@ -477,6 +488,15 @@ def wire_routers(app: FastAPI, settings: Settings) -> None:
     app.include_router(model_settings_router, prefix="/api", tags=["model-settings"])
     app.include_router(runtime_api_router, prefix="/api", tags=["runtime"])
     app.include_router(maintenance_router, prefix="/api", tags=["maintenance"])
+    app.include_router(admin_bootstrap_router, prefix="/api/admin", tags=["admin-bootstrap"])
+    app.include_router(admin_users_router, prefix="/api", tags=["admin-users"])
+    app.include_router(admin_tenants_router, prefix="/api", tags=["admin-tenants"])
+    app.include_router(admin_providers_router, prefix="/api", tags=["admin-providers"])
+    app.include_router(admin_plugins_router, prefix="/api", tags=["admin-plugins"])
+    app.include_router(admin_audit_router, prefix="/api", tags=["admin-audit"])
+    app.include_router(admin_health_router, prefix="/api", tags=["admin-health"])
+    app.include_router(admin_features_router, prefix="/api", tags=["admin-features"])
+    app.include_router(admin_memory_router, prefix="/api", tags=["admin-memory"])
 
     # Multi-modal and AI enhancement routes
     if MULTIMODAL_AVAILABLE:

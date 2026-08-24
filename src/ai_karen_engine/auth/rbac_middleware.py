@@ -91,6 +91,24 @@ class Permission(str, Enum):
     ADMIN_WRITE = "admin:write"
     ADMIN_SYSTEM = "admin:system"
 
+    # Admin domain permissions
+    ADMIN_USERS_READ = "admin.users:read"
+    ADMIN_USERS_MANAGE = "admin.users:manage"
+    ADMIN_TENANTS_READ = "admin.tenants:read"
+    ADMIN_TENANTS_MANAGE = "admin.tenants:manage"
+    ADMIN_PROVIDERS_READ = "admin.providers:read"
+    ADMIN_PROVIDERS_MANAGE = "admin.providers:manage"
+    ADMIN_PLUGINS_READ = "admin.plugins:read"
+    ADMIN_PLUGINS_MANAGE = "admin.plugins:manage"
+    ADMIN_AUDIT_READ = "admin.audit:read"
+    ADMIN_RUNTIME_READ = "admin.runtime:read"
+    ADMIN_RUNTIME_MANAGE = "admin.runtime:manage"
+    ADMIN_HEALTH_READ = "admin.health:read"
+    ADMIN_MEMORY_READ = "admin.memory:read"
+    ADMIN_MEMORY_MANAGE = "admin.memory:manage"
+    ADMIN_FEATURES_READ = "admin.features:read"
+    ADMIN_FEATURES_MANAGE = "admin.features:manage"
+
     # Monitoring / security
     AUDIT_READ = "audit:read"
     SECURITY_READ = "security:read"

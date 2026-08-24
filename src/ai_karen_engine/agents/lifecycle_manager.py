@@ -1,15 +1,25 @@
 """
 Agent Lifecycle Manager
 
-This module manages the lifecycle of agents, including initialization,
-status tracking, cleanup, and resource management.
+.. deprecated::
+    The legacy lifecycle manager is deprecated. Agent lifecycle is now handled
+    by ``ai_karen_engine.agent_medusa.lifecycle.lifecycle_manager`` and the
+    canonical specialist registry.
 """
 
 import asyncio
 import logging
+import warnings
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set
 from uuid import UUID, uuid4
+
+warnings.warn(
+    "ai_karen_engine.agents.lifecycle_manager is deprecated. "
+    "Use ai_karen_engine.agent_medusa.lifecycle instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from .models import (
     AgentInfo,
@@ -18,7 +28,7 @@ from .models import (
     AgentExecutionMode,
     AgentCapability,
     AgentMetrics,
-    AgentConfig
+    AgentConfig,
 )
 
 logger = logging.getLogger(__name__)

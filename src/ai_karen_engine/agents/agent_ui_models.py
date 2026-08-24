@@ -1,17 +1,26 @@
 """
 Agent UI Service Data Models
 
-This module defines all the data models, schemas, and type definitions for the Agent UI Service,
-including request/response models, task models, and UI interaction models.
+.. deprecated::
+    Legacy UI models are deprecated. UI-facing contracts should migrate to
+    ``ai_karen_engine.copilotkit.models`` or a dedicated API layer.
 """
 
 from typing import Any, Dict, List, Optional, Union, Literal
 from enum import Enum
 from datetime import datetime
+import warnings
+
 try:
     from pydantic import BaseModel, Field, ConfigDict
 except ImportError:
     from ai_karen_engine.pydantic_stub import BaseModel, Field, ConfigDict
+
+warnings.warn(
+    "ai_karen_engine.agents.agent_ui_models is deprecated.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 # Import existing schemas
 from .internal.agent_schemas import AgentTask, AgentResponse, TaskStatus

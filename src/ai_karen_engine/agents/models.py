@@ -1,14 +1,23 @@
 """
 Data models for Agent Integration System
 
-This module defines the core data models used throughout the Agent Integration system,
-including request/response types, agent configurations, and status tracking.
+.. deprecated::
+    Legacy agent models are deprecated. Use ``ai_karen_engine.agent_medusa.contracts``
+    for canonical runtime contracts.
 """
 
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 from uuid import UUID, uuid4
+import warnings
+
+warnings.warn(
+    "ai_karen_engine.agents.models is deprecated. "
+    "Use ai_karen_engine.agent_medusa.contracts instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 try:
     from pydantic import BaseModel, ConfigDict, Field, field_validator

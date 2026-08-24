@@ -2,17 +2,26 @@
 Enhanced Agent Tool Broker service for managing agent tools with deep integration
 to Karen's Tool Registry and advanced security features.
 
-This service provides comprehensive capabilities for agents to discover, access, and manage
-tools with secure access control, usage monitoring, and intelligent capability matching.
+.. deprecated::
+    The legacy tool broker is deprecated. Tool access is now governed by
+    ``ai_karen_engine.agent_medusa`` and ``ai_karen_engine.core.tools``.
 """
 
 import asyncio
 import logging
 import time
 import threading
+import warnings
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from datetime import datetime, timedelta
 from enum import Enum
+
+warnings.warn(
+    "ai_karen_engine.agents.agent_tool_broker is deprecated. "
+    "Use ai_karen_engine.agent_medusa and ai_karen_engine.core.tools instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 from uuid import uuid4
 from collections import defaultdict
 

@@ -238,6 +238,3 @@ def __getattr__(name: str) -> Any:
     module_name, attr_name = _EXPORTS[name]
     module = import_module(module_name)
     return getattr(module, attr_name)
-
-
-from ai_karen_engine.agents.agent_reasoning import ReasoningEngine

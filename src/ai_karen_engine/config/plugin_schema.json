@@ -1,12 +1,146 @@
 {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Karen Extension Manifest",
+  "description": "Canonical schema for AI Karen extension manifests.",
   "type": "object",
-  "required": ["plugin_api_version", "intent", "enable_external_workflow", "required_roles", "trusted_ui"],
+  "required": [
+    "id",
+    "name",
+    "version",
+    "plugin_api_version",
+    "description",
+    "entrypoint"
+  ],
   "properties": {
-    "plugin_api_version": {"type": "string"},
-    "intent": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
-    "enable_external_workflow": {"type": "boolean"},
-    "required_roles": {"type": "array", "items": {"type": "string"}},
-    "trusted_ui": {"type": "boolean"},
-    "workflow_slug": {"type": "string"}
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"
+    },
+    "plugin_api_version": {
+      "type": "string",
+      "default": "1.0"
+    },
+    "description": {
+      "type": "string"
+    },
+    "entrypoint": {
+      "type": "string",
+      "pattern": "^[a-z_][a-z0-9_]*:[a-z_][a-z0-9_]*$"
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "version"],
+        "properties": {
+          "id": {"type": "string"},
+          "version": {"type": "string"},
+          "provides_ui": {"type": "boolean", "default": false},
+          "provides_api": {"type": "boolean", "default": false},
+          "provides_background_tasks": {"type": "boolean", "default": false},
+          "provides_webhooks": {"type": "boolean", "default": false},
+          "prompt_contract_id": {"type": "string"},
+          "prompt_version": {"type": "string"}
+        }
+      }
+    },
+    "intents": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "required_permissions": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "optional_permissions": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "required_roles": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "tenant_scope": {
+      "type": "string",
+      "enum": ["single", "multi", "global"]
+    },
+    "allowed_tenant_ids": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "input_schema": {
+      "type": "object"
+    },
+    "output_schema": {
+      "type": "object"
+    },
+    "prompt_contract_id": {
+      "type": "string"
+    },
+    "prompt_version": {
+      "type": "string"
+    },
+    "requires_network": {
+      "type": "boolean",
+      "default": false
+    },
+    "requires_filesystem": {
+      "type": "boolean",
+      "default": false
+    },
+    "requires_credentials": {
+      "type": "boolean",
+      "default": false
+    },
+    "requires_external_api": {
+      "type": "boolean",
+      "default": false
+    },
+    "side_effect_level": {
+      "type": "string",
+      "enum": ["none", "read", "write", "external"]
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 30000
+    },
+    "max_retries": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 3
+    },
+    "enabled_by_default": {
+      "type": "boolean",
+      "default": false
+    },
+    "trusted_ui": {
+      "type": "boolean",
+      "default": false
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {"type": "string"},
+          "version": {"type": "string"},
+          "optional": {"type": "boolean", "default": false},
+          "dependency_type": {"type": "string", "default": "extension"}
+        }
+      }
+    },
+    "metadata": {
+      "type": "object"
+    }
   }
 }

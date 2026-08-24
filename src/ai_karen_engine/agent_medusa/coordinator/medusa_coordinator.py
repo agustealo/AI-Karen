@@ -4,7 +4,7 @@ import logging
 
 from ..contracts.runtime_request import RuntimeRequest
 from ..contracts.runtime_response import RuntimeResponse
-from ..contracts.deep_execution_plan import DeepExecutionPlan, PlanStep, StepStatus
+from ..contracts.deep_execution_plan import DeepExecutionPlan, PlanStep, StepStatus, DegradationMetadata, DegradationLevel
 from ..planning.capability_planner import CapabilityAwareMedusaPlanner
 from ..registry import get_medusa_registry
 from ..registry_factory import get_implementation_factory
@@ -108,11 +108,14 @@ class MedusaCoordinator:
             trajectory = ExecutionTrajectory(request_id=request.request_id, trajectory_id=request.request_id)
             request_emitter = EventEmitter(sinks=list(self._global_sinks))
             self.active_plans[request.request_id] = plan
+            
+            degraded_agents: List[str] = []
+            degradation_reasons: Dict[str, str] = {}
+            
             try:
                 step_outputs: list[Dict[str, Any]] = []
                 agent_trace: list[str] = []
                 while not plan.is_complete:
-                    # A17: stop scheduling once the authorized budget is exhausted.
                     if meter.exhausted:
                         for s in plan.steps:
                             if s.status == StepStatus.PENDING:
@@ -127,7 +130,7 @@ class MedusaCoordinator:
                         raise RuntimeError("Medusa Execution Stalled: dependency failure")
                     results = await asyncio.gather(
                         *[
-                            self._execute_step(step, plan, request, authorized_plan, meter, request_emitter, trajectory)
+                            self._execute_step(step, plan, request, authorized_plan, meter, request_emitter, trajectory, degraded_agents, degradation_reasons)
                             for step in runnable_steps
                         ],
                         return_exceptions=True,
@@ -140,20 +143,40 @@ class MedusaCoordinator:
                             step_outputs.append(res)
                             agent_trace.append(step.agent_specialist)
             finally:
-                # Cleanup in-memory active plan after durable handling (A15).
                 self.active_plans.pop(request.request_id, None)
+
+            if degraded_agents:
+                plan.degraded_mode = True
+                plan.degradation_metadata = DegradationMetadata(
+                    degraded=True,
+                    degradation_reason=f"Agents {', '.join(degraded_agents)} ran in degraded mode",
+                    affected_agent=", ".join(degraded_agents),
+                    fallback_level=DegradationLevel.PARTIAL,
+                    capabilities_lost=degradation_reasons.get("capabilities_lost", []),
+                    original_requirement=degradation_reasons.get("original_requirement", "full agent execution"),
+                )
 
             final_status = aggregate_status([s.status.value for s in plan.steps])
             trajectory.complete(final_status.value)
             trajectory.events = request_emitter._events
             self.trajectories[request.request_id] = trajectory
+            
+            response_metadata = {"plan": plan.to_dict(), "trajectory": trajectory.to_dict()}
+            if plan.degraded_mode:
+                response_metadata["degraded_mode"] = True
+                response_metadata["degradation_reason"] = plan.degradation_metadata.degradation_reason
+                response_metadata["affected_agents"] = degraded_agents
+                response_metadata["fallback_level"] = plan.degradation_metadata.fallback_level.value
+                response_metadata["execution_topology"] = "multi_agent"
+                response_metadata["policy_decision_id"] = authorized_plan.policy_decision_id
+
             return await self.assembler.assemble(
                 request_id=request.request_id,
                 step_outputs=step_outputs,
                 agent_trace=agent_trace,
                 latest_user_message=request.query,
                 status=final_status,
-                metadata={"plan": plan.to_dict(), "trajectory": trajectory.to_dict()},
+                metadata=response_metadata,
             )
         except Exception as e:
             return to_safe_response(e, correlation_id=request.request_id)
@@ -167,15 +190,29 @@ class MedusaCoordinator:
         meter: Any = None,
         emitter: Any = None,
         trajectory: Any = None,
+        degraded_agents: Optional[List[str]] = None,
+        degradation_reasons: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         logger.info(f"Medusa Coordinator -> Executing Step: {step.description} via {step.agent_specialist}")
         step.status = StepStatus.RUNNING
         emitter = emitter or self.event_emitter
 
-        # A18: an agent with unhealthy capability dependencies runs degraded.
         health = await self.registry.get_agent_health(step.agent_specialist)
-        if health.get("exists") and not health.get("healthy"):
+        is_degraded = health.get("exists") and not health.get("healthy")
+        
+        if is_degraded:
             await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.DEGRADED)
+            if degraded_agents is not None:
+                degraded_agents.append(step.agent_specialist)
+            if degradation_reasons is not None:
+                degradation_reasons[step.agent_specialist] = health.get("degradation_reason", "Agent unhealthy")
+            step.degradation_metadata = DegradationMetadata(
+                degraded=True,
+                degradation_reason=health.get("degradation_reason", "Agent unhealthy"),
+                affected_agent=step.agent_specialist,
+                fallback_level=DegradationLevel.PARTIAL,
+                capabilities_lost=health.get("capabilities_lost", []),
+            )
 
         registration = await self.registry.get_agent(step.agent_specialist)
         if registration is None:
@@ -189,7 +226,7 @@ class MedusaCoordinator:
                 agent_id=step.agent_specialist,
                 message=f"step {step.id} started",
                 correlation_id=request.request_id,
-                metadata={"step_id": step.id},
+                metadata={"step_id": step.id, "degraded": is_degraded},
             ))
 
         execution = SpecialistExecutionContext(
@@ -208,6 +245,7 @@ class MedusaCoordinator:
             "request_id": request.request_id,
             "plan_metadata": plan.metadata,
             "previous_steps": {s.id: s.output_data for s in plan.steps if s.status == StepStatus.COMPLETED},
+            "degraded_mode": is_degraded,
         }
 
         await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.BUSY)
@@ -221,10 +259,10 @@ class MedusaCoordinator:
                     agent_id=step.agent_specialist,
                     message=f"step {step.id} completed",
                     correlation_id=request.request_id,
-                    metadata={"step_id": step.id},
+                    metadata={"step_id": step.id, "degraded": is_degraded},
                 ))
             if trajectory is not None:
-                trajectory.record_step({"agent_id": step.agent_specialist, "step_id": step.id, "output": result})
+                trajectory.record_step({"agent_id": step.agent_specialist, "step_id": step.id, "output": result, "degraded": is_degraded})
             return result
         except Exception as exc:
             if emitter is not None:
@@ -233,7 +271,7 @@ class MedusaCoordinator:
                     agent_id=step.agent_specialist,
                     message=f"step {step.id} failed: {exc}",
                     correlation_id=request.request_id,
-                    metadata={"step_id": step.id, "error": str(exc)},
+                    metadata={"step_id": step.id, "error": str(exc), "degraded": is_degraded},
                 ))
             raise
         finally:

@@ -1,8 +1,9 @@
 """
 Enhanced Agent Memory service with deep integration to Karen's Unified Memory Service.
 
-This service provides sophisticated memory management capabilities for agents, including
-storage, retrieval, semantic search, memory sharing, and lifecycle management.
+.. deprecated::
+    The legacy agent memory service is deprecated. Memory operations should use
+    ``ai_karen_engine.core.memory`` and ``ai_karen_engine.agent_medusa.adapters.memory_runtime_adapter``.
 """
 
 import asyncio
@@ -11,8 +12,16 @@ import time
 import uuid
 import json
 import traceback
+import warnings
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union, Set, Tuple
+
+warnings.warn(
+    "ai_karen_engine.agents.agent_memory is deprecated. "
+    "Use ai_karen_engine.core.memory instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 from enum import Enum
 from dataclasses import dataclass, field
 

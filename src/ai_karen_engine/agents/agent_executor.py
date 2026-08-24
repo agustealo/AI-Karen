@@ -1,16 +1,23 @@
 """
 Agent Executor service for executing agent tasks.
 
-This service provides the capability to execute tasks on behalf of agents,
-managing the execution lifecycle and reporting results.
+.. deprecated::
+    The legacy agent executor is deprecated. Use ``ai_karen_engine.agent_medusa.coordinator.MedusaCoordinator``
+    for canonical specialist execution.
 """
 
 import asyncio
 import logging
+import warnings
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
-from ai_karen_engine.core.services.base import BaseService, ServiceConfig
+warnings.warn(
+    "ai_karen_engine.agents.agent_executor is deprecated. "
+    "Use ai_karen_engine.agent_medusa.coordinator.MedusaCoordinator instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = logging.getLogger(__name__)
 

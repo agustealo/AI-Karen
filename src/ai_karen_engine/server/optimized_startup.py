@@ -24,7 +24,6 @@ from ai_karen_engine.core.observability.performance_metrics import PerformanceMe
 from ai_karen_engine.core.services.classified_service_registry import ClassifiedServiceRegistry
 from tools.performance_auditor import PerformanceAuditor
 from ai_karen_engine.config.deployment_config_manager import DeploymentConfigManager
-from ai_karen_engine.server.plugin_loader import load_plugins
 
 logger = logging.getLogger(__name__)
 
@@ -348,40 +347,11 @@ def get_deployment_config() -> Optional[DeploymentConfigManager]:
     return _deployment_config
 
 
-# Integration with existing plugin system
-async def load_plugins_optimized(plugin_dir: str, settings: Any) -> None:
-    """Load plugins using optimized async processing."""
-    if not _task_orchestrator:
-        # Fallback to original plugin loading
-        load_plugins(plugin_dir)
-        return
-    
-    try:
-        # Use async task orchestrator for parallel plugin loading
-        plugin_tasks = []
-        
-        # Create async wrapper for plugin loading
-        async def load_plugin_async(plugin_path: str) -> None:
-            await _task_orchestrator.offload_cpu_intensive_task(
-                load_plugins, plugin_path
-            )
-        
-        # Load plugins in parallel if multiple plugin directories exist
-        import os
-        if os.path.isdir(plugin_dir):
-            for item in os.listdir(plugin_dir):
-                item_path = os.path.join(plugin_dir, item)
-                if os.path.isdir(item_path):
-                    plugin_tasks.append(load_plugin_async(item_path))
-        
-        if plugin_tasks:
-            await asyncio.gather(*plugin_tasks)
-            logger.info(f"✅ Loaded {len(plugin_tasks)} plugins in parallel")
-        else:
-            # Fallback to original loading
-            load_plugins(plugin_dir)
-            
-    except Exception as e:
-        logger.error(f"❌ Optimized plugin loading failed: {e}")
-        # Fallback to original plugin loading
-        load_plugins(plugin_dir)
+__all__ = [
+    "initialize_optimization_components",
+    "optimized_service_startup",
+    "initialize_performance_monitoring",
+    "integrate_with_existing_logging",
+    "run_startup_audit",
+    "cleanup_optimization_components",
+]

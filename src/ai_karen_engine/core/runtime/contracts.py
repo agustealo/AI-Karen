@@ -372,6 +372,7 @@ class RuntimeCapabilitiesSnapshot:
     available_workflows: List[str] = field(default_factory=list)
     available_agents: List[str] = field(default_factory=list)
     available_reasoning_modes: List[str] = field(default_factory=list)
+    available_plugins: List[str] = field(default_factory=list)
 
     degraded_state: bool = False
     degradation_reason: Optional[str] = None

@@ -1,15 +1,24 @@
 """
 Agent UI Integration Service
 
-This service provides UI integration capabilities for agents, allowing them to
-interact with user interfaces and handle UI-related tasks.
+.. deprecated::
+    The legacy UI integration service is deprecated. UI integration should use
+    ``ai_karen_engine.copilotkit`` or direct API routes.
 """
 
 import asyncio
 import logging
+import warnings
 from typing import Any, Dict, List, Optional, Union
 
 from ai_karen_engine.core.services.base import BaseService, ServiceConfig, ServiceStatus
+
+warnings.warn(
+    "ai_karen_engine.agents.agent_ui_integration is deprecated. "
+    "Use ai_karen_engine.copilotkit or direct API routes instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 class AgentUIIntegration(BaseService):

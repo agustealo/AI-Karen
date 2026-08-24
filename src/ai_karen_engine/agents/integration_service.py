@@ -1,15 +1,24 @@
 """
 Agent Integration Service
 
-This module provides the main integration service that connects the UI components
-with the backend agent orchestration system, handling all execution modes and
-providing a unified interface for agent interactions.
+.. deprecated::
+    The legacy integration service is deprecated. Multi-agent execution is now
+    handled by ``ai_karen_engine.agent_medusa``. Legacy UI modes may still use
+    this service via ``agents.adapters.medusa_adapter``.
 """
 
 import asyncio
 import logging
+import warnings
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
+
+warnings.warn(
+    "ai_karen_engine.agents.integration_service is deprecated. "
+    "Use ai_karen_engine.agent_medusa instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from .models import (
     AgentRequest,
@@ -22,7 +31,7 @@ from .models import (
     AgentStatus,
     AgentError,
     StreamChunk,
-    AgentMetrics
+    AgentMetrics,
 )
 from .execution_handlers import get_execution_handler
 from .lifecycle_manager import get_lifecycle_manager

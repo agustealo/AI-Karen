@@ -1,16 +1,25 @@
 """
 Agent Memory Fusion service for integrating and consolidating agent memories.
 
-This service provides capabilities to merge, consolidate, and optimize memories
-across different agents and memory systems.
+.. deprecated::
+    The legacy memory fusion service is deprecated. Memory operations are handled
+    by ``ai_karen_engine.core.memory`` and ``ai_karen_engine.agent_medusa.adapters.memory_runtime_adapter``.
 """
 
 import asyncio
 import logging
+import warnings
 from typing import Any, Dict, List, Optional, Set
 from datetime import datetime
 
 from ai_karen_engine.core.services.base import BaseService, ServiceConfig
+
+warnings.warn(
+    "ai_karen_engine.agents.agent_memory_fusion is deprecated. "
+    "Use ai_karen_engine.core.memory instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = logging.getLogger(__name__)
 

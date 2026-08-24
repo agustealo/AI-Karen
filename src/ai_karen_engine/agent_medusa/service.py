@@ -104,6 +104,14 @@ class AgentMedusaService:
     # Compatibility methods for migration
     async def execute_task(self, task: Any, execution_mode: Any = None) -> Any:
         """Compatibility method for old AgentTask execution."""
+        import warnings
+
+        warnings.warn(
+            "AgentMedusaService.execute_task is deprecated. "
+            "Use AgentMedusaService.execute with RuntimeRequest instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         from .contracts.runtime_request import RuntimeRequest
         request = RuntimeRequest(
             query=task.description,
@@ -127,6 +135,14 @@ class AgentMedusaService:
 
     async def execute_request(self, request: Any) -> Any:
         """Compatibility method for old AgentRequest execution."""
+        import warnings
+
+        warnings.warn(
+            "AgentMedusaService.execute_request is deprecated. "
+            "Use AgentMedusaService.execute with RuntimeRequest instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         runtime_request = RuntimeRequest(
             query=request.message,
             session_id=request.session_id or "unknown",

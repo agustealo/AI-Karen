@@ -82,7 +82,7 @@ docker compose --profile observability up
 
 **CPU-only mode:**
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.cpu.yml up
 ```
 
 **WSL2 NVIDIA setup:**
@@ -275,10 +275,11 @@ docker compose --profile local-gguf up
 For CUDA-specific local model support, use the CUDA compose overlay instead:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml up
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.cuda.yml up
 ```
 
-That path keeps the same built-in `vllm` provider identity and also enables the CUDA-local GGUF service defined in `docker-compose.cuda.yml`.
+That path keeps the same built-in `vllm` provider identity and also enables the CUDA-local GGUF service
+defined in `deploy/compose/docker-compose.cuda.yml`.
 
 To start the built-in vLLM service itself, add the profile explicitly:
 
@@ -456,10 +457,10 @@ docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
 If you don't have an NVIDIA GPU or want to run without GPU acceleration:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.cpu.yml up
 ```
 
-The `docker-compose.cpu.yml` override removes all NVIDIA device requirements from services.
+The `deploy/compose/docker-compose.cpu.yml` override removes all NVIDIA device requirements from services.
 
 ## Access URLs
 
@@ -791,7 +792,7 @@ Plugins are automatically discovered and hot-reloaded.
 
 ```bash
 # Production deployment
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.prod.yml up -d
 
 # With custom environment
 cp .env.example .env
@@ -1102,7 +1103,7 @@ If you don't have an NVIDIA GPU or want to run without GPU acceleration:
 
 ```bash
 # CPU-only mode (no GPU requirements)
-docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.cpu.yml up
 ```
 
 The `docker-compose.cpu.yml` override removes all NVIDIA device requirements from services.

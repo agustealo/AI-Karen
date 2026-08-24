@@ -1,0 +1,48 @@
+{
+  "id": "echo",
+  "name": "echo",
+  "version": "1.0.0",
+  "plugin_api_version": "1.0",
+  "description": "Echo test extension for integration tests",
+  "entrypoint": "handler:EchoExtension",
+  "capabilities": [
+    {
+      "id": "echo",
+      "version": "1.0.0",
+      "provides_api": true
+    }
+  ],
+  "intents": ["echo"],
+  "required_permissions": [],
+  "optional_permissions": [],
+  "required_roles": [],
+  "tenant_scope": "single",
+  "allowed_tenant_ids": [],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "message": {"type": "string"}
+    },
+    "required": ["message"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "echo": {"type": "string"}
+    },
+    "required": ["echo"]
+  },
+  "prompt_contract_id": "test-echo-v1",
+  "prompt_version": "1.0.0",
+  "requires_network": false,
+  "requires_filesystem": false,
+  "requires_credentials": false,
+  "requires_external_api": false,
+  "side_effect_level": "none",
+  "timeout_ms": 5000,
+  "max_retries": 1,
+  "enabled_by_default": true,
+  "trusted_ui": false,
+  "dependencies": [],
+  "metadata": {}
+}
