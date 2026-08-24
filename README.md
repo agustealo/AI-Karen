@@ -318,7 +318,139 @@ CPU overlay:
 docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
 ```
 
-### Default Development Endpoints
+### First Run & Login
+
+After the services are running, complete the initial administrator setup before using protected parts of Karen.
+
+### 1. Confirm the API is running
+
+Open:
+
+```text
+http://localhost:8000/docs
+```
+
+or check the authentication service:
+
+```bash
+curl http://localhost:8000/api/auth/status
+```
+
+### 2. Check whether first-run setup is required
+
+```bash
+curl http://localhost:8000/api/auth/first-run
+```
+
+A fresh installation should return:
+
+```json
+{
+  "first_run_required": true,
+  "message": "First-run setup required"
+}
+```
+
+### 3. Create the first administrator
+
+The canonical setup path is:
+
+```text
+POST /api/auth/first-run/setup
+```
+
+Example:
+
+```bash
+curl -X POST http://localhost:8000/api/auth/first-run/setup \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "you@example.com",
+    "full_name": "Your Name",
+    "password": "choose-a-strong-password",
+    "confirm_password": "choose-a-strong-password"
+  }'
+```
+
+This creates the initial user with `admin` and `user` roles and returns an authenticated session. The initial username is derived from the email prefix, so `you@example.com` becomes `you`.
+
+### 4. Open the web interface
+
+Visit:
+
+```text
+http://localhost:8010
+```
+
+Log in with either the email used during first-run setup or the generated username, plus the password you created.
+
+### 5. API login
+
+The canonical login endpoint is:
+
+```text
+POST /api/auth/login
+```
+
+Email example:
+
+```bash
+curl -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "you@example.com",
+    "password": "your-password"
+  }'
+```
+
+Username login is also supported:
+
+```json
+{
+  "username": "you",
+  "password": "your-password"
+}
+```
+
+Successful login returns an access token, refresh token, user information, and resolved RBAC permissions. The backend also sets the canonical `kari_session` HTTP-only cookie for browser sessions.
+
+### Legacy development admin helper
+
+The repository currently still contains `create_admin.py`, which creates or updates this development account:
+
+```text
+Email:    admin@kari.ai
+Username: admin
+Password: Admin@123!
+```
+
+This is **legacy development/bootstrap tooling**, not the recommended installation flow. It contains a hardcoded development credential and is scheduled for cleanup with the root-normalization work.
+
+Prefer `/api/auth/first-run/setup` for new installations. Never use the legacy password in production.
+
+### Development auth bypass
+
+Development environments also support explicit auth bypass through configuration such as:
+
+```text
+ENVIRONMENT=development
+AUTH_DEV_MODE=true
+```
+
+or the explicit `KARI_AUTH_BYPASS` switch. These are development/testing mechanisms only and must not be enabled in a real deployment.
+
+### What to configure after login
+
+A new installation should normally verify these next:
+
+1. **Provider availability**: confirm at least one local or configured model provider is healthy.
+2. **Model configuration**: configure the desired local/default model path.
+3. **Memory services**: confirm persistence services if durable memory is enabled.
+4. **Extensions**: enable only governed extensions required for the deployment.
+5. **Observability**: optionally start Prometheus/Grafana with the `observability` profile.
+6. **Secrets**: replace example JWT, database, Redis, provider, and Grafana credentials before production use.
+
+## Default Development Endpoints
 
 | Service | Address |
 |---|---|
