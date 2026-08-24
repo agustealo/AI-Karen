@@ -86,8 +86,10 @@ class MedusaCoordinator:
                         topology_signals={"preferred": "multi_agent"},
                     )
             else:
-                from ..policy_adapter import build_execution_inputs
-                requirements, authorized_plan = await build_execution_inputs(request, self.registry)
+                raise PermissionError(
+                    "MedusaCoordinator requires an authorized_plan from RuntimePolicy. "
+                    "Medusa must not synthesize its own authorization."
+                )
 
             plan = await self.planner.create_plan(
                 request_id=request.request_id,

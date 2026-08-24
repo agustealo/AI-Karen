@@ -626,7 +626,7 @@ class ChatRuntime:
         self, request: ChatExecutionRequest, decision: ExecutionDecision, plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter, memory_recall_meta: Optional[Dict[str, Any]] = None
     ) -> Tuple[str, Dict[str, Any]]:
         """Simple conversational path: CORTEX -> ExpressionGateway."""
-        if not meter.consume_model_call():
+        if not await meter.consume_model_call():
             raise RuntimeError("Execution budget exhausted: max_model_calls")
 
         ctx = request.context
@@ -664,7 +664,7 @@ class ChatRuntime:
 
         result = await gateway.generate(task)
 
-        if not meter.check_duration():
+        if not await meter.check_duration():
             raise RuntimeError("Execution budget exhausted: max_duration_ms")
 
         provenance = ResponseProvenance(

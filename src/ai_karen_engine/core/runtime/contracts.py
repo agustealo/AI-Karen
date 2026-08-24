@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -64,78 +65,105 @@ class ExecutionBudgetMeter:
         self._output_tokens = 0
         self._start_ms: float = 0.0
         self._exhausted = False
+        self._lock = asyncio.Lock()
 
     def start(self) -> None:
         self._start_ms = __import__("time").time() * 1000.0
 
-    def check_duration(self) -> bool:
-        if self._exhausted:
-            return False
-        elapsed = __import__("time").time() * 1000.0 - self._start_ms
-        return elapsed < self._budget.max_duration_ms
+    async def check_duration(self) -> bool:
+        async with self._lock:
+            if self._exhausted:
+                return False
+            elapsed = __import__("time").time() * 1000.0 - self._start_ms
+            if elapsed >= self._budget.max_duration_ms:
+                self._exhausted = True
+                return False
+            return True
 
-    def consume_model_call(self) -> bool:
-        if self._exhausted:
-            return False
-        self._model_calls += 1
-        if self._model_calls > self._budget.max_model_calls:
-            self._exhausted = True
-            return False
-        return True
+    async def reserve_model_call(self) -> bool:
+        async with self._lock:
+            if self._exhausted:
+                return False
+            self._model_calls += 1
+            if self._model_calls > self._budget.max_model_calls:
+                self._exhausted = True
+                return False
+            return True
 
-    def consume_reasoning_step(self) -> bool:
-        if self._exhausted:
-            return False
-        self._reasoning_steps += 1
-        if self._reasoning_steps > self._budget.max_reasoning_steps:
-            self._exhausted = True
-            return False
-        return True
+    async def reserve_reasoning_step(self) -> bool:
+        async with self._lock:
+            if self._exhausted:
+                return False
+            self._reasoning_steps += 1
+            if self._reasoning_steps > self._budget.max_reasoning_steps:
+                self._exhausted = True
+                return False
+            return True
 
-    def consume_tool_call(self) -> bool:
-        if self._exhausted:
-            return False
-        self._tool_calls += 1
-        if self._tool_calls > self._budget.max_tool_calls:
-            self._exhausted = True
-            return False
-        return True
+    async def reserve_tool_call(self) -> bool:
+        async with self._lock:
+            if self._exhausted:
+                return False
+            self._tool_calls += 1
+            if self._tool_calls > self._budget.max_tool_calls:
+                self._exhausted = True
+                return False
+            return True
 
-    def consume_agent_turn(self) -> bool:
-        if self._exhausted:
-            return False
-        self._agent_turns += 1
-        if self._agent_turns > self._budget.max_agent_turns:
-            self._exhausted = True
-            return False
-        return True
+    async def reserve_agent_turn(self) -> bool:
+        async with self._lock:
+            if self._exhausted:
+                return False
+            self._agent_turns += 1
+            if self._agent_turns > self._budget.max_agent_turns:
+                self._exhausted = True
+                return False
+            return True
 
-    def consume_external_request(self) -> bool:
-        if self._exhausted:
-            return False
-        self._external_requests += 1
-        if self._external_requests > self._budget.max_external_requests:
-            self._exhausted = True
-            return False
-        return True
+    async def reserve_external_request(self) -> bool:
+        async with self._lock:
+            if self._exhausted:
+                return False
+            self._external_requests += 1
+            if self._external_requests > self._budget.max_external_requests:
+                self._exhausted = True
+                return False
+            return True
 
-    def add_input_tokens(self, count: int) -> bool:
-        if self._exhausted:
-            return False
-        self._input_tokens += count
-        if self._input_tokens > self._budget.max_input_tokens:
-            self._exhausted = True
-            return False
-        return True
+    async def add_input_tokens(self, count: int) -> bool:
+        async with self._lock:
+            if self._exhausted:
+                return False
+            self._input_tokens += count
+            if self._input_tokens > self._budget.max_input_tokens:
+                self._exhausted = True
+                return False
+            return True
 
-    def add_output_tokens(self, count: int) -> bool:
-        if self._exhausted:
-            return False
-        self._output_tokens += count
-        if self._output_tokens > self._budget.max_output_tokens:
-            self._exhausted = True
-            return False
-        return True
+    async def add_output_tokens(self, count: int) -> bool:
+        async with self._lock:
+            if self._exhausted:
+                return False
+            self._output_tokens += count
+            if self._output_tokens > self._budget.max_output_tokens:
+                self._exhausted = True
+                return False
+            return True
+
+    async def consume_model_call(self) -> bool:
+        return await self.reserve_model_call()
+
+    async def consume_reasoning_step(self) -> bool:
+        return await self.reserve_reasoning_step()
+
+    async def consume_tool_call(self) -> bool:
+        return await self.reserve_tool_call()
+
+    async def consume_agent_turn(self) -> bool:
+        return await self.reserve_agent_turn()
+
+    async def consume_external_request(self) -> bool:
+        return await self.reserve_external_request()
 
     @property
     def exhausted(self) -> bool:

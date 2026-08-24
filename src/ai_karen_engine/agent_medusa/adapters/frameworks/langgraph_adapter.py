@@ -128,7 +128,7 @@ class MedusaLangGraphAdapter:
                             agent_specialist=step_def,
                             agent_version=None,
                             input_data={},
-                            dependencies=[f"step_{idx - 1}"] if idx > 0 else [],
+                            dependencies=[],
                             required_tools=list(plan.allowed_tools),
                             required_plugins=list(plan.allowed_plugins),
                         )

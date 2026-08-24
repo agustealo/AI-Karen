@@ -94,7 +94,7 @@ class GenerationBridge:
     ) -> str:
         # A17: enforce per-call model budget before invoking generation.
         if execution is not None and execution.budget_meter is not None:
-            if not execution.budget_meter.consume_model_call():
+            if not await execution.budget_meter.consume_model_call():
                 raise RuntimeError("ExecutionBudget exhausted: model calls")
         req = GenerationRequest(
             request_id=request_id,
@@ -130,7 +130,7 @@ class ToolBridge:
     ) -> Dict[str, Any]:
         # A17: enforce per-call tool budget before executing the action.
         if execution is not None and execution.budget_meter is not None:
-            if not execution.budget_meter.consume_tool_call():
+            if not await execution.budget_meter.consume_tool_call():
                 raise PermissionError("ExecutionBudget exhausted: tool calls")
         # 1. Gate: no authorization -> no execution.
         if not await self._authorize(tool_name, authorized_plan):
