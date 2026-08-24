@@ -33,26 +33,17 @@ interface RuntimeMetadataPanelProps {
 const safe = (value?: unknown) => (value !== undefined && value !== null && String(value).trim() ? String(value) : 'n/a');
 
 export default function RuntimeMetadataPanel(props: RuntimeMetadataPanelProps) {
-  const isEmergency = props.responseSource === 'emergency_static' || props.fallbackLevel === 99 || props.fallbackLevel === '99';
-  const isFallback = (Number(props.fallbackLevel) > 0 && !isEmergency) || props.responseSource === 'fallback_provider_runtime';
-  const isLive = !isEmergency && !isFallback && props.responseSource === 'provider_runtime';
+  const isFallback = Number(props.fallbackLevel) > 0 && props.degradedMode !== false;
+  const isDegraded = props.degradedMode === true;
 
-  let statusLabel = 'unknown';
-  let StatusIcon = Info;
-  let statusColor = 'text-muted-foreground';
+  let statusLabel = 'ok';
+  let StatusIcon = CheckCircle2;
+  let statusColor = 'text-emerald-500';
 
-  if (isLive) {
-    statusLabel = 'live';
-    StatusIcon = CheckCircle2;
-    statusColor = 'text-emerald-500';
-  } else if (isFallback) {
-    statusLabel = 'degraded fallback';
+  if (isDegraded) {
+    statusLabel = props.degradationType || 'degraded';
     StatusIcon = AlertCircle;
     statusColor = 'text-amber-500';
-  } else if (isEmergency) {
-    statusLabel = 'emergency unavailable';
-    StatusIcon = AlertCircle;
-    statusColor = 'text-destructive';
   }
 
   return (
@@ -98,7 +89,7 @@ export default function RuntimeMetadataPanel(props: RuntimeMetadataPanelProps) {
           </div>
           <div className="bg-card p-3 flex flex-col gap-1">
             <span className="text-muted-foreground uppercase font-semibold text-[9px]">Fallback Level</span>
-            <strong className={cn(isEmergency && "text-destructive")}>{safe(props.fallbackLevel)}</strong>
+            <strong className={cn(isDegraded && "text-amber-500")}>{safe(props.fallbackLevel)}</strong>
           </div>
           <div className="bg-card p-3 flex flex-col gap-1">
             <span className="text-muted-foreground uppercase font-semibold text-[9px]">Latency</span>
@@ -110,7 +101,7 @@ export default function RuntimeMetadataPanel(props: RuntimeMetadataPanelProps) {
           </div>
         </div>
 
-        {isEmergency && props.providerAttempts && props.providerAttempts.length > 0 && (
+        {isDegraded && props.providerAttempts && props.providerAttempts.length > 0 && (
           <div className="p-3 border-t border-primary/10 bg-destructive/5">
             <div className="mb-2 text-[9px] font-bold uppercase tracking-wider text-destructive/80">Provider Attempt Chain</div>
             <div className="space-y-1.5">
@@ -140,7 +131,7 @@ export default function RuntimeMetadataPanel(props: RuntimeMetadataPanelProps) {
           </div>
         )}
 
-        {(isEmergency || isFallback) && props.degradationReason && (
+        {(isDegraded || isFallback) && props.degradationReason && (
           <div className="p-3 border-t border-primary/10 bg-amber-500/5">
              <div className="text-[9px] font-bold uppercase tracking-wider text-amber-600/80 mb-1">Reason</div>
              <div className="text-[10px] leading-relaxed italic">{props.degradationReason}</div>

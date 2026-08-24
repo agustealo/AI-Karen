@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
@@ -12,7 +11,10 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionRequest,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
-from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk as _SharedChatStreamChunk
+from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
+    ChatStreamChunk as _SharedChatStreamChunk,
+)
 
 logger = get_logger(__name__)
 
@@ -28,11 +30,14 @@ class WorkflowRuntime:
     """
 
     async def run(
-        self, request: ChatExecutionRequest, decision: Optional[ExecutionDecision] = None
+        self,
+        request: ChatExecutionRequest,
+        decision: Optional[ExecutionDecision] = None,
+        plan: Optional[AuthorizedExecutionPlan] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         ctx = request.context
         conversation_id = ctx.conversation_id or _normalize(ctx.session_id)
-        config = self._build_config(request, ctx, conversation_id, decision)
+        config = self._build_config(request, ctx, conversation_id, decision, plan)
 
         orchestrator = await self._get_orchestrator()
         final_state = await orchestrator.process(
@@ -44,11 +49,14 @@ class WorkflowRuntime:
         return self._extract_payload(final_state)
 
     async def stream(
-        self, request: ChatExecutionRequest, decision: Optional[ExecutionDecision] = None
+        self,
+        request: ChatExecutionRequest,
+        decision: Optional[ExecutionDecision] = None,
+        plan: Optional[AuthorizedExecutionPlan] = None,
     ) -> AsyncIterator[_SharedChatStreamChunk]:
         ctx = request.context
         conversation_id = ctx.conversation_id or _normalize(ctx.session_id)
-        config = self._build_config(request, ctx, conversation_id, decision)
+        config = self._build_config(request, ctx, conversation_id, decision, plan)
 
         try:
             orchestrator = await self._get_orchestrator()
@@ -83,13 +91,6 @@ class WorkflowRuntime:
                 metadata={"event": "error"},
             )
 
-        yield _SharedChatStreamChunk(
-            type="complete",
-            content="",
-            correlation_id=ctx.correlation_id,
-            metadata={"session_id": conversation_id},
-        )
-
     # ------------------------------------------------------------------
     # LangGraph-bound helpers (kept inside the adapter on purpose)
     # ------------------------------------------------------------------
@@ -105,6 +106,7 @@ class WorkflowRuntime:
         ctx: ChatExecutionContext,
         conversation_id: str,
         decision: Optional[ExecutionDecision] = None,
+        plan: Optional[AuthorizedExecutionPlan] = None,
     ) -> Dict[str, Any]:
         response_id = ctx.request_id or str(uuid.uuid4())
         request_config = {
@@ -132,8 +134,14 @@ class WorkflowRuntime:
                 "policy_decision_id": decision.policy_decision_id,
                 "policy_version": decision.policy_version,
                 "policy_reason_codes": list(decision.policy_reason_codes),
-                "execution_topology": decision.topology.value if hasattr(decision.topology, "value") else str(decision.topology),
+                "execution_topology": (
+                    decision.topology.value
+                    if hasattr(decision.topology, "value")
+                    else str(decision.topology)
+                ),
             })
+        if plan is not None:
+            request_config["runtime_policy"] = _serialize_plan(plan)
         request_config.update(request.metadata or {})
         return {
             "model": request.preferred_model,
@@ -196,6 +204,35 @@ def _normalize(session_id: Optional[str]) -> str:
     from ai_karen_engine.utils.chat_helpers import normalize_session_id
 
     return normalize_session_id(session_id)
+
+
+def _serialize_plan(plan: AuthorizedExecutionPlan) -> Dict[str, Any]:
+    return {
+        "execution_id": plan.execution_id,
+        "policy_decision_id": plan.policy_decision_id,
+        "topology": (
+            plan.topology.value
+            if hasattr(plan.topology, "value")
+            else str(plan.topology)
+        ),
+        "allowed_capabilities": list(plan.allowed_capabilities),
+        "allowed_tools": list(plan.allowed_tools),
+        "allowed_plugins": list(plan.allowed_plugins),
+        "allowed_agents": list(plan.allowed_agents),
+        "provider_constraints": dict(plan.provider_constraints),
+        "memory_scope": plan.memory_scope,
+        "resource_scope": dict(plan.resource_scope),
+        "budget": plan.budget.__dict__ if hasattr(plan.budget, "__dict__") else {},
+        "approval_requirements": list(plan.approval_requirements),
+        "reasoning_modes": list(plan.reasoning_modes),
+        "workflow_id": plan.workflow_id,
+        "agent_topology": plan.agent_topology,
+        "degraded_allowed": plan.degraded_allowed,
+        "degradation_state": (
+            plan.degradation_state.__dict__ if plan.degradation_state else None
+        ),
+        "audit_context": dict(plan.audit_context),
+    }
 
 
 _workflow_runtime: Optional[WorkflowRuntime] = None

@@ -1,9 +1,9 @@
-﻿from typing import Any, Dict, Optional
+﻿from typing import Any, Dict, List, Optional
 import asyncio
 import logging
 
 from ..contracts.runtime_request import RuntimeRequest
-from ..contracts.runtime_response import RuntimeResponse, ResponseStatus
+from ..contracts.runtime_response import RuntimeResponse
 from ..contracts.deep_execution_plan import DeepExecutionPlan, PlanStep, StepStatus
 from ..planning.capability_planner import CapabilityAwareMedusaPlanner
 from ..registry import get_medusa_registry
@@ -12,13 +12,17 @@ from ..response.assembler import ResponseAssembler
 from ..lifecycle.lifecycle_manager import MedusaAgentLifecycle, LifecycleStatus
 from ..contracts.safe_error import to_safe_response
 from ..execution.failure_policy import aggregate_status
-from ..policy_adapter import build_execution_inputs
 from ..contracts.specialist_execution import SpecialistExecutionContext
 from ..execution.event_emitter import EventEmitter
 from ..contracts.trace import ExecutionTrajectory
 from ..contracts.events import AgentEvent, AgentEventType
 from ..adapters.extension_runtime_adapter import ExtensionRuntimeAdapter
 from ..adapters.memory_runtime_adapter import MemoryRuntimeAdapter
+from ...core.runtime.contracts import (
+    ExecutionBudget,
+    ExecutionRequirements,
+    AuthorizedExecutionPlan,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +68,26 @@ class MedusaCoordinator:
     async def handle_request(self, request: RuntimeRequest) -> RuntimeResponse:
         logger.info(f"Medusa Coordinator -> Handling request {request.request_id}")
         try:
-            requirements, authorized_plan = await build_execution_inputs(request, self.registry)
+            if request.authorized_plan is not None:
+                plan_data = dict(request.authorized_plan)
+                budget_data = plan_data.pop("budget", None)
+                if isinstance(budget_data, dict):
+                    budget_data = ExecutionBudget(**budget_data)
+                plan_data["budget"] = budget_data
+                authorized_plan = AuthorizedExecutionPlan(**plan_data)
+                if request.execution_requirements is not None:
+                    requirements = ExecutionRequirements(**request.execution_requirements)
+                else:
+                    requirements = ExecutionRequirements(
+                        request_id=request.request_id,
+                        correlation_id=request.request_id,
+                        intent="agent.multi_agent",
+                        requires_agent_delegation=True,
+                        topology_signals={"preferred": "multi_agent"},
+                    )
+            else:
+                from ..policy_adapter import build_execution_inputs
+                requirements, authorized_plan = await build_execution_inputs(request, self.registry)
 
             plan = await self.planner.create_plan(
                 request_id=request.request_id,

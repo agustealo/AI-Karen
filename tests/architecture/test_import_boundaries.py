@@ -366,3 +366,50 @@ def test_models_subtree_migrated_to_core() -> None:
         "services/provider_runtime.py still exists. "
         "Migrate to core/runtime/provider_runtime.py and update importers."
     )
+
+
+# ---------------------------------------------------------------------------
+# Transport architecture tests (CHAT-FIRST-1E)
+#
+# Transport modules must not import provider selection, fallback chains,
+# prompt builders, memory recall orchestration, or CORTEX execution logic.
+# They must delegate to ChatRuntime.execute_stream() exclusively.
+# ---------------------------------------------------------------------------
+
+CHAT_TRANSPORT_DIR = AI_KEREN_ROOT / "api_routes" / "chat"
+
+TRANSPORT_FORBIDDEN_IMPORTS: list[tuple[str, str]] = [
+    ("api_routes.chat", "core.model_runtime"),
+    ("api_routes.chat", "core.langgraph_orchestrator"),
+    ("api_routes.chat", "core.reasoning"),
+    ("api_routes.chat", "core.memory"),
+    ("api_routes.chat", "core.runtime.runtime_fallback"),
+]
+
+
+def _collect_chat_transport_files() -> list[Path]:
+    if not CHAT_TRANSPORT_DIR.exists():
+        return []
+    return [p for p in CHAT_TRANSPORT_DIR.rglob("*.py") if p.is_file()]
+
+
+@pytest.mark.parametrize("consumer,forbidden", TRANSPORT_FORBIDDEN_IMPORTS)
+def test_chat_transports_must_not_import_forbidden_domains(
+    consumer: str, forbidden: str
+) -> None:
+    """Chat transport routes must not import provider selection or execution logic."""
+    files = _collect_chat_transport_files()
+    assert files, f"{consumer} directory does not resolve to files"
+
+    all_violations: list[tuple[str, str]] = []
+    for f in files:
+        for v in _imports_violate_hard_rule(f, forbidden):
+            all_violations.append((str(f), v))
+
+    if all_violations:
+        details = "\n".join(f"  {f}: {v}" for f, v in all_violations)
+        pytest.fail(
+            f"Forbidden import: {consumer} must not import {forbidden}.\n"
+            f"Transport modules must delegate to ChatRuntime and remain thin.\n"
+            f"Violations:\n{details}"
+        )

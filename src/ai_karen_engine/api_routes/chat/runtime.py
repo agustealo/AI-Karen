@@ -28,7 +28,6 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
     ChatExecutionStatus,
-    ChatStreamChunk,
 )
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     runtime_response_http_status,
@@ -357,30 +356,8 @@ async def create_chat_response(
 
         if request.stream:
             async def generate_stream():
-                sequence_counter = 0
-
-                initial_status = ChatStreamChunk(
-                    type="status",
-                    content="Initializing request...",
-                    correlation_id=correlation_id,
-                    metadata={"status": "initializing", "transport": "sse"},
-                    event_id=str(uuid.uuid4()),
-                    sequence=sequence_counter,
-                    request_id=response_id,
-                    response_id=response_id,
-                    conversation_id=normalize_chat_session_id(session_id),
-                    timestamp=datetime.utcnow(),
-                )
-                sequence_counter += 1
-                yield f"data: {json.dumps(initial_status.to_sse_payload())}\n\n"
-
                 async for chunk in get_chat_runtime().execute_stream(chat_request):
-                    payload = chunk.to_sse_payload()
-                    if payload.get("sequence") is None:
-                        payload["sequence"] = sequence_counter
-                    sequence_counter += 1
-                    yield f"data: {json.dumps(payload)}\n\n"
-
+                    yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
                 yield "data: [DONE]\n\n"
 
             return StreamingResponse(
@@ -499,30 +476,8 @@ async def stream_chat_response(
         )
 
         async def generate_stream():
-            sequence_counter = 0
-
-            initial_status = ChatStreamChunk(
-                type="status",
-                content="Initializing request...",
-                correlation_id=correlation_id,
-                metadata={"status": "initializing", "transport": "sse"},
-                event_id=str(uuid.uuid4()),
-                sequence=sequence_counter,
-                request_id=response_id,
-                response_id=response_id,
-                conversation_id=conversation_id,
-                timestamp=datetime.utcnow(),
-            )
-            sequence_counter += 1
-            yield f"data: {json.dumps(initial_status.to_sse_payload())}\n\n"
-
             async for chunk in get_chat_runtime().execute_stream(chat_request):
-                payload = chunk.to_sse_payload()
-                if payload.get("sequence") is None:
-                    payload["sequence"] = sequence_counter
-                sequence_counter += 1
-                yield f"data: {json.dumps(payload)}\n\n"
-
+                yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(

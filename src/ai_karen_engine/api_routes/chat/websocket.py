@@ -35,7 +35,12 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     get_chat_runtime_control_plane,
 )
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
-from ai_karen_engine.core.runtime.chat_runtime_contract import CanonicalChatRequest
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
+    CanonicalChatRequest,
+    ChatExecutionContext,
+    ChatExecutionRequest,
+)
+from ai_karen_engine.utils.chat_helpers import normalize_session_id as normalize_chat_session_id
 from ai_karen_engine.services.streaming.stream_processor import AsyncStreamProcessor
 from ai_karen_engine.services.streaming.websocket_gateway import WebSocketGateway
 
@@ -202,37 +207,68 @@ async def websocket_chat_endpoint(
     Features:
     - Real-time bidirectional communication
     - Authentication and session management
-    - Typing indicators and presence
-    - Message queuing for offline scenarios
-    - Connection recovery and reconnection logic
+    - Streaming responses via canonical ChatRuntime
     """
     connection_id = None
 
     try:
-        # ── Control Plane Gate ──────────────────────────────────
         runtime_response = await get_chat_runtime_control_plane().get_runtime_response(user_context=current_user)
 
         if runtime_response is not None:
             await websocket.accept()
-            payload = {
-                "type": "runtime_mode",
-            }
+            payload = {"type": "runtime_mode"}
             if isinstance(
                 runtime_response,
                 (MaintenanceResponse, EmergencyFallbackResponse, DegradedResponse),
             ):
                 payload.update(serialize_runtime_response(runtime_response) or {})
             await websocket.send_text(json.dumps(payload))
-            await websocket.close(code=1013)  # Try Again Later
+            await websocket.close(code=1013)
             return
-        # ── End Control Plane Gate ──────────────────────────────
 
-        # Handle WebSocket connection
-        connection_id = await gateway.handle_websocket_connection(websocket)
-        logger.info(
-            "WebSocket chat session completed",
-            extra={"connection_id": connection_id, "user": current_user.get("user_id")},
-        )
+        await websocket.accept()
+        connection_id = str(uuid.uuid4())
+        session_id = connection_id
+
+        while True:
+            try:
+                data = await websocket.receive_text()
+                message = json.loads(data)
+                user_message = str(message.get("message") or "").strip()
+                if not user_message:
+                    continue
+
+                chat_request = ChatExecutionRequest(
+                    messages=[{"role": "user", "content": user_message}],
+                    context=ChatExecutionContext(
+                        user_id=current_user["user_id"],
+                        tenant_id=str(current_user.get("tenant_id") or "default"),
+                        session_id=session_id,
+                        conversation_id=normalize_chat_session_id(session_id),
+                        request_id=str(uuid.uuid4()),
+                        correlation_id=str(uuid.uuid4()),
+                        roles=list(current_user.get("roles") or []),
+                        permissions=list(current_user.get("permissions") or []),
+                    ),
+                    stream=True,
+                    metadata={"transport": "websocket"},
+                )
+
+                async for chunk in get_chat_runtime().execute_stream(chat_request):
+                    await websocket.send_text(json.dumps(chunk.to_sse_payload()))
+
+            except WebSocketDisconnect:
+                break
+            except Exception as exc:
+                logger.error("WebSocket chat stream error: %s", exc, extra={"connection_id": connection_id})
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "content": str(exc),
+                        "correlation_id": "",
+                    }))
+                except Exception:
+                    break
 
     except WebSocketDisconnect as e:
         logger.info(f"WebSocket disconnected: {connection_id} (code: {e.code})")

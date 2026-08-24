@@ -53,6 +53,7 @@ class RuntimeEventType(str, Enum):
 
     REQUEST_COMPLETED = "request.completed"
     REQUEST_FAILED = "request.failed"
+    REQUEST_CANCELLED = "request.cancelled"
 
 
 @dataclass(slots=True)

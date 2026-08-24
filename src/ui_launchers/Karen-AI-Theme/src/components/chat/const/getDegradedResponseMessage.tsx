@@ -146,8 +146,7 @@ const getStatusMessage = (status: number, fallbackDetail: string): string => {
   if (status >= 500) {
     if (
       fallbackDetail.toLowerCase().includes('no configured provider could generate a response') ||
-      fallbackDetail.toLowerCase().includes('expression engine is currently inactive') ||
-      fallbackDetail.toLowerCase().includes('emergency_static')
+      fallbackDetail.toLowerCase().includes('expression engine is currently inactive')
     ) {
       return NO_ACTIVE_CLOUD_PROVIDERS_MESSAGE;
     }

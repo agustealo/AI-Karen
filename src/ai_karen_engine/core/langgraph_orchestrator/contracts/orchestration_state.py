@@ -88,6 +88,7 @@ class LangGraphOrchestrationState(TypedDict):
     # Medusa Extensions
     agent_trace: Optional[List[str]]
     medusa_status: Optional[str]
+    runtime_policy: Optional[Dict[str, Any]]
 
     # Degraded Mode Support
     degraded_mode: bool
@@ -165,6 +166,7 @@ def create_initial_state(
         "formatted_response": None,
         "agent_trace": None,
         "medusa_status": None,
+        "runtime_policy": runtime_config.get("runtime_policy"),
     }
 
 

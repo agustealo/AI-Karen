@@ -17,6 +17,10 @@ class RuntimeRequest:
     priority: str = "medium" # low, medium, high, critical
     max_iterations: int = 10
     timeout_seconds: float = 60.0
+
+    # Pre-built authorized inputs from CORTEX/RuntimePolicy
+    authorized_plan: Optional[Dict[str, Any]] = None
+    execution_requirements: Optional[Dict[str, Any]] = None
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -28,5 +32,7 @@ class RuntimeRequest:
             "timestamp": self.timestamp.isoformat(),
             "priority": self.priority,
             "max_iterations": self.max_iterations,
-            "timeout_seconds": self.timeout_seconds
+            "timeout_seconds": self.timeout_seconds,
+            "authorized_plan": self.authorized_plan,
+            "execution_requirements": self.execution_requirements,
         }

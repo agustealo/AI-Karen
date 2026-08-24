@@ -9,7 +9,7 @@ providing a unified interface for agent interactions.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from .models import (
     AgentRequest,
@@ -36,6 +36,13 @@ try:
 except Exception:  # pragma: no cover - optional dependency chain
     AgentRegistry = None
     HAS_AGENT_REGISTRY = False
+
+try:
+    from .adapters.medusa_adapter import MedusaAdapter
+    HAS_MEDUSA_ADAPTER = True
+except Exception:  # pragma: no cover - optional dependency chain
+    MedusaAdapter = None
+    HAS_MEDUSA_ADAPTER = False
 
 logger = logging.getLogger(__name__)
 
@@ -396,7 +403,21 @@ class AgentIntegrationService:
                 metadata={"request_id": request.request_id}
             )
             
-            # Get execution handler
+            # Get execution handler or delegate to Medusa for multi-agent
+            if selected_agent.execution_mode == AgentExecutionMode.DEEP_AGENTS and HAS_MEDUSA_ADAPTER:
+                medusa_adapter = MedusaAdapter()
+                response = await medusa_adapter.execute(request)
+                response.metadata.update({
+                    "routing": routing_metadata,
+                    "selected_agent": {
+                        "agent_id": selected_agent.agent_id,
+                        "name": selected_agent.name,
+                        "execution_mode": selected_agent.execution_mode.value,
+                        "delegated_to": "medusa",
+                    }
+                })
+                return response
+            
             handler = get_execution_handler(selected_agent.execution_mode)
             
             # Update request with selected agent info
@@ -534,7 +555,23 @@ class AgentIntegrationService:
                 metadata={"request_id": request.request_id}
             )
             
-            # Get execution handler
+            # Get execution handler or delegate to Medusa for multi-agent
+            if selected_agent.execution_mode == AgentExecutionMode.DEEP_AGENTS and HAS_MEDUSA_ADAPTER:
+                medusa_adapter = MedusaAdapter()
+                async for stream_response in medusa_adapter.execute_stream(request):
+                    stream_response.metadata = stream_response.metadata or {}
+                    stream_response.metadata.update({
+                        "routing": routing_metadata,
+                        "selected_agent": {
+                            "agent_id": selected_agent.agent_id,
+                            "name": selected_agent.name,
+                            "execution_mode": selected_agent.execution_mode.value,
+                            "delegated_to": "medusa",
+                        }
+                    })
+                    yield stream_response
+                return
+            
             handler = get_execution_handler(selected_agent.execution_mode)
             
             # Update request with selected agent info

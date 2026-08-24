@@ -42,6 +42,12 @@ except ImportError:
     NativeAdapter = None
     NativeExecutionMode = None
 
+# Import key classes and functions from medusa_adapter.py (when it exists)
+try:
+    from .medusa_adapter import MedusaAdapter
+except ImportError:
+    MedusaAdapter = None
+
 # Define __all__ to control what gets imported with "from ai_karen_engine.agents.adapters import *"
 __all__ = [
     # From langchain_adapter
@@ -59,4 +65,7 @@ __all__ = [
     # From native_adapter
     "NativeAdapter",
     "NativeExecutionMode",
+
+    # From medusa_adapter
+    "MedusaAdapter",
 ]
