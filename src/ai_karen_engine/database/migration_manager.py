@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 
-from ai_karen_engine.core.memory.chat_memory_config import settings
+from ai_karen_engine.config.database import get_database_settings
 from ai_karen_engine.database.client import MultiTenantPostgresClient
 from ai_karen_engine.database.models import Tenant
 
@@ -44,8 +44,10 @@ class MigrationManager:
         self.migration_files = SCHEMA_MIGRATIONS
 
     def _build_database_url(self) -> str:
-        if getattr(settings, "database_url", None):
-            return settings.database_url
+        db_settings = get_database_settings()
+        url = db_settings.postgres.build_database_url()
+        if url:
+            return url
         host = os.getenv("POSTGRES_HOST", "localhost")
         port = os.getenv("POSTGRES_PORT", "5432")
         user = os.getenv("POSTGRES_USER", "postgres")

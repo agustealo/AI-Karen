@@ -1,11 +1,17 @@
+import os
 from typing import Any, Dict, Optional
 from datetime import datetime, timedelta
 
 from fastapi import HTTPException, Request, Response, status
 
-from ai_karen_engine.core.memory.chat_memory_config import settings
-# REMOVED: Complex auth service - replaced with simple auth
-# REMOVED: Complex cookie manager - using simple auth
+def _is_production() -> bool:
+    env = (
+        os.getenv("ENVIRONMENT")
+        or os.getenv("KARI_ENV")
+        or os.getenv("ENV")
+        or "development"
+    ).lower()
+    return env == "production"
 
 # Legacy cookie name for backward compatibility
 COOKIE_NAME = "kari_session"
@@ -34,7 +40,7 @@ def set_session_cookie(
     response: Response, session_token: str, max_age: int = 24 * 60 * 60
 ) -> None:
     """Set the authentication session cookie on the response (simplified)."""
-    secure_flag = settings.environment.lower() == "production"
+    secure_flag = _is_production()
     response.set_cookie(
         COOKIE_NAME,
         session_token,
@@ -53,7 +59,7 @@ def set_refresh_token_cookie(
     if expires_at:
         max_age = int((expires_at - datetime.utcnow()).total_seconds())
     
-    secure_flag = settings.environment.lower() == "production"
+    secure_flag = _is_production()
     response.set_cookie(
         "refresh_token",
         refresh_token,
@@ -88,7 +94,7 @@ def validate_cookie_security() -> Dict[str, Any]:
     """Validate current cookie security configuration (simplified)."""
     return {
         "status": "simplified",
-        "secure_cookies": settings.environment.lower() == "production",
+        "secure_cookies": _is_production(),
         "httponly": True,
         "samesite": "strict"
     }

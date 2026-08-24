@@ -1,46 +1,36 @@
 """
 Production Database Client
 SQLAlchemy database connection management with async support
+
+DATA-CONVERGE-2: Engine and session factory ownership now lives in the
+canonical ``ai_karen_engine.persistence.postgres.PostgresEngine`` singleton.
+This module proxies to it, preserving the ``.engine`` / ``.async_engine`` /
+``.SessionLocal`` / ``.AsyncSessionLocal`` attributes and all method
+signatures for backward compatibility.
 """
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.pool import QueuePool
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from contextlib import contextmanager, asynccontextmanager
 from typing import Generator, AsyncGenerator, Any, Optional
 import time
+import re
 from datetime import datetime
 from dataclasses import dataclass, field
 
-import os
 from ai_karen_engine.database.models import Base
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.persistence.postgres import get_postgres_engine
 
-# --- DATA-CONVERGE-2: canonical persistence config ---
-try:
-    from ai_karen_engine.config.database import get_database_settings
-    _db_settings = get_database_settings()
-    _postgres = _db_settings.postgres
-    _pool = _db_settings.pool
-    settings_database_url = _postgres.build_database_url()
-    settings_pool_size = _pool.pool_size
-    settings_max_overflow = _pool.max_overflow
-    settings_pool_recycle = _pool.pool_recycle
-    settings_pool_pre_ping = _pool.pool_pre_ping
-except Exception:
-    # Fallback to legacy chat_memory_config during migration
-    from ai_karen_engine.core.memory.chat_memory_config import settings
-    settings_database_url = settings.database_url
-    settings_pool_size = 10
-    settings_max_overflow = 20
-    settings_pool_recycle = 3600
-    settings_pool_pre_ping = True
+# Canonical URL reference for error messages (no fallback needed — if canonical
+# config fails, the engine initialization will also fail and report it)
+from ai_karen_engine.config.database import get_database_settings
+_canonical_database_url = get_database_settings().postgres.build_database_url()
 
 try:
     from ai_karen_engine.utils.error_formatter import ErrorFormatter, log_config_error
 except ImportError:
-    # Fallback if error formatter is not available
     ErrorFormatter = None
     log_config_error = None
 
@@ -72,113 +62,37 @@ class DatabaseHealthStatus:
 
 
 class DatabaseClient:
-    """Production database client with connection pooling and async support"""
-    
+    """Production database client with connection pooling and async support.
+
+    Proxies engine/session ownership to the canonical PostgresEngine singleton.
+    """
+
     def __init__(self):
-        self.engine = None
-        self.async_engine = None
-        self.SessionLocal = None
-        self.AsyncSessionLocal = None
-        self._initialize_engine()
-    
+        self._engine_holder = get_postgres_engine()
+
+    # --- Backward-compatible property access to canonical engine ---
+    @property
+    def engine(self):
+        return self._engine_holder.engine
+
+    @property
+    def async_engine(self):
+        return self._engine_holder.async_engine
+
+    @property
+    def SessionLocal(self):
+        return self._engine_holder.session_factory
+
+    @property
+    def AsyncSessionLocal(self):
+        return self._engine_holder.async_session_factory
+
     def _initialize_engine(self):
-        """Initialize SQLAlchemy engine with production settings"""
+        """No-op. Engine is owned by PostgresEngine singleton."""
+        pass
 
-        try:
-            # SQL echo controllable via env to avoid noisy logs in dev
-            sql_echo_env = os.getenv("SQL_ECHO") or os.getenv("KAREN_SQL_ECHO")
-            try:
-                sql_echo = (
-                    str(sql_echo_env).lower() in ("1", "true", "yes")
-                ) if sql_echo_env is not None else False
-            except Exception:
-                sql_echo = False
-
-            # Create synchronous engine with connection pooling
-            # Ensure sync URL uses psycopg2 driver, not asyncpg
-            sync_url = settings_database_url.replace('postgresql+asyncpg://', 'postgresql://')
-            self.engine = create_engine(
-                sync_url,
-                poolclass=QueuePool,
-                pool_size=settings_pool_size,
-                max_overflow=settings_max_overflow,
-                pool_pre_ping=settings_pool_pre_ping,
-                pool_recycle=settings_pool_recycle,
-                echo=sql_echo,
-            )
-
-            # Create async engine
-            async_url = settings_database_url if 'asyncpg' in settings_database_url else settings_database_url.replace('postgresql://', 'postgresql+asyncpg://')
-            self.async_engine = create_async_engine(
-                async_url,
-                pool_size=settings_pool_size,
-                max_overflow=settings_max_overflow,
-                pool_pre_ping=settings_pool_pre_ping,
-                pool_recycle=settings_pool_recycle,
-                echo=sql_echo,
-            )
-            
-            # Create session factories
-            self.SessionLocal = sessionmaker(
-                autocommit=False,
-                autoflush=False,
-                bind=self.engine
-            )
-            
-            self.AsyncSessionLocal = async_sessionmaker(
-                autocommit=False,
-                autoflush=False,
-                expire_on_commit=False,
-                bind=self.async_engine,
-                class_=AsyncSession
-            )
-            
-            logger.info("Database engine initialized successfully")
-            
-        except Exception as e:
-            # Use enhanced error formatting if available
-            if ErrorFormatter and log_config_error:
-                log_config_error(logger, e, ".env")
-            else:
-                # Enhanced fallback error message
-                error_msg = f"❌ Database Engine Initialization Failed: {e}"
-                
-                if "Could not parse SQLAlchemy URL" in str(e):
-                    error_msg += (
-                        "\n\n🔧 SOLUTION: Fix your database configuration:\n"
-                        "   1. Check your .env file for DATABASE_URL\n"
-                        "   2. Ensure PostgreSQL is running:\n"
-                        "      $ docker compose up -d postgres\n"
-                        "   3. Verify the URL format:\n"
-                        "      DATABASE_URL=postgresql://user:pass@host:port/dbname\n"
-                        "\n"
-                        f"ℹ️  Current database URL: {settings_database_url}"
-                    )
-                elif "Connection refused" in str(e):
-                    error_msg += (
-                        "\n\n🔧 SOLUTION: Start the database service:\n"
-                        "   $ docker compose up -d postgres\n"
-                        "   $ docker ps  # Check if postgres is running\n"
-                        "\n"
-                        "ℹ️  Make sure PostgreSQL is accessible on the configured port."
-                    )
-                else:
-                    error_msg += (
-                        "\n\n🔧 POSSIBLE SOLUTIONS:\n"
-                        "   1. Check database configuration in .env\n"
-                        "   2. Start database service: docker compose up -d postgres\n"
-                        "   3. Verify database credentials and connectivity\n"
-                    )
-                
-                logger.error(error_msg)
-            raise
-    
     def create_tables(self) -> None:
-        """No-op in production.
-
-        Table creation is owned by migrations. This method remains
-        for backwards compatibility during DATA-CONVERGE-1.
-        """
+        """No-op in production. Table creation is owned by migrations."""
         logger.warning(
             "DatabaseClient.create_tables() is a no-op in production. "
             "Use migrations to manage schema."
@@ -186,348 +100,131 @@ class DatabaseClient:
 
     async def cleanup(self):
         """Close database engines and free resources (async)."""
-        if self.engine:
-            self.engine.dispose()
-            self.engine = None
-            
-        if self.async_engine:
-            try:
-                # SQLAlchemy 2.0 async engine dispose is awaitable
-                await self.async_engine.dispose()
-                self.async_engine = None
-            except Exception as e:
-                logger.warning(f"Error during async engine disposal: {e}")
+        await self._engine_holder.cleanup()
 
     def close(self):
         """Synchronous cleanup (best effort)."""
-        if self.engine:
-            self.engine.dispose()
-            self.engine = None
-        
-        # We can't easily await here, so we log it
-        if self.async_engine:
-             logger.warning("Synchronous close() called on async database client. Use await cleanup() for full disposal.")
-    
+        self._engine_holder.close()
+
     def drop_tables(self):
-        """Drop all database tables (use with caution!)"""
-        
+        """Drop all database tables. For development/testing only.
+
+        NOTE: destructive administrative tooling. Prefer migration-based schema
+        management in production.
+        """
         try:
             Base.metadata.drop_all(bind=self.engine)
             logger.warning("All database tables dropped")
-            
         except Exception as e:
-            logger.error(f"Failed to drop database tables: {e}")
+            logger.error("Failed to drop database tables: %s", e)
             raise
-    
+
     def get_session(self) -> Session:
         """Get a new database session"""
-        
-        if not self.SessionLocal:
-            raise RuntimeError("Database not initialized")
-        
-        return self.SessionLocal()
-    
+        return self._engine_holder.get_session()
+
     @contextmanager
     def session_scope(self) -> Generator[Session, None, None]:
         """Provide a transactional scope around a series of operations"""
-        
-        session = self.get_session()
-        try:
+        with self._engine_holder.session_scope() as session:
             yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-    
+
     def health_check(self) -> bool:
         """Check database connectivity"""
-        
-        try:
-            with self.session_scope() as session:
-                session.execute(text("SELECT 1"))
-            return True
-            
-        except Exception as e:
-            logger.error(f"Database health check failed: {e}")
-            return False
-    
+        return self._engine_holder.health_check()
+
     def is_degraded(self) -> bool:
         """Return True if the database is not healthy."""
-        return not self.health_check()
-    
+        return self._engine_holder.is_degraded()
+
     def comprehensive_health_check(self) -> DatabaseHealthStatus:
         """Perform comprehensive database health check with metrics"""
-        start_time = time.time()
-        
-        try:
-            # Test basic connectivity
-            with self.session_scope() as session:
-                session.execute(text("SELECT 1"))
-            
-            response_time_ms = (time.time() - start_time) * 1000
-            
-            # Get connection pool metrics
-            pool_metrics = self._get_connection_pool_metrics()
-            
-            # Log success without exposing credentials
-            sanitized_url = self._sanitize_database_url(settings.database_url)
-            logger.info(f"Database health check passed - URL: {sanitized_url}, Response time: {response_time_ms:.2f}ms")
-            
-            return DatabaseHealthStatus(
-                is_healthy=True,
-                status="healthy",
-                message="Database connection successful",
-                response_time_ms=response_time_ms,
-                connection_pool_metrics=pool_metrics
-            )
-            
-        except Exception as e:
-            response_time_ms = (time.time() - start_time) * 1000
-            error_msg = str(e)
-            
-            # Log failure without exposing credentials
-            sanitized_url = self._sanitize_database_url(settings.database_url)
-            logger.error(f"Database health check failed - URL: {sanitized_url}, Error: {error_msg}")
-            
-            return DatabaseHealthStatus(
-                is_healthy=False,
-                status="unhealthy",
-                message=f"Database connection failed: {error_msg}",
-                response_time_ms=response_time_ms,
-                error_details=error_msg
-            )
-    
+        return self._engine_holder.comprehensive_health_check()
+
     def startup_health_check(self) -> DatabaseHealthStatus:
         """Perform startup health check with detailed validation"""
-        logger.info("Performing database startup health check...")
-        
-        start_time = time.time()
-        checks = []
-        
-        try:
-            # Check 1: Basic connectivity
-            with self.session_scope() as session:
-                session.execute(text("SELECT 1"))
-            checks.append("Basic connectivity: PASS")
-            
-            # Check 2: Database version and info
-            with self.session_scope() as session:
-                result = session.execute(text("SELECT version()")).fetchone()
-                db_version = result[0] if result else "Unknown"
-                checks.append(f"Database version check: PASS ({db_version[:50]}...)")
-            
-            # Check 3: Connection pool status
-            pool_metrics = self._get_connection_pool_metrics()
-            checks.append(f"Connection pool: PASS (size: {pool_metrics.pool_size}, active: {pool_metrics.checked_out})")
-            
-            # Check 4: Transaction test
-            with self.session_scope() as session:
-                session.execute(text("BEGIN"))
-                session.execute(text("SELECT 1"))
-                session.execute(text("COMMIT"))
-            checks.append("Transaction test: PASS")
-            
-            response_time_ms = (time.time() - start_time) * 1000
-            
-            # Log detailed startup results
-            sanitized_url = self._sanitize_database_url(settings.database_url)
-            logger.info("Database startup health check completed successfully:")
-            logger.info(f"  - Database URL: {sanitized_url}")
-            logger.info(f"  - Response time: {response_time_ms:.2f}ms")
-            for check in checks:
-                logger.info(f"  - {check}")
-            
-            return DatabaseHealthStatus(
-                is_healthy=True,
-                status="healthy",
-                message=f"All startup checks passed ({len(checks)} checks)",
-                response_time_ms=response_time_ms,
-                connection_pool_metrics=pool_metrics
-            )
-            
-        except Exception as e:
-            response_time_ms = (time.time() - start_time) * 1000
-            error_msg = str(e)
-            
-            # Log detailed failure information
-            sanitized_url = self._sanitize_database_url(settings.database_url)
-            logger.error("Database startup health check failed:")
-            logger.error(f"  - Database URL: {sanitized_url}")
-            logger.error(f"  - Error: {error_msg}")
-            logger.error(f"  - Response time: {response_time_ms:.2f}ms")
-            for check in checks:
-                logger.info(f"  - {check}")
-            
-            return DatabaseHealthStatus(
-                is_healthy=False,
-                status="unhealthy",
-                message=f"Startup health check failed: {error_msg}",
-                response_time_ms=response_time_ms,
-                error_details=error_msg
-            )
-    
+        return self._engine_holder.startup_health_check()
+
     def _get_connection_pool_metrics(self) -> ConnectionPoolMetrics:
         """Get current connection pool metrics"""
-        if not self.engine or not hasattr(self.engine, 'pool'):
+        if not self.engine or not hasattr(self.engine, "pool"):
             return ConnectionPoolMetrics()
-        
         pool = self.engine.pool
-        
         try:
             return ConnectionPoolMetrics(
-                pool_size=getattr(pool, 'size', lambda: 0)(),
-                checked_out=getattr(pool, 'checkedout', lambda: 0)(),
-                overflow=getattr(pool, 'overflow', lambda: 0)(),
-                checked_in=getattr(pool, 'checkedin', lambda: 0)(),
-                total_connections=getattr(pool, 'size', lambda: 0)() + getattr(pool, 'overflow', lambda: 0)(),
-                invalid_connections=getattr(pool, 'invalidated', lambda: 0)()
+                pool_size=getattr(pool, "size", lambda: 0)(),
+                checked_out=getattr(pool, "checkedout", lambda: 0)(),
+                overflow=getattr(pool, "overflow", lambda: 0)(),
+                checked_in=getattr(pool, "checkedin", lambda: 0)(),
+                total_connections=getattr(pool, "size", lambda: 0)()
+                + getattr(pool, "overflow", lambda: 0)(),
+                invalid_connections=getattr(pool, "invalidated", lambda: 0)(),
             )
-        except Exception as e:
-            logger.warning(f"Could not retrieve connection pool metrics: {e}")
+        except Exception:
             return ConnectionPoolMetrics()
-    
+
     def _sanitize_database_url(self, url: str) -> str:
         """Sanitize database URL by removing credentials"""
         try:
-            # Replace password with asterisks
-            import re
-            # Pattern to match postgresql://user:password@host:port/database
-            pattern = r'(postgresql://[^:]+:)[^@]+(@.+)'
-            sanitized = re.sub(pattern, r'\1****\2', url)
-            return sanitized
+            pattern = r"(postgresql://[^:]+:)[^@]+(@.+)"
+            return re.sub(pattern, r"\1****\2", url)
         except Exception:
-            # Fallback: just show the protocol and host info
             return "postgresql://****:****@[host]/[database]"
-    
+
     @asynccontextmanager
     async def get_async_session(self) -> AsyncGenerator[AsyncSession, None]:
         """Get async database session with automatic cleanup and commit."""
-        if not self.AsyncSessionLocal:
-            raise RuntimeError("Async database not initialized")
-        
-        async with self.AsyncSessionLocal() as session:
+        async with self._engine_holder.get_async_session() as session:
             yield session
-            # The async_sessionmaker's context manager handles rollback/close on exception.
-            # We only need to commit if everything succeeded.
-            try:
-                logger.debug("DatabaseClient: Attempting to commit async session")
-                await session.commit()
-                logger.debug("DatabaseClient: Async session committed successfully")
-            except Exception as e:
-                logger.error(f"DatabaseClient: Error committing async session: {e}", exc_info=True)
-                await session.rollback()
-                raise
-    
+
     async_session_scope = get_async_session
     _get_pool_metrics = _get_connection_pool_metrics
 
     def initialize(self) -> None:
-        """No-op compatibility method. DatabaseClient auto-initializes on instantiation."""
+        """No-op compatibility method. Engine is owned by PostgresEngine."""
         return None
-    
+
     async def async_health_check(self) -> bool:
         """Check database connectivity asynchronously"""
-        
-        try:
-            async with self.get_async_session() as session:
-                await session.execute(text("SELECT 1"))
-            return True
-            
-        except Exception as e:
-            logger.error(f"Async database health check failed: {e}")
-            return False
-    
+        return await self._engine_holder.async_health_check()
+
     async def async_comprehensive_health_check(self) -> DatabaseHealthStatus:
         """Perform comprehensive async database health check with metrics"""
-        start_time = time.time()
-        
-        try:
-            # Test basic connectivity
-            async with self.get_async_session() as session:
-                await session.execute(text("SELECT 1"))
-            
-            response_time_ms = (time.time() - start_time) * 1000
-            
-            # Get connection pool metrics
-            pool_metrics = self._get_connection_pool_metrics()
-            
-            # Log success without exposing credentials
-            sanitized_url = self._sanitize_database_url(settings.database_url)
-            logger.info(f"Async database health check passed - URL: {sanitized_url}, Response time: {response_time_ms:.2f}ms")
-            
-            return DatabaseHealthStatus(
-                is_healthy=True,
-                status="healthy",
-                message="Async database connection successful",
-                response_time_ms=response_time_ms,
-                connection_pool_metrics=pool_metrics
-            )
-            
-        except Exception as e:
-            response_time_ms = (time.time() - start_time) * 1000
-            error_msg = str(e)
-            
-            # Log failure without exposing credentials
-            sanitized_url = self._sanitize_database_url(settings.database_url)
-            logger.error(f"Async database health check failed - URL: {sanitized_url}, Error: {error_msg}")
-            
-            return DatabaseHealthStatus(
-                is_healthy=False,
-                status="unhealthy",
-                message=f"Async database connection failed: {error_msg}",
-                response_time_ms=response_time_ms,
-                error_details=error_msg
-            )
-    
+        return await self._engine_holder.async_comprehensive_health_check()
+
     def get_tenant_schema_name(self, tenant_id: str) -> str:
         """Get schema name for tenant (for multi-tenant support)"""
         return f"tenant_{tenant_id}"
-    
+
     async def create_tables_async(self):
         """Create all database tables asynchronously"""
-        
         try:
             async with self.async_engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
             logger.info("Database tables created successfully (async)")
-            
         except Exception as e:
-            logger.error(f"Failed to create database tables (async): {e}")
+            logger.error("Failed to create database tables (async): %s", e)
             raise
 
 
 # Multi-tenant database client class
 class MultiTenantPostgresClient(DatabaseClient):
-    """Multi-tenant PostgreSQL client with async support and enhanced health monitoring"""
-    
+    """Multi-tenant PostgreSQL client with async support and enhanced health monitoring.
+
+    DATA-CONVERGE-2: The ``database_url`` override parameter is accepted for
+    backward compatibility but ignored — the canonical PostgresEngine reads
+    connection parameters from ``DatabaseSettings``.
+    """
+
     def __init__(self, database_url: Optional[str] = None, **kwargs):
-        """Initialize multi-tenant client with optional custom database URL"""
-        # Store original settings database_url
-        self._original_database_url = settings.database_url
-        
-        # Temporarily override settings if custom URL provided
-        if database_url:
-            settings.database_url = database_url
-        
-        try:
-            super().__init__()
-        finally:
-            # Restore original settings
-            if database_url:
-                settings.database_url = self._original_database_url
+        super().__init__()
 
     def get_sync_session(self) -> Session:
         """Compatibility wrapper for callers expecting an explicit sync session accessor."""
         return self.get_session()
 
     def create_shared_tables(self) -> None:
-        """No-op in production.
-
-        Table creation is owned by migrations. This method remains
-        for backwards compatibility during DATA-CONVERGE-1.
-        """
+        """No-op in production. Table creation is owned by migrations."""
         logger.warning(
             "DatabaseClient.create_shared_tables() is a no-op in production. "
             "Use migrations to manage schema."
@@ -676,108 +373,101 @@ class MultiTenantPostgresClient(DatabaseClient):
     def tenant_schema_exists(self, tenant_id: Any) -> bool:
         """Compatibility no-op for deployments using shared-table tenant scoping."""
         return tenant_id is not None
-    
+
     def health_check_with_tenant_support(self, tenant_id: Optional[str] = None) -> DatabaseHealthStatus:
         """Perform health check with optional tenant-specific validation"""
         start_time = time.time()
-        
+
         try:
-            # Basic health check first
             basic_health = self.comprehensive_health_check()
-            
+
             if not basic_health.is_healthy:
                 return basic_health
-            
-            # If tenant_id provided, test tenant-specific operations
+
             if tenant_id:
                 schema_name = self.get_tenant_schema_name(tenant_id)
-                
+
                 with self.session_scope() as session:
-                    # Test tenant schema access (if it exists)
                     try:
-                        session.execute(text(f"SELECT 1 FROM information_schema.schemata WHERE schema_name = '{schema_name}'"))
+                        session.execute(
+                            text(
+                                f"SELECT 1 FROM information_schema.schemata "
+                                f"WHERE schema_name = '{schema_name}'"
+                            )
+                        )
                         tenant_check = f"Tenant schema check for {tenant_id}: PASS"
                     except Exception as e:
                         tenant_check = f"Tenant schema check for {tenant_id}: WARNING - {str(e)}"
-                
+
                 response_time_ms = (time.time() - start_time) * 1000
-                
-                logger.info(f"Multi-tenant health check completed - {tenant_check}")
-                
+
                 return DatabaseHealthStatus(
                     is_healthy=True,
                     status="healthy",
                     message=f"Multi-tenant database connection successful. {tenant_check}",
                     response_time_ms=response_time_ms,
-                    connection_pool_metrics=basic_health.connection_pool_metrics
+                    connection_pool_metrics=basic_health.connection_pool_metrics,
                 )
-            
+
             return basic_health
-            
+
         except Exception as e:
             response_time_ms = (time.time() - start_time) * 1000
-            error_msg = str(e)
-            
-            logger.error(f"Multi-tenant health check failed: {error_msg}")
-            
             return DatabaseHealthStatus(
                 is_healthy=False,
                 status="unhealthy",
-                message=f"Multi-tenant database connection failed: {error_msg}",
+                message=f"Multi-tenant database connection failed: {e}",
                 response_time_ms=response_time_ms,
-                error_details=error_msg
+                error_details=str(e),
             )
-    
+
     async def async_health_check_with_tenant_support(self, tenant_id: Optional[str] = None) -> DatabaseHealthStatus:
         """Perform async health check with optional tenant-specific validation"""
         start_time = time.time()
-        
+
         try:
-            # Basic async health check first
             basic_health = await self.async_comprehensive_health_check()
-            
+
             if not basic_health.is_healthy:
                 return basic_health
-            
-            # If tenant_id provided, test tenant-specific operations
+
             if tenant_id:
                 schema_name = self.get_tenant_schema_name(tenant_id)
-                
+
                 async with self.get_async_session() as session:
-                    # Test tenant schema access (if it exists)
                     try:
-                        await session.execute(text(f"SELECT 1 FROM information_schema.schemata WHERE schema_name = '{schema_name}'"))
+                        await session.execute(
+                            text(
+                                f"SELECT 1 FROM information_schema.schemata "
+                                f"WHERE schema_name = '{schema_name}'"
+                            )
+                        )
                         tenant_check = f"Tenant schema check for {tenant_id}: PASS"
                     except Exception as e:
                         tenant_check = f"Tenant schema check for {tenant_id}: WARNING - {str(e)}"
-                
+
                 response_time_ms = (time.time() - start_time) * 1000
-                
-                logger.info(f"Async multi-tenant health check completed - {tenant_check}")
-                
+
                 return DatabaseHealthStatus(
                     is_healthy=True,
                     status="healthy",
                     message=f"Async multi-tenant database connection successful. {tenant_check}",
                     response_time_ms=response_time_ms,
-                    connection_pool_metrics=basic_health.connection_pool_metrics
+                    connection_pool_metrics=basic_health.connection_pool_metrics,
                 )
-            
+
             return basic_health
-            
+
         except Exception as e:
             response_time_ms = (time.time() - start_time) * 1000
-            error_msg = str(e)
-            
-            logger.error(f"Async multi-tenant health check failed: {error_msg}")
-            
             return DatabaseHealthStatus(
                 is_healthy=False,
                 status="unhealthy",
-                message=f"Async multi-tenant database connection failed: {error_msg}",
+                message=f"Async multi-tenant database connection failed: {e}",
                 response_time_ms=response_time_ms,
-                error_details=error_msg
+                error_details=str(e),
             )
+
 
 # Global database client instance
 db_client = DatabaseClient()

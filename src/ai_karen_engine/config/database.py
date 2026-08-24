@@ -68,11 +68,19 @@ class SupabaseSettings(BaseSettings):
         if value:
             return value
         field_name = info.field_name
+        canonical_map = {
+            "project_url": "SUPABASE_PROJECT_URL",
+            "publishable_key": "SUPABASE_PUBLISHABLE_KEY",
+            "secret_key": "SUPABASE_SECRET_KEY",
+        }
         legacy_map = {
             "project_url": "SUPABASE_URL",
             "publishable_key": "SUPABASE_ANON_KEY",
             "secret_key": "SUPABASE_SERVICE_ROLE_KEY",
         }
+        canonical_env = canonical_map.get(field_name)
+        if canonical_env and os.environ.get(canonical_env):
+            return os.environ[canonical_env]
         legacy_env = legacy_map.get(field_name)
         if legacy_env and legacy_env in os.environ:
             logger.warning(
