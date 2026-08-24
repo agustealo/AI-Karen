@@ -257,7 +257,7 @@ class CapabilityAwareMedusaPlanner:
                     dependency_step_ids.append(agent_id_to_step_id[dep_agent_id])
 
             agent_tools = set(getattr(reg, 'allowed_tools', []))
-            agent_plugins = set(getattr(reg, 'allowed_tools', []))
+            agent_plugins = set(getattr(reg, 'allowed_plugins', []))
             required_tools_set = set(authorized_plan.allowed_tools) & agent_tools
             required_plugins_set = set(authorized_plan.allowed_plugins) & agent_plugins
 
