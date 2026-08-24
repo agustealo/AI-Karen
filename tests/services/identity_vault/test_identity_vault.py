@@ -1276,12 +1276,12 @@ class TestIdentityVaultModels:
             credential_id=uuid.uuid4(),
             external_account_id=uuid.uuid4(),
             session_token="test-session-token",
-            token_type=TokenType.ACCESS,
+            token_type=TokenType.OAUTH_ACCESS,
             scopes=["read"],
         )
         
         assert session_data.session_token == "test-session-token"
-        assert session_data.token_type == TokenType.ACCESS
+        assert session_data.token_type == TokenType.OAUTH_ACCESS
         assert "read" in session_data.scopes
     
     def test_auth_grant_model(self):

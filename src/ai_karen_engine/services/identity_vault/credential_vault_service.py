@@ -2049,3 +2049,27 @@ class CredentialVaultService(BaseService):
         except Exception as e:
             logger.error(f"Failed to get audit events by correlation ID: {e}")
             return []
+    
+    # Abstract method implementations
+    async def start(self) -> None:
+        """Start the service."""
+        logger.info(f"Starting {self.name}")
+        self._status = "running"
+    
+    async def stop(self) -> None:
+        """Stop the service."""
+        logger.info(f"Stopping {self.name}")
+        self._status = "stopped"
+    
+    async def health_check(self) -> bool:
+        """Perform a health check."""
+        try:
+            # Basic health check - verify database connection
+            if self._db_session is not None:
+                # Try a simple query to test the connection
+                await self._db_session.execute("SELECT 1")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Health check failed: {e}")
+            return False
