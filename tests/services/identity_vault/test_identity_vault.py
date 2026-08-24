@@ -82,9 +82,9 @@ class TestCredentialVaultService:
     """Test the credential vault service."""
     
     @pytest.fixture
-    def service(self):
+    def service(self, service_with_mock_db):
         """Create a credential vault service instance."""
-        return CredentialVaultService()
+        return service_with_mock_db
     
     @pytest.fixture
     def mock_tenant_id(self):
