@@ -24,15 +24,14 @@ from typing import (
 )
 from dataclasses import dataclass, field
 from ai_karen_engine.services.caching.production_cache_service import get_cache_service
-from ai_karen_engine.core.memory.memory_service import (
-    WebUIMemoryService,
-    WebUIMemoryQuery,
-    MemoryType,
-    UISource,
-)
 from ai_karen_engine.core.memory.unified_memory_service import (
     MemoryCommitRequest,
     MemoryQueryRequest,
+    UnifiedMemoryService,
+)
+from ai_karen_engine.core.memory.memory_service import (
+    MemoryType,
+    UISource,
 )
 from enum import Enum
 
@@ -403,17 +402,17 @@ class ConversationContextBuilder:
     ) -> Dict[str, Any]:
         """Build memory context for conversation."""
         try:
-            # Query for relevant memories
-            memory_query = WebUIMemoryQuery(
-                text=current_message,
-                user_id=conversation.user_id,
-                conversation_id=conversation.id,
-                top_k=self.max_context_memories,
-                similarity_threshold=self.context_relevance_threshold,
-                curated_only=True,
-            )
+            # Query for relevant memories using canonical unified memory service
+            query_obj = type('obj', (object,), {
+                'user_id': conversation.user_id,
+                'text': current_message,
+                'top_k': self.max_context_memories,
+                'similarity_threshold': self.context_relevance_threshold,
+                'curated_only': True,
+                'memory_classes': set()
+            })()
 
-            memories = await self._query_memory_records(tenant_id, memory_query)
+            memories = await self._query_memory_records(tenant_id, query_obj)
 
             # Group memories by type for better context organization
             memory_context: Dict[str, List[Dict[str, Any]]] = {
@@ -468,26 +467,23 @@ class ConversationContextBuilder:
     async def _query_memory_records(
         self,
         tenant_id: Union[str, uuid.UUID],
-        query: WebUIMemoryQuery,
+        query: Any,
     ) -> List[Any]:
-        """Use the unified memory query path when available."""
+        """Use the canonical unified memory query path."""
 
-        if hasattr(self.memory_service, "query"):
-            result = await self.memory_service.query(
-                tenant_id,
-                MemoryQueryRequest(
-                    user_id=query.user_id or "anonymous",
-                    org_id=None,
-                    query=query.text,
-                    top_k=query.top_k,
-                    similarity_threshold=query.similarity_threshold or 0.7,
-                    curated_only=query.curated_only,
-                    memory_classes=list(query.memory_classes),
-                ),
-            )
-            return result.hits
-
-        return await self.memory_service.query_memories(tenant_id, query)
+        result = await self.memory_service.query(
+            tenant_id,
+            MemoryQueryRequest(
+                user_id=query.user_id,
+                org_id=None,
+                query=query.text,
+                top_k=query.top_k,
+                similarity_threshold=query.similarity_threshold or 0.7,
+                curated_only=query.curated_only,
+                memory_classes=list(query.memory_classes),
+            ),
+        )
+        return result.hits
 
     async def _commit_memory_record(
         self,
@@ -502,9 +498,12 @@ class ConversationContextBuilder:
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
-        """Use the unified memory commit path when available."""
+        """Use the canonical unified memory commit path."""
 
-        resolved_user_id = user_id or session_id or conversation_id or "anonymous"
+        if not user_id:
+            logger.error("user_id is required for memory commit, got None")
+            return None
+
         combined_metadata = {
             "ui_source": ui_source.value,
             "conversation_id": conversation_id,
@@ -513,32 +512,19 @@ class ConversationContextBuilder:
         if metadata:
             combined_metadata.update(metadata)
 
-        if hasattr(self.memory_service, "commit"):
-            result = await self.memory_service.commit(
-                tenant_id,
-                MemoryCommitRequest(
-                    user_id=resolved_user_id,
-                    org_id=None,
-                    text=content,
-                    tags=list(tags or []),
-                    importance=5,
-                    decay="short",
-                    metadata=combined_metadata,
-                ),
-            )
-            return result.id if result.success else None
-
-        return await self.memory_service.store_web_ui_memory(
-            tenant_id=tenant_id,
-            content=content,
-            user_id=resolved_user_id,
-            ui_source=ui_source,
-            session_id=session_id,
-            conversation_id=conversation_id,
-            memory_type=memory_type,
-            tags=tags,
-            metadata=metadata,
+        result = await self.memory_service.commit(
+            tenant_id,
+            MemoryCommitRequest(
+                user_id=user_id,
+                org_id=None,
+                text=content,
+                tags=list(tags or []),
+                importance=5,
+                decay="short",
+                metadata=combined_metadata,
+            ),
         )
+        return result.id if result.success else None
 
     async def _build_insights_context(
         self,
@@ -821,7 +807,7 @@ class ConversationService:
     def __init__(
         self,
         base_conversation_manager: ConversationManager,
-        memory_service: WebUIMemoryService,
+        memory_service: UnifiedMemoryService,
     ):
         """Initialize with existing conversation manager and memory service."""
         self.base_manager = base_conversation_manager
@@ -2016,17 +2002,28 @@ class ConversationService:
             if not last_user_message:
                 return
 
-            # Build memory context
+            # Build memory context using canonical unified memory service
             if self.context_memory_integration:
-                memory_context = await self.memory_service.build_conversation_context(
-                    tenant_id=tenant_id,
-                    query=last_user_message.content,
-                    user_id=conversation.user_id,
-                    session_id=conversation.session_id,
-                    conversation_id=conversation.id,
-                )
+                query_obj = type('obj', (object,), {
+                    'user_id': conversation.user_id,
+                    'text': last_user_message.content,
+                    'top_k': 5,
+                    'similarity_threshold': 0.7,
+                    'curated_only': True,
+                    'memory_classes': set()
+                })()
 
-                conversation.context_memories = memory_context.get("memories", [])
+                memories = await self._query_memory_records(tenant_id, query_obj)
+                conversation.context_memories = [
+                    {
+                        "content": getattr(memory, "content", getattr(memory, "text", "")),
+                        "similarity_score": getattr(memory, "score", None),
+                        "importance_score": getattr(memory, "importance", 5),
+                        "timestamp": getattr(memory, "created_at", None),
+                        "tags": getattr(memory, "tags", []),
+                    }
+                    for memory in memories
+                ]
 
         except Exception as e:
             logger.error(f"Failed to add web UI context: {e}")
