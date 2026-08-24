@@ -28,6 +28,9 @@ from ai_karen_engine.core.intelligence.ml.predictors.intent import IntentPredict
 from ai_karen_engine.core.intelligence.ml.predictors.memory_relevance import (
     MemoryRelevancePredictor,
 )
+from ai_karen_engine.core.intelligence.ml.predictors.topology import (
+    ExecutionTopologyPredictor,
+)
 from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
 from ai_karen_engine.core.intelligence.task_signature_builder import (
     TaskSignatureBuilder,
@@ -68,6 +71,7 @@ class IntelligenceRuntime:
         self._ml_runtime.register_predictor(PredictionTask.AMBIGUITY, AmbiguityPredictor(self._ml_runtime, semantic_encoder))
         self._ml_runtime.register_predictor(PredictionTask.MEMORY_RELEVANCE, MemoryRelevancePredictor(self._ml_runtime, semantic_encoder))
         self._ml_runtime.register_predictor(PredictionTask.CAPABILITY, CapabilityPredictor(self._ml_runtime, semantic_encoder))
+        self._ml_runtime.register_predictor(PredictionTask.EXECUTION_TOPOLOGY, ExecutionTopologyPredictor(self._ml_runtime, semantic_encoder))
 
     async def analyze(self, text: str, context: dict[str, Any] | None = None) -> IntelligenceAnalysisResult:
         start = time.time()
@@ -164,6 +168,20 @@ class IntelligenceRuntime:
                     cap_value = pred.value or {}
                     if isinstance(cap_value, dict):
                         result.capability_hints = {k: bool(v > 0.2) for k, v in cap_value.items()}
+                if task == PredictionTask.EXECUTION_TOPOLOGY:
+                    result.topology_signals["ml_prediction"] = {
+                        "label": pred.label,
+                        "confidence": pred.confidence,
+                        "probability": pred.probability,
+                        "model_id": pred.model_id,
+                        "model_version": pred.model_version,
+                        "feature_version": pred.feature_version,
+                        "calibration_version": pred.calibration_version,
+                        "calibrated": pred.calibrated,
+                        "fallback_used": pred.fallback_used,
+                        "inference_method": pred.inference_method,
+                        "probabilities": pred.metadata.get("probabilities", {}),
+                    }
 
         if predictions.get(PredictionTask.COMPLEXITY) is None:
             result.task_complexity = self._heuristic_complexity(text, result)

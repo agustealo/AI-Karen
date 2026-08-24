@@ -16,6 +16,28 @@ class PredictionTask(str, Enum):
     CAPABILITY = "capability"
     COLLABORATION_VALUE = "collaboration_value"
     VERIFICATION_VALUE = "verification_value"
+    EXECUTION_TOPOLOGY = "execution_topology"
+
+
+EXECUTION_TOPOLOGY_LABELS = {
+    "direct": "direct",
+    "reasoning": "reasoning",
+    "workflow": "workflow",
+    "multi_agent": "multi_agent",
+}
+
+
+class TopologyPredictionLabels:
+    @staticmethod
+    def canonical() -> dict[str, str]:
+        return dict(EXECUTION_TOPOLOGY_LABELS)
+
+    @staticmethod
+    def to_enum(label: str) -> str:
+        canonical_map = EXECUTION_TOPOLOGY_LABELS
+        if label not in canonical_map:
+            raise ValueError(f"Invalid topology label: {label}")
+        return canonical_map[label]
 
 
 @dataclass

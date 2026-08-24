@@ -1,51 +1,32 @@
 from __future__ import annotations
 
-import hashlib
 import logging
-import os
-import tempfile
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Protocol
+from datetime import datetime, timezone
+from typing import Any
 
-from ai_karen_engine.config.config_manager import get_ml_registry_dir
-from ai_karen_engine.core.intelligence.ml.contracts import MLModelManifest, ModelStatus, PredictionTask
+from ai_karen_engine.core.intelligence.ml.contracts import (
+    MLModelManifest,
+    ModelStatus,
+    PredictionTask,
+)
 from ai_karen_engine.core.intelligence.ml.evaluation.contracts import BenchmarkConfig
+from ai_karen_engine.core.intelligence.ml.evaluation.corpus import (
+    CanonicalEvaluationCorpus,
+)
 from ai_karen_engine.core.intelligence.ml.evaluation.runner import BenchmarkRunner
-from ai_karen_engine.core.intelligence.ml.evaluation.corpus import CanonicalEvaluationCorpus
 from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
 from ai_karen_engine.core.intelligence.ml.training.contracts import (
     TrainingArtifact,
+    TrainingExecutor,
     TrainingJob,
     TrainingJobStatus,
     TrainingPipelineResult,
 )
+from ai_karen_engine.core.intelligence.ml.training.sklearn_executor import (
+    SklearnTrainingExecutor,
+)
 
 logger = logging.getLogger(__name__)
-
-
-class TrainingExecutor(Protocol):
-    def execute(self, job: TrainingJob) -> TrainingArtifact:
-        ...
-
-
-class MockTrainingExecutor:
-    def execute(self, job: TrainingJob) -> TrainingArtifact:
-        artifact_path = f"models/training/{job.job_id}"
-        Path(artifact_path).mkdir(parents=True, exist_ok=True)
-        (Path(artifact_path) / "model.bin").write_bytes(b"mock-model-weights")
-        h = hashlib.sha256(b"mock-model-weights").hexdigest()
-        return TrainingArtifact(
-            artifact_path=artifact_path,
-            artifact_hash=h,
-            model_id=f"trained-{job.task}",
-            model_version=f"train-{job.job_id[:8]}",
-            task=job.task,
-            dataset_version=job.dataset_version,
-            training_config_version=job.training_config_version,
-            metrics={"mock_loss": 0.1, "mock_accuracy": 0.9},
-            resource_usage={"cpu_seconds": 10.0, "gpu_seconds": 5.0},
-        )
 
 
 class TrainingPipeline:
@@ -56,7 +37,7 @@ class TrainingPipeline:
         evaluator: BenchmarkRunner | None = None,
     ) -> None:
         self._registry = registry or MLModelRegistry()
-        self._executor = executor or MockTrainingExecutor()
+        self._executor = executor or SklearnTrainingExecutor()
         self._evaluator = evaluator or BenchmarkRunner(CanonicalEvaluationCorpus())
 
     def submit(self, job: TrainingJob) -> TrainingPipelineResult:
@@ -70,7 +51,7 @@ class TrainingPipeline:
             self._validate_job(job)
 
             job.status = TrainingJobStatus.RUNNING.value
-            job.started_at = datetime.now().isoformat()
+            job.started_at = datetime.now(timezone.utc).isoformat()
             artifact = self._executor.execute(job)
             job.artifact_path = artifact.artifact_path
             job.artifact_hash = artifact.artifact_hash
@@ -85,7 +66,7 @@ class TrainingPipeline:
             result.artifact = artifact
             result.registered = registered
             job.status = TrainingJobStatus.SUCCEEDED.value
-            job.completed_at = datetime.now().isoformat()
+            job.completed_at = datetime.now(timezone.utc).isoformat()
         except Exception as exc:
             job.status = TrainingJobStatus.FAILED.value
             job.error_message = str(exc)
@@ -117,11 +98,19 @@ class TrainingPipeline:
             task=task,
             dataset_version=artifact.dataset_version,
         )
-        return await self._evaluator.run(MockTrainedPredictor(artifact), config)
+        try:
+            from ai_karen_engine.core.intelligence.ml.training.sklearn_executor import (
+                SklearnTrainingExecutor,
+            )
+            executor = SklearnTrainingExecutor()
+            return await self._evaluator.run(executor, config)
+        except Exception as exc:
+            logger.debug("Evaluation artifact failed: %s", exc)
+            return None
 
     def _register_artifact(self, artifact: TrainingArtifact, job: TrainingJob) -> bool:
         try:
-            task = PredictionTask(artifact.task)
+            PredictionTask(artifact.task)
         except ValueError:
             return False
 
@@ -136,23 +125,8 @@ class TrainingPipeline:
             training_dataset_version=artifact.dataset_version,
             calibration_version="",
             metrics=artifact.metrics,
-            created_at=datetime.now().isoformat(),
+            created_at=datetime.now(timezone.utc).isoformat(),
             status=ModelStatus.CANDIDATE.value,
         )
         self._registry.register(manifest)
         return True
-
-
-class MockTrainedPredictor:
-    def __init__(self, artifact: TrainingArtifact) -> None:
-        self._artifact = artifact
-
-    async def predict(self, features: Any) -> Any:
-        from ai_karen_engine.core.intelligence.ml.contracts import Prediction
-        return Prediction(
-            task=PredictionTask(self._artifact.task),
-            label="mock",
-            confidence=0.8,
-            fallback_used=False,
-            inference_method="trained_model",
-        )

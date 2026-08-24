@@ -180,6 +180,7 @@ async def test_analyze_produces_signals_with_inference_metadata():
             "embedding_similarity",
             "heuristic_fallback",
             "learned_model",
+            "deterministic_baseline",
         )
         assert isinstance(signal.fallback_used, bool)
 

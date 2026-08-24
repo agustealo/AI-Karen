@@ -9,6 +9,7 @@ from ai_karen_engine.core.intelligence.ml.calibration import (
 from ai_karen_engine.core.intelligence.ml.contracts import (
     CalibratedProbability,
     CalibrationContext,
+    EXECUTION_TOPOLOGY_LABELS,
     ModelStatus,
     MLModelManifest,
     Prediction,
@@ -17,6 +18,7 @@ from ai_karen_engine.core.intelligence.ml.contracts import (
     SemanticEncoder,
     ShadowComparisonResult,
     ShadowEvaluation,
+    TopologyPredictionLabels,
 )
 from ai_karen_engine.core.intelligence.ml.continual_learning import (
     ContinualRetrainingPipeline,
@@ -47,11 +49,17 @@ from ai_karen_engine.core.intelligence.ml.online_learning import (
     MLOutcomeCollector,
     MLOutcomeRecord,
 )
+from ai_karen_engine.core.intelligence.ml.predictors.topology import (
+    ExecutionTopologyPredictor,
+)
+from ai_karen_engine.core.intelligence.ml.predictors.topology_features import (
+    FEATURE_VERSION as TOPOLOGY_FEATURE_VERSION,
+)
 from ai_karen_engine.core.intelligence.ml.promotion import PromotionDecision, evaluate_promotion
 from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
 from ai_karen_engine.core.intelligence.ml.shadow import ShadowEvaluator
 from ai_karen_engine.core.intelligence.ml.training import (
-    MockTrainingExecutor,
+    SklearnTrainingExecutor,
     TrainingArtifact,
     TrainingExecutor,
     TrainingJob,
@@ -76,6 +84,7 @@ __all__ = [
     "ContinualRetrainingPipeline",
     "EvaluationCase",
     "EvidenceProfile",
+    "EXECUTION_TOPOLOGY_LABELS",
     "IdentityCalibrator",
     "IsotonicCalibrator",
     "MLEvidenceAggregator",
@@ -97,6 +106,8 @@ __all__ = [
     "ShadowComparisonResult",
     "ShadowEvaluation",
     "ShadowEvaluator",
+    "TOPOLOGY_FEATURE_VERSION",
+    "TopologyPredictionLabels",
     "TrainingArtifact",
     "TrainingExecutor",
     "TrainingJob",
@@ -110,4 +121,6 @@ __all__ = [
     "compute_latency_metrics",
     "compute_reliability_curve",
     "evaluate_promotion",
+    "ExecutionTopologyPredictor",
+    "SklearnTrainingExecutor",
 ]

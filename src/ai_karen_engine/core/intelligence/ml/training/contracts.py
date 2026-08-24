@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Protocol
 
 
 class TrainingJobStatus(str, Enum):
@@ -14,6 +13,11 @@ class TrainingJobStatus(str, Enum):
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+
+
+class TrainingExecutor(Protocol):
+    def execute(self, job: TrainingJob) -> TrainingArtifact:
+        ...
 
 
 @dataclass

@@ -193,6 +193,13 @@ class MLConfig:
     promotion_min_samples: int = 50
     shadow_sample_limit: int = 200
     artifact_hash_algorithm: str = "sha256"
+    topology_enabled: bool = True
+    topology_mode: str = "shadow"
+    topology_min_confidence: float = 0.5
+    topology_feature_version: str = "topology_features_v1"
+    random_seed: int = 42
+    training_max_samples: int = 10000
+    training_test_size: float = 0.2
 
 
 @dataclass
@@ -322,6 +329,13 @@ DEFAULT_CONFIG = {
         "promotion_min_samples": 50,
         "shadow_sample_limit": 200,
         "artifact_hash_algorithm": "sha256",
+        "topology_enabled": True,
+        "topology_mode": "shadow",
+        "topology_min_confidence": 0.5,
+        "topology_feature_version": "topology_features_v1",
+        "random_seed": 42,
+        "training_max_samples": 10000,
+        "training_test_size": 0.2,
     },
     "spacy_model": "en_core_web_sm",
     "memory": {
@@ -812,6 +826,41 @@ def get_ml_shadow_sample_limit() -> int:
     return int(get_ml_config().get("shadow_sample_limit", 200))
 
 
+def get_ml_topology_enabled() -> bool:
+    """Get whether ML topology prediction is enabled."""
+    return bool(get_ml_config().get("topology_enabled", True))
+
+
+def get_ml_topology_mode() -> str:
+    """Get the ML topology prediction mode (shadow/active)."""
+    return str(get_ml_config().get("topology_mode", "shadow"))
+
+
+def get_ml_topology_min_confidence() -> float:
+    """Get the minimum confidence threshold for ML topology predictions."""
+    return float(get_ml_config().get("topology_min_confidence", 0.5))
+
+
+def get_ml_topology_feature_version() -> str:
+    """Get the feature version for topology prediction."""
+    return str(get_ml_config().get("topology_feature_version", "topology_features_v1"))
+
+
+def get_ml_random_seed() -> int:
+    """Get the random seed for ML training."""
+    return int(get_ml_config().get("random_seed", 42))
+
+
+def get_ml_training_max_samples() -> int:
+    """Get the maximum number of training samples."""
+    return int(get_ml_config().get("training_max_samples", 10000))
+
+
+def get_ml_training_test_size() -> float:
+    """Get the test set size ratio for training."""
+    return float(get_ml_config().get("training_test_size", 0.2))
+
+
 __all__ = [
     "load_config",
     "save_config",
@@ -849,6 +898,13 @@ __all__ = [
     "get_ml_promotion_max_ece",
     "get_ml_promotion_min_samples",
     "get_ml_shadow_sample_limit",
+    "get_ml_topology_enabled",
+    "get_ml_topology_mode",
+    "get_ml_topology_min_confidence",
+    "get_ml_topology_feature_version",
+    "get_ml_random_seed",
+    "get_ml_training_max_samples",
+    "get_ml_training_test_size",
     "config_manager",
     "get_config",
     "reload",
