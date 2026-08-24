@@ -1,11 +1,24 @@
 """
 Production Inference Services Factory
-Comprehensive factory for initializing and wiring all inference runtime services.
+
+DEPRECATED: Runtime selection authority belongs to core/model_runtime ModelManager
+/ ProviderRouter. This factory is retained only as a backward-compatibility shim
+during migration. New code should route model execution through ModelManager /
+ProviderRouter instead.
 """
 
+import warnings
 import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+
+warnings.warn(
+    "ai_karen_engine.inference.factory is deprecated. "
+    "Use ai_karen_engine.core.model_runtime.model_manager.ModelManager "
+    "or ai_karen_engine.core.model_runtime.providers.* for execution adapters.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -163,7 +163,6 @@ def test_consumer_matrix_documented() -> None:
         "src/ai_karen_engine/llm_orchestrator.py",
         "src/ai_karen_engine/core/runtime/chat_runtime_control_plane.py",
         "src/ai_karen_engine/config/llm_provider_config.py",
-        "src/ai_karen_engine/routing/kire_router.py",
         "src/ai_karen_engine/api_routes/models/intelligent_router.py",
         "src/ai_karen_engine/api_routes/models/settings.py",
         "src/ai_karen_engine/services/models/routing/llm_router_service.py",

@@ -1368,9 +1368,12 @@ class LLMRegistry:
     def _register_core_runtimes(self) -> None:
         """Register core model runtimes."""
         try:
-            from ai_karen_engine.inference.local_gguf_runtime import LocalGGUFRuntime
-            from ai_karen_engine.inference.transformers_runtime import TransformersRuntime
-            from ai_karen_engine.inference.core_helpers_runtime import CoreHelpersRuntime
+            from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+                TransformersRuntime,
+            )
+            from ai_karen_engine.core.model_runtime.providers.core_helpers_runtime import (
+                CoreHelpersRuntime,
+            )
 
             # Local GGUF Runtime
             if LocalGGUFRuntime and LocalGGUFRuntime.is_available():

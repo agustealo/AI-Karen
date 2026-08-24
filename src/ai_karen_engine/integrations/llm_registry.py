@@ -41,7 +41,6 @@ except ImportError:
 
 from ai_karen_engine.integrations.llm_utils import LLMProviderBase
 from importlib import import_module
-from ai_karen_engine.routing.types import RouteRequest
 from ai_karen_engine.config.llm_provider_config import (
     get_provider_class_module,
     get_provider_config_manager,

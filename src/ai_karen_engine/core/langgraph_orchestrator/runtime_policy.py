@@ -78,8 +78,6 @@ def select_execution_branch(state: Dict[str, Any]) -> str:
         return "medusa"
 
     if intent in (
-        "routing.select",
-        "routing.profile",
         "admin_panel",
         "extension.action",
         "agent_complex_reasoning",
@@ -93,8 +91,6 @@ def should_use_medusa(state: Dict[str, Any]) -> str:
     """Determine if AgentMedusa should handle the request."""
     intent = state.get("detected_intent", "")
     if intent in (
-        "routing.select",
-        "routing.profile",
         "admin_panel",
         "extension.action",
         "agent_complex_reasoning",

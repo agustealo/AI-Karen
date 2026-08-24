@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
@@ -12,6 +13,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionResult,
     ChatExecutionStatus,
     ChatRuntimeMetadata,
+    ChatStreamEventType,
 )
 from ai_karen_engine.core.runtime.contracts import (
     ActionExecutionGate,
@@ -62,6 +64,9 @@ _CANONICAL_META_KEYS = (
     "response_source",
     "fallback_level",
     "fallback_reason",
+    "failure_category",
+    "provider_attempts",
+    "degradation_type",
     "degraded_mode",
     "degradation_reason",
 )
@@ -220,6 +225,10 @@ class ChatRuntime:
         self, request: ChatExecutionRequest
     ) -> AsyncIterator[ChatStreamChunk]:
         ctx = request.context
+        sequence = 0
+        request_id = ctx.request_id or str(uuid.uuid4())
+        response_id = ctx.request_id or str(uuid.uuid4())
+        conversation_id = ctx.conversation_id or normalize_chat_session_id(ctx.session_id)
 
         self._bind_observability_context(ctx)
         self._emitter.emit(
@@ -235,12 +244,32 @@ class ChatRuntime:
                 status="gate",
                 metadata={"gate_mode": getattr(gate, "mode", "gate")},
             )
-            yield ChatStreamChunk(
-                type="error",
-                content=getattr(gate, "message", "Service unavailable"),
-                correlation_id=ctx.correlation_id,
-                metadata={"gate": getattr(gate, "mode", "gate")},
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type="error",
+                    content=getattr(gate, "message", "Service unavailable"),
+                    correlation_id=ctx.correlation_id,
+                    metadata={"gate": getattr(gate, "mode", "gate")},
+                ),
+                sequence,
+                request_id,
+                response_id,
+                conversation_id,
             )
+            sequence += 1
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type="complete",
+                    content="",
+                    correlation_id=ctx.correlation_id,
+                    metadata={"gate": getattr(gate, "mode", "gate")},
+                ),
+                sequence,
+                request_id,
+                response_id,
+                conversation_id,
+            )
+            sequence += 1
             return
 
         decision = await self._decide(request)
@@ -249,6 +278,20 @@ class ChatRuntime:
         meter.start()
         trajectory = self._trajectory_recorder.start()
         stream_start = time.time()
+
+        yield self._enrich_chunk(
+            ChatStreamChunk(
+                type="status",
+                content="Processing request...",
+                correlation_id=ctx.correlation_id,
+                metadata={"stage": "started"},
+            ),
+            sequence,
+            request_id,
+            response_id,
+            conversation_id,
+        )
+        sequence += 1
 
         memory_recall_meta: Dict[str, Any] = {}
         if decision.memory_recall_required:
@@ -261,35 +304,135 @@ class ChatRuntime:
             ]
 
         streamed_text = ""
+        provider_meta: Dict[str, Any] = {}
+        generation_error: Optional[Exception] = None
+
         gen = (
-            self._run_reasoning_stream(request, decision, plan, meter)
+            self._run_reasoning_stream(request, decision, plan, meter, _meta=provider_meta)
             if decision.topology.value == "reasoning"
             else (
-                self._run_graph_stream(request, decision, plan, meter)
+                self._run_graph_stream(request, decision, plan, meter, _meta=provider_meta)
                 if decision.is_graph_required
-                else self._run_simple_stream(request, decision, plan, meter)
+                else self._run_simple_stream(
+                    request, decision, plan, meter, memory_recall_meta, _meta=provider_meta
+                )
             )
         )
-        async for chunk in gen:
-            if chunk.type == "content":
-                streamed_text += chunk.content
-            yield chunk
 
+        try:
+            async for chunk in gen:
+                if chunk.type == "content":
+                    streamed_text += chunk.content
+                if chunk.type == ChatStreamEventType.COMPLETE:
+                    continue
+                yield self._enrich_chunk(chunk, sequence, request_id, response_id, conversation_id)
+                sequence += 1
+        except asyncio.CancelledError:
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_CANCELLED,
+                correlation_id=ctx.correlation_id,
+                request_id=request_id,
+                user_id=ctx.user_id,
+                tenant_id=ctx.tenant_id,
+                session_id=ctx.session_id,
+                conversation_id=conversation_id,
+            )
+            raise
+        except Exception as exc:
+            generation_error = exc
+            logger.error(
+                "ChatRuntime stream failed: %s",
+                exc,
+                extra={"correlation_id": ctx.correlation_id},
+            )
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                error_type=type(exc).__name__,
+                status="error",
+                metadata={"error": str(exc)},
+            )
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type="error",
+                    content=str(exc),
+                    correlation_id=ctx.correlation_id,
+                    metadata={"error_type": type(exc).__name__},
+                ),
+                sequence,
+                request_id,
+                response_id,
+                conversation_id,
+            )
+            sequence += 1
+
+        persistence_failed = False
         if decision.memory_recall_required and decision.memory_write_allowed:
             try:
                 await self._persist_memory(request, streamed_text, memory_recall_meta, plan)
             except Exception as exc:
+                persistence_failed = True
                 logger.warning("Streaming memory persistence failed: %s", exc)
 
         latency_ms = (time.time() - stream_start) * 1000.0
-        self._record_trajectory_completion(trajectory, decision, streamed_text, stream_start, meter, {}, memory_recall_meta)
-        self._record_execution_outcome(trajectory.trajectory_id, decision, streamed_text, stream_start, meter, memory_recall_meta, success=bool(streamed_text))
+        success = bool(streamed_text) and generation_error is None
+        self._record_trajectory_completion(
+            trajectory,
+            decision,
+            streamed_text,
+            stream_start,
+            meter,
+            provider_meta,
+            memory_recall_meta,
+            error=str(generation_error) if generation_error else None,
+        )
+        self._record_execution_outcome(
+            trajectory.trajectory_id,
+            decision,
+            streamed_text,
+            stream_start,
+            meter,
+            memory_recall_meta,
+            success=success,
+        )
+
+        terminal_metadata = self._build_stream_terminal_metadata(
+            request,
+            decision,
+            provider_meta,
+            memory_recall_meta,
+            latency_ms,
+            request_id,
+            response_id,
+            generation_error=generation_error,
+            persistence_failed=persistence_failed,
+        )
+
         self._emitter.emit(
             RuntimeEventType.REQUEST_COMPLETED,
             intent=decision.intent,
             latency_ms=latency_ms,
+            provider=provider_meta.get("actual_provider"),
+            model=provider_meta.get("actual_model"),
+            runtime_engine=provider_meta.get("runtime_engine"),
+            response_source=provider_meta.get("response_source"),
+            fallback_level=provider_meta.get("fallback_level", 0),
+            degraded_mode=provider_meta.get("degraded_mode", False) or persistence_failed,
             memory_recall_count=memory_recall_meta.get("memory_recall_count", 0),
         )
+
+        yield self._enrich_chunk(
+            ChatStreamChunk(
+                type="complete",
+                content="",
+                correlation_id=ctx.correlation_id,
+                metadata=terminal_metadata,
+            ),
+            sequence,
+            request_id,
+            response_id,
+            conversation_id,
+        )
+        sequence += 1
 
     # ------------------------------------------------------------------
     # Memory
@@ -550,16 +693,26 @@ class ChatRuntime:
             "fallback_reason": (result.metadata or {}).get("degradation_reason") if result.degraded else None,
             "degraded_mode": result.degraded,
             "degradation_reason": result.degradation_reason,
+            "degradation_type": (result.metadata or {}).get("degradation_type"),
+            "provider_attempts": getattr(result, "attempts", []) or [],
             "provenance": provenance,
         }
         return result.text, normalized
 
     async def _run_simple_stream(
-        self, request: ChatExecutionRequest, decision: ExecutionDecision, plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter, memory_recall_meta: Optional[Dict[str, Any]] = None
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+        memory_recall_meta: Optional[Dict[str, Any]] = None,
+        _meta: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[ChatStreamChunk]:
         ctx = request.context
         try:
             text, normalized = await self._run_simple(request, decision, plan, meter, memory_recall_meta)
+            if _meta is not None:
+                _meta.update(normalized)
             yield ChatStreamChunk(
                 type="content",
                 content=text,
@@ -587,30 +740,29 @@ class ChatRuntime:
                 type="error",
                 content=str(exc),
                 correlation_id=ctx.correlation_id,
-                metadata={"event": "error"},
-            )
-        finally:
-            yield ChatStreamChunk(
-                type="complete",
-                content="",
-                correlation_id=ctx.correlation_id,
-                metadata={
-                    "session_id": ctx.conversation_id
-                    or normalize_chat_session_id(ctx.session_id)
-                },
+                metadata={"error_type": type(exc).__name__},
             )
 
     async def _run_graph(
         self, request: ChatExecutionRequest, decision: ExecutionDecision, plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter
     ) -> Tuple[str, Dict[str, Any]]:
         """Graph-required path: routed exclusively through WorkflowRuntime."""
-        text, response_metadata = await get_workflow_runtime().run(request, decision)
+        text, response_metadata = await get_workflow_runtime().run(request, decision, plan)
         return text, self._normalize_graph_meta(response_metadata, request)
 
     async def _run_graph_stream(
-        self, request: ChatExecutionRequest, decision: ExecutionDecision, plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+        _meta: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[ChatStreamChunk]:
-        async for chunk in get_workflow_runtime().stream(request, decision):
+        async for chunk in get_workflow_runtime().stream(request, decision, plan):
+            if chunk.type == ChatStreamEventType.COMPLETE:
+                continue
+            if _meta is not None:
+                self._accumulate_chunk_metadata(chunk, _meta)
             yield chunk
 
     async def _run_reasoning(
@@ -703,9 +855,16 @@ class ChatRuntime:
         return text, provider_meta
 
     async def _run_reasoning_stream(
-        self, request: ChatExecutionRequest, decision: ExecutionDecision, plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+        _meta: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[ChatStreamChunk]:
         text, normalized = await self._run_reasoning(request, decision, plan, meter)
+        if _meta is not None:
+            _meta.update(normalized)
         yield ChatStreamChunk(
             type="content",
             content=text,
@@ -879,6 +1038,107 @@ class ChatRuntime:
             session_id=ctx.session_id,
             conversation_id=ctx.conversation_id,
         )
+
+    def _enrich_chunk(
+        self,
+        chunk: ChatStreamChunk,
+        sequence: int,
+        request_id: str,
+        response_id: str,
+        conversation_id: str,
+    ) -> ChatStreamChunk:
+        now = datetime.datetime.utcnow()
+        return ChatStreamChunk(
+            type=chunk.type,
+            content=chunk.content,
+            correlation_id=chunk.correlation_id or "",
+            metadata=dict(chunk.metadata or {}),
+            event_id=chunk.event_id or str(uuid.uuid4()),
+            sequence=sequence,
+            request_id=request_id,
+            response_id=response_id,
+            conversation_id=conversation_id,
+            timestamp=chunk.timestamp or now,
+        )
+
+    def _accumulate_chunk_metadata(self, chunk: ChatStreamChunk, meta: Dict[str, Any]) -> None:
+        chunk_meta = chunk.metadata or {}
+        for key in _CANONICAL_META_KEYS:
+            value = chunk_meta.get(key)
+            if value is not None and key not in meta:
+                meta[key] = value
+        llm = chunk_meta.get("llm_metadata") or chunk_meta.get("llm")
+        if isinstance(llm, dict):
+            for key in _CANONICAL_META_KEYS:
+                value = llm.get(key)
+                if value is not None and key not in meta:
+                    meta[key] = value
+
+    def _build_stream_terminal_metadata(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        provider_meta: Dict[str, Any],
+        memory_recall_meta: Dict[str, Any],
+        latency_ms: float,
+        request_id: str,
+        response_id: str,
+        generation_error: Optional[Exception] = None,
+        persistence_failed: bool = False,
+    ) -> Dict[str, Any]:
+        ctx = request.context
+        conversation_id = ctx.conversation_id or normalize_chat_session_id(ctx.session_id)
+        degraded = provider_meta.get("degraded_mode", False) or persistence_failed
+        degradation_reason = provider_meta.get("degradation_reason")
+        if persistence_failed and not generation_error:
+            degraded = True
+            degradation_reason = "memory_persistence_failed"
+
+        return {
+            "correlation_id": ctx.correlation_id,
+            "request_id": request_id,
+            "response_id": response_id,
+            "conversation_id": conversation_id,
+            "assistant_message_id": None,
+            "requested_provider": request.preferred_provider,
+            "requested_model": request.preferred_model,
+            "actual_provider": provider_meta.get("actual_provider"),
+            "actual_model": provider_meta.get("actual_model"),
+            "runtime_engine": provider_meta.get("runtime_engine"),
+            "protocol": provider_meta.get("protocol"),
+            "locality": provider_meta.get("locality"),
+            "response_source": provider_meta.get("response_source"),
+            "fallback_level": provider_meta.get("fallback_level", 0),
+            "fallback_reason": provider_meta.get("fallback_reason"),
+            "failure_category": self._map_failure_category(provider_meta),
+            "provider_attempts": provider_meta.get("provider_attempts", []),
+            "used_fallback": provider_meta.get("used_fallback", False)
+                or provider_meta.get("fallback_level", 0) > 0,
+            "degraded_mode": degraded,
+            "degradation_reason": degradation_reason,
+            "mode": "graph" if decision.is_graph_required else "normal",
+            "latency_ms": latency_ms,
+            "memory_recall_count": memory_recall_meta.get("memory_recall_count", 0),
+            "memory_recall_status": memory_recall_meta.get("memory_recall_status", "skipped"),
+            "memory_persistence_status": memory_recall_meta.get(
+                "memory_persistence_status", "skipped"
+            ),
+            "status": "error" if generation_error else ("degraded" if degraded else "ok"),
+        }
+
+    @staticmethod
+    def _map_failure_category(provider_meta: Dict[str, Any]) -> Optional[str]:
+        degradation_type = provider_meta.get("degradation_type")
+        if degradation_type == "provider_unavailable":
+            return "provider_unavailable"
+        if degradation_type == "fallback_exhausted":
+            return "degraded_runtime"
+        fallback_level = provider_meta.get("fallback_level", 0)
+        if fallback_level > 0:
+            return "provider_fallback"
+        if provider_meta.get("generation_error"):
+            return "degraded_runtime"
+        return None
 
     def _record_trajectory_completion(
         self,

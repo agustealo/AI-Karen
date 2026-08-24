@@ -2,7 +2,7 @@ import pytest
 
 from ai_karen_engine.core.expression.engines.builtin_provider_engine import BuiltinProviderEngine
 from ai_karen_engine.core.expression.contracts import ExpressionTask
-from ai_karen_engine.inference.transformers_runtime import TransformersRuntime
+from ai_karen_engine.core.model_runtime.providers.transformers_runtime import TransformersRuntime
 from ai_karen_engine.integrations.llm_utils import ProviderNotAvailable
 
 

@@ -45,6 +45,22 @@ class MLMetrics:
                 "Total shadow model disagreements with primary",
                 ["model_id", "model_version", "prediction_task"],
             )
+            self.calibration_error = self.metrics_manager.register_histogram(
+                "karen_ml_calibration_error",
+                "ML model calibration error (ECE)",
+                ["model_id", "model_version", "prediction_task"],
+                buckets=[0.0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5],
+            )
+            self.evaluation_score = self.metrics_manager.register_gauge(
+                "karen_ml_evaluation_score",
+                "ML model evaluation score (F1/accuracy)",
+                ["model_id", "model_version", "prediction_task", "metric"],
+            )
+            self.promotion_status = self.metrics_manager.register_gauge(
+                "karen_ml_promotion_status",
+                "ML model promotion status (1=eligible, 0=blocked, -1=insufficient)",
+                ["model_id", "model_version", "purpose"],
+            )
 
     def record_inference(
         self,
@@ -107,6 +123,57 @@ class MLMetrics:
             ).inc()
         except Exception as exc:
             logger.debug("Failed to record shadow disagreement metric: %s", exc)
+
+    def record_calibration_error(
+        self,
+        model_id: str,
+        model_version: str,
+        prediction_task: str,
+        ece: float,
+    ) -> None:
+        try:
+            self.calibration_error.labels(
+                model_id=model_id,
+                model_version=model_version,
+                prediction_task=prediction_task,
+            ).observe(ece)
+        except Exception as exc:
+            logger.debug("Failed to record calibration error metric: %s", exc)
+
+    def record_evaluation_score(
+        self,
+        model_id: str,
+        model_version: str,
+        prediction_task: str,
+        metric: str,
+        value: float,
+    ) -> None:
+        try:
+            self.evaluation_score.labels(
+                model_id=model_id,
+                model_version=model_version,
+                prediction_task=prediction_task,
+                metric=metric,
+            ).set(value)
+        except Exception as exc:
+            logger.debug("Failed to record evaluation score metric: %s", exc)
+
+    def record_promotion_status(
+        self,
+        model_id: str,
+        model_version: str,
+        purpose: str,
+        decision: str,
+    ) -> None:
+        try:
+            value = {"PROMOTION_ELIGIBLE": 1.0, "PROMOTION_BLOCKED": 0.0, "INSUFFICIENT_EVIDENCE": -1.0}.get(decision, -1.0)
+            self.promotion_status.labels(
+                model_id=model_id,
+                model_version=model_version,
+                purpose=purpose,
+            ).set(value)
+        except Exception as exc:
+            logger.debug("Failed to record promotion status metric: %s", exc)
 
 
 _ml_metrics: Optional[MLMetrics] = None

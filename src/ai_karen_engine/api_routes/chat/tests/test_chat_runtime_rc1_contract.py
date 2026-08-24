@@ -186,10 +186,10 @@ def test_graph_decision_invokes_workflow_runtime():
     )
 
     class _FakeWorkflowRuntime:
-        async def run(self, request, decision):
+        async def run(self, request, decision, plan=None):
             return "graph answer", fake_state["response_metadata"]
 
-        async def stream(self, request, decision):
+        async def stream(self, request, decision, plan=None):
             yield fake_state
 
     fake_state = {
@@ -975,10 +975,8 @@ def test_execute_stream_preserves_canonical_identifiers():
 
 
 def test_execute_stream_emits_error_on_gate():
-    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
     from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
         MaintenanceResponse,
-        get_chat_runtime_control_plane,
     )
 
     degraded = MaintenanceResponse(
@@ -1002,9 +1000,12 @@ def test_execute_stream_emits_error_on_gate():
             chunks = []
             async for chunk in rt.execute_stream(request):
                 chunks.append(chunk)
-        assert len(chunks) == 1
+        assert len(chunks) == 2
         assert chunks[0].type == "error"
         assert "maintenance" in chunks[0].content.lower() or "unavailable" in chunks[0].content.lower()
+        assert chunks[1].type == "complete"
+        assert chunks[1].event_id is not None
+        assert chunks[1].sequence == 1
 
     asyncio.get_event_loop().run_until_complete(_run())
 
@@ -1015,3 +1016,114 @@ def test_canonical_stream_chunk_event_types_are_valid():
     expected = {"status", "content", "tool", "citation", "approval", "warning", "error", "complete"}
     actual = {member.value for member in ChatStreamEventType}
     assert actual == expected
+
+
+def test_execute_stream_emits_initial_status_event():
+    async def _run():
+        rt = ChatRuntime()
+        request = _make_request()
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+            new=AsyncMock(return_value=_FakeCP()),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
+            new=lambda: _FakeDecider(ExecutionDecision(
+                execution_mode=RuntimeExecutionMode.DIRECT,
+                graph_required=False,
+            )),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
+            new=_FakeGateway,
+        ), patch(
+            "ai_karen_engine.core.memory.get_memory_manager",
+        ) as mock_mem:
+            instance = mock_mem.return_value
+            instance.recall_context = AsyncMock(return_value={"results": [], "status": "success"})
+            instance.process_interaction = AsyncMock()
+            chunks = []
+            async for chunk in rt.execute_stream(request):
+                chunks.append(chunk)
+        assert len(chunks) >= 2
+        assert chunks[0].type == "status"
+        assert chunks[0].content == "Processing request..."
+        assert chunks[0].event_id is not None
+        assert chunks[0].sequence == 0
+        assert chunks[0].request_id is not None
+        assert chunks[0].response_id is not None
+        assert chunks[0].conversation_id is not None
+        assert chunks[0].timestamp is not None
+
+    asyncio.get_event_loop().run_until_complete(_run())
+
+
+def test_execute_stream_graph_chunks_have_canonical_identifiers():
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk
+
+    graph_decision = ExecutionDecision(
+        execution_mode=RuntimeExecutionMode.GRAPH,
+        graph_required=True,
+    )
+
+    async def _fake_graph_stream(request, decision, plan):
+        yield ChatStreamChunk(
+            type="content",
+            content="graph content",
+            correlation_id=request.context.correlation_id,
+            metadata={"actual_provider": "anthropic", "actual_model": "claude-3"},
+        )
+
+    class _FakeWorkflowRuntime:
+        async def run(self, request, decision, plan=None):
+            return "graph answer", {}
+
+        async def stream(self, request, decision, plan=None):
+            async for chunk in _fake_graph_stream(request, decision, plan):
+                yield chunk
+
+    async def _run():
+        rt = ChatRuntime()
+        request = ChatExecutionRequest(
+            messages=[{"content": "hi", "message_type": "user"}],
+            context=ChatExecutionContext(
+                user_id="user-123",
+                tenant_id="tenant-456",
+                session_id="sess-789",
+                conversation_id="conv-abc",
+                request_id="req-def",
+                correlation_id="corr-ghi",
+                roles=["admin"],
+                permissions=["chat:write"],
+            ),
+        )
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+            new=AsyncMock(return_value=_FakeCP()),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_cortex_execution_decider",
+            new=lambda: _FakeDecider(graph_decision),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_workflow_runtime",
+            new=lambda: _FakeWorkflowRuntime(),
+        ), patch(
+            "ai_karen_engine.core.runtime.chat_runtime.ExpressionGateway",
+            new=AssertionError,
+        ), patch(
+            "ai_karen_engine.core.memory.get_memory_manager",
+        ) as mock_mem:
+            instance = mock_mem.return_value
+            instance.recall_context = AsyncMock(return_value={"results": [], "status": "success"})
+            instance.process_interaction = AsyncMock()
+            chunks = []
+            async for chunk in rt.execute_stream(request):
+                chunks.append(chunk)
+        content_chunks = [c for c in chunks if c.type == "content"]
+        assert len(content_chunks) >= 1
+        for chunk in content_chunks:
+            assert chunk.event_id is not None
+            assert chunk.sequence is not None
+            assert chunk.request_id == "req-def"
+            assert chunk.response_id == "req-def"
+            assert chunk.conversation_id == "conv-abc"
+            assert chunk.timestamp is not None
+
+    asyncio.get_event_loop().run_until_complete(_run())

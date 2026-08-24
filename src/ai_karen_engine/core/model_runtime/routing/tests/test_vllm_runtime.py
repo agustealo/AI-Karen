@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from unittest.mock import Mock
 
 # Import VLLMRuntime and related classes
-from ai_karen_engine.inference.vllm_runtime import VLLMRuntime
+from ai_karen_engine.core.model_runtime.providers.vllm_runtime import VLLMRuntime
 from ai_karen_engine.integrations.llm_utils import ProviderNotAvailable, GenerationFailed
 from ai_karen_engine.integrations.providers.openai_provider import OpenAIProvider
 
@@ -153,7 +153,7 @@ class TestVLLMRuntimeHealthCheck:
 
     def test_health_check_with_base_url_calls_provider(self):
         """Test that health check delegates to OpenAI-compatible provider when configured."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             # Setup mock provider
             mock_provider = MagicMock()
             mock_provider.health_check.return_value = {
@@ -175,7 +175,7 @@ class TestVLLMRuntimeHealthCheck:
 
     def test_health_check_with_provider_error_returns_unhealthy(self):
         """Test that health check returns unhealthy when provider raises exception."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             # Setup mock provider that raises error
             mock_provider = MagicMock()
             mock_provider.health_check.side_effect = Exception("Connection refused")
@@ -196,7 +196,7 @@ class TestVLLMRuntimeGeneration:
 
     def test_generate_with_base_url_calls_provider(self):
         """Test that generate() delegates to OpenAI-compatible provider when configured."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             # Setup mock provider
             mock_provider = MagicMock()
             mock_provider.generate_text.return_value = "Generated response from vLLM"
@@ -213,7 +213,7 @@ class TestVLLMRuntimeGeneration:
 
     def test_generate_with_provider_error_raises_generation_failed(self):
         """Test that generate() raises GenerationFailed when provider fails."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             # Setup mock provider that raises error
             mock_provider = MagicMock()
             mock_provider.generate_text.side_effect = Exception("API error")
@@ -229,7 +229,7 @@ class TestVLLMRuntimeGeneration:
 
     def test_generate_text_interface_method(self):
         """Test that generate_text() interface method delegates to generate()."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             mock_provider = MagicMock()
             mock_provider.generate_text.return_value = "Response"
             mock_provider_class.return_value = mock_provider
@@ -241,7 +241,7 @@ class TestVLLMRuntimeGeneration:
 
     def test_generate_response_interface_method(self):
         """Test that generate_response() interface method delegates to generate()."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             mock_provider = MagicMock()
             mock_provider.generate_text.return_value = "Response"
             mock_provider_class.return_value = mock_provider
@@ -253,7 +253,7 @@ class TestVLLMRuntimeGeneration:
 
     def test_no_silent_fallback_to_transformers(self):
         """Test that VLLMRuntime does NOT silently fall back to Transformers when vLLM fails."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             # Setup mock provider that fails
             mock_provider = MagicMock()
             mock_provider.generate_text.side_effect = Exception("vLLM unavailable")
@@ -271,7 +271,7 @@ class TestVLLMRuntimeStreaming:
 
     def test_stream_with_base_url_calls_provider(self):
         """Test that stream() delegates to OpenAI-compatible provider when configured."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             # Setup mock provider with streaming
             mock_provider = MagicMock()
             mock_provider.stream_generate.return_value = iter(["Hello", " from", " vLLM", "!"])
@@ -288,7 +288,7 @@ class TestVLLMRuntimeStreaming:
 
     def test_stream_with_provider_error_raises_generation_failed(self):
         """Test that stream() raises GenerationFailed when provider fails."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             # Setup mock provider that fails
             mock_provider = MagicMock()
             mock_provider.stream_generate.side_effect = Exception("Stream error")
@@ -301,7 +301,7 @@ class TestVLLMRuntimeStreaming:
 
     def test_stream_generate_interface_method(self):
         """Test that stream_generate() interface method delegates to stream()."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             mock_provider = MagicMock()
             mock_provider.stream_generate.return_value = iter(["Token"])
             mock_provider_class.return_value = mock_provider
@@ -317,7 +317,7 @@ class TestVLLMRuntimeEmbeddings:
 
     def test_embed_with_provider_support(self):
         """Test that embed() uses provider when embeddings are supported."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             # Setup mock provider with embed method
             mock_provider = MagicMock()
             mock_provider.embed.return_value = [0.1, 0.2, 0.3]
@@ -332,7 +332,7 @@ class TestVLLMRuntimeEmbeddings:
 
     def test_embed_without_provider_support_raises_not_implemented(self):
         """Test that embed() raises NotImplementedError when provider doesn't support embeddings."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             # Setup mock provider without embed method
             mock_provider = MagicMock(spec=[])  # No methods
             mock_provider_class.return_value = mock_provider
@@ -346,7 +346,7 @@ class TestVLLMRuntimeEmbeddings:
 
     def test_embed_without_provider_support_does_not_use_transformers(self):
         """builtin_vllm must not silently map embeddings to Transformers."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class, \
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class, \
              patch('ai_karen_engine.inference.transformers_runtime.TransformersRuntime.get_instance') as mock_transformers:
             mock_provider_class.return_value = MagicMock(spec=[])
 
@@ -362,7 +362,7 @@ class TestVLLMRuntimeWarmCache:
 
     def test_warm_cache_calls_generate(self):
         """Test that warm_cache() calls generate with minimal request."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             mock_provider = MagicMock()
             mock_provider.generate_text.return_value = "ok"
             mock_provider_class.return_value = mock_provider
@@ -377,7 +377,7 @@ class TestVLLMRuntimeWarmCache:
 
     def test_warm_cache_silently_fails(self):
         """Test that warm_cache() doesn't raise exceptions on failure."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             mock_provider = MagicMock()
             mock_provider.generate_text.side_effect = Exception("Server unavailable")
             mock_provider_class.return_value = mock_provider
@@ -420,7 +420,7 @@ class TestVLLMRuntimeMetadata:
 
     def test_health_check_includes_runtime_metadata(self):
         """Test that health check includes runtime metadata."""
-        with patch('ai_karen_engine.inference.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
+        with patch('ai_karen_engine.core.model_runtime.providers.vllm_runtime.OpenAICompatibleProvider') as mock_provider_class:
             mock_provider = MagicMock()
             mock_provider.health_check.return_value = {"status": "ok"}
             mock_provider_class.return_value = mock_provider

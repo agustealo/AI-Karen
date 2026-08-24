@@ -1,60 +1,87 @@
 """
-Inference Engine
+Deprecated shim: inference namespace moved to core/model_runtime/.
 
-Production-ready inference system with support for multiple runtimes:
-- Transformers: HuggingFace safetensors models
-- Core Helpers: Utility models
+Import from canonical locations instead:
 
-Features:
-- Unified model store for all models
-- Factory pattern for centralized initialization
-- Health monitoring and resource tracking
-
-NOTE: Runtime selection authority belongs to core/model_runtime ModelManager
-/ ProviderRouter. This package provides execution adapters only.
+    from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+        TransformersRuntime,
+    )
+    from ai_karen_engine.core.model_runtime.providers.vllm_runtime import VLLMRuntime
+    from ai_karen_engine.core.model_runtime.providers.core_helpers_runtime import (
+        CoreHelpersRuntime,
+    )
+    from ai_karen_engine.core.model_runtime.huggingface_service import (
+        HuggingFaceService,
+    )
+    from ai_karen_engine.core.model_runtime.model_store import ModelStore
 """
 
-try:
-    from .transformers_runtime import TransformersRuntime
-except ImportError:
-    TransformersRuntime = None
+import warnings
 
-try:
-    from .vllm_runtime import VLLMRuntime
-except ImportError:
-    VLLMRuntime = None
+warnings.warn(
+    "ai_karen_engine.inference is deprecated. "
+    "Use ai_karen_engine.core.model_runtime.* instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-try:
-    from .core_helpers_runtime import CoreHelpersRuntime
-except ImportError:
-    CoreHelpersRuntime = None
-
-# Import model store
-try:
-    from .model_store import ModelStore
-except ImportError:
-    ModelStore = None
-
-# Import factory for centralized initialization
-from .factory import (
+from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+    TransformersRuntime,
+)
+from ai_karen_engine.core.model_runtime.providers.vllm_runtime import (
+    VLLMRuntime,
+)
+from ai_karen_engine.core.model_runtime.providers.core_helpers_runtime import (
+    CoreHelpersRuntime,
+)
+from ai_karen_engine.core.model_runtime.huggingface_service import (
+    EnhancedHuggingFaceService,
+    HuggingFaceService,
+    ModelFilters,
+    TrainingFilters,
+    TrainableModel,
+)
+from ai_karen_engine.core.model_runtime.model_store import (
+    LocalModel,
+    ModelDescriptor,
+    ModelStore,
+    get_model_store,
+    initialize_model_store,
+    list_models,
+    get_model,
+    register_model,
+    scan_local_models,
+)
+from ai_karen_engine.inference.factory import (
     InferenceServiceConfig,
     InferenceServiceFactory,
     get_inference_service_factory,
+    get_local_gguf_runtime,
     get_transformers_runtime,
-    get_model_store,
+    get_model_store as _get_model_store_factory,
 )
 
 __all__ = [
     "TransformersRuntime",
     "VLLMRuntime",
     "CoreHelpersRuntime",
-    # Model Store
     "ModelStore",
-    # Factory
+    "ModelDescriptor",
+    "LocalModel",
+    "HuggingFaceService",
+    "EnhancedHuggingFaceService",
+    "ModelFilters",
+    "TrainingFilters",
+    "TrainableModel",
     "InferenceServiceConfig",
     "InferenceServiceFactory",
     "get_inference_service_factory",
-    # Factory convenience functions
+    "get_local_gguf_runtime",
     "get_transformers_runtime",
     "get_model_store",
+    "initialize_model_store",
+    "list_models",
+    "get_model",
+    "register_model",
+    "scan_local_models",
 ]

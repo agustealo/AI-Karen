@@ -18,8 +18,8 @@ describe('chat response fallback presentation', () => {
     });
 
     expect(degraded.providerDisplayName).toBe('Local Emergency Fallback');
-    expect(degraded.modelDisplayName).toBe('Karen Local Fallback');
-    expect(degraded.degradedBannerText).toContain('zai failed, switched to Local Emergency Fallback (Karen Local Fallback).');
+    expect(degraded.modelDisplayName).toBe('kari-fallback-v1');
+    expect(degraded.degradedBannerText).toContain('zai failed, switched to Local Emergency Fallback (kari-fallback-v1).');
   });
 
   it('does not claim failover when local runtime naming variants are equivalent', () => {
@@ -59,7 +59,7 @@ describe('chat response fallback presentation', () => {
       },
     });
 
-    expect(details.statusLabel).toBe('Emergency Unavailable');
+    expect(details.statusLabel).toBe('degraded mode');
     expect(details.providerLabel).toBe('none');
     expect(details.modelLabel).toBe('none');
     expect(details.providerAttempts).toHaveLength(1);

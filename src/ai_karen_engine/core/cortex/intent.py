@@ -17,12 +17,6 @@ BASIC_INTENT_MAP = {
     "memory": "memory",
     "diagnose": "diagnostics",
     "admin": "admin_panel",
-    # Routing shorthand patterns (KIRE)
-    "route": "routing.select",
-    "use provider": "routing.select",
-    "switch model": "routing.select",
-    "routing profile": "routing.profile",
-    "model selection": "routing.select",
     # Extend as needed for coverage
 }
 

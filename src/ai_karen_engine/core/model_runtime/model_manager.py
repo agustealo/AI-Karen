@@ -33,7 +33,9 @@ from ai_karen_engine.core.runtime.resilience.fallback_manager import (
     FallbackManager as ResilienceFallbackManager,
     get_fallback_manager as get_resilience_fallback_manager,
 )
-from ai_karen_engine.inference.transformers_runtime import TransformersRuntime
+from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+    TransformersRuntime,
+)
 from ai_karen_engine.integrations.providers.openai_compatible_provider import (
     OpenAICompatibleProvider,
 )
@@ -379,7 +381,7 @@ class ModelManager:
     def _build_runtime(self, endpoint: ProviderEndpoint) -> Any:
         if endpoint.endpoint_type == ProviderEndpointType.BUILTIN_TRANSFORMERS:
             from ai_karen_engine.config.config_manager import get_default_model
-            from ai_karen_engine.inference.core_helpers_runtime import (
+            from ai_karen_engine.core.model_runtime.providers.core_helpers_runtime import (
                 CoreHelpersRuntime,
             )
 
@@ -393,7 +395,7 @@ class ModelManager:
             return runtime
 
         if endpoint.endpoint_type == ProviderEndpointType.BUILTIN_VLLM:
-            from ai_karen_engine.inference.vllm_runtime import VLLMRuntime
+            from ai_karen_engine.core.model_runtime.providers.vllm_runtime import VLLMRuntime
 
             runtime = VLLMRuntime.get_instance(
                 model=endpoint.default_model or "auto",

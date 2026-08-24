@@ -181,6 +181,21 @@ class MonitoringConfig:
 
 
 @dataclass
+class MLConfig:
+    """Machine learning configuration."""
+
+    registry_dir: str = "models/registry"
+    evaluation_dataset_version: str = "ml-eval-v1"
+    default_calibration_version: str = "calib-v1"
+    promotion_min_gain: float = 0.01
+    promotion_max_latency_ms: float = 500.0
+    promotion_max_ece: float = 0.05
+    promotion_min_samples: int = 50
+    shadow_sample_limit: int = 200
+    artifact_hash_algorithm: str = "sha256"
+
+
+@dataclass
 class AgentRuntimeConfig:
     """Agent runtime configuration."""
 
@@ -226,6 +241,7 @@ class AIKarenConfig:
     services: ServiceConfig = field(default_factory=ServiceConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
+    ml: MLConfig = field(default_factory=MLConfig)
     web_ui: WebUIConfig = field(default_factory=WebUIConfig)
     agent_runtime: AgentRuntimeConfig = field(default_factory=AgentRuntimeConfig)
     expression: Dict[str, Any] = field(default_factory=dict)
@@ -295,6 +311,17 @@ DEFAULT_CONFIG = {
         "crawl_max_depth": 1,
         "enable_agent_mode": True,
         "degraded_mode_threshold": 3,
+    },
+    "ml": {
+        "registry_dir": "models/registry",
+        "evaluation_dataset_version": "ml-eval-v1",
+        "default_calibration_version": "calib-v1",
+        "promotion_min_gain": 0.01,
+        "promotion_max_latency_ms": 500.0,
+        "promotion_max_ece": 0.05,
+        "promotion_min_samples": 50,
+        "shadow_sample_limit": 200,
+        "artifact_hash_algorithm": "sha256",
     },
     "spacy_model": "en_core_web_sm",
     "memory": {
@@ -488,6 +515,8 @@ def _create_config_object(config_dict: Dict[str, Any]) -> AIKarenConfig:
         data["monitoring"] = MonitoringConfig(
             **_filter_kwargs(MonitoringConfig, data["monitoring"])
         )
+    if "ml" in data:
+        data["ml"] = MLConfig(**_filter_kwargs(MLConfig, data["ml"]))
     if "web_ui" in data:
         data["web_ui"] = WebUIConfig(**_filter_kwargs(WebUIConfig, data["web_ui"]))
 
@@ -747,6 +776,42 @@ def is_non_streaming_enabled() -> bool:
     return chat_cfg.get("non_streaming_enabled", True)
 
 
+def get_ml_config() -> Dict[str, Any]:
+    """Get the full ML configuration section."""
+    cfg = load_config()
+    return cfg.get("ml", DEFAULT_CONFIG["ml"])
+
+
+def get_ml_registry_dir() -> str:
+    """Get the ML model registry directory."""
+    return get_ml_config().get("registry_dir", "models/registry")
+
+
+def get_ml_promotion_min_gain() -> float:
+    """Get the minimum F1 gain required for promotion."""
+    return float(get_ml_config().get("promotion_min_gain", 0.01))
+
+
+def get_ml_promotion_max_latency_ms() -> float:
+    """Get the maximum allowed p95 latency for promotion."""
+    return float(get_ml_config().get("promotion_max_latency_ms", 500.0))
+
+
+def get_ml_promotion_max_ece() -> float:
+    """Get the maximum allowed calibration error for promotion."""
+    return float(get_ml_config().get("promotion_max_ece", 0.05))
+
+
+def get_ml_promotion_min_samples() -> int:
+    """Get the minimum evaluation samples required for promotion."""
+    return int(get_ml_config().get("promotion_min_samples", 50))
+
+
+def get_ml_shadow_sample_limit() -> int:
+    """Get the maximum number of shadow evaluation samples."""
+    return int(get_ml_config().get("shadow_sample_limit", 200))
+
+
 __all__ = [
     "load_config",
     "save_config",
@@ -777,6 +842,13 @@ __all__ = [
     "is_streaming_enabled",
     "get_chat_streaming_transport",
     "is_non_streaming_enabled",
+    "get_ml_config",
+    "get_ml_registry_dir",
+    "get_ml_promotion_min_gain",
+    "get_ml_promotion_max_latency_ms",
+    "get_ml_promotion_max_ece",
+    "get_ml_promotion_min_samples",
+    "get_ml_shadow_sample_limit",
     "config_manager",
     "get_config",
     "reload",
@@ -788,6 +860,7 @@ __all__ = [
     "ServiceConfig",
     "SecurityConfig",
     "MonitoringConfig",
+    "MLConfig",
     "WebUIConfig",
     "AgentRuntimeConfig",
     "Environment",

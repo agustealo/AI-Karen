@@ -89,3 +89,67 @@ class ModelStatus(str, Enum):
     SHADOW = "SHADOW"
     ACTIVE = "ACTIVE"
     RETIRED = "RETIRED"
+
+
+@dataclass
+class CalibrationContext:
+    task: PredictionTask
+    model_id: str
+    model_version: str
+    feature_version: str
+    predicted_label: str
+    dataset_version: str = "ml-eval-v1"
+
+
+@dataclass
+class CalibratedProbability:
+    raw_probability: float
+    calibrated_probability: float
+    calibration_version: str
+    method: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ShadowEvaluation:
+    evaluation_id: str
+    purpose: str
+    active_model_id: str
+    active_model_version: str
+    shadow_model_id: str
+    shadow_model_version: str
+    feature_version: str
+    input_text: str
+    input_features: dict[str, Any] = field(default_factory=dict)
+    active_prediction: Prediction | None = None
+    shadow_prediction: Prediction | None = None
+    agreement: bool = False
+    label_match: bool = False
+    confidence_delta: float = 0.0
+    latency_delta_ms: float = 0.0
+    active_correct: bool | None = None
+    shadow_correct: bool | None = None
+    active_fallback: bool = False
+    shadow_fallback: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ShadowComparisonResult:
+    evaluation_id: str
+    purpose: str
+    active_model_id: str
+    shadow_model_id: str
+    dataset_version: str
+    sample_count: int
+    agreement_rate: float
+    label_disagreement_count: int
+    avg_confidence_delta: float
+    avg_latency_delta_ms: float
+    fallback_delta: float
+    regression_count: int
+    active_fallback_rate: float
+    shadow_fallback_rate: float
+    active_accuracy: float | None = None
+    shadow_accuracy: float | None = None
+    evaluations: list[ShadowEvaluation] = field(default_factory=list)

@@ -26,7 +26,7 @@ from ai_karen_engine.services.training.training_interface import (
     TrainingJob,
     HardwareConstraints
 )
-from ai_karen_engine.inference.huggingface_service import EnhancedHuggingFaceService
+from ai_karen_engine.core.model_runtime.huggingface_service import EnhancedHuggingFaceService
 from ai_karen_engine.learning.training_data_manager import TrainingDataManager
 from ai_karen_engine.core.model_runtime.management.system_model_manager import SystemModelManager
 

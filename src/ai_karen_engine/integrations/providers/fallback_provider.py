@@ -183,7 +183,7 @@ class FallbackProvider(LLMProviderBase):
 
         for model_name, model_path in attempt_order:
             try:
-                from ai_karen_engine.inference.transformers_runtime import (
+                from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
                     TransformersRuntime,
                 )
 

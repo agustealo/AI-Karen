@@ -3,7 +3,6 @@ import logging
 import os
 import time
 import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,7 +14,6 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
     ChatExecutionStatus,
-    ChatStreamChunk,
 )
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     EmergencyFallbackResponse,
@@ -210,15 +208,6 @@ async def _log_audit_event(**kwargs: Any) -> None:
         pass
 
 
-def _ensure_routing_actions_registered() -> None:
-    """Ensure routing actions are registered for the /start endpoint."""
-    try:
-        import ai_karen_engine.routing.actions  # noqa: F401  — registers routing.* handlers in predictor registry
-    except Exception:
-        # Best-effort; if not present, action registry may be empty until lazily imported elsewhere
-        pass
-
-
 @router.get("/health")
 async def copilot_health():
     """Lightweight health check for copilot routes to verify wiring.
@@ -248,7 +237,6 @@ async def copilot_start_action(
     user_ctx: Optional[Dict[str, Any]] = None,
 ):
     """Generic CopilotKit action starter. Routes to predictor-registered actions."""
-    _ensure_routing_actions_registered()
     correlation_id = (
         http_request.headers.get("X-Correlation-Id") or f"copilot_{int(time.time())}"
     )
@@ -318,25 +306,16 @@ async def copilot_start_action(
     handler_getter = getattr(registry, "get", lambda *_: None)
     handler = handler_getter(req.action)
     if handler is None:
-        # Try late registration of routing actions, then re-check
+        available = []
         try:
-            import ai_karen_engine.routing.actions  # noqa: F401  — late-registers routing.* handlers in predictor registry
+            registry = _get_predictor_registry()
+            available = list(registry.keys()) if hasattr(registry, "keys") else []
         except Exception:
-            pass
-        registry = _get_predictor_registry()
-        handler_getter = getattr(registry, "get", lambda *_: None)
-        handler = handler_getter(req.action)
-        if handler is None:
             available = []
-            try:
-                registry = _get_predictor_registry()
-                available = list(registry.keys()) if hasattr(registry, "keys") else []
-            except Exception:
-                available = []
-            raise HTTPException(
-                status_code=404,
-                detail=f"Unknown action: {req.action}. Available: {available}",
-            )
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown action: {req.action}. Available: {available}",
+        )
 
     try:
         import inspect
@@ -384,7 +363,6 @@ async def copilot_start_action_get(action: str, http_request: Request):
     Accepts `action` as a query param and calls the POST handler with empty payload/context.
     Keeps legacy or misconfigured clients working without 404s.
     """
-    _ensure_routing_actions_registered()
     return await copilot_start_action(http_request=http_request)
 
 
@@ -540,50 +518,8 @@ async def copilot_assist_stream(
     )
 
     async def generate_stream():
-        sequence_counter = 0
-
-        initial_chunk = ChatStreamChunk(
-            type="status",
-            content="Initializing request...",
-            correlation_id=correlation_id,
-            metadata={"status": "initializing", "transport": "sse", "surface": "copilot"},
-            event_id=str(uuid.uuid4()),
-            sequence=sequence_counter,
-            request_id=response_id,
-            response_id=response_id,
-            conversation_id=conversation_id,
-            timestamp=datetime.utcnow(),
-        )
-        sequence_counter += 1
-        yield f"data: {json.dumps(initial_chunk.to_sse_payload())}\n\n"
-
-        try:
-            async for chunk in get_chat_runtime().execute_stream(chat_request):
-                payload = chunk.to_sse_payload()
-                if payload.get("sequence") is None:
-                    payload["sequence"] = sequence_counter
-                sequence_counter += 1
-                yield f"data: {json.dumps(payload)}\n\n"
-        except Exception as stream_error:
-            logger.error(
-                "Streaming error in copilot assist: %s",
-                stream_error,
-                extra={"correlation_id": correlation_id},
-            )
-            error_chunk = ChatStreamChunk(
-                type="error",
-                content="Streaming error: " + str(stream_error),
-                correlation_id=correlation_id,
-                metadata={"error_type": "stream_error"},
-                event_id=str(uuid.uuid4()),
-                sequence=sequence_counter,
-                request_id=response_id,
-                response_id=response_id,
-                conversation_id=conversation_id,
-                timestamp=datetime.utcnow(),
-            )
-            yield f"data: {json.dumps(error_chunk.to_sse_payload())}\n\n"
-
+        async for chunk in get_chat_runtime().execute_stream(chat_request):
+            yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

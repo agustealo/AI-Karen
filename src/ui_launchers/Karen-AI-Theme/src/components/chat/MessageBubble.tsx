@@ -111,10 +111,6 @@ const copyTextFallback = (text: string): boolean => {
 };
 
 const getActionLabel = (action: SuggestedAction): string => {
-  if (action.type === 'routing.profile.list') {
-    return 'Show Available Profiles';
-  }
-
   return action.description || action.type || 'Perform Action';
 };
 
@@ -193,8 +189,6 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
     statusLabel,
     showFallbackRow,
     fallbackLabel,
-    showReasonRow,
-    reasonLabel,
     showTokensRow,
     tokensLabel,
     memoryUsedLabel,
@@ -204,6 +198,7 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
     memoryLatencyLabel,
     memoryDegradedLabel,
     writebackStatusLabel,
+    providerAttempts,
   } = deriveResponseDetailsPresentation(message.metadata);
 
   const normalizedDegradedNotice = useMemo(

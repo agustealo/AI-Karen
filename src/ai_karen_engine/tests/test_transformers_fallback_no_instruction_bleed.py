@@ -1,4 +1,4 @@
-from ai_karen_engine.inference.transformers_runtime import TransformersRuntime
+from ai_karen_engine.core.model_runtime.providers.transformers_runtime import TransformersRuntime
 
 
 def test_transformers_fallback_no_instruction_bleed():

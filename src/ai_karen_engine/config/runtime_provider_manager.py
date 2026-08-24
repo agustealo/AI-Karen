@@ -348,7 +348,7 @@ class RuntimeProviderManager:
             if canonical_name in ("builtin_vllm",):
                 # Check if local model files exist for these specific runtimes
                 try:
-                    from ai_karen_engine.inference.model_store import ModelStore
+                    from ai_karen_engine.core.model_runtime.model_store import ModelStore
                     model_store = ModelStore()
                     local_models = model_store.scan_local_models()
                     

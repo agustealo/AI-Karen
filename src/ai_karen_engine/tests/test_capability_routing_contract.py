@@ -3,8 +3,8 @@ from ai_karen_engine.core.cortex.routing_intents import CAPABILITY_ROUTES, resol
 
 def test_capability_registry_contains_live_fact_routes():
     assert "time.current" in CAPABILITY_ROUTES
-    assert "web.search" in CAPABILITY_ROUTES
-    assert "weather.current" in CAPABILITY_ROUTES
+    assert "search.general" in CAPABILITY_ROUTES
+    assert "search.weather" in CAPABILITY_ROUTES
 
 
 def test_time_query_requires_tool():
@@ -17,10 +17,10 @@ def test_time_query_requires_tool():
 
 def test_web_search_requires_tool_and_live_data():
     decision = resolve_capability_decision("Search the internet for latest vLLM CUDA issue")
-    assert decision.intent == "web.search"
+    assert decision.intent == "search.general"
     assert decision.requires_tool is True
     assert decision.requires_live_data is True
-    assert decision.capability == "web_search"
+    assert decision.capability == "internet_search"
 
 
 def test_general_chat_allows_llm_only():

@@ -974,43 +974,33 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     const metadata = (lastAssistant?.metadata && typeof lastAssistant.metadata === 'object')
       ? lastAssistant.metadata as Record<string, unknown>
       : {};
-    const llm = (metadata.llm && typeof metadata.llm === 'object')
-      ? metadata.llm as Record<string, unknown>
-      : {};
 
     const asText = (value: unknown): string | undefined =>
       typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
-    const degradedReasonRaw = asText(metadata.reason) || asText(metadata.degraded_reason) || asText(llm.reason);
-    const degradedReason = getDegradationReasonLabel(degradedReasonRaw) || degradedReasonRaw;
-    const statusRaw = asText(metadata.status);
-    const status = getDegradationReasonLabel(statusRaw) || statusRaw;
-    const responseSource = asText(llm.response_source) || asText(metadata.response_source);
-    const fallbackLevel = asText(llm.fallback_level);
-    const isEmergencyStatic = responseSource === 'emergency_static' || fallbackLevel === '99';
-    const actualProvider = isEmergencyStatic
-      ? undefined
-      : asText(llm.actual_provider) || asText(llm.provider) || asText(metadata.actual_provider);
-    const actualModel = isEmergencyStatic
-      ? undefined
-      : asText(llm.actual_model) || asText(llm.model_id) || asText(metadata.actual_model);
+    const degradedReason = getDegradationReasonLabel(asText(metadata.degradation_reason)) || asText(metadata.degradation_reason);
+    const status = getDegradationReasonLabel(asText(metadata.status)) || asText(metadata.status);
+    const responseSource = asText(metadata.response_source);
+    const fallbackLevel = asText(metadata.fallback_level);
+
+    const actualProvider = asText(metadata.actual_provider);
+    const actualModel = asText(metadata.actual_model);
 
     return {
-      requestedProvider: asText(llm.requested_provider) || asText(metadata.requested_provider),
+      requestedProvider: asText(metadata.requested_provider),
       actualProvider,
-      requestedModel: asText(llm.requested_model) || asText(metadata.requested_model),
+      requestedModel: asText(metadata.requested_model),
       actualModel,
-      runtimeEngine: isEmergencyStatic ? undefined : asText(metadata.execution_path) || asText(llm.runtime_engine),
+      runtimeEngine: asText(metadata.runtime_engine),
       fallbackLevel,
       correlationId: asText(metadata.correlation_id),
       requestId: asText(metadata.request_id),
-      status: isEmergencyStatic ? 'emergency unavailable' : status,
+      status,
       responseSource,
-      usedFallback: Boolean(llm.used_fallback || llm.is_fallback || metadata.used_fallback),
-      degradedReason: isEmergencyStatic
-        ? degradedReason || 'No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.'
-        : degradedReason,
-      showCircuitWarning: Boolean(metadata.circuit_breaker_open || metadata.dependency_degraded || degradedReason || isEmergencyStatic),
+      usedFallback: Boolean(metadata.used_fallback),
+      degradedMode: Boolean(metadata.degraded_mode),
+      degradedReason,
+      showCircuitWarning: Boolean(metadata.circuit_breaker_open || metadata.dependency_degraded || degradedReason),
     };
   }, [messages]);
   const selectableProviders = useMemo(() => {
@@ -1331,10 +1321,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         }
       }
 
-      // Backend metadata is the source of truth. No frontend enrichment for requested_provider/model.
-      // If backend doesn't provide these fields, it means the provider wasn't honored or routing bypassed them.
-      // This preserves transparency about what actually happened.
-
       metadata.llm = llm;
       metadata.status = metadata.status || 'completed';
       metadata.execution_path = metadata.execution_path || 'stream';
@@ -1461,11 +1447,11 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           ? finalMetadata.llm as Record<string, unknown>
           : {};
 
-        if (preferredProvider && !llmMetadata?.requested_provider) {
+        if (preferredProvider && !finalMetadata.requested_provider) {
           console.warn(
             `[ChatInterface] Backend did not provide requested_provider. ` +
-            `Sent: ${preferredProvider}, Expected in metadata.llm.requested_provider. ` +
-            `This may indicate provider routing bypassed or unavailable.`
+              `Sent: ${preferredProvider}, Expected in metadata.requested_provider. ` +
+              `This may indicate provider routing bypassed or unavailable.`
           );
         }
 
@@ -1562,9 +1548,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         ? normalizeBackendChatResponse(runtimePayload)
         : null;
 
-      const noActiveCloudProvidersMessage =
-        'No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.';
-
       const errorAssistantMessage: ChatMessage | null = fallbackErrorResponse ? {
         id: fallbackErrorResponse.correlationId || 'assistant-error-' + Date.now(),
         role: 'assistant',
@@ -1577,7 +1560,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       } : null;
 
       setMessages((prev) => {
-        // Update user message to failed
         const next = prev.map(m => m.id === userMessage.id ? {
           ...m,
           status: fallbackErrorResponse ? 'completed' as const : 'failed' as const,
@@ -1599,27 +1581,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           }
           : {
               title: 'Chat request failed',
-              description: (() => {
-                const message = getDegradedResponseMessage(error);
-                if (
-                  message.includes('No active cloud providers are configured') ||
-                  message.includes('Built-in runtimes may still be available')
-                ) {
-                  return message;
-                }
-
-                const raw = error instanceof Error ? error.message : '';
-                if (
-                  raw.toLowerCase().includes('no configured provider could generate a response') ||
-                  raw.toLowerCase().includes('expression engine is currently inactive')
-                ) {
-                  return noActiveCloudProvidersMessage;
-                }
-
-                return message;
-              })(),
-              variant: 'destructive',
-            },
+              description: getDegradedResponseMessage(error),
+          }
       );
       console.error('Chat request failed:', error);
     } finally {
@@ -1653,11 +1616,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   const handleActionClick = useCallback((action: SuggestedAction) => {
     const messageText = action.description || action.type;
     if (!messageText) return;
-    if (action.type === 'routing.profile.list') {
-      setInput('List all available profiles');
-      handleSubmit('List all available profiles');
-      return;
-    }
     setInput(messageText);
     handleSubmit(messageText);
   }, [setInput, handleSubmit]);
@@ -1977,6 +1935,9 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         correlationId={latestAssistantMetadata.correlationId}
         requestId={latestAssistantMetadata.requestId}
         status={latestAssistantMetadata.status}
+        responseSource={latestAssistantMetadata.responseSource}
+        degradedMode={latestAssistantMetadata.degradedMode}
+        degradationReason={latestAssistantMetadata.degradedReason}
       />
 
       <RuntimeReceipt
