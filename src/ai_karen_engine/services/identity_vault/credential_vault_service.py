@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Union
 from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
 from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +47,7 @@ from ai_karen_engine.database.models.identity_vault import (
     ProviderDefinitionUpdate,
     CredentialCreate,
     CredentialUpdate,
+    CredentialSecretCreate,
     ExternalAccountCreate,
     ExternalAccountUpdate,
     CredentialBindingCreate,

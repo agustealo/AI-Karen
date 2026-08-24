@@ -37,8 +37,15 @@ class AdminHealthStatusResponse(BaseModel):
     last_transition_reason: Optional[str]
 
 
-def get_admin_health_service() -> AdminHealthService:
-    return AdminHealthService()
+_health_service_instance: Optional[AdminHealthService] = None
+
+
+async def get_admin_health_service() -> AdminHealthService:
+    global _health_service_instance
+    if _health_service_instance is None:
+        _health_service_instance = AdminHealthService()
+        await _health_service_instance.initialize()
+    return _health_service_instance
 
 
 def _normalize_health(status: str) -> str:
@@ -55,9 +62,9 @@ def _normalize_health(status: str) -> str:
 @router.get("/", response_model=AdminHealthStatusResponse)
 async def get_admin_health_status(
     current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_HEALTH_READ)),
+    service: AdminHealthService = Depends(get_admin_health_service),
 ):
     """System health dashboard with explicit normalized states (admin read)."""
-    service = get_admin_health_service()
     runtime = await service.get_runtime_status(operator_id=current_user.get("user_id"))
     deps = await service.get_dependency_health(operator_id=current_user.get("user_id"))
 
@@ -94,8 +101,8 @@ async def get_admin_health_status(
 @router.post("/check")
 async def trigger_admin_health_check(
     current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_HEALTH_READ)),
+    service: AdminHealthService = Depends(get_admin_health_service),
 ):
     """Trigger an immediate health check (admin read)."""
-    service = get_admin_health_service()
     result = await service.trigger_health_check(operator_id=current_user.get("user_id"))
     return result

@@ -65,8 +65,12 @@ class AdminHealthService:
     """
 
     def __init__(self, control_plane: Optional[ChatRuntimeControlPlane] = None) -> None:
-        self._control_plane = control_plane or get_chat_runtime_control_plane()
+        self._control_plane = control_plane
         self._audit = get_audit_logger()
+
+    async def initialize(self) -> None:
+        if self._control_plane is None:
+            self._control_plane = await get_chat_runtime_control_plane()
 
     def _audit_mutation(
         self,

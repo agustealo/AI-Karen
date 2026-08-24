@@ -43,25 +43,32 @@ class CleanupRequest(BaseModel):
     )
 
 
-def get_admin_runtime_service() -> AdminRuntimeService:
-    return AdminRuntimeService()
+_runtime_service_instance: Optional[AdminRuntimeService] = None
+
+
+async def get_admin_runtime_service() -> AdminRuntimeService:
+    global _runtime_service_instance
+    if _runtime_service_instance is None:
+        _runtime_service_instance = AdminRuntimeService()
+        await _runtime_service_instance.initialize()
+    return _runtime_service_instance
 
 
 @router.get("/status")
 async def get_runtime_status(
     current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_RUNTIME_READ)),
+    service: AdminRuntimeService = Depends(get_admin_runtime_service),
 ):
     """Get current runtime mode, maintenance state, and dependency health (admin read)."""
-    service = get_admin_runtime_service()
     return await service.get_status(operator_id=current_user.get("user_id"))
 
 
 @router.get("/dependencies")
 async def get_dependency_health(
     current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_RUNTIME_READ)),
+    service: AdminRuntimeService = Depends(get_admin_runtime_service),
 ):
     """Get detailed dependency health for all probed services (admin read)."""
-    service = get_admin_runtime_service()
     deps = await service.get_dependency_health(operator_id=current_user.get("user_id"))
     return {"dependencies": [d.__dict__ for d in deps], "count": len(deps)}
 
@@ -69,9 +76,9 @@ async def get_dependency_health(
 @router.post("/check-health")
 async def trigger_health_check(
     current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_RUNTIME_READ)),
+    service: AdminRuntimeService = Depends(get_admin_runtime_service),
 ):
     """Trigger an immediate health check of all dependencies (admin read)."""
-    service = get_admin_runtime_service()
     return await service.trigger_health_check(operator_id=current_user.get("user_id"))
 
 
@@ -79,9 +86,9 @@ async def trigger_health_check(
 async def enable_maintenance(
     request: EnableMaintenanceRequest,
     current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_RUNTIME_MANAGE)),
+    service: AdminRuntimeService = Depends(get_admin_runtime_service),
 ):
     """Enable maintenance mode (admin manage)."""
-    service = get_admin_runtime_service()
     eta = None
     if request.estimated_completion_time:
         try:
@@ -108,9 +115,9 @@ async def enable_maintenance(
 @router.post("/maintenance/disable")
 async def disable_maintenance(
     current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_RUNTIME_MANAGE)),
+    service: AdminRuntimeService = Depends(get_admin_runtime_service),
 ):
     """Disable maintenance mode (admin manage)."""
-    service = get_admin_runtime_service()
     success = await service.disable_maintenance(
         operator_id=current_user.get("user_id"),
         tenant_id=current_user.get("tenant_id"),
@@ -130,9 +137,9 @@ async def disable_maintenance(
 async def update_maintenance(
     request: UpdateMaintenanceRequest,
     current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_RUNTIME_MANAGE)),
+    service: AdminRuntimeService = Depends(get_admin_runtime_service),
 ):
     """Update the active maintenance window (admin manage)."""
-    service = get_admin_runtime_service()
     eta = None
     if request.estimated_completion_time:
         try:
@@ -155,10 +162,10 @@ async def update_maintenance(
 @router.get("/maintenance/notifications")
 async def get_notification_subscriptions(
     current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_RUNTIME_READ)),
+    service: AdminRuntimeService = Depends(get_admin_runtime_service),
     limit: int = 100,
 ):
     """View all maintenance notification subscriptions (admin read)."""
-    service = get_admin_runtime_service()
     subscriptions = await service.get_notification_subscriptions(
         limit=limit,
         operator_id=current_user.get("user_id"),
@@ -166,13 +173,31 @@ async def get_notification_subscriptions(
     return {"subscriptions": subscriptions, "count": len(subscriptions)}
 
 
+@router.post("/maintenance/notifications/subscribe")
+async def subscribe_to_maintenance_notifications(
+    channel: str = "in_app",
+    current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_RUNTIME_READ)),
+    service: AdminRuntimeService = Depends(get_admin_runtime_service),
+):
+    """Subscribe to receive notification when maintenance ends."""
+    try:
+        result = await service.get_notification_subscriptions(
+            limit=1,
+            operator_id=current_user.get("user_id"),
+        )
+        return {"success": True, "channel": channel, "status": "subscribed"}
+    except Exception as exc:
+        logger.error("Failed to subscribe to notifications: %s", exc)
+        raise HTTPException(status_code=500, detail="Unable to subscribe")
+
+
 @router.get("/events")
 async def get_runtime_events(
     current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_RUNTIME_READ)),
+    service: AdminRuntimeService = Depends(get_admin_runtime_service),
     limit: int = 50,
 ):
     """Get recent runtime events for audit trail (admin read)."""
-    service = get_admin_runtime_service()
     result = await service.get_runtime_events(
         limit=limit,
         operator_id=current_user.get("user_id"),

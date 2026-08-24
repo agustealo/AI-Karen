@@ -26,7 +26,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from ai_karen_engine.core.services.base import Base
+from ai_karen_engine.database.models import Base
 
 
 class CredentialStatus(str, Enum):
@@ -111,7 +111,7 @@ class ProviderDefinition(Base):
     provider_id = Column(String(255), unique=True, nullable=False, index=True)
     display_name = Column(String(255), nullable=False)
     description = Column(Text)
-    provider_type = Column(Enum(ProviderType), nullable=False)
+    provider_type = Column(String(50), nullable=False)  # Using String instead of Enum for compatibility
     config = Column(JSON, nullable=False)  # OAuth config, API endpoints, etc.
     icon_url = Column(String(500))
     website_url = Column(String(500))
@@ -141,7 +141,7 @@ class CredentialSecret(Base):
     secret_type = Column(String(50), nullable=False)  # api_key, refresh_token, access_token, etc.
     encrypted_value = Column(Text, nullable=False)  # Encrypted secret data
     encryption_key_id = Column(String(255))  # Key used for encryption
-    metadata = Column(JSON, default=dict)  # Additional secret metadata
+    secret_metadata = Column(JSON, default=dict)  # Additional secret metadata
     created_at = Column(DateTime(timezone=True), default=func.now())
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     
@@ -163,9 +163,9 @@ class Credential(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text)
     provider_id = Column(UUID(as_uuid=True), ForeignKey('identity_providers.id', ondelete='CASCADE'), nullable=False, index=True)
-    status = Column(Enum(CredentialStatus), default=CredentialStatus.ACTIVE)
+    status = Column(String(50), default="active")
     credential_type = Column(String(50), nullable=False)  # oauth, api_key, basic_auth, etc.
-    metadata = Column(JSON, default=dict)  # Additional credential metadata
+    credential_metadata = Column(JSON, default=dict)  # Additional credential metadata
     masked_hint = Column(String(255))  # UI hint (e.g., "••••••••••••••••")
     last_used_at = Column(DateTime(timezone=True))
     expires_at = Column(DateTime(timezone=True))  # Optional expiration for tokens
@@ -259,7 +259,7 @@ class AccountSession(Base):
     session_token = Column(String(255), unique=True, nullable=False, index=True)
     access_token = Column(Text)
     refresh_token = Column(Text)
-    token_type = Column(Enum(TokenType), nullable=False)
+    token_type = Column(String(50), nullable=False)
     expires_at = Column(DateTime(timezone=True))
     scopes = Column(JSON, default=list)  # OAuth scopes or permissions
     session_metadata = Column(JSON, default=dict)  # Session-specific metadata
@@ -328,7 +328,7 @@ class TokenLease(Base):
     access_token = Column(Text)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     scopes = Column(JSON, default=list)
-    metadata = Column(JSON, default=dict)
+    lease_metadata = Column(JSON, default=dict)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), default=func.now())
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
@@ -359,7 +359,7 @@ class LoginAttempt(Base):
     ip_address = Column(String(45))
     user_agent = Column(String(500))
     timestamp = Column(DateTime(timezone=True), default=func.now())
-    metadata = Column(JSON, default=dict)
+    attempt_metadata = Column(JSON, default=dict)
     
     # Relationships
     credential = relationship("Credential", back_populates="login_attempts")
@@ -391,7 +391,7 @@ class CredentialAuditEvent(Base):
     correlation_id = Column(String(255), index=True)
     ip_address = Column(String(45))
     user_agent = Column(String(500))
-    metadata = Column(JSON, default=dict)
+    audit_metadata = Column(JSON, default=dict)
     timestamp = Column(DateTime(timezone=True), default=func.now())
     
     # Relationships
@@ -572,4 +572,4 @@ class IdentityVaultSchema:
 
 
 # Import Base at the end to avoid circular imports
-from .base import Base
+from ai_karen_engine.database.models import Base

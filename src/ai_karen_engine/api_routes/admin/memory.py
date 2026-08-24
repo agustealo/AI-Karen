@@ -71,6 +71,36 @@ async def get_memory_stats(
         return [AdminMemoryStatsResponse(tenant_id=effective_tenant, total_items=0, total_size_bytes=0)]
 
 
+@router.get("/observability")
+async def get_memory_observability(
+    current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_MEMORY_READ)),
+    tenant_id: Optional[str] = Query("default"),
+):
+    """Get memory observability data (admin read)."""
+    try:
+        from ai_karen_engine.database.client import MultiTenantPostgresClient
+        db = MultiTenantPostgresClient()
+        async with db.get_async_session() as session:
+            from sqlalchemy import text
+            result = await session.execute(
+                text("SELECT COUNT(*) FROM memory_items WHERE tenant_id = :tid"),
+                {"tid": tenant_id or "default"},
+            )
+            total_items = result.scalar() or 0
+
+        return {
+            "events": [],
+            "summary": {
+                "memory_used": total_items > 0,
+                "total_items": total_items,
+                "tenant_id": tenant_id or "default",
+            },
+        }
+    except Exception as exc:
+        logger.error("Failed to get memory observability: %s", exc)
+        return {"events": [], "summary": {"memory_used": False}}
+
+
 @router.post("/cleanup")
 async def cleanup_memory(
     request: AdminMemoryCleanupRequest,
