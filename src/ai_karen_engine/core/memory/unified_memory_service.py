@@ -184,6 +184,12 @@ class UnifiedMemoryService:
         correlation_id = correlation_id or str(uuid.uuid4())
 
         try:
+            # Enforce identity requirements for memory queries
+            if not request.user_id or request.user_id.strip() == "anonymous":
+                error_msg = f"user_id is required for memory queries, got: {request.user_id}"
+                logger.error(error_msg, extra={"correlation_id": correlation_id})
+                raise ValueError(error_msg)
+
             self.metrics["unified_queries"] += 1
 
             # 1. Tenant filtering - build metadata filter
@@ -269,6 +275,12 @@ class UnifiedMemoryService:
         correlation_id = correlation_id or str(uuid.uuid4())
 
         try:
+            # Enforce identity requirements for durable memory
+            if not request.user_id or request.user_id.strip() == "anonymous":
+                error_msg = f"user_id is required for durable memory operations, got: {request.user_id}"
+                logger.error(error_msg, extra={"correlation_id": correlation_id})
+                raise ValueError(error_msg)
+
             self.metrics["unified_commits"] += 1
 
             # 1. Validate and assign decay tier based on importance
