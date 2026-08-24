@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import math
 import pytest
 
 from ai_karen_engine.core.adaptive.contracts import ActionOutcomeObservation
 from ai_karen_engine.core.adaptive.learning.aggregates import EvidenceAggregator
-from ai_karen_engine.core.adaptive.learning.contextual_policy import ContextualPolicy
+from ai_karen_engine.core.adaptive.learning.contextual_policy import (
+    BaselinePolicy,
+    LinearContextualPolicy,
+)
+from ai_karen_engine.core.adaptive.learning.policy_contracts import (
+    ActionRiskClass,
+    DecisionType,
+    PolicyContext,
+)
 from ai_karen_engine.core.adaptive.learning.observations import (
     AdaptiveObservationProcessor,
 )
@@ -67,11 +76,17 @@ def test_evidence_aggregator():
 
 
 def test_contextual_policy_shadow():
-    policy = ContextualPolicy(enabled=False)
-    assert policy.enabled is False
-    scores = [0.5, 0.7, 0.3]
-    adjusted = policy.rank(None, [], scores)
-    assert adjusted == scores
+    policy = LinearContextualPolicy()
+    context = PolicyContext(
+        feature_snapshot_id="snap-1",
+        decision_type=DecisionType.RESPOND_STRATEGY,
+        eligible_actions=["respond_directly", "ask_clarification"],
+        risk_class=ActionRiskClass.LOW,
+    )
+    decision = policy.score_actions(context, context.eligible_actions)
+    assert decision.policy_id == "linear-contextual"
+    assert decision.chosen_action in context.eligible_actions
+    assert math.isclose(sum(decision.probabilities.values()), 1.0, abs_tol=1e-6)
 
 
 def test_offline_policy_evaluator():

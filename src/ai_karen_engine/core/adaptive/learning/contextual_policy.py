@@ -1,69 +1,127 @@
-"""Contextual policy abstraction.
+"""Contextual policy implementations.
 
-Contextual bandit-style learning for discrete low-risk choices.
-Initially deterministic/statistical.
+BaselinePolicy (deterministic production control) and LinearContextualPolicy
+(shadow candidate).
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
+
+import numpy as np
+
+from ai_karen_engine.core.adaptive.learning.policy_contracts import (
+    ActionRiskClass,
+    DecisionType,
+    PolicyContext,
+    PolicyDecision,
+    PolicyStatus,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class ContextualPolicy:
-    """Contextual bandit abstraction for adaptive action selection.
+class BaselinePolicy:
+    policy_id = "baseline"
+    policy_version = "v1"
+    status = PolicyStatus.ACTIVE
 
-    Initially deterministic. Shadow mode only by default.
-    """
+    def __init__(self) -> None:
+        self._observations: list[PolicyDecision] = []
 
-    def __init__(self, enabled: bool = False, exploration_rate: float = 0.0) -> None:
-        self._enabled = enabled
-        self._exploration_rate = exploration_rate
-        self._policy_version = "contextual-v1"
-        self._observations: list[dict[str, Any]] = []
-
-    def rank(
+    def score_actions(
         self,
-        context: Any,
-        candidates: list[dict[str, Any]],
-        baseline_scores: list[float],
-    ) -> list[float]:
-        """Return adjusted scores for candidates.
+        context: PolicyContext,
+        eligible_actions: list[str],
+    ) -> PolicyDecision:
+        scores = {action: 0.0 for action in eligible_actions}
+        features = context.normalized_features or {}
+        for action in eligible_actions:
+            score = float(features.get(f"baseline:{action}", 0.5))
+            scores[action] = max(0.0, min(1.0, score))
 
-        In shadow mode, returns baseline scores unchanged.
-        When enabled, applies learned adjustments.
-        """
-        if not self._enabled or self._exploration_rate <= 0.0:
-            return baseline_scores
+        chosen = max(scores, key=lambda k: scores[k]) if scores else ""
+        chosen_prob = scores.get(chosen, 1.0) if chosen else 0.0
 
-        adjusted = []
-        for i, candidate in enumerate(candidates):
-            score = baseline_scores[i] if i < len(baseline_scores) else 0.0
-            adjusted.append(score)
-        return adjusted
+        decision = PolicyDecision(
+            scores=dict(scores),
+            probabilities={chosen: 1.0} if chosen else {},
+            chosen_action=chosen,
+            chosen_probability=chosen_prob,
+            policy_id=self.policy_id,
+            policy_version=self.policy_version,
+            exploration_used=False,
+        )
+        self._observations.append(decision)
+        return decision
 
-    def log_decision(
+
+class LinearContextualPolicy:
+    def __init__(
         self,
-        context: Any,
-        candidates: list[dict[str, Any]],
-        chosen_index: int,
-        scores: list[float],
+        policy_id: str = "linear-contextual",
+        policy_version: str = "v1",
+        mode: PolicyStatus = PolicyStatus.SHADOW,
+        weights: dict[str, float] | None = None,
     ) -> None:
-        """Log a decision for counterfactual evaluation."""
-        self._observations.append({
-            "context": context,
-            "candidates": candidates,
-            "chosen_index": chosen_index,
-            "scores": scores,
-            "policy_version": self._policy_version,
-        })
+        self.policy_id = policy_id
+        self.policy_version = policy_version
+        self.status = mode
+        self._weights = weights or {}
+        self._observations: list[PolicyDecision] = []
+        self._exploration_rate = 0.0
 
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
+    def score_actions(
+        self,
+        context: PolicyContext,
+        eligible_actions: list[str],
+    ) -> PolicyDecision:
+        if not eligible_actions:
+            return PolicyDecision(
+                policy_id=self.policy_id,
+                policy_version=self.policy_version,
+            )
 
-    @property
-    def policy_version(self) -> str:
-        return self._policy_version
+        features = context.normalized_features or {}
+        scores = {}
+        for action in eligible_actions:
+            score = 0.0
+            for feature_key, feature_value in features.items():
+                weight = self._weights.get(f"{feature_key}:{action}", 0.0)
+                score += weight * float(feature_value)
+            bias = self._weights.get(f"bias:{action}", 0.0)
+            score += bias
+            scores[action] = max(0.0, min(1.0, score))
+
+        if self._exploration_rate > 0.0 and context.risk_class != ActionRiskClass.HIGH:
+            pass
+
+        total = sum(scores.values())
+        probabilities = {}
+        if total > 0.0:
+            probabilities = {a: s / total for a, s in scores.items()}
+        else:
+            probabilities = {a: 1.0 / len(scores) for a in scores}
+
+        chosen = max(scores, key=lambda k: scores[k]) if scores else ""
+        chosen_prob = probabilities.get(chosen, 0.0)
+
+        decision = PolicyDecision(
+            scores=dict(scores),
+            probabilities=dict(probabilities),
+            chosen_action=chosen,
+            chosen_probability=chosen_prob,
+            policy_id=self.policy_id,
+            policy_version=self.policy_version,
+            exploration_used=False,
+        )
+        self._observations.append(decision)
+        return decision
+
+    def set_weights(self, weights: dict[str, float]) -> None:
+        self._weights = dict(weights)
+
+    def set_mode(self, mode: PolicyStatus) -> None:
+        self.status = mode

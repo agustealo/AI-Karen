@@ -28,7 +28,7 @@ class RuleBasedAdaptivePolicy:
         self, context: AdaptiveContext, candidates: list[dict[str, Any]]
     ) -> AdaptiveRecommendationSet:
         """Rank candidates using deterministic rules."""
-        recommendations = []
+        recommendations: list[AdaptiveRecommendation] = []
         for candidate in candidates:
             action_type = candidate.get("action_type")
             target_id = candidate.get("target_id")
