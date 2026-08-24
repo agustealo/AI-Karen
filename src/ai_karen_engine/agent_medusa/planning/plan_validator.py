@@ -17,7 +17,6 @@ This is the single validation gate referenced by AGENT-LIVE-1 A6 / P0-1.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
 
 from ..contracts.deep_execution_plan import DeepExecutionPlan, PlanStep
 
@@ -29,8 +28,8 @@ class PlanValidationError(Exception):
 @dataclass
 class PlanValidationReport:
     valid: bool
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 class PlanValidator:
@@ -43,13 +42,13 @@ class PlanValidator:
         self,
         plan: DeepExecutionPlan,
         *,
-        allowed_agents: Optional[Set[str]] = None,
-        allowed_tools: Optional[Set[str]] = None,
-        allowed_plugins: Optional[Set[str]] = None,
+        allowed_agents: set[str] | None = None,
+        allowed_tools: set[str] | None = None,
+        allowed_plugins: set[str] | None = None,
         max_parallel_steps: int = 4,
         max_steps: int = 32,
     ) -> PlanValidationReport:
-        errors: List[str] = []
+        errors: list[str] = []
 
         if not plan.steps:
             errors.append("plan has no steps")
@@ -58,7 +57,7 @@ class PlanValidator:
         if len(plan.steps) > max_steps:
             errors.append(f"plan step count {len(plan.steps)} exceeds max {max_steps}")
 
-        ids: Set[str] = set()
+        ids: set[str] = set()
         for step in plan.steps:
             if not step.id:
                 errors.append("step has empty id")
@@ -106,13 +105,13 @@ class PlanValidator:
         return PlanValidationReport(valid=not errors, errors=errors)
 
     @staticmethod
-    def _detect_cycle(steps: List[PlanStep]) -> Optional[List[str]]:
-        graph: Dict[str, List[str]] = {s.id: list(s.dependencies) for s in steps}
+    def _detect_cycle(steps: list[PlanStep]) -> list[str] | None:
+        graph: dict[str, list[str]] = {s.id: list(s.dependencies) for s in steps}
         WHITE, GRAY, BLACK = 0, 1, 2
-        color: Dict[str, int] = {s.id: WHITE for s in steps}
-        stack: List[str] = []
+        color: dict[str, int] = {s.id: WHITE for s in steps}
+        stack: list[str] = []
 
-        def visit(node: str) -> Optional[List[str]]:
+        def visit(node: str) -> list[str] | None:
             color[node] = GRAY
             stack.append(node)
             for nxt in graph.get(node, []):
@@ -137,7 +136,7 @@ class PlanValidator:
     def _calculate_max_parallelism(self, plan: DeepExecutionPlan) -> int:
         """Calculate maximum parallel steps based on dependency constraints."""
         step_map = {step.id: step for step in plan.steps}
-        completed: Set[str] = set()
+        completed: set[str] = set()
         max_parallel = 0
 
         while len(completed) < len(plan.steps):
@@ -152,34 +151,31 @@ class PlanValidator:
 
         return max_parallel
 
-    def _validate_capability_chains(self, plan: DeepExecutionPlan) -> List[str]:
-        """Validate that capability dependencies can be satisfied through the plan."""
-        errors: List[str] = []
+    def _validate_capability_chains(self, plan: DeepExecutionPlan) -> list[str]:
+        """Validate that dependency chains are well-formed."""
+        errors: list[str] = []
         step_map = {step.id: step for step in plan.steps}
 
         for step in plan.steps:
-            if step.input_contract:
-                for required_input in step.input_contract.required_inputs:
-                    if required_input not in step_map:
-                        errors.append(
-                            f"step {step.id} requires input from unknown step: {required_input}"
-                        )
-
-                    dep_step = step_map.get(required_input)
-                    if dep_step and dep_step.output_contract:
+            for dep_id in step.dependencies:
+                if dep_id not in step_map:
+                    errors.append(f"step {step.id} depends on unknown step: {dep_id}")
+                else:
+                    dep_step = step_map[dep_id]
+                    if dep_step.output_contract:
                         provided_outputs = set(dep_step.output_contract.outputs_provided or [])
                         if not provided_outputs:
                             errors.append(
-                                f"step {required_input} provides no outputs but is required by {step.id}"
+                                f"step {dep_id} provides no outputs but is required by {step.id}"
                             )
 
         return errors
 
-    def _validate_input_satisfaction(self, plan: DeepExecutionPlan) -> List[str]:
+    def _validate_input_satisfaction(self, plan: DeepExecutionPlan) -> list[str]:
         """Validate that all required inputs will be satisfied by some step."""
-        errors: List[str] = []
+        errors: list[str] = []
         step_map = {step.id: step for step in plan.steps}
-        all_provided_outputs: Set[str] = set()
+        all_provided_outputs: set[str] = set()
 
         for step in plan.steps:
             if step.output_contract:

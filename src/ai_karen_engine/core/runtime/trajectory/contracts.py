@@ -44,6 +44,8 @@ class ExecutionTrajectory:
     request_id: str | None = None
     correlation_id: str | None = None
 
+    executed_topology: str | None = None
+
     tenant_id: str | None = None
     user_id: str | None = None
     session_id: str | None = None
@@ -96,6 +98,9 @@ class ExecutionTrajectory:
 
     response_source: str | None = None
 
+    feature_snapshot_refs: list[str] = field(default_factory=list)
+    decision_observation_refs: list[str] = field(default_factory=list)
+
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -111,6 +116,7 @@ class ExecutionTrajectory:
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "input_fingerprint": self.input_fingerprint,
             "intent": self.intent,
+            "executed_topology": self.executed_topology,
             "intelligence_signals": self.intelligence_signals,
             "cortex_decision": self.cortex_decision,
             "policy_decision_id": self.policy_decision_id,
@@ -157,6 +163,8 @@ class ExecutionTrajectory:
             "execution_status": self.execution_status,
             "error_code": self.error_code,
             "response_source": self.response_source,
+            "feature_snapshot_refs": self.feature_snapshot_refs,
+            "decision_observation_refs": self.decision_observation_refs,
         }
         if self.metadata:
             data["metadata"] = self.metadata

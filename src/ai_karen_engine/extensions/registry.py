@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from ai_karen_engine.extensions.contracts import (
-    ExtensionManifest,
-    ExtensionRegistration,
     ExtensionLifecycleState,
+    ExtensionRegistration,
 )
 from ai_karen_engine.extensions.errors import ExtensionNotFoundError
 
@@ -38,11 +36,11 @@ class ExtensionRegistry:
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._registrations: Dict[str, ExtensionRegistration] = {}
-        self._by_capability: Dict[str, Set[str]] = {}
-        self._by_intent: Dict[str, Set[str]] = {}
-        self._by_permission: Dict[str, Set[str]] = {}
-        self._versions: Dict[str, Dict[str, ExtensionRegistration]] = {}
+        self._registrations: dict[str, ExtensionRegistration] = {}
+        self._by_capability: dict[str, set[str]] = {}
+        self._by_intent: dict[str, set[str]] = {}
+        self._by_permission: dict[str, set[str]] = {}
+        self._versions: dict[str, dict[str, ExtensionRegistration]] = {}
 
     def register(self, registration: ExtensionRegistration) -> None:
         """Register an extension after validation.
@@ -102,30 +100,30 @@ class ExtensionRegistry:
 
         logger.info("Unregistered extension: %s", plugin_id)
 
-    def get(self, plugin_id: str) -> Optional[ExtensionRegistration]:
+    def get(self, plugin_id: str) -> ExtensionRegistration | None:
         """Get registration by id."""
         return self._registrations.get(plugin_id)
 
-    def get_by_version(self, plugin_id: str, version: str) -> Optional[ExtensionRegistration]:
+    def get_by_version(self, plugin_id: str, version: str) -> ExtensionRegistration | None:
         """Get a specific version of an extension."""
         return self._versions.get(plugin_id, {}).get(version)
 
-    def get_by_capability(self, capability_id: str) -> List[ExtensionRegistration]:
+    def get_by_capability(self, capability_id: str) -> list[ExtensionRegistration]:
         """Find extensions by capability."""
         plugin_ids = self._by_capability.get(capability_id, set())
         return [self._registrations[pid] for pid in plugin_ids if pid in self._registrations]
 
-    def get_by_intent(self, intent: str) -> List[ExtensionRegistration]:
+    def get_by_intent(self, intent: str) -> list[ExtensionRegistration]:
         """Find extensions by intent."""
         plugin_ids = self._by_intent.get(intent, set())
         return [self._registrations[pid] for pid in plugin_ids if pid in self._registrations]
 
-    def get_by_permission(self, permission: str) -> List[ExtensionRegistration]:
+    def get_by_permission(self, permission: str) -> list[ExtensionRegistration]:
         """Find extensions requiring a permission."""
         plugin_ids = self._by_permission.get(permission, set())
         return [self._registrations[pid] for pid in plugin_ids if pid in self._registrations]
 
-    def list_registered(self) -> List[ExtensionRegistration]:
+    def list_registered(self) -> list[ExtensionRegistration]:
         """List all registered extensions."""
         return [
             reg for reg in self._registrations.values()
@@ -137,14 +135,14 @@ class ExtensionRegistry:
             }
         ]
 
-    def list_enabled(self) -> List[ExtensionRegistration]:
+    def list_enabled(self) -> list[ExtensionRegistration]:
         """List enabled extensions."""
         return [
             reg for reg in self._registrations.values()
             if reg.state == ExtensionLifecycleState.ENABLED
         ]
 
-    def update_state(self, plugin_id: str, state: ExtensionLifecycleState, error: Optional[str] = None) -> None:
+    def update_state(self, plugin_id: str, state: ExtensionLifecycleState, error: str | None = None) -> None:
         """Update lifecycle state."""
         registration = self._registrations.get(plugin_id)
         if registration is None:
@@ -154,7 +152,7 @@ class ExtensionRegistry:
             registration.last_error = error
         logger.debug("Extension %s state -> %s", plugin_id, state.value)
 
-    def prune_stale(self, discovered_ids: Set[str]) -> List[str]:
+    def prune_stale(self, discovered_ids: set[str]) -> list[str]:
         """Remove registered extensions that no longer exist on disk.
 
         Returns list of pruned plugin ids.
@@ -164,12 +162,12 @@ class ExtensionRegistry:
             if plugin_id not in discovered_ids
         ]
         for plugin_id in stale:
-            asyncio.create_task(self.unregister(plugin_id))
+            self.unregister(plugin_id)
         return stale
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Registry statistics."""
-        by_state: Dict[str, int] = {}
+        by_state: dict[str, int] = {}
         for reg in self._registrations.values():
             by_state[reg.state.value] = by_state.get(reg.state.value, 0) + 1
         return {

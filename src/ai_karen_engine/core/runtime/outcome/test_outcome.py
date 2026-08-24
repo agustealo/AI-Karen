@@ -1,20 +1,13 @@
 from __future__ import annotations
 
-import copy
-
-import pytest
-
 from ai_karen_engine.core.observability.context import (
     ObservabilityContext,
-    bind_observability_context,
     clear_observability_context,
     set_observability_context,
 )
 from ai_karen_engine.core.runtime.outcome.contracts import (
-    ExecutionOutcome,
     ExecutionStatus,
     UserFeedbackType,
-    UserOutcome,
 )
 from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
 from ai_karen_engine.core.runtime.outcome.store import InMemoryOutcomeStore

@@ -6,43 +6,43 @@ credential management, OAuth flows, account binding, and audit logging.
 """
 
 import uuid
-from datetime import datetime, timedelta
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Security
-from fastapi.responses import JSONResponse
-from sqlalchemy import select
 
+from fastapi import APIRouter, Depends, HTTPException, Query, Security
+from fastapi.responses import JSONResponse
+
+from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.security import get_current_user, get_tenant_id
-from ai_karen_engine.services.identity_vault.credential_vault_service import CredentialVaultService
 from ai_karen_engine.database.models.identity_vault import (
-    ProviderDefinitionCreate,
-    ProviderDefinitionUpdate,
+    AccountCapabilityDiscovery,
+    AccountSession,
+    AccountSessionCreate,
+    AuditEventType,
+    AuthGrant,
+    AuthGrantCreate,
+    Credential,
+    CredentialAuditEvent,
+    CredentialBinding,
+    CredentialBindingCreate,
     CredentialCreate,
+    CredentialHealthStatus,
+    CredentialSecretCreate,
+    CredentialStatus,
     CredentialUpdate,
+    ExternalAccount,
     ExternalAccountCreate,
     ExternalAccountUpdate,
-    CredentialBindingCreate,
-    AccountSessionCreate,
-    AuthGrantCreate,
-    TokenLeaseCreate,
-    LoginAttemptCreate,
-    CredentialAuditEventCreate,
-    ProviderDefinition,
-    Credential,
-    ExternalAccount,
-    CredentialBinding,
-    AccountSession,
-    AuthGrant,
-    TokenLease,
     LoginAttempt,
-    CredentialAuditEvent,
-    CredentialResponse,
-    ExternalAccountResponse,
-    AccountCapabilityDiscovery,
+    LoginAttemptCreate,
+    ProviderDefinition,
+    ProviderDefinitionCreate,
+    ProviderDefinitionUpdate,
+    TokenLease,
+    TokenLeaseCreate,
     TokenRotationResult,
-    CredentialHealthStatus,
 )
-from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.services.identity_vault.credential_vault_service import (
+    CredentialVaultService,
+)
 
 logger = get_logger(__name__)
 
@@ -50,11 +50,14 @@ router = APIRouter(prefix="/identity-vault", tags=["identity-vault"])
 
 
 # Dependency to get the credential vault service
+_vault_service: CredentialVaultService | None = None
+
 def get_credential_vault_service() -> CredentialVaultService:
     """Get the credential vault service instance."""
-    # In a real implementation, this would be injected via dependency injection
-    # For now, we'll create a new instance
-    return CredentialVaultService()
+    global _vault_service
+    if _vault_service is None:
+        _vault_service = CredentialVaultService()
+    return _vault_service
 
 
 # Provider Management Routes
@@ -82,12 +85,13 @@ async def create_provider(
 @router.get("/providers/{provider_id}", response_model=ProviderDefinition)
 async def get_provider(
     provider_id: str,
+    tenant_id: uuid.UUID = Security(get_tenant_id),
     service: CredentialVaultService = Depends(get_credential_vault_service),
 ):
     """Get a provider definition by ID."""
     try:
         await service.initialize()
-        provider = await service.get_provider(provider_id)
+        provider = await service.get_provider(provider_id=provider_id, tenant_id=tenant_id)
         if not provider:
             raise HTTPException(status_code=404, detail="Provider not found")
         return provider
@@ -98,7 +102,7 @@ async def get_provider(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/providers", response_model=List[ProviderDefinition])
+@router.get("/providers", response_model=list[ProviderDefinition])
 async def list_providers(
     enabled_only: bool = Query(False, description="Only return enabled providers"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of providers to return"),
@@ -177,7 +181,7 @@ async def delete_provider(
 @router.post("/credentials", response_model=Credential)
 async def create_credential(
     credential_data: CredentialCreate,
-    secrets: List[CredentialSecretCreate],
+    secrets: list[CredentialSecretCreate],
     tenant_id: uuid.UUID = Security(get_tenant_id),
     user_id: str = Security(get_current_user),
     service: CredentialVaultService = Depends(get_credential_vault_service),
@@ -200,12 +204,13 @@ async def create_credential(
 @router.get("/credentials/{credential_id}", response_model=Credential)
 async def get_credential(
     credential_id: uuid.UUID,
+    tenant_id: uuid.UUID = Security(get_tenant_id),
     service: CredentialVaultService = Depends(get_credential_vault_service),
 ):
     """Get a credential by ID."""
     try:
         await service.initialize()
-        credential = await service.get_credential(credential_id)
+        credential = await service.get_credential(credential_id=credential_id, tenant_id=tenant_id)
         if not credential:
             raise HTTPException(status_code=404, detail="Credential not found")
         return credential
@@ -216,10 +221,10 @@ async def get_credential(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/credentials", response_model=List[Credential])
+@router.get("/credentials", response_model=list[Credential])
 async def list_credentials(
-    provider_id: Optional[str] = Query(None, description="Filter by provider ID"),
-    status: Optional[CredentialStatus] = Query(None, description="Filter by status"),
+    provider_id: str | None = Query(None, description="Filter by provider ID"),
+    status: CredentialStatus | None = Query(None, description="Filter by status"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of credentials to return"),
     offset: int = Query(0, ge=0, description="Number of credentials to skip"),
     tenant_id: uuid.UUID = Security(get_tenant_id),
@@ -296,7 +301,7 @@ async def delete_credential(
 @router.post("/credentials/{credential_id}/rotate", response_model=TokenRotationResult)
 async def rotate_credential(
     credential_id: uuid.UUID,
-    new_secrets: List[CredentialSecretCreate],
+    new_secrets: list[CredentialSecretCreate],
     tenant_id: uuid.UUID = Security(get_tenant_id),
     user_id: str = Security(get_current_user),
     service: CredentialVaultService = Depends(get_credential_vault_service),
@@ -323,7 +328,7 @@ async def rotate_credential(
 @router.post("/credentials/{credential_id}/revoke")
 async def revoke_credential(
     credential_id: uuid.UUID,
-    reason: Optional[str] = Query(None, description="Reason for revocation"),
+    reason: str | None = Query(None, description="Reason for revocation"),
     tenant_id: uuid.UUID = Security(get_tenant_id),
     user_id: str = Security(get_current_user),
     service: CredentialVaultService = Depends(get_credential_vault_service),
@@ -372,12 +377,13 @@ async def create_external_account(
 @router.get("/accounts/{account_id}", response_model=ExternalAccount)
 async def get_external_account(
     account_id: uuid.UUID,
+    tenant_id: uuid.UUID = Security(get_tenant_id),
     service: CredentialVaultService = Depends(get_credential_vault_service),
 ):
     """Get an external account by ID."""
     try:
         await service.initialize()
-        account = await service.get_external_account(account_id)
+        account = await service.get_external_account(account_id=account_id, tenant_id=tenant_id)
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
         return account
@@ -388,10 +394,10 @@ async def get_external_account(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/accounts", response_model=List[ExternalAccount])
+@router.get("/accounts", response_model=list[ExternalAccount])
 async def list_external_accounts(
-    provider_id: Optional[str] = Query(None, description="Filter by provider ID"),
-    account_identifier: Optional[str] = Query(None, description="Filter by account identifier"),
+    provider_id: str | None = Query(None, description="Filter by provider ID"),
+    account_identifier: str | None = Query(None, description="Filter by account identifier"),
     active_only: bool = Query(False, description="Only return active accounts"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of accounts to return"),
     offset: int = Query(0, ge=0, description="Number of accounts to skip"),
@@ -492,12 +498,13 @@ async def create_binding(
 @router.get("/bindings/{binding_id}", response_model=CredentialBinding)
 async def get_binding(
     binding_id: uuid.UUID,
+    tenant_id: uuid.UUID = Security(get_tenant_id),
     service: CredentialVaultService = Depends(get_credential_vault_service),
 ):
     """Get a credential binding by ID."""
     try:
         await service.initialize()
-        binding = await service.get_binding(binding_id)
+        binding = await service.get_binding(binding_id=binding_id, tenant_id=tenant_id)
         if not binding:
             raise HTTPException(status_code=404, detail="Binding not found")
         return binding
@@ -508,10 +515,10 @@ async def get_binding(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/bindings", response_model=List[CredentialBinding])
+@router.get("/bindings", response_model=list[CredentialBinding])
 async def list_bindings(
-    credential_id: Optional[uuid.UUID] = Query(None, description="Filter by credential ID"),
-    external_account_id: Optional[uuid.UUID] = Query(None, description="Filter by external account ID"),
+    credential_id: uuid.UUID | None = Query(None, description="Filter by credential ID"),
+    external_account_id: uuid.UUID | None = Query(None, description="Filter by external account ID"),
     active_only: bool = Query(False, description="Only return active bindings"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of bindings to return"),
     offset: int = Query(0, ge=0, description="Number of bindings to skip"),
@@ -538,8 +545,8 @@ async def list_bindings(
 @router.patch("/bindings/{binding_id}", response_model=CredentialBinding)
 async def update_binding(
     binding_id: uuid.UUID,
-    is_primary: Optional[bool] = Query(None, description="Whether this is the primary binding"),
-    binding_metadata: Optional[dict] = Query(None, description="Additional binding metadata"),
+    is_primary: bool | None = Query(None, description="Whether this is the primary binding"),
+    binding_metadata: dict | None = Query(None, description="Additional binding metadata"),
     tenant_id: uuid.UUID = Security(get_tenant_id),
     user_id: str = Security(get_current_user),
     service: CredentialVaultService = Depends(get_credential_vault_service),
@@ -615,8 +622,8 @@ async def create_oauth_grant(
 async def complete_oauth_grant(
     grant_id: uuid.UUID,
     access_token: str,
-    refresh_token: Optional[str] = None,
-    scopes: Optional[List[str]] = None,
+    refresh_token: str | None = None,
+    scopes: list[str] | None = None,
     tenant_id: uuid.UUID = Security(get_tenant_id),
     user_id: str = Security(get_current_user),
     service: CredentialVaultService = Depends(get_credential_vault_service),
@@ -646,7 +653,7 @@ async def complete_oauth_grant(
 async def refresh_oauth_token(
     credential_id: uuid.UUID,
     refresh_token: str,
-    new_scopes: Optional[List[str]] = None,
+    new_scopes: list[str] | None = None,
     tenant_id: uuid.UUID = Security(get_tenant_id),
     user_id: str = Security(get_current_user),
     service: CredentialVaultService = Depends(get_credential_vault_service),
@@ -696,12 +703,13 @@ async def create_account_session(
 @router.get("/sessions/{session_id}", response_model=AccountSession)
 async def get_account_session(
     session_id: uuid.UUID,
+    tenant_id: uuid.UUID = Security(get_tenant_id),
     service: CredentialVaultService = Depends(get_credential_vault_service),
 ):
     """Get an account session by ID."""
     try:
         await service.initialize()
-        session = await service.get_account_session(session_id)
+        session = await service.get_account_session(session_id=session_id, tenant_id=tenant_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         return session
@@ -712,10 +720,10 @@ async def get_account_session(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/sessions", response_model=List[AccountSession])
+@router.get("/sessions", response_model=list[AccountSession])
 async def list_account_sessions(
-    credential_id: Optional[uuid.UUID] = Query(None, description="Filter by credential ID"),
-    external_account_id: Optional[uuid.UUID] = Query(None, description="Filter by external account ID"),
+    credential_id: uuid.UUID | None = Query(None, description="Filter by credential ID"),
+    external_account_id: uuid.UUID | None = Query(None, description="Filter by external account ID"),
     active_only: bool = Query(False, description="Only return active sessions"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of sessions to return"),
     offset: int = Query(0, ge=0, description="Number of sessions to skip"),
@@ -742,7 +750,7 @@ async def list_account_sessions(
 @router.post("/sessions/{session_id}/invalidate")
 async def invalidate_account_session(
     session_id: uuid.UUID,
-    reason: Optional[str] = Query(None, description="Reason for invalidation"),
+    reason: str | None = Query(None, description="Reason for invalidation"),
     tenant_id: uuid.UUID = Security(get_tenant_id),
     user_id: str = Security(get_current_user),
     service: CredentialVaultService = Depends(get_credential_vault_service),
@@ -813,12 +821,13 @@ async def create_token_lease(
 @router.get("/leases/{lease_token}", response_model=TokenLease)
 async def get_token_lease(
     lease_token: str,
+    tenant_id: uuid.UUID = Security(get_tenant_id),
     service: CredentialVaultService = Depends(get_credential_vault_service),
 ):
     """Get a token lease by lease token."""
     try:
         await service.initialize()
-        lease = await service.get_token_lease(lease_token)
+        lease = await service.get_token_lease(lease_token=lease_token, tenant_id=tenant_id)
         if not lease:
             raise HTTPException(status_code=404, detail="Lease not found")
         return lease
@@ -832,7 +841,7 @@ async def get_token_lease(
 @router.post("/leases/{lease_token}/invalidate")
 async def invalidate_token_lease(
     lease_token: str,
-    reason: Optional[str] = Query(None, description="Reason for invalidation"),
+    reason: str | None = Query(None, description="Reason for invalidation"),
     tenant_id: uuid.UUID = Security(get_tenant_id),
     user_id: str = Security(get_current_user),
     service: CredentialVaultService = Depends(get_credential_vault_service),
@@ -886,12 +895,13 @@ async def discover_account_capabilities(
 @router.get("/credentials/{credential_id}/health", response_model=CredentialHealthStatus)
 async def get_credential_health(
     credential_id: uuid.UUID,
+    tenant_id: uuid.UUID = Security(get_tenant_id),
     service: CredentialVaultService = Depends(get_credential_vault_service),
 ):
     """Get health status for a credential."""
     try:
         await service.initialize()
-        health = await service.get_credential_health(credential_id)
+        health = await service.get_credential_health(credential_id=credential_id, tenant_id=tenant_id)
         if not health:
             raise HTTPException(status_code=404, detail="Credential not found")
         return health
@@ -902,7 +912,7 @@ async def get_credential_health(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/credentials/attention-needed", response_model=List[CredentialHealthStatus])
+@router.get("/credentials/attention-needed", response_model=list[CredentialHealthStatus])
 async def get_credentials_needing_attention(
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of credentials to return"),
     tenant_id: uuid.UUID = Security(get_tenant_id),
@@ -922,12 +932,12 @@ async def get_credentials_needing_attention(
 
 
 # Audit Routes
-@router.get("/audit/events", response_model=List[CredentialAuditEvent])
+@router.get("/audit/events", response_model=list[CredentialAuditEvent])
 async def get_audit_events(
-    user_id: Optional[str] = Query(None, description="Filter by user ID"),
-    credential_id: Optional[uuid.UUID] = Query(None, description="Filter by credential ID"),
-    account_id: Optional[uuid.UUID] = Query(None, description="Filter by account ID"),
-    event_type: Optional[AuditEventType] = Query(None, description="Filter by event type"),
+    user_id: str | None = Query(None, description="Filter by user ID"),
+    credential_id: uuid.UUID | None = Query(None, description="Filter by credential ID"),
+    account_id: uuid.UUID | None = Query(None, description="Filter by account ID"),
+    event_type: AuditEventType | None = Query(None, description="Filter by event type"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of events to return"),
     offset: int = Query(0, ge=0, description="Number of events to skip"),
     tenant_id: uuid.UUID = Security(get_tenant_id),
@@ -951,7 +961,7 @@ async def get_audit_events(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/audit/correlation/{correlation_id}", response_model=List[CredentialAuditEvent])
+@router.get("/audit/correlation/{correlation_id}", response_model=list[CredentialAuditEvent])
 async def get_audit_events_by_correlation(
     correlation_id: str,
     tenant_id: uuid.UUID = Security(get_tenant_id),
@@ -971,30 +981,32 @@ async def get_audit_events_by_correlation(
 
 
 # Utility Routes
-@router.get("/credentials/{credential_id}/bindings", response_model=List[CredentialBinding])
+@router.get("/credentials/{credential_id}/bindings", response_model=list[CredentialBinding])
 async def get_credential_bindings(
     credential_id: uuid.UUID,
+    tenant_id: uuid.UUID = Security(get_tenant_id),
     service: CredentialVaultService = Depends(get_credential_vault_service),
 ):
     """Get all bindings for a credential."""
     try:
         await service.initialize()
-        bindings = await service.get_credential_bindings(credential_id)
+        bindings = await service.get_credential_bindings(credential_id=credential_id, tenant_id=tenant_id)
         return bindings
     except Exception as e:
         logger.error(f"Failed to get credential bindings: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/accounts/{account_id}/bindings", response_model=List[CredentialBinding])
+@router.get("/accounts/{account_id}/bindings", response_model=list[CredentialBinding])
 async def get_external_account_bindings(
     account_id: uuid.UUID,
+    tenant_id: uuid.UUID = Security(get_tenant_id),
     service: CredentialVaultService = Depends(get_credential_vault_service),
 ):
     """Get all bindings for an external account."""
     try:
         await service.initialize()
-        bindings = await service.get_external_account_bindings(account_id)
+        bindings = await service.get_external_account_bindings(external_account_id=account_id, tenant_id=tenant_id)
         return bindings
     except Exception as e:
         logger.error(f"Failed to get external account bindings: {e}")
@@ -1002,7 +1014,7 @@ async def get_external_account_bindings(
 
 
 # Legacy Routes for Compatibility
-@router.get("/providers/{provider_id}/credentials", response_model=List[Credential])
+@router.get("/providers/{provider_id}/credentials", response_model=list[Credential])
 async def get_provider_credentials(
     provider_id: str,
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of credentials to return"),
@@ -1025,7 +1037,7 @@ async def get_provider_credentials(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/accounts/{account_id}/sessions", response_model=List[AccountSession])
+@router.get("/accounts/{account_id}/sessions", response_model=list[AccountSession])
 async def get_account_sessions(
     account_id: uuid.UUID,
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of sessions to return"),

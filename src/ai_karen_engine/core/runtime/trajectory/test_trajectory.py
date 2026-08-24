@@ -1,20 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
-
-import pytest
-
 from ai_karen_engine.core.observability.context import (
     ObservabilityContext,
-    bind_observability_context,
     clear_observability_context,
-    get_observability_context,
     set_observability_context,
 )
 from ai_karen_engine.core.runtime.trajectory.contracts import (
     ExecutionTrajectory,
-    PluginAction,
-    ProviderAttempt,
 )
 from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
 from ai_karen_engine.core.runtime.trajectory.store import InMemoryTrajectoryStore

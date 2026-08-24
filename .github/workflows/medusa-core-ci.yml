@@ -48,12 +48,11 @@ jobs:
       
       - name: Run MyPy type checker
         run: |
-          mypy src/ai_karen_engine/agent_medusa/ src/ai_karen_engine/core/runtime/ --ignore-missing-imports --no-error-summary || true
+          mypy src/ai_karen_engine/agent_medusa/ src/ai_karen_engine/core/runtime/ --ignore-missing-imports --no-error-summary
       
       - name: Run Bandit security linter
         run: |
-          bandit -r src/ai_karen_engine/agent_medusa/ src/ai_karen_engine/core/runtime/ -f json -o bandit-report.json || true
-        continue-on-error: true
+          bandit -r src/ai_karen_engine/agent_medusa/ src/ai_karen_engine/core/runtime/ -f json -o bandit-report.json
       
       - name: Upload Bandit report
         if: always()
@@ -113,7 +112,7 @@ jobs:
       
       - name: Run legacy to Medusa delegation tests
         run: |
-          pytest tests/core/runtime/test_legacy_to_medusa_delegation.py -v --timeout=300 --tb=short || true
+          pytest tests/core/runtime/test_legacy_to_medusa_delegation.py -v --timeout=300 --tb=short
       
       - name: Run core runtime tests
         run: |
@@ -230,17 +229,25 @@ jobs:
               )
               
               try:
-                  # This should fail with PLAN_UNSATISFIABLE
+                  await planner.create_plan(
+                      request_id='test-1',
+                      query='test',
+                      requirements=requirements,
+                      authorized_plan=authorized_plan,
+                      registry=None,
+                  )
                   print('✗ Should have raised ValueError for unsatisfiable capability')
+                  raise SystemExit(1)
               except ValueError as e:
                   if 'PLAN_UNSATISFIABLE' in str(e):
                       print('✓ Unavailable capability fails honestly')
                   else:
                       print(f'✗ Wrong error: {e}')
+                      raise SystemExit(1)
           
           import asyncio
           asyncio.run(test_unsatisfiable())
-          " || true
+          "
 
   security-scan:
     name: Security Scanning
@@ -287,9 +294,9 @@ jobs:
       
       - name: Run final behavioral proof tests
         run: |
-          pytest tests/core/runtime/ -k "dependency" -v --timeout=300 || true
-          pytest tests/core/runtime/ -k "wildcard" -v --timeout=300 || true
-          pytest tests/core/runtime/ -k "concurrent" -v --timeout=300 || true
+          pytest tests/core/runtime/ -k "dependency" -v --timeout=300
+          pytest tests/core/runtime/ -k "wildcard" -v --timeout=300
+          pytest tests/core/runtime/ -k "concurrent" -v --timeout=300
           
           echo "Running behavioral proofs..."
           

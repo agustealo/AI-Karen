@@ -27,6 +27,7 @@ class OutcomeRecorder:
         self,
         trajectory_id: str | None = None,
         *,
+        decision_observation_id: str | None = None,
         status: ExecutionStatus = ExecutionStatus.FAILURE,
         latency_ms: float | None = None,
         provider_errors: list[str] | None = None,
@@ -60,6 +61,7 @@ class OutcomeRecorder:
             {
                 "outcome_id": f"out_{uuid.uuid4().hex}",
                 "trajectory_id": trajectory_id,
+                "decision_observation_id": decision_observation_id,
                 "request_id": ctx.request_id,
                 "correlation_id": ctx.correlation_id,
                 "tenant_id": ctx.tenant_id,
@@ -83,6 +85,7 @@ class OutcomeRecorder:
         self,
         trajectory_id: str | None = None,
         *,
+        decision_observation_id: str | None = None,
         feedback_type: UserFeedbackType | None = None,
         rating: float | None = None,
         correction_text: str | None = None,
@@ -106,6 +109,7 @@ class OutcomeRecorder:
             {
                 "outcome_id": f"out_{uuid.uuid4().hex}",
                 "trajectory_id": trajectory_id,
+                "decision_observation_id": decision_observation_id,
                 "request_id": ctx.request_id,
                 "correlation_id": ctx.correlation_id,
                 "tenant_id": ctx.tenant_id,

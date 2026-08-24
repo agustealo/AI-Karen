@@ -84,6 +84,7 @@ class OutcomeRecord:
 
     outcome_id: str
     trajectory_id: str | None = None
+    decision_observation_id: str | None = None
     message_id: str | None = None
     conversation_id: str | None = None
 
@@ -102,6 +103,7 @@ class OutcomeRecord:
         data: dict[str, Any] = {
             "outcome_id": self.outcome_id,
             "trajectory_id": self.trajectory_id,
+            "decision_observation_id": self.decision_observation_id,
             "message_id": self.message_id,
             "conversation_id": self.conversation_id,
             "tenant_id": self.tenant_id,

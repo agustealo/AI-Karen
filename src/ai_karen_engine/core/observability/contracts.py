@@ -55,6 +55,14 @@ class RuntimeEventType(str, Enum):
     REQUEST_FAILED = "request.failed"
     REQUEST_CANCELLED = "request.cancelled"
 
+    LEARNING_FEATURE_SNAPSHOT_RECORDED = "learning.feature_snapshot.recorded"
+    LEARNING_DECISION_OBSERVATION_RECORDED = "learning.decision_observation.recorded"
+    LEARNING_OUTCOME_LINKED = "learning.outcome_linked"
+    LEARNING_DATASET_BUILD_STARTED = "learning.dataset.build_started"
+    LEARNING_DATASET_BUILD_COMPLETED = "learning.dataset.build_completed"
+    LEARNING_DATASET_BUILD_FAILED = "learning.dataset.build_failed"
+    LEARNING_RECORDING_FAILED = "learning.recording_failed"
+
 
 @dataclass(slots=True)
 class RuntimeEvent:

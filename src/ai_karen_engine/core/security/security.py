@@ -3,24 +3,22 @@ Security utilities for the AI-Karen production chat system.
 Provides input validation, sanitization, encryption, and security monitoring.
 """
 
+import base64
+import hashlib
 import logging
 import re
-import html
-import hashlib
 import secrets
-import time
-from typing import Dict, Any, List, Optional, Union
-from datetime import datetime, timedelta
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import Enum
+from typing import Any
 
 import bleach
-from pydantic import BaseModel, validator
-import jwt
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-import base64
+
+from ai_karen_engine.auth.auth_middleware import get_current_user as _get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +48,12 @@ class SecurityEvent:
     timestamp: datetime
     event_type: str
     threat_level: ThreatLevel
-    user_id: Optional[str]
-    conversation_id: Optional[str]
-    client_ip: Optional[str]
-    metadata: Dict[str, Any]
-    session_id: Optional[str] = None
-    user_agent: Optional[str] = None
+    user_id: str | None
+    conversation_id: str | None
+    client_ip: str | None
+    metadata: dict[str, Any]
+    session_id: str | None = None
+    user_agent: str | None = None
 
 
 class SecurityValidator:
@@ -133,9 +131,9 @@ class SecurityValidator:
     @classmethod
     def validate_input(
         cls, content: str, security_level: SecurityLevel = SecurityLevel.MEDIUM
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Validate and sanitize input content."""
-        result = {
+        result: dict[str, Any] = {
             "is_valid": True,
             "sanitized_content": content,
             "threats": [],
@@ -196,7 +194,7 @@ class SecurityValidator:
 class ContentEncryption:
     """Content encryption utilities."""
 
-    def __init__(self, key: Optional[bytes] = None):
+    def __init__(self, key: bytes | None = None):
         """Initialize with optional encryption key."""
         if key:
             self.cipher = Fernet(key)
@@ -205,7 +203,7 @@ class ContentEncryption:
             self.cipher = Fernet(Fernet.generate_key())
 
     @classmethod
-    def generate_key(cls, password: str, salt: Optional[bytes] = None) -> bytes:
+    def generate_key(cls, password: str, salt: bytes | None = None) -> tuple[bytes, bytes]:
         """Generate encryption key from password."""
         if salt is None:
             salt = secrets.token_bytes(16)
@@ -231,7 +229,7 @@ class SecurityMonitor:
     """Security monitoring and threat detection."""
 
     def __init__(self):
-        self.security_events: List[SecurityEvent] = []
+        self.security_events: list[SecurityEvent] = []
         self.thresholds = {
             "failed_attempts": 5,
             "suspicious_ips": 10,
@@ -275,17 +273,17 @@ class SecurityMonitor:
         if suspicious_ips > self.thresholds["suspicious_ips"]:
             logger.warning(f"Suspicious IP threshold exceeded: {suspicious_ips} IPs")
 
-    def get_security_report(self, hours: int = 24) -> Dict[str, Any]:
+    def get_security_report(self, hours: int = 24) -> dict[str, Any]:
         """Generate security report for specified time period."""
         cutoff_time = datetime.now() - timedelta(hours=hours)
         recent_events = [e for e in self.security_events if e.timestamp > cutoff_time]
 
-        threat_counts = {}
+        threat_counts: dict[str, int] = {}
         for event in recent_events:
             threat_level = event.threat_level.value
             threat_counts[threat_level] = threat_counts.get(threat_level, 0) + 1
 
-        event_types = {}
+        event_types: dict[str, int] = {}
         for event in recent_events:
             event_type = event.event_type
             event_types[event_type] = event_types.get(event_type, 0) + 1
@@ -306,12 +304,12 @@ security_monitor = SecurityMonitor()
 def log_security_event(
     event_type: str,
     threat_level: ThreatLevel,
-    user_id: Optional[str] = None,
-    conversation_id: Optional[str] = None,
-    client_ip: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    session_id: Optional[str] = None,
-    user_agent: Optional[str] = None,
+    user_id: str | None = None,
+    conversation_id: str | None = None,
+    client_ip: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    session_id: str | None = None,
+    user_agent: str | None = None,
 ) -> None:
     """Log a security event."""
     event = SecurityEvent(
@@ -331,7 +329,7 @@ def log_security_event(
 
 def validate_request_content(
     content: str, security_level: SecurityLevel = SecurityLevel.MEDIUM
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Validate request content with security monitoring."""
     result = SecurityValidator.validate_input(content, security_level)
 
@@ -361,3 +359,21 @@ def decrypt_sensitive_data(encrypted_content: bytes, password: str) -> str:
     key, _ = ContentEncryption.generate_key(password)
     decryptor = ContentEncryption(key)
     return decryptor.decrypt(encrypted_content)
+
+
+from uuid import UUID
+
+from fastapi import Request
+
+
+async def get_current_user(request: Request) -> str:
+    user = await _get_current_user(request)
+    return user.get("user_id", "")
+
+
+async def get_tenant_id(request: Request) -> UUID:
+    user = await _get_current_user(request)
+    tenant_id = user.get("tenant_id", "default")
+    if isinstance(tenant_id, UUID):
+        return tenant_id
+    return UUID(str(tenant_id))

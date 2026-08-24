@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime
 from typing import Any
-
-from ai_karen_engine.core.runtime.outcome.contracts import OutcomeRecord
 
 
 class OutcomeStore(ABC):

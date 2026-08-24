@@ -1,18 +1,26 @@
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
-from ai_karen_engine.agent_medusa.contracts.capabilities import AgentCapability, AgentCapabilityType
-from ai_karen_engine.agent_medusa.contracts.registration import AgentRegistration, AgentLifecycleState
-from ai_karen_engine.agent_medusa.planning.capability_planner import CapabilityAwareMedusaPlanner
-from ai_karen_engine.agent_medusa.registry import MedusaRegistry
+from ai_karen_engine.agent_medusa.contracts.capabilities import (
+    AgentCapability,
+    AgentCapabilityType,
+)
+from ai_karen_engine.agent_medusa.contracts.registration import (
+    AgentLifecycleState,
+    AgentRegistration,
+)
+from ai_karen_engine.agent_medusa.planning.capability_planner import (
+    CapabilityAwareMedusaPlanner,
+)
 from ai_karen_engine.agent_medusa.planning.plan_validator import PlanValidator
+from ai_karen_engine.agent_medusa.registry import MedusaRegistry
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionBudget,
-    ExecutionRequirements,
     ExecutionBudgetMeter,
+    ExecutionRequirements,
 )
 
 
@@ -380,3 +388,206 @@ class TestDeterministicSpecialistSelection:
             registry=registry,
         )
         assert [s.agent_specialist for s in plan.steps] == ["alpha", "zebra"]
+
+
+class TestDependencyGraphProof:
+    @pytest.mark.asyncio
+    async def test_dependency_chain_a_to_b_to_c(self):
+        registry = MedusaRegistry()
+        await registry.initialize()
+
+        agent_a = AgentRegistration(
+            agent_id="agent_a",
+            name="Agent A",
+            description="First in chain",
+            capabilities=[AgentCapability(type=AgentCapabilityType.REASONING, name="CapabilityA", description="provides A")],
+            lifecycle_state=AgentLifecycleState.ACTIVE,
+        )
+        agent_b = AgentRegistration(
+            agent_id="agent_b",
+            name="Agent B",
+            description="Middle in chain",
+            capabilities=[AgentCapability(type=AgentCapabilityType.RESEARCH, name="CapabilityB", description="provides B")],
+            capability_dependencies=["CapabilityA"],
+            lifecycle_state=AgentLifecycleState.ACTIVE,
+        )
+        agent_c = AgentRegistration(
+            agent_id="agent_c",
+            name="Agent C",
+            description="Last in chain",
+            capabilities=[AgentCapability(type=AgentCapabilityType.PLANNING, name="CapabilityC", description="provides C")],
+            capability_dependencies=["CapabilityB"],
+            lifecycle_state=AgentLifecycleState.ACTIVE,
+        )
+        await registry.register_agent(agent_a)
+        await registry.register_agent(agent_b)
+        await registry.register_agent(agent_c)
+
+        planner = CapabilityAwareMedusaPlanner(registry=registry, validator=PlanValidator())
+        requirements = _make_requirements(required_capabilities=[])
+        authorized_plan = _make_authorized_plan(allowed_agents=["agent_a", "agent_b", "agent_c"])
+
+        plan = await planner.create_plan(
+            request_id="req-1",
+            query="test",
+            requirements=requirements,
+            authorized_plan=authorized_plan,
+            registry=registry,
+        )
+        assert len(plan.steps) == 3
+        step_by_agent = {s.agent_specialist: s for s in plan.steps}
+        assert step_by_agent["agent_a"].dependencies == []
+        assert step_by_agent["agent_b"].dependencies == [step_by_agent["agent_a"].id]
+        assert step_by_agent["agent_c"].dependencies == [step_by_agent["agent_b"].id]
+
+    @pytest.mark.asyncio
+    async def test_cycle_rejection(self):
+        registry = MedusaRegistry()
+        await registry.initialize()
+
+        agent_a = AgentRegistration(
+            agent_id="cycle_a",
+            name="Cycle A",
+            description="Part of cycle",
+            capabilities=[AgentCapability(type=AgentCapabilityType.REASONING, name="CycleCapA", description="a")],
+            capability_dependencies=["CycleCapB"],
+            lifecycle_state=AgentLifecycleState.ACTIVE,
+        )
+        agent_b = AgentRegistration(
+            agent_id="cycle_b",
+            name="Cycle B",
+            description="Part of cycle",
+            capabilities=[AgentCapability(type=AgentCapabilityType.RESEARCH, name="CycleCapB", description="b")],
+            capability_dependencies=["CycleCapA"],
+            lifecycle_state=AgentLifecycleState.ACTIVE,
+        )
+        await registry.register_agent(agent_a)
+        await registry.register_agent(agent_b)
+
+        planner = CapabilityAwareMedusaPlanner(registry=registry, validator=PlanValidator())
+        requirements = _make_requirements(required_capabilities=[])
+        authorized_plan = _make_authorized_plan(allowed_agents=["cycle_a", "cycle_b"])
+
+        with pytest.raises(ValueError, match="PLAN_CYCLE"):
+            await planner.create_plan(
+                request_id="req-1",
+                query="test",
+                requirements=requirements,
+                authorized_plan=authorized_plan,
+                registry=registry,
+            )
+
+    @pytest.mark.asyncio
+    async def test_missing_dependency_rejection(self):
+        registry = MedusaRegistry()
+        await registry.initialize()
+
+        orphan = AgentRegistration(
+            agent_id="orphan",
+            name="Orphan Agent",
+            description="Depends on missing capability",
+            capabilities=[AgentCapability(type=AgentCapabilityType.REASONING, name="OrphanCap", description="orphan")],
+            capability_dependencies=["NonexistentCapability"],
+            lifecycle_state=AgentLifecycleState.ACTIVE,
+        )
+        await registry.register_agent(orphan)
+
+        planner = CapabilityAwareMedusaPlanner(registry=registry, validator=PlanValidator())
+        requirements = _make_requirements(required_capabilities=[])
+        authorized_plan = _make_authorized_plan(allowed_agents=["orphan"])
+
+        with pytest.raises(ValueError, match="PLAN_UNSATISFIABLE"):
+            await planner.create_plan(
+                request_id="req-1",
+                query="test",
+                requirements=requirements,
+                authorized_plan=authorized_plan,
+                registry=registry,
+            )
+
+    @pytest.mark.asyncio
+    async def test_failed_dependency_blocks_dependent_step(self):
+        registry = MedusaRegistry()
+        await registry.initialize()
+
+        upstream = AgentRegistration(
+            agent_id="upstream",
+            name="Upstream",
+            description="Provides required capability",
+            capabilities=[AgentCapability(type=AgentCapabilityType.REASONING, name="UpstreamCap", description="upstream")],
+            lifecycle_state=AgentLifecycleState.DISABLED,
+        )
+        downstream = AgentRegistration(
+            agent_id="downstream",
+            name="Downstream",
+            description="Depends on disabled upstream",
+            capabilities=[AgentCapability(type=AgentCapabilityType.RESEARCH, name="DownstreamCap", description="downstream")],
+            capability_dependencies=["UpstreamCap"],
+            lifecycle_state=AgentLifecycleState.ACTIVE,
+        )
+        await registry.register_agent(upstream)
+        await registry.register_agent(downstream)
+
+        planner = CapabilityAwareMedusaPlanner(registry=registry, validator=PlanValidator())
+        requirements = _make_requirements(required_capabilities=[])
+        authorized_plan = _make_authorized_plan(allowed_agents=["upstream", "downstream"])
+
+        with pytest.raises(ValueError, match="PLAN_UNSATISFIABLE"):
+            await planner.create_plan(
+                request_id="req-1",
+                query="test",
+                requirements=requirements,
+                authorized_plan=authorized_plan,
+                registry=registry,
+            )
+
+    @pytest.mark.asyncio
+    async def test_independent_branches_execute_in_parallel(self):
+        registry = MedusaRegistry()
+        await registry.initialize()
+
+        branch_a = AgentRegistration(
+            agent_id="branch_a",
+            name="Branch A",
+            description="Independent branch A",
+            capabilities=[AgentCapability(type=AgentCapabilityType.REASONING, name="BranchCapA", description="a")],
+            capability_dependencies=["SharedCap"],
+            lifecycle_state=AgentLifecycleState.ACTIVE,
+        )
+        branch_b = AgentRegistration(
+            agent_id="branch_b",
+            name="Branch B",
+            description="Independent branch B",
+            capabilities=[AgentCapability(type=AgentCapabilityType.RESEARCH, name="BranchCapB", description="b")],
+            capability_dependencies=["SharedCap"],
+            lifecycle_state=AgentLifecycleState.ACTIVE,
+        )
+        shared = AgentRegistration(
+            agent_id="shared",
+            name="Shared",
+            description="Common upstream",
+            capabilities=[AgentCapability(type=AgentCapabilityType.PLANNING, name="SharedCap", description="shared")],
+            lifecycle_state=AgentLifecycleState.ACTIVE,
+        )
+        await registry.register_agent(branch_a)
+        await registry.register_agent(branch_b)
+        await registry.register_agent(shared)
+
+        planner = CapabilityAwareMedusaPlanner(registry=registry, validator=PlanValidator())
+        requirements = _make_requirements(required_capabilities=[])
+        authorized_plan = _make_authorized_plan(allowed_agents=["shared", "branch_a", "branch_b"])
+
+        plan = await planner.create_plan(
+            request_id="req-1",
+            query="test",
+            requirements=requirements,
+            authorized_plan=authorized_plan,
+            registry=registry,
+        )
+        assert len(plan.steps) == 3
+        shared_steps = [s for s in plan.steps if s.agent_specialist == "shared"]
+        branch_a_steps = [s for s in plan.steps if s.agent_specialist == "branch_a"]
+        branch_b_steps = [s for s in plan.steps if s.agent_specialist == "branch_b"]
+        assert shared_steps[0].dependencies == []
+        assert branch_a_steps[0].dependencies == [shared_steps[0].id]
+        assert branch_b_steps[0].dependencies == [shared_steps[0].id]

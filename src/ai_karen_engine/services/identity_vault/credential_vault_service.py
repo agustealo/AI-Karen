@@ -542,7 +542,7 @@ class CredentialVaultService(BaseService):
             logger.error(f"Failed to create provider: {e}")
             raise
     
-    async def get_provider(self, provider_id: str) -> Optional[ProviderDefinition]:
+    async def get_provider(self, provider_id: str, tenant_id: Optional[uuid.UUID] = None) -> Optional[ProviderDefinition]:
         """Get a provider definition by ID."""
         try:
             async with self._session_scope() as session:
@@ -714,7 +714,7 @@ class CredentialVaultService(BaseService):
             logger.error(f"Failed to create credential: {e}")
             raise
     
-    async def get_credential(self, credential_id: uuid.UUID) -> Optional[Credential]:
+    async def get_credential(self, credential_id: uuid.UUID, tenant_id: Optional[uuid.UUID] = None) -> Optional[Credential]:
         """Get a credential by ID."""
         try:
             async with self._session_scope() as session:
@@ -1016,7 +1016,7 @@ class CredentialVaultService(BaseService):
             logger.error(f"Failed to create external account: {e}")
             raise
     
-    async def get_external_account(self, account_id: uuid.UUID) -> Optional[ExternalAccount]:
+    async def get_external_account(self, account_id: uuid.UUID, tenant_id: Optional[uuid.UUID] = None) -> Optional[ExternalAccount]:
         """Get an external account by ID."""
         try:
             async with self._session_scope() as session:
@@ -1205,7 +1205,7 @@ class CredentialVaultService(BaseService):
             logger.error(f"Failed to create binding: {e}")
             raise
     
-    async def get_binding(self, binding_id: uuid.UUID) -> Optional[CredentialBinding]:
+    async def get_binding(self, binding_id: uuid.UUID, tenant_id: Optional[uuid.UUID] = None) -> Optional[CredentialBinding]:
         """Get a credential binding by ID."""
         try:
             async with self._session_scope() as session:
@@ -1544,7 +1544,7 @@ class CredentialVaultService(BaseService):
             logger.error(f"Failed to create account session: {e}")
             raise
     
-    async def get_account_session(self, session_id: uuid.UUID) -> Optional[AccountSession]:
+    async def get_account_session(self, session_id: uuid.UUID, tenant_id: Optional[uuid.UUID] = None) -> Optional[AccountSession]:
         """Get an account session by ID."""
         try:
             async with self._session_scope() as session:
@@ -1713,7 +1713,7 @@ class CredentialVaultService(BaseService):
             logger.error(f"Failed to create token lease: {e}")
             raise
     
-    async def get_token_lease(self, lease_token: str) -> Optional[TokenLease]:
+    async def get_token_lease(self, lease_token: str, tenant_id: Optional[uuid.UUID] = None) -> Optional[TokenLease]:
         """Get a token lease by lease token."""
         try:
             async with self._session_scope() as session:
@@ -1867,6 +1867,7 @@ class CredentialVaultService(BaseService):
     async def get_credential_health(
         self,
         credential_id: uuid.UUID,
+        tenant_id: Optional[uuid.UUID] = None,
     ) -> Optional[CredentialHealthStatus]:
         """Get health status for a credential."""
         try:
@@ -1959,6 +1960,7 @@ class CredentialVaultService(BaseService):
     async def get_credential_bindings(
         self,
         credential_id: uuid.UUID,
+        tenant_id: Optional[uuid.UUID] = None,
     ) -> List[CredentialBinding]:
         """Get all bindings for a credential."""
         try:
@@ -1979,6 +1981,7 @@ class CredentialVaultService(BaseService):
     async def get_external_account_bindings(
         self,
         external_account_id: uuid.UUID,
+        tenant_id: Optional[uuid.UUID] = None,
     ) -> List[CredentialBinding]:
         """Get all bindings for an external account."""
         try:

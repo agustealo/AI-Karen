@@ -20,23 +20,21 @@ The plan is then validated by PlanValidator before any side effect.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
-from ..contracts.deep_execution_plan import (
-    DeepExecutionPlan,
-    PlanStep,
-    StepInputContract,
-    StepOutputContract,
-    DegradationMetadata,
-    DegradationLevel,
-)
-from ..contracts.registration import AgentRegistration
-from ..planning.plan_validator import PlanValidator
 from ...core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionBudget,
     ExecutionRequirements,
 )
+from ..contracts.deep_execution_plan import (
+    DeepExecutionPlan,
+    PlanStep,
+    StepInputContract,
+    StepOutputContract,
+)
+from ..contracts.registration import AgentRegistration
+from ..planning.plan_validator import PlanValidator
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +42,7 @@ logger = logging.getLogger(__name__)
 class CapabilityAwareMedusaPlanner:
     """Plans among authorized agent capabilities for a multi-agent request."""
 
-    def __init__(self, registry: Any = None, validator: Optional[PlanValidator] = None):
+    def __init__(self, registry: Any = None, validator: PlanValidator | None = None):
         self._registry = registry
         self._validator = validator or PlanValidator()
 
@@ -56,8 +54,8 @@ class CapabilityAwareMedusaPlanner:
         requirements: ExecutionRequirements,
         authorized_plan: AuthorizedExecutionPlan,
         registry: Any,
-        budget: Optional[ExecutionBudget] = None,
-        context: Optional[Dict[str, Any]] = None,
+        budget: ExecutionBudget | None = None,
+        context: dict[str, Any] | None = None,
     ) -> DeepExecutionPlan:
         """Produce a deterministic, validated DeepExecutionPlan.
 
@@ -126,10 +124,10 @@ class CapabilityAwareMedusaPlanner:
         *,
         requirements: ExecutionRequirements,
         registry: Any,
-        allowed_agents: Set[str],
-    ) -> List[AgentRegistration]:
+        allowed_agents: set[str],
+    ) -> list[AgentRegistration]:
         """Resolve and filter registrations based on capabilities and lifecycle."""
-        candidate_ids: Set[str] = set()
+        candidate_ids: set[str] = set()
         for cap in list(requirements.required_capabilities) + list(requirements.tool_requirements):
             try:
                 regs = await registry.find_agents_by_capability(cap)
@@ -147,7 +145,7 @@ class CapabilityAwareMedusaPlanner:
             if not authorized_candidates:
                 raise ValueError("PLAN_UNSATISFIABLE: no authorized specialists match required capabilities")
 
-        registrations: List[AgentRegistration] = []
+        registrations: list[AgentRegistration] = []
         for agent_id in sorted(authorized_candidates):
             reg = await _safe_get(registry, agent_id)
             if reg is None:
@@ -164,21 +162,22 @@ class CapabilityAwareMedusaPlanner:
 
     def _build_dependency_graph(
         self,
-        registrations: List[AgentRegistration],
+        registrations: list[AgentRegistration],
         requirements: ExecutionRequirements,
-    ) -> Dict[str, List[str]]:
+    ) -> dict[str, list[str]]:
         """Build dependency graph from agent capability_dependencies and requirements."""
         registration_map = {reg.agent_id: reg for reg in registrations}
-        dependency_graph: Dict[str, List[str]] = {reg.agent_id: [] for reg in registrations}
+        dependency_graph: dict[str, list[str]] = {reg.agent_id: [] for reg in registrations}
 
         all_registered_agents = set(registration_map.keys())
-        capability_to_agents: Dict[str, List[str]] = {}
+        capability_to_agents: dict[str, list[str]] = {}
 
         for reg in registrations:
             for cap in reg.capabilities:
                 cap_name = cap.name if hasattr(cap, 'name') else str(cap)
                 capability_to_agents.setdefault(cap_name, []).append(reg.agent_id)
 
+        unsatisfied: list[str] = []
         for reg in registrations:
             declared_deps = getattr(reg, 'capability_dependencies', [])
             if declared_deps:
@@ -189,6 +188,10 @@ class CapabilityAwareMedusaPlanner:
                             if provider_id in all_registered_agents and provider_id != reg.agent_id:
                                 if provider_id not in dependency_graph[reg.agent_id]:
                                     dependency_graph[reg.agent_id].append(provider_id)
+                    else:
+                        unsatisfied.append(
+                            f"{reg.agent_id} requires capability '{dep_capability}' which no specialist provides"
+                        )
 
             for tool_req in requirements.tool_requirements:
                 for other_reg in registrations:
@@ -198,9 +201,12 @@ class CapabilityAwareMedusaPlanner:
                             if other_reg.agent_id not in dependency_graph[reg.agent_id]:
                                 dependency_graph[reg.agent_id].append(other_reg.agent_id)
 
+        if unsatisfied:
+            raise ValueError("PLAN_UNSATISFIABLE: unsatisfied dependencies: " + "; ".join(unsatisfied))
+
         return dependency_graph
 
-    def _topological_sort(self, dependency_graph: Dict[str, List[str]]) -> List[str]:
+    def _topological_sort(self, dependency_graph: dict[str, list[str]]) -> list[str]:
         """Kahn's algorithm for topological sorting."""
         in_degree = {node: 0 for node in dependency_graph}
         for node in dependency_graph:
@@ -234,22 +240,24 @@ class CapabilityAwareMedusaPlanner:
         query: str,
         requirements: ExecutionRequirements,
         registry: Any,
-        ordered_registrations: List[str],
+        ordered_registrations: list[str],
         authorized_plan: AuthorizedExecutionPlan,
-        context: Dict[str, Any],
-        dependency_graph: Dict[str, List[str]],
-    ) -> List[PlanStep]:
+        context: dict[str, Any],
+        dependency_graph: dict[str, list[str]],
+    ) -> list[PlanStep]:
         """Build PlanSteps with dependency ordering and scoped tools/plugins."""
-        steps: List[PlanStep] = []
-        agent_id_to_step_id: Dict[str, str] = {}
+        steps: list[PlanStep] = []
+        agent_id_to_step_id: dict[str, str] = {}
+
+        for idx, agent_id in enumerate(ordered_registrations):
+            agent_id_to_step_id[agent_id] = f"step_{idx}"
 
         for idx, agent_id in enumerate(ordered_registrations):
             reg = await _safe_get(registry, agent_id)
             if reg is None:
                 continue
 
-            step_id = f"step_{idx}"
-            agent_id_to_step_id[agent_id] = step_id
+            step_id = agent_id_to_step_id[agent_id]
 
             dependency_step_ids = []
             for dep_agent_id in dependency_graph[agent_id]:
@@ -278,7 +286,7 @@ class CapabilityAwareMedusaPlanner:
                     prompt_contract_id=getattr(reg, "prompt_contract_id", None),
                     prompt_version=getattr(reg, "prompt_version", None),
                     input_contract=StepInputContract(
-                        required_inputs=dependency_step_ids,
+                        required_inputs=["analysis_result", "structured_output"] if dependency_step_ids else [],
                         optional_inputs=[],
                     ),
                     output_contract=StepOutputContract(
@@ -289,7 +297,7 @@ class CapabilityAwareMedusaPlanner:
         return steps
 
 
-async def _safe_get(registry: Any, agent_id: str) -> Optional[AgentRegistration]:
+async def _safe_get(registry: Any, agent_id: str) -> AgentRegistration | None:
     try:
         return await registry.get_agent(agent_id)
     except Exception:
