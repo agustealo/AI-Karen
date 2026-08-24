@@ -12,12 +12,12 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
-from ..contracts.runtime_request import RuntimeRequest
-from ..contracts.runtime_response import RuntimeResponse, ResponseStatus
-from ..contracts.specialist_execution import SpecialistExecutionContext
-from ..specialists.bridges import GenerationBridge, ToolBridge
-from ..registry import get_medusa_registry
-from ..registry_factory import get_implementation_factory
+from ...contracts.runtime_request import RuntimeRequest
+from ...contracts.runtime_response import RuntimeResponse, ResponseStatus
+from ...contracts.specialist_execution import SpecialistExecutionContext
+from ...specialists.bridges import GenerationBridge, ToolBridge
+from ...registry import get_medusa_registry
+from ...registry_factory import get_implementation_factory
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,8 @@ class MedusaLangGraphAdapter:
                         PlanStep(
                             id=step_def.get("id", f"step_{idx}"),
                             description=step_def.get("description", ""),
-                            agent_specialist=step_def.get("specialist") or step_def.get("agent_id"),
+                            agent_specialist=step_def.get("specialist")
+                    or step_def.get("agent_id"),
                             agent_version=step_def.get("version"),
                             input_data=step_def.get("input", {}),
                             dependencies=step_def.get("dependencies", []),
@@ -156,12 +157,19 @@ class MedusaLangGraphAdapter:
             )
             if response.status == ResponseStatus.SUCCESS:
                 step.status = StepStatus.COMPLETED
-                step.output_data = {"content": response.content, "metadata": response.metadata}
+                step.output_data = {
+                    "content": response.content,
+                    "metadata": response.metadata,
+                }
                 completed[step.id] = step.output_data
                 outputs.append(step.output_data)
             else:
                 step.status = StepStatus.FAILED
-                step.error = response.metadata.get("error") if response.metadata else "unknown"
+                step.error = (
+                    response.metadata.get("error")
+                    if response.metadata
+                    else "unknown"
+                )
                 break
 
         from ..response.assembler import ResponseAssembler
@@ -169,7 +177,11 @@ class MedusaLangGraphAdapter:
         return await assembler.assemble(
             request_id=request.request_id,
             step_outputs=outputs,
-            agent_trace=[s.agent_specialist for s in steps if s.status == StepStatus.COMPLETED],
+            agent_trace=[
+                s.agent_specialist
+                for s in steps
+                if s.status == StepStatus.COMPLETED
+            ],
             latest_user_message=request.query,
             status=ResponseStatus.SUCCESS if outputs else ResponseStatus.ERROR,
             metadata={"plan_steps": len(steps), "completed_steps": len(outputs)},

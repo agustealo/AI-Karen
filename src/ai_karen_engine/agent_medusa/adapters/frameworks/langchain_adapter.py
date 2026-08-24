@@ -39,9 +39,9 @@ class LangChainAdapter:
         """Execute a specialist via LangChain AgentExecutor."""
         try:
             from langchain.agents import AgentExecutor
-            from langchain.agents.conversational_chat.base import ConversationalChatAgent
-            from langchain.tools import BaseTool
-            from langchain_core.messages import HumanMessage
+            from langchain.agents.conversational_chat.base import (
+                ConversationalChatAgent,
+            )
         except ImportError as exc:
             logger.error("LangChain is required but not installed: %s", exc)
             return RuntimeResponse(
@@ -93,13 +93,11 @@ class LangChainAdapter:
             )
 
     async def _build_tools(
-        self, allowed_tools: List[str], request: RuntimeRequest, plan_data: Dict[str, Any]
+        self,
+        allowed_tools: List[str],
+        request: RuntimeRequest,
+        plan_data: Dict[str, Any],
     ) -> List[Any]:
-        try:
-            from langchain.tools import BaseTool
-        except ImportError:
-            return []
-
         tools: List[Any] = []
         for tool_name in allowed_tools:
             tool = await self._create_tool(tool_name, request, plan_data)
@@ -130,19 +128,19 @@ class LangChainAdapter:
 
             def _run(self, *args: Any, **kwargs: Any) -> str:
                 import asyncio
-                return asyncio.get_event_loop().run_until_complete(_run(*args, **kwargs))
+
+                return asyncio.get_event_loop().run_until_complete(
+                    _run(*args, **kwargs)
+                )
 
             async def _arun(self, *args: Any, **kwargs: Any) -> str:
                 return await _run(*args, **kwargs)
 
         return _DynamicTool()
 
-    async def _build_llm(self, request: RuntimeRequest, plan_data: Dict[str, Any]) -> Any:
-        try:
-            from langchain.chat_models.base import BaseChatModel
-        except ImportError:
-            raise ImportError("LangChain chat models are required but not installed")
-
+    async def _build_llm(
+        self, request: RuntimeRequest, plan_data: Dict[str, Any]
+    ) -> Any:
         generation_bridge = GenerationBridge()
         generation_request = {
             "query": request.query,
@@ -156,7 +154,9 @@ class LangChainAdapter:
 class _LangChainLLMWrapper:
     """Wraps Medusa GenerationBridge as a LangChain-compatible LLM."""
 
-    def __init__(self, generation_bridge: GenerationBridge, request: Dict[str, Any]) -> None:
+    def __init__(
+        self, generation_bridge: GenerationBridge, request: Dict[str, Any]
+    ) -> None:
         self._bridge = generation_bridge
         self._request = request
 
@@ -173,4 +173,7 @@ class _LangChainLLMWrapper:
 
     def invoke(self, prompt: Any, **kwargs: Any) -> Any:
         import asyncio
-        return asyncio.get_event_loop().run_until_complete(self.ainvoke(prompt, **kwargs))
+
+        return asyncio.get_event_loop().run_until_complete(
+            self.ainvoke(prompt, **kwargs)
+        )
