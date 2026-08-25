@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
+from ai_karen_engine.core.contracts.cognitive import BehaviorConfidence
 from ai_karen_engine.core.cortex.behavior.contracts import (
     BehaviorCandidate,
     BehaviorConstraint,
@@ -20,148 +20,172 @@ logger = logging.getLogger(__name__)
 
 
 class BehaviorSelector:
-    """Selects the best behavior from candidates using cognitive signals."""
+    """Selects the best behavior from typed cognitive signals."""
 
     def __init__(self) -> None:
         self.eligibility_gate = BehaviorEligibilityGate()
 
-    def select(self, context: BehaviorSelectionContext, candidates: list[BehaviorCandidate]) -> BehaviorDecision:
-        """Select the best behavior from candidates."""
+    def select(
+        self,
+        context: BehaviorSelectionContext,
+        candidates: list[BehaviorCandidate],
+    ) -> BehaviorDecision:
         hard_filtered = self.eligibility_gate.filter(candidates, context)
-        
         if not hard_filtered:
             return BehaviorDecision(
                 decision_id=f"bd-{context.request_id}",
                 selected_behavior=BehaviorType.ABSTAIN,
-                confidence=0.0,
+                confidence=BehaviorConfidence(0.0),
                 reason_codes=["no_eligible_candidates"],
             )
 
-        scored = [(self._score(c, context), c) for c in hard_filtered]
-        scored.sort(key=lambda x: x[0].utility, reverse=True)
-
+        scored = [(self._score(candidate, context), candidate) for candidate in hard_filtered]
+        scored.sort(key=lambda item: item[0].utility, reverse=True)
         best_score, best = scored[0]
+
         if best_score.utility <= 0.0:
             return BehaviorDecision(
                 decision_id=f"bd-{context.request_id}",
                 selected_behavior=BehaviorType.ABSTAIN,
-                confidence=0.0,
+                confidence=BehaviorConfidence(0.0),
                 reason_codes=["zero_utility"],
             )
 
-        if context.belief_assessment.get("confidence", 1.0) < 0.3 and best.behavior_type not in (BehaviorType.VERIFY, BehaviorType.ABSTAIN):
+        belief_confidence = float(context.belief.confidence) if context.belief else 1.0
+        if belief_confidence < 0.3 and best.behavior_type not in (
+            BehaviorType.VERIFY,
+            BehaviorType.ABSTAIN,
+        ):
             return BehaviorDecision(
                 decision_id=f"bd-{context.request_id}",
                 selected_behavior=BehaviorType.ABSTAIN,
-                confidence=context.belief_assessment.get("confidence", 0.0),
-                reason_codes=["low_confidence_abstain"],
+                confidence=BehaviorConfidence(belief_confidence),
+                reason_codes=["low_epistemic_confidence_abstain"],
             )
 
         requires_verification = self._evaluate_verification(best, context)
-
         return BehaviorDecision(
             decision_id=f"bd-{context.request_id}",
             selected_behavior=best.behavior_type,
-            alternatives=[c for _, c in scored[1:]],
-            confidence=best_score.confidence,
+            alternatives=[candidate for _, candidate in scored[1:]],
+            confidence=BehaviorConfidence(best_score.confidence),
             reason_codes=best.reason_codes,
             evidence_refs=best.evidence_refs,
             goal_refs=best.goal_refs,
             belief_refs=best.belief_refs,
             memory_refs=best.memory_refs,
             requires_verification=requires_verification,
-            requires_approval=BehaviorConstraint.REQUIRES_APPROVAL in best.constraints,
+            requires_approval=(
+                BehaviorConstraint.REQUIRES_APPROVAL in best.constraints
+                or bool(context.policy and context.policy.approval_required)
+            ),
             degraded=BehaviorConstraint.DEGRADED in best.constraints,
-            policy_decision_ref=context.policy_constraints.get("decision_id"),
+            policy_decision_ref=context.policy.policy_id if context.policy else None,
         )
 
-    def _score(self, candidate: BehaviorCandidate, context: BehaviorSelectionContext) -> BehaviorScoreComponents:
-        s = BehaviorScoreComponents()
-        s.confidence = candidate.confidence
+    def _score(
+        self,
+        candidate: BehaviorCandidate,
+        context: BehaviorSelectionContext,
+    ) -> BehaviorScoreComponents:
+        score = BehaviorScoreComponents()
+        score.confidence = float(candidate.confidence)
+        score.goal_alignment = self._score_goals(candidate, context)
+        score.belief_support = self._score_belief(candidate, context)
+        score.salience_fit = self._score_salience(candidate, context)
+        score.user_preference_fit = 0.5 if context.user_model_ref else 0.4
+        score.historical_success = self._score_adaptive(candidate, context)
+        score.policy_fit = self._score_policy(candidate, context)
+        score.capability_fit = self._score_capability(candidate, context.capability_requirements)
+        score.risk = self._score_risk(candidate, context)
+        score.interruption_cost = 0.3 if candidate.behavior_type == BehaviorType.ASK else 0.1
+        score.verification_value = 0.9 if candidate.behavior_type == BehaviorType.VERIFY else 0.1
+        return score
 
-        if context.goal_state:
-            s.goal_alignment = self._score_goal(candidate, context.goal_state)
-        if context.belief_assessment:
-            s.belief_support = self._score_belief(candidate, context.belief_assessment)
-        if context.salience:
-            s.salience_fit = self._score_salience(candidate, context.salience)
-        if context.user_model:
-            s.user_preference_fit = self._score_user(candidate, context.user_model)
-        if context.adaptive_recommendations:
-            s.historical_success = self._score_adaptive(candidate, context.adaptive_recommendations)
-        if context.policy_constraints:
-            s.policy_fit = self._score_policy(candidate, context.policy_constraints)
-
-        s.capability_fit = self._score_capability(candidate, context.capability_requirements)
-        s.risk = self._score_risk(candidate, context)
-        s.interruption_cost = self._score_interruption(candidate, context)
-        s.verification_value = self._score_verification(candidate, context)
-        return s
-
-    def _score_goal(self, candidate: BehaviorCandidate, goal_state: dict[str, Any]) -> float:
-        if not goal_state:
+    def _score_goals(self, candidate: BehaviorCandidate, context: BehaviorSelectionContext) -> float:
+        if not context.goals:
             return 0.5
-        active = goal_state.get("active_goals", [])
-        if not active:
-            return 0.5
-        return 0.9 if candidate.behavior_type in (BehaviorType.USE_WORKFLOW, BehaviorType.REASON, BehaviorType.RECALL) else 0.4
+        affinities = [goal.affinity.get(candidate.behavior_type.value) for goal in context.goals]
+        explicit = [value for value in affinities if value is not None]
+        if explicit:
+            return max(0.0, min(1.0, max(explicit)))
+        if all(goal.blocked for goal in context.goals):
+            return 0.2
+        return 0.6
 
-    def _score_belief(self, candidate: BehaviorCandidate, belief_assessment: dict[str, Any]) -> float:
-        confidence = belief_assessment.get("confidence", 0.5)
+    def _score_belief(self, candidate: BehaviorCandidate, context: BehaviorSelectionContext) -> float:
+        confidence = float(context.belief.confidence) if context.belief else 0.5
         if candidate.behavior_type == BehaviorType.ABSTAIN:
             return 1.0 - confidence
         return confidence
 
-    def _score_salience(self, candidate: BehaviorCandidate, salience: dict[str, Any]) -> float:
-        overall = salience.get("overall", 0.0)
-        if candidate.behavior_type == BehaviorType.ASK:
-            return overall if overall > 0.5 else 0.3
-        return overall * 0.8
+    def _score_salience(self, candidate: BehaviorCandidate, context: BehaviorSelectionContext) -> float:
+        if context.salience is None:
+            return 0.5
+        dimensions = context.salience.dimensions
+        if candidate.behavior_type == BehaviorType.VERIFY:
+            return max(
+                dimensions.get("risk", 0.0),
+                dimensions.get("contradiction", 0.0),
+                dimensions.get("surprise", 0.0),
+            )
+        if candidate.behavior_type == BehaviorType.RECALL:
+            return max(
+                dimensions.get("goal_relevance", 0.0),
+                dimensions.get("unresolved_state", 0.0),
+                context.salience.overall * 0.5,
+            )
+        return context.salience.overall * context.salience.modulation
 
-    def _score_user(self, candidate: BehaviorCandidate, user_model: dict[str, Any]) -> float:
-        prefers_action = user_model.get("prefers_action_over_clarification", True)
-        if candidate.behavior_type == BehaviorType.ASK and not prefers_action:
-            return 0.2
-        return 0.7 if prefers_action else 0.5
+    def _score_adaptive(self, candidate: BehaviorCandidate, context: BehaviorSelectionContext) -> float:
+        if context.adaptive is None:
+            return 0.5
+        for recommendation in context.adaptive.recommendations:
+            if recommendation.action_type == candidate.behavior_type.value:
+                return max(0.0, min(1.0, recommendation.utility_score))
+        return max(0.0, min(1.0, context.adaptive.utility_score))
 
-    def _score_adaptive(self, candidate: BehaviorCandidate, recommendations: list[dict[str, Any]]) -> float:
-        for rec in recommendations:
-            if rec.get("action_type") == candidate.behavior_type.value:
-                return rec.get("utility_score", 0.5)
-        return 0.5
-
-    def _score_policy(self, candidate: BehaviorCandidate, policy_constraints: dict[str, Any]) -> float:
-        blocked = policy_constraints.get("blocked_behaviors", [])
-        if candidate.behavior_type.value in blocked:
+    def _score_policy(self, candidate: BehaviorCandidate, context: BehaviorSelectionContext) -> float:
+        if context.policy is None:
+            return 1.0
+        if candidate.behavior_type.value in context.policy.blocked_behaviors:
             return 0.0
         return 1.0
 
     def _score_capability(self, candidate: BehaviorCandidate, requirements: list[str]) -> float:
         if not requirements:
             return 0.8
-        if candidate.behavior_type == BehaviorType.USE_CAPABILITY:
-            return 0.9 if requirements else 0.2
-        return 0.7
+        return 0.9 if candidate.behavior_type == BehaviorType.USE_CAPABILITY else 0.7
 
     def _score_risk(self, candidate: BehaviorCandidate, context: BehaviorSelectionContext) -> float:
-        risk = context.policy_constraints.get("risk", 0.0)
         if candidate.behavior_type in (BehaviorType.REFUSE, BehaviorType.ABSTAIN):
             return 0.0
-        return risk
+        return context.policy.risk_level if context.policy else 0.0
 
-    def _score_interruption(self, candidate: BehaviorCandidate, context: BehaviorSelectionContext) -> float:
-        if candidate.behavior_type == BehaviorType.ASK:
-            return 0.3
-        return 0.1
-
-    def _score_verification(self, candidate: BehaviorCandidate, context: BehaviorSelectionContext) -> float:
+    def _evaluate_verification(
+        self,
+        candidate: BehaviorCandidate,
+        context: BehaviorSelectionContext,
+    ) -> VerificationRequirement | None:
         if candidate.behavior_type == BehaviorType.VERIFY:
-            return 0.9
-        return 0.1
-
-    def _evaluate_verification(self, candidate: BehaviorCandidate, context: BehaviorSelectionContext) -> VerificationRequirement | None:
-        if candidate.behavior_type == BehaviorType.VERIFY:
-            return VerificationRequirement(required=True, reason=VerificationReason.LOW_CONFIDENCE, depth=VerificationDepth.STANDARD)
-        if context.reasoning_assessment.get("confidence", 1.0) < 0.4:
-            return VerificationRequirement(required=True, reason=VerificationReason.LOW_CONFIDENCE, depth=VerificationDepth.STANDARD)
+            return VerificationRequirement(
+                required=True,
+                reason=VerificationReason.LOW_CONFIDENCE,
+                depth=VerificationDepth.STANDARD,
+                source="cortex",
+            )
+        if context.meta and context.meta.reasoning_confidence < 0.4:
+            return VerificationRequirement(
+                required=True,
+                reason=VerificationReason.LOW_REASONING_CONFIDENCE,
+                depth=VerificationDepth.STANDARD,
+                source="cortex",
+            )
+        if context.belief and context.belief.contradictions:
+            return VerificationRequirement(
+                required=True,
+                reason=VerificationReason.CONFLICTING_EVIDENCE,
+                depth=VerificationDepth.STANDARD,
+                source="cortex",
+            )
         return None
