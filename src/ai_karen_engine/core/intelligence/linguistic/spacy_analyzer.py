@@ -15,6 +15,7 @@ from ai_karen_engine.core.intelligence.linguistic.contracts import (
     LinguisticMetadata,
     ParsedMessage,
 )
+from ai_karen_engine.core.intelligence.linguistic.spacy_config import SpacyConfig
 
 try:
     from cachetools import TTLCache
@@ -57,11 +58,6 @@ except ImportError:
         def __len__(self) -> int:
             self._purge_expired()
             return super().__len__()
-
-try:
-    from ai_karen_engine.core.memory.signals.nlp_config import SpacyConfig
-except ImportError:
-    from ai_karen_engine.core.intelligence.linguistic.spacy_config import SpacyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +111,8 @@ class SpacyAnalyzer:
                         from spacy.cli import download
                         download(self.config.model_name)
                         self.nlp = spacy.load(self.config.model_name, disable=self.config.disabled_components)
-                    except Exception:
+                    except Exception as exc:
+                        logger.warning("Unable to provision spaCy model %s: %s", self.config.model_name, exc)
                         self.nlp = None
             if self.nlp is not None and local_model_root:
                 try:
