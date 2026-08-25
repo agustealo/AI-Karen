@@ -1,8 +1,4 @@
-"""Canonical reasoning contracts for the specialist cognition layer.
-
-These dataclasses are the single source of truth for reasoning artifacts. They
-contain semantic data only and never provider/runtime implementation objects.
-"""
+"""Canonical reasoning contracts for the specialist cognition layer."""
 
 from __future__ import annotations
 
@@ -80,6 +76,12 @@ class ReasoningErrorCode(str, Enum):
     ESCALATION_DENIED = "escalation_denied"
 
 
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 @dataclass(slots=True)
 class ReasoningEvidence:
     evidence_id: str
@@ -107,6 +109,21 @@ class ReasoningEvidence:
             raise ValueError("reasoning evidence requires explicit non-default tenant_id")
         self.relevance = max(0.0, min(1.0, self.relevance))
         self.confidence = max(0.0, min(1.0, self.confidence))
+        self.recorded_at = _utc(self.recorded_at)
+        for name in ("event_time", "observed_at", "valid_from", "valid_until", "expires_at"):
+            value = getattr(self, name)
+            if value is not None:
+                setattr(self, name, _utc(value))
+
+    @property
+    def timestamp(self) -> float:
+        """Deprecated compatibility view; use recorded_at."""
+        return self.recorded_at.timestamp()
+
+    @property
+    def valid_at(self) -> str | None:
+        """Deprecated compatibility view; use valid_from."""
+        return self.valid_from.isoformat() if self.valid_from else None
 
 
 @dataclass(slots=True)
@@ -139,6 +156,11 @@ class ReasoningAssessment:
     contradiction_severity: str = ContradictionSeverity.LOW.value
     uncertainty_reasons: list[str] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.confidence, ReasoningConfidence):
+            self.confidence = ReasoningConfidence(float(self.confidence))
+        self.evidence_sufficiency = max(0.0, min(1.0, self.evidence_sufficiency))
 
 
 @dataclass(slots=True)
