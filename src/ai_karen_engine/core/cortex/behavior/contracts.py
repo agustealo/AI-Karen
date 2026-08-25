@@ -74,7 +74,7 @@ class BehaviorConstraint(str, Enum):
 
 
 @dataclass(slots=True)
-class CognitivePolicyConfig:
+class BehaviorPolicyVersion:
     """Version identifiers attached to behavior decisions."""
 
     policy_version: str = "1.0.0"
@@ -108,7 +108,9 @@ def _belief_snapshot(value: BeliefSnapshot | Mapping[str, Any]) -> BeliefSnapsho
     return BeliefSnapshot(
         active_claim_ids=tuple(value.get("active_claim_ids", ())),
         disputed_claim_ids=tuple(value.get("disputed_claim_ids", ())),
-        epistemic_confidence=float(value.get("epistemic_confidence", value.get("confidence", 1.0))),
+        epistemic_confidence=float(
+            value.get("epistemic_confidence", value.get("confidence", 1.0))
+        ),
         contradiction_count=int(value.get("contradiction_count", 0)),
         stale=bool(value.get("stale", False)),
         evidence_refs=tuple(value.get("evidence_refs", ())),
@@ -147,22 +149,36 @@ def _salience_snapshot(value: SalienceSnapshot | Mapping[str, Any]) -> SalienceS
         overall=float(value.get("overall", 0.0)),
         activation=float(value.get("activation", value.get("overall", 0.0))),
         inhibition=float(value.get("inhibition", 0.0)),
-        salience_confidence=float(value.get("salience_confidence", value.get("confidence", 0.0))),
+        salience_confidence=float(
+            value.get("salience_confidence", value.get("confidence", 0.0))
+        ),
         dominant_dimensions=tuple(value.get("dominant_dimensions", ())),
         source_refs=tuple(value.get("source_refs", ())),
     )
 
 
-def _memory_snapshot(value: MemorySignalSnapshot | Mapping[str, Any] | list[Mapping[str, Any]]) -> MemorySignalSnapshot:
+def _memory_snapshot(
+    value: MemorySignalSnapshot | Mapping[str, Any] | list[Mapping[str, Any]],
+) -> MemorySignalSnapshot:
     if isinstance(value, MemorySignalSnapshot):
         return value
     if isinstance(value, list):
-        ids = tuple(str(item.get("memory_id", "")) for item in value if item.get("memory_id"))
-        confidence = max((float(item.get("confidence", item.get("salience_value", 0.0))) for item in value), default=0.0)
+        ids = tuple(
+            str(item.get("memory_id", "")) for item in value if item.get("memory_id")
+        )
+        confidence = max(
+            (
+                float(item.get("confidence", item.get("salience_value", 0.0)))
+                for item in value
+            ),
+            default=0.0,
+        )
         return MemorySignalSnapshot(memory_ids=ids, retrieval_confidence=confidence)
     return MemorySignalSnapshot(
         memory_ids=tuple(value.get("memory_ids", ())),
-        retrieval_confidence=float(value.get("retrieval_confidence", value.get("confidence", 0.0))),
+        retrieval_confidence=float(
+            value.get("retrieval_confidence", value.get("confidence", 0.0))
+        ),
         degraded=bool(value.get("degraded", False)),
         degradation_reason=value.get("degradation_reason"),
     )
@@ -172,24 +188,34 @@ def _user_snapshot(value: UserModelSnapshot | Mapping[str, Any]) -> UserModelSna
     if isinstance(value, UserModelSnapshot):
         return value
     return UserModelSnapshot(
-        prefers_action_over_clarification=bool(value.get("prefers_action_over_clarification", True)),
+        prefers_action_over_clarification=bool(
+            value.get("prefers_action_over_clarification", True)
+        ),
         explicit_preference_refs=tuple(value.get("explicit_preference_refs", ())),
         inferred_preference_refs=tuple(value.get("inferred_preference_refs", ())),
     )
 
 
-def _relationship_snapshot(value: RelationshipSnapshot | Mapping[str, Any]) -> RelationshipSnapshot:
+def _relationship_snapshot(
+    value: RelationshipSnapshot | Mapping[str, Any],
+) -> RelationshipSnapshot:
     if isinstance(value, RelationshipSnapshot):
         return value
     return RelationshipSnapshot(
         relationship_ids=tuple(value.get("relationship_ids", ())),
-        shared_project_refs=tuple(value.get("shared_project_refs", value.get("shared_projects", ()))),
-        unresolved_thread_refs=tuple(value.get("unresolved_thread_refs", value.get("unresolved_threads", ()))),
+        shared_project_refs=tuple(
+            value.get("shared_project_refs", value.get("shared_projects", ()))
+        ),
+        unresolved_thread_refs=tuple(
+            value.get("unresolved_thread_refs", value.get("unresolved_threads", ()))
+        ),
     )
 
 
 def _adaptive_snapshots(
-    value: tuple[AdaptiveRecommendationSnapshot, ...] | list[AdaptiveRecommendationSnapshot] | list[Mapping[str, Any]],
+    value: tuple[AdaptiveRecommendationSnapshot, ...]
+    | list[AdaptiveRecommendationSnapshot]
+    | list[Mapping[str, Any]],
 ) -> tuple[AdaptiveRecommendationSnapshot, ...]:
     result: list[AdaptiveRecommendationSnapshot] = []
     for item in value:
@@ -200,7 +226,12 @@ def _adaptive_snapshots(
                 AdaptiveRecommendationSnapshot(
                     action_type=str(item.get("action_type", "")),
                     utility_score=float(item.get("utility_score", 0.0)),
-                    recommendation_confidence=float(item.get("recommendation_confidence", item.get("confidence", 0.0))),
+                    recommendation_confidence=float(
+                        item.get(
+                            "recommendation_confidence",
+                            item.get("confidence", 0.0),
+                        )
+                    ),
                     reason_codes=tuple(item.get("reason_codes", ())),
                     recommendation_id=item.get("recommendation_id"),
                 )
@@ -208,11 +239,15 @@ def _adaptive_snapshots(
     return tuple(result)
 
 
-def _reasoning_snapshot(value: ReasoningSnapshot | Mapping[str, Any]) -> ReasoningSnapshot:
+def _reasoning_snapshot(
+    value: ReasoningSnapshot | Mapping[str, Any],
+) -> ReasoningSnapshot:
     if isinstance(value, ReasoningSnapshot):
         return value
     return ReasoningSnapshot(
-        reasoning_confidence=float(value.get("reasoning_confidence", value.get("confidence", 1.0))),
+        reasoning_confidence=float(
+            value.get("reasoning_confidence", value.get("confidence", 1.0))
+        ),
         status=str(value.get("status", "completed")),
         contradiction_count=int(value.get("contradiction_count", 0)),
         evidence_sufficiency=float(value.get("evidence_sufficiency", 1.0)),
@@ -237,8 +272,7 @@ class BehaviorSelectionContext:
     """Typed semantic snapshot for behavior selection.
 
     Legacy mappings are accepted only at construction and immediately coerced
-    into typed snapshots. Public fields remain typed to prevent schema drift.
-    Tenant scope is explicit; "default" is not an acceptable security scope.
+    into typed snapshots. Public fields remain typed after construction.
     """
 
     request_id: str
@@ -323,7 +357,10 @@ class BehaviorScoreComponents:
             + self.verification_value * self.weights["verification_value"]
             + self.capability_fit * self.weights["capability_fit"]
         )
-        return max(0.0, min(1.0, weighted_sum - self.risk - self.interruption_cost))
+        return max(
+            0.0,
+            min(1.0, weighted_sum - self.risk - self.interruption_cost),
+        )
 
 
 @dataclass(slots=True)
@@ -354,12 +391,12 @@ __all__ = [
     "BehaviorCandidate",
     "BehaviorConstraint",
     "BehaviorDecision",
+    "BehaviorPolicyVersion",
     "BehaviorScoreComponents",
     "BehaviorSelectionContext",
     "BehaviorSource",
     "BehaviorTarget",
     "BehaviorType",
-    "CognitivePolicyConfig",
     "ReasoningDepth",
     "VerificationDepth",
     "VerificationReason",
