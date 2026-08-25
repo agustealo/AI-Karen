@@ -2,8 +2,12 @@
 Core Memory Domain for AI Karen Engine.
 
 Runtime authority note:
-- `ai_karen_engine.core.memory` is the single live runtime memory authority.
-- Legacy `core.neuro_vault` remains migration/compatibility scope only.
+- ``ai_karen_engine.core.memory`` remains the public memory-domain facade.
+- Cognitive contracts are import-safe and do not initialize runtime/platform
+  dependencies as a side effect.
+- Runtime, persistence, retrieval, evaluation, and compatibility exports are
+  resolved lazily when callers explicitly request them.
+- Legacy ``core.neuro_vault`` remains migration/compatibility scope only.
 
 Cognitive architecture:
 - 12 memory types: Working, Episodic, Semantic, Autobiographical, Preference,
@@ -19,73 +23,14 @@ Cognitive architecture:
 - Reflection engine (evidence checking, promotion gates)
 """
 
-from .ledger_models import (
-    ConsentScope,
-    ContradictionEvent,
-    MemoryAssertion,
-    MemoryEpisode,
-    MemoryEvent,
-    MemoryRelation,
-    ProfileFact,
-    ProjectionStatus,
-    ReinforcementEvent,
-    RetentionPolicy,
-)
-from .memory_runtime_manager import (
-    MemoryRuntimeManager,
-    close,
-    get_memory_manager,
-    get_metrics,
-    init_memory,
-    recall_context,
-    update_memory,
-)
+from __future__ import annotations
 
-try:
-    from .profile_synthesis import ProfileService, get_profile_service
-except ImportError:
-    get_profile_service = None
-    ProfileService = None
+from importlib import import_module
+from typing import Any
 
-try:
-    from .retrieval import HybridRetrievalRouter, get_retrieval_router
-except ImportError:
-    get_retrieval_router = None
-    HybridRetrievalRouter = None
-
-get_eval_harness = None
-MemoryEvalHarness = None
-
-try:
-    from .evaluation import MemoryEvalHarness as _MemoryEvalHarness
-    from .evaluation import get_eval_harness as _get_eval_harness
-except ImportError:
-    _get_eval_harness = None
-    _MemoryEvalHarness = None
-else:
-    get_eval_harness = _get_eval_harness
-    MemoryEvalHarness = _MemoryEvalHarness
-
-try:
-    from .neuro import (
-        ConsolidationDecision,
-        LessonArtifact,
-        MemoryActivationDecision,
-        MemoryActivationMode,
-        MemoryCandidate,
-        MemoryClass,
-        ProcedureArtifact,
-    )
-except ImportError:
-    MemoryClass = None
-    MemoryActivationMode = None
-    MemoryActivationDecision = None
-    MemoryCandidate = None
-    ConsolidationDecision = None
-    ProcedureArtifact = None
-    LessonArtifact = None
-
-# Cognitive architecture exports
+# Pure cognitive contracts are the only eager package-root exports. Importing
+# ``ai_karen_engine.core.memory.contracts`` must never initialize persistence,
+# observability, provider, or runtime infrastructure.
 from .contracts import (
     ClaimStatus,
     MemoryClaim,
@@ -111,63 +56,86 @@ from .types import (
     ReflectionCandidate,
 )
 
-try:
-    from .lifecycle import LifecycleEvent, LifecycleHook, MemoryLifecycle
-except ImportError:
-    MemoryLifecycle = None
-    LifecycleHook = None
-    LifecycleEvent = None
+# Package-root compatibility exports. These symbols historically lived behind
+# eager imports in this module. Keeping them lazy preserves the API while
+# preventing a contract import from pulling platform/runtime authority into the
+# cognitive kernel.
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    # Runtime authority.
+    "MemoryRuntimeManager": (".memory_runtime_manager", "MemoryRuntimeManager"),
+    "get_memory_manager": (".memory_runtime_manager", "get_memory_manager"),
+    "init_memory": (".memory_runtime_manager", "init_memory"),
+    "close": (".memory_runtime_manager", "close"),
+    "recall_context": (".memory_runtime_manager", "recall_context"),
+    "update_memory": (".memory_runtime_manager", "update_memory"),
+    "get_metrics": (".memory_runtime_manager", "get_metrics"),
+    # Legacy ledger compatibility. The module itself owns its deprecation path.
+    "ConsentScope": (".ledger_models", "ConsentScope"),
+    "ContradictionEvent": (".ledger_models", "ContradictionEvent"),
+    "MemoryAssertion": (".ledger_models", "MemoryAssertion"),
+    "MemoryEpisode": (".ledger_models", "MemoryEpisode"),
+    "MemoryEvent": (".ledger_models", "MemoryEvent"),
+    "MemoryRelation": (".ledger_models", "MemoryRelation"),
+    "ProfileFact": (".ledger_models", "ProfileFact"),
+    "ProjectionStatus": (".ledger_models", "ProjectionStatus"),
+    "ReinforcementEvent": (".ledger_models", "ReinforcementEvent"),
+    "RetentionPolicy": (".ledger_models", "RetentionPolicy"),
+    # Profile/retrieval/evaluation services.
+    "ProfileService": (".profile_synthesis", "ProfileService"),
+    "get_profile_service": (".profile_synthesis", "get_profile_service"),
+    "HybridRetrievalRouter": (".retrieval", "HybridRetrievalRouter"),
+    "get_retrieval_router": (".retrieval", "get_retrieval_router"),
+    "MemoryEvalHarness": (".evaluation", "MemoryEvalHarness"),
+    "get_eval_harness": (".evaluation", "get_eval_harness"),
+    # Neuro-memory contracts/services.
+    "ConsolidationDecision": (".neuro", "ConsolidationDecision"),
+    "LessonArtifact": (".neuro", "LessonArtifact"),
+    "MemoryActivationDecision": (".neuro", "MemoryActivationDecision"),
+    "MemoryActivationMode": (".neuro", "MemoryActivationMode"),
+    "MemoryCandidate": (".neuro", "MemoryCandidate"),
+    "MemoryClass": (".neuro", "MemoryClass"),
+    "ProcedureArtifact": (".neuro", "ProcedureArtifact"),
+    # Cognitive service implementations.
+    "LifecycleEvent": (".lifecycle", "LifecycleEvent"),
+    "LifecycleHook": (".lifecycle", "LifecycleHook"),
+    "MemoryLifecycle": (".lifecycle", "MemoryLifecycle"),
+    "MemoryClaimStore": (".claims", "MemoryClaimStore"),
+    "AssociationGraph": (".associative", "AssociationGraph"),
+    "SpreadingActivation": (".associative", "SpreadingActivation"),
+    "ReflectionEngine": (".reflection", "ReflectionEngine"),
+    "SelfModelStore": (".self_model", "SelfModelStore"),
+    "UserModelStore": (".user_model", "UserModelStore"),
+    "RelationshipModelStore": (".relationship_model", "RelationshipModelStore"),
+    "ProspectiveMemoryStore": (".prospective", "ProspectiveMemoryStore"),
+    # CORE-SPLIT-2 recall authority and adapters.
+    "DefaultRecallService": ("..recall", "DefaultRecallService"),
+    "RecallManagerRecallAdapter": (".adapters", "RecallManagerRecallAdapter"),
+    "RetrievalRouterRecallAdapter": (".adapters", "RetrievalRouterRecallAdapter"),
+}
 
-try:
-    from .claims import MemoryClaimStore
-except ImportError:
-    MemoryClaimStore = None
 
-try:
-    from .associative import AssociationGraph, SpreadingActivation
-except ImportError:
-    AssociationGraph = None
-    SpreadingActivation = None
+def __getattr__(name: str) -> Any:
+    """Resolve compatibility/runtime exports only on explicit access.
 
-try:
-    from .reflection import ReflectionEngine
-except ImportError:
-    ReflectionEngine = None
+    This is intentionally a package-boundary mechanism, not an orchestration
+    path. It prevents cognitive contract imports from acquiring runtime or
+    platform side effects while preserving historical package-root imports.
+    """
 
-try:
-    from .self_model import SelfModelStore
-except ImportError:
-    SelfModelStore = None
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-try:
-    from .user_model import UserModelStore
-except ImportError:
-    UserModelStore = None
+    module_name, attribute_name = target
+    module = import_module(module_name, package=__name__)
+    value = getattr(module, attribute_name)
+    globals()[name] = value
+    return value
 
-try:
-    from .relationship_model import RelationshipModelStore
-except ImportError:
-    RelationshipModelStore = None
 
-try:
-    from .prospective import ProspectiveMemoryStore
-except ImportError:
-    ProspectiveMemoryStore = None
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_EXPORTS))
 
-# CORE-SPLIT-2 recall authority
-try:
-    from ..recall import DefaultRecallService
-except ImportError:
-    DefaultRecallService = None
-
-try:
-    from .adapters import (
-        RecallManagerRecallAdapter,
-        RetrievalRouterRecallAdapter,
-    )
-except ImportError:
-    RecallManagerRecallAdapter = None
-    RetrievalRouterRecallAdapter = None
 
 __all__ = [
     "get_memory_manager",
@@ -200,7 +168,7 @@ __all__ = [
     "ConsolidationDecision",
     "ProcedureArtifact",
     "LessonArtifact",
-    # Cognitive architecture
+    # Cognitive architecture.
     "MemoryClaim",
     "ClaimStatus",
     "SalienceScore",
@@ -230,7 +198,7 @@ __all__ = [
     "UserModelStore",
     "RelationshipModelStore",
     "ProspectiveMemoryStore",
-    # CORE-SPLIT-2 recall authority
+    # CORE-SPLIT-2 recall authority.
     "DefaultRecallService",
     "RecallManagerRecallAdapter",
     "RetrievalRouterRecallAdapter",
