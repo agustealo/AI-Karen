@@ -325,12 +325,6 @@ class LLMRouter:
 
         # Provider priority mapping - canonical built-ins with proper priorities
         self.provider_priorities = {
-            # Built-in runtimes - highest priority
-            "builtin_vllm": ProviderPriority.TRANSFORMER,
-            "vllm": ProviderPriority.TRANSFORMER,
-            "nano_vllm": ProviderPriority.TRANSFORMER,
-            "nano-vllm": ProviderPriority.TRANSFORMER,
-
             # Local provider options
             "ollama": ProviderPriority.LOCAL_SERVICE,
             # local_gguf is removed - mapped to LOCAL_SERVICE for backward compatibility
@@ -380,8 +374,6 @@ class LLMRouter:
 
         # Streaming support
         self._streaming_providers: Set[str] = {
-            "builtin_vllm",
-            "vllm",
             "ollama",
             "openai",
             "anthropic",
@@ -927,13 +919,6 @@ class LLMRouter:
 
         if not isinstance(provider_info, dict):
             return False
-
-        if provider_name == "builtin_vllm":
-            return (
-                provider_info.get("health_status") == "healthy"
-                and provider_info.get("runtime") == "vllm"
-                and not provider_info.get("initialization_error")
-            )
 
         if provider_name == "builtin_transformers":
             return provider_info.get("transformers_available") is True

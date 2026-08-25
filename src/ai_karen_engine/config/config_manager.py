@@ -102,7 +102,6 @@ class LLMConfig:
     fallback_chain: List[str] = field(
         default_factory=lambda: [
             "builtin_transformers",
-            "builtin_vllm",
             "openai",
             "gemini",
             "deepseek",
@@ -113,7 +112,6 @@ class LLMConfig:
         default_factory=lambda: {
             "openai": "gpt-4o-mini",
             "deepseek": "deepseek-chat",
-            "builtin_vllm": "auto",
             "builtin_transformers": "auto",
             "gemini": "gemini-2.5-flash",
             "huggingface": "microsoft/DialoGPT-large",
@@ -284,7 +282,6 @@ DEFAULT_CONFIG = {
         "provider_defaults": {
             "openai": "gpt-4o-mini",
             "deepseek": "deepseek-chat",
-            "builtin_vllm": "auto",
             "builtin_transformers": "auto",
             "gemini": "gemini-2.5-flash",
             "huggingface": "microsoft/DialoGPT-large",
@@ -737,7 +734,7 @@ def get_fallback_chain() -> list:
     """Get the ordered fallback chain of providers."""
     return get_llm_config().get(
         "fallback_chain",
-        ["builtin_transformers", "builtin_vllm", "openai", "gemini", "deepseek", "huggingface"],
+        ["builtin_transformers", "openai", "gemini", "deepseek", "huggingface"],
     )
 
 
@@ -1015,7 +1012,7 @@ class ConfigManager:
         # Ensure default fallback uses the built-in runtime provider IDs.
         return config.get("llm_providers", {}).get(
             "fallback_hierarchy",
-            ["builtin_transformers", "builtin_vllm", "openai", "gemini", "deepseek", "huggingface"],
+            ["builtin_transformers", "openai", "gemini", "deepseek", "huggingface"],
         )
 
     def get_plugins_config(self):

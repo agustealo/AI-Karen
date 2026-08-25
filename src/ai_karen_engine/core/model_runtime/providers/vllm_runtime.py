@@ -29,7 +29,7 @@ class VLLMRuntime(LLMProviderBase):
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         api_key_env: Optional[str] = None,
-        provider_name: str = "builtin_vllm",
+        provider_name: str = "custom_openai_compatible",
     ) -> None:
         self.model = (
             model if model != "auto"
