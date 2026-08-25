@@ -1,51 +1,24 @@
-"""
-Belief / Uncertainty / Contradiction contracts for AI-Karen reasoning.
+"""Belief / uncertainty / contradiction contracts for AI-Karen reasoning.
 
-Gives Karen a first-class way to distinguish what she observed, what the user
-asserted, what she inferred, what she verified, what she suspects, what is
-contradicted, what used to be true, and what is unknown.
-
-These are domain contracts, NOT persistence or provider calls.
-Belief logic evaluates evidence; memory stores it.
+Belief owns epistemic assessment. Memory owns the canonical claim lifecycle.
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-# ===================================
-# TYPE ALIASES
-# ===================================
+from ai_karen_engine.core.contracts.cognitive import EpistemicConfidence
+from ai_karen_engine.core.memory.contracts import ClaimStatus
 
 ClaimId = str
 EvidenceId = str
 
 
-# ===================================
-# CLAIM STATUS
-# ===================================
-
-class ClaimStatus(str, Enum):
-    """Status of a belief claim through its epistemic lifecycle."""
-    OBSERVED = "observed"
-    USER_ASSERTED = "user_asserted"
-    INFERRED = "inferred"
-    SUPPORTED = "supported"
-    VERIFIED = "verified"
-    DISPUTED = "disputed"
-    CONTRADICTED = "contradicted"
-    SUPERSEDED = "superseded"
-    STALE = "stale"
-    RETRACTED = "retracted"
-    UNKNOWN = "unknown"
-
-
 class ConfidenceDimension(str, Enum):
-    """Dimensions of confidence for a claim."""
     SOURCE = "source"
     EVIDENCE_STRENGTH = "evidence_strength"
     BELIEF = "belief"
@@ -54,7 +27,6 @@ class ConfidenceDimension(str, Enum):
 
 
 class UncertaintySource(str, Enum):
-    """What contributes to uncertainty about a claim."""
     NEW_CLAIM = "new_claim"
     CONTRADICTORY_EVIDENCE = "contradictory_evidence"
     STALE_EVIDENCE = "stale_evidence"
@@ -66,7 +38,8 @@ class UncertaintySource(str, Enum):
 
 
 class EvidenceType(str, Enum):
-    """Type of evidence supporting or contradicting a claim."""
+    """Canonical evidence-source type for cognitive epistemics."""
+
     USER_STATEMENT = "user_statement"
     OBSERVATION = "observation"
     TOOL_RESULT = "tool_result"
@@ -78,7 +51,6 @@ class EvidenceType(str, Enum):
 
 
 class EvidenceRelation(str, Enum):
-    """How an evidence item relates to a claim."""
     SUPPORTS = "supports"
     CONTRADICTS = "contradicts"
     QUALIFIES = "qualifies"
@@ -88,7 +60,6 @@ class EvidenceRelation(str, Enum):
 
 
 class EvidenceStrength(str, Enum):
-    """Strength of an evidence item."""
     WEAK = "weak"
     MODERATE = "moderate"
     STRONG = "strong"
@@ -96,7 +67,6 @@ class EvidenceStrength(str, Enum):
 
 
 class ClaimScope(str, Enum):
-    """Scope of applicability for a claim."""
     GLOBAL = "global"
     USER = "user"
     TENANT = "tenant"
@@ -106,7 +76,6 @@ class ClaimScope(str, Enum):
 
 
 class ContradictionKind(str, Enum):
-    """Kind of contradiction detected between claims."""
     DIRECT = "direct"
     TEMPORAL = "temporal"
     SCOPE = "scope"
@@ -117,13 +86,11 @@ class ContradictionKind(str, Enum):
 
 
 class ContradictionNature(str, Enum):
-    """Whether a contradiction is a true contradiction or a change over time."""
     CONTRADICTION = "contradiction"
     CHANGE_OVER_TIME = "change_over_time"
 
 
 class RevisionAction(str, Enum):
-    """Action taken during belief revision."""
     KEEP = "keep"
     STRENGTHEN = "strengthen"
     WEAKEN = "weaken"
@@ -136,7 +103,6 @@ class RevisionAction(str, Enum):
 
 
 class BeliefVerdict(str, Enum):
-    """Final verdict on a belief assessment."""
     ACTIVE = "active"
     INACTIVE = "inactive"
     CONFLICTING = "conflicting"
@@ -146,27 +112,23 @@ class BeliefVerdict(str, Enum):
     CONFLICTING_EVIDENCE = "conflicting_evidence"
 
 
-# ===================================
-# CLAIM CONTRACTS
-# ===================================
-
 @dataclass(slots=True)
 class ClaimTemporalValidity:
-    """Temporal information for a claim."""
     asserted_at: datetime | None = None
     observed_at: datetime | None = None
+    event_time: datetime | None = None
     valid_from: datetime | None = None
     valid_until: datetime | None = None
     last_verified_at: datetime | None = None
+    superseded_at: datetime | None = None
+    deleted_at: datetime | None = None
 
     def is_expired(self, now: datetime | None = None) -> bool:
-        now = now or datetime.utcnow()
-        if self.valid_until is not None and now > self.valid_until:
-            return True
-        return False
+        now = now or datetime.now(timezone.utc)
+        return self.valid_until is not None and now > self.valid_until
 
     def age_seconds(self, now: datetime | None = None) -> float:
-        now = now or datetime.utcnow()
+        now = now or datetime.now(timezone.utc)
         ref = self.last_verified_at or self.observed_at or self.asserted_at
         if ref is None:
             return float("inf")
@@ -175,11 +137,6 @@ class ClaimTemporalValidity:
 
 @dataclass(slots=True)
 class BeliefClaim:
-    """A claim that Karen believes (or suspects) to be true.
-
-    A claim is not automatically a fact.  It carries its epistemic provenance
-    so that downstream consumers can reason about confidence.
-    """
     claim_id: str
     subject: str
     predicate: str
@@ -188,10 +145,10 @@ class BeliefClaim:
     source: EvidenceType
     source_ref: str | None
     scope: ClaimScope
-    confidence: float
+    confidence: EpistemicConfidence
     tenant_id: str
     user_id: str | None
-    claim_format: str  # "triple" | "text" | "structured"
+    claim_format: str
     provenance: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     temporal: ClaimTemporalValidity = field(default_factory=ClaimTemporalValidity)
@@ -201,12 +158,12 @@ class BeliefClaim:
     version: int = 1
 
     def __post_init__(self) -> None:
-        self.confidence = max(0.0, min(1.0, self.confidence))
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("belief tenant_id must be explicit and non-default")
 
 
 @dataclass(slots=True)
 class Evidence:
-    """A piece of evidence supporting or contradicting a claim."""
     evidence_id: str
     type: EvidenceType
     source: str
@@ -217,6 +174,7 @@ class Evidence:
     relation: EvidenceRelation = EvidenceRelation.SUPPORTS
     confidence: float = 0.0
     observed_at: datetime | None = None
+    event_time: datetime | None = None
     expires_at: datetime | None = None
     authority: str = ""
     tenant_id: str = ""
@@ -228,9 +186,10 @@ class Evidence:
 
     def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("evidence tenant_id must be explicit and non-default")
 
-    def redact(self) -> Evidence:
-        """Return a redacted copy that strips secrets."""
+    def redact(self) -> "Evidence":
         return Evidence(
             evidence_id=self.evidence_id,
             type=self.type,
@@ -242,6 +201,7 @@ class Evidence:
             relation=self.relation,
             confidence=self.confidence,
             observed_at=self.observed_at,
+            event_time=self.event_time,
             expires_at=self.expires_at,
             authority=self.authority,
             tenant_id=self.tenant_id,
@@ -255,7 +215,6 @@ class Evidence:
 
 @dataclass(slots=True)
 class BeliefContradiction:
-    """Records a contradiction between two claims or evidence items."""
     contradiction_id: str
     claim_a_id: str
     claim_b_id: str | None
@@ -264,7 +223,7 @@ class BeliefContradiction:
     severity: str
     description: str
     evidence_refs: list[str] = field(default_factory=list)
-    detected_at: datetime = field(default_factory=datetime.utcnow)
+    detected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     tenant_id: str = ""
     resolved: bool = False
     resolution: str | None = None
@@ -272,7 +231,6 @@ class BeliefContradiction:
 
 @dataclass(slots=True)
 class ConfidenceMetrics:
-    """Multi-dimensional confidence for a claim."""
     source_confidence: float = 0.0
     evidence_strength: float = 0.0
     belief_confidence: float = 0.0
@@ -280,15 +238,17 @@ class ConfidenceMetrics:
     consistency_confidence: float = 0.0
 
     def __post_init__(self) -> None:
-        self.source_confidence = max(0.0, min(1.0, self.source_confidence))
-        self.evidence_strength = max(0.0, min(1.0, self.evidence_strength))
-        self.belief_confidence = max(0.0, min(1.0, self.belief_confidence))
-        self.freshness_confidence = max(0.0, min(1.0, self.freshness_confidence))
-        self.consistency_confidence = max(0.0, min(1.0, self.consistency_confidence))
+        for name in (
+            "source_confidence",
+            "evidence_strength",
+            "belief_confidence",
+            "freshness_confidence",
+            "consistency_confidence",
+        ):
+            setattr(self, name, max(0.0, min(1.0, getattr(self, name))))
 
     @property
-    def overall(self) -> float:
-        """Geometric-mean-style overall confidence."""
+    def overall(self) -> EpistemicConfidence:
         values = [
             self.source_confidence,
             self.evidence_strength,
@@ -297,17 +257,16 @@ class ConfidenceMetrics:
             self.consistency_confidence,
         ]
         product = 1.0
-        for v in values:
-            product *= v
-        return float(product ** (1.0 / len(values)))
+        for value in values:
+            product *= value
+        return EpistemicConfidence(product ** (1.0 / len(values)))
 
 
 @dataclass(slots=True)
 class BeliefAssessment:
-    """Result of assessing a claim with its evidence."""
     claim_id: str
     status: ClaimStatus
-    overall_confidence: float
+    overall_confidence: EpistemicConfidence
     confidence_metrics: ConfidenceMetrics
     reason_codes: list[str] = field(default_factory=list)
     evidence_refs: list[str] = field(default_factory=list)
@@ -315,18 +274,14 @@ class BeliefAssessment:
     contradictions: list[BeliefContradiction] = field(default_factory=list)
     verdict: BeliefVerdict = BeliefVerdict.ACTIVE
 
-    def __post_init__(self) -> None:
-        self.overall_confidence = max(0.0, min(1.0, self.overall_confidence))
-
 
 @dataclass(slots=True)
 class ClaimComparison:
-    """Comparison between two claims."""
     claim_a_id: str
     claim_b_id: str
-    relationship: str  # "same", "contradictory", "corroborating", "independent"
-    confidence_a: float
-    confidence_b: float
+    relationship: str
+    confidence_a: EpistemicConfidence
+    confidence_b: EpistemicConfidence
     assessment_a: BeliefAssessment | None = None
     assessment_b: BeliefAssessment | None = None
     evidence_overlap: list[str] = field(default_factory=list)
@@ -334,22 +289,17 @@ class ClaimComparison:
 
 @dataclass(slots=True)
 class BeliefRevision:
-    """Record of a belief revision action."""
     revision_id: str
     claim_id: str
     action: RevisionAction
     reason: str
     evidence_ref: str | None
-    confidence_before: float
-    confidence_after: float
-    revised_at: datetime = field(default_factory=datetime.utcnow)
+    confidence_before: EpistemicConfidence
+    confidence_after: EpistemicConfidence
+    revised_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     tenant_id: str = ""
     superseded_claim_id: str | None = None
 
-
-# ===================================
-# EVIDENCE WEIGHTS
-# ===================================
 
 EVIDENCE_STRENGTH_WEIGHTS: dict[EvidenceStrength, float] = {
     EvidenceStrength.WEAK: 0.3,
@@ -369,12 +319,8 @@ SOURCE_CREDIBILITY: dict[EvidenceType, float] = {
     EvidenceType.OUTCOME: 0.75,
 }
 
-STALENESS_THRESHOLD_HOURS: float = 24.0 * 7  # 7 days
+STALENESS_THRESHOLD_HOURS: float = 24.0 * 7
 
-
-# ===================================
-# ID HELPERS
-# ===================================
 
 def make_claim_id() -> str:
     return f"claim_{uuid.uuid4().hex[:16]}"
