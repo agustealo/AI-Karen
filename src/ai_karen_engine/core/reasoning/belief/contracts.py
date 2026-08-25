@@ -38,8 +38,6 @@ class UncertaintySource(str, Enum):
 
 
 class EvidenceType(str, Enum):
-    """Canonical evidence-source type for cognitive epistemics."""
-
     USER_STATEMENT = "user_statement"
     OBSERVATION = "observation"
     TOOL_RESULT = "tool_result"
@@ -112,6 +110,12 @@ class BeliefVerdict(str, Enum):
     CONFLICTING_EVIDENCE = "conflicting_evidence"
 
 
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 @dataclass(slots=True)
 class ClaimTemporalValidity:
     asserted_at: datetime | None = None
@@ -124,15 +128,15 @@ class ClaimTemporalValidity:
     deleted_at: datetime | None = None
 
     def is_expired(self, now: datetime | None = None) -> bool:
-        now = now or datetime.now(timezone.utc)
-        return self.valid_until is not None and now > self.valid_until
+        current = _utc(now or datetime.now(timezone.utc))
+        return self.valid_until is not None and current > _utc(self.valid_until)
 
     def age_seconds(self, now: datetime | None = None) -> float:
-        now = now or datetime.now(timezone.utc)
+        current = _utc(now or datetime.now(timezone.utc))
         ref = self.last_verified_at or self.observed_at or self.asserted_at
         if ref is None:
             return float("inf")
-        return (now - ref).total_seconds()
+        return (current - _utc(ref)).total_seconds()
 
 
 @dataclass(slots=True)
@@ -160,6 +164,8 @@ class BeliefClaim:
     def __post_init__(self) -> None:
         if not self.tenant_id or self.tenant_id == "default":
             raise ValueError("belief tenant_id must be explicit and non-default")
+        if not isinstance(self.confidence, EpistemicConfidence):
+            self.confidence = EpistemicConfidence(float(self.confidence))
 
 
 @dataclass(slots=True)
@@ -177,7 +183,7 @@ class Evidence:
     event_time: datetime | None = None
     expires_at: datetime | None = None
     authority: str = ""
-    tenant_id: str = ""
+    tenant_id: str | None = None
     user_id: str | None = None
     claim_ids: list[ClaimId] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -224,9 +230,13 @@ class BeliefContradiction:
     description: str
     evidence_refs: list[str] = field(default_factory=list)
     detected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    tenant_id: str = ""
+    tenant_id: str | None = None
     resolved: bool = False
     resolution: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("contradiction tenant_id must be explicit and non-default")
 
 
 @dataclass(slots=True)
@@ -249,13 +259,13 @@ class ConfidenceMetrics:
 
     @property
     def overall(self) -> EpistemicConfidence:
-        values = [
+        values = (
             self.source_confidence,
             self.evidence_strength,
             self.belief_confidence,
             self.freshness_confidence,
             self.consistency_confidence,
-        ]
+        )
         product = 1.0
         for value in values:
             product *= value
@@ -297,8 +307,12 @@ class BeliefRevision:
     confidence_before: EpistemicConfidence
     confidence_after: EpistemicConfidence
     revised_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    tenant_id: str = ""
+    tenant_id: str | None = None
     superseded_claim_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("belief revision tenant_id must be explicit and non-default")
 
 
 EVIDENCE_STRENGTH_WEIGHTS: dict[EvidenceStrength, float] = {
