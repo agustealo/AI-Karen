@@ -140,3 +140,94 @@ core/data_models ↛ (deleted)
 core/operations ↛ (deleted)
 core/echo_core ↛ (deleted)
 ```
+
+## Cognitive Continuity Invariant
+
+> **Cognitive Continuity Invariant**
+>
+> Karen's behavior MUST be capable of being influenced by relevant prior experience, learned user knowledge, temporal state, active goals, relationships, unresolved intentions, and consolidated learning without requiring raw conversation history to remain in the model context.
+>
+> Memory retrieval MUST NOT depend solely on vector similarity.
+>
+> Durable beliefs MUST retain provenance, confidence, temporal validity, and contradiction/supersession relationships.
+>
+> Episodic memory, semantic consolidation, associative recall, temporal reasoning, and controlled forgetting are Core cognitive responsibilities.
+>
+> Concrete storage, vector databases, caches, graph databases, embedding implementations, and scheduling infrastructure are not Core.
+
+## Memory Cognitive Architecture
+
+Karen's cognitive memory model follows this lifecycle:
+
+```
+PERCEIVE → ENCODE → SCORE_SALIENCE → ASSOCIATE → STORE_EPISODE →
+REPLAY_REFLECT → CONSOLIDATE → GENERALIZE → RETRIEVE →
+RECONSOLIDATE → DECAY_SUPERSEDE_FORGET
+```
+
+### Memory Types
+
+1. **Working Memory** — current mental workspace
+2. **Episodic Memory** — specific interactions and experiences
+3. **Semantic Memory** — durable facts and generalized knowledge
+4. **Autobiographical Memory** — Karen-user history and meaningful shared events
+5. **Preference Memory** — likes, dislikes, styles, recurring choices
+6. **Procedural Memory** — successful ways of doing things
+7. **Prospective Memory** — intentions, commitments, unfinished work
+8. **Relational Memory** — people, projects, objects and how they connect
+9. **Temporal Memory** — when something was true and for how long
+10. **Salience Memory** — importance, surprise, emotional relevance, consequences
+11. **Belief Memory** — claims with confidence and evidence
+12. **Meta Memory** — what Karen knows, doubts, forgot, or needs to verify
+
+### Recall Score Formula
+
+```
+RecallScore =
+    semantic_similarity
+  + associative_activation
+  + temporal_relevance
+  + salience
+  + relationship_relevance
+  + current_goal_relevance
+  + repetition_strength
+  + causal_relevance
+  + unresolved_intention_relevance
+  + explicit_user_priority
+  - contradiction_penalty
+  - staleness
+  - interference
+```
+
+### Controlled Forgetting
+
+Three mechanisms:
+- **DECAY**: low-value unused memories become less retrievable
+- **SUPPRESSION**: irrelevant memories lose activation in current context
+- **CONSOLIDATION**: many similar episodes become stronger generalized memory
+
+### Cognitive Proof Suite
+
+The following cognitive behaviors must be verified by tests:
+
+```
+[ ] recalls explicit user preference after session boundary
+[ ] retrieves related memory without lexical overlap
+[ ] newer preference supersedes older preference
+[ ] old episode remains available as provenance
+[ ] distinguishes event time from conversation time
+[ ] repeated episodes consolidate into semantic memory
+[ ] one isolated event does not become strong user preference
+[ ] contradictory memories lower confidence
+[ ] unresolved intention can resurface when relevant
+[ ] irrelevant old memories decay in retrieval rank
+[ ] high-salience decision survives longer than trivial detail
+[ ] recall spans associative graph neighbors
+[ ] retrieved memories influence CORTEX action selection
+[ ] CORTEX cannot treat inferred memory as verified fact
+[ ] cross-tenant memories can never activate
+[ ] deleted/retracted memories cannot reappear from vector/graph indexes
+[ ] memory reconstruction preserves provenance
+[ ] provider replacement does not change memory semantics
+[ ] Redis/Milvus outage degrades honestly rather than inventing recall
+```
