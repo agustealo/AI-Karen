@@ -21,7 +21,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Union
 
 # ===================================
 # ENUMS AND CLASSIFICATIONS
@@ -158,7 +158,7 @@ class ImportanceLevel(Enum):
 # ===================================
 
 # Embedding vector (typically 384, 768, or 1536 dimensions)
-EmbeddingVector = List[float]
+EmbeddingVector = list[float]
 ArtifactImportanceScore = float
 ArtifactRetentionScore = float
 
@@ -169,7 +169,7 @@ RecallStatus = MemoryStatus
 RecallVisibility = MemoryVisibility
 
 # JSON-like metadata
-JSONLike = Union[Dict[str, Any], List[Any], str, int, float, bool, None]
+JSONLike = Union[dict[str, Any], list[Any], str, int, float, bool, None]
 
 
 # ===================================
@@ -186,23 +186,23 @@ class MemoryMetadata:
     # Tenant/User identification
     tenant_id: str
     user_id: str
-    conversation_id: Optional[str] = None
-    session_id: Optional[str] = None
+    conversation_id: str | None = None
+    session_id: str | None = None
 
     # Source and provenance
     source: str = "user"  # user|ai|system|tool|consolidation
-    created_by: Optional[str] = None  # Agent/process that created this
+    created_by: str | None = None  # Agent/process that created this
 
     # Classification
-    tags: List[str] = field(default_factory=list)
-    categories: List[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    categories: list[str] = field(default_factory=list)
 
     # Context and relationships
-    context: Dict[str, Any] = field(default_factory=dict)
-    related_memories: List[str] = field(default_factory=list)  # IDs of related memories
+    context: dict[str, Any] = field(default_factory=dict)
+    related_memories: list[str] = field(default_factory=list)  # IDs of related memories
 
     # Additional metadata
-    custom: Dict[str, Any] = field(default_factory=dict)  # Extensible custom fields
+    custom: dict[str, Any] = field(default_factory=dict)  # Extensible custom fields
 
 
 @dataclass
@@ -212,15 +212,15 @@ class RuntimeMemoryArtifact:
     artifact_type: ArtifactType
     source_tier: ArtifactSourceTier
     user_id: str
-    tenant_id: Optional[str]
-    session_id: Optional[str]
-    thread_id: Optional[str]
-    content: Dict[str, Any]
+    tenant_id: str | None
+    session_id: str | None
+    thread_id: str | None
+    content: dict[str, Any]
     importance_score: ArtifactImportanceScore = 0.0
     retention_score: ArtifactRetentionScore = 0.0
-    privacy_tags: List[ArtifactPrivacyTag] = field(default_factory=list)
+    privacy_tags: list[ArtifactPrivacyTag] = field(default_factory=list)
     training_eligibility: ArtifactTrainingEligibility = ArtifactTrainingEligibility.REVIEW
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # ===================================
@@ -242,7 +242,7 @@ class MemoryEntry:
     # === Core Identity ===
     id: str
     content: str  # Main text content
-    embedding: Optional[EmbeddingVector] = None
+    embedding: EmbeddingVector | None = None
 
     # === Classification ===
     memory_type: MemoryType = MemoryType.EPISODIC
@@ -255,12 +255,12 @@ class MemoryEntry:
     timestamp: datetime = field(default_factory=datetime.utcnow)
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
-    last_accessed: Optional[datetime] = None
+    last_accessed: datetime | None = None
     access_count: int = 0
 
     # === Lifecycle Management ===
-    expires_at: Optional[datetime] = None
-    ttl_seconds: Optional[float] = None  # Time-to-live in seconds
+    expires_at: datetime | None = None
+    ttl_seconds: float | None = None  # Time-to-live in seconds
 
     # === Scoring and Relevance ===
     importance: float = 5.0      # 1-10 scale
@@ -269,16 +269,16 @@ class MemoryEntry:
     quality: float = 1.0         # 0-1 scale (quality of memory)
 
     # === Metadata ===
-    metadata: Optional[MemoryMetadata] = None
+    metadata: MemoryMetadata | None = None
 
     # === Optional Fields ===
-    summary: Optional[str] = None  # Brief summary of content
-    keywords: List[str] = field(default_factory=list)  # Extracted keywords
-    entities: List[str] = field(default_factory=list)  # Named entities
+    summary: str | None = None  # Brief summary of content
+    keywords: list[str] = field(default_factory=list)  # Extracted keywords
+    entities: list[str] = field(default_factory=list)  # Named entities
 
     # === Version Control ===
     version: int = 1
-    parent_id: Optional[str] = None  # For memory updates/consolidation
+    parent_id: str | None = None  # For memory updates/consolidation
 
     def __post_init__(self):
         """Validate and normalize fields after initialization."""
@@ -311,7 +311,7 @@ class MemoryEntry:
         self.last_accessed = datetime.utcnow()
         self.access_count += 1
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "id": self.id,
@@ -354,28 +354,28 @@ class MemoryQuery:
     Consolidates query types from all memory systems.
     """
     # === Query Content ===
-    text: Optional[str] = None  # Text query
-    embedding: Optional[EmbeddingVector] = None  # Vector query
+    text: str | None = None  # Text query
+    embedding: EmbeddingVector | None = None  # Vector query
 
     # === Filters ===
-    memory_types: Optional[List[MemoryType]] = None
-    namespaces: Optional[List[MemoryNamespace]] = None
-    statuses: Optional[List[MemoryStatus]] = None
+    memory_types: list[MemoryType] | None = None
+    namespaces: list[MemoryNamespace] | None = None
+    statuses: list[MemoryStatus] | None = None
 
     # === Tags and Keywords ===
-    tags_any: Optional[List[str]] = None  # Match any tag
-    tags_all: Optional[List[str]] = None  # Match all tags
-    keywords: Optional[List[str]] = None
+    tags_any: list[str] | None = None  # Match any tag
+    tags_all: list[str] | None = None  # Match all tags
+    keywords: list[str] | None = None
 
     # === Temporal Filters ===
-    since: Optional[datetime] = None  # Memories after this time
-    until: Optional[datetime] = None  # Memories before this time
+    since: datetime | None = None  # Memories after this time
+    until: datetime | None = None  # Memories before this time
     recency_boost: float = 0.0  # Boost for recent memories (0-1)
 
     # === Scoring Filters ===
-    min_importance: Optional[float] = None
-    min_confidence: Optional[float] = None
-    min_quality: Optional[float] = None
+    min_importance: float | None = None
+    min_confidence: float | None = None
+    min_quality: float | None = None
 
     # === Retrieval Parameters ===
     top_k: int = 10  # Number of results to return
@@ -383,9 +383,9 @@ class MemoryQuery:
     include_expired: bool = False  # Include expired memories
 
     # === User/Tenant Scope ===
-    tenant_id: Optional[str] = None
-    user_id: Optional[str] = None
-    conversation_id: Optional[str] = None
+    tenant_id: str | None = None
+    user_id: str | None = None
+    conversation_id: str | None = None
 
     # === Advanced Options ===
     rerank: bool = False  # Apply reranking
@@ -399,17 +399,17 @@ class MemoryQueryResult:
 
     Includes retrieved memories and metadata about the query.
     """
-    memories: List[MemoryEntry]
+    memories: list[MemoryEntry]
     total_found: int  # Total matches (before pagination)
     query_time_ms: float  # Query execution time
 
     # === Query Metadata ===
     query: MemoryQuery
-    strategy_used: Optional[str] = None  # E.g., "hybrid", "semantic", "temporal"
+    strategy_used: str | None = None  # E.g., "hybrid", "semantic", "temporal"
 
     # === Statistics ===
-    by_type: Dict[MemoryType, int] = field(default_factory=dict)
-    by_namespace: Dict[MemoryNamespace, int] = field(default_factory=dict)
+    by_type: dict[MemoryType, int] = field(default_factory=dict)
+    by_namespace: dict[MemoryNamespace, int] = field(default_factory=dict)
     avg_relevance: float = 0.0
     truncated: bool = False  # True if results were limited
 
@@ -523,51 +523,51 @@ TTL_PERSISTENT = None  # Never expires
 
 
 __all__ = [
+    "DEFAULT_CONFIDENCE",
+    # Constants
+    "DEFAULT_DECAY_LAMBDA",
+    "DEFAULT_IMPORTANCE",
+    "DEFAULT_TOP_K",
+    "MAX_CONTENT_LENGTH",
+    "MAX_EMBEDDING_DIM",
+    "MAX_KEYWORDS",
+    "MAX_TAGS",
+    "TTL_EPHEMERAL",
+    "TTL_LONG_TERM",
+    "TTL_PERSISTENT",
+    "TTL_SHORT_TERM",
+    "ArtifactImportanceScore",
+    "ArtifactPrivacyTag",
+    "ArtifactRetentionScore",
+    "ArtifactSourceTier",
+    "ArtifactTrainingEligibility",
+    "ArtifactType",
+    # Types
+    "EmbeddingVector",
+    "ImportanceLevel",
+    "JSONLike",
+    "MemoryEntry",
+    # Data structures
+    "MemoryMetadata",
+    "MemoryNamespace",
+    "MemoryPriority",
+    "MemoryQuery",
+    "MemoryQueryResult",
+    "MemoryStatus",
     # Enums
     "MemoryType",
-    "MemoryNamespace",
-    "ArtifactType",
-    "ArtifactSourceTier",
-    "ArtifactPrivacyTag",
-    "ArtifactTrainingEligibility",
-    "MemoryStatus",
-    "MemoryPriority",
     "MemoryVisibility",
-    "ImportanceLevel",
-    "RecallType",
     "RecallNamespace",
     "RecallPriority",
     "RecallStatus",
+    "RecallType",
     "RecallVisibility",
-    # Types
-    "EmbeddingVector",
-    "ArtifactImportanceScore",
-    "ArtifactRetentionScore",
-    "JSONLike",
-    # Data structures
-    "MemoryMetadata",
     "RuntimeMemoryArtifact",
-    "MemoryEntry",
-    "MemoryQuery",
-    "MemoryQueryResult",
+    "clamp",
+    "create_memory_entry",
+    "decay_score",
     # Helper functions
     "make_memory_id",
-    "clamp",
-    "decay_score",
-    "ttl_to_expires",
     "now_utc",
-    "create_memory_entry",
-    # Constants
-    "DEFAULT_DECAY_LAMBDA",
-    "DEFAULT_TOP_K",
-    "DEFAULT_IMPORTANCE",
-    "DEFAULT_CONFIDENCE",
-    "MAX_CONTENT_LENGTH",
-    "MAX_EMBEDDING_DIM",
-    "MAX_TAGS",
-    "MAX_KEYWORDS",
-    "TTL_EPHEMERAL",
-    "TTL_SHORT_TERM",
-    "TTL_LONG_TERM",
-    "TTL_PERSISTENT",
+    "ttl_to_expires",
 ]

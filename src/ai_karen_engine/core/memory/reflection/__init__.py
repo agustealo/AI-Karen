@@ -48,7 +48,7 @@ class ReflectionEngine:
         # Group episodes by subject/predicate
         grouped = self._group_episodes(episodes)
 
-        for key, group in grouped.items():
+        for group in grouped.values():
             if len(group) < self.min_evidence_count:
                 continue
 

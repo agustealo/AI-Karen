@@ -2,16 +2,13 @@ from __future__ import annotations
 
 from ai_karen_engine.core.reasoning.meta.contracts import (
     BeliefConflictSummary,
-    CalibrationObservation,
     LoopAssessment,
-    MetaAssessment,
+    MemoryReliabilityAssessment,
     MetaCognitiveState,
     MetaReasonCode,
     MetaStatus,
-    MemoryReliabilityAssessment,
     ReasoningDepth,
     ReasoningDepthRecommendation,
-    StrategyAttempt,
     StrategyFingerprint,
     VerificationNeedAssessment,
 )

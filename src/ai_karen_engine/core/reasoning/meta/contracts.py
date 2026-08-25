@@ -28,6 +28,7 @@ class MetaStatus(str, Enum):
     LOOPING = "looping"
     VERIFICATION_REQUIRED = "verification_required"
     HUMAN_INPUT_REQUIRED = "human_input_required"
+    FAILED = "failed"
 
 
 class MetaReasonCode(str, Enum):

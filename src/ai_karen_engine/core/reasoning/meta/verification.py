@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any
 
 from ai_karen_engine.core.reasoning.meta.contracts import (
     MetaCognitiveState,
     MetaReasonCode,
-    ReasoningDepth,
     VerificationNeedAssessment,
 )
-
 
 logger = logging.getLogger(__name__)
 

@@ -2,20 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass, field
-from typing import Any
 
 from ai_karen_engine.core.reasoning.meta.contracts import (
-    BeliefConflictSummary,
     CalibrationObservation,
     LoopAssessment,
+    MemoryReliabilityAssessment,
     MetaAssessment,
     MetaCognitiveRequest,
     MetaCognitiveResult,
     MetaCognitiveState,
     MetaReasonCode,
     MetaStatus,
-    MemoryReliabilityAssessment,
     ReasoningDepth,
     ReasoningDepthRecommendation,
     StrategyAttempt,
@@ -133,7 +130,7 @@ class MetaCognitiveAssessor:
         )
 
     def _assess_verification_need(self, state: MetaCognitiveState, request: MetaCognitiveRequest) -> VerificationNeedAssessment:
-        if state.reasoning_confidence < 0.3 or state.evidence_consistency < 0.3:
+        if state.memory_reliability < 0.3 or state.reasoning_confidence < 0.3 or state.evidence_consistency < 0.3:
             return VerificationNeedAssessment(required=True, reason=MetaReasonCode.LOW_MEMORY_CONFIDENCE, depth=ReasoningDepth.STANDARD, urgency=0.8)
         return VerificationNeedAssessment(required=False)
 

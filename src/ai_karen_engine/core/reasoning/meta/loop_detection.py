@@ -2,13 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass, field
-from typing import Any
 
 from ai_karen_engine.core.reasoning.meta.contracts import (
     LoopAssessment,
-    LoopDetectionStrategy,
-    MetaReasonCode,
     StrategyAttempt,
     StrategyFingerprint,
 )
