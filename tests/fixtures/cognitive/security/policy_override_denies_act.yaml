@@ -12,6 +12,8 @@ expected:
   confidence_min: 0.0
   confidence_max: 1.0
   policy_violation: true
+  appears_in:
+    - POLICY_WINS
   flags:
     denied_behavior: ASK
 claims:

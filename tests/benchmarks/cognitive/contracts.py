@@ -66,6 +66,7 @@ class BehaviorDecision:
     confidence: float
     applied_constraints: list[str]
     allowed: SecurityCheck = SecurityCheck.ALLOWED
+    policy_override: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -74,6 +75,7 @@ class BehaviorDecision:
             "confidence": self.confidence,
             "applied_constraints": list(self.applied_constraints),
             "allowed": self.allowed.value,
+            "policy_override": self.policy_override,
         }
 
 
@@ -157,7 +159,7 @@ class CognitiveResult:
     promoted_to_trusted: bool = True
     appears_in: list[str] = field(default_factory=list)
     flags: dict[str, Any] = field(default_factory=dict)
-    defects: list["DefectRecord"] = field(default_factory=list)
+    defects: list[DefectRecord] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -217,15 +219,15 @@ REPORT_GROUPS: dict[str, list[ScenarioKind]] = {
 
 
 __all__ = [
+    "REPORT_GROUPS",
     "BehaviorDecision",
-    "ContradictionResult",
     "CognitiveResult",
+    "ContradictionResult",
     "DefectRecord",
     "DefectSeverity",
     "DeletionStatus",
     "ExpectedSpec",
     "MetaDiagnosis",
-    "REPORT_GROUPS",
     "Scenario",
     "ScenarioKind",
 ]

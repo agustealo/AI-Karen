@@ -8,9 +8,42 @@ Pure orchestration: no production source edits, no providers/network.
 from __future__ import annotations
 
 import os
-from datetime import datetime
 from typing import Any
 
+from ai_karen_engine.core.adaptive.contracts import ActionOutcomeObservation
+from ai_karen_engine.core.adaptive.learning.aggregates import EvidenceAggregator
+from ai_karen_engine.core.adaptive.salience.assessment import SalienceAssessmentEngine
+from ai_karen_engine.core.adaptive.salience.contracts import (
+    SalienceAssessmentRequest,
+    SalienceContext,
+)
+from ai_karen_engine.core.adaptive.salience.decay import SalienceDecayEngine
+from ai_karen_engine.core.memory.scoring.ranking import MemoryRanker
+from ai_karen_engine.core.personalization.contracts import (
+    CurrentUserState,
+    UserStateSnapshot,
+)
+from ai_karen_engine.core.personalization.goals.conflicts import ConflictDetector
+from ai_karen_engine.core.personalization.goals.contracts import (
+    CompletionEvidenceSource,
+    GoalState,
+)
+from ai_karen_engine.core.personalization.goals.lifecycle import GoalLifecycle
+from ai_karen_engine.core.personalization.goals.prioritization import GoalPrioritizer
+from ai_karen_engine.core.personalization.preferences.lifecycle import (
+    PreferenceLifecycle,
+)
+from ai_karen_engine.core.personalization.preferences.resolver import PreferenceResolver
+from ai_karen_engine.core.personalization.snapshot import SnapshotBuilder
+from ai_karen_engine.core.reasoning.belief.assessment import BeliefEngine
+from ai_karen_engine.core.reasoning.belief.contradiction import ContradictionDetector
+from ai_karen_engine.core.reasoning.belief.revision import BeliefRevisionEngine
+from ai_karen_engine.core.reasoning.meta.assessment import MetaCognitiveAssessor
+from ai_karen_engine.core.reasoning.meta.contracts import (
+    BeliefConflictSummary,
+    MetaCognitiveRequest,
+)
+from benchmarks.cognitive.builders import CognitiveState, build_state
 from benchmarks.cognitive.contracts import (
     CognitiveResult,
     DefectRecord,
@@ -19,52 +52,20 @@ from benchmarks.cognitive.contracts import (
     Scenario,
     ScenarioKind,
 )
-from benchmarks.cognitive.builders import CognitiveState, build_state
 from benchmarks.cognitive.decision_model import (
     DeletionPropagator,
     SecurityGuard,
     evaluate_decision,
 )
 
-from ai_karen_engine.core.reasoning.belief.assessment import BeliefEngine
-from ai_karen_engine.core.reasoning.belief.contradiction import ContradictionDetector
-from ai_karen_engine.core.reasoning.belief.revision import BeliefRevisionEngine
-from ai_karen_engine.core.reasoning.belief.temporal import TemporalReasoner
-from ai_karen_engine.core.reasoning.meta.assessment import MetaCognitiveAssessor
-from ai_karen_engine.core.reasoning.meta.contracts import (
-    BeliefConflictSummary,
-    MetaCognitiveRequest,
-)
-from ai_karen_engine.core.adaptive.salience.assessment import SalienceAssessmentEngine
-from ai_karen_engine.core.adaptive.salience.contracts import (
-    SalienceAssessmentRequest,
-    SalienceContext,
-)
-from ai_karen_engine.core.adaptive.salience.decay import SalienceDecayEngine
-from ai_karen_engine.core.personalization.goals.lifecycle import GoalLifecycle
-from ai_karen_engine.core.personalization.goals.prioritization import GoalPrioritizer
-from ai_karen_engine.core.personalization.goals.conflicts import ConflictDetector
-from ai_karen_engine.core.personalization.goals.contracts import (
-    CompletionEvidenceSource,
-    GoalState,
-    IntentionState,
-)
-from ai_karen_engine.core.personalization.preferences.resolver import PreferenceResolver
-from ai_karen_engine.core.personalization.preferences.lifecycle import PreferenceLifecycle
-from ai_karen_engine.core.personalization.snapshot import SnapshotBuilder
-from ai_karen_engine.core.personalization.contracts import (
-    CurrentUserState,
-    UserStateSnapshot,
-)
-from ai_karen_engine.core.adaptive.learning.aggregates import EvidenceAggregator
-from ai_karen_engine.core.adaptive.contracts import ActionOutcomeObservation
-from ai_karen_engine.core.memory.scoring.ranking import MemoryRanker
-
-
 _REPO_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
 _FIXTURES_DIR = os.path.join(_REPO_ROOT, "tests", "fixtures", "cognitive")
+
+
+def _confidence_value(value: Any) -> float:
+    return float(value) if value is not None else 0.0
 
 
 def fixtures_dir() -> str:
@@ -134,6 +135,27 @@ def load_scenarios(fixtures_dir: str | None = None) -> list[Scenario]:
     return scenarios
 
 
+_SCENARIO_CACHE: dict[ScenarioKind, list[Scenario]] | None = None
+
+
+def scenarios_for(kind: ScenarioKind) -> list[Scenario]:
+    global _SCENARIO_CACHE
+    if _SCENARIO_CACHE is None:
+        all_scenarios = load_scenarios()
+        _SCENARIO_CACHE = {k: [] for k in ScenarioKind}
+        for sc in all_scenarios:
+            _SCENARIO_CACHE.setdefault(sc.kind, []).append(sc)
+    return list(_SCENARIO_CACHE.get(kind, []))
+
+
+def check(scenario: Scenario) -> list[str]:
+    """Run a scenario and return assertion failures (empty == pass)."""
+    result = run_scenario(scenario)
+    from benchmarks.cognitive.assertions import evaluate
+
+    return evaluate(result, scenario.expected)
+
+
 def run_scenario(scenario: Scenario) -> CognitiveResult:
     state = build_state(scenario)
     kind = scenario.kind
@@ -200,7 +222,7 @@ def _run_memory_continuity(scenario: Scenario, state: CognitiveState) -> Cogniti
     return CognitiveResult(
         scenario_id=scenario.scenario_id,
         kind=scenario.kind,
-        verdict=assessment.verdict.value,
+        verdict=assessment.verdict.value.upper(),
         confidence=confidence,
         active=retained,
         retained=retained,
@@ -293,7 +315,7 @@ def _run_behavior_selection(scenario: Scenario, state: CognitiveState) -> Cognit
     for p in state.preferences:
         try:
             promoted = promoted or _promote_to_stable(p)
-        except Exception:
+        except (TypeError, AttributeError, ValueError):
             continue
 
     decision = evaluate_decision(
@@ -314,7 +336,7 @@ def _run_behavior_selection(scenario: Scenario, state: CognitiveState) -> Cognit
         active=True,
         retained=True,
         tenant_scoped=True,
-        policy_violation=decision.allowed.value == "BLOCKED",
+        policy_violation=decision.policy_override,
         promoted_to_trusted=promoted,
         appears_in=appears_in,
         flags={"allowed": decision.allowed.value, "rationale": decision.rationale},
@@ -337,7 +359,6 @@ def _run_goal_intention(scenario: Scenario, state: CognitiveState) -> CognitiveR
 
     verdict = goal.state.value if goal else "NO_GOAL"
     confidence = goal.confidence if goal else 0.0
-    active = bool(goal.is_active()) if goal else False
 
     if goal and target_state is not None:
         try:
@@ -356,7 +377,7 @@ def _run_goal_intention(scenario: Scenario, state: CognitiveState) -> CognitiveR
             else:
                 raise ValueError(f"cannot transition to {target_state.value}")
             verdict = goal.state.value
-        except Exception as exc:
+        except (ValueError, KeyError, AttributeError, TypeError) as exc:
             defects.append(DefectRecord(
                 scenario_id=scenario.scenario_id,
                 expected=f"transition to {target_state.value}",
@@ -366,6 +387,8 @@ def _run_goal_intention(scenario: Scenario, state: CognitiveState) -> CognitiveR
                 kind=scenario.kind,
                 detail=f"State transition blocked: {type(exc).__name__}: {exc}",
             ))
+
+    active = bool(goal.is_active()) if goal else False
 
     detected = conflicts.detect_conflicts(state.goals)
     active_goals = [g for g in state.goals if not g.is_terminal()]
@@ -403,19 +426,24 @@ def _run_salience(scenario: Scenario, state: CognitiveState) -> CognitiveResult:
     reason_values = [rc.value for rc in assessment.reason_codes]
     appears_in = list(reason_values)
 
-    decay = SalienceDecayEngine().decay_signal(state.salience_signals[0])
-    flags = {"decays": decay.decayed, "decayed_value": round(decay.decayed_value, 3)}
+    decay_engine = SalienceDecayEngine()
+    decay_flags: dict[str, Any] = {}
+    for idx, sig in enumerate(state.salience_signals):
+        d = decay_engine.decay_signal(sig)
+        prefix = "persistent" if sig.persistence_class == "persistent" else f"signal_{idx}"
+        decay_flags[f"{prefix}_decayed"] = d.decayed
+        decay_flags[f"{prefix}_value"] = round(d.decayed_value, 3)
 
     return CognitiveResult(
         scenario_id=scenario.scenario_id,
         kind=scenario.kind,
         verdict="salient" if assessment.overall >= 0.5 else "background",
-        confidence=round(assessment.confidence, 3),
+        confidence=round(_confidence_value(assessment.confidence), 3),
         active=True,
         retained=True,
         tenant_scoped=True,
         appears_in=appears_in,
-        flags=flags,
+        flags=decay_flags,
     )
 
 
@@ -481,18 +509,18 @@ def _run_meta_cognition(scenario: Scenario, state: CognitiveState) -> CognitiveR
         else:
             mapped.append(v.upper().replace("_", "_"))
 
-    verdict = result.state.status.value
+    verdict = result.assessment.status.value
     return CognitiveResult(
         scenario_id=scenario.scenario_id,
         kind=scenario.kind,
         verdict=verdict,
-        confidence=round(assessment.confidence, 3),
+        confidence=round(_confidence_value(assessment.confidence), 3),
         active=True,
         retained=True,
         tenant_scoped=True,
         appears_in=mapped,
         defects=[],
-        flags={"reason_codes": state_codes, "meta_confidence": round(result.state.confidence, 3)},
+        flags={"reason_codes": state_codes, "meta_confidence": round(_confidence_value(result.state.confidence), 3)},
     )
 
 
@@ -571,6 +599,7 @@ def _run_deletion(scenario: Scenario, state: CognitiveState) -> CognitiveResult:
             detail=f"Deleted ids still present in active claims: {resurrected}",
         ))
 
+    surviving = [c.claim_id for c in state.claims if c.claim_id not in state.deleted_ids]
     return CognitiveResult(
         scenario_id=scenario.scenario_id,
         kind=scenario.kind,
@@ -579,7 +608,7 @@ def _run_deletion(scenario: Scenario, state: CognitiveState) -> CognitiveResult:
         active=False,
         retained=False,
         tenant_scoped=True,
-        appears_in=[],
+        appears_in=surviving,
         defects=defects,
         flags={"deleted_count": len(state.deleted_ids), "purged_count": len(state.purged_claims)},
     )
@@ -696,7 +725,7 @@ def _enum_goal_state(value: Any) -> Any:
     return None
 
 
-def _completion_source(goal: "Goal") -> CompletionEvidenceSource:
+def _completion_source(goal: Any) -> CompletionEvidenceSource:
     required = list(getattr(goal, "completion_evidence_required", []) or [])
     for src in required:
         if src == CompletionEvidenceSource.USER_CONFIRMED:

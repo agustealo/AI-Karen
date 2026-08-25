@@ -13,13 +13,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from benchmarks.cognitive.builders import CognitiveState
 from benchmarks.cognitive.contracts import (
     BehaviorDecision,
     BehaviorOption,
     DeletionStatus,
     SecurityCheck,
 )
-from benchmarks.cognitive.builders import CognitiveState
 
 
 @dataclass
@@ -36,15 +36,12 @@ class BehaviorSelector:
         preferences: list[Any] | None,
         policy_constraints: dict[str, Any] | None,
     ) -> BehaviorOption:
-        constraints = policy_constraints or {}
-        deny = constraints.get("deny", []) or []
         salience_value = _salience_score(salience)
         confidence = _confidence(belief)
         user_emphasis = any(_is_emphasis_critical(e) for e in (state.user_emphasis or []))
-
-        blocked = _preferred_behavior(preferences)
-        if blocked is not None:
-            base = blocked
+        natural = _preferred_behavior(preferences)
+        if natural is not None:
+            base = natural
         elif user_emphasis or salience_value >= 0.75:
             base = BehaviorOption.VERIFY
         elif confidence >= 0.8 and _belief_strong(belief):
@@ -54,12 +51,8 @@ class BehaviorSelector:
         else:
             base = BehaviorOption.ACT
 
-        if base.value in deny:
-            return BehaviorOption.POLICY_WINS
         if salience_value >= 0.9:
             base = _escalate(base)
-        if base.value in deny:
-            return BehaviorOption.POLICY_WINS
         return base
 
     def to_decision(
@@ -90,12 +83,8 @@ class PolicyGuard:
         deny = constraints.get("deny", []) or []
         if decision.option.value in deny:
             return SecurityCheck.BLOCKED
-        if constraints.get("tenant_boundary") and decision.option == BehaviorOption.ACT:
-            return SecurityCheck.BLOCKED
-        if (
-            constraints.get("max_score") is not None
-            and decision.confidence > float(constraints.get("max_score"))
-        ):
+        max_score = constraints.get("max_score")
+        if max_score is not None and decision.confidence > float(max_score):
             return SecurityCheck.BLOCKED
         return SecurityCheck.ALLOWED
 
@@ -142,17 +131,26 @@ def evaluate_decision(
     selector: BehaviorSelector | None = None,
 ) -> BehaviorDecision:
     selector = selector or BehaviorSelector()
-    option = selector.select(state, belief, salience, preferences, policy_constraints)
-    confidence = _decision_confidence(option, belief, salience)
+    natural = selector.select(state, belief, salience, preferences, policy_constraints)
     deny = list((policy_constraints or {}).get("deny", []) or [])
+    if natural.value in deny:
+        option = BehaviorOption.POLICY_WINS
+        policy_override = True
+    else:
+        option = natural
+        policy_override = False
+    confidence = _decision_confidence(option, belief, salience)
     decision = selector.to_decision(
         option=option,
         rationale=_rationale(option, belief, salience),
         confidence=confidence,
         constraints=deny,
     )
-    guard = PolicyGuard()
-    decision.allowed = guard.is_allowed(decision, policy_constraints)
+    decision.policy_override = policy_override
+    if policy_override:
+        decision.allowed = SecurityCheck.BLOCKED
+    else:
+        decision.allowed = PolicyGuard().is_allowed(decision, policy_constraints)
     return decision
 
 
@@ -164,11 +162,11 @@ def summarize_memory_security(
     guard = SecurityGuard()
     checks: dict[str, SecurityCheck] = {}
     for c in state.claims:
-        checks[getattr(c, "claim_id", id(c))] = guard.check_memory_access(
+        checks[str(getattr(c, "claim_id", id(c)))] = guard.check_memory_access(
             c,
             policy_constraints,
             requester_tenant,
-            getattr(c, "tenant_id", requester_tenant),
+            str(getattr(c, "tenant_id", requester_tenant)),
         )
     return checks
 
@@ -181,15 +179,15 @@ def _confidence(belief: Any) -> float:
     if belief is None:
         return 0.5
     for attr in ("overall_confidence", "confidence", "reasoning_confidence"):
-        val = getattr(belief, attr, None)
-        if isinstance(val, (int, float)):
-            return float(val)
+        val = _to_float(getattr(belief, attr, None))
+        if val is not None:
+            return val
     assessment = getattr(belief, "assessment", None)
     if assessment is not None:
         for attr in ("overall_confidence", "confidence"):
-            val = getattr(assessment, attr, None)
-            if isinstance(val, (int, float)):
-                return float(val)
+            val = _to_float(getattr(assessment, attr, None))
+            if val is not None:
+                return val
     return 0.5
 
 
@@ -207,10 +205,21 @@ def _salience_score(salience: Any) -> float:
 
 def _belief_strong(belief: Any) -> bool:
     conf = _confidence(belief)
-    reasoning = getattr(belief, "reasoning_confidence", None)
-    if isinstance(reasoning, (int, float)) and reasoning < 0.3:
+    reasoning = _to_float(getattr(belief, "reasoning_confidence", None))
+    if reasoning is not None and reasoning < 0.3:
         return False
     return conf >= 0.8
+
+
+def _to_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if value is not None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def _is_emphasis_critical(emphasis: Any) -> bool:

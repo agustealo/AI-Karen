@@ -44,7 +44,7 @@ def _install_observability_shim() -> None:
     )
     shim = types.ModuleType(pkg_name)
     shim.__path__ = [pkg_path]
-    shim.__cog_eval_shim__ = True
+    setattr(shim, "__cog_eval_shim__", True)  # noqa: B010
 
     sys.modules[pkg_name] = shim
 
@@ -61,7 +61,7 @@ def _install_observability_shim() -> None:
         full = f"{pkg_name}.{sub}"
         try:
             mod = importlib.import_module(full)
-        except Exception:
+        except ImportError:
             continue
         for attr in getattr(mod, "__all__", []):
             if not hasattr(shim, attr):
@@ -86,7 +86,7 @@ def _install_observability_shim() -> None:
         if not hasattr(shim, name):
             setattr(shim, name, _Sentinel(name))
 
-    shim.__all__ = list(dict.fromkeys(getattr(shim, "__all__", []) + _missing))
+    setattr(shim, "__all__", list(dict.fromkeys(getattr(shim, "__all__", []) + _missing)))  # noqa: B010
 
 
 class _Sentinel:
@@ -102,7 +102,7 @@ class _Sentinel:
 _install_observability_shim()
 
 
-def pytest_configure(config: "pytest.Config") -> None:
+def pytest_configure(config: pytest.Config) -> None:
     for marker in (
         "cognitive",
         "continuity",
@@ -111,6 +111,7 @@ def pytest_configure(config: "pytest.Config") -> None:
         "goal",
         "salience",
         "metacognition",
+        "meta",
         "policy",
         "memory_security",
         "deletion",
@@ -122,11 +123,10 @@ def pytest_configure(config: "pytest.Config") -> None:
         )
 
 
-def pytest_collection_modifyitems(config: "pytest.Config", items: list) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: list) -> None:
     for item in items:
-        if not item.get_closest_marker("cognitive"):
-            if "cognitive" in item.keywords:
-                item.add_marker(pytest.mark.cognitive)
+        if not item.get_closest_marker("cognitive") and "cognitive" in item.keywords:
+            item.add_marker(pytest.mark.cognitive)
 
 
 @pytest.fixture(scope="session")

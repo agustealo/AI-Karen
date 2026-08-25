@@ -21,8 +21,8 @@ from ai_karen_engine.core.personalization.contracts import (
     PreferenceCategory,
     PreferenceRecord,
     PreferenceScope,
-    PreferenceState,
     PreferenceStability,
+    PreferenceState,
 )
 from ai_karen_engine.core.personalization.goals.contracts import (
     Commitment,
@@ -53,8 +53,6 @@ from ai_karen_engine.core.reasoning.belief.contracts import (
     EvidenceStrength,
     EvidenceType,
 )
-
-
 def _enum(value: Any, enum_cls: Any, default: Any) -> Any:
     if value is None:
         return default
@@ -401,6 +399,7 @@ def build_state(scenario: Any) -> CognitiveState:
     state.context_candidates = [
         {
             "memory_id": c.get("id", c.get("memory_id", f"m_{i}")),
+            "tenant_id": c.get("tenant_id", scenario.tenant_id),
             "retrieval_score": float(c.get("retrieval_score", 0.5)),
             "confidence": float(c.get("confidence", 1.0)),
             "salience_value": float(c.get("salience_value", 0.0)),

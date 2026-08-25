@@ -10,7 +10,8 @@ expected:
   confidence_min: 0.0
   confidence_max: 1.0
   flags:
-    no_decay_persistent: true
+    persistent_decayed: false
+    signal_1_decayed: true
 salience:
   signals:
     - dimension: novelty
