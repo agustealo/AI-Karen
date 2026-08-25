@@ -31,13 +31,16 @@ class RetrievalPort(Protocol):
     ) -> Sequence[RetrievalRecord]: ...
 
 
-class CoreEmbeddingPort:
-    """Default adapter to the canonical model runtime embedding authority."""
+class IntelligenceEmbeddingPort:
+    """Default memory adapter to the canonical IntelligenceRuntime encoder."""
 
     async def embed(self, text: str) -> Sequence[float]:
-        from ai_karen_engine.core.model_runtime.model_manager import get_model_manager
+        from ai_karen_engine.core.intelligence import get_intelligence_runtime
 
-        return await get_model_manager().generate_embedding(text)
+        embeddings = await get_intelligence_runtime().embed([text])
+        if not embeddings or embeddings[0] is None:
+            raise RuntimeError("Canonical intelligence embedding is unavailable")
+        return embeddings[0]
 
 
 _embedding_port: EmbeddingPort | None = None
@@ -47,7 +50,7 @@ _retrieval_port: RetrievalPort | None = None
 def get_embedding_port() -> EmbeddingPort:
     global _embedding_port
     if _embedding_port is None:
-        _embedding_port = CoreEmbeddingPort()
+        _embedding_port = IntelligenceEmbeddingPort()
     return _embedding_port
 
 
