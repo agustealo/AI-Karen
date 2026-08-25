@@ -44,7 +44,7 @@ jobs:
   cognitive-proof:
     name: Cognitive Benchmark + Policy Dominance
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
       - name: Checkout exact head
@@ -54,13 +54,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
 
-      - name: Install project and test dependencies
+      - name: Install cognitive proof dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-timeout pyyaml
+          pip install pytest pytest-timeout pyyaml
 
       - name: Compile cognitive contract surface
         run: |
