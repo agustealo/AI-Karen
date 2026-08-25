@@ -5,13 +5,13 @@ on:
     paths:
       - "src/ai_karen_engine/core/expression/**"
       - "src/ai_karen_engine/core/model_runtime/provider_endpoint.py"
-      - "tests/beta/test_real_model_wiring.py"
+      - "tests/beta/**"
       - ".github/workflows/beta-real-model-proof.yml"
   pull_request:
     paths:
       - "src/ai_karen_engine/core/expression/**"
       - "src/ai_karen_engine/core/model_runtime/provider_endpoint.py"
-      - "tests/beta/test_real_model_wiring.py"
+      - "tests/beta/**"
       - ".github/workflows/beta-real-model-proof.yml"
   workflow_dispatch:
 
