@@ -25,7 +25,8 @@ on:
       - 'tests/architecture/cognitive_contracts/**'
 
 env:
-  PYTHON_VERSION: '3.13'
+  # requirements.txt currently pins copilotkit==0.1.87, which supports <3.13.
+  PYTHON_VERSION: '3.12'
 
 jobs:
   cognitive-proof:
