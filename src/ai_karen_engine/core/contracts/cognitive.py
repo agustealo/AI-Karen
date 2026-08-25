@@ -138,6 +138,11 @@ class SalienceConfidence(ConfidenceValue):
 
 
 @dataclass(frozen=True, slots=True)
+class ReasoningConfidence(ConfidenceValue):
+    """Confidence in the quality of a reasoning result."""
+
+
+@dataclass(frozen=True, slots=True)
 class BehaviorConfidence(ConfidenceValue):
     """Confidence that the selected behavior is appropriate."""
 
@@ -145,6 +150,11 @@ class BehaviorConfidence(ConfidenceValue):
 @dataclass(frozen=True, slots=True)
 class MetaConfidence(ConfidenceValue):
     """Confidence in cognitive self-assessment."""
+
+
+@dataclass(frozen=True, slots=True)
+class PreferenceConfidence(ConfidenceValue):
+    """Confidence that a user preference is stable/current."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +195,8 @@ __all__ = [
     "EpistemicConfidence",
     "LearningConfidence",
     "MetaConfidence",
+    "PreferenceConfidence",
+    "ReasoningConfidence",
     "ReasoningDepth",
     "RetrievalConfidence",
     "SalienceConfidence",
