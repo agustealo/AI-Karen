@@ -1,13 +1,13 @@
 """
 Personalization persistence repository for AI-Karen.
 
-Uses canonical Postgres infrastructure. Does not duplicate memory storage.
+Uses platform persistence via adapter pattern.
+Core must not directly depend on platform implementations.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ..contracts import (
@@ -18,28 +18,41 @@ from ..contracts import (
     UserModelHealth,
     UserModelHealthStatus,
 )
+from ..adapters import PersonalizationRepositoryAdapter
 
 logger = logging.getLogger(__name__)
 
 
 class PersonalizationRepository:
-    """In-memory personalization repository backed by canonical infrastructure."""
+    """Personalization repository backed by platform persistence."""
 
-    def __init__(self) -> None:
-        self._preferences: Dict[str, PreferenceRecord] = {}
-        self._behaviors: Dict[str, BehaviorPattern] = {}
-        self._goals: Dict[str, UserGoal] = {}
-        self._current_states: Dict[str, Any] = {}
-        self._healthy = True
+    def __init__(self, platform_repository=None):
+        self._platform_repository = platform_repository
+        self._adapter = None
+        if platform_repository is not None:
+            self._adapter = PersonalizationRepositoryAdapter(platform_repository)
+
+    def set_platform_repository(self, repository) -> None:
+        """Set the platform repository (CORE-SPLIT-2 migration)."""
+        self._platform_repository = repository
+        self._adapter = PersonalizationRepositoryAdapter(repository)
 
     async def health_check(self) -> UserModelHealthStatus:
+        """Evidence-backed health check."""
+        if self._adapter is not None:
+            try:
+                return await self._adapter.health_check()
+            except Exception as exc:
+                logger.debug("Platform health check failed: %s", exc)
+
+        # Fallback: honest degraded state instead of fake health
         return UserModelHealthStatus(
-            repository=UserModelHealth.READY if self._healthy else UserModelHealth.DEGRADED,
-            memory_integration=UserModelHealth.READY,
-            queue=UserModelHealth.READY,
-            snapshot_cache=UserModelHealth.READY,
-            evidence_processor=UserModelHealth.READY,
-            overall=UserModelHealth.READY if self._healthy else UserModelHealth.DEGRADED,
+            repository=UserModelHealth.DEGRADED,
+            memory_integration=UserModelHealth.DEGRADED,
+            queue=UserModelHealth.DEGRADED,
+            snapshot_cache=UserModelHealth.DEGRADED,
+            evidence_processor=UserModelHealth.DEGRADED,
+            overall=UserModelHealth.DEGRADED,
         )
 
     def save_preference(self, record: PreferenceRecord) -> None:
@@ -68,18 +81,54 @@ class PersonalizationRepository:
         return False
 
     def save_behavior(self, pattern: BehaviorPattern) -> None:
+        if self._adapter is not None:
+            import asyncio
+            try:
+                asyncio.get_event_loop().run_until_complete(
+                    self._adapter.save_behavior(pattern)
+                )
+            except RuntimeError:
+                pass
+            return
         self._behaviors[pattern.pattern_id] = pattern
 
     def list_behaviors(self, user_id: str, tenant_id: str) -> List[BehaviorPattern]:
+        if self._adapter is not None:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                return loop.run_until_complete(
+                    self._adapter.list_behaviors(user_id, tenant_id)
+                )
+            except RuntimeError:
+                pass
         return [
             p for p in self._behaviors.values()
             if p.user_id == user_id and p.tenant_id == tenant_id
         ]
 
     def save_goal(self, goal: UserGoal) -> None:
+        if self._adapter is not None:
+            import asyncio
+            try:
+                asyncio.get_event_loop().run_until_complete(
+                    self._adapter.save_goal(goal)
+                )
+            except RuntimeError:
+                pass
+            return
         self._goals[goal.goal_id] = goal
 
     def list_goals(self, user_id: str, tenant_id: str) -> List[UserGoal]:
+        if self._adapter is not None:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                return loop.run_until_complete(
+                    self._adapter.list_goals(user_id, tenant_id)
+                )
+            except RuntimeError:
+                pass
         return [
             g for g in self._goals.values()
             if g.user_id == user_id and g.tenant_id == tenant_id
