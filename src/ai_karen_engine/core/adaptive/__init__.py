@@ -1,10 +1,34 @@
 """Adaptive decision intelligence layer.
 
-Produces ranked, explainable recommendations for the existing executive/runtime path.
+The package root is a compatibility facade. Importing a pure adaptive contract
+must not initialize runtime, observability, provider, persistence, or platform
+infrastructure as a side effect.
 """
 
 from __future__ import annotations
 
-from ai_karen_engine.core.adaptive.runtime import AdaptiveRuntime
+from importlib import import_module
+from typing import Any
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "AdaptiveRuntime": (".runtime", "AdaptiveRuntime"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module_name, attribute_name = target
+    module = import_module(module_name, package=__name__)
+    value = getattr(module, attribute_name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_EXPORTS))
+
 
 __all__ = ["AdaptiveRuntime"]
