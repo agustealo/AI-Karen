@@ -18,8 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
-
+from typing import Any
 
 # ===================================
 # MEMORY CLAIM
@@ -48,18 +47,18 @@ class MemoryClaim:
     predicate: str
     object: Any
     confidence: float = 0.5
-    provenance: List[str] = field(default_factory=list)
-    evidence: List[str] = field(default_factory=list)
+    provenance: list[str] = field(default_factory=list)
+    evidence: list[str] = field(default_factory=list)
     asserted_at: datetime = field(default_factory=datetime.utcnow)
-    valid_from: Optional[datetime] = None
-    valid_until: Optional[datetime] = None
-    last_confirmed: Optional[datetime] = None
-    contradiction_refs: List[str] = field(default_factory=list)
-    supersedes: Optional[str] = None
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    last_confirmed: datetime | None = None
+    contradiction_refs: list[str] = field(default_factory=list)
+    supersedes: str | None = None
     status: ClaimStatus = ClaimStatus.OBSERVED
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def is_valid(self, at: Optional[datetime] = None) -> bool:
+    def is_valid(self, at: datetime | None = None) -> bool:
         """Check if claim is valid at given time."""
         check_time = at or datetime.utcnow()
         if self.valid_from and check_time < self.valid_from:
@@ -134,16 +133,16 @@ class SelfModel:
 
     This provides continuity without pretending consciousness.
     """
-    identity: Dict[str, Any] = field(default_factory=dict)
-    stable_principles: List[str] = field(default_factory=list)
-    capabilities: List[str] = field(default_factory=list)
-    capability_limits: Dict[str, str] = field(default_factory=dict)
-    role_relationships: Dict[str, str] = field(default_factory=dict)
-    learned_strategies: List[str] = field(default_factory=list)
-    current_commitments: List[str] = field(default_factory=list)
-    active_goals: List[str] = field(default_factory=list)
+    identity: dict[str, Any] = field(default_factory=dict)
+    stable_principles: list[str] = field(default_factory=list)
+    capabilities: list[str] = field(default_factory=list)
+    capability_limits: dict[str, str] = field(default_factory=dict)
+    role_relationships: dict[str, str] = field(default_factory=dict)
+    learned_strategies: list[str] = field(default_factory=list)
+    current_commitments: list[str] = field(default_factory=list)
+    active_goals: list[str] = field(default_factory=list)
     confidence: float = 1.0
-    significant_decisions: List[Dict[str, Any]] = field(default_factory=list)
+    significant_decisions: list[dict[str, Any]] = field(default_factory=list)
 
 
 # ===================================
@@ -157,16 +156,16 @@ class UserModel:
 
     Evidence-backed: no one-event canon.
     """
-    explicit_preferences: Dict[str, Any] = field(default_factory=dict)
-    inferred_preferences: Dict[str, float] = field(default_factory=dict)
-    communication_patterns: Dict[str, Any] = field(default_factory=dict)
-    projects: List[str] = field(default_factory=list)
-    goals: List[str] = field(default_factory=list)
-    relationships: Dict[str, Any] = field(default_factory=dict)
-    routines: List[str] = field(default_factory=list)
-    skills: List[str] = field(default_factory=list)
-    decisions: List[Dict[str, Any]] = field(default_factory=list)
-    evolving_beliefs: List[MemoryClaim] = field(default_factory=list)
+    explicit_preferences: dict[str, Any] = field(default_factory=dict)
+    inferred_preferences: dict[str, float] = field(default_factory=dict)
+    communication_patterns: dict[str, Any] = field(default_factory=dict)
+    projects: list[str] = field(default_factory=list)
+    goals: list[str] = field(default_factory=list)
+    relationships: dict[str, Any] = field(default_factory=dict)
+    routines: list[str] = field(default_factory=list)
+    skills: list[str] = field(default_factory=list)
+    decisions: list[dict[str, Any]] = field(default_factory=list)
+    evolving_beliefs: list[MemoryClaim] = field(default_factory=list)
 
 
 # ===================================
@@ -180,12 +179,12 @@ class RelationshipModel:
 
     Tracks shared history and relationship-specific context.
     """
-    shared_projects: List[str] = field(default_factory=list)
-    past_decisions: List[Dict[str, Any]] = field(default_factory=list)
-    interaction_style: Dict[str, Any] = field(default_factory=dict)
-    trust_relevant_facts: List[str] = field(default_factory=list)
-    unresolved_threads: List[str] = field(default_factory=list)
-    interaction_history: List[Dict[str, Any]] = field(default_factory=list)
+    shared_projects: list[str] = field(default_factory=list)
+    past_decisions: list[dict[str, Any]] = field(default_factory=list)
+    interaction_style: dict[str, Any] = field(default_factory=dict)
+    trust_relevant_facts: list[str] = field(default_factory=list)
+    unresolved_threads: list[str] = field(default_factory=list)
+    interaction_history: list[dict[str, Any]] = field(default_factory=list)
 
 
 # ===================================
@@ -201,13 +200,13 @@ class ProspectiveMemory:
     This is cognitive: remembering that there is unfinished business.
     """
     intention: str
-    trigger: Dict[str, Any] = field(default_factory=dict)
+    trigger: dict[str, Any] = field(default_factory=dict)
     status: str = "open"  # open, completed, cancelled
     priority: str = "medium"  # low, medium, high, critical
     created_at: datetime = field(default_factory=datetime.utcnow)
-    created_from: Optional[str] = None  # conversation_id or source
-    completed_at: Optional[datetime] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_from: str | None = None  # conversation_id or source
+    completed_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # ===================================

@@ -22,8 +22,8 @@ class MemoryClaimStore:
     """
 
     def __init__(self):
-        self._claims: Dict[str, MemoryClaim] = {}
-        self._by_subject: Dict[str, List[str]] = {}
+        self._claims: dict[str, MemoryClaim] = {}
+        self._by_subject: dict[str, list[str]] = {}
 
     def add(self, claim: MemoryClaim) -> str:
         """Add a memory claim."""
@@ -34,11 +34,11 @@ class MemoryClaimStore:
         self._by_subject[claim.subject].append(claim_id)
         return claim_id
 
-    def get(self, claim_id: str) -> Optional[MemoryClaim]:
+    def get(self, claim_id: str) -> MemoryClaim | None:
         """Get a memory claim by ID."""
         return self._claims.get(claim_id)
 
-    def get_by_subject(self, subject: str) -> List[MemoryClaim]:
+    def get_by_subject(self, subject: str) -> list[MemoryClaim]:
         """Get all claims about a subject."""
         claim_ids = self._by_subject.get(subject, [])
         return [self._claims[cid] for cid in claim_ids if cid in self._claims]
@@ -51,7 +51,7 @@ class MemoryClaimStore:
             new_claim.supersedes = claim_id
             self.add(new_claim)
 
-    def detect_contradictions(self, claim_id: str) -> List[str]:
+    def detect_contradictions(self, claim_id: str) -> list[str]:
         """Detect contradictions for a claim."""
         claim = self._claims.get(claim_id)
         if not claim:
@@ -74,10 +74,10 @@ class MemoryClaimStore:
             self._claims[claim_id].confidence = new_confidence
             self._claims[claim_id].last_confirmed = datetime.utcnow()
 
-    def get_valid_claims(self, at: Optional[datetime] = None) -> List[MemoryClaim]:
+    def get_valid_claims(self, at: datetime | None = None) -> list[MemoryClaim]:
         """Get all valid claims at a given time."""
         return [c for c in self._claims.values() if c.is_valid(at)]
 
-    def get_claims_by_status(self, status: ClaimStatus) -> List[MemoryClaim]:
+    def get_claims_by_status(self, status: ClaimStatus) -> list[MemoryClaim]:
         """Get all claims with a given status."""
         return [c for c in self._claims.values() if c.status == status]

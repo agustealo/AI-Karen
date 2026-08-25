@@ -239,7 +239,8 @@ class TestGoalLifecycle:
         # Not all required evidence present -> satisfied check fails
         assert not lifecycle.check_satisfied(goal)
         # Mark satisfied with proper evidence
-        lifecycle.mark_satisfied(goal, "test:passed:1")
+        # Mark satisfied with proper evidence
+        lifecycle.mark_satisfied(goal, CompletionEvidenceSource.TEST_PASSED, "test:passed:1")
         assert goal.state == GoalState.SATISFIED
 
     def test_tenant_isolation(self):

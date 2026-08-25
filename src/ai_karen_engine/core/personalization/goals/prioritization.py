@@ -18,6 +18,7 @@ from .contracts import (
     GoalPriorityAssessment,
     GoalState,
     GoalSnapshot,
+    GoalType,
     to_snapshot,
 )
 
@@ -82,13 +83,10 @@ class GoalPrioritizer:
             reason_codes.append("dependency_pressure")
         if blocking >= 0.7:
             reason_codes.append("blocking_impact")
-        if goal.origin == GoalOrigin.INFERRED:
+        if goal.goal_type == GoalType.INFERRED:
             reason_codes.append("inferred_source_lower_default")
         if not reason_codes:
             reason_codes.append("baseline")
-
-        if goal.evidence:
-            evidence_refs.extend(e.evidence_id for e in goal.evidence)
 
         return GoalPriorityAssessment(
             goal_id=goal.goal_id,

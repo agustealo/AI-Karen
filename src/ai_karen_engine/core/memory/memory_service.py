@@ -17,89 +17,21 @@ try:
     from pydantic import BaseModel, ConfigDict, Field
 except ImportError:
     from ai_karen_engine.pydantic_stub import BaseModel, Field
-from sqlalchemy import and_, desc, select, update
 
-from ai_karen_engine.core.memory.retrieval.curated_recall import (
-    CURATED_MEMORY_KIND,
-    DEFAULT_CURATED_MEMORY_CLASSES,
-    build_curated_metadata_filter,
-    filter_curated_memories,
+from ai_karen_engine.interfaces.ui.memory_models import (
+    UIMemoryType as UIUIMemoryType,
+    UISource,
+    WebUIMemoryEntry,
+    WebUIMemoryQuery,
 )
-from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
-from ai_karen_engine.database.client import MultiTenantPostgresClient
-from ai_karen_engine.database.memory_manager import (
-    MemoryEntry,
-    MemoryManager,
-    MemoryQuery,
-)
-from ai_karen_engine.database.models import TenantConversation, TenantMemoryEntry
-from ai_karen_engine.core.memory.unified_memory_service import UnifiedMemoryService
 
 logger = get_logger(__name__)
 
 
-class MemoryType(str, Enum):
-    """Types of memory entries for web UI categorization."""
-
-    GENERAL = "general"
-    FACT = "fact"
-    PREFERENCE = "preference"
-    CONTEXT = "context"
-    CONVERSATION = "conversation"
-    INSIGHT = "insight"
-
-
-class UISource(str, Enum):
-    """Source UI types for tracking memory origin."""
-
-    WEB = "web"
-    DESKTOP = "desktop"
-    API = "api"
-    AG_UI = "ag_ui"
-
-
-@dataclass
-class WebUIMemoryEntry(MemoryEntry):
-    """Extended memory entry with web UI specific fields."""
-
-    ui_source: Optional[UISource] = None
-    conversation_id: Optional[str] = None
-    memory_type: MemoryType = MemoryType.GENERAL
-    importance_score: int = 5
-    access_count: int = 0
-    last_accessed: Optional[datetime] = None
-    ai_generated: bool = False
-    user_confirmed: bool = True
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary with web UI fields."""
-        base_dict = super().to_dict()
-        base_dict.update(
-            {
-                "ui_source": self.ui_source.value if self.ui_source else None,
-                "conversation_id": self.conversation_id,
-                "memory_type": self.memory_type.value,
-                "importance_score": self.importance_score,
-                "access_count": self.access_count,
-                "last_accessed": self.last_accessed.isoformat()
-                if self.last_accessed
-                else None,
-                "ai_generated": self.ai_generated,
-                "user_confirmed": self.user_confirmed,
-            }
-        )
-        return base_dict
-
-
-class WebUIMemoryQuery(BaseModel):
-    """Enhanced memory query with web UI specific parameters."""
-
-    text: str
-    user_id: Optional[str] = None
-    session_id: Optional[str] = None
+class MemoryContextBuilder:
     conversation_id: Optional[str] = None
     ui_source: Optional[UISource] = None
-    memory_types: List[MemoryType] = Field(default_factory=list)
+    memory_types: List[UIMemoryType] = Field(default_factory=list)
     tags: List[str] = Field(default_factory=list)
     importance_range: Optional[Tuple[int, int]] = None
     only_user_confirmed: bool = True
@@ -140,12 +72,12 @@ class MemoryContextBuilder:
         self.memory_service = memory_service
         self.max_context_tokens = 2000  # Approximate token limit for context
         self.context_weights = {
-            MemoryType.FACT: 1.0,
-            MemoryType.PREFERENCE: 0.9,
-            MemoryType.CONTEXT: 0.8,
-            MemoryType.CONVERSATION: 0.7,
-            MemoryType.INSIGHT: 0.6,
-            MemoryType.GENERAL: 0.5,
+            UIMemoryType.FACT: 1.0,
+            UIMemoryType.PREFERENCE: 0.9,
+            UIMemoryType.CONTEXT: 0.8,
+            UIMemoryType.CONVERSATION: 0.7,
+            UIMemoryType.INSIGHT: 0.6,
+            UIMemoryType.GENERAL: 0.5,
         }
 
     async def build_context(
@@ -489,34 +421,34 @@ class WebUIMemoryService(UnifiedMemoryService):
     def _infer_web_memory_type(
         web_data: Dict[str, Any],
         base_memory: MemoryEntry,
-    ) -> MemoryType:
+    ) -> UIMemoryType:
         """Map stored curated metadata back onto the web UI memory taxonomy."""
         explicit_type = web_data.get("memory_type")
         if explicit_type:
             try:
-                return MemoryType(str(explicit_type))
+                return UIMemoryType(str(explicit_type))
             except Exception:
                 pass
 
         metadata = getattr(base_memory, "metadata", {}) or {}
         memory_class = str(metadata.get("memory_class") or "").strip()
         if memory_class == "user_fact":
-            return MemoryType.PREFERENCE
+            return UIMemoryType.PREFERENCE
         if memory_class == "project_fact":
-            return MemoryType.FACT
+            return UIMemoryType.FACT
         if memory_class == "episodic":
-            return MemoryType.CONVERSATION
+            return UIMemoryType.CONVERSATION
         if memory_class == "semantic_long_term":
-            return MemoryType.INSIGHT
+            return UIMemoryType.INSIGHT
 
         fallback_type = metadata.get("memory_type") or metadata.get("type")
         if fallback_type:
             try:
-                return MemoryType(str(fallback_type))
+                return UIMemoryType(str(fallback_type))
             except Exception:
                 pass
 
-        return MemoryType.GENERAL
+        return UIMemoryType.GENERAL
 
     async def build_context(
         self,
@@ -549,7 +481,7 @@ class WebUIMemoryService(UnifiedMemoryService):
         ui_source: UISource,
         session_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
-        memory_type: MemoryType = MemoryType.GENERAL,
+        memory_type: UIMemoryType = UIMemoryType.GENERAL,
         tags: Optional[List[str]] = None,
         importance_score: Optional[int] = None,
         ai_generated: bool = False,
@@ -572,7 +504,7 @@ class WebUIMemoryService(UnifiedMemoryService):
             extracted_facts = []
             if (
                 self.fact_extraction_enabled
-                and memory_type in [MemoryType.FACT, MemoryType.GENERAL]
+                and memory_type in [UIMemoryType.FACT, UIMemoryType.GENERAL]
                 and not ai_generated
             ):
                 extracted_facts = await self._extract_facts(content)
@@ -994,7 +926,7 @@ class WebUIMemoryService(UnifiedMemoryService):
         return None
 
     async def _generate_auto_tags(
-        self, content: str, memory_type: MemoryType
+        self, content: str, memory_type: UIMemoryType
     ) -> List[str]:
         """Generate automatic tags for memory content using spaCy NLP."""
         try:
@@ -1190,7 +1122,7 @@ __all__ = [
     "MemoryService",
     "WebUIMemoryEntry",
     "WebUIMemoryQuery",
-    "MemoryType",
+    "UIMemoryType",
     "UISource",
     "MemoryContextBuilder",
 ]

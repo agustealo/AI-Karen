@@ -14,11 +14,9 @@ Version: 1.0.0 (Cognitive Architecture)
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import List, Optional
+from datetime import datetime
 
 from ai_karen_engine.core.memory.contracts import SalienceScore
-
 
 # ===================================
 # SALIENCE SCORING POLICY
@@ -86,7 +84,7 @@ class ForgettingPolicy:
         """Determine if episodes should be consolidated into semantic memory."""
         return episode_count >= self.consolidation_min_episodes and confidence >= self.consolidation_min_confidence
 
-    def compute_staleness_penalty(self, last_confirmed: Optional[datetime]) -> float:
+    def compute_staleness_penalty(self, last_confirmed: datetime | None) -> float:
         """Compute staleness penalty based on time since last confirmation."""
         if last_confirmed is None:
             return 0.5  # Default penalty for unconfirmed memories

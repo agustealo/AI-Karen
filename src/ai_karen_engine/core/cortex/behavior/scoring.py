@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
-
 from ai_karen_engine.core.cortex.behavior.contracts import (
     BehaviorCandidate,
     BehaviorScoreComponents,
     BehaviorSelectionContext,
+    BehaviorType,
 )
 
 
@@ -51,7 +49,7 @@ class BehaviorScoringEngine:
     def _historical(self, c: BehaviorCandidate, ctx: BehaviorSelectionContext) -> float:
         for rec in ctx.adaptive_recommendations:
             if rec.get("action_type") == c.behavior_type.value:
-                return float(rec.get("utility_score", 0.5))
+                return max(0.5, float(rec.get("utility_score", 0.5)))
         return 0.5
 
     def _risk(self, c: BehaviorCandidate, ctx: BehaviorSelectionContext) -> float:

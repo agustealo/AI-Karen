@@ -54,7 +54,7 @@ class UserModelStore:
         """Add a belief about the user."""
         self._model.evolving_beliefs.append(claim)
 
-    def get_preference(self, key: str) -> Optional[Any]:
+    def get_preference(self, key: str) -> Any | None:
         """Get a preference value."""
         if key in self._model.explicit_preferences:
             return self._model.explicit_preferences[key]

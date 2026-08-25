@@ -285,6 +285,7 @@ class Goal:
     revisions: List[GoalRevision] = field(default_factory=list)
     completion_evidence_required: List[CompletionEvidenceSource] = field(default_factory=list)
     completion_evidence: List[str] = field(default_factory=list)
+    completion_evidence_sources: List[CompletionEvidenceSource] = field(default_factory=list)
     completed_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
     superseded_by: Optional[str] = None
@@ -309,9 +310,21 @@ def goal_from_user_goal(ug: UserGoal) -> Goal:
 
     Inferred goals receive lower confidence than explicit ones.
     """
-    origin = GoalOrigin.REFLECTION if "reflection" in str(ug.metadata).lower() else GoalOrigin.OBSERVATION
+    origin = GoalOrigin.USER_STATED
     goal_type = GoalType.EXPLICIT
     confidence = ug.confidence
+
+    if ug.metadata:
+        meta_str = str(ug.metadata).lower()
+        if "observation" in meta_str or "observed" in meta_str:
+            origin = GoalOrigin.OBSERVATION
+        elif "reflection" in meta_str:
+            origin = GoalOrigin.REFLECTION
+        elif "inferred" in meta_str or "inference" in meta_str:
+            origin = GoalOrigin.INFERENCE
+        elif "cortex" in meta_str:
+            origin = GoalOrigin.CORTEX
+
     if origin != GoalOrigin.USER_STATED:
         goal_type = GoalType.INFERRED
         confidence = min(ug.confidence, 0.6)
@@ -384,6 +397,7 @@ class GoalSnapshot:
     expires_at: Optional[datetime]
     superseded_by: Optional[str]
     completion_evidence: List[str]
+    completion_evidence_sources: List[CompletionEvidenceSource]
     outcome: Optional[GoalOutcome]
 
 
@@ -410,6 +424,7 @@ def to_snapshot(goal: Goal) -> GoalSnapshot:
         expires_at=goal.expires_at,
         superseded_by=goal.superseded_by,
         completion_evidence=list(goal.completion_evidence),
+        completion_evidence_sources=list(goal.completion_evidence_sources),
         outcome=goal.outcome,
     )
 

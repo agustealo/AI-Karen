@@ -15,6 +15,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.memory.contracts import (
@@ -24,7 +25,6 @@ from ai_karen_engine.core.memory.contracts import (
     SalienceScore,
 )
 from ai_karen_engine.core.memory.types import MemoryEntry, MemoryStatus
-
 
 # ===================================
 # LIFECYCLE STATE
@@ -52,9 +52,9 @@ class LifecycleEvent(str, Enum):
 class LifecycleState:
     """Current state of a memory in the lifecycle."""
     state: str = "perceive"
-    memory_id: Optional[str] = None
+    memory_id: str | None = None
     entered_at: datetime = field(default_factory=datetime.utcnow)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # ===================================
@@ -65,9 +65,8 @@ class LifecycleHook(ABC):
     """Base class for lifecycle hooks."""
 
     @abstractmethod
-    async def on_event(self, event: LifecycleEvent, memory: MemoryEntry, context: Dict[str, Any]) -> Optional[MemoryEntry]:
+    async def on_event(self, event: LifecycleEvent, memory: MemoryEntry, context: dict[str, Any]) -> MemoryEntry | None:
         """Handle a lifecycle event. Return modified memory or None."""
-        pass
 
 
 class MemoryLifecycle:
@@ -97,13 +96,13 @@ class MemoryLifecycle:
     def __init__(self, memory: MemoryEntry):
         self.memory = memory
         self.state = LifecycleState(state="perceive", memory_id=memory.id)
-        self.hooks: List[LifecycleHook] = []
+        self.hooks: list[LifecycleHook] = []
 
     def add_hook(self, hook: LifecycleHook) -> None:
         """Add a lifecycle hook."""
         self.hooks.append(hook)
 
-    async def transition(self, event: LifecycleEvent, context: Dict[str, Any]) -> bool:
+    async def transition(self, event: LifecycleEvent, context: dict[str, Any]) -> bool:
         """Attempt to transition to a new state."""
         current = self.state.state
         allowed = self.TRANSITIONS.get(current, [])

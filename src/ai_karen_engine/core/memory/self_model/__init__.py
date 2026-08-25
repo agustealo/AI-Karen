@@ -56,7 +56,7 @@ class SelfModelStore:
         if goal not in self._model.active_goals:
             self._model.active_goals.append(goal)
 
-    def record_significant_decision(self, decision: Dict[str, Any]) -> None:
+    def record_significant_decision(self, decision: dict[str, Any]) -> None:
         """Record a significant decision."""
         self._model.significant_decisions.append({
             **decision,

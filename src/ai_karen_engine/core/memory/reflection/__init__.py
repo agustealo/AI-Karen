@@ -38,9 +38,9 @@ class ReflectionEngine:
         self.min_evidence_count = min_evidence_count
         self.min_confidence = min_confidence
         self.reflection_interval_hours = reflection_interval_hours
-        self._last_reflection: Optional[datetime] = None
+        self._last_reflection: datetime | None = None
 
-    async def reflect(self, episodes: List[CognitiveMemoryEntry]) -> List[ReflectionCandidate]:
+    async def reflect(self, episodes: list[CognitiveMemoryEntry]) -> list[ReflectionCandidate]:
         """
         Reflect on episodes to derive candidate insights.
         """
@@ -58,16 +58,16 @@ class ReflectionEngine:
 
         return candidates
 
-    def _group_episodes(self, episodes: List[CognitiveMemoryEntry]) -> Dict[str, List[CognitiveMemoryEntry]]:
+    def _group_episodes(self, episodes: list[CognitiveMemoryEntry]) -> dict[str, list[CognitiveMemoryEntry]]:
         """Group episodes by subject for pattern detection."""
-        groups: Dict[str, List[CognitiveMemoryEntry]] = {}
+        groups: dict[str, list[CognitiveMemoryEntry]] = {}
         for ep in episodes:
             if ep.claim:
                 key = f"{ep.claim.subject}:{ep.claim.predicate}"
                 groups.setdefault(key, []).append(ep)
         return groups
 
-    def _generate_candidate(self, episodes: List[CognitiveMemoryEntry]) -> Optional[ReflectionCandidate]:
+    def _generate_candidate(self, episodes: list[CognitiveMemoryEntry]) -> ReflectionCandidate | None:
         """Generate a reflection candidate from a group of episodes."""
         if not episodes:
             return None

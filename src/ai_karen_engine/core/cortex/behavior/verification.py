@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
-
 from ai_karen_engine.core.cortex.behavior.contracts import (
+    BehaviorCandidate,
     BehaviorSelectionContext,
     BehaviorType,
     VerificationDepth,

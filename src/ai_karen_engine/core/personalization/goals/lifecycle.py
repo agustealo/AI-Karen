@@ -25,6 +25,7 @@ from .contracts import (
     IntentionState,
     IntentionTriggerType,
     ProspectiveState,
+    to_snapshot,
     _map_user_goal_status,
 )
 
@@ -43,6 +44,7 @@ _VALID_TRANSITIONS: Dict[GoalState, Set[GoalState]] = {
         GoalState.PAUSED,
         GoalState.AT_RISK,
         GoalState.SATISFIED,
+        GoalState.SUPERSEDED,
         GoalState.ABANDONED,
         GoalState.EXPIRED,
     },
@@ -210,14 +212,17 @@ class GoalLifecycle:
         """A goal is satisfied when all required proof gates pass."""
         if not goal.completion_evidence_required:
             return False
-        evidence_set = set(goal.completion_evidence)
         required = set(s.value for s in goal.completion_evidence_required)
-        return required.issubset(evidence_set)
+        satisfied = set(s.value for s in goal.completion_evidence_sources)
+        return required.issubset(satisfied)
 
-    def mark_satisfied(self, goal: Goal, evidence_ref: str) -> Goal:
+    def mark_satisfied(
+        self, goal: Goal, source: CompletionEvidenceSource, evidence_ref: str
+    ) -> Goal:
         if evidence_ref not in goal.completion_evidence:
             goal.completion_evidence.append(evidence_ref)
-            goal.evidence_refs.append(evidence_ref)
+        if source not in goal.completion_evidence_sources:
+            goal.completion_evidence_sources.append(source)
         if self.check_satisfied(goal) and goal.state == GoalState.ACTIVE:
             self.transition(goal, GoalState.SATISFIED, "all proof gates pass", evidence_ref)
         return goal
@@ -285,16 +290,12 @@ class GoalLifecycle:
         return parent
 
     def dependency_blocks(self, goal: Goal, all_goals: Dict[str, Goal]) -> bool:
-        """Returns True if any dependency is not in an active/completed state."""
+        """Returns True if any dependency is not in a completed/satisfied state."""
         for dep_id in goal.depends_on:
             dep = all_goals.get(dep_id)
             if dep is None:
                 continue
-            if dep.state in (
-                GoalState.ACTIVE,
-                GoalState.COMPLETED,
-                GoalState.SATISFIED,
-            ):
+            if dep.state in (GoalState.COMPLETED, GoalState.SATISFIED):
                 continue
             return True
         return False

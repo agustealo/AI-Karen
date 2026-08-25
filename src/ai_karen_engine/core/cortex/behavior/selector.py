@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
 from typing import Any
 
 from ai_karen_engine.core.cortex.behavior.contracts import (
     BehaviorCandidate,
+    BehaviorConstraint,
     BehaviorDecision,
     BehaviorScoreComponents,
     BehaviorSelectionContext,
-    BehaviorSource,
     BehaviorType,
     VerificationDepth,
     VerificationReason,
@@ -42,6 +41,14 @@ class BehaviorSelector:
                 selected_behavior=BehaviorType.ABSTAIN,
                 confidence=0.0,
                 reason_codes=["zero_utility"],
+            )
+
+        if context.belief_assessment.get("confidence", 1.0) < 0.3 and best.behavior_type not in (BehaviorType.VERIFY, BehaviorType.ABSTAIN):
+            return BehaviorDecision(
+                decision_id=f"bd-{context.request_id}",
+                selected_behavior=BehaviorType.ABSTAIN,
+                confidence=context.belief_assessment.get("confidence", 0.0),
+                reason_codes=["low_confidence_abstain"],
             )
 
         requires_verification = self._evaluate_verification(best, context)

@@ -33,7 +33,7 @@ class RelationshipModelStore:
         if project not in self._model.shared_projects:
             self._model.shared_projects.append(project)
 
-    def record_decision(self, decision: Dict[str, Any]) -> None:
+    def record_decision(self, decision: dict[str, Any]) -> None:
         """Record a past decision."""
         self._model.past_decisions.append({
             **decision,
@@ -54,7 +54,7 @@ class RelationshipModelStore:
         if thread not in self._model.unresolved_threads:
             self._model.unresolved_threads.append(thread)
 
-    def record_interaction(self, interaction: Dict[str, Any]) -> None:
+    def record_interaction(self, interaction: dict[str, Any]) -> None:
         """Record an interaction."""
         self._model.interaction_history.append({
             **interaction,

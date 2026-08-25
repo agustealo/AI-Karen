@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
-
 from ai_karen_engine.core.cortex.behavior.contracts import (
     BehaviorCandidate,
     BehaviorConstraint,
@@ -26,6 +23,4 @@ class BehaviorEligibilityGate:
             return False
         if BehaviorConstraint.TENANT_RESTRICTED in candidate.constraints and context.tenant_id:
             return True
-        if candidate.behavior_type == BehaviorType.REFUSE and context.policy_constraints.get("allow_refuse", True) is False:
-            return False
-        return True
+        return not (candidate.behavior_type == BehaviorType.REFUSE and context.policy_constraints.get("allow_refuse", True) is False)

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+from typing import Any
+
 from ai_karen_engine.core.cortex.behavior.contracts import (
     BehaviorCandidate,
     BehaviorConstraint,
-    BehaviorDecision,
-    BehaviorScoreComponents,
     BehaviorSelectionContext,
     BehaviorType,
     VerificationReason,
-    VerificationRequirement,
 )
 from ai_karen_engine.core.cortex.behavior.eligibility import BehaviorEligibilityGate
 from ai_karen_engine.core.cortex.behavior.scoring import BehaviorScoringEngine
@@ -16,7 +15,7 @@ from ai_karen_engine.core.cortex.behavior.selector import BehaviorSelector
 
 
 def _ctx(**kwargs: Any) -> BehaviorSelectionContext:
-    return BehaviorSelectionContext(request_id="r1", correlation_id="c1", tenant_id="t1", **kwargs)
+    return BehaviorSelectionContext(request_id="r1", correlation_id="c1", **kwargs)
 
 
 def _candidate(btype: BehaviorType = BehaviorType.RESPOND, **kwargs: Any) -> BehaviorCandidate:
@@ -83,8 +82,8 @@ def test_conflicting_evidence_can_trigger_abstention():
 
 def test_policy_denied_behavior_cannot_be_selected():
     engine = BehaviorScoringEngine()
-    candidate = _candidate(BehaviorType.USE_TOOL)
-    ctx = _ctx(policy_constraints={"blocked_behaviors": ["use_tool"]})
+    candidate = _candidate(BehaviorType.USE_CAPABILITY)
+    ctx = _ctx(policy_constraints={"blocked_behaviors": ["use_capability"]})
     score = engine.score(candidate, ctx)
     assert score.policy_fit == 0.0
 

@@ -22,8 +22,8 @@ class ProspectiveMemoryStore:
     """
 
     def __init__(self):
-        self._memories: Dict[str, ProspectiveMemory] = {}
-        self._by_status: Dict[str, List[str]] = {}
+        self._memories: dict[str, ProspectiveMemory] = {}
+        self._by_status: dict[str, list[str]] = {}
 
     def add(self, memory: ProspectiveMemory) -> str:
         """Add a prospective memory."""
@@ -35,16 +35,16 @@ class ProspectiveMemoryStore:
         self._by_status[status].append(memory_id)
         return memory_id
 
-    def get(self, memory_id: str) -> Optional[ProspectiveMemory]:
+    def get(self, memory_id: str) -> ProspectiveMemory | None:
         """Get a prospective memory by ID."""
         return self._memories.get(memory_id)
 
-    def get_by_status(self, status: str) -> List[ProspectiveMemory]:
+    def get_by_status(self, status: str) -> list[ProspectiveMemory]:
         """Get all prospective memories with a given status."""
         memory_ids = self._by_status.get(status, [])
         return [self._memories[mid] for mid in memory_ids if mid in self._memories]
 
-    def get_open(self) -> List[ProspectiveMemory]:
+    def get_open(self) -> list[ProspectiveMemory]:
         """Get all open prospective memories."""
         return self.get_by_status("open")
 
@@ -72,7 +72,7 @@ class ProspectiveMemoryStore:
                 self._by_status["cancelled"] = []
             self._by_status["cancelled"].append(memory_id)
 
-    def check_triggers(self, context: Dict[str, Any]) -> List[ProspectiveMemory]:
+    def check_triggers(self, context: dict[str, Any]) -> list[ProspectiveMemory]:
         """Check if any prospective memories are triggered by the current context."""
         triggered = []
         for memory in self._memories.values():
@@ -82,7 +82,7 @@ class ProspectiveMemoryStore:
                 triggered.append(memory)
         return triggered
 
-    def _matches_trigger(self, trigger: Dict[str, Any], context: Dict[str, Any]) -> bool:
+    def _matches_trigger(self, trigger: dict[str, Any], context: dict[str, Any]) -> bool:
         """Check if a trigger matches the current context."""
         for key, value in trigger.items():
             if key not in context:

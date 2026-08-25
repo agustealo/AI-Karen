@@ -22,9 +22,9 @@ class AssociationGraph:
     """
     Graph of memory associations for spreading activation.
     """
-    nodes: Dict[str, CognitiveMemoryEntry] = field(default_factory=dict)
-    edges: Dict[str, List[str]] = field(default_factory=dict)  # memory_id -> related memory_ids
-    concept_index: Dict[str, List[str]] = field(default_factory=dict)  # concept -> memory_ids
+    nodes: dict[str, CognitiveMemoryEntry] = field(default_factory=dict)
+    edges: dict[str, list[str]] = field(default_factory=dict)  # memory_id -> related memory_ids
+    concept_index: dict[str, list[str]] = field(default_factory=dict)  # concept -> memory_ids
 
     def add_memory(self, entry: CognitiveMemoryEntry) -> None:
         """Add a memory to the graph."""
@@ -38,7 +38,7 @@ class AssociationGraph:
         if target_id not in self.edges[target_id]:
             self.edges[source_id].append(target_id)
 
-    def get_neighbors(self, memory_id: str, depth: int = 1) -> Set[str]:
+    def get_neighbors(self, memory_id: str, depth: int = 1) -> set[str]:
         """Get neighbors up to a certain depth."""
         visited = set()
         queue = [(memory_id, 0)]
@@ -63,14 +63,14 @@ class SpreadingActivation:
         self.activation_decay: float = 0.5
         self.max_propagation_depth: int = 3
 
-    def activate(self, seed_concepts: List[str], context: Dict[str, Any]) -> Dict[str, float]:
+    def activate(self, seed_concepts: list[str], context: dict[str, Any]) -> dict[str, float]:
         """
         Spread activation from seed concepts.
 
         Returns a dict of memory_id -> activation_strength.
         """
-        activations: Dict[str, float] = {}
-        queue: List[tuple[str, float, int]] = []
+        activations: dict[str, float] = {}
+        queue: list[tuple[str, float, int]] = []
 
         # Initialize with seed concepts
         for concept in seed_concepts:
@@ -92,7 +92,7 @@ class SpreadingActivation:
 
         return activations
 
-    def compute_recall_score(self, base_score: RecallScoreComponents, activations: Dict[str, float]) -> float:
+    def compute_recall_score(self, base_score: RecallScoreComponents, activations: dict[str, float]) -> float:
         """Add associative activation to recall score."""
         if not activations:
             return base_score.total()
