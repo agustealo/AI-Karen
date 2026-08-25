@@ -399,6 +399,8 @@ class SecureAuthMiddleware:
             "/api/auth/refresh",
             "/api/auth/forgot-password",
             "/api/auth/reset-password",
+            "/api/auth/first-run",
+            "/api/auth/first-run/setup",
             "/api/public",
             "/ws",
         ]

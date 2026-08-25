@@ -1,8 +1,14 @@
 """Canonical auth services package boundary."""
 
 from .auth_service import AuthService, Session, UserAccount, UserRole, UserStatus
-from .config import AuthConfig, Environment, INSECURE_SECRET_MARKERS, load_auth_config
-from .authorization_service import AuthorizationConfig, AuthorizationService, Policy, PolicyEnforcementResult, PolicyType
+from .authorization_service import (
+    AuthorizationConfig,
+    AuthorizationService,
+    Policy,
+    PolicyEnforcementResult,
+    PolicyType,
+)
+from .config import INSECURE_SECRET_MARKERS, AuthConfig, Environment, load_auth_config
 from .data_protection_service import (
     DataProtectionConfig,
     DataProtectionPolicy,
@@ -13,7 +19,6 @@ from .data_protection_service import (
     EncryptionKey,
     RetentionPolicy,
 )
-from .user_service import UserAlreadyExistsError, UserNotFoundError, TenantNotFoundError, UserService, UserServiceError
 from .tenant_isolation import (
     CrossTenantAccessError,
     SecurityIncident,
@@ -29,27 +34,21 @@ from .tenant_isolation import (
     get_tenant_isolation_service,
     validate_tenant_access,
 )
+from .user_service import (
+    TenantNotFoundError,
+    UserAlreadyExistsError,
+    UserNotFoundError,
+    UserService,
+    UserServiceError,
+)
 
 __all__ = [
+    "INSECURE_SECRET_MARKERS",
     "AuthConfig",
     "AuthService",
-    "Environment",
-    "INSECURE_SECRET_MARKERS",
-    "Session",
-    "UserAccount",
-    "UserRole",
-    "UserStatus",
-    "load_auth_config",
-    "UserService",
-    "UserServiceError",
-    "UserNotFoundError",
-    "TenantNotFoundError",
-    "UserAlreadyExistsError",
     "AuthorizationConfig",
     "AuthorizationService",
-    "Policy",
-    "PolicyEnforcementResult",
-    "PolicyType",
+    "CrossTenantAccessError",
     "DataProtectionConfig",
     "DataProtectionPolicy",
     "DataProtectionResult",
@@ -57,18 +56,31 @@ __all__ = [
     "DataSensitivity",
     "EncryptionAlgorithm",
     "EncryptionKey",
+    "Environment",
+    "Policy",
+    "PolicyEnforcementResult",
+    "PolicyType",
     "RetentionPolicy",
-    "CrossTenantAccessError",
     "SecurityIncident",
     "SecurityIncidentLogger",
     "SecurityIncidentType",
+    "Session",
     "TenantAccessLevel",
     "TenantContext",
     "TenantIsolationError",
     "TenantIsolationService",
+    "TenantNotFoundError",
     "TenantValidator",
+    "UserAccount",
+    "UserAlreadyExistsError",
+    "UserNotFoundError",
+    "UserRole",
+    "UserService",
+    "UserServiceError",
+    "UserStatus",
     "VectorStoreTenantFilter",
     "create_tenant_context",
     "get_tenant_isolation_service",
+    "load_auth_config",
     "validate_tenant_access",
 ]

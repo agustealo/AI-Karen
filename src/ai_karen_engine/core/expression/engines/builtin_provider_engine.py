@@ -64,7 +64,7 @@ class BuiltinProviderEngine(BaseExpressionEngine):
                 required_caps, healthy_only=True
             )
         ]
-        for fallback_id in ("builtin_vllm", "lmstudio-desktop", "llamacpp-server", "ollama-local"):
+        for fallback_id in ("lmstudio-desktop", "llamacpp-server", "ollama-local"):
             if fallback_id in capable_ids and fallback_id not in provider_ids:
                 provider_ids.append(fallback_id)
 

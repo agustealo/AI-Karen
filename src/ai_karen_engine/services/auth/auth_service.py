@@ -133,6 +133,11 @@ class AuthService(BaseService):
         """Return the authenticated configuration."""
         return self._config
 
+    @config.setter
+    def config(self, value: AuthConfig) -> None:
+        """Set the configuration from BaseService initialization."""
+        self._config = value
+
     @property
     def lock(self) -> asyncio.Lock:
         """Get or create the async lock lazily to ensure correct event loop attachment."""

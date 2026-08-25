@@ -246,8 +246,9 @@ class TestAdminUpdateDelegatesToAuthAuthority:
     @pytest.mark.asyncio
     async def test_set_user_status_delegates_to_canonical_service(self):
         fake_service = AsyncMock()
+        UserStatus = __import__("ai_karen_engine.services.auth.auth_service", fromlist=["UserStatus"]).UserStatus
         fake_service.set_user_status = AsyncMock(
-            return_value=_user(status=__import__("ai_karen_engine.services.auth.auth_service", fromlist=["UserStatus"]).UserStatus.INACTIVE)
+            return_value=_user(status=UserStatus.INACTIVE)
         )
 
         facade = FacadeAuthService()
@@ -260,7 +261,7 @@ class TestAdminUpdateDelegatesToAuthAuthority:
         fake_service.set_user_status.assert_awaited_once_with(
             user_id="user-1", is_active=False, reason="admin_action"
         )
-        assert result["status"] == {"value": "inactive"}
+        assert result["status"] == "inactive"
 
     @pytest.mark.asyncio
     async def test_set_user_roles_delegates_to_canonical_service(self):

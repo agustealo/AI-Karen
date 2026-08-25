@@ -120,15 +120,15 @@ PROVIDER_FAILURE_COUNTER = _get_or_create_metric(
 
 class ProviderProcessingError(RuntimeError):
     def __init__(self, provider_name: str, errors: Sequence[BaseException]):
-        self.router.provider_name = provider_name
-        self.router.errors = list(errors)
-        self.router.last_error: Optional[BaseException] = self.router.errors[-1] if self.router.errors else None
+        self.provider_name = provider_name
+        self.errors = list(errors)
+        self.last_error: Optional[BaseException] = self.errors[-1] if self.errors else None
         unique_messages: List[str] = []
-        for error in self.router.errors:
+        for error in self.errors:
             message = str(error)
             if message and message not in unique_messages:
                 unique_messages.append(message)
-        attempts = len(self.router.errors) or 1
+        attempts = len(self.errors) or 1
         summary = "; ".join(unique_messages) if unique_messages else "unknown error"
         super().__init__(f"{provider_name} failed after {attempts} attempts: {summary}")
 
@@ -145,31 +145,31 @@ class ProviderRuntime:
                 registry = get_registry()
             else:
                 registry = router.registry
-        self.router.registry = registry
-        self.router.router = router
+        self.registry = registry
+        self.router = router
 
-        self.router.provider_health: Dict[str, Any] = getattr(self.router.router, "provider_health", {})
-        self.router.retry_attempts = 3
-        self.router.retry_initial_delay = 1.0
-        self.router.retry_backoff_factor = 2.0
-        self.router.retry_max_delay = 10.0
-        self.router.retry_jitter = 0.5
-        self.router.circuit_breaker_threshold = 2
-        self.router.circuit_breaker_timeout = 60.0
-        self.router.rate_limit_backoff = 15.0
-        self.router.latency_history_size = 20
-        self.router.default_rate_limit = {"max_requests": 30, "window_seconds": 60}
-        self.router.rate_limit_config = {
+        self.provider_health: Dict[str, Any] = getattr(router, "provider_health", {})
+        self.retry_attempts = 3
+        self.retry_initial_delay = 1.0
+        self.retry_backoff_factor = 2.0
+        self.retry_max_delay = 10.0
+        self.retry_jitter = 0.5
+        self.circuit_breaker_threshold = 2
+        self.circuit_breaker_timeout = 60.0
+        self.rate_limit_backoff = 15.0
+        self.latency_history_size = 20
+        self.default_rate_limit = {"max_requests": 30, "window_seconds": 60}
+        self.rate_limit_config = {
             "openai": {"max_requests": 60, "window_seconds": 60},
             "anthropic": {"max_requests": 30, "window_seconds": 60},
             "gemini": {"max_requests": 40, "window_seconds": 60},
             "deepseek": {"max_requests": 40, "window_seconds": 60},
         }
-        self.router._response_prompt_builder = ResponsePromptBuilder()
-        self.router._response_sanitizer = ResponseSanitizer()
-        self.router._response_validator = ResponseValidator()
-        self.router._provider_authentication: Dict[str, bool] = {}
-        self.router._performance_metrics: Dict[str, Any] = {
+        self._response_prompt_builder = ResponsePromptBuilder()
+        self._response_sanitizer = ResponseSanitizer()
+        self._response_validator = ResponseValidator()
+        self._provider_authentication: Dict[str, bool] = {}
+        self._performance_metrics: Dict[str, Any] = {
             "total_requests": 0,
             "successful_requests": 0,
             "failed_requests": 0,
@@ -179,15 +179,15 @@ class ProviderRuntime:
             "fallback_activations": 0,
             "last_reset": time.time(),
         }
-        self.router._audit_trail: List[Dict[str, Any]] = []
-        self.router._routing_decisions: List[Dict[str, Any]] = []
-        self.router._provider_whitelist: Optional[set] = None
-        self.router._provider_blacklist: set = set()
-        self.router._model_validation = True
-        self.router._request_sanitization = True
-        self.router._request_validation = True
-        self.router._response_verification = True
-        self.router._streaming_providers: set = {
+        self._audit_trail: List[Dict[str, Any]] = []
+        self._routing_decisions: List[Dict[str, Any]] = []
+        self._provider_whitelist: Optional[set] = None
+        self._provider_blacklist: set = set()
+        self._model_validation = True
+        self._request_sanitization = True
+        self._request_validation = True
+        self._response_verification = True
+        self._streaming_providers: set = {
             "builtin_vllm",
             "vllm",
             "ollama",
@@ -197,7 +197,7 @@ class ProviderRuntime:
             "deepseek",
             "zai",
         }
-        self.router._streaming_timeout = 300
+        self._streaming_timeout = 300
 
     @staticmethod
     def _resolve_runtime_engine(provider_name: Optional[str], provider_category: Optional[str] = None) -> Optional[str]:
@@ -300,7 +300,7 @@ class ProviderRuntime:
         request: "ChatRequest",
         user_preferences: Optional[Dict[str, Any]] = None,
     ) -> ProviderExecutionResult:
-        return await self.router.execute(decision, request, user_preferences=user_preferences)
+        return await self.execute(decision, request, user_preferences=user_preferences)
 
     async def execute(
         self,
