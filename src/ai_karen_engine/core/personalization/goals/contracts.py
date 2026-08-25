@@ -40,8 +40,6 @@ class GoalPriority(str, Enum):
 
 
 class GoalState(str, Enum):
-    """Canonical goal lifecycle state."""
-
     PROPOSED = "proposed"
     ACTIVE = "active"
     BLOCKED = "blocked"
@@ -137,7 +135,6 @@ class ProspectiveState(str, Enum):
     ARCHIVED = "archived"
 
 
-# Compatibility alias only. EvidenceType is the sole evidence vocabulary owner.
 EvidenceSourceType = EvidenceType
 
 
@@ -150,6 +147,11 @@ class GoalRelationship(str, Enum):
     CONFLICTS_WITH = "conflicts_with"
 
 
+def _validate_tenant(value: str | None, owner: str) -> None:
+    if not value or value == "default":
+        raise ValueError(f"{owner} tenant_id must be explicit and non-default")
+
+
 @dataclass
 class GoalEvidence:
     evidence_id: str
@@ -160,11 +162,12 @@ class GoalEvidence:
     polarity: str
     confidence: float
     observed_at: datetime
-    tenant_id: str = ""
+    tenant_id: str | None = None
     user_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        _validate_tenant(self.tenant_id, "goal evidence")
         self.confidence = max(0.0, min(1.0, self.confidence))
 
 
@@ -198,8 +201,11 @@ class GoalRevision:
     new_value: Any
     reason: str
     revised_at: datetime
-    tenant_id: str = ""
+    tenant_id: str | None = None
     user_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_tenant(self.tenant_id, "goal revision")
 
 
 @dataclass
@@ -236,8 +242,7 @@ class Goal:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.tenant_id or self.tenant_id == "default":
-            raise ValueError("goal tenant_id must be explicit and non-default")
+        _validate_tenant(self.tenant_id, "goal")
         self.confidence = max(0.0, min(1.0, self.confidence))
 
     def is_active(self) -> bool:
@@ -365,8 +370,11 @@ class GoalConflict:
     description: str
     evidence_refs: list[str] = field(default_factory=list)
     detected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    tenant_id: str = ""
+    tenant_id: str | None = None
     resolution_candidates: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        _validate_tenant(self.tenant_id, "goal conflict")
 
 
 @dataclass
@@ -402,8 +410,7 @@ class Intention:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.tenant_id or self.tenant_id == "default":
-            raise ValueError("intention tenant_id must be explicit and non-default")
+        _validate_tenant(self.tenant_id, "intention")
         self.confidence = max(0.0, min(1.0, self.confidence))
 
 
@@ -415,11 +422,12 @@ class IntentionEvidence:
     source_type: EvidenceType
     confidence: float
     observed_at: datetime
-    tenant_id: str = ""
+    tenant_id: str | None = None
     user_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        _validate_tenant(self.tenant_id, "intention evidence")
         self.confidence = max(0.0, min(1.0, self.confidence))
 
 
@@ -439,11 +447,12 @@ class CommitmentEvidence:
     confidence: float
     observed_at: datetime
     strength: CommitmentStrength
-    tenant_id: str = ""
+    tenant_id: str | None = None
     user_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        _validate_tenant(self.tenant_id, "commitment evidence")
         self.confidence = max(0.0, min(1.0, self.confidence))
 
 
@@ -468,8 +477,7 @@ class Commitment:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.tenant_id or self.tenant_id == "default":
-            raise ValueError("commitment tenant_id must be explicit and non-default")
+        _validate_tenant(self.tenant_id, "commitment")
         self.confidence = max(0.0, min(1.0, self.confidence))
 
     def is_active(self) -> bool:
@@ -482,8 +490,11 @@ class ProspectiveTrigger:
     target_ref: str
     description: str
     condition: str | None = None
-    tenant_id: str = ""
+    tenant_id: str | None = None
     user_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_tenant(self.tenant_id, "prospective trigger")
 
 
 @dataclass
@@ -498,9 +509,12 @@ class ProspectiveMemory:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     triggered_at: datetime | None = None
     archived_at: datetime | None = None
-    tenant_id: str = ""
+    tenant_id: str | None = None
     user_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _validate_tenant(self.tenant_id, "prospective memory")
 
 
 from .lifecycle import GoalStore
