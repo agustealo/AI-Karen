@@ -1,0 +1,89 @@
+name: Cognitive Proof CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/ai_karen_engine/core/cognitive/**'
+      - 'src/ai_karen_engine/core/contracts/**'
+      - 'src/ai_karen_engine/core/cortex/**'
+      - 'src/ai_karen_engine/core/reasoning/**'
+      - 'src/ai_karen_engine/core/adaptive/**'
+      - 'src/ai_karen_engine/core/personalization/**'
+      - 'src/ai_karen_engine/core/context/**'
+      - 'src/ai_karen_engine/core/memory/**'
+      - 'tests/benchmarks/cognitive/**'
+      - 'tests/fixtures/cognitive/**'
+      - 'tests/architecture/cognitive_contracts/**'
+      - '.github/workflows/cognitive-proof-ci.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'src/ai_karen_engine/core/cognitive/**'
+      - 'src/ai_karen_engine/core/contracts/**'
+      - 'src/ai_karen_engine/core/cortex/**'
+      - 'src/ai_karen_engine/core/reasoning/**'
+      - 'src/ai_karen_engine/core/adaptive/**'
+      - 'src/ai_karen_engine/core/personalization/**'
+      - 'src/ai_karen_engine/core/context/**'
+      - 'src/ai_karen_engine/core/memory/**'
+      - 'tests/benchmarks/cognitive/**'
+      - 'tests/fixtures/cognitive/**'
+      - 'tests/architecture/cognitive_contracts/**'
+      - '.github/workflows/cognitive-proof-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.13'
+  PYTHONPATH: 'src:tests'
+
+jobs:
+  cognitive-proof:
+    name: Cognitive Benchmark + Policy Dominance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install project and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-timeout pyyaml
+
+      - name: Compile cognitive contract surface
+        run: |
+          python -m compileall \
+            src/ai_karen_engine/core/cognitive \
+            src/ai_karen_engine/core/contracts \
+            src/ai_karen_engine/core/cortex \
+            src/ai_karen_engine/core/reasoning \
+            src/ai_karen_engine/core/adaptive \
+            src/ai_karen_engine/core/personalization \
+            src/ai_karen_engine/core/context \
+            src/ai_karen_engine/core/memory
+
+      - name: Run cognitive contract architecture gates
+        run: |
+          pytest tests/architecture/cognitive_contracts -q --timeout=300 --tb=short
+
+      - name: Run full cognitive benchmark proof
+        run: |
+          pytest tests/benchmarks/cognitive/test_proof_gates.py -q --timeout=300 --tb=short
+
+      - name: Run policy dominance proof explicitly
+        run: |
+          pytest tests/benchmarks/cognitive/test_proof_gates.py \
+            -q --timeout=300 --tb=short \
+            -k 'policy_dominance'
