@@ -79,10 +79,12 @@ jobs:
           pytest tests/architecture/cognitive_contracts -q --timeout=300 --tb=short
 
       - name: Run full cognitive benchmark proof
+        if: ${{ always() }}
         run: |
           pytest tests/benchmarks/cognitive/test_proof_gates.py -q --timeout=300 --tb=short
 
       - name: Run policy dominance proof explicitly
+        if: ${{ always() }}
         run: |
           pytest tests/benchmarks/cognitive/test_proof_gates.py \
             -q --timeout=300 --tb=short \
