@@ -113,6 +113,7 @@ class AdaptiveSnapshot:
 class PolicySnapshot:
     policy_id: str
     tenant_id: str
+    allowed_behaviors: list[str] = field(default_factory=list)
     blocked_behaviors: list[str] = field(default_factory=list)
     risk_level: float = 0.0
     approval_required: bool = False
