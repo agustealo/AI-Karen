@@ -1,9 +1,9 @@
-"""Hard isolation gates for the beta-critical Core AI execution perimeter.
+"""Hard isolation gates for the Core AI execution perimeter.
 
-Unlike the broader CORE-SPLIT-2 convergence inventory, these rules are not
-xfail debt. Model runtime and expression execution must remain independently
-importable and must never reach outward into integrations, extensions, plugins,
-MCP implementations, API transports, or CopilotKit.
+The live execution spine is zero-tolerance: no integrations, extensions,
+plugins, MCP implementations, API transports, or CopilotKit imports. Older
+model-runtime modules that still violate the boundary are held in an exact debt
+inventory so the set can only shrink, never silently grow.
 """
 from __future__ import annotations
 
@@ -15,10 +15,8 @@ import pytest
 
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "ai_karen_engine"
 CORE_ROOT = SRC_ROOT / "core"
-CRITICAL_ROOTS = (
-    CORE_ROOT / "model_runtime",
-    CORE_ROOT / "expression",
-)
+MODEL_RUNTIME_ROOT = CORE_ROOT / "model_runtime"
+EXPRESSION_ROOT = CORE_ROOT / "expression"
 FORBIDDEN_PREFIXES = (
     "ai_karen_engine.integrations",
     "ai_karen_engine.extensions",
@@ -27,6 +25,36 @@ FORBIDDEN_PREFIXES = (
     "ai_karen_engine.api_routes",
     "copilotkit",
 )
+
+ACTIVE_EXECUTION_FILES = (
+    MODEL_RUNTIME_ROOT / "provider_execution.py",
+    MODEL_RUNTIME_ROOT / "provider_contracts.py",
+    MODEL_RUNTIME_ROOT / "provider_registry_service.py",
+    MODEL_RUNTIME_ROOT / "provider_policy.py",
+    MODEL_RUNTIME_ROOT / "provider_endpoint.py",
+    MODEL_RUNTIME_ROOT / "model_manager.py",
+    MODEL_RUNTIME_ROOT / "providers" / "transformers_runtime.py",
+    MODEL_RUNTIME_ROOT / "providers" / "vllm_runtime.py",
+)
+
+# Exact pre-existing debt outside the beta execution spine. This is not an
+# allow-anything wildcard: any new file/import pair makes CI fail. Remove entries
+# as each legacy module is migrated or deleted after reference audit.
+KNOWN_LEGACY_VIOLATIONS = {
+    ("core/model_runtime/model_store.py", "ai_karen_engine.integrations.registry"),
+    (
+        "core/model_runtime/routing/intelligent_model_router.py",
+        "ai_karen_engine.integrations.registry",
+    ),
+    (
+        "core/model_runtime/routing/llm_router_service.py",
+        "ai_karen_engine.integrations.llm_utils",
+    ),
+    (
+        "core/model_runtime/routing/llm_router_service.py",
+        "ai_karen_engine.integrations.llm_registry",
+    ),
+}
 
 
 def _imports(path: Path) -> list[str]:
@@ -40,30 +68,71 @@ def _imports(path: Path) -> list[str]:
     return found
 
 
-def test_beta_critical_core_never_imports_outer_layers() -> None:
-    violations: list[tuple[str, str]] = []
+def _outer_layer_violations(paths: list[Path]) -> set[tuple[str, str]]:
+    violations: set[tuple[str, str]] = set()
+    for path in paths:
+        for imported in _imports(path):
+            if any(
+                imported == prefix or imported.startswith(prefix + ".")
+                for prefix in FORBIDDEN_PREFIXES
+            ):
+                violations.add((str(path.relative_to(SRC_ROOT)), imported))
+    return violations
 
-    for root in CRITICAL_ROOTS:
-        assert root.exists(), f"critical Core domain is missing: {root}"
-        for path in root.rglob("*.py"):
-            for imported in _imports(path):
-                if any(
-                    imported == prefix or imported.startswith(prefix + ".")
-                    for prefix in FORBIDDEN_PREFIXES
-                ):
-                    violations.append((str(path.relative_to(SRC_ROOT)), imported))
 
+def _production_model_runtime_files() -> list[Path]:
+    return [
+        path
+        for path in MODEL_RUNTIME_ROOT.rglob("*.py")
+        if "tests" not in path.parts
+    ]
+
+
+def test_active_core_execution_spine_never_imports_outer_layers() -> None:
+    paths = list(ACTIVE_EXECUTION_FILES) + list(EXPRESSION_ROOT.rglob("*.py"))
+    missing = [path for path in paths if not path.exists()]
+    assert not missing, f"critical Core files missing: {missing}"
+
+    violations = _outer_layer_violations(paths)
     if violations:
-        details = "\n".join(f"  {path}: {imported}" for path, imported in violations)
+        details = "\n".join(
+            f"  {path}: {imported}" for path, imported in sorted(violations)
+        )
         pytest.fail(
-            "Beta-critical Core AI execution leaked into an outer layer.\n"
+            "Active Core AI execution leaked into an outer layer.\n"
             "Core must depend on ports/contracts; adapters depend inward on Core.\n"
             f"Violations:\n{details}"
         )
 
 
+def test_no_untracked_model_runtime_outer_imports() -> None:
+    actual = _outer_layer_violations(_production_model_runtime_files())
+    unexpected = actual - KNOWN_LEGACY_VIOLATIONS
+    resolved = KNOWN_LEGACY_VIOLATIONS - actual
+
+    if unexpected:
+        details = "\n".join(
+            f"  {path}: {imported}" for path, imported in sorted(unexpected)
+        )
+        pytest.fail(
+            "New untracked Core model-runtime boundary violations detected.\n"
+            f"Violations:\n{details}"
+        )
+
+    # Force the debt inventory to shrink when code is fixed. A stale entry is a
+    # test failure so cleanup cannot be completed without updating this ledger.
+    if resolved:
+        details = "\n".join(
+            f"  {path}: {imported}" for path, imported in sorted(resolved)
+        )
+        pytest.fail(
+            "Core isolation debt was resolved but the inventory was not reduced.\n"
+            f"Remove these stale entries:\n{details}"
+        )
+
+
 def test_provider_execution_port_is_stdlib_only() -> None:
-    path = CORE_ROOT / "model_runtime" / "provider_execution.py"
+    path = MODEL_RUNTIME_ROOT / "provider_execution.py"
     imports = _imports(path)
     allowed_roots = {"__future__", "collections", "threading", "typing"}
     forbidden = [
