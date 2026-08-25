@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -49,8 +50,6 @@ async def test_builtin_provider_executes_real_provider_and_preserves_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from ai_karen_engine.core.expression.engines import builtin_provider_engine as module
-    from ai_karen_engine.core.model_runtime import provider_registry_service
-    from ai_karen_engine.integrations import llm_registry
 
     endpoint = SimpleNamespace(provider_id="builtin_vllm")
 
@@ -71,12 +70,24 @@ async def test_builtin_provider_executes_real_provider_and_preserves_provenance(
             assert payload["messages"] == _task().messages
             return "BETA_REAL_MODEL_OK"
 
-    monkeypatch.setattr(
-        provider_registry_service,
-        "get_provider_registry_service",
-        lambda: FakeRegistry(),
+    registry_module = ModuleType(
+        "ai_karen_engine.core.model_runtime.provider_registry_service"
     )
-    monkeypatch.setattr(llm_registry, "get_provider", lambda *args, **kwargs: FakeProvider())
+    registry_module.get_provider_registry_service = lambda: FakeRegistry()
+    monkeypatch.setitem(
+        sys.modules,
+        "ai_karen_engine.core.model_runtime.provider_registry_service",
+        registry_module,
+    )
+
+    llm_registry_module = ModuleType("ai_karen_engine.integrations.llm_registry")
+    llm_registry_module.get_provider = lambda *args, **kwargs: FakeProvider()
+    monkeypatch.setitem(
+        sys.modules,
+        "ai_karen_engine.integrations.llm_registry",
+        llm_registry_module,
+    )
+
     monkeypatch.setattr(
         module,
         "evaluate_provider_policy",
