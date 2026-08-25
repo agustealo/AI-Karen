@@ -1,4 +1,8 @@
-"""Cognitive policy configuration for meta-cognition thresholds."""
+"""Cognitive policy configuration for meta-cognition thresholds.
+
+These values are semantic policy knobs, not runtime/provider settings.
+Runtime configuration may materialize this dataclass and inject it into Core.
+"""
 
 from dataclasses import dataclass, field
 from enum import Enum
@@ -26,6 +30,27 @@ class CognitiveThresholds:
     low_confidence_abort_threshold: float = 0.2
     high_confidence_trust_threshold: float = 0.8
     budget_exhaustion_threshold: int = 1
+
+    def __post_init__(self) -> None:
+        for name in (
+            "weak_memory_threshold",
+            "weak_reasoning_threshold",
+            "weak_evidence_threshold",
+            "verification_threshold",
+            "deep_reasoning_threshold",
+            "minimum_information_gain",
+            "low_confidence_abort_threshold",
+            "high_confidence_trust_threshold",
+        ):
+            value = getattr(self, name)
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be between 0.0 and 1.0")
+        if self.loop_repeat_threshold < 2:
+            raise ValueError("loop_repeat_threshold must be >= 2")
+        if self.max_reconsideration_steps < 1:
+            raise ValueError("max_reconsideration_steps must be >= 1")
+        if self.budget_exhaustion_threshold < 0:
+            raise ValueError("budget_exhaustion_threshold must be >= 0")
 
     def should_verify_memory(self, reliability: float) -> bool:
         return reliability < self.verification_threshold
@@ -60,7 +85,8 @@ class CognitiveThresholds:
 
 @dataclass(slots=True)
 class CognitivePolicyConfig:
-    version: str = "1.0.0"
+    schema_version: str = "1.0.0"
+    policy_version: str = "meta-v1"
     thresholds: CognitiveThresholds = field(default_factory=CognitiveThresholds)
     enable_loop_detection: bool = True
     enable_budget_tracking: bool = True
@@ -70,14 +96,15 @@ class CognitivePolicyConfig:
     metadata: dict[str, str] = field(default_factory=dict)
 
     def get_thresholds(self) -> CognitiveThresholds:
-        return self.thresholdes
+        return self.thresholds
 
     def is_strict_mode(self) -> bool:
         return self.strict_mode
 
     def with_strict_mode(self, strict: bool = True) -> "CognitivePolicyConfig":
         return CognitivePolicyConfig(
-            version=self.version,
+            schema_version=self.schema_version,
+            policy_version=self.policy_version,
             thresholds=self.thresholds,
             enable_loop_detection=self.enable_loop_detection,
             enable_budget_tracking=self.enable_budget_tracking,
