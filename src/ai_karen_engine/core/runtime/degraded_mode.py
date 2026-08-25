@@ -1,41 +1,24 @@
-"""
-Degraded Mode — Backward Compatibility Shim.
+"""Degraded Mode compatibility shim owned by Core runtime.
 
-This module preserves the public API surface that existing consumers import
-(DegradedModeReason, get_degraded_mode_manager, generate_degraded_mode_response,
-DegradedMode) but delegates all runtime decisions to the authoritative
-ChatRuntimeControlPlane.
-
-# MIGRATION NOTE
-# This shim exists so that existing imports don't break during the
-# production-readiness pass. Once all consumers are migrated to use
-# the control plane directly, this file can be deleted.
-# Tracked for removal in the cleanup phase.
+The shim never manufactures assistant text and never imports a concrete fallback
+provider. It delegates model execution to ExpressionGateway and returns an honest
+unavailable envelope when all runtime providers fail.
 """
 
 from __future__ import annotations
 
-import asyncio
-import logging
-import textwrap
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
-from dataclasses import dataclass
 
 from ai_karen_engine.core.logging import get_logger
+
 logger = get_logger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Preserved enums/types for import compatibility
-# ---------------------------------------------------------------------------
-
-
 class DegradedModeReason(Enum):
-    """Reasons for entering degraded mode (preserved for import compat)."""
-
     ALL_PROVIDERS_FAILED = "all_providers_failed"
     NETWORK_ISSUES = "network_issues"
     API_RATE_LIMITS = "api_rate_limits"
@@ -45,46 +28,27 @@ class DegradedModeReason(Enum):
 
 @dataclass
 class DegradedModeStatus:
-    """Status information (preserved for import compat)."""
-
     is_active: bool = False
     reason: Optional[DegradedModeReason] = None
     activated_at: Optional[datetime] = None
-    failed_providers: List[str] = None
+    failed_providers: Optional[List[str]] = None
     recovery_attempts: int = 0
     last_recovery_attempt: Optional[datetime] = None
-    core_helpers_available: Dict[str, bool] = None
+    core_helpers_available: Optional[Dict[str, bool]] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.failed_providers is None:
             self.failed_providers = []
         if self.core_helpers_available is None:
             self.core_helpers_available = {}
 
 
-# ---------------------------------------------------------------------------
-# Shim Manager — delegates to control plane
-# ---------------------------------------------------------------------------
-
-
 class DegradedModeManager:
-    """
-    Backward-compatible shim that delegates to ChatRuntimeControlPlane.
-
-    Consumers that import `get_degraded_mode_manager()` will get this shim,
-    which routes all decisions through the authoritative control plane.
-    """
-
-    def __init__(self):
+    def __init__(self) -> None:
         import os
-        from ai_karen_engine.config.config_manager import (
-            get_default_model,
-            get_default_provider,
-        )
+        from ai_karen_engine.config.config_manager import get_default_model, get_default_provider
 
-        self._fallback_provider = os.getenv(
-            "KARI_DEGRADED_PROVIDER", get_default_provider()
-        )
+        self._fallback_provider = os.getenv("KARI_DEGRADED_PROVIDER", get_default_provider())
         self._fallback_model = os.getenv("KARI_DEGRADED_MODEL", get_default_model())
 
     def get_fallback_provider(self) -> Tuple[str, str]:
@@ -95,50 +59,34 @@ class DegradedModeManager:
         reason: DegradedModeReason,
         failed_providers: Optional[List[str]] = None,
     ) -> None:
-        """Log the request — actual mode transitions are handled by the control plane."""
         logger.warning(
-            f"[Shim] Degraded mode activation requested: {reason.value}, "
-            f"providers: {failed_providers}. "
-            f"Actual transitions are managed by ChatRuntimeControlPlane."
+            "Legacy degraded-mode activation requested",
+            extra={"reason": reason.value, "failed_providers": failed_providers or []},
         )
 
     def deactivate_degraded_mode(self) -> None:
-        logger.info("[Shim] Degraded mode deactivation requested via legacy API.")
+        logger.info("Legacy degraded-mode deactivation requested")
 
     def attempt_recovery(self) -> bool:
         return False
 
     async def generate_degraded_response(self, user_input: str, **kwargs: Any) -> Dict[str, Any]:
-        """Backward-compatible entrypoint that delegates to the async generator."""
         return await generate_degraded_mode_response(user_input, **kwargs)
 
     def get_status(self) -> DegradedModeStatus:
-        """Return status by reading from the control plane if available."""
-        try:
-            from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
-                RuntimeMode,
-            )
-
-            # Try to get control plane status without blocking
-            return DegradedModeStatus(
-                is_active=False,  # The control plane manages this
-                reason=None,
-                core_helpers_available={"default_model": True},
-            )
-        except Exception:
-            return DegradedModeStatus()
+        return DegradedModeStatus(
+            is_active=False,
+            reason=None,
+            core_helpers_available={"runtime_control_plane": True},
+        )
 
     def get_health_summary(self) -> Dict[str, Any]:
         return {
             "degraded_mode_active": False,
-            "core_helpers": {"default_model": {"is_healthy": True}},
+            "core_helpers": {"runtime_control_plane": {"is_healthy": True}},
             "note": "Managed by ChatRuntimeControlPlane",
         }
 
-
-# ---------------------------------------------------------------------------
-# Global singleton
-# ---------------------------------------------------------------------------
 
 _degraded_mode_manager: Optional[DegradedModeManager] = None
 
@@ -150,134 +98,77 @@ def get_degraded_mode_manager() -> DegradedModeManager:
     return _degraded_mode_manager
 
 
-# ---------------------------------------------------------------------------
-# Legacy function compat
-# ---------------------------------------------------------------------------
-
-
 async def generate_degraded_mode_response(user_input: str, **kwargs: Any) -> Dict[str, Any]:
-    """Generate a live degraded response with runtime fallback support."""
+    from ai_karen_engine.core.expression.contracts import ExpressionTask
+    from ai_karen_engine.core.expression.gateway import ExpressionGateway
     from ai_karen_engine.core.langgraph_orchestrator.formatting.response_formatter_pipeline import (
         ResponseFormatterPipeline,
     )
-    from ai_karen_engine.core.expression.gateway import ExpressionGateway
-    from ai_karen_engine.core.expression.contracts import ExpressionTask
 
-    # Get the requested provider from kwargs if available
-    requested_provider = kwargs.get("requested_provider", "gemini")
-    requested_model = kwargs.get("requested_model", "unknown")
+    requested_provider = kwargs.get("requested_provider", "auto")
+    requested_model = kwargs.get("requested_model", "auto")
     failure_reason = kwargs.get("failure_reason", "Requested provider unavailable")
 
-    # Try runtime fallback first through ExpressionGateway
     try:
-        gateway = ExpressionGateway()
-        task = ExpressionTask(
-            task_id=f"degraded_{int(time.time())}",
-            kind="chat",
-            correlation_id=kwargs.get("correlation_id", "degraded"),
-            request_id=kwargs.get("request_id", "degraded"),
-            messages=[{"role": "user", "content": user_input}],
-            preferred_provider=requested_provider,
-            preferred_model=requested_model,
-            max_tokens=256,
-            temperature=0.7,
-            timeout_ms=10000,
-            required_capabilities=["text"],
-            forbidden_capabilities=[],
-            response_mode="text",
-            metadata={
-                "degraded_mode": True,
-                "failure_reason": failure_reason,
-            }
+        result = await ExpressionGateway().generate(
+            ExpressionTask(
+                task_id=f"degraded_{int(time.time())}",
+                kind="chat",
+                correlation_id=kwargs.get("correlation_id", "degraded"),
+                request_id=kwargs.get("request_id", "degraded"),
+                messages=[{"role": "user", "content": user_input}],
+                preferred_provider=requested_provider,
+                preferred_model=requested_model,
+                max_tokens=256,
+                temperature=0.7,
+                timeout_ms=10000,
+                required_capabilities=["text_generation"],
+                forbidden_capabilities=[],
+                response_mode="text",
+                metadata={"degraded_mode": True, "failure_reason": failure_reason},
+            )
         )
-
-        # Call the ExpressionGateway
-        result = await gateway.generate(task)
-
-        # Extract content and metadata from result
-        content = result.text or ""
-        
-        if not content.strip():
-            raise RuntimeError("ExpressionGateway returned empty response")
-
-        # Build response envelope with proper metadata
+        if not result.text.strip() or not result.provider:
+            raise RuntimeError("No model provider produced degraded output")
         return ResponseFormatterPipeline().build_response_envelope(
-            content,
+            result.text,
             result.provider,
             result.model or requested_model,
             metadata={
                 "degraded_mode": True,
                 "degraded_mode_active": True,
-                "llm": {
-                    "provider": result.provider,
-                    "model_id": result.model,
-                    "source": result.response_source,
-                    "engine_id": result.engine_id,
-                    "latency_ms": result.latency_ms,
-                    "attempts": result.attempts,
-                    "skipped": result.skipped,
-                },
-                "source": result.response_source,
-                "model_id": result.model,
-                "provider": result.provider,
-                "model": result.model or requested_model,
-                "note": "Response generated via ExpressionGateway (degraded runtime fallback)",
+                "requested_provider": requested_provider,
+                "requested_model": requested_model,
+                "actual_provider": result.provider,
+                "actual_model": result.model,
+                "response_source": result.response_source,
+                "latency_ms": result.latency_ms,
+                "failure_reason": failure_reason,
             },
             status="ok",
         )
-
     except Exception as exc:
-        logger.warning(
-            "Runtime fallback generation failed; using deterministic fallback: %s",
-            exc,
-        )
-        # Fallback to deterministic response
-        from ai_karen_engine.integrations.providers.fallback_provider import FallbackProvider
-
-        fallback_provider_name, fallback_model_name = get_degraded_mode_manager().get_fallback_provider()
-        message = (
-            f"I understand you're asking about: {user_input[:200]}. "
-            "I'm currently operating with limited capabilities, but I'm still here to help. "
-            "If you'd like, I can answer with a concise summary or suggest next steps."
-        )
-
+        logger.warning("All degraded runtime providers failed: %s", exc)
         return ResponseFormatterPipeline().build_response_envelope(
-            message,
-            fallback_provider_name,
-            fallback_model_name,
+            "",
+            None,
+            None,
             metadata={
                 "degraded_mode": True,
                 "degraded_mode_active": True,
-                "llm": {
-                    "requested_provider": requested_provider,
-                    "requested_model": requested_model,
-                    "provider": fallback_provider_name,
-                    "model_id": fallback_model_name,
-                    "model_name": fallback_model_name,
-                    "source": "deterministic_fallback",
-                    "is_degraded": True,
-                    "used_fallback": True,
-                    "fallback_from": requested_provider,
-                    "failure_reason": failure_reason,
-                },
-                "source": "deterministic_fallback",
-                "model_id": fallback_model_name,
-                "provider": fallback_provider_name,
-                "model": fallback_model_name,
-                "note": "Response generated via deterministic fallback (runtime fallback failed)",
+                "requested_provider": requested_provider,
+                "requested_model": requested_model,
+                "actual_provider": None,
+                "actual_model": None,
+                "response_source": "model_unavailable",
+                "failure_reason": failure_reason,
+                "error_type": type(exc).__name__,
             },
-            status="ok",
+            status="unavailable",
         )
 
 
-# ---------------------------------------------------------------------------
-# Legacy class compat
-# ---------------------------------------------------------------------------
-
-
 class DegradedMode:
-    """Compatibility wrapper (delegates to shim manager)."""
-
     @staticmethod
     def activate(
         reason: DegradedModeReason,
@@ -299,4 +190,4 @@ class DegradedMode:
 
     @staticmethod
     async def generate_response(user_input: str, **kwargs: Any) -> Dict[str, Any]:
-        return generate_degraded_mode_response(user_input, **kwargs)
+        return await generate_degraded_mode_response(user_input, **kwargs)
