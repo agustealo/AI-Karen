@@ -1,0 +1,91 @@
+name: Cognitive Convergence CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/ai_karen_engine/core/contracts/**'
+      - 'src/ai_karen_engine/core/cortex/**'
+      - 'src/ai_karen_engine/core/memory/**'
+      - 'src/ai_karen_engine/core/personalization/**'
+      - 'src/ai_karen_engine/core/reasoning/**'
+      - 'tests/cognitive/**'
+      - 'tests/benchmarks/cognitive/**'
+      - 'tests/architecture/cognitive_contracts/**'
+      - '.github/workflows/cognitive-convergence-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/ai_karen_engine/core/contracts/**'
+      - 'src/ai_karen_engine/core/cortex/**'
+      - 'src/ai_karen_engine/core/memory/**'
+      - 'src/ai_karen_engine/core/personalization/**'
+      - 'src/ai_karen_engine/core/reasoning/**'
+      - 'tests/cognitive/**'
+      - 'tests/architecture/cognitive_contracts/**'
+
+env:
+  PYTHON_VERSION: '3.13'
+
+jobs:
+  cognitive-proof:
+    name: Cognitive contracts and behavior proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio ruff mypy pyyaml
+
+      - name: Compile cognitive source
+        run: |
+          python -m compileall \
+            src/ai_karen_engine/core/contracts \
+            src/ai_karen_engine/core/cortex \
+            src/ai_karen_engine/core/memory \
+            src/ai_karen_engine/core/personalization \
+            src/ai_karen_engine/core/reasoning
+
+      - name: Architecture convergence invariants
+        run: pytest tests/architecture/cognitive_contracts -q
+
+      - name: Cognitive benchmark and policy dominance
+        run: pytest tests/cognitive -q
+
+      - name: Ruff changed cognitive surfaces
+        run: |
+          ruff check \
+            src/ai_karen_engine/core/contracts/cognitive.py \
+            src/ai_karen_engine/core/cortex/behavior \
+            src/ai_karen_engine/core/reasoning/contracts.py \
+            src/ai_karen_engine/core/reasoning/belief \
+            src/ai_karen_engine/core/reasoning/meta \
+            src/ai_karen_engine/core/personalization/goals/contracts.py \
+            tests/architecture/cognitive_contracts/test_convergence_invariants.py \
+            tests/cognitive/test_behavior_policy_dominance.py
+
+      - name: Static provider/platform boundary scan
+        shell: bash
+        run: |
+          if grep -RInE '(^| )(from|import) (fastapi|sqlalchemy|redis|openai|ollama|vllm|httpx|requests|ai_karen_engine\.platform|ai_karen_engine\.providers|ai_karen_engine\.extensions|ai_karen_engine\.api_routes)' \
+            src/ai_karen_engine/core/contracts/cognitive.py \
+            src/ai_karen_engine/core/cortex/behavior/contracts.py \
+            src/ai_karen_engine/core/reasoning/contracts.py \
+            src/ai_karen_engine/core/reasoning/belief/contracts.py \
+            src/ai_karen_engine/core/reasoning/meta/contracts.py \
+            src/ai_karen_engine/core/memory/contracts.py \
+            src/ai_karen_engine/core/personalization/goals/contracts.py; then
+            echo 'Forbidden provider/platform import found in canonical cognition.'
+            exit 1
+          fi
