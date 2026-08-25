@@ -95,14 +95,14 @@ class TestModelPropertyStatus:
             model_type="user",
             old_value="terse",
             new_value="detailed",
-            old_status=ModelPropertyStatus.STABLE,
+            old_status=ModelPropertyStatus.CONFIRMED,
             new_status=ModelPropertyStatus.SUPERSEDED,
             reason="contradictory evidence",
             evidence_refs=["ev1"],
             revised_at=datetime.utcnow(),
             revised_by="system",
         )
-        assert rev.old_status == ModelPropertyStatus.STABLE
+        assert rev.old_status == ModelPropertyStatus.CONFIRMED
         assert rev.new_status == ModelPropertyStatus.SUPERSEDED
 
 
@@ -434,7 +434,7 @@ class TestUserModel:
             category="communication",
             stability=PreferenceStability.SESSION,
         )
-        assert signal.provenance.status != ModelPropertyStatus.STABLE
+        assert signal.provenance.status != ModelPropertyStatus.CONFIRMED
         assert signal.provenance.confidence < 0.5
         assert signal.stability == PreferenceStability.SESSION
 
@@ -501,7 +501,7 @@ class TestRelationshipModel:
             relationship_context=[],
             confidence_summary={},
             created_at=datetime.utcnow(),
-            updated_at=datetime.ucnow(),
+            updated_at=datetime.utcnow(),
         )
         assert len(rel.shared_history) >= 1
 
