@@ -13,8 +13,6 @@ from typing import Any
 
 
 class ReasoningDepth(str, Enum):
-    """Canonical reasoning/verification depth."""
-
     NONE = "none"
     LIGHT = "light"
     STANDARD = "standard"
@@ -22,8 +20,6 @@ class ReasoningDepth(str, Enum):
 
 
 class VerificationReason(str, Enum):
-    """Canonical reason that verification may be required."""
-
     LOW_CONFIDENCE = "low_confidence"
     LOW_MEMORY_CONFIDENCE = "low_memory_confidence"
     LOW_REASONING_CONFIDENCE = "low_reasoning_confidence"
@@ -57,7 +53,8 @@ class ConfidenceValue:
     """Base value object for non-interchangeable confidence domains.
 
     Numeric interoperability is intentionally limited to plain int/float. Two
-    different confidence-domain objects cannot be silently combined.
+    confidence-domain objects require an explicit conversion before comparison
+    or arithmetic.
     """
 
     value: float = 0.0
@@ -66,7 +63,7 @@ class ConfidenceValue:
         object.__setattr__(self, "value", max(0.0, min(1.0, float(self.value))))
 
     @staticmethod
-    def _number(other: Any) -> float:
+    def _number(other: Any) -> Any:
         if isinstance(other, ConfidenceValue):
             raise TypeError("confidence domains require explicit conversion")
         if isinstance(other, (int, float)):
@@ -75,6 +72,9 @@ class ConfidenceValue:
 
     def __float__(self) -> float:
         return self.value
+
+    def __format__(self, format_spec: str) -> str:
+        return format(self.value, format_spec)
 
     def __lt__(self, other: Any) -> bool:
         number = self._number(other)
@@ -124,48 +124,46 @@ class ConfidenceValue:
 
 @dataclass(frozen=True, slots=True)
 class EpistemicConfidence(ConfidenceValue):
-    """Confidence that a claim/belief is epistemically supported."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class RetrievalConfidence(ConfidenceValue):
-    """Confidence in recall quality/relevance, not truth."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class SalienceConfidence(ConfidenceValue):
-    """Confidence that a salience assessment is reliable."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class ReasoningConfidence(ConfidenceValue):
-    """Confidence in the quality of a reasoning result."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class BehaviorConfidence(ConfidenceValue):
-    """Confidence that the selected behavior is appropriate."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class MetaConfidence(ConfidenceValue):
-    """Confidence in cognitive self-assessment."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class PreferenceConfidence(ConfidenceValue):
-    """Confidence that a user preference is stable/current."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class LearningConfidence(ConfidenceValue):
-    """Confidence in an experience-derived learning signal."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class CognitiveScope:
-    """Explicit cognitive scope. Tenant identity is never implicit."""
-
     tenant_id: str
     user_id: str | None = None
     session_id: str | None = None
@@ -179,8 +177,6 @@ class CognitiveScope:
 
 @dataclass(frozen=True, slots=True)
 class CognitiveVersion:
-    """Version lineage for replayable cognitive outputs."""
-
     policy_version: str = "1.0.0"
     schema_version: str = "1.0.0"
     scoring_version: str = "1.0.0"
