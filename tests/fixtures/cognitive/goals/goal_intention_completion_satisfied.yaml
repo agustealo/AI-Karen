@@ -15,6 +15,7 @@ expected:
   retained: true
   flags:
     target_state: COMPLETED
+    target_goal_id: goal_complete_001
 goals:
   - id: goal_complete_001
     description: "Ship release notes"

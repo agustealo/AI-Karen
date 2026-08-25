@@ -14,6 +14,7 @@ expected:
   retained: true
   flags:
     target_state: BLOCKED
+    target_goal_id: goal_blocked
 goals:
   - id: goal_dep
     description: "Blocker task A"

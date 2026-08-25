@@ -24,8 +24,6 @@ claims:
     scope: conversation
     confidence: 0.95
     claim_format: triple
-    temporal:
-      last_verified_at: "2026-08-01T10:00:00Z"
 beliefs:
   evidence:
     - id: ev_policy
@@ -33,7 +31,6 @@ beliefs:
       relation: supports
       strength: strong
       content: "User explicitly requested autonomous handling."
-      observed_at: "2026-08-01T10:00:00Z"
       confidence: 0.9
       claim_ids:
         - claim_policy

@@ -28,7 +28,6 @@ beliefs:
       relation: supports
       strength: weak
       content: "Vague forecast suggests sun."
-      observed_at: "2026-08-01T10:00:00Z"
       confidence: 0.15
       claim_ids:
         - claim_uncertain

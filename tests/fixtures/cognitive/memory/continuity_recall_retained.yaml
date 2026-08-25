@@ -24,10 +24,6 @@ memories:
     scope: user
     confidence: 0.9
     claim_format: triple
-    temporal:
-      asserted_at: "2026-08-01T09:00:00Z"
-      observed_at: "2026-08-01T09:00:00Z"
-      last_verified_at: "2026-08-01T09:00:00Z"
 beliefs:
   evidence:
     - id: ev_support_001
@@ -35,7 +31,6 @@ beliefs:
       relation: supports
       strength: strong
       content: "User requested coffee at 08:30 each morning this week."
-      observed_at: "2026-08-01T09:01:00Z"
       confidence: 0.9
       claim_ids:
         - claim_memory_001

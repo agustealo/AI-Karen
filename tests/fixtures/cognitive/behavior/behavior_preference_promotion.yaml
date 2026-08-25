@@ -22,8 +22,6 @@ claims:
     scope: user
     confidence: 0.92
     claim_format: triple
-    temporal:
-      last_verified_at: "2026-08-01T10:00:00Z"
 preferences:
   - id: pref_local
     key: "interaction.tool_locality"
@@ -40,7 +38,6 @@ beliefs:
       relation: supports
       strength: strong
       content: "User stated preference for local tools."
-      observed_at: "2026-08-01T10:00:00Z"
       confidence: 0.9
       claim_ids:
         - claim_promote

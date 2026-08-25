@@ -180,14 +180,16 @@ def summarize_deletion(state: CognitiveState) -> DeletionStatus:
 def _confidence(belief: Any) -> float:
     if belief is None:
         return 0.5
-    val = getattr(belief, "confidence", None)
-    if isinstance(val, (int, float)):
-        return float(val)
-    assessment = getattr(belief, "assessment", None)
-    if assessment is not None:
-        val = getattr(assessment, "confidence", None)
+    for attr in ("overall_confidence", "confidence", "reasoning_confidence"):
+        val = getattr(belief, attr, None)
         if isinstance(val, (int, float)):
             return float(val)
+    assessment = getattr(belief, "assessment", None)
+    if assessment is not None:
+        for attr in ("overall_confidence", "confidence"):
+            val = getattr(assessment, attr, None)
+            if isinstance(val, (int, float)):
+                return float(val)
     return 0.5
 
 

@@ -45,6 +45,7 @@ from ai_karen_engine.core.personalization.goals.lifecycle import GoalLifecycle
 from ai_karen_engine.core.personalization.goals.prioritization import GoalPrioritizer
 from ai_karen_engine.core.personalization.goals.conflicts import ConflictDetector
 from ai_karen_engine.core.personalization.goals.contracts import (
+    CompletionEvidenceSource,
     GoalState,
     IntentionState,
 )
@@ -329,18 +330,33 @@ def _run_goal_intention(scenario: Scenario, state: CognitiveState) -> CognitiveR
     for g in state.goals:
         lifecycle.upsert(g)
 
-    goal = state.goals[0] if state.goals else None
-    target_state = _enum_goal_state(scenario.expected.flags.get("target_state")) if scenario.expected.flags else None
+    flags = scenario.expected.flags or {}
+    target_goal_id = flags.get("target_goal_id")
+    target_state = _enum_goal_state(flags.get("target_state"))
+    goal = next((g for g in state.goals if g.goal_id == target_goal_id), state.goals[0] if state.goals else None)
 
     verdict = goal.state.value if goal else "NO_GOAL"
     confidence = goal.confidence if goal else 0.0
     active = bool(goal.is_active()) if goal else False
 
     if goal and target_state is not None:
-        if lifecycle.can_transition(goal, target_state):
-            lifecycle.transition(goal, target_state, reason="scenario-driven")
+        try:
+            if target_state == GoalState.COMPLETED:
+                if goal.state == GoalState.ACTIVE and lifecycle.check_satisfied(goal):
+                    lifecycle.mark_satisfied(goal, _completion_source(goal), "scenario_satisfied")
+                if goal.state != GoalState.COMPLETED:
+                    lifecycle.mark_completed(goal, "scenario_completion")
+            elif target_state == GoalState.SATISFIED:
+                if lifecycle.check_satisfied(goal):
+                    lifecycle.mark_satisfied(goal, _completion_source(goal), "scenario_satisfied")
+                else:
+                    raise ValueError("completion evidence not satisfied")
+            elif lifecycle.can_transition(goal, target_state):
+                lifecycle.transition(goal, target_state, reason="scenario-driven")
+            else:
+                raise ValueError(f"cannot transition to {target_state.value}")
             verdict = goal.state.value
-        else:
+        except Exception as exc:
             defects.append(DefectRecord(
                 scenario_id=scenario.scenario_id,
                 expected=f"transition to {target_state.value}",
@@ -348,7 +364,7 @@ def _run_goal_intention(scenario: Scenario, state: CognitiveState) -> CognitiveR
                 affected_owner="ai_karen_engine.core.personalization.goals.lifecycle",
                 severity=DefectSeverity.MEDIUM,
                 kind=scenario.kind,
-                detail="Goal state transition blocked by lifecycle rules.",
+                detail=f"State transition blocked: {type(exc).__name__}: {exc}",
             ))
 
     detected = conflicts.detect_conflicts(state.goals)
@@ -424,7 +440,32 @@ def _run_meta_cognition(scenario: Scenario, state: CognitiveState) -> CognitiveR
         budget_remaining=flags.get("budget_remaining", {"reasoning_steps": 5}),
         metadata={},
     )
-    result = MetaCognitiveAssessor().assess(request)
+    defects: list[DefectRecord] = []
+    try:
+        result = MetaCognitiveAssessor().assess(request)
+    except AttributeError as exc:
+        defects.append(DefectRecord(
+            scenario_id=scenario.scenario_id,
+            expected="MetaCognitiveAssessor.assess returns a MetaCognitiveResult",
+            actual=f"{type(exc).__name__}: {exc}",
+            affected_owner="ai_karen_engine.core.reasoning.meta.assessment",
+            severity=DefectSeverity.HIGH,
+            kind=scenario.kind,
+            detail=(
+                "MetaCognitiveAssessor._derive_status references "
+                "MetaReasonCode.CONFLICTING_EVIDENCE, which does not exist on "
+                "the MetaReasonCode enum (only EVIDENCE_INCONSISTENT is defined). "
+                "Owned by COG-CLOSE-1."
+            ),
+        ))
+        return CognitiveResult(
+            scenario_id=scenario.scenario_id,
+            kind=scenario.kind,
+            verdict="DEFECT",
+            confidence=0.0,
+            defects=defects,
+            flags={"meta_cognitive_assessor_broken": True},
+        )
     assessment = result.assessment
     state_codes = [rc.value for rc in assessment.reason_codes]
 
@@ -574,18 +615,19 @@ def _run_learning(scenario: Scenario, state: CognitiveState) -> CognitiveResult:
 
     defects: list[DefectRecord] = []
     success_expect = bool(flags.get("expect_success_convergence", True))
-    if success_expect and success_rate < 0.7:
+    converged = success_rate >= 0.85 and profile.correction_rate == 0.0 and profile.retry_rate == 0.0
+    if success_expect and not converged:
         defects.append(DefectRecord(
             scenario_id=scenario.scenario_id,
-            expected="success_rate >= 0.7 after repeated successes",
-            actual=f"{success_rate:.3f}",
+            expected="success_rate >= 0.85 with no corrections/retries",
+            actual=f"success_rate={success_rate:.3f} correction_rate={profile.correction_rate:.3f}",
             affected_owner="ai_karen_engine.core.adaptive.learning.aggregates",
             severity=DefectSeverity.MEDIUM,
             kind=scenario.kind,
             detail="Capability profile did not converge toward high success rate.",
         ))
 
-    verdict = "CONVERGED" if (success_rate >= 0.7 and defect_rate <= 0.4) else "NOT_CONVERGED"
+    verdict = "CONVERGED" if converged else "NOT_CONVERGED"
     return CognitiveResult(
         scenario_id=scenario.scenario_id,
         kind=scenario.kind,
@@ -652,3 +694,11 @@ def _enum_goal_state(value: Any) -> Any:
             except KeyError:
                 pass
     return None
+
+
+def _completion_source(goal: "Goal") -> CompletionEvidenceSource:
+    required = list(getattr(goal, "completion_evidence_required", []) or [])
+    for src in required:
+        if src == CompletionEvidenceSource.USER_CONFIRMED:
+            return CompletionEvidenceSource.USER_CONFIRMED
+    return CompletionEvidenceSource.USER_CONFIRMED
