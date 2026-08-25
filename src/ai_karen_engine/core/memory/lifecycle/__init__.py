@@ -14,17 +14,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar
 
-from ai_karen_engine.core.memory.contracts import (
-    MemoryClaim,
-    ProspectiveMemory,
-    RecallScoreComponents,
-    SalienceScore,
-)
-from ai_karen_engine.core.memory.types import MemoryEntry, MemoryStatus
+from ai_karen_engine.core.memory.types import MemoryEntry as MemoryEntry
 
 # ===================================
 # LIFECYCLE STATE
@@ -53,7 +47,7 @@ class LifecycleState:
     """Current state of a memory in the lifecycle."""
     state: str = "perceive"
     memory_id: str | None = None
-    entered_at: datetime = field(default_factory=datetime.utcnow)
+    entered_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -79,7 +73,7 @@ class MemoryLifecycle:
     RECONSOLIDATE → DECAY_SUPERSEDE_FORGET
     """
 
-    TRANSITIONS = {
+    TRANSITIONS: ClassVar[dict[str, list[str]]] = {
         "perceive": ["encode"],
         "encode": ["score_salience"],
         "score_salience": ["associate"],

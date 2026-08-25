@@ -63,8 +63,8 @@ def make_claim(
 ) -> BeliefClaim:
     now = datetime.utcnow()
     asserted_at = asserted_at or now
-    observed_at = observed_at or now
-    last_verified_at = last_verified_at or now
+    observed_at = observed_at or asserted_at
+    last_verified_at = last_verified_at or observed_at
     temporal = make_temporal(
         asserted_at=asserted_at,
         observed_at=observed_at,

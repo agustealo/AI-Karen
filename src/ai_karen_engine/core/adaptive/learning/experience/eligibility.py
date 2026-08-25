@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any
 
 from ai_karen_engine.core.adaptive.learning.experience.contracts import (
     ExperienceObservation,
     LearningEligibility,
+    LearningEligibilityDecision,
+    LearningScope,
     LearningSignal,
+    LearningSignalType,
     OutcomeAssessment,
+    OutcomeAssessmentStatus,
 )
 
 logger = logging.getLogger(__name__)

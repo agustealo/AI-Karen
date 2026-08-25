@@ -2,15 +2,10 @@ from __future__ import annotations
 
 from ai_karen_engine.core.adaptive.learning.experience.contracts import (
     ExperienceObservation,
-    LearningEligibilityDecision,
     LearningRewardVector,
-    LearningSignal,
-    LearningSignalType,
     LearningScope,
-    LearningStrength,
-    OutcomeAssessment,
+    LearningSignalType,
     OutcomeAssessmentStatus,
-    OutcomeAttribution,
     ProfileUpdateCandidate,
     ReflectionTrigger,
 )

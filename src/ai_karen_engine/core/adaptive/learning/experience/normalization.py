@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any
 
 from ai_karen_engine.core.adaptive.contracts import ActionOutcomeObservation
 from ai_karen_engine.core.adaptive.learning.experience.contracts import (
@@ -19,7 +17,6 @@ class ExperienceNormalizer:
 
     def normalize(self, outcome: ActionOutcomeObservation) -> ExperienceObservation:
         """Convert an ActionOutcomeObservation into an ExperienceObservation."""
-        assessment = self._assess_outcome(outcome)
         return ExperienceObservation(
             observation_id=f"exp-{outcome.observation_id}",
             what_was_tried=outcome.action_type or "unknown",

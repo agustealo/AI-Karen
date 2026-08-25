@@ -3,28 +3,34 @@ from __future__ import annotations
 from typing import Any
 
 from ai_karen_engine.core.adaptive.contracts import ActionOutcomeObservation
+from ai_karen_engine.core.adaptive.learning.experience.attribution import (
+    AttributionEngine,
+)
 from ai_karen_engine.core.adaptive.learning.experience.contracts import (
     ExperienceObservation,
     LearningEligibility,
     LearningRewardVector,
+    LearningScope,
     LearningSignal,
     LearningSignalType,
-    LearningScope,
+    LearningStrength,
     OutcomeAssessment,
     OutcomeAssessmentStatus,
-    OutcomeAttribution,
     ReflectionTrigger,
 )
-from ai_karen_engine.core.adaptive.learning.experience.attribution import AttributionEngine
-from ai_karen_engine.core.adaptive.learning.experience.eligibility import EligibilityGate
-from ai_karen_engine.core.adaptive.learning.experience.normalization import ExperienceNormalizer
-from ai_karen_engine.core.adaptive.learning.experience.reward import RewardComputer
+from ai_karen_engine.core.adaptive.learning.experience.eligibility import (
+    EligibilityGate,
+)
+from ai_karen_engine.core.adaptive.learning.experience.normalization import (
+    ExperienceNormalizer,
+)
 
 
 def _outcome(**kwargs: Any) -> ActionOutcomeObservation:
     return ActionOutcomeObservation(
         observation_id="obs1",
         source_outcome_id="out1",
+        action_type="respond_directly",
         user_scope={"user_id": "u1", "tenant_id": "t1"},
         **kwargs,
     )
