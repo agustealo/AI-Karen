@@ -19,6 +19,22 @@ except ImportError:
     from ai_karen_engine.pydantic_stub import BaseModel, ConfigDict, Field
 
 
+class TrustTier(str, Enum):
+    BUILTIN_TRUSTED = "builtin_trusted"
+    FIRST_PARTY = "first_party"
+    SIGNED_THIRD_PARTY = "signed_third_party"
+    UNTRUSTED = "untrusted"
+    REMOTE = "remote"
+
+
+class ExecutionIsolationMode(str, Enum):
+    IN_PROCESS = "in_process"
+    SUBPROCESS = "subprocess"
+    CONTAINER = "container"
+    WASM = "wasm"
+    REMOTE = "remote"
+
+
 class ExtensionLifecycleState(str, Enum):
     DISCOVERED = "discovered"
     VALIDATED = "validated"
@@ -54,17 +70,72 @@ class ResponseSource(str, Enum):
     DEGRADED = "degraded"
 
 
+class Idempotency(str, Enum):
+    UNKNOWN = "unknown"
+    IDEMPOTENT = "idempotent"
+    NON_IDEMPOTENT = "non_idempotent"
+
+
+class RiskClass(str, Enum):
+    SAFE = "safe"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class DataClassification(str, Enum):
+    PUBLIC = "public"
+    INTERNAL = "internal"
+    CONFIDENTIAL = "confidential"
+    RESTRICTED = "restricted"
+
+
+class ResultTrust(str, Enum):
+    SYSTEM_TRUSTED = "system_trusted"
+    VERIFIED = "verified"
+    UNTRUSTED_EXTERNAL = "untrusted_external"
+    UNVERIFIED = "unverified"
+
+
 class ExtensionCapability(BaseModel):
-    """Declared capability of an extension."""
+    """Declared capability of an extension with operation-specific contracts."""
 
     id: str
     version: str = "1.0.0"
+
+    input_schema: Dict[str, Any] = Field(default_factory=dict)
+    output_schema: Dict[str, Any] = Field(default_factory=dict)
+
+    required_permissions: List[str] = Field(default_factory=list)
+    optional_permissions: List[str] = Field(default_factory=list)
+    required_roles: List[str] = Field(default_factory=list)
+
+    side_effect_level: SideEffectLevel = SideEffectLevel.NONE
+    risk_class: RiskClass = RiskClass.LOW
+    idempotency: Idempotency = Idempotency.UNKNOWN
+
+    retry_policy: Dict[str, Any] = Field(default_factory=lambda: {"max_retries": 3, "retryable": True})
+
+    requires_network: bool = False
+    requires_filesystem: bool = False
+    requires_credentials: bool = False
+
+    resource_profile: Dict[str, Any] = Field(default_factory=dict)
+
+    prompt_contract_id: Optional[str] = None
+    prompt_version: Optional[str] = None
+
+    supports_streaming: bool = False
+    supports_cancellation: bool = False
+
+    data_classification: DataClassification = DataClassification.PUBLIC
+    result_trust: ResultTrust = ResultTrust.UNTRUSTED_EXTERNAL
+
     provides_ui: bool = False
     provides_api: bool = False
     provides_background_tasks: bool = False
     provides_webhooks: bool = False
-    prompt_contract_id: Optional[str] = None
-    prompt_version: Optional[str] = None
 
 
 class ExtensionDependency(BaseModel):
@@ -73,7 +144,7 @@ class ExtensionDependency(BaseModel):
     id: str
     version: Optional[str] = None
     optional: bool = False
-    dependency_type: str = "extension"  # extension, system_service, credential
+    dependency_type: str = "extension"
 
 
 class ExtensionPermissionGrant(BaseModel):
@@ -129,6 +200,8 @@ class ExtensionManifest(BaseModel):
 
     enabled_by_default: bool = False
     trusted_ui: bool = False
+    trust_tier: TrustTier = TrustTier.UNTRUSTED
+    isolation_mode: ExecutionIsolationMode = ExecutionIsolationMode.IN_PROCESS
 
     dependencies: List[ExtensionDependency] = Field(default_factory=list)
 
@@ -183,8 +256,45 @@ class ExtensionExecutionContext:
 
 
 @dataclass
+class CapabilityInvocationRequest:
+    """Intent-based capability invocation request.
+
+    Represents WHAT the intelligence kernel requires, not WHO executes it.
+    Runtime resolves the appropriate extension.
+    """
+
+    capability_id: str
+    capability_version_constraint: Optional[str] = None
+    payload: Dict[str, Any] = field(default_factory=dict)
+    context: ExtensionExecutionContext = field(default_factory=lambda: ExtensionExecutionContext(
+        request_id="", correlation_id="", user_id=""
+    ))
+    provider_hint: Optional[str] = None
+    authorized_plan: Optional[Dict[str, Any]] = None
+    deadline: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+
+@dataclass
+class ResolvedCapability:
+    """Resolved capability with chosen extension."""
+
+    capability: ExtensionCapability
+    extension_id: str
+    extension_version: str
+    extension_trust_tier: TrustTier
+    extension_isolation_mode: ExecutionIsolationMode
+    policy_decision_id: Optional[str] = None
+    resource_budget: Optional[Dict[str, Any]] = None
+
+
+@dataclass
 class ExtensionExecutionRequest:
-    """Typed execution request."""
+    """Typed execution request.
+
+    Kept for compatibility during migration. New code should use
+    CapabilityInvocationRequest which is capability-first, not plugin-first.
+    """
 
     plugin_id: str
     capability: str
@@ -196,7 +306,7 @@ class ExtensionExecutionRequest:
 
 @dataclass
 class ExtensionExecutionResult:
-    """Typed execution result with provenance."""
+    """Typed execution result with provenance and trust metadata."""
 
     request_id: str
     plugin_id: str
@@ -215,6 +325,27 @@ class ExtensionExecutionResult:
     execution_id: Optional[str] = None
     degraded: bool = False
     created_at: datetime = field(default_factory=datetime.utcnow)
+
+    trust_tier: TrustTier = TrustTier.UNTRUSTED
+    result_trust: ResultTrust = ResultTrust.UNTRUSTED_EXTERNAL
+    data_classification: DataClassification = DataClassification.PUBLIC
+
+    backend: Optional[str] = None
+    backend_version: Optional[str] = None
+    requested_url: Optional[str] = None
+    final_url: Optional[str] = None
+    canonical_url: Optional[str] = None
+    fetched_at: Optional[datetime] = None
+    status_code: Optional[int] = None
+    content_type: Optional[str] = None
+    content_hash: Optional[str] = None
+    title: Optional[str] = None
+    crawl_depth: Optional[int] = None
+    parent_url: Optional[str] = None
+    redirect_chain: List[str] = field(default_factory=list)
+    extraction_method: Optional[str] = None
+    warnings: List[str] = field(default_factory=list)
+    raw_artifact_ref: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -235,10 +366,19 @@ class ExtensionExecutionResult:
             "execution_id": self.execution_id,
             "degraded": self.degraded,
             "created_at": self.created_at.isoformat(),
+            "trust_tier": self.trust_tier.value,
+            "result_trust": self.result_trust.value,
+            "data_classification": self.data_classification.value,
         }
 
 
 __all__ = [
+    "Idempotency",
+    "RiskClass",
+    "DataClassification",
+    "ResultTrust",
+    "TrustTier",
+    "ExecutionIsolationMode",
     "ExtensionLifecycleState",
     "SideEffectLevel",
     "TenantScope",
@@ -251,6 +391,8 @@ __all__ = [
     "ExtensionHealth",
     "ExtensionHealthRecord",
     "ExtensionExecutionContext",
+    "CapabilityInvocationRequest",
+    "ResolvedCapability",
     "ExtensionExecutionRequest",
     "ExtensionExecutionResult",
 ]
