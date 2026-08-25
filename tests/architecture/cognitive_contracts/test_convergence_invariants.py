@@ -6,13 +6,16 @@ import ast
 from dataclasses import fields
 from datetime import date, datetime
 from pathlib import Path
+from typing import get_type_hints
 
-from ai_karen_engine.core.cognitive.state import CognitiveState
+from ai_karen_engine.core.cognitive.state import CognitiveState, ReasoningSnapshot
 from ai_karen_engine.core.contracts.cognitive import (
     BehaviorConfidence,
     EpistemicConfidence,
     LearningConfidence,
     MetaConfidence,
+    PreferenceConfidence,
+    ReasoningConfidence,
     ReasoningDepth,
     RetrievalConfidence,
     SalienceConfidence,
@@ -21,10 +24,8 @@ from ai_karen_engine.core.contracts.cognitive import (
 from ai_karen_engine.core.contracts.compatibility import COGNITIVE_COMPATIBILITY_SHIMS
 from ai_karen_engine.core.cortex.behavior import contracts as behavior_contracts
 from ai_karen_engine.core.memory.contracts import ClaimStatus as MemoryClaimStatus
-from ai_karen_engine.core.reasoning.belief.contracts import (
-    ClaimStatus as BeliefClaimStatus,
-    EvidenceType,
-)
+from ai_karen_engine.core.personalization.goals.contracts import EvidenceSourceType, EvidenceType
+from ai_karen_engine.core.reasoning.belief.contracts import ClaimStatus as BeliefClaimStatus
 from ai_karen_engine.core.reasoning.meta import contracts as meta_contracts
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -45,9 +46,24 @@ def test_one_claim_status_authority() -> None:
     assert BeliefClaimStatus is MemoryClaimStatus
 
 
+def test_one_evidence_type_authority() -> None:
+    assert EvidenceSourceType is EvidenceType
+
+
 def test_cognitive_state_exists_and_requires_explicit_tenant() -> None:
-    names = {field.name for field in fields(CognitiveState)}
-    assert {"tenant_id", "belief", "goals", "salience", "context", "meta", "adaptive", "policy"} <= names
+    names = {item.name for item in fields(CognitiveState)}
+    assert {
+        "tenant_id",
+        "belief",
+        "goals",
+        "salience",
+        "context",
+        "reasoning",
+        "meta",
+        "adaptive",
+        "policy",
+    } <= names
+    assert get_type_hints(CognitiveState)["reasoning"] == ReasoningSnapshot | None
     try:
         CognitiveState(state_id="s", request_id="r", correlation_id="c", tenant_id="default")
     except ValueError:
@@ -78,18 +94,25 @@ def test_confidence_domains_are_distinct_types() -> None:
         EpistemicConfidence,
         RetrievalConfidence,
         SalienceConfidence,
+        ReasoningConfidence,
         BehaviorConfidence,
         MetaConfidence,
+        PreferenceConfidence,
         LearningConfidence,
     }
-    assert len(domains) == 6
+    assert len(domains) == 8
     for domain in domains:
         assert float(domain(0.6)) == 0.6
+    try:
+        _ = EpistemicConfidence(0.5) + RetrievalConfidence(0.5)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("cross-domain confidence arithmetic must require explicit conversion")
 
 
 def test_temporal_cognitive_state_uses_datetime() -> None:
-    created = CognitiveState.__annotations__["created_at"]
-    assert created is datetime
+    assert get_type_hints(CognitiveState)["created_at"] is datetime
 
 
 def test_legacy_goal_and_evidence_types_have_sunsets() -> None:
@@ -100,7 +123,6 @@ def test_legacy_goal_and_evidence_types_have_sunsets() -> None:
     assert mapping[evidence].canonical_symbol.endswith("reasoning.belief.contracts.EvidenceType")
     assert mapping[goal].remove_after > date(2026, 8, 25)
     assert mapping[evidence].remove_after > date(2026, 8, 25)
-    assert len(EvidenceType) >= 1
 
 
 def test_no_expired_cognitive_shims() -> None:
