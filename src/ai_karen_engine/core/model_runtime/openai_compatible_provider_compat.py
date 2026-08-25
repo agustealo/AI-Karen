@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Temporary Core compatibility name for OpenAI-compatible protocol execution."""
+"""Temporary Core compatibility names for OpenAI-compatible protocol execution."""
 
 from typing import Any, Optional
 
@@ -33,3 +33,8 @@ class OpenAICompatibleProvider(OpenAICompatibleRuntimeClient):
             provider_name=provider_name,
             timeout_seconds=float(timeout_seconds or timeout or 60.0),
         )
+
+
+OpenAIProvider = OpenAICompatibleProvider
+
+__all__ = ["OpenAICompatibleProvider", "OpenAIProvider"]
