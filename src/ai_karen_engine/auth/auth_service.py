@@ -1,17 +1,21 @@
-"""Production authentication service adapter for Kari AI."""
+"""Compatibility facade for the canonical authentication authority.
+
+This module exists solely as an adapter for legacy integration points.
+All authentication business logic lives in
+``ai_karen_engine.services.auth.auth_service.AuthService``.
+
+Sunset plan:
+  - Deprecated: new callers should use ``get_auth_service()`` directly.
+  - Removal: after all legacy imports have been migrated.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import uuid
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
-from sqlalchemy.orm.attributes import flag_modified
-
-from ai_karen_engine.database.models import AuthUser
 from ai_karen_engine.services.auth.auth_service import (
     AuthService as CoreAuthService,
     UserAccount,
@@ -92,7 +96,13 @@ def get_auth_service_sync() -> CoreAuthService:
 
 
 class AuthService:
-    """Compatibility facade used by legacy integration points."""
+    """Compatibility facade used by legacy integration points.
+
+    This adapter delegates to the canonical ``AuthService`` in
+    ``ai_karen_engine.services.auth.auth_service``. It must never reach
+    into private service internals, mutate caches directly, or issue
+    raw database queries.
+    """
 
     def __init__(self) -> None:
         self._service: Optional[CoreAuthService] = None
@@ -197,49 +207,63 @@ class AuthService:
         is_active: Optional[bool] = None,
         is_verified: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """Update admin-managed user account fields."""
+        """Update admin-managed user account fields.
+
+        Delegates to the canonical AuthService; never touches private
+        members or the database directly.
+        """
 
         service = await self._get_service()
+        user = await service.update_user(
+            user_id=user_id,
+            full_name=full_name,
+            roles=roles,
+            preferences=preferences,
+            is_active=is_active,
+            is_verified=is_verified,
+        )
+        return user_account_to_dict(user)
 
-        try:
-            user_uuid = uuid.UUID(str(user_id))
-        except ValueError as exc:
-            raise ValueError("Invalid user ID") from exc
+    async def set_user_status(
+        self,
+        user_id: str,
+        is_active: bool,
+        *,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Set the active status of a user account."""
 
-        async with service._session_scope() as session:
-            result = await session.execute(
-                select(AuthUser).where(AuthUser.user_id == user_uuid)
-            )
-            auth_user = result.scalar_one_or_none()
-            if not auth_user:
-                raise ValueError("User not found")
+        service = await self._get_service()
+        user = await service.set_user_status(user_id=user_id, is_active=is_active, reason=reason)
+        return user_account_to_dict(user)
 
-            if full_name is not None:
-                auth_user.full_name = full_name
+    async def set_user_roles(
+        self,
+        user_id: str,
+        roles: list[str],
+        *,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Replace the roles assigned to a user."""
 
-            if roles is not None:
-                auth_user.roles = roles
-                flag_modified(auth_user, "roles")
+        service = await self._get_service()
+        user = await service.set_user_roles(user_id=user_id, roles=roles, reason=reason)
+        return user_account_to_dict(user)
 
-            if preferences is not None:
-                current_preferences = dict(auth_user.preferences or {})
-                current_preferences.update(preferences)
-                auth_user.preferences = current_preferences
-                flag_modified(auth_user, "preferences")
+    async def update_user_preferences(
+        self,
+        user_id: str,
+        preferences: Dict[str, Any],
+        *,
+        merge: bool = True,
+    ) -> Dict[str, Any]:
+        """Update user preferences."""
 
-            if is_active is not None:
-                auth_user.is_active = is_active
-
-            if is_verified is not None:
-                auth_user.is_verified = is_verified
-
-            auth_user.updated_at = datetime.utcnow()
-            await session.flush()
-            await session.refresh(auth_user)
-
-            user = service._build_user_account(auth_user)
-            service._user_cache[str(auth_user.user_id)] = user
-            return user_account_to_dict(user)
+        service = await self._get_service()
+        user = await service.update_user_preferences(
+            user_id=user_id, preferences=preferences, merge=merge
+        )
+        return user_account_to_dict(user)
 
     async def list_users(
         self,

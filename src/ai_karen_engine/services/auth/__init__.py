@@ -1,6 +1,7 @@
 """Canonical auth services package boundary."""
 
-from .auth_service import AuthConfig, AuthService, Session, UserAccount, UserRole, UserStatus
+from .auth_service import AuthService, Session, UserAccount, UserRole, UserStatus
+from .config import AuthConfig, Environment, INSECURE_SECRET_MARKERS, load_auth_config
 from .authorization_service import AuthorizationConfig, AuthorizationService, Policy, PolicyEnforcementResult, PolicyType
 from .data_protection_service import (
     DataProtectionConfig,
@@ -32,10 +33,13 @@ from .tenant_isolation import (
 __all__ = [
     "AuthConfig",
     "AuthService",
+    "Environment",
+    "INSECURE_SECRET_MARKERS",
     "Session",
     "UserAccount",
     "UserRole",
     "UserStatus",
+    "load_auth_config",
     "UserService",
     "UserServiceError",
     "UserNotFoundError",

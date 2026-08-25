@@ -22,10 +22,11 @@ import bcrypt
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_karen_engine.core.services.base import BaseService, ServiceConfig
+from ai_karen_engine.core.services.base import BaseService
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.database.client import MultiTenantPostgresClient
 from ai_karen_engine.database.models import AuthUser, AuthSession, Tenant
+from ai_karen_engine.services.auth.config import AuthConfig, load_auth_config
 
 logger = get_logger(__name__)
 
@@ -97,24 +98,6 @@ class Session:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-class AuthConfig(ServiceConfig):
-    """Authentication configuration."""
-
-    name: str = "auth_service"
-    version: str = "1.0.0"
-    jwt_secret_key: str = "change-me-in-production"
-    jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 480  # 8 hours instead of 30 minutes
-    refresh_token_expire_days: int = 30    # 30 days instead of 7 days
-    password_min_length: int = 8
-    password_require_complexity: bool = True
-    max_failed_login_attempts: int = 5
-    account_lockout_minutes: int = 30
-    session_timeout_hours: int = 168  # 7 days instead of 24 hours
-    enable_two_factor: bool = True
-    bcrypt_rounds: int = 12
-
-
 class AuthService(BaseService):
     """
     Authentication Service for CoPilot Architecture.
@@ -123,9 +106,10 @@ class AuthService(BaseService):
     user management, session management, and token validation.
     """
 
-    def __init__(self, config: Optional[AuthConfig] = None):
+    def __init__(self, config: Optional[AuthConfig] = None) -> None:
         """Initialize the Authentication Service."""
-        super().__init__(config or AuthConfig())
+        self._config = config if config is not None else load_auth_config()
+        super().__init__(self._config)
         self._initialized = False
         self._tables_ensured = False
         self._lock: Optional[asyncio.Lock] = None
@@ -134,12 +118,20 @@ class AuthService(BaseService):
         self._db_session: Optional[AsyncSession] = None
         self._db_client: Optional[MultiTenantPostgresClient] = None
 
-        # Thread-safe data structures
+        # Bounded runtime caches (optimization only; database is the authority)
         self._active_sessions: Dict[str, Session] = {}
         self._user_cache: Dict[str, UserAccount] = {}
 
-        # Load configuration from environment
-        self._load_config_from_env()
+        logger.debug(
+            "AuthService initialized with environment=%s, jwt_algorithm=%s",
+            self._config.environment.value,
+            self._config.jwt_algorithm,
+        )
+
+    @property
+    def config(self) -> AuthConfig:
+        """Return the authenticated configuration."""
+        return self._config
 
     @property
     def lock(self) -> asyncio.Lock:
@@ -148,65 +140,9 @@ class AuthService(BaseService):
             self._lock = asyncio.Lock()
         return self._lock
 
-    def _load_config_from_env(self) -> None:
-        """Load configuration from environment variables."""
-        from ai_karen_engine.config.config_manager import resolve_jwt_secret
-
-        auth_secret = resolve_jwt_secret()
-        if auth_secret:
-            self.config.jwt_secret_key = auth_secret
-
-        # Fall back to ConfigManager for consistent secret management
-        try:
-            from ai_karen_engine.config.config_manager import get_config
-
-            cfg = get_config()
-            if not auth_secret:
-                # Priority 1: security.jwt_secret
-                if (
-                    hasattr(cfg, "security")
-                    and cfg.security.jwt_secret
-                    and cfg.security.jwt_secret != "your-secret-key"
-                ):
-                    self.config.jwt_secret_key = cfg.security.jwt_secret
-                # Priority 2: auth.secret_key
-                elif (
-                    hasattr(cfg, "auth")
-                    and hasattr(cfg.auth, "secret_key")
-                    and cfg.auth.secret_key
-                    and cfg.auth.secret_key != "changeme"
-                ):
-                    self.config.jwt_secret_key = cfg.auth.secret_key
-        except Exception:
-            pass
-
-        if "AUTH_JWT_ALGORITHM" in os.environ:
-            self.config.jwt_algorithm = os.environ["AUTH_JWT_ALGORITHM"]
-
-        if "AUTH_ACCESS_TOKEN_EXPIRE_MINUTES" in os.environ:
-            self.config.access_token_expire_minutes = int(
-                os.environ["AUTH_ACCESS_TOKEN_EXPIRE_MINUTES"]
-            )
-
-        if "AUTH_REFRESH_TOKEN_EXPIRE_DAYS" in os.environ:
-            self.config.refresh_token_expire_days = int(
-                os.environ["AUTH_REFRESH_TOKEN_EXPIRE_DAYS"]
-            )
-
-        if "AUTH_PASSWORD_MIN_LENGTH" in os.environ:
-            self.config.password_min_length = int(
-                os.environ["AUTH_PASSWORD_MIN_LENGTH"]
-            )
-
-        if "AUTH_MAX_FAILED_LOGIN_ATTEMPTS" in os.environ:
-            self.config.max_failed_login_attempts = int(
-                os.environ["AUTH_MAX_FAILED_LOGIN_ATTEMPTS"]
-            )
-
-        if "AUTH_ACCOUNT_LOCKOUT_MINUTES" in os.environ:
-            self.config.account_lockout_minutes = int(
-                os.environ["AUTH_ACCOUNT_LOCKOUT_MINUTES"]
-            )
+    def _validate_config(self) -> None:
+        """Validate configuration parameters."""
+        self._config.validate()
 
     async def initialize(self) -> None:
         """Initialize the Authentication Service."""
@@ -271,19 +207,29 @@ class AuthService(BaseService):
             )
 
     async def _ensure_database_tables(self) -> None:
-        """Ensure database tables exist."""
+        """Validate database connectivity and schema compatibility.
+
+        In production, runtime must not mutate schema. Tables are expected
+        to be created by migration/bootstrap tooling.
+        """
         if self._tables_ensured:
             return
 
         try:
             client = self._get_db_client()
-            await client.create_tables_async()
-            self._tables_ensured = True
-            logger.info("Database tables verified/created successfully")
+            if self._config.auto_create_tables:
+                await client.create_tables_async()
+                self._tables_ensured = True
+                logger.info("Database tables verified/created successfully")
+            else:
+                await client.get_async_session().__aenter__()
+                self._tables_ensured = True
+                logger.info("Database connectivity validated")
         except Exception as e:
-            logger.error(f"Failed to ensure database tables: {e}")
-            # Don't re-raise here to allow service to start even if DB is not ready
-            # though it might fail later.
+            logger.error(f"Failed to validate database connectivity: {e}")
+            raise RuntimeError(
+                "AuthService database preflight failed"
+            ) from e
 
     def set_db_session(self, session: AsyncSession) -> None:
         """Set the database session for the current execution context."""
@@ -1145,6 +1091,130 @@ class AuthService(BaseService):
             logger.error("Error validating session: %s", e)
             return None
 
+    async def list_sessions(
+        self,
+        user_id: Optional[str] = None,
+        *,
+        active_only: bool = True,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """List sessions from the durable database store.
+
+        The in-memory cache is not the authority; sessions are always
+        read from the database.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            async with self._session_scope() as session:
+                query = select(AuthSession)
+                if user_id:
+                    try:
+                        user_uuid = uuid.UUID(str(user_id))
+                        query = query.where(AuthSession.user_id == user_uuid)
+                    except ValueError:
+                        return []
+                if active_only:
+                    query = query.where(AuthSession.is_active)
+
+                query = query.limit(limit).offset(offset)
+                result = await session.execute(query)
+                sessions = result.scalars().all()
+
+                return [
+                    {
+                        "session_token": str(s.session_token),
+                        "user_id": str(s.user_id),
+                        "access_token": s.access_token,
+                        "refresh_token": s.refresh_token,
+                        "expires_in": s.expires_in,
+                        "created_at": s.created_at.isoformat() if s.created_at else None,
+                        "last_accessed": s.last_accessed.isoformat() if s.last_accessed else None,
+                        "ip_address": s.ip_address,
+                        "user_agent": s.user_agent,
+                        "device_fingerprint": s.device_fingerprint,
+                        "is_active": s.is_active,
+                        "invalidated_at": s.invalidated_at.isoformat() if s.invalidated_at else None,
+                        "invalidation_reason": s.invalidation_reason,
+                    }
+                    for s in sessions
+                ]
+        except Exception as e:
+            logger.error("Error listing sessions: %s", e)
+            return []
+
+    async def revoke_session(self, session_token: str, reason: str = "manual_revoke") -> bool:
+        """Revoke a single session by its session token."""
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            async with self._session_scope() as session:
+                result = await session.execute(
+                    select(AuthSession).where(
+                        AuthSession.session_token == uuid.UUID(str(session_token))
+                        if self._is_valid_uuid(session_token)
+                        else AuthSession.access_token == session_token
+                    )
+                )
+                db_session = result.scalar_one_or_none()
+                if not db_session:
+                    return False
+
+                db_session.is_active = False
+                db_session.invalidated_at = datetime.utcnow()
+                db_session.invalidation_reason = reason
+                await session.flush()
+                return True
+        except Exception as e:
+            logger.error("Error revoking session: %s", e)
+            return False
+
+    async def revoke_all_sessions(
+        self,
+        user_id: str,
+        reason: str = "global_revoke",
+    ) -> int:
+        """Revoke all active sessions for a user. Returns count revoked."""
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            user_uuid = uuid.UUID(str(user_id))
+        except ValueError:
+            return 0
+
+        try:
+            async with self._session_scope() as session:
+                result = await session.execute(
+                    select(AuthSession).where(
+                        AuthSession.user_id == user_uuid,
+                        AuthSession.is_active,
+                    )
+                )
+                db_sessions = result.scalars().all()
+                count = 0
+                for db_session in db_sessions:
+                    db_session.is_active = False
+                    db_session.invalidated_at = datetime.utcnow()
+                    db_session.invalidation_reason = reason
+                    count += 1
+                await session.flush()
+                return count
+        except Exception as e:
+            logger.error("Error revoking all sessions: %s", e)
+            return 0
+
+    @staticmethod
+    def _is_valid_uuid(value: str) -> bool:
+        try:
+            uuid.UUID(str(value))
+            return True
+        except ValueError:
+            return False
+
     def _hash_password(self, password: str) -> str:
         """
         Hash a password using bcrypt.
@@ -1587,6 +1657,48 @@ class AuthService(BaseService):
             logger.error("Failed to update user profile: %s", e)
             return None, str(e)
 
+    async def _emit_audit_event(
+        self,
+        action: str,
+        actor_user_id: Optional[str],
+        target_user_id: Optional[str],
+        status: str,
+        reason_code: Optional[str] = None,
+        session_id: Optional[str] = None,
+        ip_address: str = "unknown",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Emit a structured auth audit event.
+
+        No passwords, JWTs, refresh tokens, 2FA secrets, or hashes are
+        included in audit data.
+        """
+        event = {
+            "action": action,
+            "actor_user_id": actor_user_id,
+            "target_user_id": target_user_id,
+            "tenant_id": None,
+            "session_id": session_id,
+            "status": status,
+            "reason_code": reason_code,
+            "ip_address": ip_address,
+            "timestamp": datetime.utcnow().isoformat(),
+            "metadata": metadata or {},
+        }
+
+        if target_user_id:
+            try:
+                target = await self.get_user_by_id(target_user_id)
+                if target:
+                    event["tenant_id"] = target.tenant_id
+            except Exception:
+                pass
+
+        try:
+            logger.info("AUTH_AUDIT %s", event)
+        except Exception:
+            pass
+
     async def update_user(
         self,
         user_id: str,
@@ -1643,7 +1755,98 @@ class AuthService(BaseService):
 
             user_account = self._build_user_account(auth_user)
             self._user_cache[str(auth_user.user_id)] = user_account
+
+            await self._emit_audit_event(
+                action="auth.user.updated",
+                actor_user_id=None,
+                target_user_id=user_id,
+                status="success",
+                metadata={"updated_fields": [k for k, v in {
+                    "full_name": full_name,
+                    "roles": roles,
+                    "preferences": preferences,
+                    "is_active": is_active,
+                    "is_verified": is_verified,
+                }.items() if v is not None]},
+            )
+
             return user_account
+
+    async def set_user_status(
+        self,
+        user_id: str,
+        is_active: bool,
+        *,
+        reason: Optional[str] = None,
+    ) -> UserAccount:
+        """Set the active status of a user account."""
+        user = await self.update_user(
+            user_id,
+            is_active=is_active,
+        )
+        await self._emit_audit_event(
+            action="auth.account.status_changed",
+            actor_user_id=None,
+            target_user_id=user_id,
+            status="success",
+            reason_code=reason,
+            metadata={"is_active": is_active},
+        )
+        return user
+
+    async def set_user_roles(
+        self,
+        user_id: str,
+        roles: List[str],
+        *,
+        reason: Optional[str] = None,
+    ) -> UserAccount:
+        """Replace the roles assigned to a user."""
+        user = await self.update_user(
+            user_id,
+            roles=roles,
+        )
+        await self._emit_audit_event(
+            action="auth.role.assigned",
+            actor_user_id=None,
+            target_user_id=user_id,
+            status="success",
+            reason_code=reason,
+            metadata={"roles": roles},
+        )
+        return user
+
+    async def update_user_preferences(
+        self,
+        user_id: str,
+        preferences: Dict[str, Any],
+        *,
+        merge: bool = True,
+    ) -> UserAccount:
+        """Update user preferences.
+
+        If merge is True, the provided preferences are merged with existing
+        preferences. If False, preferences are replaced entirely.
+        """
+        if merge:
+            existing = await self.get_user_by_id(user_id)
+            if existing:
+                merged = dict(existing.preferences or {})
+                merged.update(preferences)
+                preferences = merged
+
+        user = await self.update_user(
+            user_id,
+            preferences=preferences,
+        )
+        await self._emit_audit_event(
+            action="auth.user.updated",
+            actor_user_id=None,
+            target_user_id=user_id,
+            status="success",
+            metadata={"preferences_updated": list(preferences.keys())},
+        )
+        return user
 
     async def health_check(self) -> bool:
         """
