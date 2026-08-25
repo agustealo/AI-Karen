@@ -130,7 +130,7 @@ class TestClaimAssessment:
             source=EvidenceType.SYSTEM_INFERENCE,
             confidence=0.6,
         )
-        ev = make_evidence(etype=EvidenceType.SYSTEM_INFERENCE)
+        ev = make_evidence(type=EvidenceType.SYSTEM_INFERENCE)
         assessment = engine.assess(claim, [ev])
         assert assessment.status != ClaimStatus.VERIFIED
         assert "inferred_not_verified" in assessment.reason_codes
@@ -214,9 +214,7 @@ class TestTemporalTruth:
             claim_id="new", object="LM Studio",
             asserted_at=datetime.utcnow(),
         )
-        nature, superseded = detector.resolve_temporal(
-            old_claim, new_claim.observed_at or datetime.utcnow()
-        )
+        nature, superseded = detector.resolve_temporal(old_claim, new_claim)
         assert nature == ContradictionNature.CHANGE_OVER_TIME
 
     def test_stale_evidence_reduces_current_applicability(self):
@@ -369,7 +367,7 @@ class TestUnknownAndInsufficient:
     def test_evidence_source_preserved(self):
         engine = BeliefEngine()
         claim = make_claim(source=EvidenceType.USER_STATEMENT)
-        ev = make_evidence(etype=EvidenceType.USER_STATEMENT, source_ref="msg1")
+        ev = make_evidence(type=EvidenceType.USER_STATEMENT, source_ref="msg1")
         assessment = engine.assess(claim, [ev])
         assert ev.evidence_id in assessment.evidence_refs
 
@@ -380,7 +378,7 @@ class TestUnknownAndInsufficient:
             source=EvidenceType.SYSTEM_INFERENCE,
         )
         evs = [
-            make_evidence(etype=EvidenceType.SYSTEM_INFERENCE,
+            make_evidence(type=EvidenceType.SYSTEM_INFERENCE,
                           relation=EvidenceRelation.SUPPORTS)
             for _ in range(5)
         ]

@@ -10,10 +10,10 @@ Version: 1.0.0 (Cognitive Architecture)
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any
 
-from ai_karen_engine.core.memory.contracts import ProspectiveMemory
+from ai_karen_engine.core.memory.contracts import ProspectiveMemory as ProspectiveMemory
 
 
 class ProspectiveMemoryStore:
@@ -27,7 +27,7 @@ class ProspectiveMemoryStore:
 
     def add(self, memory: ProspectiveMemory) -> str:
         """Add a prospective memory."""
-        memory_id = f"pm:{memory.intention}:{datetime.utcnow().timestamp()}"
+        memory_id = f"pm:{memory.intention}:{datetime.now(tz=timezone.utc).timestamp()}"
         self._memories[memory_id] = memory
         status = memory.status
         if status not in self._by_status:
@@ -53,7 +53,7 @@ class ProspectiveMemoryStore:
         if memory_id in self._memories:
             memory = self._memories[memory_id]
             memory.status = "completed"
-            memory.completed_at = datetime.utcnow()
+            memory.completed_at = datetime.now(tz=timezone.utc)
             # Move to completed list
             if "open" in self._by_status and memory_id in self._by_status["open"]:
                 self._by_status["open"].remove(memory_id)

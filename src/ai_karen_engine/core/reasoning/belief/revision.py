@@ -68,6 +68,20 @@ class BeliefRevisionEngine:
         if claim.status == ClaimStatus.RETRACTED:
             return self._apply(RevisionAction.KEEP, claim, None, 0.0, claim.confidence, "claim retracted")
 
+        superseding_evidence = [
+            e for e in new_evidence
+            if e.relation == EvidenceRelation.SUPERSEDES
+        ]
+        if superseding_evidence:
+            strongest = max(superseding_evidence, key=lambda e: e.confidence)
+            if strongest.confidence > claim.confidence:
+                new_conf = max(claim.confidence, min(1.0, strongest.confidence))
+                return self._apply(
+                    RevisionAction.STRENGTHEN, claim, strongest, new_conf,
+                    claim.confidence,
+                    "superseding evidence replaces weaker claim",
+                )
+
         if has_temporal_change and claim.status in (
             ClaimStatus.OBSERVED,
             ClaimStatus.USER_ASSERTED,

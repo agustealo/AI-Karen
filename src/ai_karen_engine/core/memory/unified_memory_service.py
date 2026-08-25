@@ -24,13 +24,8 @@ from ai_karen_engine.core.memory.retrieval.curated_recall import (
     filter_curated_memories,
     is_curated_memory_metadata,
 )
-from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
-from ai_karen_engine.database.client import MultiTenantPostgresClient
-from ai_karen_engine.database.memory_manager import (
-    MemoryEntry,
-    MemoryManager,
-    MemoryQuery,
-)
+from ai_karen_engine.core.memory.adapters.postgres_adapter import PostgresMemoryAdapter
+from ai_karen_engine.core.memory.adapters.redis_adapter import RedisMemoryAdapter
 from ai_karen_engine.core.memory.memory_policy import DecayTier, MemoryPolicyManager
 from ai_karen_engine.core.memory.memory_writeback import (
     InteractionType,
@@ -129,26 +124,57 @@ class UnifiedMemoryService:
 
     def __init__(
         self,
-        db_client: MultiTenantPostgresClient,
-        embedding_manager: EmbeddingManager,
-        redis_client: Optional[Any] = None,
-        policy_manager: Optional[MemoryPolicyManager] = None,
+        db_client=None,
+        embedding_manager=None,
+        redis_client=None,
+        policy_manager=None,
+        retrieval_adapter=None,
+        consolidation_adapter=None,
+        embedding_adapter=None,
     ):
         """Initialize unified memory service"""
         self.db_client = db_client
         self.embedding_manager = embedding_manager
         self.redis_client = redis_client
 
+        # CORE-SPLIT-2: Use adapters when provided
+        self._retrieval_adapter = retrieval_adapter
+        self._consolidation_adapter = consolidation_adapter
+        self._embedding_adapter = embedding_adapter
+
+        # Create adapters from legacy dependencies if not provided
+        if self._retrieval_adapter is None and db_client is not None:
+            try:
+                from ai_karen_engine.core.memory.memory_manager import MemoryManager
+                base_manager = MemoryManager(
+                    db_client=db_client,
+                    embedding_manager=embedding_manager,
+                    redis_client=redis_client,
+                )
+                self._retrieval_adapter = PostgresMemoryAdapter(db_client, base_manager)
+            except Exception:
+                pass
+
+        if self._embedding_adapter is None and embedding_manager is not None:
+            try:
+                from ai_karen_engine.core.memory.adapters import LegacyEmbeddingManagerAdapter
+                self._embedding_adapter = LegacyEmbeddingManagerAdapter(embedding_manager)
+            except Exception:
+                pass
+
         # Initialize policy manager
         self.policy_manager = policy_manager or MemoryPolicyManager()
         self.policy = self.policy_manager.policy
 
         # Initialize base memory manager for compatibility
-        self.base_manager = MemoryManager(
-            db_client=db_client,
-            embedding_manager=embedding_manager,
-            redis_client=redis_client,
-        )
+        if db_client is not None and embedding_manager is not None:
+            self.base_manager = MemoryManager(
+                db_client=db_client,
+                embedding_manager=embedding_manager,
+                redis_client=redis_client,
+            )
+        else:
+            self.base_manager = None
 
         # Initialize writeback system for shard linking
         self.writeback_system = MemoryWritebackSystem(

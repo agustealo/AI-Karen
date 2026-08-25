@@ -10,10 +10,9 @@ Version: 1.0.0 (Cognitive Architecture)
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 
-from ai_karen_engine.core.memory.contracts import ClaimStatus, MemoryClaim
+from ai_karen_engine.core.memory.contracts import ClaimStatus as ClaimStatus, MemoryClaim as MemoryClaim
 
 
 class MemoryClaimStore:
@@ -72,7 +71,7 @@ class MemoryClaimStore:
         """Update confidence of a claim."""
         if claim_id in self._claims:
             self._claims[claim_id].confidence = new_confidence
-            self._claims[claim_id].last_confirmed = datetime.utcnow()
+            self._claims[claim_id].last_confirmed = datetime.now(tz=timezone.utc)
 
     def get_valid_claims(self, at: datetime | None = None) -> list[MemoryClaim]:
         """Get all valid claims at a given time."""
