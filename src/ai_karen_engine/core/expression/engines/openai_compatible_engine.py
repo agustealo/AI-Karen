@@ -1,92 +1,95 @@
 from __future__ import annotations
 
-import time
 import logging
+import time
 from typing import Any
 
 from .base import BaseExpressionEngine
 from ..contracts import ExpressionResult, ExpressionTask
-from ...model_runtime.provider_policy import evaluate_provider_policy, normalize_provider_id
+from ...model_runtime.provider_execution import execute_provider_endpoint
+from ...model_runtime.provider_policy import evaluate_provider_policy
 from ...model_runtime.runtime_engine import EndpointKind
 
 logger = logging.getLogger(__name__)
 
 
 class OpenAICompatibleEngine(BaseExpressionEngine):
-    """
-    Engine that routes to local or remote OpenAI-compatible endpoints
-    using the canonical endpoint registry.
-    """
+    """Route canonical OpenAI-compatible endpoints without integration imports."""
 
     async def generate(self, task: ExpressionTask) -> ExpressionResult:
         started = time.perf_counter()
-
         is_cloud = self.engine_id == "cloud"
 
         from ai_karen_engine.core.model_runtime.provider_registry_service import (
             get_provider_registry_service,
         )
-        registry = get_provider_registry_service()
 
+        registry = get_provider_registry_service()
         provider_id = self._resolve_provider(task, is_cloud, registry)
         if not provider_id:
             return self._failure_result(task, started, "no_suitable_provider_found")
+
+        endpoint = registry.get_provider_endpoint(provider_id)
+        if endpoint is None:
+            return self._failure_result(
+                task,
+                started,
+                f"provider_endpoint_not_found:{provider_id}",
+                provider=provider_id,
+            )
 
         model = task.preferred_model
         if model == "auto":
             model = None
 
         try:
-            from ai_karen_engine.integrations.llm_registry import get_provider
-
-            endpoint = registry.get_provider_endpoint(provider_id)
-            provider = get_provider(
-                provider_id,
+            execution = await execute_provider_endpoint(
+                endpoint,
+                messages=task.messages,
                 model=model,
-                base_url=endpoint.base_url if endpoint else None,
+                max_tokens=task.max_tokens,
+                temperature=task.temperature,
             )
-
-            if not provider:
-                return self._failure_result(task, started, f"provider_not_found:{provider_id}")
-
-            prompt = self._extract_prompt(task.messages)
-
-            if hasattr(provider, "generate_text_async"):
-                text = await provider.generate_text_async(prompt, messages=task.messages, max_tokens=task.max_tokens, temperature=task.temperature)
-            elif hasattr(provider, "generate_text"):
-                import asyncio
-                loop = asyncio.get_running_loop()
-                text = await loop.run_in_executor(None, lambda: provider.generate_text(prompt, messages=task.messages, max_tokens=task.max_tokens, temperature=task.temperature))
-            else:
-                import asyncio
-                loop = asyncio.get_running_loop()
-                text = await loop.run_in_executor(None, lambda: provider.generate(prompt, **{"messages": task.messages, "max_tokens": task.max_tokens, "temperature": task.temperature}))
-
-            actual_provider = provider_id
-            actual_model = getattr(provider, "model", model)
-            attempts = []
-            skipped = []
+            text = execution.text
+            actual_provider = execution.provider_id
+            actual_model = execution.model
+            runtime_engine = execution.runtime_engine or "openai_compatible"
         except Exception as exc:
-            logger.error(f"OpenAICompatibleEngine ({self.engine_id}) failed for {provider_id}: {exc}")
-            return self._failure_result(task, started, str(exc), provider=provider_id)
+            logger.error(
+                "OpenAICompatibleEngine (%s) failed for %s: %s",
+                self.engine_id,
+                provider_id,
+                exc,
+            )
+            return self._failure_result(
+                task, started, str(exc), provider=provider_id
+            )
 
         return ExpressionResult(
             task_id=task.task_id,
             text=text,
             provider=actual_provider,
-            model=str(actual_model) if actual_model else None,
+            model=actual_model,
             engine_id=self.engine_id,
             engine_mode="openai_compatible",
-            runtime_engine="openai_compatible",
+            runtime_engine=runtime_engine,
             response_source=f"{self.engine_id}_engine",
-            attempts=attempts,
-            skipped=skipped,
+            attempts=[
+                {
+                    "provider": actual_provider,
+                    "model": actual_model,
+                    "status": "success",
+                }
+            ],
+            skipped=[],
             latency_ms=(time.perf_counter() - started) * 1000,
             degraded=not bool(text.strip()),
             degradation_reason=None if text.strip() else "empty_response",
         )
 
-    def _resolve_provider(self, task: ExpressionTask, is_cloud: bool, registry: Any) -> str | None:
+    def _resolve_provider(
+        self, task: ExpressionTask, is_cloud: bool, registry: Any
+    ) -> str | None:
         """Find the best healthy provider matching the engine category."""
         required_caps = {"chat_completion", "text_generation"}
 
@@ -112,7 +115,13 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
 
         return targets[0].provider_id if targets else None
 
-    def _failure_result(self, task: ExpressionTask, started: float, reason: str, provider: str = "unknown") -> ExpressionResult:
+    def _failure_result(
+        self,
+        task: ExpressionTask,
+        started: float,
+        reason: str,
+        provider: str = "unknown",
+    ) -> ExpressionResult:
         return ExpressionResult(
             task_id=task.task_id,
             text="",
@@ -128,9 +137,3 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             degraded=True,
             degradation_reason=reason,
         )
-
-    def _extract_prompt(self, messages: list[dict[str, str]]) -> str:
-        """Helper to extract a simple prompt from messages."""
-        if not messages:
-            return ""
-        return messages[-1].get("content", "")
