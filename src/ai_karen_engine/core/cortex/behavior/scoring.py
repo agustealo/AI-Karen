@@ -57,7 +57,11 @@ class BehaviorScoringEngine:
 
     def _policy_fit(self, c: BehaviorCandidate, ctx: BehaviorSelectionContext) -> float:
         blocked = ctx.policy_constraints.get("blocked_behaviors", [])
-        return 0.0 if c.behavior_type.value in blocked else 1.0
+        if c.behavior_type.value in blocked:
+            return 0.0
+        if BehaviorConstraint.POLICY_BLOCKED in c.constraints:
+            return 0.0
+        return 1.0
 
     def _interruption(self, c: BehaviorCandidate, ctx: BehaviorSelectionContext) -> float:
         return 0.3 if c.behavior_type == BehaviorType.ASK else 0.1

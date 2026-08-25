@@ -169,14 +169,21 @@ class SalienceAssessment:
     confidence: float = 0.0
     reason_codes: list[SalienceReasonCode] = field(default_factory=list)
     source_refs: list[str] = field(default_factory=list)
+    activation: float = 0.0
+    modulation: float = 0.0
+    policy_version: str = "1.0.0"
+    schema_version: str = "1.0.0"
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.overall == 0.0:
-            self.overall = self._compute_overall()
+            computed = self._compute_overall()
+            self.overall = computed
+            self.activation = computed
+            self.modulation = 1.0 - self.interruption_cost
 
     def _compute_overall(self) -> float:
-        dims = [
+        activation_dims = [
             self.novelty,
             self.urgency,
             self.goal_relevance,
@@ -188,12 +195,20 @@ class SalienceAssessment:
             self.success_significance,
             self.unresolved_state,
             self.contradiction,
-            self.interruption_cost,
             self.user_emphasis,
+            self.repetition,
         ]
-        if not dims:
+        inhibition_dims = [
+            self.interruption_cost,
+        ]
+        
+        if not activation_dims:
             return 0.0
-        return max(0.0, min(1.0, max(dims)))
+            
+        activation = max(0.0, min(1.0, max(activation_dims)))
+        inhibition = 1.0 - max(0.0, min(1.0, max(inhibition_dims) if inhibition_dims else 0.0))
+        
+        return max(0.0, min(1.0, activation * inhibition))
 
 
 @dataclass(slots=True)

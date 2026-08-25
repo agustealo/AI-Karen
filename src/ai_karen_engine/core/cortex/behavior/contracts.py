@@ -53,6 +53,16 @@ class BehaviorConstraint(str, Enum):
     HIGH_RISK = "high_risk"
 
 
+@dataclass(slots=True)
+class CognitivePolicyConfig:
+    """Configuration for cognitive policy versioning."""
+    policy_version: str = "1.0.0"
+    schema_version: str = "1.0.0"
+    scoring_version: str = "1.0.0"
+    meta_version: str = "1.0.0"
+    salience_version: str = "1.0.0"
+
+
 class VerificationReason(str, Enum):
     LOW_CONFIDENCE = "low_confidence"
     HIGH_RISK = "high_risk"
@@ -112,6 +122,15 @@ class BehaviorSelectionContext:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+class CognitivePolicyConfig:
+    """Configuration for cognitive policy versioning."""
+    policy_version: str = "1.0.0"
+    schema_version: str = "1.0.0"
+    scoring_version: str = "1.0.0"
+    meta_version: str = "1.0.0"
+    salience_version: str = "1.0.0"
+
+
 @dataclass(slots=True)
 class BehaviorScoreComponents:
     """Explainable score components for a behavior."""
@@ -126,22 +145,37 @@ class BehaviorScoreComponents:
     interruption_cost: float = 0.0
     verification_value: float = 0.0
     capability_fit: float = 0.0
+    weights: dict[str, float] = field(default_factory=lambda: {
+        "goal_alignment": 0.15,
+        "belief_support": 0.15,
+        "salience_fit": 0.12,
+        "user_preference_fit": 0.10,
+        "historical_success": 0.08,
+        "policy_fit": 0.20,
+        "confidence": 0.10,
+        "verification_value": 0.05,
+        "capability_fit": 0.05,
+    })
+    policy_version: str = "1.0.0"
 
     @property
     def utility(self) -> float:
-        raw = (
-            self.goal_alignment
-            + self.belief_support
-            + self.salience_fit
-            + self.user_preference_fit
-            + self.historical_success
-            + self.policy_fit
-            + self.confidence
-            + self.verification_value
-            + self.capability_fit
+        if self.policy_fit == 0.0:
+            return 0.0
+        
+        weighted_sum = (
+            self.goal_alignment * self.weights.get("goal_alignment", 0.15) +
+            self.belief_support * self.weights.get("belief_support", 0.15) +
+            self.salience_fit * self.weights.get("salience_fit", 0.12) +
+            self.user_preference_fit * self.weights.get("user_preference_fit", 0.10) +
+            self.historical_success * self.weights.get("historical_success", 0.08) +
+            self.policy_fit * self.weights.get("policy_fit", 0.20) +
+            self.confidence * self.weights.get("confidence", 0.10) +
+            self.verification_value * self.weights.get("verification_value", 0.05) +
+            self.capability_fit * self.weights.get("capability_fit", 0.05)
         )
         penalties = self.risk + self.interruption_cost
-        return max(0.0, min(1.0, raw - penalties))
+        return max(0.0, min(1.0, weighted_sum - penalties))
 
 
 @dataclass(slots=True)
@@ -155,7 +189,7 @@ class VerificationRequirement:
 
 @dataclass(slots=True)
 class BehaviorDecision:
-    """Final behavior decision from CORTEX. Never execution instructions."""
+    final behavior decision from CORTEX. Never execution instructions."""
     decision_id: str
     selected_behavior: BehaviorType
     alternatives: list[BehaviorCandidate] = field(default_factory=list)
@@ -169,5 +203,8 @@ class BehaviorDecision:
     requires_verification: VerificationRequirement | None = None
     requires_approval: bool = False
     degraded: bool = False
+    policy_version: str = "1.0.0"
+    schema_version: str = "1.0.0"
+    scoring_version: str = "1.0.0"
     metadata: dict[str, Any] = field(default_factory=dict)
     decided_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

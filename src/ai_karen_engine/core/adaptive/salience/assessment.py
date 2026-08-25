@@ -81,19 +81,30 @@ class SalienceAssessmentEngine:
         setattr(assessment, SalienceDimension.RELATIONSHIP_IMPORTANCE.value, max(0.0, min(1.0, current + rel.relevance_strength)))
 
     def _compute_confidence(self, assessment: SalienceAssessment, signals: list[SalienceSignal]) -> float:
-        if not signals:
+        if not signals and not assessment.user_emphasis:
             return 0.0
-        return max(0.0, min(1.0, sum(s.confidence for s in signals) / len(signals)))
+        
+        confidences = [s.confidence for s in signals if s.confidence > 0]
+        
+        if assessment.user_emphasis > 0:
+            confidences.append(min(1.0, assessment.user_emphasis))
+            
+        if not confidences:
+            return 0.0
+            
+        return max(0.0, min(1.0, sum(confidences) / len(confidences)))
 
     def _build_memory_signals(self, assessment: SalienceAssessment, request: SalienceAssessmentRequest) -> list[MemorySalienceSignal]:
         signals = []
-        for goal_id in request.context.current_goals:
-            signals.append(MemorySalienceSignal(
-                memory_id=goal_id,
-                salience_value=assessment.goal_relevance,
-                dimensions={SalienceDimension.GOAL_RELEVANCE.value: assessment.goal_relevance},
-                tenant_id=request.context.tenant_id,
-            ))
+        for signal in request.signals:
+            if hasattr(signal, 'metadata') and 'memory_id' in signal.metadata:
+                memory_id = signal.metadata['memory_id']
+                signals.append(MemorySalienceSignal(
+                    memory_id=memory_id,
+                    salience_value=assessment.overall,
+                    dimensions={signal.dimension.value: signal.value for signal in request.signals},
+                    tenant_id=request.context.tenant_id,
+                ))
         return signals
 
     def _build_goal_adjustments(self, assessment: SalienceAssessment, request: SalienceAssessmentRequest) -> list[GoalSalienceAdjustment]:

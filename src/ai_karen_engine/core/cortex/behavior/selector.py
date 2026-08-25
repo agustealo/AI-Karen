@@ -14,6 +14,7 @@ from ai_karen_engine.core.cortex.behavior.contracts import (
     VerificationReason,
     VerificationRequirement,
 )
+from ai_karen_engine.core.cortex.behavior.eligibility import BehaviorEligibilityGate
 
 logger = logging.getLogger(__name__)
 
@@ -21,17 +22,22 @@ logger = logging.getLogger(__name__)
 class BehaviorSelector:
     """Selects the best behavior from candidates using cognitive signals."""
 
+    def __init__(self) -> None:
+        self.eligibility_gate = BehaviorEligibilityGate()
+
     def select(self, context: BehaviorSelectionContext, candidates: list[BehaviorCandidate]) -> BehaviorDecision:
         """Select the best behavior from candidates."""
-        if not candidates:
+        hard_filtered = self.eligibility_gate.filter(candidates, context)
+        
+        if not hard_filtered:
             return BehaviorDecision(
                 decision_id=f"bd-{context.request_id}",
                 selected_behavior=BehaviorType.ABSTAIN,
                 confidence=0.0,
-                reason_codes=["no_candidates"],
+                reason_codes=["no_eligible_candidates"],
             )
 
-        scored = [(self._score(c, context), c) for c in candidates]
+        scored = [(self._score(c, context), c) for c in hard_filtered]
         scored.sort(key=lambda x: x[0].utility, reverse=True)
 
         best_score, best = scored[0]

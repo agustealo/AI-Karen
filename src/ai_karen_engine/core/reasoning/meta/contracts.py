@@ -33,12 +33,15 @@ class MetaStatus(str, Enum):
 
 class MetaReasonCode(str, Enum):
     LOW_MEMORY_CONFIDENCE = "low_memory_confidence"
-    CONFLICTING_EVIDENCE = "conflicting_evidence"
-    STALE_MEMORY = "stale_memory"
+    LOW_REASONING_CONFIDENCE = "low_reasoning_confidence"
+    EVIDENCE_INCONSISTENT = "evidence_inconsistent"
+    CONTEXT_INCOMPLETE = "context_incomplete"
+    SOURCE_QUALITY_LOW = "source_quality_low"
+    STALE_EVIDENCE = "stale_evidence"
+    LOOP_DETECTED = "loop_detected"
     HIGH_RISK_UNCERTAIN_CLAIM = "high_risk_uncertain_claim"
     REPEATED_FAILED_STRATEGY = "repeated_failed_strategy"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
-    LOOP_DETECTED = "loop_detected"
     MARGINAL_GAIN = "marginal_gain"
     BUDGET_EXHAUSTED = "budget_exhausted"
     EVIDENCE_SUFFICIENT = "evidence_sufficient"
@@ -85,6 +88,8 @@ class MetaAssessment:
     recommended_cognitive_actions: list[str] = field(default_factory=list)
     reason_codes: list[MetaReasonCode] = field(default_factory=list)
     evidence_refs: list[str] = field(default_factory=list)
+    policy_version: str = "1.0.0"
+    schema_version: str = "1.0.0"
     metadata: dict[str, Any] = field(default_factory=dict)
     assessed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -163,14 +168,36 @@ class ReasoningDepthRecommendation:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+class CalibrationOutcome(str, Enum):
+    CORRECT = "correct"
+    INCORRECT = "incorrect"
+    PARTIALLY_CORRECT = "partially_correct"
+    UNCERTAIN = "uncertain"
+    VERIFIED = "verified"
+    REFUTED = "refuted"
+    UNKNOWN = "unknown"
+
+
 @dataclass(slots=True)
 class CalibrationObservation:
-    """Observation for calibration tracking."""
+    observation_id: str = ""
     predicted_confidence: float = 0.0
     actual_outcome: str = "unknown"
+    actual_confidence: float | None = None
     correction_required: bool = False
     verification_result: str | None = None
+    outcome_type: CalibrationOutcome = CalibrationOutcome.UNKNOWN
+    error_magnitude: float = 0.0
+    context: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def calibration_error(self) -> float:
+        if self.actual_confidence is None:
+            return 0.0
+        return abs(self.predicted_confidence - self.actual_confidence)
+
+    def is_well_calibrated(self, tolerance: float = 0.2) -> bool:
+        return self.calibration_error() <= tolerance
 
 
 @dataclass(slots=True)

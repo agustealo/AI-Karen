@@ -112,9 +112,19 @@ class ContextBudget:
     max_tokens: int = 4096
     priority_floor: ContextPriority = ContextPriority.MINIMAL
     reserved_for_critical: int = 2
+    requirement_limits: dict[str, int] = field(default_factory=dict)
+    min_trust_level: ContextTrustLevel = ContextTrustLevel.LOW_CONFIDENCE
 
     def effective_capacity(self) -> int:
         return max(0, self.max_items - self.reserved_for_critical)
+    
+    def meets_priority_floor(self, priority: ContextPriority) -> bool:
+        floor_order = [ContextPriority.MINIMAL, ContextPriority.LOW, ContextPriority.MEDIUM, 
+                      ContextPriority.HIGH, ContextPriority.CRITICAL]
+        try:
+            return floor_order.index(priority) >= floor_order.index(self.priority_floor)
+        except ValueError:
+            return False
 
 
 @dataclass(slots=True)
@@ -184,13 +194,17 @@ class ContextPlan:
     budget: ContextBudget = field(default_factory=ContextBudget)
     explanation: str = ""
     trace_id: str = ""
+    policy_version: str = "1.0.0"
+    schema_version: str = "1.0.0"
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def select(self) -> list[ContextCandidate]:
         selected: list[ContextCandidate] = []
         seen_ids: set[str] = set()
+        tokens_used = 0
 
         def sort_key(c: ContextCandidate) -> tuple[int, int, str]:
-            return (-c.score(), -len(c.conflicts), c.candidate_id)
+            return (-c.score(), len(c.conflicts), c.candidate_id)
 
         sorted_candidates = sorted(self.candidates, key=sort_key)
 
@@ -199,12 +213,29 @@ class ContextPlan:
                 continue
             if not candidate.is_selectable():
                 continue
-            if len(selected) >= self.budget.effective_capacity():
-                break
+            if not self.budget.meets_priority_floor(candidate.priority):
+                continue
+            
+            candidate_tokens = len(candidate.content)
+            if tokens_used + candidate_tokens > self.budget.max_tokens:
+                continue
+            
+            requirement_limit = self._get_requirement_limit(candidate)
+            requirement_count = sum(1 for s in selected if s.kind == candidate.kind)
+            if requirement_count >= requirement_limit:
+                continue
+            
             selected.append(candidate)
             seen_ids.add(candidate.candidate_id)
+            tokens_used += candidate_tokens
 
         return selected
+
+    def _get_requirement_limit(self, candidate: ContextCandidate) -> int:
+        for req in self.requirements:
+            if req.kind == candidate.kind:
+                return req.max_items
+        return self.budget.requirement_limits.get(candidate.kind.value, self.budget.max_items)
 
     def explain_selection(self, selected: list[ContextCandidate]) -> list[str]:
         explanations: list[str] = []

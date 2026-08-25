@@ -21,6 +21,6 @@ class BehaviorEligibilityGate:
     def _is_eligible(self, candidate: BehaviorCandidate, context: BehaviorSelectionContext) -> bool:
         if BehaviorConstraint.POLICY_BLOCKED in candidate.constraints:
             return False
-        if BehaviorConstraint.TENANT_RESTRICTED in candidate.constraints and context.tenant_id:
-            return True
+        if BehaviorConstraint.TENANT_RESTRICTED in candidate.constraints:
+            return context.tenant_id == "default"
         return not (candidate.behavior_type == BehaviorType.REFUSE and context.policy_constraints.get("allow_refuse", True) is False)

@@ -1,8 +1,8 @@
 # Karen Core Architecture: Authority Matrix & Layer Model
 
-> **Status**: CORE-MAP-1 (canonical)
-> **Last updated**: 2026-08-23
-> **Commit**: cd91763079f38aa7605d7c31a65fed5be1f4cf27
+> **Status**: COG-CLOSE-1 (canonical)
+> **Last updated**: 2026-08-24
+> **Commit**: COG-CLOSE-1-hard-gates-and-typed-synapses
 
 ## The Six-Layer Model
 
