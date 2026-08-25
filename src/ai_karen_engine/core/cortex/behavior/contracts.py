@@ -12,6 +12,7 @@ from ai_karen_engine.core.cognitive.state import (
     GoalSnapshot,
     MetaSnapshot,
     PolicySnapshot,
+    ReasoningSnapshot,
     SalienceSnapshot,
 )
 from ai_karen_engine.core.contracts.cognitive import (
@@ -21,7 +22,6 @@ from ai_karen_engine.core.contracts.cognitive import (
     VerificationRequirement,
 )
 
-# Backward-compatible name only. There is one canonical depth enum.
 VerificationDepth = ReasoningDepth
 
 
@@ -85,8 +85,6 @@ class CognitivePolicyConfig:
 
 @dataclass(slots=True)
 class BehaviorCandidate:
-    """A candidate behavior for CORTEX selection."""
-
     candidate_id: str
     behavior_type: BehaviorType
     target: BehaviorTarget | None = None
@@ -105,11 +103,7 @@ class BehaviorCandidate:
 
 @dataclass(slots=True)
 class BehaviorSelectionContext:
-    """Typed semantic snapshot for behavior selection.
-
-    No provider clients, persistence handles, runtime sessions, or loose cognitive
-    dictionaries are permitted at this public boundary.
-    """
+    """Typed semantic snapshot for behavior selection."""
 
     request_id: str
     correlation_id: str
@@ -126,7 +120,7 @@ class BehaviorSelectionContext:
     user_model_ref: str | None = None
     relationship_ref: str | None = None
     adaptive: AdaptiveSnapshot | None = None
-    reasoning: MetaSnapshot | None = None
+    reasoning: ReasoningSnapshot | None = None
     meta: MetaSnapshot | None = None
     policy: PolicySnapshot | None = None
     capability_requirements: list[str] = field(default_factory=list)
@@ -139,8 +133,6 @@ class BehaviorSelectionContext:
 
 @dataclass(slots=True)
 class BehaviorScoreComponents:
-    """Explainable, normalized behavior score components."""
-
     goal_alignment: float = 0.0
     belief_support: float = 0.0
     salience_fit: float = 0.0
@@ -169,7 +161,6 @@ class BehaviorScoreComponents:
 
     @property
     def utility(self) -> float:
-        # Policy is a hard gate, not a soft utility signal.
         if self.policy_fit <= 0.0:
             return 0.0
         weighted_sum = (
@@ -183,8 +174,7 @@ class BehaviorScoreComponents:
             + self.verification_value * self.weights.get("verification_value", 0.05)
             + self.capability_fit * self.weights.get("capability_fit", 0.05)
         )
-        penalties = self.risk + self.interruption_cost
-        return max(0.0, min(1.0, weighted_sum - penalties))
+        return max(0.0, min(1.0, weighted_sum - self.risk - self.interruption_cost))
 
 
 @dataclass(slots=True)
