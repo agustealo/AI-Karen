@@ -5,6 +5,11 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from ai_karen_engine.core.contracts.cognitive import (
+    ReasoningDepth,
+    VerificationRequirement,
+)
+
 
 class MetaCognitiveDimension(str, Enum):
     KNOWLEDGE_SUFFICIENCY = "knowledge_sufficiency"
@@ -34,6 +39,7 @@ class MetaStatus(str, Enum):
 class MetaReasonCode(str, Enum):
     LOW_MEMORY_CONFIDENCE = "low_memory_confidence"
     LOW_REASONING_CONFIDENCE = "low_reasoning_confidence"
+    CONFLICTING_EVIDENCE = "conflicting_evidence"
     EVIDENCE_INCONSISTENT = "evidence_inconsistent"
     CONTEXT_INCOMPLETE = "context_incomplete"
     SOURCE_QUALITY_LOW = "source_quality_low"
@@ -48,13 +54,6 @@ class MetaReasonCode(str, Enum):
     STRATEGY_EXHAUSTED = "strategy_exhausted"
 
 
-class ReasoningDepth(str, Enum):
-    NONE = "none"
-    LIGHT = "light"
-    STANDARD = "standard"
-    DEEP = "deep"
-
-
 class LoopDetectionStrategy(str, Enum):
     SAME_STRATEGY = "same_strategy"
     SAME_EVIDENCE = "same_evidence"
@@ -64,6 +63,7 @@ class LoopDetectionStrategy(str, Enum):
 @dataclass(slots=True)
 class MetaCognitiveState:
     """Multi-dimensional meta-cognitive state."""
+
     knowledge_sufficiency: float = 0.0
     memory_reliability: float = 0.0
     evidence_consistency: float = 0.0
@@ -82,6 +82,7 @@ class MetaCognitiveState:
 @dataclass(slots=True)
 class MetaAssessment:
     """Assessment of cognitive quality."""
+
     status: MetaStatus = MetaStatus.STABLE
     confidence: float = 0.0
     issues: list[str] = field(default_factory=list)
@@ -91,24 +92,24 @@ class MetaAssessment:
     policy_version: str = "1.0.0"
     schema_version: str = "1.0.0"
     metadata: dict[str, Any] = field(default_factory=dict)
-    assessed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    assessed_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
 
 @dataclass(slots=True)
 class StrategyAttempt:
     """Record of a reasoning strategy attempt."""
+
     strategy_id: str
     strategy_type: str
     evidence_hashes: list[str] = field(default_factory=list)
     outcome: str = "unknown"
     confidence: float = 0.0
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class StrategyFingerprint:
-    """Fingerprint for loop detection."""
     strategy_type: str
     evidence_hash: str
     outcome_class: str
@@ -116,17 +117,15 @@ class StrategyFingerprint:
 
 @dataclass(slots=True)
 class LoopAssessment:
-    """Assessment of reasoning loop state."""
     is_looping: bool = False
     loop_count: int = 0
-    detected_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    detected_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
     fingerprint: StrategyFingerprint | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class BeliefConflictSummary:
-    """Summary of evidence conflicts for meta-cognition."""
     conflict_id: str
     claim_a: str
     claim_b: str
@@ -138,7 +137,8 @@ class BeliefConflictSummary:
 
 @dataclass(slots=True)
 class MemoryReliabilityAssessment:
-    """Assessment of memory reliability."""
+    """Retrieval quality. This is not epistemic truth confidence."""
+
     recall_confidence: float = 0.0
     memory_age: str = "unknown"
     contradiction_count: int = 0
@@ -149,19 +149,14 @@ class MemoryReliabilityAssessment:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
-class VerificationNeedAssessment:
-    """Assessment of verification need."""
-    required: bool = False
-    reason: MetaReasonCode | None = None
-    depth: ReasoningDepth = ReasoningDepth.STANDARD
-    urgency: float = 0.0
-    metadata: dict[str, Any] = field(default_factory=dict)
+# Compatibility alias only. The canonical shared contract is
+# core.contracts.cognitive.VerificationRequirement.
+# Sunset: remove after all callers use VerificationRequirement directly.
+VerificationNeedAssessment = VerificationRequirement
 
 
 @dataclass(slots=True)
 class ReasoningDepthRecommendation:
-    """Recommendation for reasoning depth."""
     recommended_depth: ReasoningDepth = ReasoningDepth.STANDARD
     reason: MetaReasonCode | None = None
     confidence: float = 0.0
@@ -202,10 +197,11 @@ class CalibrationObservation:
 
 @dataclass(slots=True)
 class MetaCognitiveRequest:
-    """Request for meta-cognitive assessment."""
+    """Request for meta-cognitive assessment with explicit tenant scope."""
+
     request_id: str
     correlation_id: str
-    tenant_id: str = "default"
+    tenant_id: str
     reasoning_confidence: float = 0.0
     memory_reliability: float = 0.0
     evidence_consistency: float = 0.0
@@ -214,16 +210,42 @@ class MetaCognitiveRequest:
     budget_remaining: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("MetaCognitiveRequest requires an explicit tenant_id")
+
 
 @dataclass(slots=True)
 class MetaCognitiveResult:
-    """Result of meta-cognitive assessment."""
     assessment: MetaAssessment
     state: MetaCognitiveState
     loop_assessment: LoopAssessment | None = None
     memory_reliability: MemoryReliabilityAssessment | None = None
-    verification_need: VerificationNeedAssessment | None = None
+    verification_need: VerificationRequirement | None = None
     depth_recommendation: ReasoningDepthRecommendation | None = None
     calibration_observations: list[CalibrationObservation] = field(default_factory=list)
     diagnostics: dict[str, Any] = field(default_factory=dict)
-    assessed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    assessed_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
+__all__ = [
+    "BeliefConflictSummary",
+    "CalibrationObservation",
+    "CalibrationOutcome",
+    "LoopAssessment",
+    "LoopDetectionStrategy",
+    "MemoryReliabilityAssessment",
+    "MetaAssessment",
+    "MetaCognitiveDimension",
+    "MetaCognitiveRequest",
+    "MetaCognitiveResult",
+    "MetaCognitiveState",
+    "MetaReasonCode",
+    "MetaStatus",
+    "ReasoningDepth",
+    "ReasoningDepthRecommendation",
+    "StrategyAttempt",
+    "StrategyFingerprint",
+    "VerificationNeedAssessment",
+    "VerificationRequirement",
+]
