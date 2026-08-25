@@ -15,6 +15,7 @@ from ai_karen_engine.core.contracts.cognitive import (
     RetrievalConfidence,
     SalienceConfidence,
 )
+from ai_karen_engine.core.personalization.goals.contracts import GoalSnapshot
 
 
 @dataclass(slots=True)
@@ -28,20 +29,6 @@ class BeliefSnapshot:
     last_verified_at: datetime | None = None
     contradictions: list[str] = field(default_factory=list)
     source_refs: list[str] = field(default_factory=list)
-    policy_version: str = "1.0.0"
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class GoalSnapshot:
-    goal_id: str
-    state: str = "unknown"
-    priority: float = 0.0
-    progress: float = 0.0
-    deadline: datetime | None = None
-    blocked: bool = False
-    required_capabilities: list[str] = field(default_factory=list)
-    affinity: dict[str, float] = field(default_factory=dict)
     policy_version: str = "1.0.0"
     metadata: dict[str, Any] = field(default_factory=dict)
 
