@@ -7,39 +7,34 @@ export function middleware(request: NextRequest) {
     request.cookies.get('access_token')?.value;
   const pathname = request.nextUrl.pathname;
 
-  // Define protected routes that require authentication
-  const isProtectedRoute = pathname.startsWith('/dashboard') || 
-                           pathname.startsWith('/chat') ||
-                           pathname.startsWith('/settings') ||
-                           pathname.startsWith('/admin');
+  const isProtectedRoute =
+    pathname.startsWith('/dashboard') ||
+    pathname.startsWith('/chat') ||
+    pathname.startsWith('/settings') ||
+    pathname.startsWith('/admin');
 
-  // If trying to access a protected route without a token, redirect to login
   if (isProtectedRoute && !token) {
     const loginUrl = new URL('/login', request.url);
     loginUrl.searchParams.set('next', `${pathname}${request.nextUrl.search}`);
     return NextResponse.redirect(loginUrl);
   }
 
-  // Also redirect root / to dashboard if logged in, otherwise to login
+  // Root intentionally reaches the client bootstrap gate. Installation state
+  // is backend truth and must not be guessed from cookies in edge middleware.
   if (pathname === '/') {
-    if (token) {
-      return NextResponse.redirect(new URL('/dashboard', request.url));
-    } else {
-      return NextResponse.redirect(new URL('/login', request.url));
-    }
+    return NextResponse.next();
   }
 
   return NextResponse.next();
 }
 
-// Ensure the middleware only runs for relevant paths
 export const config = {
   matcher: [
     '/',
-    '/dashboard/:path*', 
-    '/chat/:path*', 
-    '/settings/:path*', 
+    '/dashboard/:path*',
+    '/chat/:path*',
+    '/settings/:path*',
     '/admin/:path*',
-    '/login'
+    '/login',
   ],
 };
