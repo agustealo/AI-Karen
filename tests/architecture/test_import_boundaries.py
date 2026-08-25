@@ -71,9 +71,6 @@ def _normalize_import(imp: str) -> str:
 # ---------------------------------------------------------------------------
 
 FORBIDDEN_IMPORTS: list[tuple[str, str]] = [
-    # Intelligence is pure signal analysis — no execution authority
-    ("core.intelligence", "core.runtime"),
-
     # Cortex decides but does not execute providers/models
     ("core.cortex", "core.model_runtime"),
     ("core.cortex", "core.langgraph_orchestrator"),
@@ -100,6 +97,30 @@ FORBIDDEN_IMPORTS: list[tuple[str, str]] = [
 
 
 # ---------------------------------------------------------------------------
+# CORE-SPLIT-2: Core must not import Platform/Provider/Extension infra
+# These are currently xfail with owner/sprint/sunset/expiry metadata.
+# ---------------------------------------------------------------------------
+
+CORE_SPLIT_2_FORBIDDEN_IMPORTS: list[tuple[str, str, str, str, str, str]] = [
+    # (consumer, forbidden, owner, sprint, sunset_condition, expiry)
+    ("core", "services", "Core Team", "CORE-SPLIT-2 Phase 3", "All core modules use runtime/ service ports", "2026-09-30"),
+    ("core", "tools", "Core Team", "CORE-SPLIT-2 Phase 3", "All tool execution routes through extensions/", "2026-09-30"),
+    ("core", "database", "Platform Team", "CORE-SPLIT-2 Phase 2", "All DB access routes through platform/memory/", "2026-09-30"),
+    ("core", "persistence", "Platform Team", "CORE-SPLIT-2 Phase 5", "All persistence routes through platform/", "2026-09-30"),
+    ("core", "storage", "Platform Team", "CORE-SPLIT-2 Phase 2", "All storage routes through platform/", "2026-09-30"),
+    ("core", "integrations", "Platform Team", "CORE-SPLIT-2 Phase 11", "All integrations route through extensions/", "2026-09-30"),
+    ("core", "mcp", "Extensions Team", "CORE-SPLIT-2 Phase 11", "MCP is an extension adapter, not core", "2026-09-30"),
+    ("core", "middleware", "Runtime Team", "CORE-SPLIT-2 Phase 9", "HTTP middleware lives in api_routes/", "2026-09-30"),
+    ("core", "error_handling", "Core Team", "CORE-SPLIT-2 Phase 9", "Error types split to core/contracts/errors.py", "2026-09-30"),
+    ("core", "error_tracking", "Platform Team", "CORE-SPLIT-2 Phase 9", "Error tracking is platform infrastructure", "2026-09-30"),
+    ("core", "inference", "Runtime Team", "CORE-SPLIT-2 Phase 8", "Inference routes through runtime/inference/", "2026-09-30"),
+    ("core", "extensions", "Extensions Team", "CORE-SPLIT-2 Phase 3", "Core imports extension contracts, not implementations", "2026-09-30"),
+    ("core.memory", "core.model_runtime", "Memory Team", "CORE-SPLIT-2 Phase 2", "Memory uses EmbeddingPort, not EmbeddingManager", "2026-09-30"),
+    ("core.personalization", "services", "Personalization Team", "CORE-SPLIT-2 Phase 5", "Personalization uses platform/personalization/", "2026-09-30"),
+]
+
+
+# ---------------------------------------------------------------------------
 # Blocked-with-exceptions: consumer may import data contracts but not
 # execution infrastructure. The exception list contains allowed sub-paths
 # (data contracts, contracts modules) that are safe to consume.
@@ -112,6 +133,8 @@ FORBIDDEN_IMPORTS_WITH_EXCEPTIONS: list[tuple[str, str, set[str]]] = [
     ("core.adaptive", "core.runtime", {"core.runtime.outcome.contracts"}),
     # Security may consume auth/config data but not runtime execution
     ("core.security", "core.runtime", set()),
+    # Intelligence may consume runtime data contracts for training datasets
+    ("core.intelligence", "core.runtime", {"core.runtime.contracts"}),
 ]
 
 
@@ -273,7 +296,9 @@ def _collect_services_files() -> list[Path]:
     "consumer,forbidden", FORBIDDEN_SERVICES_IMPORTS
 )
 @pytest.mark.xfail(
-    reason="SERVICE-CLOSE-1: services/ currently imports forbidden core domains. "
+    reason="[SERVICE-CLOSE-1] owner=Platform Team sprint=SERVICE-CLOSE-1 "
+           "sunset=services/ imports only runtime/ ports expiry=2026-09-30. "
+           "services/ currently imports forbidden core domains. "
            "These violations are tracked for convergence sprints "
            "(SERVICE-MODEL-1, SERVICE-ORCH-1, SERVICE-PLUGIN-1, etc.).",
     strict=False,
@@ -302,7 +327,9 @@ def test_services_must_not_import_core_domain(
     "consumer,forbidden", FORBIDDEN_PARALLEL_SERVICES_IMPORTS
 )
 @pytest.mark.xfail(
-    reason="SERVICE-CLOSE-1: services/ contains parallel infrastructure subsystems. "
+    reason="[SERVICE-CLOSE-1] owner=Platform Team sprint=SERVICE-CLOSE-1 "
+           "sunset=services/ uses canonical owners only expiry=2026-09-30. "
+           "services/ contains parallel infrastructure subsystems. "
            "These violations are tracked for convergence sprints.",
     strict=False,
 )
@@ -366,6 +393,54 @@ def test_models_subtree_migrated_to_core() -> None:
         "services/provider_runtime.py still exists. "
         "Migrate to core/runtime/provider_runtime.py and update importers."
     )
+
+
+# ---------------------------------------------------------------------------
+# CORE-SPLIT-2: Core must not import Platform/Provider/Extension infra
+# These violations are tracked with owner, sprint, sunset, and expiry.
+# ---------------------------------------------------------------------------
+
+CORE_SPLIT_2_FORBIDDEN_IMPORTS: list[tuple[str, str, str, str, str, str]] = [
+    ("core", "services", "Core Team", "CORE-SPLIT-2 Phase 3", "All core modules use runtime/ service ports", "2026-09-30"),
+    ("core", "tools", "Core Team", "CORE-SPLIT-2 Phase 3", "All tool execution routes through extensions/", "2026-09-30"),
+    ("core", "database", "Platform Team", "CORE-SPLIT-2 Phase 2", "All DB access routes through platform/memory/", "2026-09-30"),
+    ("core", "persistence", "Platform Team", "CORE-SPLIT-2 Phase 5", "All persistence routes through platform/", "2026-09-30"),
+    ("core", "storage", "Platform Team", "CORE-SPLIT-2 Phase 2", "All storage routes through platform/", "2026-09-30"),
+    ("core", "integrations", "Platform Team", "CORE-SPLIT-2 Phase 11", "All integrations route through extensions/", "2026-09-30"),
+    ("core", "mcp", "Extensions Team", "CORE-SPLIT-2 Phase 11", "MCP is an extension adapter, not core", "2026-09-30"),
+    ("core", "middleware", "Runtime Team", "CORE-SPLIT-2 Phase 9", "HTTP middleware lives in api_routes/", "2026-09-30"),
+    ("core", "error_handling", "Core Team", "CORE-SPLIT-2 Phase 9", "Error types split to core/contracts/errors.py", "2026-09-30"),
+    ("core", "error_tracking", "Platform Team", "CORE-SPLIT-2 Phase 9", "Error tracking is platform infrastructure", "2026-09-30"),
+    ("core", "inference", "Runtime Team", "CORE-SPLIT-2 Phase 8", "Inference routes through runtime/inference/", "2026-09-30"),
+    ("core", "extensions", "Extensions Team", "CORE-SPLIT-2 Phase 3", "Core imports extension contracts, not implementations", "2026-09-30"),
+    ("core.memory", "core.model_runtime", "Memory Team", "CORE-SPLIT-2 Phase 2", "Memory uses EmbeddingPort, not EmbeddingManager", "2026-09-30"),
+    ("core.personalization", "services", "Personalization Team", "CORE-SPLIT-2 Phase 5", "Personalization uses platform/personalization/", "2026-09-30"),
+]
+
+
+def test_core_split_2_no_platform_provider_extension_imports() -> None:
+    """CORE-SPLIT-2: Core must not import Platform/Provider/Extension infrastructure."""
+    for consumer, forbidden, owner, sprint, sunset, expiry in CORE_SPLIT_2_FORBIDDEN_IMPORTS:
+        consumer_dir = AI_KEREN_ROOT / consumer.replace(".", "/")
+        if not consumer_dir.exists():
+            continue
+        files = [p for p in consumer_dir.rglob("*.py") if p.is_file()]
+        if not files:
+            continue
+
+        all_violations: list[tuple[str, str]] = []
+        for f in files:
+            for v in _imports_violate_hard_rule(f, forbidden):
+                all_violations.append((str(f), v))
+
+        if all_violations:
+            details = "\n".join(f"  {f}: {v}" for f, v in all_violations)
+            pytest.xfail(
+                f"[CORE-SPLIT-2] owner={owner} sprint={sprint} "
+                f"sunset={sunset} expiry={expiry}\n"
+                f"Forbidden import: {consumer} must not import {forbidden}.\n"
+                f"Violations:\n{details}"
+            )
 
 
 # ---------------------------------------------------------------------------
