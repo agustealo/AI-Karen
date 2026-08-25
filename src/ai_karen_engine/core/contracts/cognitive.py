@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 
 class ReasoningDepth(str, Enum):
@@ -37,11 +38,7 @@ class VerificationReason(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class VerificationRequirement:
-    """Single verification contract shared by Meta, CORTEX, and Runtime.
-
-    Meta recommends a requirement, CORTEX decides whether verification becomes
-    selected behavior, and Runtime executes the authorized verification.
-    """
+    """Single verification contract shared by Meta, CORTEX, and Runtime."""
 
     required: bool = False
     reason: VerificationReason | str | None = None
@@ -57,15 +54,72 @@ class VerificationRequirement:
 
 @dataclass(frozen=True, slots=True)
 class ConfidenceValue:
-    """Base value object for non-interchangeable confidence domains."""
+    """Base value object for non-interchangeable confidence domains.
+
+    Numeric interoperability is intentionally limited to plain int/float. Two
+    different confidence-domain objects cannot be silently combined.
+    """
 
     value: float = 0.0
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "value", max(0.0, min(1.0, self.value)))
+        object.__setattr__(self, "value", max(0.0, min(1.0, float(self.value))))
+
+    @staticmethod
+    def _number(other: Any) -> float:
+        if isinstance(other, ConfidenceValue):
+            raise TypeError("confidence domains require explicit conversion")
+        if isinstance(other, (int, float)):
+            return float(other)
+        return NotImplemented
 
     def __float__(self) -> float:
         return self.value
+
+    def __lt__(self, other: Any) -> bool:
+        number = self._number(other)
+        if number is NotImplemented:
+            return NotImplemented
+        return self.value < number
+
+    def __le__(self, other: Any) -> bool:
+        number = self._number(other)
+        if number is NotImplemented:
+            return NotImplemented
+        return self.value <= number
+
+    def __gt__(self, other: Any) -> bool:
+        number = self._number(other)
+        if number is NotImplemented:
+            return NotImplemented
+        return self.value > number
+
+    def __ge__(self, other: Any) -> bool:
+        number = self._number(other)
+        if number is NotImplemented:
+            return NotImplemented
+        return self.value >= number
+
+    def __add__(self, other: Any) -> float:
+        number = self._number(other)
+        if number is NotImplemented:
+            return NotImplemented
+        return self.value + number
+
+    def __radd__(self, other: Any) -> float:
+        return self.__add__(other)
+
+    def __sub__(self, other: Any) -> float:
+        number = self._number(other)
+        if number is NotImplemented:
+            return NotImplemented
+        return self.value - number
+
+    def __rsub__(self, other: Any) -> float:
+        number = self._number(other)
+        if number is NotImplemented:
+            return NotImplemented
+        return number - self.value
 
 
 @dataclass(frozen=True, slots=True)
