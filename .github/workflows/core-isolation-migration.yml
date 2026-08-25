@@ -1,0 +1,44 @@
+name: Core Isolation Migration
+
+on:
+  push:
+    paths:
+      - "scripts/core_isolation_import_migration.py"
+      - ".github/workflows/core-isolation-migration.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply exact Core import migration
+        run: python scripts/core_isolation_import_migration.py
+
+      - name: Compile changed Core tree
+        env:
+          PYTHONPATH: src
+        run: python -m compileall -q src/ai_karen_engine/core
+
+      - name: Commit migrated imports
+        run: |
+          if git diff --quiet; then
+            echo "No migration changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/ai_karen_engine/core
+          git commit -m "migrate core imports behind runtime ports"
+          git push
