@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+from typing import Any
+
+from ai_karen_engine.core.adaptive.salience.assessment import SalienceAssessmentEngine
 from ai_karen_engine.core.adaptive.salience.contracts import (
+    RelationshipRelevanceSignal,
     SalienceAssessment,
     SalienceAssessmentRequest,
     SalienceContext,
     SalienceDimension,
     SalienceReasonCode,
     SalienceSignal,
-    SalienceSource,
+    UserEmphasisSignal,
 )
-from ai_karen_engine.core.adaptive.salience.assessment import SalienceAssessmentEngine
 from ai_karen_engine.core.adaptive.salience.decay import SalienceDecayEngine
 
 
@@ -74,7 +77,6 @@ def test_resolved_event_can_decay():
 
 def test_user_emphasis_raises_salience():
     engine = SalienceAssessmentEngine()
-    from ai_karen_engine.core.adaptive.salience.contracts import UserEmphasisSignal
     req = _make_request(signals=[], user_emphasis=[
         UserEmphasisSignal(emphasis_type="critical", target="deployment", strength=0.8, confidence=0.9)
     ])
@@ -84,7 +86,9 @@ def test_user_emphasis_raises_salience():
 
 def test_relationship_relevance_can_affect_weighting():
     engine = SalienceAssessmentEngine()
-    from ai_karen_engine.core.adaptive.salience.contracts import RelationshipRelevanceSignal
+    from ai_karen_engine.core.adaptive.salience.contracts import (
+        RelationshipRelevanceSignal,
+    )
     req = _make_request(signals=[], relationship_signals=[
         RelationshipRelevanceSignal(relationship_id="r1", relevance_strength=0.9)
     ])
@@ -115,7 +119,6 @@ def test_components_remain_explainable():
 
 
 def test_tenant_boundaries_preserved():
-    from ai_karen_engine.core.adaptive.salience.contracts import MemorySalienceSignal
     engine = SalienceAssessmentEngine()
     req = _make_request(signals=[], relationship_signals=[
         RelationshipRelevanceSignal(relationship_id="r1", relevance_strength=0.5)

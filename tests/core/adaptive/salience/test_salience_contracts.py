@@ -1,19 +1,19 @@
 from __future__ import annotations
 
+import pytest
+
 from ai_karen_engine.core.adaptive.salience.contracts import (
+    ExpectedState,
+    GoalSalienceAdjustment,
+    MemorySalienceSignal,
+    ObservedState,
+    PredictionError,
     SalienceAssessment,
     SalienceDimension,
     SalienceReasonCode,
     SalienceSignal,
     SalienceSource,
-    SalienceContext,
-    PredictionError,
-    ExpectedState,
-    ObservedState,
     UserEmphasisSignal,
-    RelationshipRelevanceSignal,
-    MemorySalienceSignal,
-    GoalSalienceAdjustment,
 )
 
 
@@ -66,4 +66,4 @@ def test_salience_assessment_defaults():
 
 def test_salience_assessment_computed_overall():
     a = SalienceAssessment(urgency=1.0, risk=0.0, novelty=0.0)
-    assert a.overall == pytest.approx(0.033, rel=1e-2)
+    assert a.overall == pytest.approx(1.0, rel=1e-2)

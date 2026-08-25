@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any
 
 from ai_karen_engine.core.adaptive.salience.contracts import (
     GoalSalienceAdjustment,
@@ -15,7 +13,6 @@ from ai_karen_engine.core.adaptive.salience.contracts import (
     SalienceDimension,
     SalienceReasonCode,
     SalienceSignal,
-    SalienceSource,
     UserEmphasisSignal,
 )
 
@@ -55,6 +52,7 @@ class SalienceAssessmentEngine:
         assessment.reason_codes = list(dict.fromkeys(reason_codes))
         assessment.source_refs = list(dict.fromkeys(source_refs))
         assessment.confidence = self._compute_confidence(assessment, request.signals)
+        assessment.overall = assessment._compute_overall()
 
         memory_signals = self._build_memory_signals(assessment, request)
         goal_adjustments = self._build_goal_adjustments(assessment, request)

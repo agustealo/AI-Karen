@@ -6,8 +6,6 @@ from typing import Any
 from ai_karen_engine.core.adaptive.salience.contracts import (
     SalienceAssessment,
     SalienceDimension,
-    SalienceReasonCode,
-    SalienceSignal,
 )
 
 

@@ -1,43 +1,43 @@
 from __future__ import annotations
 
+from ai_karen_engine.core.adaptive.salience.aggregation import SalienceAggregator
 from ai_karen_engine.core.adaptive.salience.assessment import SalienceAssessmentEngine
 from ai_karen_engine.core.adaptive.salience.contracts import (
+    ExpectedState,
     GoalSalienceAdjustment,
     MemorySalienceSignal,
+    ObservedState,
     PredictionError,
     RelationshipRelevanceSignal,
     SalienceAssessment,
     SalienceAssessmentRequest,
     SalienceAssessmentResult,
+    SalienceContext,
     SalienceDimension,
     SalienceReasonCode,
     SalienceSignal,
     SalienceSource,
-    SalienceContext,
     UserEmphasisSignal,
-    ExpectedState,
-    ObservedState,
 )
 from ai_karen_engine.core.adaptive.salience.decay import SalienceDecayEngine
-from ai_karen_engine.core.adaptive.salience.aggregation import SalienceAggregator
 
 __all__ = [
-    "SalienceAssessmentEngine",
-    "SalienceDecayEngine",
+    "ExpectedState",
+    "GoalSalienceAdjustment",
+    "MemorySalienceSignal",
+    "ObservedState",
+    "PredictionError",
+    "RelationshipRelevanceSignal",
     "SalienceAggregator",
     "SalienceAssessment",
+    "SalienceAssessmentEngine",
     "SalienceAssessmentRequest",
     "SalienceAssessmentResult",
-    "SalienceSignal",
+    "SalienceContext",
+    "SalienceDecayEngine",
     "SalienceDimension",
     "SalienceReasonCode",
+    "SalienceSignal",
     "SalienceSource",
-    "SalienceContext",
-    "PredictionError",
-    "ExpectedState",
-    "ObservedState",
     "UserEmphasisSignal",
-    "RelationshipRelevanceSignal",
-    "MemorySalienceSignal",
-    "GoalSalienceAdjustment",
 ]

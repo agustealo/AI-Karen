@@ -507,6 +507,112 @@ class MemoryManager(Protocol):
 
 
 # ===================================
+# RECALL PORT
+# ===================================
+
+@runtime_checkable
+class RecallPort(Protocol):
+    """
+    Port for memory recall operations.
+
+    This is the interface that reasoning, cortex, and other core modules
+    use to retrieve memories. Implementations live in runtime/ or platform/.
+    """
+
+    def query(self, query_text: str, *, top_k: int = 10, **filters) -> List[MemoryEntry]:
+        """Query memories by text."""
+        ...
+
+    def decompose(self, query: str) -> List[str]:
+        """Decompose a query into sub-queries for multi-hop retrieval."""
+        ...
+
+    def fuse(self, results: List[List[MemoryEntry]]) -> List[MemoryEntry]:
+        """Fuse multiple retrieval result lists."""
+        ...
+
+    def rerank(self, query: str, candidates: Sequence[MemoryEntry], *, top_k: Optional[int] = None) -> List[Tuple[MemoryEntry, float]]:
+        """Re-rank candidates for a query."""
+        ...
+
+
+# ===================================
+# RETRIEVAL PORT
+# ===================================
+
+@runtime_checkable
+class RetrievalPort(Protocol):
+    """
+    Port for memory retrieval operations.
+
+    Implementations live in platform/ (postgres, redis, milvus, etc.).
+    """
+
+    def retrieve(self, query: str, *, top_k: int = 10, **filters) -> List[MemoryEntry]:
+        """Retrieve memories matching a query."""
+        ...
+
+    def retrieve_by_id(self, entry_id: str) -> Optional[MemoryEntry]:
+        """Retrieve a specific memory by ID."""
+        ...
+
+    def retrieve_batch(self, entry_ids: Sequence[str]) -> List[MemoryEntry]:
+        """Retrieve multiple memories by ID."""
+        ...
+
+
+# ===================================
+# CONSOLIDATION PORT
+# ===================================
+
+@runtime_checkable
+class ConsolidationPort(Protocol):
+    """
+    Port for memory consolidation operations.
+
+    Implementations live in platform/.
+    """
+
+    def identify_candidates(self, **criteria) -> List[MemoryEntry]:
+        """Identify memories eligible for consolidation."""
+        ...
+
+    def consolidate(self, entry: MemoryEntry) -> MemoryEntry:
+        """Consolidate a memory (e.g., episodic → semantic)."""
+        ...
+
+    def consolidate_batch(self, entries: Sequence[MemoryEntry]) -> List[MemoryEntry]:
+        """Consolidate multiple memories."""
+        ...
+
+
+# ===================================
+# EMBEDDING PORT
+# ===================================
+
+@runtime_checkable
+class EmbeddingPort(Protocol):
+    """
+    Port for embedding operations.
+
+    Implementations live in runtime/ or providers/.
+    Core must not instantiate EmbeddingManager directly.
+    """
+
+    def embed_text(self, text: str, *, model: Optional[str] = None) -> EmbeddingVector:
+        """Generate embedding for a single text."""
+        ...
+
+    def embed_batch(self, texts: Sequence[str], *, model: Optional[str] = None) -> List[EmbeddingVector]:
+        """Generate embeddings for multiple texts."""
+        ...
+
+    def embed_query(self, query: str, *, model: Optional[str] = None) -> EmbeddingVector:
+        """Generate embedding for a query."""
+        ...
+
+
+# ===================================
 # HELPER TYPE ALIASES
 # ===================================
 
@@ -529,6 +635,11 @@ __all__ = [
     "QueryExecutor",
     "MemoryConsolidator",
     "MemoryManager",
+    # CORE-SPLIT-2 ports
+    "RecallPort",
+    "RetrievalPort",
+    "ConsolidationPort",
+    "EmbeddingPort",
     # Type aliases
     "StorageResult",
     "SearchResult",

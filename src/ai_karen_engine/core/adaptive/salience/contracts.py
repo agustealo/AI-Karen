@@ -74,6 +74,7 @@ class SalienceSignal:
     retrigger_count: int = 0
     last_activated_at: str | None = None
     persistence_class: str = "standard"
+    source_ref: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -192,7 +193,7 @@ class SalienceAssessment:
         ]
         if not dims:
             return 0.0
-        return max(0.0, min(1.0, sum(dims) / len(dims)))
+        return max(0.0, min(1.0, max(dims)))
 
 
 @dataclass(slots=True)

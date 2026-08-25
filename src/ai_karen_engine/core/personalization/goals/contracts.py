@@ -1,42 +1,638 @@
 """
-Goal contracts for AI-Karen personalization.
+Goal / Intention / Commitment cognitive contracts for AI-Karen.
+
+This module defines the cognitive representation of Karen's unfinished business:
+active goals, intentions, commitments, priorities, dependencies, conflicts,
+prospective memory, and completion evidence.
+
+These are domain contracts, NOT persistence models and NOT runtime state.
+The in-memory GoalStore lives in lifecycle.py and is re-exported here only
+for backward compatibility with existing callers.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from ..contracts import UserGoal, UserGoalStatus
+from ..contracts import PreferenceScope, UserGoal, UserGoalStatus
 
 
-class GoalStore:
-    """Stores and manages user goals."""
+# ===================================
+# TYPE ALIASES
+# ===================================
 
-    def __init__(self):
-        self._goals: Dict[str, UserGoal] = {}
-
-    def upsert(self, goal: UserGoal) -> None:
-        self._goals[goal.goal_id] = goal
-
-    def get(self, goal_id: str) -> Optional[UserGoal]:
-        return self._goals.get(goal_id)
-
-    def list_active(self, user_id: str, tenant_id: str) -> List[UserGoal]:
-        return [
-            g for g in self._goals.values()
-            if g.user_id == user_id and g.tenant_id == tenant_id and g.status == UserGoalStatus.ACTIVE
-        ]
-
-    def list_for_user(self, user_id: str, tenant_id: str) -> List[UserGoal]:
-        return [
-            g for g in self._goals.values()
-            if g.user_id == user_id and g.tenant_id == tenant_id
-        ]
-
-    def all(self) -> List[UserGoal]:
-        return list(self._goals.values())
+GoalId = str
 
 
-__all__ = ["GoalStore"]
+# ===================================
+# GOAL ENUMS
+# ===================================
+
+class GoalType(str, Enum):
+    """How a goal originated cognitively."""
+    EXPLICIT = "explicit"
+    INFERRED = "inferred"
+    DERIVED = "derived"
+
+
+class GoalOrigin(str, Enum):
+    """Source of the goal's formation."""
+    USER_STATED = "user_stated"
+    OBSERVATION = "observation"
+    INFERENCE = "inference"
+    REFLECTION = "reflection"
+    CORTEX = "cortex"
+
+
+class GoalPriority(str, Enum):
+    """Cognitive urgency/priority band."""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class GoalState(str, Enum):
+    """Full goal lifecycle state.
+
+    PROPOSED and SATISFIED are distinct from COMPLETED:
+    - SATISFIED: all proof gates have passed.
+    - COMPLETED: Karen has received evidence that the goal was actually fulfilled.
+    """
+    PROPOSED = "proposed"
+    ACTIVE = "active"
+    BLOCKED = "blocked"
+    PAUSED = "paused"
+    AT_RISK = "at_risk"
+    SATISFIED = "satisfied"
+    COMPLETED = "completed"
+    ABANDONED = "abandoned"
+    SUPERSEDED = "superseded"
+    EXPIRED = "expired"
+
+
+class ConflictType(str, Enum):
+    """Type of conflict between goals."""
+    VALUE = "value"
+    SCOPE = "scope"
+    DEPENDENCY = "dependency"
+    TEMPORAL = "temporal"
+
+
+class ConflictSeverity(str, Enum):
+    """Severity of a goal conflict."""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class CompletionEvidenceSource(str, Enum):
+    """Source of completion evidence for a goal."""
+    USER_CONFIRMED = "user_confirmed"
+    TEST_PASSED = "test_passed"
+    STATE_CHANGED = "state_changed"
+    ARTIFACT_CREATED = "artifact_created"
+    RUNTIME_EVENT = "runtime_event"
+    EXPLICIT_OUTCOME = "explicit_outcome"
+
+
+class IntentionState(str, Enum):
+    """Lifecycle state of an intention."""
+    FORMED = "formed"
+    WAITING = "waiting"
+    READY = "ready"
+    ACTIVE = "active"
+    FULFILLED = "fulfilled"
+    CANCELLED = "cancelled"
+    INVALIDATED = "invalidated"
+
+
+class IntentionPriority(str, Enum):
+    """Priority of an intention."""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class IntentionTriggerType(str, Enum):
+    """Semantic trigger types for intentions (not scheduler implementations)."""
+    TIME_RELEVANT = "time_relevant"
+    EVENT_RELEVANT = "event_relevant"
+    CONTEXT_RELEVANT = "context_relevant"
+    GOAL_STATE_RELEVANT = "goal_state_relevant"
+    USER_RELEVANT = "user_relevant"
+    PROJECT_RELEVANT = "project_relevant"
+
+
+class CommitmentParty(str, Enum):
+    """Party to a commitment."""
+    USER = "user"
+    KAREN = "karen"
+    EXTERNAL = "external"
+
+
+class CommitmentSource(str, Enum):
+    """How a commitment was established."""
+    USER_STATEMENT = "user_statement"
+    OBSERVATION = "observation"
+    IMPLICIT_UNDERSTANDING = "implicit_understanding"
+
+
+class CommitmentStrength(str, Enum):
+    """Strength of a commitment.
+
+    COMMITTED and BOUND require stronger evidence than ordinary goals.
+    """
+    PROFFERED = "proffered"
+    COMMITTED = "committed"
+    BOUND = "bound"
+
+
+class CommitmentStatus(str, Enum):
+    """Lifecycle status of a commitment."""
+    PROPOSED = "proposed"
+    ACKNOWLEDGED = "acknowledged"
+    ACTIVE = "active"
+    FULFILLED = "fulfilled"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    SUPERSEDED = "superseded"
+
+
+class ProspectiveState(str, Enum):
+    """State of a prospective memory item."""
+    DORMANT = "dormant"
+    TRIGGERED = "triggered"
+    ARCHIVED = "archived"
+
+
+class EvidenceSourceType(str, Enum):
+    """Source of evidence (generalized, reusable across domains)."""
+    USER_STATEMENT = "user_statement"
+    OBSERVATION = "observation"
+    TOOL_RESULT = "tool_result"
+    MEMORY = "memory"
+    DOCUMENT = "document"
+    EXTERNAL_SOURCE = "external_source"
+    SYSTEM_INFERENCE = "system_inference"
+    OUTCOME = "outcome"
+
+
+class GoalRelationship(str, Enum):
+    """Relationship type between goals in a hierarchy."""
+    PARENT = "parent"
+    CHILD = "child"
+    DEPENDS_ON = "depends_on"
+    BLOCKS = "blocks"
+    CONTRIBUTES_TO = "contributes_to"
+    CONFLICTS_WITH = "conflicts_with"
+
+
+# ===================================
+# GOAL CONTRACTS
+# ===================================
+
+@dataclass
+class GoalEvidence:
+    """A piece of evidence supporting or forming a goal."""
+    evidence_id: str
+    claim: str
+    source_type: EvidenceSourceType
+    source_ref: Optional[str]
+    observed_value: Any
+    polarity: str
+    confidence: float
+    observed_at: datetime
+    tenant_id: str = ""
+    user_id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.confidence = max(0.0, min(1.0, self.confidence))
+
+
+@dataclass
+class GoalProgress:
+    """Progress tracking for a goal."""
+    completed_steps: int = 0
+    total_steps: int = 0
+    percentage: float = 0.0
+    last_updated: Optional[datetime] = None
+    milestones: List[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.percentage = max(0.0, min(1.0, self.percentage))
+
+
+@dataclass
+class GoalOutcome:
+    """Outcome of a completed goal."""
+    outcome_id: str
+    success: bool
+    description: str
+    evidence_refs: List[str] = field(default_factory=list)
+    achieved_at: Optional[datetime] = None
+
+
+@dataclass
+class GoalRevision:
+    """Record of a goal revision."""
+    revision_id: str
+    goal_id: str
+    field_changed: str
+    old_value: Any
+    new_value: Any
+    reason: str
+    revised_at: datetime
+    tenant_id: str = ""
+    user_id: Optional[str] = None
+
+
+@dataclass
+class Goal:
+    """Cognitive representation of an unfinished business item.
+
+    Evolves around (but does not replace) UserGoal.  A Goal is Karen's
+    internal understanding of what matters, not a scheduler entry.
+    """
+    goal_id: str
+    tenant_id: str
+    user_id: Optional[str]
+    description: str
+    goal_type: GoalType
+    origin: GoalOrigin
+    state: GoalState
+    priority: GoalPriority
+    scope: PreferenceScope
+    confidence: float
+    evidence_refs: List[str]
+    started_at: datetime
+    last_observed_at: datetime
+    target_date: Optional[datetime] = None
+    parent_goal_id: Optional[str] = None
+    child_goal_ids: List[str] = field(default_factory=list)
+    depends_on: List[str] = field(default_factory=list)
+    blocks: List[str] = field(default_factory=list)
+    contributes_to: List[str] = field(default_factory=list)
+    conflicts_with: List[str] = field(default_factory=list)
+    progress: Optional[GoalProgress] = None
+    outcome: Optional[GoalOutcome] = None
+    revisions: List[GoalRevision] = field(default_factory=list)
+    completion_evidence_required: List[CompletionEvidenceSource] = field(default_factory=list)
+    completion_evidence: List[str] = field(default_factory=list)
+    completed_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    superseded_by: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.confidence = max(0.0, min(1.0, self.confidence))
+
+    def is_active(self) -> bool:
+        return self.state == GoalState.ACTIVE
+
+    def is_terminal(self) -> bool:
+        return self.state in (
+            GoalState.COMPLETED,
+            GoalState.ABANDONED,
+            GoalState.EXPIRED,
+        )
+
+
+def goal_from_user_goal(ug: UserGoal) -> Goal:
+    """Convert a legacy UserGoal into an enhanced Goal.
+
+    Inferred goals receive lower confidence than explicit ones.
+    """
+    origin = GoalOrigin.REFLECTION if "reflection" in str(ug.metadata).lower() else GoalOrigin.OBSERVATION
+    goal_type = GoalType.EXPLICIT
+    confidence = ug.confidence
+    if origin != GoalOrigin.USER_STATED:
+        goal_type = GoalType.INFERRED
+        confidence = min(ug.confidence, 0.6)
+
+    target_date = ug.target_date
+    if isinstance(target_date, str):
+        target_date = datetime.fromisoformat(target_date)
+
+    return Goal(
+        goal_id=ug.goal_id,
+        tenant_id=ug.tenant_id,
+        user_id=ug.user_id,
+        description=ug.description,
+        goal_type=goal_type,
+        origin=origin,
+        state=_map_user_goal_status(ug.status),
+        priority=GoalPriority.MEDIUM,
+        scope=ug.scope,
+        confidence=confidence,
+        evidence_refs=list(ug.evidence),
+        started_at=ug.started_at,
+        last_observed_at=ug.last_observed_at,
+        target_date=target_date,
+        metadata=dict(ug.metadata),
+    )
+
+
+def _map_user_goal_status(status: Any) -> GoalState:
+    """Map a legacy UserGoalStatus to the richer GoalState."""
+    mapping = {
+        UserGoalStatus.ACTIVE: GoalState.ACTIVE,
+        UserGoalStatus.PAUSED: GoalState.PAUSED,
+        UserGoalStatus.COMPLETED: GoalState.COMPLETED,
+        UserGoalStatus.ABANDONED: GoalState.ABANDONED,
+        UserGoalStatus.UNKNOWN: GoalState.PROPOSED,
+    }
+    if isinstance(status, str):
+        try:
+            ugs = UserGoalStatus(status)
+        except ValueError:
+            return GoalState.PROPOSED
+        return mapping.get(ugs, GoalState.PROPOSED)
+    return mapping.get(status, GoalState.PROPOSED)
+
+
+@dataclass
+class GoalSnapshot:
+    """Read-only snapshot of a Goal for cross-domain consumption.
+
+    This is the stable interface exported to other cognitive sprints
+    (e.g. COG-REFLECT-1's GoalContextLike protocol).
+    """
+    goal_id: str
+    tenant_id: str
+    user_id: Optional[str]
+    description: str
+    state: GoalState
+    priority: GoalPriority
+    goal_type: GoalType
+    origin: GoalOrigin
+    confidence: float
+    evidence_refs: List[str]
+    parent_goal_id: Optional[str]
+    child_goal_ids: List[str]
+    depends_on: List[str]
+    blocks: List[str]
+    conflicts_with: List[str]
+    target_date: Optional[datetime]
+    completed_at: Optional[datetime]
+    expires_at: Optional[datetime]
+    superseded_by: Optional[str]
+    completion_evidence: List[str]
+    outcome: Optional[GoalOutcome]
+
+
+def to_snapshot(goal: Goal) -> GoalSnapshot:
+    """Create a read-only GoalSnapshot from a Goal."""
+    return GoalSnapshot(
+        goal_id=goal.goal_id,
+        tenant_id=goal.tenant_id,
+        user_id=goal.user_id,
+        description=goal.description,
+        state=goal.state,
+        priority=goal.priority,
+        goal_type=goal.goal_type,
+        origin=goal.origin,
+        confidence=goal.confidence,
+        evidence_refs=list(goal.evidence_refs),
+        parent_goal_id=goal.parent_goal_id,
+        child_goal_ids=list(goal.child_goal_ids),
+        depends_on=list(goal.depends_on),
+        blocks=list(goal.blocks),
+        conflicts_with=list(goal.conflicts_with),
+        target_date=goal.target_date,
+        completed_at=goal.completed_at,
+        expires_at=goal.expires_at,
+        superseded_by=goal.superseded_by,
+        completion_evidence=list(goal.completion_evidence),
+        outcome=goal.outcome,
+    )
+
+
+@dataclass
+class GoalConflict:
+    """Detected conflict between two goals."""
+    conflict_id: str
+    goal_a_id: str
+    goal_b_id: str
+    conflict_type: ConflictType
+    severity: ConflictSeverity
+    description: str
+    evidence_refs: List[str] = field(default_factory=list)
+    detected_at: datetime = field(default_factory=datetime.utcnow)
+    tenant_id: str = ""
+    resolution_candidates: List[str] = field(default_factory=list)
+
+
+@dataclass
+class GoalPriorityAssessment:
+    """Result of a cognitive priority assessment."""
+    goal_id: str
+    score: float
+    reason_codes: List[str] = field(default_factory=list)
+    evidence_refs: List[str] = field(default_factory=list)
+    assessed_at: datetime = field(default_factory=datetime.utcnow)
+
+    def __post_init__(self) -> None:
+        self.score = max(0.0, min(1.0, self.score))
+
+
+# ===================================
+# INTENTION CONTRACTS
+# ===================================
+
+@dataclass
+class Intention:
+    """A plan to pursue a goal, triggered by semantic conditions."""
+    intention_id: str
+    goal_id: str
+    tenant_id: str
+    user_id: Optional[str]
+    description: str
+    state: IntentionState
+    priority: IntentionPriority
+    trigger_type: IntentionTriggerType
+    trigger_condition: str
+    context: str
+    evidence_refs: List[str] = field(default_factory=list)
+    confidence: float = 0.0
+    formed_at: datetime = field(default_factory=datetime.utcnow)
+    activated_at: Optional[datetime] = None
+    fulfilled_at: Optional[datetime] = None
+    invalidated_at: Optional[datetime] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.confidence = max(0.0, min(1.0, self.confidence))
+
+
+@dataclass
+class IntentionEvidence:
+    """Evidence about an intention."""
+    evidence_id: str
+    intention_id: str
+    claim: str
+    source_type: EvidenceSourceType
+    confidence: float
+    observed_at: datetime
+    tenant_id: str = ""
+    user_id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.confidence = max(0.0, min(1.0, self.confidence))
+
+
+# ===================================
+# COMMITMENT CONTRACTS
+# ===================================
+
+@dataclass
+class CommitmentCondition:
+    """A condition under which a commitment holds."""
+    condition_id: str
+    description: str
+    met: bool = False
+    evidence_ref: Optional[str] = None
+
+
+@dataclass
+class CommitmentEvidence:
+    """Evidence that a commitment was made."""
+    evidence_id: str
+    source: CommitmentSource
+    source_ref: Optional[str]
+    confidence: float
+    observed_at: datetime
+    strength: CommitmentStrength
+    tenant_id: str = ""
+    user_id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.confidence = max(0.0, min(1.0, self.confidence))
+
+
+@dataclass
+class Commitment:
+    """A binding commitment by one or more parties.
+
+    A commitment must preserve: who committed, to whom, what, when,
+    under what condition, source evidence, confidence, and deadline.
+    Commitments require stronger evidence than ordinary goals.
+    """
+    commitment_id: str
+    tenant_id: str
+    user_id: Optional[str]
+    parties: List[CommitmentParty]
+    description: str
+    source: CommitmentSource
+    strength: CommitmentStrength
+    status: CommitmentStatus
+    confidence: float
+    conditions: List[CommitmentCondition] = field(default_factory=list)
+    evidence: List[CommitmentEvidence] = field(default_factory=list)
+    deadline: Optional[datetime] = None
+    committed_at: datetime = field(default_factory=datetime.utcnow)
+    fulfilled_at: Optional[datetime] = None
+    failed_at: Optional[datetime] = None
+    superseded_by: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.confidence = max(0.0, min(1.0, self.confidence))
+
+    def is_active(self) -> bool:
+        return self.status == CommitmentStatus.ACTIVE
+
+
+# ===================================
+# PROSPECTIVE MEMORY CONTRACTS
+# ===================================
+
+@dataclass
+class ProspectiveTrigger:
+    """A semantic trigger for prospective memory.
+
+    Triggers are semantic, not scheduler implementations.
+    """
+    trigger_type: IntentionTriggerType
+    target_ref: str
+    description: str
+    condition: Optional[str] = None
+    tenant_id: str = ""
+    user_id: Optional[str] = None
+
+
+@dataclass
+class ProspectiveMemory:
+    """Cognitive prospective memory.
+
+    Core owns the intention.  It does not own cron execution.
+    """
+    pm_id: str
+    description: str
+    trigger: ProspectiveTrigger
+    state: ProspectiveState
+    target_intention_id: Optional[str]
+    target_goal_id: Optional[str]
+    evidence_refs: List[str] = field(default_factory=list)
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    triggered_at: Optional[datetime] = None
+    archived_at: Optional[datetime] = None
+    tenant_id: str = ""
+    user_id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+# ===================================
+# BACKWARD COMPATIBILITY RE-EXPORT
+# ===================================
+
+from .lifecycle import GoalStore  # noqa: E402
+
+__all__ = [
+    "GoalId",
+    "GoalType",
+    "GoalOrigin",
+    "GoalPriority",
+    "GoalState",
+    "ConflictType",
+    "ConflictSeverity",
+    "CompletionEvidenceSource",
+    "IntentionState",
+    "IntentionPriority",
+    "IntentionTriggerType",
+    "CommitmentParty",
+    "CommitmentSource",
+    "CommitmentStrength",
+    "CommitmentStatus",
+    "ProspectiveState",
+    "EvidenceSourceType",
+    "GoalRelationship",
+    "GoalEvidence",
+    "GoalProgress",
+    "GoalOutcome",
+    "GoalRevision",
+    "Goal",
+    "GoalSnapshot",
+    "GoalConflict",
+    "GoalPriorityAssessment",
+    "Intention",
+    "IntentionEvidence",
+    "CommitmentCondition",
+    "CommitmentEvidence",
+    "Commitment",
+    "ProspectiveTrigger",
+    "ProspectiveMemory",
+    "goal_from_user_goal",
+    "to_snapshot",
+    "GoalStore",
+    "UserGoal",
+    "UserGoalStatus",
+]
