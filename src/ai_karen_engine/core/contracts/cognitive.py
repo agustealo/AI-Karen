@@ -6,10 +6,9 @@ subsystems. Domain-specific contracts remain with their domain owners.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
 
 
 class ReasoningDepth(str, Enum):
@@ -121,7 +120,7 @@ class CognitiveVersion:
     policy_version: str = "1.0.0"
     schema_version: str = "1.0.0"
     scoring_version: str = "1.0.0"
-    created_at: datetime = datetime.now(timezone.utc)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 __all__ = [
