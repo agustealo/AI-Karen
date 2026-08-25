@@ -7,7 +7,9 @@ from typing import Any
 
 from .base import BaseExpressionEngine
 from ..contracts import ExpressionResult, ExpressionTask
+from ...model_runtime.provider_execution import get_provider_execution_registry
 from ...model_runtime.provider_policy import evaluate_provider_policy
+from ...model_runtime.provider_registry_service import get_provider_registry_service
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +17,9 @@ logger = logging.getLogger(__name__)
 class BuiltinProviderEngine(BaseExpressionEngine):
     """Execute text generation through first-party local model runtimes.
 
-    vLLM is the normal generative-serving target. Transformers remains available
-    for specialized ML capabilities, not as an implicit text-generation fallback.
+    Provider selection remains Core authority. Concrete provider construction is
+    supplied through the Core-owned execution port by the application
+    composition layer, so this engine never imports integrations/plugins.
     """
 
     engine_id = "builtin"
@@ -26,11 +29,8 @@ class BuiltinProviderEngine(BaseExpressionEngine):
         payload = self._build_payload(task)
         prompt = self._extract_prompt(task.messages)
 
-        from ai_karen_engine.core.model_runtime.provider_registry_service import (
-            get_provider_registry_service,
-        )
-
         registry = get_provider_registry_service()
+        execution_registry = get_provider_execution_registry()
         required_caps = {"chat_completion", "text_generation"}
         preferred = str(task.preferred_provider or "").strip().lower()
 
@@ -80,16 +80,22 @@ class BuiltinProviderEngine(BaseExpressionEngine):
                     )
                     continue
 
-                from ai_karen_engine.integrations.llm_registry import get_provider
-
-                provider = get_provider(provider_id, model=model_id)
+                provider = execution_registry.create_provider(
+                    provider_id,
+                    model=model_id,
+                )
                 if not provider:
+                    error_type = (
+                        "provider_execution_not_configured"
+                        if not execution_registry.is_configured()
+                        else "provider_not_found"
+                    )
                     attempts.append(
                         {
                             "provider": provider_id,
                             "model": model_id,
                             "status": "failed",
-                            "error_type": "provider_not_found",
+                            "error_type": error_type,
                             "latency_ms": (time.perf_counter() - attempt_start) * 1000,
                         }
                     )
