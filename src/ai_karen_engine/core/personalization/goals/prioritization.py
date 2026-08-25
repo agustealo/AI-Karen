@@ -8,12 +8,12 @@ goals deserve active work, without touching schedulers or executors.
 from __future__ import annotations
 
 import logging
-import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .contracts import (
     Goal,
+    GoalOrigin,
     GoalPriority,
     GoalPriorityAssessment,
     GoalState,
@@ -72,8 +72,6 @@ class GoalPrioritizer:
         )
         score = max(0.0, min(1.0, score))
 
-        if goal.goal_type.value == GoalPriority.CRITICAL.value:
-            pass
         if explicit >= 0.9:
             reason_codes.append("critical_priority")
         if urgency >= 0.8:
@@ -84,8 +82,8 @@ class GoalPrioritizer:
             reason_codes.append("dependency_pressure")
         if blocking >= 0.7:
             reason_codes.append("blocking_impact")
-        if goal.origin.value == GoalOrigin.INFERRED.value if False else False:
-            pass
+        if goal.origin == GoalOrigin.INFERRED:
+            reason_codes.append("inferred_source_lower_default")
         if not reason_codes:
             reason_codes.append("baseline")
 
@@ -106,18 +104,19 @@ class GoalPrioritizer:
         context: Optional[Dict[str, Any]] = None,
         top_k: int = 5,
     ) -> List[Goal]:
-        """Select goals that are eligible for active work.
+        """Select goals eligible for active work.
 
         Excludes PAUSED, EXPIRED, ABANDONED, SUPERSEDED, COMPLETED,
-        and BLOCKED goals that cannot yet proceed.
+        and goals whose dependencies are not yet satisfiable.
         """
-        eligible = [
-            g for g in goals
-            if g.state in (GoalState.ACTIVE, GoalState.SATISFIED, GoalState.AT_RISK, GoalState.PROPOSED)
-            and g.state != GoalState.PAUSED
-            and not (g.expires_at is not None and datetime.utcnow() > g.expires_at)
-            and not g.is_terminal()
-        ]
+        now = datetime.utcnow()
+        eligible: List[Goal] = []
+        for g in goals:
+            if g.state in (GoalState.ACTIVE, GoalState.SATISFIED, GoalState.AT_RISK, GoalState.PROPOSED):
+                if g.expires_at is not None and now > g.expires_at:
+                    continue
+                if not g.is_terminal():
+                    eligible.append(g)
         assessed = [(g, self.assess(g, context)) for g in eligible]
         assessed.sort(key=lambda pair: pair[1].score, reverse=True)
         return [g for g, _ in assessed[:top_k]]
@@ -144,9 +143,12 @@ class GoalPrioritizer:
         now = datetime.utcnow()
         if goal.target_date is not None:
             remaining = (goal.target_date - now).total_seconds()
-            total_span = max(1.0, remaining + 1.0)
-            urgency = max(0.0, min(1.0, 1.0 - remaining / (remaining + abs(total_span))))
-            return urgency
+            if remaining <= 0:
+                return 1.0
+            reference_window = remaining * 4.0
+            if reference_window <= 0:
+                return 1.0
+            return max(0.0, min(1.0, 1.0 - remaining / reference_window))
         explicit_urgency = context.get("explicit_urgency", 0.0)
         if isinstance(explicit_urgency, (int, float)):
             return max(0.0, min(1.0, float(explicit_urgency)))
@@ -165,29 +167,26 @@ class GoalPrioritizer:
         remaining = (goal.target_date - now).total_seconds()
         if remaining <= 0:
             return 0.0
-        max_seconds = context_max_deadline := remaining + 86400.0
-        return max(0.0, min(1.0, 1.0 - remaining / max_seconds)) if max_seconds > 0 else 0.0
+        reference = remaining + 86400.0
+        return max(0.0, min(1.0, 1.0 - remaining / reference)) if reference > 0 else 0.0
 
     def _dependency_pressure(self, goal: Goal, context: Dict[str, Any]) -> float:
         dep_count = context.get("dependency_count", {}).get(goal.goal_id, 0)
-        return max(0.0, min(1.0, dep_count / 5.0))
+        return max(0.0, min(1.0, float(dep_count) / 5.0))
 
     def _blocking_impact(self, goal: Goal, context: Dict[str, Any]) -> float:
         blocked_count = context.get("blocked_count", {}).get(goal.goal_id, 0)
-        return max(0.0, min(1.0, blocked_count / 5.0))
+        return max(0.0, min(1.0, float(blocked_count) / 5.0))
 
     def _hierarchy_factor(self, goal: Goal, context: Dict[str, Any]) -> float:
         depth = context.get("hierarchy_depth", {}).get(goal.goal_id, 0)
-        return max(0.0, min(1.0, depth / 5.0))
+        return max(0.0, min(1.0, float(depth) / 5.0))
 
     def _context_relevance(self, goal: Goal, context: Dict[str, Any]) -> float:
         relevance = context.get("goal_relevance", {}).get(goal.goal_id, 0.3)
         if not isinstance(relevance, (int, float)):
             relevance = 0.3
         return max(0.0, min(1.0, float(relevance)))
-
-
-from .contracts import GoalOrigin  # noqa: E402
 
 
 __all__ = ["GoalPrioritizer"]

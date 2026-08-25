@@ -27,7 +27,7 @@ class SalienceAggregator:
         if not assessments:
             return SalienceAggregationResult()
 
-        dims = {dim: [] for dim in SalienceDimension}
+        dims: dict[SalienceDimension, list[float]] = {dim: [] for dim in SalienceDimension}
         for a in assessments:
             for dim in SalienceDimension:
                 val = getattr(a, dim.value, 0.0)
