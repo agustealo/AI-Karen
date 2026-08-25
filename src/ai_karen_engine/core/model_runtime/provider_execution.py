@@ -1,8 +1,8 @@
 """Core-owned provider execution boundary.
 
 The AI machine owns *when* and *which* provider executes, but it must never
-import concrete integration/provider implementations.  Outer composition layers
-register a factory here at startup.  Core consumers resolve provider instances
+import concrete integration/provider implementations. Outer composition layers
+register a factory here at startup. Core consumers resolve provider instances
 through this port only.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import Any, Protocol, runtime_checkable
 class ProviderExecutionPort(Protocol):
     """Minimal provider surface consumed by Core expression engines.
 
-    Concrete providers may expose sync or async generation methods.  The
+    Concrete providers may expose sync or async generation methods. The
     expression engines intentionally perform capability detection so adapters
     remain backwards compatible while provider implementations migrate toward a
     single typed execution contract.
@@ -32,19 +32,40 @@ class ProviderExecutionRegistry:
     """Process-local registry for provider construction adapters.
 
     This registry contains factories supplied by the application composition
-    edge.  It deliberately contains no provider discovery, secrets, SDK imports,
+    edge. It deliberately contains no provider discovery, secrets, SDK imports,
     plugin loading, or integration-specific behavior.
+
+    Factory replacement is explicit. A plugin or extension therefore cannot
+    silently overwrite the provider-construction authority after bootstrap.
     """
 
     def __init__(self) -> None:
         self._factory: ProviderFactory | None = None
         self._lock = RLock()
 
-    def register_factory(self, factory: ProviderFactory) -> None:
-        """Install the application-level provider factory."""
+    def register_factory(
+        self,
+        factory: ProviderFactory,
+        *,
+        replace: bool = False,
+    ) -> None:
+        """Install the application-level provider factory.
+
+        Re-registering the identical factory is idempotent. Replacing a
+        different factory requires ``replace=True`` so authority changes are
+        deliberate and auditable at the composition edge.
+        """
         if not callable(factory):
             raise TypeError("provider factory must be callable")
+
         with self._lock:
+            if self._factory is factory:
+                return
+            if self._factory is not None and not replace:
+                raise RuntimeError(
+                    "provider execution factory is already registered; "
+                    "pass replace=True only from controlled bootstrap/reload code"
+                )
             self._factory = factory
 
     def clear_factory(self) -> None:
@@ -56,7 +77,11 @@ class ProviderExecutionRegistry:
         with self._lock:
             return self._factory is not None
 
-    def create_provider(self, provider_id: str, **kwargs: Any) -> ProviderExecutionPort | None:
+    def create_provider(
+        self,
+        provider_id: str,
+        **kwargs: Any,
+    ) -> ProviderExecutionPort | None:
         """Construct a provider through the registered outer-layer factory."""
         with self._lock:
             factory = self._factory
@@ -73,9 +98,13 @@ def get_provider_execution_registry() -> ProviderExecutionRegistry:
     return _registry
 
 
-def register_provider_factory(factory: ProviderFactory) -> None:
+def register_provider_factory(
+    factory: ProviderFactory,
+    *,
+    replace: bool = False,
+) -> None:
     """Register an outer-layer provider factory with the Core execution port."""
-    _registry.register_factory(factory)
+    _registry.register_factory(factory, replace=replace)
 
 
 __all__ = [
