@@ -7,18 +7,21 @@ import inspect
 import os
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Iterable, Iterator, List, Mapping, Optional
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
+from ai_karen_engine.core.model_runtime.openai_compatible_client import (
+    OpenAICompatibleRuntimeClient,
+)
+from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
 from ai_karen_engine.core.model_runtime.provider_endpoint import (
     ProviderEndpoint,
     ProviderEndpointType,
 )
 from ai_karen_engine.core.model_runtime.provider_health_monitor import (
-    ProviderHealthMonitor,
     HealthStatus,
+    ProviderHealthMonitor,
 )
 from ai_karen_engine.core.model_runtime.provider_registry_service import (
     ProviderCapability,
@@ -32,12 +35,6 @@ from ai_karen_engine.core.runtime.resilience.circuit_breaker import (
 from ai_karen_engine.core.runtime.resilience.fallback_manager import (
     FallbackManager as ResilienceFallbackManager,
     get_fallback_manager as get_resilience_fallback_manager,
-)
-from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
-    TransformersRuntime,
-)
-from ai_karen_engine.integrations.providers.openai_compatible_provider import (
-    OpenAICompatibleProvider,
 )
 
 logger = get_logger(__name__)
@@ -75,8 +72,6 @@ class ModelManager:
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}
         self._runtime_cache: Dict[str, Any] = {}
 
-    # ------------------------------------------------------------------
-    # Selection
     def select_provider(
         self,
         capability: str = "chat_completion",
@@ -84,8 +79,6 @@ class ModelManager:
         context: Optional[Dict[str, Any]] = None,
         stream: bool = False,
     ) -> Optional[RuntimeSelection]:
-        """Select a provider endpoint for the requested capability."""
-
         preferred_provider = None
         if context:
             preferred_provider = context.get("preferred_provider")
@@ -128,7 +121,6 @@ class ModelManager:
     ) -> Optional[ProviderCapability]:
         if isinstance(capability, ProviderCapability):
             return capability
-
         value = str(capability or "").strip().lower()
         if value in {"chat", "chat_completion", "text", "text_generation"}:
             return ProviderCapability.TEXT_GENERATION
@@ -136,7 +128,6 @@ class ModelManager:
             return ProviderCapability.EMBEDDINGS
         if value == "streaming":
             return ProviderCapability.STREAMING
-
         try:
             return ProviderCapability(value)
         except Exception:
@@ -154,13 +145,10 @@ class ModelManager:
         if endpoint:
             return endpoint
 
-        # Treat registered providers from the base registry as OpenAI-compatible
-        # endpoints if they expose a base URL and default model in config.
-        provider_info = self.registry.base_registry.get_provider_info(provider_id)
-        if not provider_info:
+        registration = getattr(self.registry, "_provider_registrations", {}).get(provider_id)
+        if registration is None:
             return None
-
-        base_url = getattr(provider_info, "base_url", None)
+        base_url = registration.metadata.get("base_url") if registration.metadata else None
         endpoint_type = (
             ProviderEndpointType.OPENAI_COMPATIBLE
             if base_url
@@ -168,22 +156,20 @@ class ModelManager:
         )
         return ProviderEndpoint(
             provider_id=provider_id,
-            display_name=getattr(provider_info, "display_name", provider_id),
+            display_name=registration.description or provider_id,
             endpoint_type=endpoint_type,
             base_url=base_url,
             enabled=True,
             builtin=False,
             tenant_scoped=True,
-            supports_streaming=True,
-            supports_embeddings=True,
+            supports_streaming=registration.supports_streaming,
+            supports_embeddings=registration.supports_embeddings,
             supports_models_endpoint=bool(base_url),
             fallback_eligible=True,
-            default_model=getattr(provider_info, "default_model", None),
-            metadata={},
+            default_model=registration.default_model,
+            metadata=dict(registration.metadata),
         )
 
-    # ------------------------------------------------------------------
-    # Execution
     async def generate_chat(
         self,
         messages: List[Dict[str, Any]],
@@ -191,33 +177,24 @@ class ModelManager:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        """Generate a chat response using the centrally selected runtime."""
-
-        selection = self.select_provider(
-            "chat_completion",
-            context=context,
-            stream=stream,
-        )
+        selection = self.select_provider("chat_completion", context=context, stream=stream)
         if not selection:
-            return self._degraded_chat_response(messages, context=context)
+            raise ProviderNotAvailable("No capable model provider is available")
 
         prompt = self._messages_to_prompt(messages)
         provider = self._get_runtime(selection)
 
         if not self._provider_is_healthy(selection.provider_id):
-            logger.warning("Provider %s unhealthy, using fallback", selection.provider_id)
-            return self._degraded_chat_response(messages, context=context)
+            raise ProviderNotAvailable(f"Provider unhealthy: {selection.provider_id}")
 
         breaker = self._get_breaker(selection.provider_id)
         if not breaker.allow_request():
-            logger.warning("Circuit breaker open for %s", selection.provider_id)
-            return self._degraded_chat_response(messages, context=context)
+            raise ProviderNotAvailable(f"Circuit breaker open: {selection.provider_id}")
 
         start = time.perf_counter()
         try:
             if stream:
                 return self.stream_provider(provider, prompt, **kwargs)
-
             response = await self.invoke_provider(provider, prompt, **kwargs)
             self._record_provider_result(selection.provider_id, True, start)
             breaker.record_success()
@@ -231,11 +208,9 @@ class ModelManager:
             )
             breaker.record_failure()
             logger.exception("Primary provider %s failed", selection.provider_id)
-            return self._degraded_chat_response(messages, context=context, error=exc)
+            raise
 
     async def generate_embedding(self, text: str, **kwargs: Any) -> List[float]:
-        """Generate an embedding using the configured embedding manager."""
-
         try:
             return await asyncio.to_thread(self.embedding_manager.embed, text)
         except Exception as exc:
@@ -243,29 +218,15 @@ class ModelManager:
             return self._deterministic_embedding(text)
 
     @classmethod
-    async def invoke_provider(
-        cls,
-        provider: Any,
-        prompt: str,
-        **kwargs: Any,
-    ) -> Any:
-        """Invoke a provider without exposing provider-specific call sites."""
-
-        for method_name in (
-            "generate_chat",
-            "generate_text",
-            "generate_response",
-            "chat",
-        ):
+    async def invoke_provider(cls, provider: Any, prompt: str, **kwargs: Any) -> Any:
+        for method_name in ("generate_chat", "generate_text", "generate_response", "chat"):
             method = getattr(provider, method_name, None)
             if not callable(method):
                 continue
-
             result = method(prompt, **kwargs)
             if inspect.isawaitable(result):
                 return await result
             return await asyncio.to_thread(lambda: result)
-
         raise AttributeError("Provider does not expose a supported generation method")
 
     @classmethod
@@ -275,42 +236,28 @@ class ModelManager:
         prompt: str,
         **kwargs: Any,
     ) -> AsyncIterator[str]:
-        """Stream from a provider through a neutral async iterator."""
-
-        for method_name in (
-            "stream_generate",
-            "generate_text_stream",
-            "stream_chat",
-            "stream",
-        ):
+        for method_name in ("stream_generate", "generate_text_stream", "stream_chat", "stream"):
             method = getattr(provider, method_name, None)
             if not callable(method):
                 continue
-
             result = method(prompt, **kwargs)
             if inspect.isawaitable(result):
                 result = await result
-
             if hasattr(result, "__aiter__"):
                 async for chunk in result:
                     if chunk:
                         yield str(chunk)
                 return
-
             for chunk in result:
                 if chunk:
                     yield str(chunk)
             return
-
-        # Fall back to a single chunk if the provider only supports sync text.
         text = await cls.invoke_provider(provider, prompt, **kwargs)
         if text:
             yield str(text)
 
     @classmethod
     def invoke_provider_sync(cls, provider: Any, prompt: str, **kwargs: Any) -> Any:
-        """Synchronous wrapper for legacy sync call sites."""
-
         return asyncio.run(cls.invoke_provider(provider, prompt, **kwargs))
 
     @classmethod
@@ -320,26 +267,20 @@ class ModelManager:
         text: str,
         **kwargs: Any,
     ) -> List[float]:
-        """Synchronous wrapper for embedding call sites."""
-
         async def _invoke() -> List[float]:
             manager = get_model_manager()
             return await manager.invoke_embedding(provider, text, **kwargs)
-
         return asyncio.run(_invoke())
 
     @classmethod
     def stream_provider_sync(
         cls, provider: Any, prompt: str, **kwargs: Any
     ) -> Iterator[str]:
-        """Synchronous wrapper that materializes the async stream."""
-
         async def _collect() -> List[str]:
             items: List[str] = []
             async for chunk in cls.stream_provider(provider, prompt, **kwargs):
                 items.append(chunk)
             return items
-
         for chunk in asyncio.run(_collect()):
             yield chunk
 
@@ -349,8 +290,6 @@ class ModelManager:
         text: str,
         **kwargs: Any,
     ) -> List[float]:
-        """Invoke a provider's embedding capability without direct call sites."""
-
         for method_name in ("embed", "get_embeddings"):
             method = getattr(provider, method_name, None)
             if not callable(method):
@@ -359,21 +298,16 @@ class ModelManager:
             if inspect.isawaitable(result):
                 return await result
             return await asyncio.to_thread(lambda: result)
-
         raise AttributeError("Provider does not expose an embedding method")
 
-    # ------------------------------------------------------------------
-    # Runtime cache / adapters
     def _get_runtime(self, selection: RuntimeSelection) -> Any:
         provider_id = selection.provider_id
         runtime = self._runtime_cache.get(provider_id)
         if runtime is not None:
             return runtime
-
         endpoint = self._resolve_endpoint(provider_id)
         if not endpoint:
             raise RuntimeError(f"Provider endpoint not found: {provider_id}")
-
         runtime = self._build_runtime(endpoint)
         self._runtime_cache[provider_id] = runtime
         return runtime
@@ -381,43 +315,36 @@ class ModelManager:
     def _build_runtime(self, endpoint: ProviderEndpoint) -> Any:
         if endpoint.endpoint_type == ProviderEndpointType.BUILTIN_TRANSFORMERS:
             from ai_karen_engine.config.config_manager import get_default_model
-            from ai_karen_engine.core.model_runtime.providers.core_helpers_runtime import (
-                CoreHelpersRuntime,
-            )
-
+            from ai_karen_engine.core.model_runtime.providers.core_helpers_runtime import CoreHelpersRuntime
             model_path = endpoint.default_model or None
             if not model_path or model_path == "auto":
                 model_path = get_default_model("builtin_transformers") or "auto"
-            runtime = CoreHelpersRuntime(
+            return CoreHelpersRuntime(
                 text_model=model_path,
                 embedding_model="/app/models/transformers/distilbert-base-uncased",
             )
-            return runtime
 
         if endpoint.endpoint_type == ProviderEndpointType.BUILTIN_VLLM:
             from ai_karen_engine.core.model_runtime.providers.vllm_runtime import VLLMRuntime
-
-            runtime = VLLMRuntime.get_instance(
+            return VLLMRuntime.get_instance(
                 model=endpoint.default_model or "auto",
                 base_url=endpoint.base_url,
                 api_key_env=endpoint.api_key_env,
             )
-            return runtime
 
+        if not endpoint.base_url:
+            raise ProviderNotAvailable(f"Provider has no executable endpoint: {endpoint.provider_id}")
         api_key = None
         if endpoint.api_key_env:
             api_key = (os.getenv(endpoint.api_key_env) or "").strip() or None
-
-        runtime = OpenAICompatibleProvider(
+        runtime = OpenAICompatibleRuntimeClient(
             model=endpoint.default_model or "auto",
             base_url=endpoint.base_url,
             api_key=api_key,
-            provider_name="openai_compatible",
+            provider_name=endpoint.provider_id,
+            timeout_seconds=endpoint.timeout_seconds,
         )
-        runtime.provider_name = endpoint.provider_id
         runtime.display_name = endpoint.display_name
-        if endpoint.api_key_env:
-            runtime.api_key_env_var = endpoint.api_key_env
         return runtime
 
     def _provider_is_healthy(self, provider_id: str) -> bool:
@@ -425,7 +352,6 @@ class ModelManager:
         if health is None or health.status == HealthStatus.UNKNOWN:
             status = self.registry.get_provider_status(provider_id)
             return bool(status and status.is_available)
-
         return health.status in {HealthStatus.HEALTHY, HealthStatus.DEGRADED}
 
     def _get_breaker(self, provider_id: str) -> CircuitBreaker:
@@ -453,47 +379,19 @@ class ModelManager:
         except Exception:
             pass
 
-    def _degraded_chat_response(
-        self,
-        messages: List[Dict[str, Any]],
-        *,
-        context: Optional[Dict[str, Any]] = None,
-        error: Optional[Exception] = None,
-    ) -> str:
-        last_user = ""
-        for message in reversed(messages or []):
-            if str(message.get("role", "")).lower() == "user":
-                last_user = str(message.get("content", "")).strip()
-                break
-
-        summary = last_user[:120] if last_user else "the request"
-        provider_hint = context.get("preferred_provider") if context else None
-        base = "Karen is operating in degraded mode"
-        if provider_hint:
-            base += f" after {provider_hint} was unavailable"
-        if error:
-            base += f" ({type(error).__name__})"
-        return f"{base}. I can still help with {summary}."
-
     def _messages_to_prompt(self, messages: Iterable[Dict[str, Any]]) -> str:
         parts: List[str] = []
         for message in messages:
             role = str(message.get("role", "user")).strip().upper() or "USER"
             content = str(message.get("content", "")).strip()
-            if not content:
-                continue
-            parts.append(f"{role}: {content}")
+            if content:
+                parts.append(f"{role}: {content}")
         return "\n".join(parts).strip()
 
     def _deterministic_embedding(self, text: str, dimensions: int = 16) -> List[float]:
         import hashlib
-
         digest = hashlib.sha256((text or "").encode("utf-8")).digest()
-        values: List[float] = []
-        for index in range(dimensions):
-            byte = digest[index % len(digest)]
-            values.append((byte / 255.0) * 2.0 - 1.0)
-        return values
+        return [((digest[index % len(digest)] / 255.0) * 2.0 - 1.0) for index in range(dimensions)]
 
 
 _model_manager: Optional[ModelManager] = None
@@ -512,9 +410,4 @@ def initialize_model_manager() -> ModelManager:
     return _model_manager
 
 
-__all__ = [
-    "ModelManager",
-    "RuntimeSelection",
-    "get_model_manager",
-    "initialize_model_manager",
-]
+__all__ = ["ModelManager", "RuntimeSelection", "get_model_manager", "initialize_model_manager"]
