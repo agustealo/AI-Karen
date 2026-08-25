@@ -14,7 +14,7 @@ Version: 1.0.0 (Cognitive Architecture)
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ai_karen_engine.core.memory.contracts import SalienceScore
 
@@ -88,7 +88,7 @@ class ForgettingPolicy:
         """Compute staleness penalty based on time since last confirmation."""
         if last_confirmed is None:
             return 0.5  # Default penalty for unconfirmed memories
-        days = (datetime.utcnow() - last_confirmed).total_seconds() / 86400.0
+        days = (datetime.now(tz=timezone.utc) - last_confirmed).total_seconds() / 86400.0
         return min(1.0, days * self.staleness_penalty_per_day)
 
 

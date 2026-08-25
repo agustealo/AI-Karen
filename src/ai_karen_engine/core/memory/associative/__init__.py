@@ -11,7 +11,7 @@ Version: 1.0.0 (Cognitive Architecture)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Any
 
 from ai_karen_engine.core.memory.contracts import RecallScoreComponents
 from ai_karen_engine.core.memory.types import CognitiveMemoryEntry

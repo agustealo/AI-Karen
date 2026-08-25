@@ -10,8 +10,7 @@ Version: 1.0.0 (Cognitive Architecture)
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 
 from ai_karen_engine.core.memory.contracts import MemoryClaim
 from ai_karen_engine.core.memory.types import CognitiveMemoryEntry, ReflectionCandidate
@@ -87,7 +86,7 @@ class ReflectionEngine:
                 confidence=confidence,
                 provenance=[p for ep in episodes for p in (ep.claim.provenance if ep.claim else [])],
                 evidence=[ep.base_entry.id for ep in episodes],
-                asserted_at=datetime.utcnow(),
+                asserted_at=datetime.now(tz=timezone.utc),
                 status=claim.status,
             ),
             evidence_count=len(episodes),
@@ -113,5 +112,5 @@ class ReflectionEngine:
         """Check if reflection should run."""
         if self._last_reflection is None:
             return True
-        elapsed = (datetime.utcnow() - self._last_reflection).total_seconds() / 3600.0
+        elapsed = (datetime.now(tz=timezone.utc) - self._last_reflection).total_seconds() / 3600.0
         return elapsed >= self.reflection_interval_hours

@@ -10,8 +10,8 @@ Version: 1.0.0 (Cognitive Architecture)
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any
 
 from ai_karen_engine.core.memory.contracts import SelfModel
 
@@ -60,5 +60,5 @@ class SelfModelStore:
         """Record a significant decision."""
         self._model.significant_decisions.append({
             **decision,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         })

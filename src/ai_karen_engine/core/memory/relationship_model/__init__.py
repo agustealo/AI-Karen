@@ -10,8 +10,8 @@ Version: 1.0.0 (Cognitive Architecture)
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any
 
 from ai_karen_engine.core.memory.contracts import RelationshipModel
 
@@ -37,7 +37,7 @@ class RelationshipModelStore:
         """Record a past decision."""
         self._model.past_decisions.append({
             **decision,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         })
 
     def set_interaction_style(self, key: str, value: Any) -> None:
@@ -58,5 +58,5 @@ class RelationshipModelStore:
         """Record an interaction."""
         self._model.interaction_history.append({
             **interaction,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         })

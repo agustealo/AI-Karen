@@ -10,8 +10,7 @@ Version: 1.0.0 (Cognitive Architecture)
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ai_karen_engine.core.memory.contracts import MemoryClaim, UserModel
 

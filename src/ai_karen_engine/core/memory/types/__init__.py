@@ -40,7 +40,7 @@ from .base import (
     MemoryNamespace as MemoryNamespace,
     MemoryPriority as MemoryPriority,
     MemoryStatus as MemoryStatus,
-    MemoryType as BaseMemoryType,
+    MemoryType as MemoryType,
     MemoryVisibility as MemoryVisibility,
 )
 

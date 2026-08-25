@@ -52,9 +52,6 @@ class ClaimStatus(str, Enum):
 MemoryLifecycleState = ClaimStatus
 
 
-MemorySalience = SalienceScore
-
-
 @dataclass
 class MemoryClaim:
     """
@@ -68,7 +65,7 @@ class MemoryClaim:
     confidence: float = 0.5
     provenance: list[str] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
-    asserted_at: datetime = field(default_factory=datetime.utcnow)
+    asserted_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
     valid_from: datetime | None = None
     valid_until: datetime | None = None
     last_confirmed: datetime | None = None
@@ -93,9 +90,9 @@ class MemoryClaim:
         return max(0.0, base - penalty)
 
 
-# ===================================
-# SALIENCE SCORING
-# ===================================
+MemorySalience = SalienceScore
+
+
 
 @dataclass
 class SalienceScore:
