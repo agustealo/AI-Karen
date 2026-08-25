@@ -1,24 +1,28 @@
-"""Builds real cognitive-domain objects from declarative scenario fixtures.
-
-Every helper here maps a small, declarative YAML fragment into the concrete
-domain contracts used by Karen's cognitive modules (beliefs, preferences,
-goals, commitments, salience signals, ...) so scenarios stay data-driven.
-"""
+"""Build real cognitive-domain objects from declarative benchmark scenarios."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
+from ai_karen_engine.core.adaptive.salience.contracts import (
+    ExpectedState,
+    ObservedState,
+    PredictionError,
+    SalienceDimension,
+    SalienceReasonCode,
+    SalienceSignal,
+    SalienceSource,
+    UserEmphasisSignal,
+)
+from ai_karen_engine.core.contracts.cognitive import EpistemicConfidence
 from ai_karen_engine.core.personalization.contracts import (
     PreferenceCategory,
-    PreferenceEvidenceSourceType,
     PreferenceRecord,
     PreferenceScope,
     PreferenceState,
     PreferenceStability,
-    UserGoalStatus,
 )
 from ai_karen_engine.core.personalization.goals.contracts import (
     Commitment,
@@ -26,10 +30,9 @@ from ai_karen_engine.core.personalization.goals.contracts import (
     CommitmentEvidence,
     CommitmentParty,
     CommitmentSource,
-    CommitmentStrength,
     CommitmentStatus,
+    CommitmentStrength,
     CompletionEvidenceSource,
-    EvidenceSourceType,
     Goal,
     GoalOrigin,
     GoalPriority,
@@ -50,19 +53,6 @@ from ai_karen_engine.core.reasoning.belief.contracts import (
     EvidenceStrength,
     EvidenceType,
 )
-from ai_karen_engine.core.adaptive.salience.contracts import (
-    PredictionError,
-    UserEmphasisSignal,
-    ExpectedState,
-    ObservedState,
-    SalienceSignal,
-    SalienceDimension,
-    SalienceReasonCode,
-    SalienceSource,
-)
-
-# Sentinel used to make type-checkers/ignores explicit at import boundaries.
-# (mypy is told to ignore the cognitive imports via per-line comments.)
 
 
 def _enum(value: Any, enum_cls: Any, default: Any) -> Any:
@@ -81,51 +71,59 @@ def _enum(value: Any, enum_cls: Any, default: Any) -> Any:
 
 
 def _parse_dt(value: Any) -> datetime | None:
+    """Normalize fixture time to timezone-aware UTC."""
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
-        return value.replace(tzinfo=None) if value.tzinfo is not None else value
-    text = str(value)
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone().replace(tzinfo=None)
-    return dt
+        dt = value
+    else:
+        text = str(value)
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _parse_claim_text(text: str) -> tuple[str, str, str]:
-    """Parse a ``subject predicate=object`` style claim shorthand."""
     if "=" in text:
         left, obj = text.split("=", 1)
-        left = left.strip()
-        parts = left.split()
+        parts = left.strip().split()
         if len(parts) >= 2:
             return parts[0], parts[1], obj.strip()
         if len(parts) == 1:
             return parts[0], "is", obj.strip()
         return "fact", "is", text.strip()
-    if " " in text.strip():
-        parts = text.strip().split()
+    parts = text.strip().split()
+    if len(parts) > 1:
         return parts[0], "is", " ".join(parts[1:])
     return text.strip(), "is", ""
 
 
 def build_claim(d: dict[str, Any], tenant_id: str, user_id: str) -> BeliefClaim:
     claim_id = d.get("id") or d.get("claim_id") or f"claim_{id(d)}"
-    if "subject" in d and "predicate" in d and "object" in d:
+    if {"subject", "predicate", "object"} <= d.keys():
         subject, predicate, obj = d["subject"], d["predicate"], d["object"]
     else:
         subject, predicate, obj = _parse_claim_text(d.get("claim", d.get("subject", "")))
+    temporal_data = d.get("temporal", {})
     temporal = ClaimTemporalValidity(
-        asserted_at=_parse_dt(d.get("temporal", {}).get("asserted_at")),
-        observed_at=_parse_dt(d.get("temporal", {}).get("observed_at")),
-        valid_from=_parse_dt(d.get("temporal", {}).get("valid_from")),
-        valid_until=_parse_dt(d.get("temporal", {}).get("valid_until")),
-        last_verified_at=_parse_dt(d.get("temporal", {}).get("last_verified_at")),
+        asserted_at=_parse_dt(temporal_data.get("asserted_at")),
+        observed_at=_parse_dt(temporal_data.get("observed_at")),
+        event_time=_parse_dt(temporal_data.get("event_time")),
+        valid_from=_parse_dt(temporal_data.get("valid_from")),
+        valid_until=_parse_dt(temporal_data.get("valid_until")),
+        last_verified_at=_parse_dt(temporal_data.get("last_verified_at")),
+        superseded_at=_parse_dt(temporal_data.get("superseded_at")),
+        deleted_at=_parse_dt(temporal_data.get("deleted_at")),
     )
     return BeliefClaim(
         claim_id=claim_id,
@@ -136,7 +134,7 @@ def build_claim(d: dict[str, Any], tenant_id: str, user_id: str) -> BeliefClaim:
         source=_enum(d.get("source"), EvidenceType, EvidenceType.OBSERVATION),
         source_ref=d.get("source_ref"),
         scope=_enum(d.get("scope"), ClaimScope, ClaimScope.USER),
-        confidence=float(d.get("confidence", 0.5)),
+        confidence=EpistemicConfidence(float(d.get("confidence", 0.5))),
         tenant_id=tenant_id,
         user_id=user_id if d.get("user_scoped", True) else None,
         claim_format=d.get("claim_format", "triple"),
@@ -159,13 +157,10 @@ def build_evidence(d: dict[str, Any], tenant_id: str, user_id: str) -> Evidence:
         content=d.get("content", ""),
         summary=d.get("summary", ""),
         strength=_enum(d.get("strength"), EvidenceStrength, EvidenceStrength.MODERATE),
-        relation=_enum(
-            d.get("relation"),
-            EvidenceRelation,
-            EvidenceRelation.SUPPORTS,
-        ),
+        relation=_enum(d.get("relation"), EvidenceRelation, EvidenceRelation.SUPPORTS),
         confidence=float(d.get("confidence", 0.8)),
         observed_at=_parse_dt(d.get("observed_at")),
+        event_time=_parse_dt(d.get("event_time")),
         expires_at=_parse_dt(d.get("expires_at")),
         authority=d.get("authority", ""),
         tenant_id=d.get("tenant_id", tenant_id),
@@ -178,7 +173,7 @@ def build_evidence(d: dict[str, Any], tenant_id: str, user_id: str) -> Evidence:
 
 
 def build_preference(d: dict[str, Any], tenant_id: str, user_id: str) -> PreferenceRecord:
-    now = _parse_dt(d.get("observed_at")) or datetime.utcnow()
+    now = _parse_dt(d.get("observed_at")) or _now()
     return PreferenceRecord(
         preference_id=d.get("id") or d.get("preference_id") or f"pref_{id(d)}",
         user_id=d.get("user_id", user_id),
@@ -196,17 +191,13 @@ def build_preference(d: dict[str, Any], tenant_id: str, user_id: str) -> Prefere
         source_types=list(d.get("source_types", d.get("sources", ["explicit_user_statement"]))),
         scope=_enum(d.get("scope"), PreferenceScope, PreferenceScope.GLOBAL),
         version=int(d.get("version", 1)),
-        category=_enum(
-            d.get("category"),
-            PreferenceCategory,
-            PreferenceCategory.DOMAIN,
-        ),
+        category=_enum(d.get("category"), PreferenceCategory, PreferenceCategory.DOMAIN),
         metadata=dict(d.get("metadata", {})),
     )
 
 
 def build_goal(d: dict[str, Any], tenant_id: str, user_id: str) -> Goal:
-    now = _parse_dt(d.get("observed_at")) or datetime.utcnow()
+    now = _parse_dt(d.get("observed_at")) or _now()
     return Goal(
         goal_id=d.get("id") or d.get("goal_id") or f"goal_{id(d)}",
         tenant_id=d.get("tenant_id", tenant_id),
@@ -243,7 +234,7 @@ def build_goal(d: dict[str, Any], tenant_id: str, user_id: str) -> Goal:
 
 
 def build_intention(d: dict[str, Any], tenant_id: str, user_id: str) -> Intention:
-    now = datetime.utcnow()
+    now = _now()
     return Intention(
         intention_id=d.get("id") or d.get("intention_id") or f"int_{id(d)}",
         goal_id=d.get("goal_id", ""),
@@ -252,11 +243,7 @@ def build_intention(d: dict[str, Any], tenant_id: str, user_id: str) -> Intentio
         description=d.get("description", ""),
         state=_enum(d.get("state"), IntentionState, IntentionState.FORMED),
         priority=_enum(d.get("priority"), IntentionPriority, IntentionPriority.MEDIUM),
-        trigger_type=_enum(
-            d.get("trigger_type"),
-            IntentionTriggerType,
-            IntentionTriggerType.GOAL_STATE_RELEVANT,
-        ),
+        trigger_type=_enum(d.get("trigger_type"), IntentionTriggerType, IntentionTriggerType.GOAL_STATE_RELEVANT),
         trigger_condition=d.get("trigger_condition", ""),
         context=d.get("context", ""),
         evidence_refs=list(d.get("evidence", [])),
@@ -269,7 +256,7 @@ def build_intention(d: dict[str, Any], tenant_id: str, user_id: str) -> Intentio
 
 
 def build_commitment(d: dict[str, Any], tenant_id: str, user_id: str) -> Commitment:
-    now = _parse_dt(d.get("observed_at")) or datetime.utcnow()
+    now = _parse_dt(d.get("observed_at")) or _now()
     return Commitment(
         commitment_id=d.get("id") or d.get("commitment_id") or f"commit_{id(d)}",
         tenant_id=d.get("tenant_id", tenant_id),
@@ -312,15 +299,15 @@ def build_commitment(d: dict[str, Any], tenant_id: str, user_id: str) -> Commitm
 
 
 def build_salience_signal(d: dict[str, Any]) -> SalienceSignal:
-    rc = d.get("reason_codes", [])
-    if isinstance(rc, str):
-        rc = [rc]
+    reason_codes = d.get("reason_codes", [])
+    if isinstance(reason_codes, str):
+        reason_codes = [reason_codes]
     return SalienceSignal(
         dimension=_enum(d.get("dimension"), SalienceDimension, SalienceDimension.NOVELTY),
         value=float(d.get("value", 0.0)),
         confidence=float(d.get("confidence", 0.8)),
         source=_enum(d.get("source"), SalienceSource, SalienceSource.ADAPTIVE_SIGNAL),
-        reason_codes=[_enum(r, SalienceReasonCode, SalienceReasonCode.PREDICTION_ERROR) for r in rc],
+        reason_codes=[_enum(r, SalienceReasonCode, SalienceReasonCode.PREDICTION_ERROR) for r in reason_codes],
         decay_rate=float(d.get("decay_rate", 0.1)),
         retrigger_count=int(d.get("retrigger_count", 0)),
         last_activated_at=d.get("last_activated_at"),
@@ -354,18 +341,14 @@ def build_prediction_error(d: dict[str, Any]) -> PredictionError:
             source_ref=d.get("observed", {}).get("source_ref", ""),
         ),
         error_magnitude=float(d.get("error_magnitude", 0.5)),
-        dimension_affected=_enum(
-            d.get("dimension"),
-            SalienceDimension,
-            SalienceDimension.SURPRISE,
-        ),
+        dimension_affected=_enum(d.get("dimension"), SalienceDimension, SalienceDimension.SURPRISE),
         metadata=dict(d.get("metadata", {})),
     )
 
 
 @dataclass
 class CognitiveState:
-    """Fully materialized cognitive state for a scenario."""
+    """Test-owned fully materialized state for a scenario."""
 
     claims: list = field(default_factory=list)
     evidence: dict = field(default_factory=dict)
@@ -383,44 +366,37 @@ class CognitiveState:
 
 
 def build_state(scenario: Any) -> CognitiveState:
-    """Materialize a Scenario's raw dict into a CognitiveState of real objects."""
     raw = scenario.raw
     tenant = scenario.tenant_id
     user = scenario.user_id
     state = CognitiveState()
 
-    claims = [build_claim(c, tenant, user) for c in raw.get("memories", []) or raw.get("claims", [])]
-    for claim in claims:
-        state.claims.append(claim)
+    for claim_data in raw.get("memories", []) or raw.get("claims", []):
+        state.claims.append(build_claim(claim_data, tenant, user))
 
     belief = raw.get("beliefs") or {}
     for ev in belief.get("evidence", []):
-        e = build_evidence(ev, tenant, user)
-        state.evidence.setdefault(e.claim_ids[0] if e.claim_ids else "_global", []).append(e)
-    for cl in belief.get("claims", []):
-        claim = build_claim(cl, tenant, user)
-        if claim.claim_id not in {c.claim_id for c in state.claims}:
+        evidence = build_evidence(ev, tenant, user)
+        key = evidence.claim_ids[0] if evidence.claim_ids else "_global"
+        state.evidence.setdefault(key, []).append(evidence)
+    for claim_data in belief.get("claims", []):
+        claim = build_claim(claim_data, tenant, user)
+        if claim.claim_id not in {existing.claim_id for existing in state.claims}:
             state.claims.append(claim)
 
-    for p in raw.get("preferences", []) or []:
-        state.preferences.append(build_preference(p, tenant, user))
+    state.preferences.extend(build_preference(p, tenant, user) for p in raw.get("preferences", []) or [])
+    state.goals.extend(build_goal(g, tenant, user) for g in raw.get("goals", []) or [])
+    state.intentions.extend(build_intention(i, tenant, user) for i in raw.get("intentions", []) or [])
 
-    for g in raw.get("goals", []) or []:
-        state.goals.append(build_goal(g, tenant, user))
-    for it in raw.get("intentions", []) or []:
-        state.intentions.append(build_intention(it, tenant, user))
+    relationship = raw.get("relationship") or {}
+    state.commitments.extend(
+        build_commitment(c, tenant, user) for c in relationship.get("commitments", []) or []
+    )
 
-    rel = raw.get("relationship") or {}
-    for c in rel.get("commitments", []) or []:
-        state.commitments.append(build_commitment(c, tenant, user))
-
-    sal = raw.get("salience") or {}
-    for s in sal.get("signals", []) or []:
-        state.salience_signals.append(build_salience_signal(s))
-    for e in sal.get("emphasis", []) or []:
-        state.user_emphasis.append(build_user_emphasis(e))
-    for pe in sal.get("prediction_errors", []) or []:
-        state.prediction_errors.append(build_prediction_error(pe))
+    salience = raw.get("salience") or {}
+    state.salience_signals.extend(build_salience_signal(s) for s in salience.get("signals", []) or [])
+    state.user_emphasis.extend(build_user_emphasis(e) for e in salience.get("emphasis", []) or [])
+    state.prediction_errors.extend(build_prediction_error(p) for p in salience.get("prediction_errors", []) or [])
 
     state.context_candidates = [
         {
@@ -435,17 +411,14 @@ def build_state(scenario: Any) -> CognitiveState:
         }
         for i, c in enumerate(raw.get("context_candidates", []) or [])
     ]
-
     state.policy_constraints = {
         "deny": list(raw.get("policy_constraints", {}).get("deny", [])),
         "tenant_boundary": bool(raw.get("policy_constraints", {}).get("tenant_boundary", True)),
         "max_score": raw.get("policy_constraints", {}).get("max_score"),
     }
-
-    for dm in raw.get("deleted", []) or []:
-        state.deleted_ids.add(dm if isinstance(dm, str) else dm.get("id"))
-    for pm in raw.get("purged", []) or []:
-        state.purged_claims.append(build_claim(pm, tenant, user))
-        state.deleted_ids.add(pm.get("id"))
-
+    for deleted in raw.get("deleted", []) or []:
+        state.deleted_ids.add(deleted if isinstance(deleted, str) else deleted.get("id"))
+    for purged in raw.get("purged", []) or []:
+        state.purged_claims.append(build_claim(purged, tenant, user))
+        state.deleted_ids.add(purged.get("id"))
     return state
