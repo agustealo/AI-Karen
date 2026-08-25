@@ -1,34 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol
 
+from ai_karen_engine.core.contracts.cognitive import ReasoningDepth
 from ai_karen_engine.core.reasoning.contracts import (
-    ReasoningBudget,
+    ReasoningAction,
     ReasoningAssessment,
+    ReasoningBudget,
     ReasoningContradiction,
     ReasoningDisposition,
     ReasoningEvidence,
     ReasoningEvidenceNeed,
-    ReasoningEscalationRequest,
     ReasoningErrorCode,
+    ReasoningEscalationRequest,
     ReasoningHypothesis,
     ReasoningRequest as CanonicalReasoningRequest,
     ReasoningResult as CanonicalReasoningResult,
-    ReasoningAction,
     ReasoningStatus,
 )
 
 
-class ReasoningDepth(str, Enum):
-    NONE = "none"
-    LIGHT = "light"
-    STANDARD = "standard"
-    DEEP = "deep"
-
-
-class RouteFamily(str, Enum):
+class RouteFamily(str, __import__("enum").Enum):
     CHAT = "chat"
     SEARCH = "search"
     MEMORY = "memory"
@@ -39,7 +32,7 @@ class RouteFamily(str, Enum):
     DEGRADED = "degraded"
 
 
-class ExecutionMode(str, Enum):
+class ExecutionMode(str, __import__("enum").Enum):
     DIRECT = "direct"
     LANGGRAPH = "langgraph"
     DEGRADED = "degraded"
@@ -100,10 +93,14 @@ class RoutingDecision:
 @dataclass(slots=True)
 class UserContext:
     user_id: str
-    tenant_id: Optional[str] = None
+    tenant_id: str
     roles: List[str] = field(default_factory=list)
     session_id: Optional[str] = None
     thread_id: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("CORTEX requires explicit non-default tenant_id")
 
 
 @dataclass(slots=True)
@@ -143,34 +140,34 @@ class ReasoningRequest:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_canonical(self) -> CanonicalReasoningRequest:
-        """Convert to the canonical core.reasoning.ReasoningRequest."""
         evidence: List[ReasoningEvidence] = []
-        mem_ctx = self.memory_context or {}
-        recall = mem_ctx.get("recall") or []
+        recall = (self.memory_context or {}).get("recall") or []
         for idx, item in enumerate(recall):
             if isinstance(item, dict):
-                evidence.append(ReasoningEvidence(
-                    evidence_id=str(item.get("id", f"mem-{idx}")),
-                    type="memory",
-                    source="memory_recall",
-                    source_ref=str(item.get("timestamp", "")),
-                    content=str(item.get("content", "")),
-                    relevance=0.5,
-                    confidence=0.5,
-                    tenant_id=self.user.tenant_id or "default",
-                ))
+                evidence.append(
+                    ReasoningEvidence(
+                        evidence_id=str(item.get("id", f"mem-{idx}")),
+                        type="memory",
+                        source="memory_recall",
+                        source_ref=str(item.get("timestamp", "")),
+                        content=str(item.get("content", "")),
+                        relevance=0.5,
+                        confidence=0.5,
+                        tenant_id=self.user.tenant_id,
+                    )
+                )
 
         return CanonicalReasoningRequest(
             request_id=self.metadata.get("correlation_id", ""),
             correlation_id=self.metadata.get("correlation_id", ""),
-            tenant_id=self.user.tenant_id or "default",
+            tenant_id=self.user.tenant_id,
             user_id=self.user.user_id,
             conversation_id=self.user.thread_id,
             objective=self.message,
             reasoning_modes=list(self.kire.reasoning_modes or []),
             evidence=evidence,
             constraints={
-                "reasoning_depth": self.kire.reasoning_depth.value if hasattr(self.kire.reasoning_depth, "value") else str(self.kire.reasoning_depth),
+                "reasoning_depth": self.kire.reasoning_depth.value,
                 "should_self_refine": self.kire.should_self_refine,
                 "should_verify": self.kire.should_verify,
                 "should_use_causal": self.kire.should_use_causal_reasoning,
@@ -183,14 +180,11 @@ class ReasoningRequest:
         )
 
     @classmethod
-    def from_canonical(cls, canonical: CanonicalReasoningRequest) -> ReasoningRequest:
-        """Build a legacy cortex request from a canonical request (best-effort)."""
-        depth = ReasoningDepth.STANDARD
+    def from_canonical(cls, canonical: CanonicalReasoningRequest) -> "ReasoningRequest":
         try:
             depth = ReasoningDepth(canonical.constraints.get("reasoning_depth", "standard"))
         except ValueError:
-            pass
-
+            depth = ReasoningDepth.STANDARD
         kire = KireSignal(
             requires_reasoning=True,
             reasoning_depth=depth,
@@ -203,7 +197,6 @@ class ReasoningRequest:
             should_self_refine=canonical.constraints.get("should_self_refine", False),
             should_verify=canonical.constraints.get("should_verify", False),
         )
-
         return cls(
             message=canonical.objective,
             user=UserContext(
@@ -241,8 +234,7 @@ class ReasoningResult:
     evidence_source_mix: Dict[str, int] = field(default_factory=dict)
 
     @classmethod
-    def from_canonical(cls, canonical: CanonicalReasoningResult) -> ReasoningResult:
-        """Build a legacy cortex result from a canonical result."""
+    def from_canonical(cls, canonical: CanonicalReasoningResult) -> "ReasoningResult":
         hypotheses = [h.statement for h in (canonical.hypotheses or [])]
         evidence = [
             {
@@ -267,24 +259,16 @@ class ReasoningResult:
             }
             for c in (canonical.contradictions or [])
         ]
-        verification_notes = []
-        if canonical.verification:
-            verification_notes = [str(v) for v in canonical.verification.values()]
-
-        confidence = 0.0
-        if canonical.assessment:
-            confidence = canonical.assessment.confidence
-
+        confidence = canonical.assessment.confidence if canonical.assessment else 0.0
         return cls(
             summary=canonical.conclusion,
             evidence=evidence,
             hypotheses=hypotheses,
             confidence=confidence,
-            verification_notes=verification_notes,
             diagnostics=canonical.diagnostics or {},
             success=canonical.status not in ("failed", "budget_exhausted"),
             degraded=canonical.status in ("failed", "budget_exhausted"),
-            reasoning_type=canonical.diagnostics.get("reasoning_type", "reasoning") if canonical.diagnostics else "reasoning",
+            reasoning_type=(canonical.diagnostics or {}).get("reasoning_type", "reasoning"),
             contradictions_found=contradictions,
             needs_human_confirmation=canonical.status == "needs_human_confirmation",
         )
@@ -301,33 +285,19 @@ class OrchestrationResult:
 
 
 class IntentEngine(Protocol):
-    def detect(self, request: RuntimeRequest) -> IntentSignal:
-        ...
+    def detect(self, request: RuntimeRequest) -> IntentSignal: ...
 
 
 class PredictorEngine(Protocol):
-    def predict(self, request: RuntimeRequest, intent: IntentSignal) -> PredictorSignal:
-        ...
+    def predict(self, request: RuntimeRequest, intent: IntentSignal) -> PredictorSignal: ...
 
 
 class KireEngine(Protocol):
-    def enrich(
-        self,
-        request: RuntimeRequest,
-        intent: IntentSignal,
-        predictors: PredictorSignal,
-    ) -> KireSignal:
-        ...
+    def enrich(self, request: RuntimeRequest, intent: IntentSignal, predictors: PredictorSignal) -> KireSignal: ...
 
 
 class RbacValidator(Protocol):
-    def validate(
-        self,
-        user: UserContext,
-        intent: IntentSignal,
-        routing: RoutingDecision,
-    ) -> None:
-        ...
+    def validate(self, user: UserContext, intent: IntentSignal, routing: RoutingDecision) -> None: ...
 
 
 class RoutingEngine(Protocol):
@@ -337,18 +307,15 @@ class RoutingEngine(Protocol):
         intent: IntentSignal,
         predictors: PredictorSignal,
         kire: KireSignal,
-    ) -> RoutingDecision:
-        ...
+    ) -> RoutingDecision: ...
 
 
 class KROOrchestrator(Protocol):
-    def run(self, request: ReasoningRequest) -> ReasoningResult:
-        ...
+    def run(self, request: ReasoningRequest) -> ReasoningResult: ...
 
 
 class LangGraphRuntime(Protocol):
-    def run(self, orchestration_input: OrchestrationInput) -> OrchestrationResult:
-        ...
+    def run(self, orchestration_input: OrchestrationInput) -> OrchestrationResult: ...
 
 
 class CorrelationIdFactory:
