@@ -1,36 +1,44 @@
-"""
-Ranking for AI Karen Memory System.
+"""Ranking for the AI Karen memory system.
 
-Ranks retrieved memory candidates based on relevance, confidence, and recency.
+Ranks retrieved memory candidates based on retrieval relevance, confidence, and
+recency contribution. The ranker is a pure cognitive scoring component and has
+no runtime, provider, persistence, or observability authority.
 """
+
+from __future__ import annotations
 
 from typing import Any
 
-from ai_karen_engine.core.logging import get_logger
-
-logger = get_logger(__name__)
 
 class MemoryRanker:
-    """Ranks memory items for context assembly."""
-    
-    def __init__(self):
-        pass
-        
-    def rank(self, candidates: list[dict[str, Any]], query: str = "") -> list[dict[str, Any]]:
-        """Rank candidates using a combined score."""
-        
+    """Rank memory items for context assembly."""
+
+    def rank(
+        self,
+        candidates: list[dict[str, Any]],
+        query: str = "",
+    ) -> list[dict[str, Any]]:
+        """Rank candidates using the canonical combined score."""
+
+        del query  # Reserved for future query-aware ranking without changing the API.
+
         for candidate in candidates:
-            # Base score from retrieval (dense/lexical)
-            base_score = candidate.get("retrieval_score", 0.5)
-            
-            # Boost by confidence
-            confidence = candidate.get("confidence", 1.0)
-            
-            # Recency decay (simplified)
-            # In practice, use timestamp delta
-            recency_multiplier = 1.0 
-            
-            candidate["final_rank_score"] = base_score * 0.5 + confidence * 0.3 + recency_multiplier * 0.2
-            
-        # Sort descending
-        return sorted(candidates, key=lambda x: x.get("final_rank_score", 0.0), reverse=True)
+            base_score = float(candidate.get("retrieval_score", 0.5))
+            confidence = float(candidate.get("confidence", 1.0))
+
+            # Current cognitive contract gives recency a neutral contribution.
+            # Temporal decay belongs to the owning temporal/scoring policy, not
+            # an implicit wall-clock lookup inside this ranker.
+            recency_multiplier = 1.0
+
+            candidate["final_rank_score"] = (
+                base_score * 0.5
+                + confidence * 0.3
+                + recency_multiplier * 0.2
+            )
+
+        return sorted(
+            candidates,
+            key=lambda candidate: float(candidate.get("final_rank_score", 0.0)),
+            reverse=True,
+        )
