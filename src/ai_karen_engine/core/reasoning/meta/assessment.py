@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 
+from ai_karen_engine.core.contracts.cognitive import (
+    ReasoningDepth,
+    VerificationReason,
+    VerificationRequirement,
+)
 from ai_karen_engine.core.reasoning.meta.contracts import (
     CalibrationObservation,
     LoopAssessment,
@@ -13,20 +17,21 @@ from ai_karen_engine.core.reasoning.meta.contracts import (
     MetaCognitiveState,
     MetaReasonCode,
     MetaStatus,
-    ReasoningDepth,
     ReasoningDepthRecommendation,
     StrategyAttempt,
     StrategyFingerprint,
-    VerificationNeedAssessment,
 )
-
-logger = logging.getLogger(__name__)
+from ai_karen_engine.core.reasoning.meta.policy import CognitivePolicyConfig
 
 
 class MetaCognitiveAssessor:
-    """Assesses the quality of the current cognitive state."""
+    """Assess cognitive quality and recommend, but never execute, recovery."""
+
+    def __init__(self, policy: CognitivePolicyConfig | None = None) -> None:
+        self.policy = policy or CognitivePolicyConfig()
 
     def assess(self, request: MetaCognitiveRequest) -> MetaCognitiveResult:
+        thresholds = self.policy.thresholds
         state = MetaCognitiveState()
         issues: list[str] = []
         actions: list[str] = []
@@ -36,7 +41,7 @@ class MetaCognitiveAssessor:
         state.memory_reliability = request.memory_reliability
         state.evidence_consistency = self._compute_evidence_consistency(request.belief_conflicts)
 
-        if request.memory_reliability < 0.4:
+        if thresholds.is_memory_weak(request.memory_reliability):
             reason_codes.append(MetaReasonCode.LOW_MEMORY_CONFIDENCE)
             issues.append("low_memory_confidence")
             actions.append("verify_memory")
@@ -52,19 +57,30 @@ class MetaCognitiveAssessor:
             issues.append("reasoning_loop")
             actions.append("change_strategy")
 
-        if request.reasoning_confidence < 0.3:
+        if thresholds.is_reasoning_weak(request.reasoning_confidence):
             reason_codes.append(MetaReasonCode.LOW_REASONING_CONFIDENCE)
             issues.append("low_reasoning_confidence")
             actions.append("deepen_reasoning")
 
-        budget = request.budget_remaining.get("reasoning_steps", 5)
-        if budget <= 1:
+        budget = int(request.budget_remaining.get("reasoning_steps", 5))
+        if not thresholds.has_budget_remaining(budget):
             reason_codes.append(MetaReasonCode.BUDGET_EXHAUSTED)
             issues.append("budget_exhausted")
             actions.append("stop")
 
         status = self._derive_status(reason_codes)
-        confidence = (request.reasoning_confidence + request.memory_reliability + state.evidence_consistency) / 3.0
+        confidence = max(
+            0.0,
+            min(
+                1.0,
+                (
+                    request.reasoning_confidence
+                    + request.memory_reliability
+                    + state.evidence_consistency
+                )
+                / 3.0,
+            ),
+        )
 
         assessment = MetaAssessment(
             status=status,
@@ -72,30 +88,30 @@ class MetaCognitiveAssessor:
             issues=issues,
             recommended_cognitive_actions=actions,
             reason_codes=reason_codes,
+            policy_version=self.policy.policy_version,
+            schema_version=self.policy.schema_version,
         )
-
         state.reason_codes = reason_codes
         state.confidence = confidence
-
-        memory_reliability = self._assess_memory_reliability(request)
-        verification_need = self._assess_verification_need(state, request)
-        depth_rec = self._assess_depth(state, request)
-        calibration = [CalibrationObservation(predicted_confidence=request.reasoning_confidence)]
 
         return MetaCognitiveResult(
             assessment=assessment,
             state=state,
             loop_assessment=loop,
-            memory_reliability=memory_reliability,
-            verification_need=verification_need,
-            depth_recommendation=depth_rec,
-            calibration_observations=calibration,
+            memory_reliability=self._assess_memory_reliability(request),
+            verification_need=self._assess_verification_need(state),
+            depth_recommendation=self._assess_depth(state),
+            calibration_observations=[
+                CalibrationObservation(predicted_confidence=request.reasoning_confidence)
+            ]
+            if self.policy.enable_calibration
+            else [],
         )
 
     def _derive_status(self, reason_codes: list[MetaReasonCode]) -> MetaStatus:
         if MetaReasonCode.LOOP_DETECTED in reason_codes:
             return MetaStatus.LOOPING
-        if any(rc in reason_codes for rc in [MetaReasonCode.EVIDENCE_INCONSISTENT, MetaReasonCode.CONFLICTING_EVIDENCE]):
+        if MetaReasonCode.EVIDENCE_INCONSISTENT in reason_codes:
             return MetaStatus.CONFLICTED
         if MetaReasonCode.INSUFFICIENT_EVIDENCE in reason_codes:
             return MetaStatus.INSUFFICIENT
@@ -107,53 +123,109 @@ class MetaCognitiveAssessor:
             return MetaStatus.DEGRADED
         return MetaStatus.STABLE
 
-    def _compute_evidence_consistency(self, belief_conflicts: list) -> float:
-        if not belief_conflicts:
+    def _compute_evidence_consistency(self, conflicts: list) -> float:
+        if not conflicts:
             return 1.0
-        total_weight = sum(1.0 if not hasattr(c, 'severity') else 
-                          1.0 if c.severity == "low" else 
-                          0.7 if c.severity == "medium" else 0.3 for c in belief_conflicts)
-        weight_sum = sum(0.2 if not hasattr(c, 'severity') else 
-                        0.2 if c.severity == "low" else 
-                        0.35 if c.severity == "medium" else 0.5 for c in belief_conflicts)
-        return max(0.0, 1.0 - weight_sum)
+        severity_penalty = {
+            "low": 0.10,
+            "medium": 0.20,
+            "high": 0.35,
+            "critical": 0.50,
+        }
+        penalty = 0.0
+        for conflict in conflicts:
+            severity = str(getattr(conflict, "severity", "medium")).lower()
+            penalty += severity_penalty.get(severity, 0.20)
+        return max(0.0, 1.0 - penalty)
 
     def _detect_loop(self, attempts: list[StrategyAttempt]) -> LoopAssessment | None:
-        if len(attempts) < 3:
+        threshold = self.policy.thresholds.loop_repeat_threshold
+        if not self.policy.enable_loop_detection or len(attempts) < threshold:
             return None
-        fingerprints = []
-        for a in attempts:
-            evidence_hash = hashlib.sha256("|".join(a.evidence_hashes).encode()).hexdigest()[:16]
-            fingerprints.append(StrategyFingerprint(
-                strategy_type=a.strategy_type,
-                evidence_hash=evidence_hash,
-                outcome_class=a.outcome,
-            ))
-        if len(fingerprints) >= 3:
-            first = fingerprints[-3]
-            if all(f.strategy_type == first.strategy_type and f.evidence_hash == first.evidence_hash for f in fingerprints[-3:]):
-                return LoopAssessment(is_looping=True, loop_count=3, fingerprint=first)
+
+        fingerprints: list[StrategyFingerprint] = []
+        for attempt in attempts:
+            evidence_hash = hashlib.sha256(
+                "|".join(attempt.evidence_hashes).encode()
+            ).hexdigest()[:16]
+            fingerprints.append(
+                StrategyFingerprint(
+                    strategy_type=attempt.strategy_type,
+                    evidence_hash=evidence_hash,
+                    outcome_class=attempt.outcome,
+                )
+            )
+
+        recent = fingerprints[-threshold:]
+        first = recent[0]
+        if all(
+            fingerprint.strategy_type == first.strategy_type
+            and fingerprint.evidence_hash == first.evidence_hash
+            and fingerprint.outcome_class == first.outcome_class
+            for fingerprint in recent
+        ):
+            return LoopAssessment(
+                is_looping=True,
+                loop_count=threshold,
+                fingerprint=first,
+            )
         return None
 
-    def _assess_memory_reliability(self, request: MetaCognitiveRequest) -> MemoryReliabilityAssessment:
+    def _assess_memory_reliability(
+        self,
+        request: MetaCognitiveRequest,
+    ) -> MemoryReliabilityAssessment:
+        weak = self.policy.thresholds.is_memory_weak(request.memory_reliability)
         return MemoryReliabilityAssessment(
             recall_confidence=request.memory_reliability,
             reliability=request.memory_reliability,
-            reason_codes=[MetaReasonCode.LOW_MEMORY_CONFIDENCE] if request.memory_reliability < 0.4 else [],
+            reason_codes=[MetaReasonCode.LOW_MEMORY_CONFIDENCE] if weak else [],
         )
 
-    def _assess_verification_need(self, state: MetaCognitiveState, request: MetaCognitiveRequest) -> VerificationNeedAssessment:
-        if state.memory_reliability < 0.3:
-            return VerificationNeedAssessment(required=True, reason=MetaReasonCode.LOW_MEMORY_CONFIDENCE, depth=ReasoningDepth.STANDARD, urgency=0.8)
-        if state.reasoning_confidence < 0.3:
-            return VerificationNeedAssessment(required=True, reason=MetaReasonCode.LOW_REASONING_CONFIDENCE, depth=ReasoningDepth.STANDARD, urgency=0.8)
-        if state.evidence_consistency < 0.3:
-            return VerificationNeedAssessment(required=True, reason=MetaReasonCode.EVIDENCE_INCONSISTENT, depth=ReasoningDepth.STANDARD, urgency=0.8)
-        return VerificationNeedAssessment(required=False)
+    def _assess_verification_need(
+        self,
+        state: MetaCognitiveState,
+    ) -> VerificationRequirement:
+        thresholds = self.policy.thresholds
+        if state.memory_reliability < thresholds.verification_threshold:
+            return VerificationRequirement(
+                required=True,
+                reason=VerificationReason.LOW_MEMORY_CONFIDENCE,
+                depth=ReasoningDepth.STANDARD,
+                urgency=0.8,
+                source_stage="meta",
+            )
+        if state.reasoning_confidence < thresholds.verification_threshold:
+            return VerificationRequirement(
+                required=True,
+                reason=VerificationReason.LOW_REASONING_CONFIDENCE,
+                depth=ReasoningDepth.STANDARD,
+                urgency=0.8,
+                source_stage="meta",
+            )
+        if state.evidence_consistency < thresholds.weak_evidence_threshold:
+            return VerificationRequirement(
+                required=True,
+                reason=VerificationReason.CONFLICTING_EVIDENCE,
+                depth=ReasoningDepth.STANDARD,
+                urgency=0.8,
+                source_stage="meta",
+            )
+        return VerificationRequirement(required=False, source_stage="meta")
 
-    def _assess_depth(self, state: MetaCognitiveState, request: MetaCognitiveRequest) -> ReasoningDepthRecommendation:
-        if state.reasoning_confidence < 0.3:
-            return ReasoningDepthRecommendation(recommended_depth=ReasoningDepth.DEEP, reason=MetaReasonCode.LOW_REASONING_CONFIDENCE)
-        if any(rc in [MetaReasonCode.EVIDENCE_INCONSISTENT, MetaReasonCode.CONFLICTING_EVIDENCE] for rc in request.budget_remaining.get('reason_codes', [])):
-            return ReasoningDepthRecommendation(recommended_depth=ReasoningDepth.DEEP, reason=MetaReasonCode.EVIDENCE_INCONSISTENT)
+    def _assess_depth(
+        self,
+        state: MetaCognitiveState,
+    ) -> ReasoningDepthRecommendation:
+        thresholds = self.policy.thresholds
+        if thresholds.should_deepen_reasoning(state.reasoning_confidence):
+            return ReasoningDepthRecommendation(
+                recommended_depth=ReasoningDepth.DEEP,
+                reason=MetaReasonCode.LOW_REASONING_CONFIDENCE,
+            )
+        if state.evidence_consistency < thresholds.weak_evidence_threshold:
+            return ReasoningDepthRecommendation(
+                recommended_depth=ReasoningDepth.DEEP,
+                reason=MetaReasonCode.EVIDENCE_INCONSISTENT,
+            )
         return ReasoningDepthRecommendation(recommended_depth=ReasoningDepth.STANDARD)
