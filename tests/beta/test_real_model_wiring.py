@@ -10,6 +10,7 @@ from ai_karen_engine.core.expression.engines.builtin_provider_engine import (
     BuiltinProviderEngine,
 )
 from ai_karen_engine.core.model_runtime.provider_endpoint import BUILTIN_PROVIDER_ENDPOINTS
+from ai_karen_engine.core.model_runtime.provider_execution import ProviderExecutionResult
 
 
 REQUIRED_GENERATIVE_CAPABILITIES = {"chat_completion", "text_generation"}
@@ -46,7 +47,7 @@ def test_local_generative_endpoints_use_canonical_capabilities() -> None:
 
 
 @pytest.mark.asyncio
-async def test_builtin_provider_executes_real_provider_and_preserves_provenance(
+async def test_builtin_provider_executes_core_endpoint_and_preserves_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from ai_karen_engine.core.expression.engines import builtin_provider_engine as module
@@ -62,13 +63,9 @@ async def test_builtin_provider_executes_real_provider_and_preserves_provenance(
         def resolve_capable_targets(self, *args, **kwargs):
             return [endpoint]
 
-    class FakeProvider:
-        model = "beta-model"
-
-        async def generate_text_async(self, prompt: str, **payload):
-            assert prompt == "Return BETA_REAL_MODEL_OK"
-            assert payload["messages"] == _task().messages
-            return "BETA_REAL_MODEL_OK"
+        def get_provider_endpoint(self, provider_id: str):
+            assert provider_id == "builtin_vllm"
+            return endpoint
 
     registry_module = ModuleType(
         "ai_karen_engine.core.model_runtime.provider_registry_service"
@@ -80,14 +77,20 @@ async def test_builtin_provider_executes_real_provider_and_preserves_provenance(
         registry_module,
     )
 
-    llm_registry_module = ModuleType("ai_karen_engine.integrations.llm_registry")
-    llm_registry_module.get_provider = lambda *args, **kwargs: FakeProvider()
-    monkeypatch.setitem(
-        sys.modules,
-        "ai_karen_engine.integrations.llm_registry",
-        llm_registry_module,
-    )
+    async def fake_execute_provider_endpoint(target, **kwargs):
+        assert target is endpoint
+        assert kwargs["messages"] == _task().messages
+        assert kwargs["model"] == "beta-model"
+        assert kwargs["max_tokens"] == 32
+        assert kwargs["temperature"] == 0.0
+        return ProviderExecutionResult(
+            text="BETA_REAL_MODEL_OK",
+            model="beta-model",
+            provider_id="builtin_vllm",
+            runtime_engine="vllm",
+        )
 
+    monkeypatch.setattr(module, "execute_provider_endpoint", fake_execute_provider_endpoint)
     monkeypatch.setattr(
         module,
         "evaluate_provider_policy",
@@ -106,6 +109,9 @@ async def test_builtin_provider_executes_real_provider_and_preserves_provenance(
     assert result.metadata["actual_model"] == "beta-model"
     assert result.metadata["fallback_level"] == 0
     assert result.attempts[-1]["status"] == "success"
+
+    # The proof must not need the legacy integration registry at all.
+    assert "ai_karen_engine.integrations.llm_registry" not in sys.modules
 
 
 def test_builtin_failure_is_not_labeled_as_static_model_output() -> None:
