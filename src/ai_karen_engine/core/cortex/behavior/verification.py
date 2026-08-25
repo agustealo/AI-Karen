@@ -11,21 +11,46 @@ from ai_karen_engine.core.cortex.behavior.contracts import (
 
 
 class VerificationDecider:
-    """Determines verification requirements for behavior decisions."""
+    """CORTEX decision layer for the canonical verification contract."""
 
-    def decide(self, context: BehaviorSelectionContext, candidate: BehaviorCandidate) -> VerificationRequirement:
-        """Decide if verification is required."""
+    def decide(
+        self,
+        context: BehaviorSelectionContext,
+        candidate: BehaviorCandidate,
+    ) -> VerificationRequirement:
         if candidate.behavior_type == BehaviorType.VERIFY:
-            return VerificationRequirement(required=True, reason=VerificationReason.LOW_CONFIDENCE, depth=VerificationDepth.STANDARD)
+            return VerificationRequirement(
+                required=True,
+                reason=VerificationReason.LOW_CONFIDENCE,
+                depth=VerificationDepth.STANDARD,
+                source="cortex",
+            )
 
-        ra = context.reasoning_assessment or {}
-        confidence = ra.get("confidence", 1.0)
-        risk = ra.get("risk", 0.0)
+        if context.meta and context.meta.reasoning_confidence < 0.4:
+            return VerificationRequirement(
+                required=True,
+                reason=VerificationReason.LOW_REASONING_CONFIDENCE,
+                depth=VerificationDepth.STANDARD,
+                urgency=0.8,
+                source="cortex",
+            )
 
-        if confidence < 0.4:
-            return VerificationRequirement(required=True, reason=VerificationReason.LOW_CONFIDENCE, depth=VerificationDepth.STANDARD)
-        if risk > 0.7:
-            return VerificationRequirement(required=True, reason=VerificationReason.HIGH_RISK, depth=VerificationDepth.DEEP)
-        if context.policy_constraints.get("contradicting_evidence", False):
-            return VerificationRequirement(required=True, reason=VerificationReason.CONFLICTING_EVIDENCE, depth=VerificationDepth.STANDARD)
-        return VerificationRequirement(required=False)
+        if context.policy and context.policy.risk_level > 0.7:
+            return VerificationRequirement(
+                required=True,
+                reason=VerificationReason.HIGH_RISK,
+                depth=VerificationDepth.DEEP,
+                urgency=context.policy.risk_level,
+                source="cortex",
+            )
+
+        if context.belief and context.belief.contradictions:
+            return VerificationRequirement(
+                required=True,
+                reason=VerificationReason.CONFLICTING_EVIDENCE,
+                depth=VerificationDepth.STANDARD,
+                urgency=0.8,
+                source="cortex",
+            )
+
+        return VerificationRequirement(required=False, source="cortex")
