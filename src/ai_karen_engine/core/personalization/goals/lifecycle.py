@@ -332,9 +332,6 @@ class GoalLifecycle:
         """Transition an intention from WAITING to READY/ACTIVE if triggered."""
         if intention.state == IntentionState.WAITING:
             if self.evaluate_trigger(intention, all_goals):
-                from .contracts import (
-                    IntentionState,
-                )
                 if intention.state == IntentionState.WAITING and self.evaluate_trigger(intention, all_goals):
                     intention.state = IntentionState.READY
                     intention.activated_at = datetime.utcnow()

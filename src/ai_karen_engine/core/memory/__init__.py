@@ -154,6 +154,21 @@ try:
 except ImportError:
     ProspectiveMemoryStore = None
 
+# CORE-SPLIT-2 recall authority
+try:
+    from ..recall import DefaultRecallService
+except ImportError:
+    DefaultRecallService = None
+
+try:
+    from .adapters import (
+        RecallManagerRecallAdapter,
+        RetrievalRouterRecallAdapter,
+    )
+except ImportError:
+    RecallManagerRecallAdapter = None
+    RetrievalRouterRecallAdapter = None
+
 __all__ = [
     "get_memory_manager",
     "MemoryRuntimeManager",
@@ -215,4 +230,8 @@ __all__ = [
     "UserModelStore",
     "RelationshipModelStore",
     "ProspectiveMemoryStore",
+    # CORE-SPLIT-2 recall authority
+    "DefaultRecallService",
+    "RecallManagerRecallAdapter",
+    "RetrievalRouterRecallAdapter",
 ]
