@@ -1,0 +1,40 @@
+scenario_id: deletion_purged_absent_from_store
+kind: deletion
+domain: general
+user_id: u_delete
+tenant_id: t_default
+description: >-
+  A purged memory must no longer be present in the active claim set and must
+  not be resurrected after deletion handling.
+expected:
+  result: PURGED
+  confidence_min: 0.0
+  confidence_max: 1.0
+  retained: false
+  tenant_scoped: true
+  not_appears_in:
+    - claim_deleted_001
+  appears_in:
+    - claim_survives_001
+memories:
+  - id: claim_survives_001
+    subject: the_active_note
+    predicate: is
+    object: "still relevant"
+    status: observed
+    source: observation
+    scope: tenant
+    confidence: 0.9
+    claim_format: triple
+purged:
+  - id: claim_deleted_001
+    subject: the_old_secret
+    predicate: is
+    object: "classified"
+    status: observed
+    source: observation
+    scope: tenant
+    confidence: 0.9
+    claim_format: triple
+deleted:
+  - claim_deleted_001

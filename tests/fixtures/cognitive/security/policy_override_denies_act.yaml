@@ -1,0 +1,43 @@
+scenario_id: behavior_policy_override
+kind: policy_dominance
+domain: general
+user_id: u_policy
+tenant_id: t_default
+description: >-
+  A high-confidence belief would normally trigger ACT, but the tenant policy
+  denies ACT and requires ASK.  The reference model must yield POLICY_WINS
+  and the guard must BLOCK the decision.
+expected:
+  result: POLICY_WINS
+  confidence_min: 0.0
+  confidence_max: 1.0
+  policy_violation: true
+  flags:
+    denied_behavior: ASK
+claims:
+  - id: claim_policy
+    subject: the_user
+    predicate: wants
+    object: "autonomous action"
+    status: verified
+    source: user_statement
+    scope: conversation
+    confidence: 0.95
+    claim_format: triple
+    temporal:
+      last_verified_at: "2026-08-01T10:00:00Z"
+beliefs:
+  evidence:
+    - id: ev_policy
+      type: user_statement
+      relation: supports
+      strength: strong
+      content: "User explicitly requested autonomous handling."
+      observed_at: "2026-08-01T10:00:00Z"
+      confidence: 0.9
+      claim_ids:
+        - claim_policy
+policy_constraints:
+  deny:
+    - ACT
+  tenant_boundary: true

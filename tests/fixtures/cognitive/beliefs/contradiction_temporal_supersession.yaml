@@ -1,0 +1,40 @@
+scenario_id: contradiction_temporal_supersession
+kind: contradiction
+domain: general
+user_id: u_reason
+tenant_id: t_default
+description: >-
+  An older claim about the same subject is superseded by a newer claim more
+  than 30 days later.  The system must classify this as a CHANGE_OVER_TIME
+  supersession, not a direct contradiction.
+expected:
+  result: SUPERSESSION
+  confidence_min: 0.0
+  confidence_max: 1.0
+  appears_in:
+    - claim_newer_002
+  not_appears_in:
+    - claim_older_002
+claims:
+  - id: claim_older_002
+    subject: the_project_deadline
+    predicate: is
+    object: "next Friday"
+    status: observed
+    source: user_statement
+    scope: conversation
+    confidence: 0.9
+    claim_format: triple
+    temporal:
+      last_verified_at: "2026-06-01T10:00:00Z"
+  - id: claim_newer_002
+    subject: the_project_deadline
+    predicate: is
+    object: "this Friday"
+    status: observed
+    source: user_statement
+    scope: conversation
+    confidence: 0.95
+    claim_format: triple
+    temporal:
+      last_verified_at: "2026-08-02T10:00:00Z"

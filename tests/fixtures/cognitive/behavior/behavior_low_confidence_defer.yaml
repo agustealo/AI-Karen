@@ -1,0 +1,37 @@
+scenario_id: behavior_selection_low_confidence_defer
+kind: behavior_selection
+domain: general
+user_id: u_behavior
+tenant_id: t_default
+description: >-
+  When belief confidence is low and there is no salience urgency, the
+  reference decision model defers to the user (ASK).
+expected:
+  result: ASK
+  confidence_min: 0.0
+  confidence_max: 1.0
+  policy_violation: false
+claims:
+  - id: claim_uncertain
+    subject: the_weather
+    predicate: is
+    object: "sunny"
+    status: inferred
+    source: system_inference
+    scope: conversation
+    confidence: 0.15
+    claim_format: triple
+beliefs:
+  evidence:
+    - id: ev_weak
+      type: system_inference
+      relation: supports
+      strength: weak
+      content: "Vague forecast suggests sun."
+      observed_at: "2026-08-01T10:00:00Z"
+      confidence: 0.15
+      claim_ids:
+        - claim_uncertain
+salience:
+  signals: []
+  emphasis: []

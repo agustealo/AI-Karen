@@ -1,0 +1,41 @@
+scenario_id: memory_continuity_recall_retained
+kind: memory_continuity
+domain: general
+user_id: u_memory
+tenant_id: t_default
+description: >-
+  A recalled episodic memory claim remains active and within its prior
+  confidence band when re-assessed with the same supporting evidence.
+expected:
+  result: ACTIVE
+  confidence_min: 0.4
+  confidence_max: 1.0
+  retained: true
+  tenant_scoped: true
+  appears_in:
+    - claim_memory_001
+memories:
+  - id: claim_memory_001
+    subject: user
+    predicate: prefers
+    object: "coffee in the morning"
+    status: observed
+    source: observation
+    scope: user
+    confidence: 0.9
+    claim_format: triple
+    temporal:
+      asserted_at: "2026-08-01T09:00:00Z"
+      observed_at: "2026-08-01T09:00:00Z"
+      last_verified_at: "2026-08-01T09:00:00Z"
+beliefs:
+  evidence:
+    - id: ev_support_001
+      type: observation
+      relation: supports
+      strength: strong
+      content: "User requested coffee at 08:30 each morning this week."
+      observed_at: "2026-08-01T09:01:00Z"
+      confidence: 0.9
+      claim_ids:
+        - claim_memory_001

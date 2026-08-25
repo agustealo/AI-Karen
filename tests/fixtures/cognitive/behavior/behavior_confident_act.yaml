@@ -1,0 +1,43 @@
+scenario_id: behavior_selection_confident_act
+kind: behavior_selection
+domain: general
+user_id: u_behavior
+tenant_id: t_default
+description: >-
+  With a verified, high-confidence claim and moderate salience, the reference
+  model selects an ACT behavior.
+expected:
+  result: ACT
+  confidence_min: 0.0
+  confidence_max: 1.0
+  policy_violation: false
+claims:
+  - id: claim_confirmed
+    subject: the_user
+    predicate: has_availability
+    object: "today at 3pm"
+    status: verified
+    source: tool_result
+    scope: conversation
+    confidence: 0.95
+    claim_format: triple
+    temporal:
+      last_verified_at: "2026-08-01T10:00:00Z"
+beliefs:
+  evidence:
+    - id: ev_confirmed
+      type: tool_result
+      relation: supports
+      strength: strong
+      content: "Calendar API returns free slot 15:00 today."
+      observed_at: "2026-08-01T10:01:00Z"
+      confidence: 0.9
+      claim_ids:
+        - claim_confirmed
+salience:
+  signals:
+    - dimension: goal_relevance
+      value: 0.4
+      confidence: 0.8
+      source: goal_system
+      reason_codes: []

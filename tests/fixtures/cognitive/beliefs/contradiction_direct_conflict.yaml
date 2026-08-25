@@ -1,0 +1,50 @@
+scenario_id: contradiction_direct_conflict
+kind: contradiction
+domain: general
+user_id: u_reason
+tenant_id: t_default
+description: >-
+  Two claims about the same subject directly contradict; the system must
+  detect a CONTRADICTION (not a temporal change) and weaken or retract the
+  older claim.
+expected:
+  result: CONTRADICTION
+  confidence_min: 0.0
+  confidence_max: 1.0
+  policy_violation: false
+  not_appears_in:
+    - claim_old_001
+claims:
+  - id: claim_old_001
+    subject: the_project_deadline
+    predicate: is
+    object: "next Friday"
+    status: observed
+    source: user_statement
+    scope: conversation
+    confidence: 0.9
+    claim_format: triple
+    temporal:
+      last_verified_at: "2026-08-01T10:00:00Z"
+  - id: claim_new_001
+    subject: the_project_deadline
+    predicate: is
+    object: "this Friday"
+    status: observed
+    source: user_statement
+    scope: conversation
+    confidence: 0.95
+    claim_format: triple
+    temporal:
+      last_verified_at: "2026-08-02T10:00:00Z"
+beliefs:
+  evidence:
+    - id: ev_old_001
+      type: user_statement
+      relation: supports
+      strength: strong
+      content: "Project deadline is next Friday."
+      observed_at: "2026-08-01T10:00:00Z"
+      confidence: 0.9
+      claim_ids:
+        - claim_old_001

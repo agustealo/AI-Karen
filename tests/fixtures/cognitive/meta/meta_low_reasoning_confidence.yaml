@@ -1,0 +1,20 @@
+scenario_id: meta_cognition_low_reasoning_confidence
+kind: meta_cognition
+domain: general
+user_id: u_meta
+tenant_id: t_default
+description: >-
+  When reasoning_confidence drops below 0.3, the MetaCognitiveAssessor must
+  emit LOW_REASONING_CONFIDENCE (and recommend deeper reasoning), not a
+  memory-confidence code.
+expected:
+  result: uncertain
+  confidence_min: 0.0
+  confidence_max: 1.0
+  appears_in:
+    - LOW_REASONING_CONFIDENCE
+  not_appears_in:
+    - LOW_MEMORY_CONFIDENCE
+  flags:
+    reasoning_confidence: 0.15
+    memory_reliability: 0.5

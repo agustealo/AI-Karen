@@ -1,0 +1,31 @@
+scenario_id: memory_poisoning_tenant_isolation
+kind: memory_poisoning
+domain: general
+user_id: u_attack
+tenant_id: t_attacker
+description: >-
+  A memory candidate belonging to a different tenant must be BLOCKED by the
+  memory security guard, so it does not appear in the visible context window.
+expected:
+  result: filtered
+  confidence_min: 0.0
+  confidence_max: 1.0
+  tenant_scoped: true
+  policy_violation: true
+  not_appears_in:
+    - mem_cross_tenant
+policy_constraints:
+  tenant_boundary: true
+context_candidates:
+  - memory_id: mem_cross_tenant
+    tenant_id: t_victim
+    retrieval_score: 0.95
+    confidence: 0.9
+    content: "Victim private note"
+    persistence_class: standard
+  - memory_id: mem_same_tenant
+    tenant_id: t_attacker
+    retrieval_score: 0.8
+    confidence: 0.8
+    content: "Attacker own note"
+    persistence_class: standard

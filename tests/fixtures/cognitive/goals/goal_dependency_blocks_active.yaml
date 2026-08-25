@@ -1,0 +1,41 @@
+scenario_id: goal_dependency_blocks_active
+kind: goal_intention
+domain: workflow
+user_id: u_goals
+tenant_id: t_default
+description: >-
+  A goal whose dependency is still active must be BLOCKED rather than
+  remain ACTIVE, preserving scheduling integrity.
+expected:
+  result: blocked
+  confidence_min: 0.0
+  confidence_max: 1.0
+  active: false
+  retained: true
+  flags:
+    target_state: BLOCKED
+goals:
+  - id: goal_dep
+    description: "Blocker task A"
+    type: explicit
+    origin: user_stated
+    state: active
+    priority: high
+    scope: project
+    confidence: 0.9
+    started_at: "2026-08-01T09:00:00Z"
+    last_observed_at: "2026-08-01T09:00:00Z"
+  - id: goal_blocked
+    description: "Dependent task B"
+    type: explicit
+    origin: user_stated
+    state: active
+    priority: medium
+    scope: project
+    confidence: 0.8
+    started_at: "2026-08-01T09:00:00Z"
+    last_observed_at: "2026-08-01T09:00:00Z"
+    depends_on:
+      - goal_dep
+    blocks:
+      - goal_dep

@@ -1,0 +1,42 @@
+scenario_id: goal_intention_completion_satisfied
+kind: goal_intention
+domain: workflow
+user_id: u_goals
+tenant_id: t_default
+description: >-
+  A goal with all required completion evidence sources satisfied can
+  transition PROPOSED -> SATISFIED -> COMPLETED and its waiting intention
+  fires when the goal reaches COMPLETED.
+expected:
+  result: completed
+  confidence_min: 0.0
+  confidence_max: 1.0
+  active: false
+  retained: true
+  flags:
+    target_state: COMPLETED
+goals:
+  - id: goal_complete_001
+    description: "Ship release notes"
+    type: explicit
+    origin: user_stated
+    state: active
+    priority: high
+    scope: project
+    confidence: 0.9
+    started_at: "2026-08-01T09:00:00Z"
+    last_observed_at: "2026-08-01T09:00:00Z"
+    completion_evidence_required:
+      - user_confirmed
+    completion_evidence:
+      - evr_done_001
+    completion_evidence_sources:
+      - user_confirmed
+intentions:
+  - id: intent_wait_001
+    goal_id: goal_complete_001
+    description: "Notify on release completion"
+    state: waiting
+    trigger_type: goal_state_relevant
+    trigger_condition: "goal_complete_001:completed"
+    context: ""

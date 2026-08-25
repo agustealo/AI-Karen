@@ -1,0 +1,31 @@
+scenario_id: learning_failure_triggers_correction
+kind: learning
+domain: tool
+user_id: u_learning
+tenant_id: t_default
+description: >-
+  When outcomes include failures with corrections, the capability profile
+  must reflect a non-zero correction rate and a bounded success rate rather
+  than falsely converging on perfect performance.
+expected:
+  result: NOT_CONVERGED
+  confidence_min: 0.0
+  confidence_max: 1.0
+  flags:
+    capability_id: flaky_tool
+    expect_success_convergence: false
+    observations:
+      - action_type: flaky_tool
+        execution_status: success
+        latency_ms: 100
+      - action_type: flaky_tool
+        execution_status: failure
+        latency_ms: 200
+        correction: true
+      - action_type: flaky_tool
+        execution_status: success
+        latency_ms: 110
+      - action_type: flaky_tool
+        execution_status: failure
+        latency_ms: 190
+        correction: true

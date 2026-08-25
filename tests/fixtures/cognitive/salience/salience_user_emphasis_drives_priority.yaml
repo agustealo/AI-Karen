@@ -1,0 +1,29 @@
+scenario_id: salience_user_emphasis_drives_priority
+kind: salience
+domain: general
+user_id: u_salience
+tenant_id: t_default
+description: >-
+  A prediction error plus explicit user emphasis raises overall salience
+  above the salient threshold and is annotated with PREDICTION_ERROR and
+  USER_EXPLICIT_EMPHASIS reason codes.
+expected:
+  result: salient
+  confidence_min: 0.0
+  confidence_max: 1.0
+  appears_in:
+    - prediction_error
+    - user_explicit_emphasis
+salience:
+  signals:
+    - dimension: surprise
+      value: 0.6
+      confidence: 0.8
+      source: prediction_error
+      reason_codes:
+        - prediction_error
+  emphasis:
+    - type: critical
+      target: "the upserted record"
+      strength: 0.9
+      confidence: 0.9

@@ -1,0 +1,32 @@
+scenario_id: learning_success_convergence
+kind: learning
+domain: tool
+user_id: u_learning
+tenant_id: t_default
+description: >-
+  After repeated successful outcomes for a capability, the EvidenceAggregator
+  converges a capability profile whose failure rate stays bounded and success
+  rate rises.
+expected:
+  result: CONVERGED
+  confidence_min: 0.0
+  confidence_max: 1.0
+  flags:
+    capability_id: test_skill
+    expect_success_convergence: true
+    observations:
+      - action_type: test_skill
+        execution_status: success
+        latency_ms: 120
+      - action_type: test_skill
+        execution_status: success
+        latency_ms: 110
+      - action_type: test_skill
+        execution_status: success
+        latency_ms: 115
+      - action_type: test_skill
+        execution_status: success
+        latency_ms: 130
+      - action_type: test_skill
+        execution_status: success
+        latency_ms: 105

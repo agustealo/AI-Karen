@@ -1,0 +1,28 @@
+scenario_id: salience_persistent_signal_does_not_decay
+kind: salience
+domain: general
+user_id: u_salience
+tenant_id: t_default
+description: >-
+  A persistent salience signal must not decay, while a standard signal does.
+expected:
+  result: salient
+  confidence_min: 0.0
+  confidence_max: 1.0
+  flags:
+    no_decay_persistent: true
+salience:
+  signals:
+    - dimension: novelty
+      value: 0.8
+      confidence: 0.9
+      source: adaptive_signal
+      persistence_class: persistent
+      last_activated_at: "2026-08-01T09:00:00Z"
+    - dimension: novelty
+      value: 0.6
+      confidence: 0.8
+      source: adaptive_signal
+      persistence_class: standard
+      decay_rate: 0.5
+      last_activated_at: "2026-06-01T09:00:00Z"
