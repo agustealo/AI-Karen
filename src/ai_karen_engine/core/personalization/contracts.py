@@ -1,26 +1,31 @@
-"""
-Personalization domain contracts for AI-Karen.
+"""Personalization domain contracts for AI-Karen.
 
-Defines the canonical data structures for user personalization:
-preferences, behavior patterns, goals, snapshots, and evidence.
-These are domain contracts, NOT persistence models.
+Personalization owns user/self/relationship models and preferences. The richer
+cognitive goal lifecycle is owned by personalization/goals.GoalState; this
+module keeps UserGoalStatus only as a legacy compatibility vocabulary.
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
 
-# ===================================
-# ENUMS
-# ===================================
+def _utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _require_tenant(tenant_id: str, contract: str) -> None:
+    if not tenant_id or tenant_id == "default":
+        raise ValueError(f"{contract} requires an explicit tenant_id")
+
 
 class PreferenceCategory(str, Enum):
-    """Top-level preference taxonomy."""
     COMMUNICATION = "communication"
     WORKFLOW = "workflow"
     TOOL = "tool"
@@ -34,7 +39,6 @@ class PreferenceCategory(str, Enum):
 
 
 class PreferenceStability(str, Enum):
-    """How durable a preference is expected to be."""
     SESSION = "session"
     SHORT_TERM = "short_term"
     MEDIUM_TERM = "medium_term"
@@ -43,7 +47,6 @@ class PreferenceStability(str, Enum):
 
 
 class PreferenceState(str, Enum):
-    """Lifecycle state of a preference record."""
     OBSERVED = "observed"
     TENTATIVE = "tentative"
     ESTABLISHED = "established"
@@ -54,7 +57,6 @@ class PreferenceState(str, Enum):
 
 
 class PreferenceScope(str, Enum):
-    """Applicability scope of a preference."""
     GLOBAL = "global"
     DOMAIN = "domain"
     PROJECT = "project"
@@ -64,7 +66,6 @@ class PreferenceScope(str, Enum):
 
 
 class PreferenceEvidenceSourceType(str, Enum):
-    """Source of preference evidence."""
     EXPLICIT_USER_STATEMENT = "explicit_user_statement"
     USER_CORRECTION = "user_correction"
     REPEATED_BEHAVIOR = "repeated_behavior"
@@ -74,8 +75,7 @@ class PreferenceEvidenceSourceType(str, Enum):
     SYSTEM_INFERENCE = "system_inference"
 
 
-class DriftState(str, Enum):
-    """Concept drift detection states."""
+class PreferenceDriftState(str, Enum):
     STABLE = "stable"
     WATCH = "watch"
     DRIFTING = "drifting"
@@ -83,8 +83,18 @@ class DriftState(str, Enum):
     UNKNOWN = "unknown"
 
 
+# Compatibility alias only. Adaptive/drift owns generic drift semantics.
+# Sunset: remove DriftState alias after personalization callers migrate.
+DriftState = PreferenceDriftState
+
+
 class UserGoalStatus(str, Enum):
-    """Goal lifecycle states."""
+    """Legacy goal status vocabulary.
+
+    Canonical cognitive goal lifecycle: personalization/goals.GoalState.
+    Sunset: remove after UserGoal compatibility adapters are retired.
+    """
+
     ACTIVE = "active"
     PAUSED = "paused"
     COMPLETED = "completed"
@@ -93,18 +103,12 @@ class UserGoalStatus(str, Enum):
 
 
 class UserModelHealth(str, Enum):
-    """Personalization subsystem health states."""
     READY = "ready"
     DEGRADED = "degraded"
     UNAVAILABLE = "unavailable"
 
 
-# ===================================
-# MODEL PROPERTY STATUS
-# ===================================
-
 class ModelPropertyStatus(str, Enum):
-    """Lifecycle and trust status for inferred model properties."""
     EXPLICIT = "explicit"
     INFERRED = "inferred"
     OBSERVED = "observed"
@@ -116,7 +120,6 @@ class ModelPropertyStatus(str, Enum):
 
 
 class EvidenceStatus(str, Enum):
-    """Provenance status for evidence backing a model property."""
     ACTIVE = "active"
     SUPERSEDED = "superseded"
     RETRACTED = "retracted"
@@ -124,7 +127,6 @@ class EvidenceStatus(str, Enum):
 
 
 class IdentityDomain(str, Enum):
-    """Taxonomy for Karen self-identity facets."""
     CAPABILITY = "capability"
     LIMITATION = "limitation"
     PRINCIPLE = "principle"
@@ -135,7 +137,6 @@ class IdentityDomain(str, Enum):
 
 
 class RelationshipType(str, Enum):
-    """Relationship classification between Karen and a user."""
     PROFESSIONAL = "professional"
     COLLABORATIVE = "collaborative"
     MENTORSHIP = "mentorship"
@@ -144,7 +145,6 @@ class RelationshipType(str, Enum):
 
 
 class InteractionNormType(str, Enum):
-    """Types of interaction norms tracked in relationships."""
     RESPONSE_STYLE = "response_style"
     AVAILABILITY = "availability"
     FEEDBACK_PREFERENCE = "feedback_preference"
@@ -153,7 +153,6 @@ class InteractionNormType(str, Enum):
 
 
 class CommitmentType(str, Enum):
-    """Types of commitments in a relationship."""
     EXPLICIT = "explicit"
     INFERRED = "inferred"
     RECURRING = "recurring"
@@ -161,20 +160,14 @@ class CommitmentType(str, Enum):
 
 
 class CapabilityBeliefType(str, Enum):
-    """Types of capability beliefs Karen holds about herself or the user."""
     STRENGTH = "strength"
     LIMITATION = "limitation"
     EMERGING = "emerging"
     DEGRADED = "degraded"
 
 
-# ===================================
-# PROVENANCE
-# ===================================
-
 @dataclass
 class Provenance:
-    """Confidence and provenance for an inferred model property."""
     source: str
     confidence: float
     evidence_refs: List[str]
@@ -185,34 +178,35 @@ class Provenance:
     supersedes: Optional[str]
     status: ModelPropertyStatus
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
         self.evidence_refs = list(self.evidence_refs)
+        self.first_observed_at = _utc(self.first_observed_at)  # type: ignore[assignment]
+        self.last_confirmed_at = _utc(self.last_confirmed_at)
+        self.valid_from = _utc(self.valid_from)  # type: ignore[assignment]
+        self.valid_until = _utc(self.valid_until)
 
-
-# ===================================
-# MODEL EVIDENCE AND REVISION
-# ===================================
 
 @dataclass
 class ModelEvidence:
-    """Single piece of evidence supporting a model property."""
     evidence_id: str
     source: str
     evidence_type: str
     content_ref: str
     observed_at: datetime
     confidence: float
+    event_time: datetime | None = None
     context: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
+        self.observed_at = _utc(self.observed_at)  # type: ignore[assignment]
+        self.event_time = _utc(self.event_time)
 
 
 @dataclass
 class ModelRevision:
-    """Records a revision to a model property."""
     revision_id: str
     property_key: str
     model_type: str
@@ -227,13 +221,8 @@ class ModelRevision:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-# ===================================
-# SELF MODEL CONTRACTS
-# ===================================
-
 @dataclass
 class IdentityFacet:
-    """A facet of Karen's self-identity."""
     facet_id: str
     domain: IdentityDomain
     key: str
@@ -246,7 +235,6 @@ class IdentityFacet:
 
 @dataclass
 class CapabilityBelief:
-    """Karen's belief about a capability."""
     belief_id: str
     capability: str
     belief_type: CapabilityBeliefType
@@ -259,7 +247,6 @@ class CapabilityBelief:
 
 @dataclass
 class SelfModel:
-    """Karen's model of her own identity, principles, capabilities, and limits."""
     model_id: str
     tenant_id: str
     identity_facets: List[IdentityFacet]
@@ -272,14 +259,12 @@ class SelfModel:
     version: str = "1.0.0"
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        _require_tenant(self.tenant_id, "SelfModel")
 
-# ===================================
-# USER MODEL CONTRACTS
-# ===================================
 
 @dataclass
 class PreferenceSignal:
-    """A user preference with full provenance."""
     signal_id: str
     key: str
     value: Any
@@ -292,8 +277,9 @@ class PreferenceSignal:
 
 
 @dataclass
-class GoalState:
-    """A user goal with provenance."""
+class UserGoalModelState:
+    """User-model projection of a goal, not the canonical GoalState lifecycle."""
+
     goal_id: str
     description: str
     status: UserGoalStatus
@@ -307,13 +293,12 @@ class GoalState:
 
 @dataclass
 class UserModel:
-    """Karen's model of the user."""
     model_id: str
     user_id: str
     tenant_id: str
     preference_signals: List[PreferenceSignal]
-    behavior_patterns: List[BehaviorPattern]
-    goals: List[GoalState]
+    behavior_patterns: List["BehaviorPattern"]
+    goals: List[UserGoalModelState]
     skills: List[IdentityFacet]
     projects: List[str]
     confidence_summary: Dict[str, "ConfidenceState"]
@@ -322,14 +307,12 @@ class UserModel:
     version: str = "1.0.0"
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        _require_tenant(self.tenant_id, "UserModel")
 
-# ===================================
-# RELATIONSHIP MODEL CONTRACTS
-# ===================================
 
 @dataclass
 class RelationshipContext:
-    """Context about the Karen-user relationship."""
     context_id: str
     relationship_type: RelationshipType
     key: str
@@ -342,7 +325,6 @@ class RelationshipContext:
 
 @dataclass
 class InteractionPattern:
-    """Observed interaction pattern between Karen and the user."""
     pattern_id: str
     pattern_type: InteractionNormType
     description: str
@@ -353,14 +335,13 @@ class InteractionPattern:
     last_seen: datetime
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
         self.observed_count = max(0, self.observed_count)
 
 
 @dataclass
 class CommitmentState:
-    """An open commitment in the relationship."""
     commitment_id: str
     commitment_type: CommitmentType
     description: str
@@ -374,7 +355,6 @@ class CommitmentState:
 
 @dataclass
 class RelationshipModel:
-    """Karen's model of the relationship with a specific user."""
     model_id: str
     tenant_id: str
     user_id: str
@@ -389,10 +369,12 @@ class RelationshipModel:
     version: str = "1.0.0"
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        _require_tenant(self.tenant_id, "RelationshipModel")
+
 
 @dataclass
 class ConfidenceState:
-    """Tracks confidence and evidence health for a model property."""
     property_key: str
     model_type: str
     confidence: float
@@ -402,36 +384,30 @@ class ConfidenceState:
     trend: str
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
         self.evidence_count = max(0, self.evidence_count)
         self.contradiction_count = max(0, self.contradiction_count)
 
 
-# ===================================
-# PREFERENCE CONTRACTS
-# ===================================
-
 @dataclass
 class PreferenceEvidence:
-    """Single piece of evidence for a preference."""
     evidence_id: str
     preference_key: str
     source_type: PreferenceEvidenceSourceType
     source_ref: Optional[str]
     observed_value: Any
-    polarity: str  # "positive" | "negative" | "neutral"
+    polarity: str
     confidence: float
     observed_at: datetime
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
 
 
 @dataclass
 class PreferenceContradiction:
-    """Records a contradiction between old and new preference evidence."""
     contradiction_id: str
     preference_id: str
     user_id: str
@@ -440,14 +416,16 @@ class PreferenceContradiction:
     new_value: Any
     old_state: PreferenceState
     new_state: PreferenceState
-    resolution: Optional[str] = None  # "supersede" | "merge" | "keep_old" | "keep_new"
+    resolution: Optional[str] = None
     resolved_at: Optional[datetime] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _require_tenant(self.tenant_id, "PreferenceContradiction")
 
 
 @dataclass
 class PreferenceRecord:
-    """Canonical preference record with evidence and uncertainty."""
     preference_id: str
     user_id: str
     tenant_id: str
@@ -467,20 +445,16 @@ class PreferenceRecord:
     category: PreferenceCategory
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        _require_tenant(self.tenant_id, "PreferenceRecord")
         self.confidence = max(0.0, min(1.0, self.confidence))
         self.evidence_count = max(0, self.evidence_count)
         self.contradiction_count = max(0, self.contradiction_count)
         self.version = max(1, self.version)
 
 
-# ===================================
-# BEHAVIOR CONTRACTS
-# ===================================
-
 @dataclass
 class BehaviorPattern:
-    """Inferred repeated behavior pattern."""
     pattern_id: str
     user_id: str
     tenant_id: str
@@ -494,18 +468,19 @@ class BehaviorPattern:
     stability: PreferenceStability
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        _require_tenant(self.tenant_id, "BehaviorPattern")
         self.confidence = max(0.0, min(1.0, self.confidence))
         self.observation_count = max(0, self.observation_count)
 
 
-# ===================================
-# GOAL CONTRACTS
-# ===================================
-
 @dataclass
 class UserGoal:
-    """User goal separate from preferences."""
+    """Legacy persistence-neutral goal projection.
+
+    New cognition should convert this to personalization/goals.Goal.
+    """
+
     goal_id: str
     user_id: str
     tenant_id: str
@@ -519,17 +494,13 @@ class UserGoal:
     target_date: Optional[datetime] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        _require_tenant(self.tenant_id, "UserGoal")
         self.confidence = max(0.0, min(1.0, self.confidence))
 
 
-# ===================================
-# STATE CONTRACTS
-# ===================================
-
 @dataclass
 class CurrentUserState:
-    """Fast-changing current state (temporary, session-scoped)."""
     user_id: str
     tenant_id: str
     current_project: Optional[str] = None
@@ -541,10 +512,12 @@ class CurrentUserState:
     expires_at: Optional[datetime] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        _require_tenant(self.tenant_id, "CurrentUserState")
+
 
 @dataclass
 class UserStateSnapshot:
-    """Read-only snapshot of user state for consumer use."""
     user_id: str
     tenant_id: str
     current_state: CurrentUserState
@@ -560,7 +533,6 @@ class UserStateSnapshot:
 
 @dataclass
 class ResolvedPreferences:
-    """Preferences resolved for a specific task/context."""
     user_id: str
     tenant_id: str
     task_context: Dict[str, Any]
@@ -570,13 +542,8 @@ class ResolvedPreferences:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-# ===================================
-# HEALTH CONTRACTS
-# ===================================
-
 @dataclass
 class UserModelHealthStatus:
-    """Personalization subsystem health report."""
     repository: UserModelHealth
     memory_integration: UserModelHealth
     queue: UserModelHealth
@@ -586,13 +553,8 @@ class UserModelHealthStatus:
     details: Dict[str, Any] = field(default_factory=dict)
 
 
-# ===================================
-# EXTRACTION CONTRACTS
-# ===================================
-
 @dataclass
 class PreferenceCandidate:
-    """Candidate preference extracted from interaction."""
     candidate_id: str
     user_id: str
     tenant_id: str
@@ -611,7 +573,6 @@ class PreferenceCandidate:
 
 @dataclass
 class BehaviorCandidate:
-    """Candidate behavior pattern extracted from outcomes."""
     candidate_id: str
     user_id: str
     tenant_id: str
@@ -621,10 +582,6 @@ class BehaviorCandidate:
     confidence: float
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-
-# ===================================
-# HELPER FUNCTIONS
-# ===================================
 
 def make_preference_id() -> str:
     return f"pref_{uuid.uuid4().hex[:16]}"
@@ -651,53 +608,51 @@ def make_candidate_id() -> str:
 
 
 __all__ = [
-    # Enums
-    "PreferenceCategory",
-    "PreferenceStability",
-    "PreferenceState",
-    "PreferenceScope",
-    "PreferenceEvidenceSourceType",
+    "BehaviorCandidate",
+    "BehaviorPattern",
+    "CapabilityBelief",
+    "CapabilityBeliefType",
+    "CommitmentState",
+    "CommitmentType",
+    "ConfidenceState",
+    "CurrentUserState",
     "DriftState",
-    "UserGoalStatus",
-    "UserModelHealth",
-    "ModelPropertyStatus",
     "EvidenceStatus",
     "IdentityDomain",
-    "RelationshipType",
-    "InteractionNormType",
-    "CommitmentType",
-    "CapabilityBeliefType",
-    # Contracts
-    "PreferenceEvidence",
-    "PreferenceContradiction",
-    "PreferenceRecord",
-    "BehaviorPattern",
-    "UserGoal",
-    "CurrentUserState",
-    "UserStateSnapshot",
-    "ResolvedPreferences",
-    "UserModelHealthStatus",
-    "PreferenceCandidate",
-    "BehaviorCandidate",
-    "Provenance",
-    "ModelEvidence",
-    "ModelRevision",
     "IdentityFacet",
-    "CapabilityBelief",
-    "SelfModel",
-    "PreferenceSignal",
-    "GoalState",
-    "UserModel",
-    "RelationshipContext",
+    "InteractionNormType",
     "InteractionPattern",
-    "CommitmentState",
+    "ModelEvidence",
+    "ModelPropertyStatus",
+    "ModelRevision",
+    "PreferenceCandidate",
+    "PreferenceCategory",
+    "PreferenceContradiction",
+    "PreferenceDriftState",
+    "PreferenceEvidence",
+    "PreferenceEvidenceSourceType",
+    "PreferenceRecord",
+    "PreferenceScope",
+    "PreferenceSignal",
+    "PreferenceStability",
+    "PreferenceState",
+    "Provenance",
+    "RelationshipContext",
     "RelationshipModel",
-    "ConfidenceState",
-    # Helpers
-    "make_preference_id",
-    "make_evidence_id",
-    "make_contradiction_id",
-    "make_pattern_id",
-    "make_goal_id",
+    "RelationshipType",
+    "ResolvedPreferences",
+    "SelfModel",
+    "UserGoal",
+    "UserGoalModelState",
+    "UserGoalStatus",
+    "UserModel",
+    "UserModelHealth",
+    "UserModelHealthStatus",
+    "UserStateSnapshot",
     "make_candidate_id",
+    "make_contradiction_id",
+    "make_evidence_id",
+    "make_goal_id",
+    "make_pattern_id",
+    "make_preference_id",
 ]
