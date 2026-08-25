@@ -1,32 +1,29 @@
 from __future__ import annotations
 
-import time
+import asyncio
 import logging
+import time
 from typing import Any
 
 from .base import BaseExpressionEngine
 from ..contracts import ExpressionResult, ExpressionTask
-from ...model_runtime.provider_policy import evaluate_provider_policy, normalize_provider_id
+from ...model_runtime.provider_execution import get_provider_execution_registry
+from ...model_runtime.provider_policy import evaluate_provider_policy
+from ...model_runtime.provider_registry_service import get_provider_registry_service
 from ...model_runtime.runtime_engine import EndpointKind
 
 logger = logging.getLogger(__name__)
 
 
 class OpenAICompatibleEngine(BaseExpressionEngine):
-    """
-    Engine that routes to local or remote OpenAI-compatible endpoints
-    using the canonical endpoint registry.
-    """
+    """Route to OpenAI-compatible endpoints through Core-owned runtime ports."""
 
     async def generate(self, task: ExpressionTask) -> ExpressionResult:
         started = time.perf_counter()
-
         is_cloud = self.engine_id == "cloud"
 
-        from ai_karen_engine.core.model_runtime.provider_registry_service import (
-            get_provider_registry_service,
-        )
         registry = get_provider_registry_service()
+        execution_registry = get_provider_execution_registry()
 
         provider_id = self._resolve_provider(task, is_cloud, registry)
         if not provider_id:
@@ -37,42 +34,67 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             model = None
 
         try:
-            from ai_karen_engine.integrations.llm_registry import get_provider
-
             endpoint = registry.get_provider_endpoint(provider_id)
-            provider = get_provider(
+            provider = execution_registry.create_provider(
                 provider_id,
                 model=model,
                 base_url=endpoint.base_url if endpoint else None,
             )
 
             if not provider:
-                return self._failure_result(task, started, f"provider_not_found:{provider_id}")
+                reason = (
+                    "provider_execution_not_configured"
+                    if not execution_registry.is_configured()
+                    else f"provider_not_found:{provider_id}"
+                )
+                return self._failure_result(task, started, reason, provider=provider_id)
 
             prompt = self._extract_prompt(task.messages)
+            generation_kwargs = {
+                "messages": task.messages,
+                "max_tokens": task.max_tokens,
+                "temperature": task.temperature,
+            }
 
             if hasattr(provider, "generate_text_async"):
-                text = await provider.generate_text_async(prompt, messages=task.messages, max_tokens=task.max_tokens, temperature=task.temperature)
+                text = await provider.generate_text_async(
+                    prompt,
+                    **generation_kwargs,
+                )
             elif hasattr(provider, "generate_text"):
-                import asyncio
                 loop = asyncio.get_running_loop()
-                text = await loop.run_in_executor(None, lambda: provider.generate_text(prompt, messages=task.messages, max_tokens=task.max_tokens, temperature=task.temperature))
+                text = await loop.run_in_executor(
+                    None,
+                    lambda: provider.generate_text(prompt, **generation_kwargs),
+                )
             else:
-                import asyncio
                 loop = asyncio.get_running_loop()
-                text = await loop.run_in_executor(None, lambda: provider.generate(prompt, **{"messages": task.messages, "max_tokens": task.max_tokens, "temperature": task.temperature}))
+                text = await loop.run_in_executor(
+                    None,
+                    lambda: provider.generate(prompt, **generation_kwargs),
+                )
 
             actual_provider = provider_id
             actual_model = getattr(provider, "model", model)
-            attempts = []
-            skipped = []
+            attempts: list[dict[str, Any]] = []
+            skipped: list[dict[str, Any]] = []
         except Exception as exc:
-            logger.error(f"OpenAICompatibleEngine ({self.engine_id}) failed for {provider_id}: {exc}")
-            return self._failure_result(task, started, str(exc), provider=provider_id)
+            logger.exception(
+                "OpenAICompatibleEngine (%s) failed for %s",
+                self.engine_id,
+                provider_id,
+            )
+            return self._failure_result(
+                task,
+                started,
+                str(exc),
+                provider=provider_id,
+            )
 
+        text_value = str(text or "")
         return ExpressionResult(
             task_id=task.task_id,
-            text=text,
+            text=text_value,
             provider=actual_provider,
             model=str(actual_model) if actual_model else None,
             engine_id=self.engine_id,
@@ -82,11 +104,16 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             attempts=attempts,
             skipped=skipped,
             latency_ms=(time.perf_counter() - started) * 1000,
-            degraded=not bool(text.strip()),
-            degradation_reason=None if text.strip() else "empty_response",
+            degraded=not bool(text_value.strip()),
+            degradation_reason=None if text_value.strip() else "empty_response",
         )
 
-    def _resolve_provider(self, task: ExpressionTask, is_cloud: bool, registry: Any) -> str | None:
+    def _resolve_provider(
+        self,
+        task: ExpressionTask,
+        is_cloud: bool,
+        registry: Any,
+    ) -> str | None:
         """Find the best healthy provider matching the engine category."""
         required_caps = {"chat_completion", "text_generation"}
 
@@ -112,7 +139,13 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
 
         return targets[0].provider_id if targets else None
 
-    def _failure_result(self, task: ExpressionTask, started: float, reason: str, provider: str = "unknown") -> ExpressionResult:
+    def _failure_result(
+        self,
+        task: ExpressionTask,
+        started: float,
+        reason: str,
+        provider: str = "unknown",
+    ) -> ExpressionResult:
         return ExpressionResult(
             task_id=task.task_id,
             text="",
@@ -129,8 +162,9 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             degradation_reason=reason,
         )
 
-    def _extract_prompt(self, messages: list[dict[str, str]]) -> str:
-        """Helper to extract a simple prompt from messages."""
+    @staticmethod
+    def _extract_prompt(messages: list[dict[str, str]]) -> str:
+        """Extract the final user-visible content for legacy provider adapters."""
         if not messages:
             return ""
         return messages[-1].get("content", "")
