@@ -8,7 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import get_type_hints
 
-from ai_karen_engine.core.cognitive.state import CognitiveState, ReasoningSnapshot
+from ai_karen_engine.core.cognitive.state import CognitiveState, GoalSnapshot, ReasoningSnapshot
 from ai_karen_engine.core.contracts.cognitive import (
     BehaviorConfidence,
     EpistemicConfidence,
@@ -24,7 +24,12 @@ from ai_karen_engine.core.contracts.cognitive import (
 from ai_karen_engine.core.contracts.compatibility import COGNITIVE_COMPATIBILITY_SHIMS
 from ai_karen_engine.core.cortex.behavior import contracts as behavior_contracts
 from ai_karen_engine.core.memory.contracts import ClaimStatus as MemoryClaimStatus
-from ai_karen_engine.core.personalization.goals.contracts import EvidenceSourceType, EvidenceType
+from ai_karen_engine.core.personalization.goals.contracts import (
+    EvidenceSourceType,
+    EvidenceType,
+    GoalSnapshot as CanonicalGoalSnapshot,
+    GoalState,
+)
 from ai_karen_engine.core.reasoning.belief.contracts import ClaimStatus as BeliefClaimStatus
 from ai_karen_engine.core.reasoning.meta import contracts as meta_contracts
 
@@ -48,6 +53,13 @@ def test_one_claim_status_authority() -> None:
 
 def test_one_evidence_type_authority() -> None:
     assert EvidenceSourceType is EvidenceType
+
+
+def test_goal_state_and_snapshot_have_one_domain_authority() -> None:
+    hints = get_type_hints(CanonicalGoalSnapshot)
+    assert hints["state"] is GoalState
+    assert GoalSnapshot is CanonicalGoalSnapshot
+    assert get_type_hints(CognitiveState)["goals"] == list[CanonicalGoalSnapshot]
 
 
 def test_cognitive_state_exists_and_requires_explicit_tenant() -> None:
