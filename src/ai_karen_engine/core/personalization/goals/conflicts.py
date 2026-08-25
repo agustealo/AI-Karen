@@ -127,9 +127,9 @@ class ConflictDetector:
                     "Tight scheduling overlap between conflicting goals",
                 )
         if (goal_a.target_date is not None and goal_b.target_date is not None
-                and goal_a.target_date < goal_b.target_date):
-            if goal_a.blocks and any(b in goal_a.blocks for b in [goal_b.goal_id]):
-                pass
+                and goal_a.target_date < goal_b.target_date
+                and goal_a.blocks and any(b in goal_a.blocks for b in [goal_b.goal_id])):
+            pass
         return None
 
     def _check_dependency_conflict(self, goal_a: Goal, goal_b: Goal) -> GoalConflict | None:
@@ -151,7 +151,6 @@ class ConflictDetector:
     def _check_circular_deps(self, goal: Goal, all_goals: dict[str, Goal]) -> GoalConflict | None:
         """Detect circular dependency chains."""
         visited: set = set()
-        stack: list[str] = [goal.goal_id]
 
         def dfs(node_id: str, path: set) -> tuple[str, str] | None:
             if node_id in path:

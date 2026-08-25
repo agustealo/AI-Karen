@@ -187,9 +187,8 @@ class GoalLifecycle:
             )
         )
 
-        if evidence_ref:
-            if evidence_ref not in goal.evidence_refs:
-                goal.evidence_refs.append(evidence_ref)
+        if evidence_ref and evidence_ref not in goal.evidence_refs:
+            goal.evidence_refs.append(evidence_ref)
 
         if target == GoalState.ACTIVE:
             goal.last_observed_at = datetime.utcnow()
@@ -207,8 +206,8 @@ class GoalLifecycle:
         """A goal is satisfied when all required proof gates pass."""
         if not goal.completion_evidence_required:
             return False
-        required = set(s.value for s in goal.completion_evidence_required)
-        satisfied = set(s.value for s in goal.completion_evidence_sources)
+        required = {s.value for s in goal.completion_evidence_required}
+        satisfied = {s.value for s in goal.completion_evidence_sources}
         return required.issubset(satisfied)
 
     def mark_satisfied(
@@ -245,9 +244,8 @@ class GoalLifecycle:
         return now > goal.expires_at
 
     def expire_if_needed(self, goal: Goal, now: datetime | None = None) -> Goal:
-        if self.check_expired(goal, now):
-            if goal.state not in (GoalState.COMPLETED, GoalState.ABANDONED, GoalState.EXPIRED):
-                self.transition(goal, GoalState.EXPIRED, "ttl exceeded")
+        if self.check_expired(goal, now) and goal.state not in (GoalState.COMPLETED, GoalState.ABANDONED, GoalState.EXPIRED):
+            self.transition(goal, GoalState.EXPIRED, "ttl exceeded")
         return goal
 
     # ---- Hierarchy ----
@@ -330,11 +328,9 @@ class GoalLifecycle:
 
     def activate_when_ready(self, intention, all_goals: dict[str, Goal]) -> Any:
         """Transition an intention from WAITING to READY/ACTIVE if triggered."""
-        if intention.state == IntentionState.WAITING:
-            if self.evaluate_trigger(intention, all_goals):
-                if intention.state == IntentionState.WAITING and self.evaluate_trigger(intention, all_goals):
-                    intention.state = IntentionState.READY
-                    intention.activated_at = datetime.utcnow()
+        if intention.state == IntentionState.WAITING and self.evaluate_trigger(intention, all_goals):
+            intention.state = IntentionState.READY
+            intention.activated_at = datetime.utcnow()
         return intention
 
 

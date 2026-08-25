@@ -105,7 +105,7 @@ def _json_safe(value: Any) -> Any:
 class MemoryRuntimeManager:
     """Single write authority for Karen's memory system."""
 
-    def __init__(self, retrieval_adapter=None, consolidation_adapter=None):
+    def __init__(self, retrieval_adapter=None, consolidation_adapter=None, recall_service=None):
         self.signal_pipeline = get_signal_pipeline()
         self.worthiness_scorer = MemoryWorthinessScorer()
         self.flags = get_feature_flags()
@@ -114,6 +114,11 @@ class MemoryRuntimeManager:
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._retrieval_adapter = retrieval_adapter
         self._consolidation_adapter = consolidation_adapter
+        self._recall_service = recall_service
+
+    def set_recall_service(self, service) -> None:
+        """Set the recall service (CORE-SPLIT-2 recall authority)."""
+        self._recall_service = service
 
     def set_retrieval_adapter(self, adapter) -> None:
         """Set the retrieval port adapter (CORE-SPLIT-2 migration)."""
@@ -156,6 +161,17 @@ class MemoryRuntimeManager:
         Legacy-compatible wrapper for cognitive routes and context assembly.
         """
         _METRICS["recall_requests"] += 1
+
+        if self._recall_service is not None:
+            try:
+                results = self._recall_service.query(query, top_k=top_k)
+                return {
+                    "results": results,
+                    "status": "ok",
+                    "source": "recall_service",
+                }
+            except Exception as exc:
+                logger.debug("Recall service failed, falling back: %s", exc)
 
         if self._retrieval_adapter is not None:
             try:

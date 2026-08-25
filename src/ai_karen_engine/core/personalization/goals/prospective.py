@@ -165,10 +165,9 @@ class IntentionLifecycle:
                     self.transition(intention, IntentionState.READY, "trigger met")
                     self.transition(intention, IntentionState.ACTIVE, "trigger active")
                     activated.append(intention)
-            elif intention.state == IntentionState.READY:
-                if self.evaluate_trigger(intention, goals):
-                    self.transition(intention, IntentionState.ACTIVE, "trigger active")
-                    activated.append(intention)
+            elif intention.state == IntentionState.READY and self.evaluate_trigger(intention, goals):
+                self.transition(intention, IntentionState.ACTIVE, "trigger active")
+                activated.append(intention)
         return activated
 
     def add_evidence(self, intention: Intention, evidence: IntentionEvidence) -> Intention:
@@ -374,9 +373,7 @@ class ProspectiveMemoryManager:
                     return True
             return False
         elif trigger_type == IntentionTriggerType.CONTEXT_RELEVANT:
-            if trigger.condition:
-                return True
-            return False
+            return bool(trigger.condition)
         elif trigger_type == IntentionTriggerType.USER_RELEVANT or trigger_type == IntentionTriggerType.TIME_RELEVANT or trigger_type == IntentionTriggerType.PROJECT_RELEVANT:
             return True
         return False
