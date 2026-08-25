@@ -1,15 +1,17 @@
 """Canonical reasoning contracts for the specialist cognition layer.
 
-These dataclasses are the single source of truth for all reasoning artifacts.
-No reasoning strategy, executor, or node should invent its own dictionary shape
-when these contracts exist.
+These dataclasses are the single source of truth for reasoning artifacts. They
+contain semantic data only and never provider/runtime implementation objects.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Protocol
+
+from ai_karen_engine.core.contracts.cognitive import ReasoningConfidence, ReasoningDepth
 
 
 class ReasoningStatus(str, Enum):
@@ -78,10 +80,6 @@ class ReasoningErrorCode(str, Enum):
     ESCALATION_DENIED = "escalation_denied"
 
 
-# ===================================
-# Evidence
-# ===================================
-
 @dataclass(slots=True)
 class ReasoningEvidence:
     evidence_id: str
@@ -89,68 +87,59 @@ class ReasoningEvidence:
     source: str
     source_ref: str
     content: str
+    tenant_id: str
     summary: str = ""
     relevance: float = 0.0
     confidence: float = 0.0
-    timestamp: float = 0.0
+    event_time: datetime | None = None
+    observed_at: datetime | None = None
+    recorded_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    expires_at: datetime | None = None
     provenance: str = ""
-    tenant_id: str = "default"
     sensitivity: str = EvidenceSensitivity.INTERNAL.value
-    valid_at: Optional[str] = None
-    observed_at: Optional[str] = None
-    recorded_at: Optional[str] = None
-    expires_at: Optional[str] = None
     authority: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("reasoning evidence requires explicit non-default tenant_id")
+        self.relevance = max(0.0, min(1.0, self.relevance))
+        self.confidence = max(0.0, min(1.0, self.confidence))
 
-# ===================================
-# Hypothesis
-# ===================================
 
 @dataclass(slots=True)
 class ReasoningHypothesis:
     hypothesis_id: str
     statement: str
     confidence: float = 0.0
-    supporting_evidence_refs: List[str] = field(default_factory=list)
-    contradicting_evidence_refs: List[str] = field(default_factory=list)
-    assumptions: List[str] = field(default_factory=list)
+    supporting_evidence_refs: list[str] = field(default_factory=list)
+    contradicting_evidence_refs: list[str] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
     uncertainty: float = 0.0
     status: str = HypothesisStatus.PROPOSED.value
     provenance: str = ""
 
 
-# ===================================
-# Contradiction
-# ===================================
-
 @dataclass(slots=True)
 class ReasoningContradiction:
     claim_a: str
     claim_b: str
-    evidence_refs: List[str] = field(default_factory=list)
+    evidence_refs: list[str] = field(default_factory=list)
     severity: str = ContradictionSeverity.MEDIUM.value
     resolvable: bool = True
     recommended_action: str = ""
 
 
-# ===================================
-# Assessment (simplified confidence)
-# ===================================
-
 @dataclass(slots=True)
 class ReasoningAssessment:
-    confidence: float = 0.0
+    confidence: ReasoningConfidence = field(default_factory=ReasoningConfidence)
     evidence_sufficiency: float = 0.0
     contradiction_severity: str = ContradictionSeverity.LOW.value
-    uncertainty_reasons: List[str] = field(default_factory=list)
-    metrics: Dict[str, Any] = field(default_factory=dict)
+    uncertainty_reasons: list[str] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
 
-
-# ===================================
-# Evidence need / escalation
-# ===================================
 
 @dataclass(slots=True)
 class ReasoningEvidenceNeed:
@@ -164,27 +153,19 @@ class ReasoningEvidenceNeed:
 
 @dataclass(slots=True)
 class ReasoningEscalationRequest:
-    requested_topology: Optional[str] = None
+    requested_topology: str | None = None
     reason: str = ""
-    required_capabilities: List[str] = field(default_factory=list)
-    required_budget_delta: Dict[str, Any] = field(default_factory=dict)
-    evidence_needs: List[ReasoningEvidenceNeed] = field(default_factory=list)
+    required_capabilities: list[str] = field(default_factory=list)
+    required_budget_delta: dict[str, Any] = field(default_factory=dict)
+    evidence_needs: list[ReasoningEvidenceNeed] = field(default_factory=list)
 
-
-# ===================================
-# Action
-# ===================================
 
 @dataclass(slots=True)
 class ReasoningAction:
     action_type: str
     description: str = ""
-    parameters: Dict[str, Any] = field(default_factory=dict)
+    parameters: dict[str, Any] = field(default_factory=dict)
 
-
-# ===================================
-# Budget
-# ===================================
 
 @dataclass(slots=True)
 class ReasoningBudget:
@@ -197,25 +178,25 @@ class ReasoningBudget:
     max_output_tokens: int = 4096
 
 
-# ===================================
-# Canonical Request / Result
-# ===================================
-
 @dataclass(slots=True)
 class ReasoningRequest:
     request_id: str
     correlation_id: str
     tenant_id: str
     user_id: str
-    conversation_id: Optional[str]
+    conversation_id: str | None
     objective: str
-    reasoning_modes: List[str]
-    evidence: List[ReasoningEvidence]
-    constraints: Dict[str, Any]
+    reasoning_modes: list[str]
+    evidence: list[ReasoningEvidence]
+    constraints: dict[str, Any]
     policy_decision_id: str
     budget: ReasoningBudget
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
     schema_version: str = "v1"
+
+    def __post_init__(self) -> None:
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("reasoning request requires explicit non-default tenant_id")
 
 
 @dataclass(slots=True)
@@ -223,41 +204,55 @@ class ReasoningResult:
     reasoning_id: str
     disposition: str
     conclusion: str
-    hypotheses: List[ReasoningHypothesis]
-    evidence: List[ReasoningEvidence]
-    assumptions: List[str]
-    unknowns: List[str]
-    contradictions: List[ReasoningContradiction]
+    hypotheses: list[ReasoningHypothesis]
+    evidence: list[ReasoningEvidence]
+    assumptions: list[str]
+    unknowns: list[str]
+    contradictions: list[ReasoningContradiction]
     assessment: ReasoningAssessment
-    evidence_needs: List[ReasoningEvidenceNeed]
-    suggested_next_actions: List[ReasoningAction]
+    evidence_needs: list[ReasoningEvidenceNeed]
+    suggested_next_actions: list[ReasoningAction]
     status: str
-    error_code: Optional[str] = None
-    escalation: Optional[ReasoningEscalationRequest] = None
-    memory_candidates: List[Dict[str, Any]] = field(default_factory=list)
-    trajectory_ref: Optional[str] = None
-    diagnostics: Dict[str, Any] = field(default_factory=dict)
+    error_code: str | None = None
+    escalation: ReasoningEscalationRequest | None = None
+    memory_candidates: list[dict[str, Any]] = field(default_factory=list)
+    trajectory_ref: str | None = None
+    diagnostics: dict[str, Any] = field(default_factory=dict)
     schema_version: str = "v1"
 
 
-# ===================================
-# Protocols
-# ===================================
-
 class EvidenceProvider(Protocol):
-    async def retrieve(
-        self,
-        request: ReasoningRequest,
-        context: Any,
-    ) -> List[ReasoningEvidence]:
-        ...
+    async def retrieve(self, request: ReasoningRequest, context: Any) -> list[ReasoningEvidence]: ...
 
 
 class ReasoningGenerationClient(Protocol):
-    async def generate(self, request: Any) -> Any:
-        ...
+    async def generate(self, request: Any) -> Any: ...
 
 
 class ReasoningToolClient(Protocol):
-    async def execute(self, capability: str, query: str, context: Any) -> Dict[str, Any]:
-        ...
+    async def execute(self, capability: str, query: str, context: Any) -> dict[str, Any]: ...
+
+
+__all__ = [
+    "ContradictionSeverity",
+    "EvidenceProvider",
+    "EvidenceSensitivity",
+    "HypothesisStatus",
+    "ReasoningAction",
+    "ReasoningAssessment",
+    "ReasoningBudget",
+    "ReasoningContradiction",
+    "ReasoningDepth",
+    "ReasoningDisposition",
+    "ReasoningErrorCode",
+    "ReasoningEscalationRequest",
+    "ReasoningEvidence",
+    "ReasoningEvidenceNeed",
+    "ReasoningGenerationClient",
+    "ReasoningHypothesis",
+    "ReasoningMode",
+    "ReasoningRequest",
+    "ReasoningResult",
+    "ReasoningStatus",
+    "ReasoningToolClient",
+]
