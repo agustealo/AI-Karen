@@ -1,7 +1,7 @@
 """Adaptive intelligence contracts.
 
-Defines the canonical data structures for the adaptive decision layer.
-These are frozen/shared contracts consumed across the adaptive package.
+Adaptive remains advisory. These contracts contain semantic recommendations and
+outcome summaries only; they never authorize or execute actions.
 """
 
 from __future__ import annotations
@@ -13,8 +13,6 @@ from typing import Any
 
 
 class AdaptiveActionType(str, Enum):
-    """Canonical action types for adaptive recommendations."""
-
     RESPOND_DIRECTLY = "respond_directly"
     ASK_CLARIFICATION = "ask_clarification"
     RETRIEVE_MEMORY = "retrieve_memory"
@@ -27,8 +25,6 @@ class AdaptiveActionType(str, Enum):
 
 
 class RecommendationReasonCode(str, Enum):
-    """Structured reason codes for adaptive recommendation provenance."""
-
     HIGH_TASK_FIT = "high_task_fit"
     USER_PREFERS_LOCAL = "user_prefers_local"
     HISTORICAL_SUCCESS_HIGH = "historical_success_high"
@@ -48,8 +44,6 @@ class RecommendationReasonCode(str, Enum):
 
 
 class SuggestionType(str, Enum):
-    """Canonical suggestion types."""
-
     WORKFLOW_AUTOMATION = "workflow_automation"
     FOLLOW_UP = "follow_up"
     PREFERENCE_LEARNED = "preference_learned"
@@ -59,8 +53,6 @@ class SuggestionType(str, Enum):
 
 
 class SuggestionFeedbackType(str, Enum):
-    """User feedback on suggestions."""
-
     ACCEPTED = "accepted"
     DISMISSED = "dismissed"
     IGNORED = "ignored"
@@ -69,40 +61,34 @@ class SuggestionFeedbackType(str, Enum):
 
 
 class CandidateFilterResult(str, Enum):
-    """Result of candidate constraint filtering."""
-
     ELIGIBLE = "eligible"
     INELIGIBLE = "ineligible"
     REQUIRES_POLICY_VALIDATION = "requires_policy_validation"
 
 
+def _validate_tenant(value: str | None, owner: str) -> None:
+    if not value or value == "default":
+        raise ValueError(f"{owner} tenant_id must be explicit and non-default")
+
+
 @dataclass(slots=True)
 class UserStateSnapshot:
-    """Minimal read-only snapshot of user state for adaptive consumption.
-
-    This is a frozen/shared contract. It does not modify user state.
-    """
-
     user_id: str
-    tenant_id: str = "default"
+    tenant_id: str | None = None
     session_id: str | None = None
-
     explicit_preferences: dict[str, Any] = field(default_factory=dict)
     locality_preference: str = "any"
     clarification_tolerance: float = 0.5
     verification_preference: str = "standard"
     interruption_sensitivity: float = 0.5
-
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _validate_tenant(self.tenant_id, "adaptive user state")
 
 
 @dataclass(slots=True)
 class ResolvedPreferences:
-    """Resolved user preferences consumed by adaptive ranking.
-
-    This is a frozen/shared contract. It is read-only for adaptive.
-    """
-
     model_locality: str = "any"
     prefers_local: bool = False
     prefers_action_over_clarification: bool = True
@@ -111,20 +97,13 @@ class ResolvedPreferences:
     max_parallelism: int = 4
     allowed_action_types: list[str] = field(default_factory=list)
     forbidden_action_types: list[str] = field(default_factory=list)
-
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class BehaviorPatternSummary:
-    """Aggregated behavior pattern summary for a user.
-
-    This is a frozen/shared contract derived from outcomes.
-    """
-
     user_id: str
-    tenant_id: str = "default"
-
+    tenant_id: str | None = None
     total_interactions: int = 0
     clarification_rate: float = 0.0
     correction_rate: float = 0.0
@@ -133,65 +112,51 @@ class BehaviorPatternSummary:
     workflow_usage_rate: float = 0.0
     avg_session_length_minutes: float = 0.0
     preferred_time_of_day: str = "unknown"
-
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _validate_tenant(self.tenant_id, "adaptive behavior summary")
 
 
 @dataclass(slots=True)
 class SystemCapabilitySnapshot:
-    """Current system capability snapshot for ranking context."""
-
     available_tools: list[str] = field(default_factory=list)
     available_agents: list[str] = field(default_factory=list)
     available_workflows: list[str] = field(default_factory=list)
     healthy_inference_targets: list[str] = field(default_factory=list)
     memory_available: bool = True
     local_only_mode: bool = False
-
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class HistoricalEvidence:
-    """Historical evidence bundle for a ranking context."""
-
     capability_profiles: dict[str, Any] = field(default_factory=dict)
     agent_profiles: dict[str, Any] = field(default_factory=dict)
     model_profiles: dict[str, Any] = field(default_factory=dict)
     user_specific_evidence: dict[str, Any] = field(default_factory=dict)
     global_evidence: dict[str, Any] = field(default_factory=dict)
-
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class AdaptiveContext:
-    """Immutable context snapshot for adaptive ranking.
-
-    Combines refs/snapshots from multiple sources without mutating them.
-    """
-
     request_id: str
     correlation_id: str
-
-    task_signature: Any  # TaskSignature
+    task_signature: Any
     user_state: UserStateSnapshot
     resolved_preferences: ResolvedPreferences
     behavior_patterns: BehaviorPatternSummary
     system_capabilities: SystemCapabilitySnapshot
     historical_evidence: HistoricalEvidence
-
     policy_version: str = "v1"
     feature_version: str = "v1"
-    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class ScoreComponents:
-    """Explainable score breakdown for a ranked candidate."""
-
     task_fit: float = 0.0
     user_preference_fit: float = 0.0
     historical_success: float = 0.0
@@ -200,7 +165,6 @@ class ScoreComponents:
     cost_penalty: float = 0.0
     interruption_penalty: float = 0.0
     confidence: float = 0.0
-
     custom_components: dict[str, float] = field(default_factory=dict)
 
     @property
@@ -219,8 +183,6 @@ class ScoreComponents:
 
 @dataclass(slots=True)
 class AdaptiveRecommendation:
-    """Canonical adaptive recommendation record."""
-
     recommendation_id: str
     action_type: AdaptiveActionType
     target_id: str | None = None
@@ -231,35 +193,27 @@ class AdaptiveRecommendation:
     explanation_codes: list[RecommendationReasonCode] = field(default_factory=list)
     score_components: ScoreComponents | None = None
     model_policy_version: str = "baseline"
-    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class AdaptiveRecommendationSet:
-    """Set of ranked adaptive recommendations."""
-
     request_id: str
     correlation_id: str
     recommendations: list[AdaptiveRecommendation] = field(default_factory=list)
     shadow_mode: bool = False
     policy_version: str = "v1"
-    generated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
+    generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def top_recommendation(self) -> AdaptiveRecommendation | None:
-        if self.recommendations:
-            return self.recommendations[0]
-        return None
+        return self.recommendations[0] if self.recommendations else None
 
 
 @dataclass(slots=True)
 class SuggestionCandidate:
-    """Canonical suggestion candidate for user-facing advice."""
-
     suggestion_id: str
     suggestion_type: SuggestionType
     subject: str
@@ -268,17 +222,14 @@ class SuggestionCandidate:
     interruption_cost: float = 0.0
     urgency: str = "normal"
     evidence: dict[str, Any] = field(default_factory=dict)
-    expires_at: str | None = None
+    expires_at: datetime | None = None
     dedupe_key: str = ""
-    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class ActionOutcomeObservation:
-    """Observation derived from an execution outcome for learning."""
-
     observation_id: str
     source_outcome_id: str
     task_signature_ref: dict[str, Any] = field(default_factory=dict)
@@ -292,15 +243,12 @@ class ActionOutcomeObservation:
     user_feedback: str | None = None
     correction: bool = False
     completion: bool = False
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class CapabilityPerformanceProfile:
-    """Aggregated performance profile for a capability."""
-
     capability_id: str
     success_rate: float = 0.0
     failure_rate: float = 0.0
@@ -309,15 +257,12 @@ class CapabilityPerformanceProfile:
     correction_rate: float = 0.0
     sample_count: int = 0
     confidence_interval: float = 0.0
-    last_updated: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
+    last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class AgentPerformanceProfile:
-    """Aggregated performance profile for an agent."""
-
     agent_id: str
     domain: str = ""
     task_type: str = ""
@@ -325,20 +270,16 @@ class AgentPerformanceProfile:
     median_latency_ms: float = 0.0
     verification_success_rate: float = 0.0
     sample_count: int = 0
-    last_updated: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
+    last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class AdaptiveHealth:
-    """Health status of the adaptive layer."""
-
     candidate_generator: str = "unknown"
     historical_profiles: str = "unknown"
     suggestion_engine: str = "unknown"
     policy_evaluator: str = "unknown"
     queue_integration: str = "unknown"
     overall: str = "unknown"
-
     metadata: dict[str, Any] = field(default_factory=dict)
