@@ -9,9 +9,6 @@ or UI.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
-
-import pytest
 
 from ai_karen_engine.core.personalization.contracts import (
     BehaviorPattern,
@@ -20,7 +17,6 @@ from ai_karen_engine.core.personalization.contracts import (
     CommitmentState,
     CommitmentType,
     ConfidenceState,
-    EvidenceStatus,
     GoalState,
     IdentityDomain,
     IdentityFacet,
@@ -39,8 +35,6 @@ from ai_karen_engine.core.personalization.contracts import (
     SelfModel,
     UserGoalStatus,
     UserModel,
-    make_candidate_id,
-    make_contradiction_id,
     make_evidence_id,
     make_goal_id,
     make_pattern_id,
@@ -51,7 +45,7 @@ from ai_karen_engine.core.personalization.contracts import (
 def _provenance(
     source: str = "test",
     confidence: float = 0.5,
-    evidence_refs: List[str] | None = None,
+    evidence_refs: list[str] | None = None,
     first_observed_at: datetime | None = None,
     last_confirmed_at: datetime | None = None,
     valid_from: datetime | None = None,
@@ -611,22 +605,22 @@ class TestBehaviorPatternExtension:
 
 
 __all__ = [
-    "TestModelPropertyStatus",
-    "TestProvenance",
-    "TestModelEvidence",
-    "TestIdentityFacet",
+    "TestBehaviorPatternExtension",
     "TestCapabilityBelief",
-    "TestPreferenceSignal",
-    "TestGoalState",
-    "TestConfidenceState",
-    "TestInteractionPattern",
-    "TestRelationshipContext",
     "TestCommitmentState",
-    "TestSelfModel",
-    "TestUserModel",
+    "TestConfidenceState",
+    "TestGoalState",
+    "TestIdentityFacet",
+    "TestInteractionPattern",
+    "TestModelEvidence",
+    "TestModelPropertyStatus",
+    "TestModelRevision",
+    "TestPreferenceSignal",
+    "TestProvenance",
+    "TestRelationshipContext",
     "TestRelationshipModel",
     "TestRetractedInformation",
+    "TestSelfModel",
     "TestUncertainInference",
-    "TestModelRevision",
-    "TestBehaviorPatternExtension",
+    "TestUserModel",
 ]
