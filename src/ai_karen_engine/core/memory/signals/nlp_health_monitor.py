@@ -5,17 +5,22 @@ Health monitoring and management for NLP services.
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
-from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-
-from ai_karen_engine.core.memory.signals.spacy_service import SpacyService, SpacyHealthStatus
-from ai_karen_engine.core.memory.signals.distilbert_service import DistilBertService, DistilBertHealthStatus
-from ai_karen_engine.core.memory.signals.nlp_config import NLPConfig
+from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.memory.signals.distilbert_service import (
+    DistilBertHealthStatus,
+    DistilBertService,
+)
+from ai_karen_engine.core.memory.signals.nlp_config import NLPConfig
+from ai_karen_engine.core.memory.signals.spacy_service import (
+    SpacyHealthStatus,
+    SpacyService,
+)
+
 logger = get_logger(__name__)
 
 
@@ -38,7 +43,7 @@ class NLPHealthMonitor:
         self, 
         spacy_service: SpacyService,
         distilbert_service: DistilBertService,
-        config: Optional[NLPConfig] = None
+        config: NLPConfig | None = None
     ):
         self.spacy_service = spacy_service
         self.distilbert_service = distilbert_service
@@ -209,7 +214,7 @@ class NLPHealthMonitor:
         except Exception as e:
             logger.error(f"NLP system recovery failed: {e}")
     
-    def get_health_summary(self) -> Dict[str, Any]:
+    def get_health_summary(self) -> dict[str, Any]:
         """Get a summary of current health status."""
         if not self.health_history:
             return {"status": "no_data", "message": "No health data available"}
@@ -239,7 +244,7 @@ class NLPHealthMonitor:
             "consecutive_failures": self.consecutive_failures
         }
     
-    def get_health_trends(self, hours: int = 24) -> Dict[str, Any]:
+    def get_health_trends(self, hours: int = 24) -> dict[str, Any]:
         """Get health trends over specified time period."""
         if not self.health_history:
             return {"error": "No health data available"}
@@ -275,7 +280,7 @@ class NLPHealthMonitor:
             "recent_alerts": list(set(alert for h in recent_history for alert in h.alerts))
         }
     
-    async def run_diagnostic(self) -> Dict[str, Any]:
+    async def run_diagnostic(self) -> dict[str, Any]:
         """Run comprehensive diagnostic tests."""
         logger.info("Running NLP system diagnostics...")
         

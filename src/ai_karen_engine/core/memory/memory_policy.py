@@ -4,11 +4,13 @@ Implements configurable decay tiers and importance-based retention policies.
 """
 
 import os
-import yaml
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Union
 from enum import Enum
+from typing import Any
+
+import yaml
+
 from ai_karen_engine.config import load_memory_policy_config
 from ai_karen_engine.core.logging import get_logger
 
@@ -49,7 +51,7 @@ class MemoryPolicy:
     similarity_threshold: float = 0.7
 
     # Decay tier configuration (days)
-    decay_map: Dict[str, Optional[int]] = field(
+    decay_map: dict[str, int | None] = field(
         default_factory=lambda: {
             DecayTier.SHORT: 7,  # 1-7 days
             DecayTier.MEDIUM: 30,  # 14-45 days
@@ -77,7 +79,7 @@ class MemoryPolicy:
     recency_alpha: float = 0.05  # Exponential decay factor for recency weighting
 
     @staticmethod
-    def load(path: Optional[str] = None) -> "MemoryPolicy":
+    def load(path: str | None = None) -> "MemoryPolicy":
         """Load memory policy from config_assets/memory.yml with fallback defaults"""
         # First try explicit path
         if path and os.path.exists(path):
@@ -110,7 +112,7 @@ class MemoryPolicy:
         return MemoryPolicy()
 
     @staticmethod
-    def _from_config(config: Dict[str, Any]) -> "MemoryPolicy":
+    def _from_config(config: dict[str, Any]) -> "MemoryPolicy":
         """Create MemoryPolicy from configuration dictionary"""
         # Extract decay map configuration
         decay_config = config.get("decay_tiers", {})
@@ -163,8 +165,8 @@ class MemoryPolicy:
             return DecayTier.SHORT  # Default to short for any valid importance
 
     def calculate_expiry_date(
-        self, decay_tier: DecayTier, created_at: Optional[datetime] = None
-    ) -> Optional[datetime]:
+        self, decay_tier: DecayTier, created_at: datetime | None = None
+    ) -> datetime | None:
         """Calculate expiry date based on decay tier"""
         if decay_tier == DecayTier.PINNED:
             return None  # Never expires
@@ -194,7 +196,7 @@ class MemoryPolicy:
         return min(int(top_k * self.rerank_window_factor), 50)  # Cap at 50
 
     def should_promote_tier(
-        self, current_tier: DecayTier, usage_stats: Dict[str, Any]
+        self, current_tier: DecayTier, usage_stats: dict[str, Any]
     ) -> bool:
         """Determine if memory should be promoted to higher tier based on usage"""
         if not self.auto_promotion_enabled:
@@ -216,7 +218,7 @@ class MemoryPolicy:
         return usage_rate >= self.used_shard_rate_threshold
 
     def should_demote_tier(
-        self, current_tier: DecayTier, usage_stats: Dict[str, Any]
+        self, current_tier: DecayTier, usage_stats: dict[str, Any]
     ) -> bool:
         """Determine if memory should be demoted to lower tier based on usage"""
         if not self.auto_demotion_enabled:
@@ -237,7 +239,7 @@ class MemoryPolicy:
         ignore_rate = ignore_count / total_retrievals
         return ignore_rate >= self.ignored_top_hit_rate_threshold
 
-    def get_next_tier_up(self, current_tier: DecayTier) -> Optional[DecayTier]:
+    def get_next_tier_up(self, current_tier: DecayTier) -> DecayTier | None:
         """Get the next higher tier for promotion"""
         tier_hierarchy = [
             DecayTier.SHORT,
@@ -255,7 +257,7 @@ class MemoryPolicy:
 
         return None
 
-    def get_next_tier_down(self, current_tier: DecayTier) -> Optional[DecayTier]:
+    def get_next_tier_down(self, current_tier: DecayTier) -> DecayTier | None:
         """Get the next lower tier for demotion"""
         tier_hierarchy = [
             DecayTier.SHORT,
@@ -274,7 +276,7 @@ class MemoryPolicy:
         return None
 
     def calculate_importance_boost(
-        self, base_importance: int, usage_stats: Dict[str, Any]
+        self, base_importance: int, usage_stats: dict[str, Any]
     ) -> int:
         """Calculate importance boost based on usage patterns"""
         usage_count = usage_stats.get("usage_count", 0)
@@ -304,7 +306,7 @@ class MemoryPolicy:
         # Ensure we don't exceed maximum importance
         return min(base_importance + int(boost), ImportanceLevel.PERMANENT)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert policy to dictionary for serialization"""
         return {
             "top_k": self.top_k,
@@ -338,12 +340,12 @@ class MemoryPolicy:
 class MemoryPolicyManager:
     """Manager for memory policy operations and feedback loops"""
 
-    def __init__(self, policy: Optional[MemoryPolicy] = None):
+    def __init__(self, policy: MemoryPolicy | None = None):
         """Initialize with memory policy"""
         self.policy = policy or MemoryPolicy.load()
         self._usage_stats_cache = {}
 
-    def reload_policy(self, path: Optional[str] = None):
+    def reload_policy(self, path: str | None = None):
         """Reload policy from configuration file"""
         self.policy = MemoryPolicy.load(path)
         logger.info("Memory policy reloaded")
@@ -353,8 +355,8 @@ class MemoryPolicyManager:
         memory_id: str,
         current_tier: DecayTier,
         current_importance: int,
-        usage_stats: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        usage_stats: dict[str, Any],
+    ) -> dict[str, Any]:
         """Evaluate memory for tier/importance adjustment"""
         recommendations = {
             "memory_id": memory_id,
@@ -402,8 +404,8 @@ class MemoryPolicyManager:
         return recommendations
 
     def calculate_feedback_metrics(
-        self, retrieval_logs: List[Dict[str, Any]]
-    ) -> Dict[str, float]:
+        self, retrieval_logs: list[dict[str, Any]]
+    ) -> dict[str, float]:
         """Calculate feedback loop metrics from retrieval logs"""
         if not retrieval_logs:
             return {
@@ -435,7 +437,7 @@ class MemoryPolicyManager:
             "total_ignored_top_hits": total_ignored_top_hits,
         }
 
-    def get_policy_summary(self) -> Dict[str, Any]:
+    def get_policy_summary(self) -> dict[str, Any]:
         """Get summary of current policy configuration"""
         return {
             "policy": self.policy.to_dict(),

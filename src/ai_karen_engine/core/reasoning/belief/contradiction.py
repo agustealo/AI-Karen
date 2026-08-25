@@ -9,18 +9,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
 
 from .contracts import (
+    BeliefClaim,
     BeliefContradiction,
-    ClaimStatus,
-    ClaimTemporalValidity,
     ContradictionKind,
     ContradictionNature,
     Evidence,
     EvidenceRelation,
     EvidenceType,
-    BeliefClaim,
     make_contradiction_id,
 )
 
@@ -35,10 +32,10 @@ class ContradictionDetector:
     def detect(
         self,
         claim: BeliefClaim,
-        evidence: List[Evidence],
-    ) -> List[BeliefContradiction]:
+        evidence: list[Evidence],
+    ) -> list[BeliefContradiction]:
         """Detect contradictions between a claim and evidence items."""
-        contradictions: List[BeliefContradiction] = []
+        contradictions: list[BeliefContradiction] = []
 
         contradicting_evidence = self._find_contradicting_evidence(claim, evidence)
         for ev in contradicting_evidence:
@@ -65,7 +62,7 @@ class ContradictionDetector:
         self,
         claim_a: BeliefClaim,
         claim_b: BeliefClaim,
-    ) -> Optional[BeliefContradiction]:
+    ) -> BeliefContradiction | None:
         """Compare two claims for contradiction."""
         if claim_a.tenant_id != claim_b.tenant_id:
             return None
@@ -110,12 +107,12 @@ class ContradictionDetector:
 
     def detect_all(
         self,
-        claims: List[BeliefClaim],
-        evidence_map: Optional[Dict[str, List[Evidence]]] = None,
-    ) -> List[BeliefContradiction]:
+        claims: list[BeliefClaim],
+        evidence_map: dict[str, list[Evidence]] | None = None,
+    ) -> list[BeliefContradiction]:
         """Detect contradictions within a set of claims and their evidence."""
         evidence_map = evidence_map or {}
-        contradictions: List[BeliefContradiction] = []
+        contradictions: list[BeliefContradiction] = []
 
         for claim in claims:
             evs = evidence_map.get(claim.claim_id, [])
@@ -133,7 +130,7 @@ class ContradictionDetector:
         self,
         old_claim: BeliefClaim,
         new_claim: BeliefClaim,
-    ) -> Tuple[ContradictionNature, Optional[BeliefClaim]]:
+    ) -> tuple[ContradictionNature, BeliefClaim | None]:
         """Determine if a new claim supersedes an old one (change over time)
         rather than directly contradicting it.
 
@@ -158,8 +155,8 @@ class ContradictionDetector:
     def _find_contradicting_evidence(
         self,
         claim: BeliefClaim,
-        evidence: List[Evidence],
-    ) -> List[Evidence]:
+        evidence: list[Evidence],
+    ) -> list[Evidence]:
         return [
             e for e in evidence
             if e.relation in (EvidenceRelation.CONTRADICTS, EvidenceRelation.WEAKENS)

@@ -4,19 +4,27 @@ Consolidates all memory adapters into single service with unified query/commit p
 """
 
 import json
-import logging
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import numpy as np
+
 try:
     from pydantic import Field
 except ImportError:
     from ai_karen_engine.pydantic_stub import Field
 
+from ai_karen_engine.core.logging import PIIRedactor, get_logger
+from ai_karen_engine.core.memory.adapters.postgres_adapter import PostgresMemoryAdapter
+from ai_karen_engine.core.memory.memory_policy import DecayTier, MemoryPolicyManager
+from ai_karen_engine.core.memory.memory_writeback import (
+    InteractionType,
+    MemoryWritebackSystem,
+    ShardUsageType,
+)
 from ai_karen_engine.core.memory.retrieval.curated_recall import (
     CURATED_MEMORY_KIND,
     DEFAULT_CURATED_MEMORY_CLASSES,
@@ -24,15 +32,6 @@ from ai_karen_engine.core.memory.retrieval.curated_recall import (
     filter_curated_memories,
     is_curated_memory_metadata,
 )
-from ai_karen_engine.core.memory.adapters.postgres_adapter import PostgresMemoryAdapter
-from ai_karen_engine.core.memory.adapters.redis_adapter import RedisMemoryAdapter
-from ai_karen_engine.core.memory.memory_policy import DecayTier, MemoryPolicyManager
-from ai_karen_engine.core.memory.memory_writeback import (
-    InteractionType,
-    MemoryWritebackSystem,
-    ShardUsageType,
-)
-from ai_karen_engine.core.logging import get_logger, PIIRedactor
 from ai_karen_engine.utils.pydantic_base import ISO8601Model
 
 logger = get_logger(__name__)
@@ -44,42 +43,42 @@ class ContextHit(ISO8601Model):
 
     id: str
     text: str
-    preview: Optional[str] = None
+    preview: str | None = None
     score: float
-    tags: List[str] = Field(default_factory=list)
-    recency: Optional[str] = None
-    meta: Dict[str, Any] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+    recency: str | None = None
+    meta: dict[str, Any] = Field(default_factory=dict)
     importance: int = Field(5, ge=1, le=10)
     decay_tier: str = Field("short")
     created_at: datetime
-    updated_at: Optional[datetime] = None
+    updated_at: datetime | None = None
     user_id: str
-    org_id: Optional[str] = None
+    org_id: str | None = None
 
 
 class MemoryCommitRequest(ISO8601Model):
     """Unified memory commit request"""
 
     user_id: str = Field(..., min_length=1)
-    org_id: Optional[str] = None
+    org_id: str | None = None
     text: str = Field(..., min_length=1, max_length=16000)
-    tags: List[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     importance: int = Field(5, ge=1, le=10)
     decay: str = Field("short", pattern="^(short|medium|long|pinned)$")
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryQueryRequest(ISO8601Model):
     """Unified memory query request"""
 
     user_id: str = Field(..., min_length=1)
-    org_id: Optional[str] = None
+    org_id: str | None = None
     query: str = Field(..., min_length=1, max_length=4096)
     top_k: int = Field(12, ge=1, le=50)
     similarity_threshold: float = Field(0.7, ge=0.0, le=1.0)
     include_metadata: bool = Field(True)
     curated_only: bool = Field(False)
-    memory_classes: List[str] = Field(
+    memory_classes: list[str] = Field(
         default_factory=lambda: list(DEFAULT_CURATED_MEMORY_CLASSES)
     )
 
@@ -87,7 +86,7 @@ class MemoryQueryRequest(ISO8601Model):
 class MemorySearchResponse(ISO8601Model):
     """Unified memory search response"""
 
-    hits: List[ContextHit]
+    hits: list[ContextHit]
     total_found: int
     query_time_ms: float
     correlation_id: str
@@ -99,7 +98,7 @@ class MemoryCommitResponse(ISO8601Model):
     id: str
     success: bool
     decay_tier: str
-    expires_at: Optional[datetime]
+    expires_at: datetime | None
     correlation_id: str
 
 
@@ -111,8 +110,8 @@ class MemoryUsageStats:
     usage_count: int = 0
     ignore_count: int = 0
     total_retrievals: int = 0
-    last_used: Optional[datetime] = None
-    last_ignored: Optional[datetime] = None
+    last_used: datetime | None = None
+    last_ignored: datetime | None = None
     recency_score: float = 0.0
 
 
@@ -157,7 +156,9 @@ class UnifiedMemoryService:
 
         if self._embedding_adapter is None and embedding_manager is not None:
             try:
-                from ai_karen_engine.core.memory.adapters import LegacyEmbeddingManagerAdapter
+                from ai_karen_engine.core.memory.adapters import (
+                    LegacyEmbeddingManagerAdapter,
+                )
                 self._embedding_adapter = LegacyEmbeddingManagerAdapter(embedding_manager)
             except Exception:
                 pass
@@ -182,7 +183,7 @@ class UnifiedMemoryService:
         )
 
         # Usage tracking for feedback loops
-        self._usage_stats: Dict[str, MemoryUsageStats] = {}
+        self._usage_stats: dict[str, MemoryUsageStats] = {}
 
         # Performance metrics
         self.metrics = {
@@ -198,9 +199,9 @@ class UnifiedMemoryService:
 
     async def query(
         self,
-        tenant_id: Union[str, uuid.UUID],
+        tenant_id: str | uuid.UUID,
         request: MemoryQueryRequest,
-        correlation_id: Optional[str] = None,
+        correlation_id: str | None = None,
     ) -> MemorySearchResponse:
         """
         Single query path supporting all interfaces (AG-UI, chat, copilot).
@@ -289,9 +290,9 @@ class UnifiedMemoryService:
 
     async def commit(
         self,
-        tenant_id: Union[str, uuid.UUID],
+        tenant_id: str | uuid.UUID,
         request: MemoryCommitRequest,
-        correlation_id: Optional[str] = None,
+        correlation_id: str | None = None,
     ) -> MemoryCommitResponse:
         """
         Single commit path with consistent tagging and decay policies.
@@ -395,10 +396,10 @@ class UnifiedMemoryService:
 
     async def update(
         self,
-        tenant_id: Union[str, uuid.UUID],
+        tenant_id: str | uuid.UUID,
         memory_id: str,
-        updates: Dict[str, Any],
-        correlation_id: Optional[str] = None,
+        updates: dict[str, Any],
+        correlation_id: str | None = None,
     ) -> bool:
         """
         Update memory with version tracking and importance recalculation.
@@ -519,10 +520,10 @@ class UnifiedMemoryService:
 
     async def delete(
         self,
-        tenant_id: Union[str, uuid.UUID],
+        tenant_id: str | uuid.UUID,
         memory_id: str,
         hard_delete: bool = False,
-        correlation_id: Optional[str] = None,
+        correlation_id: str | None = None,
     ) -> bool:
         """
         Delete memory with soft/hard deletion options and audit trails.
@@ -624,8 +625,8 @@ class UnifiedMemoryService:
             return False
 
     async def _apply_policy_filtering(
-        self, memories: List[MemoryEntry]
-    ) -> List[MemoryEntry]:
+        self, memories: list[MemoryEntry]
+    ) -> list[MemoryEntry]:
         """Apply memory policy filtering and decay checks"""
         filtered = []
         current_time = datetime.utcnow()
@@ -652,8 +653,8 @@ class UnifiedMemoryService:
         return filtered
 
     async def _convert_to_context_hits(
-        self, memories: List[MemoryEntry], user_id: str, org_id: Optional[str]
-    ) -> List[ContextHit]:
+        self, memories: list[MemoryEntry], user_id: str, org_id: str | None
+    ) -> list[ContextHit]:
         """Convert MemoryEntry objects to unified ContextHit format"""
         context_hits = []
 
@@ -711,7 +712,7 @@ class UnifiedMemoryService:
 
         return context_hits
 
-    def _apply_final_ranking(self, context_hits: List[ContextHit]) -> List[ContextHit]:
+    def _apply_final_ranking(self, context_hits: list[ContextHit]) -> list[ContextHit]:
         """Apply final ranking with importance and recency weighting"""
         current_time = datetime.utcnow()
 
@@ -736,7 +737,7 @@ class UnifiedMemoryService:
         # Sort by combined score
         return sorted(context_hits, key=lambda h: h.score, reverse=True)
 
-    async def _update_usage_stats(self, context_hits: List[ContextHit], used: bool):
+    async def _update_usage_stats(self, context_hits: list[ContextHit], used: bool):
         """Update usage statistics for feedback loops"""
         for i, hit in enumerate(context_hits):
             if hit.id not in self._usage_stats:
@@ -762,8 +763,8 @@ class UnifiedMemoryService:
                     pass
 
     async def get_feedback_metrics(
-        self, tenant_id: Union[str, uuid.UUID]
-    ) -> Dict[str, float]:
+        self, tenant_id: str | uuid.UUID
+    ) -> dict[str, float]:
         """Calculate feedback loop metrics for policy adjustment"""
         if not self._usage_stats:
             return {
@@ -793,8 +794,8 @@ class UnifiedMemoryService:
         }
 
     async def run_policy_adjustment(
-        self, tenant_id: Union[str, uuid.UUID]
-    ) -> Dict[str, Any]:
+        self, tenant_id: str | uuid.UUID
+    ) -> dict[str, Any]:
         """Run policy-based memory tier adjustments"""
         adjustments = {
             "promotions": 0,
@@ -839,8 +840,8 @@ class UnifiedMemoryService:
         return adjustments
 
     async def _get_memory_by_id(
-        self, tenant_id: Union[str, uuid.UUID], memory_id: str
-    ) -> Optional[MemoryEntry]:
+        self, tenant_id: str | uuid.UUID, memory_id: str
+    ) -> MemoryEntry | None:
         """Get memory by ID for CRUD operations"""
         try:
             async with self.db_client.get_async_session() as session:
@@ -881,11 +882,11 @@ class UnifiedMemoryService:
 
     async def _create_audit_entry(
         self,
-        tenant_id: Union[str, uuid.UUID],
+        tenant_id: str | uuid.UUID,
         memory_id: str,
         action: str,
         correlation_id: str,
-        changes: Dict[str, Any],
+        changes: dict[str, Any],
         previous_version: int,
     ):
         """Create audit trail entry for memory operations"""
@@ -917,9 +918,9 @@ class UnifiedMemoryService:
 
     async def create(
         self,
-        tenant_id: Union[str, uuid.UUID],
+        tenant_id: str | uuid.UUID,
         request: MemoryCommitRequest,
-        correlation_id: Optional[str] = None,
+        correlation_id: str | None = None,
     ) -> MemoryCommitResponse:
         """
         CREATE operation with embedding generation and decay tier assignment.
@@ -929,10 +930,10 @@ class UnifiedMemoryService:
 
     async def read(
         self,
-        tenant_id: Union[str, uuid.UUID],
+        tenant_id: str | uuid.UUID,
         memory_id: str,
-        correlation_id: Optional[str] = None,
-    ) -> Optional[ContextHit]:
+        correlation_id: str | None = None,
+    ) -> ContextHit | None:
         """
         READ operation to get a specific memory by ID.
         Part of comprehensive CRUD operations.
@@ -969,14 +970,14 @@ class UnifiedMemoryService:
 
     async def list_memories(
         self,
-        tenant_id: Union[str, uuid.UUID],
+        tenant_id: str | uuid.UUID,
         user_id: str,
-        org_id: Optional[str] = None,
+        org_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
         include_deleted: bool = False,
-        correlation_id: Optional[str] = None,
-    ) -> List[ContextHit]:
+        correlation_id: str | None = None,
+    ) -> list[ContextHit]:
         """
         List memories for a user with pagination.
         Part of comprehensive CRUD operations.
@@ -1066,10 +1067,10 @@ class UnifiedMemoryService:
 
     async def get_memory_stats(
         self,
-        tenant_id: Union[str, uuid.UUID],
-        user_id: Optional[str] = None,
-        org_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        tenant_id: str | uuid.UUID,
+        user_id: str | None = None,
+        org_id: str | None = None,
+    ) -> dict[str, Any]:
         """Get comprehensive memory statistics"""
         try:
             async with self.db_client.get_async_session() as session:
@@ -1154,11 +1155,11 @@ class UnifiedMemoryService:
         self,
         response_id: str,
         response_content: str,
-        source_context_hits: List[ContextHit],
+        source_context_hits: list[ContextHit],
         user_id: str,
-        org_id: Optional[str] = None,
-        correlation_id: Optional[str] = None,
-    ) -> List[Any]:
+        org_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> list[Any]:
         """
         Link copilot response to source memory shards for feedback tracking.
         Part of memory write-back system with shard linking.
@@ -1178,13 +1179,13 @@ class UnifiedMemoryService:
         content: str,
         interaction_type: InteractionType,
         user_id: str,
-        org_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        source_shards: Optional[List[Any]] = None,
-        tags: Optional[List[str]] = None,
+        org_id: str | None = None,
+        session_id: str | None = None,
+        source_shards: list[Any] | None = None,
+        tags: list[str] | None = None,
         importance: int = 5,
-        metadata: Optional[Dict[str, Any]] = None,
-        correlation_id: Optional[str] = None,
+        metadata: dict[str, Any] | None = None,
+        correlation_id: str | None = None,
     ) -> str:
         """
         Queue user interaction for memory write-back with proper categorization.
@@ -1205,10 +1206,10 @@ class UnifiedMemoryService:
 
     async def get_writeback_feedback_metrics(
         self,
-        user_id: Optional[str] = None,
-        org_id: Optional[str] = None,
+        user_id: str | None = None,
+        org_id: str | None = None,
         time_window_hours: int = 24,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get feedback loop metrics for "used shard rate" and "ignored top-hit rate".
         Part of memory write-back system with shard linking.
@@ -1224,7 +1225,7 @@ class UnifiedMemoryService:
         """
         return await self.writeback_system.process_writeback_batch()
 
-    def get_service_metrics(self) -> Dict[str, Any]:
+    def get_service_metrics(self) -> dict[str, Any]:
         """Get comprehensive service performance metrics"""
         base_metrics = {
             **self.metrics,
@@ -1245,7 +1246,7 @@ class UnifiedMemoryService:
         logger.info("Unified memory service initialized")
         return True
 
-    async def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> dict[str, Any]:
         """Check the health of the memory service and its dependencies."""
         db_healthy = await self.db_client.check_health()
 
@@ -1282,7 +1283,7 @@ class UnifiedMemoryService:
             logger.error(f"KV store failed: {e}")
             return False
 
-    async def retrieve(self, collection: str, key: str) -> Optional[Any]:
+    async def retrieve(self, collection: str, key: str) -> Any | None:
         """Retrieve a structured value from persistent storage (KV interface)."""
         try:
             # Use Redis if available
@@ -1297,7 +1298,7 @@ class UnifiedMemoryService:
             logger.error(f"KV retrieve failed: {e}")
             return None
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Get the current status of the memory service."""
         return {
             "initialized": True,
@@ -1308,13 +1309,13 @@ class UnifiedMemoryService:
 
 # Export public interface - updated to include writeback components
 __all__ = [
-    "UnifiedMemoryService",
     "ContextHit",
+    "InteractionType",
     "MemoryCommitRequest",
+    "MemoryCommitResponse",
     "MemoryQueryRequest",
     "MemorySearchResponse",
-    "MemoryCommitResponse",
     "MemoryUsageStats",
-    "InteractionType",
     "ShardUsageType",
+    "UnifiedMemoryService",
 ]

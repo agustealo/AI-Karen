@@ -10,7 +10,7 @@ Version: 1.0.0 (Cognitive Architecture)
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Sequence
+from collections.abc import Sequence
 
 from ai_karen_engine.core.memory.protocols import RetrievalPort
 from ai_karen_engine.core.memory.types import MemoryEntry
@@ -26,7 +26,7 @@ class RedisMemoryAdapter(RetrievalPort):
         self._redis_client = redis_client
         self._redis_connection_manager = redis_connection_manager
 
-    def retrieve(self, query: str, *, top_k: int = 10, **filters) -> List[MemoryEntry]:
+    def retrieve(self, query: str, *, top_k: int = 10, **filters) -> list[MemoryEntry]:
         """Retrieve memories matching a query from Redis."""
         try:
             results = self._redis_connection_manager.search_memories(
@@ -36,14 +36,14 @@ class RedisMemoryAdapter(RetrievalPort):
         except Exception:
             return []
 
-    def retrieve_by_id(self, entry_id: str) -> Optional[MemoryEntry]:
+    def retrieve_by_id(self, entry_id: str) -> MemoryEntry | None:
         """Retrieve a specific memory by ID from Redis."""
         try:
             return self._redis_connection_manager.get_memory(entry_id)
         except Exception:
             return None
 
-    def retrieve_batch(self, entry_ids: Sequence[str]) -> List[MemoryEntry]:
+    def retrieve_batch(self, entry_ids: Sequence[str]) -> list[MemoryEntry]:
         """Retrieve multiple memories by ID from Redis."""
         results = []
         for entry_id in entry_ids:

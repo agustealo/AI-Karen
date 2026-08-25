@@ -7,8 +7,8 @@ across different agents and memory systems.
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Set
 from datetime import datetime
+from typing import Any
 
 from ai_karen_engine.core.services.base import BaseService, ServiceConfig
 
@@ -23,12 +23,12 @@ class AgentMemoryFusion(BaseService):
     across different agents and memory systems.
     """
     
-    def __init__(self, config: Optional[ServiceConfig] = None):
+    def __init__(self, config: ServiceConfig | None = None):
         super().__init__(config or ServiceConfig(name="agent_memory_fusion"))
         self._initialized = False
-        self._memory_sources: Dict[str, str] = {}  # agent_id -> source_service_id
-        self._fusion_strategies: Dict[str, Dict[str, Any]] = {}
-        self._consolidated_memories: Dict[str, List[Dict[str, Any]]] = {}  # agent_id -> memories
+        self._memory_sources: dict[str, str] = {}  # agent_id -> source_service_id
+        self._fusion_strategies: dict[str, dict[str, Any]] = {}
+        self._consolidated_memories: dict[str, list[dict[str, Any]]] = {}  # agent_id -> memories
         self._lock = asyncio.Lock()
     
     async def initialize(self) -> None:
@@ -117,9 +117,9 @@ class AgentMemoryFusion(BaseService):
     async def consolidate_memories(
         self, 
         agent_id: str, 
-        memories: List[Dict[str, Any]],
-        strategies: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+        memories: list[dict[str, Any]],
+        strategies: list[str] | None = None
+    ) -> dict[str, Any]:
         """
         Consolidate memories using specified strategies.
         
@@ -165,8 +165,8 @@ class AgentMemoryFusion(BaseService):
     async def _apply_strategy(
         self, 
         strategy: str, 
-        memories: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        memories: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         Apply a fusion strategy to memories.
         
@@ -190,8 +190,8 @@ class AgentMemoryFusion(BaseService):
     
     async def _merge_similar_memories(
         self, 
-        memories: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        memories: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         Merge memories with similar content.
         
@@ -249,8 +249,8 @@ class AgentMemoryFusion(BaseService):
     
     def _create_merged_memory(
         self, 
-        memories: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        memories: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """
         Create a merged memory from a list of similar memories.
         
@@ -281,8 +281,8 @@ class AgentMemoryFusion(BaseService):
     
     async def _deduplicate_memories(
         self, 
-        memories: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        memories: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         Remove duplicate memories.
         
@@ -323,8 +323,8 @@ class AgentMemoryFusion(BaseService):
     
     async def _compress_memories(
         self, 
-        memories: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        memories: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         Compress memory content to save space.
         
@@ -357,8 +357,8 @@ class AgentMemoryFusion(BaseService):
     
     async def _prioritize_memories(
         self, 
-        memories: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        memories: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         Prioritize memories based on importance factors.
         
@@ -408,7 +408,7 @@ class AgentMemoryFusion(BaseService):
     async def get_consolidated_memories(
         self, 
         agent_id: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get consolidated memories for an agent.
         
@@ -424,7 +424,7 @@ class AgentMemoryFusion(BaseService):
         async with self._lock:
             return self._consolidated_memories.get(agent_id, []).copy()
     
-    async def get_fusion_strategies(self) -> Dict[str, Dict[str, Any]]:
+    async def get_fusion_strategies(self) -> dict[str, dict[str, Any]]:
         """
         Get available fusion strategies.
         
@@ -437,7 +437,7 @@ class AgentMemoryFusion(BaseService):
         async with self._lock:
             return self._fusion_strategies.copy()
     
-    async def get_memory_sources(self) -> Dict[str, str]:
+    async def get_memory_sources(self) -> dict[str, str]:
         """
         Get registered memory sources.
         

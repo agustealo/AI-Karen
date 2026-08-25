@@ -6,7 +6,8 @@ Projects memory events into DuckDB for offline analytics and evaluation.
 
 import asyncio
 import os
-from typing import Any, Dict, Optional
+from typing import Any
+
 from ai_karen_engine.core.logging import get_logger
 
 from .base import ProjectionWorker
@@ -26,7 +27,7 @@ class DuckDBWorker(ProjectionWorker):
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             self._initialized = True
 
-    async def project(self, event_data: Dict[str, Any], assertion_data: Optional[Dict[str, Any]] = None) -> bool:
+    async def project(self, event_data: dict[str, Any], assertion_data: dict[str, Any] | None = None) -> bool:
         """
         Store event data in DuckDB for analytical processing.
         """

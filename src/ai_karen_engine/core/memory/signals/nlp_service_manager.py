@@ -5,35 +5,38 @@ Unified NLP service manager for spaCy and DistilBERT integration.
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import re
-import threading
 import subprocess
 import sys
-from typing import Dict, Any, Optional, List, Union, AsyncIterator
+import threading
+from collections.abc import AsyncIterator
+from typing import Any
 
-from ai_karen_engine.core.memory.signals.spacy_service import SpacyService, ParsedMessage
+from ai_karen_engine.config.config_manager import config_manager
+from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.memory.signals.distilbert_service import DistilBertService
-from ai_karen_engine.core.reasoning.synthesis.small_language_model_service import (
-    SmallLanguageModelService,
-    ScaffoldResult,
-    OutlineResult,
-    SummaryResult,
+from ai_karen_engine.core.memory.signals.nlp_config import (
+    DistilBertConfig,
+    NLPConfig,
+    SmallLanguageModelConfig,
+    SpacyConfig,
 )
 from ai_karen_engine.core.memory.signals.nlp_health_monitor import (
     NLPHealthMonitor,
     NLPSystemHealth,
 )
-from ai_karen_engine.core.memory.signals.nlp_config import (
-    NLPConfig,
-    SpacyConfig,
-    DistilBertConfig,
-    SmallLanguageModelConfig,
+from ai_karen_engine.core.memory.signals.spacy_service import (
+    ParsedMessage,
+    SpacyService,
 )
-from ai_karen_engine.config.config_manager import config_manager
+from ai_karen_engine.core.reasoning.synthesis.small_language_model_service import (
+    OutlineResult,
+    ScaffoldResult,
+    SmallLanguageModelService,
+    SummaryResult,
+)
 
-from ai_karen_engine.core.logging import get_logger
 logger = get_logger(__name__)
 
 
@@ -121,7 +124,7 @@ class NLPServiceManager:
 
         return paths[0]
 
-    async def ensure_assets_ready(self) -> Dict[str, Any]:
+    async def ensure_assets_ready(self) -> dict[str, Any]:
         """
         Ensure all NLP assets (NLTK, spaCy) are ready.
         Attempts auto-download if resources are missing and enabled.
@@ -210,12 +213,12 @@ class NLPServiceManager:
     async def generate_response(
         self,
         model_id: str,
-        messages: List[Dict[str, str]],
-        provider: Optional[str] = None,
-        correlation_id: Optional[str] = None,
+        messages: list[dict[str, str]],
+        provider: str | None = None,
+        correlation_id: str | None = None,
         stream: bool = False,
         **kwargs,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Delegate generation to the centralized provider system."""
         from ai_karen_engine.integrations.llm_registry import get_registry
 
@@ -462,9 +465,9 @@ class NLPServiceManager:
         self,
         provider_instance,
         provider_name: str,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         **kwargs,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Try generation with a specific provider instance with improved timeout handling."""
         try:
             import asyncio
@@ -784,11 +787,11 @@ class NLPServiceManager:
     async def generate_response_stream(
         self,
         model_id: str,
-        messages: List[Dict[str, str]],
-        provider: Optional[str] = None,
-        correlation_id: Optional[str] = None,
+        messages: list[dict[str, str]],
+        provider: str | None = None,
+        correlation_id: str | None = None,
         **kwargs,
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """Yield tokens from the centralized provider system in streaming mode."""
         
         # Use generate_response but with stream=True
@@ -933,8 +936,8 @@ class NLPServiceManager:
 
     # DistilBERT service methods
     async def get_embeddings(
-        self, texts: Union[str, List[str]], normalize: bool = True
-    ) -> Union[List[float], List[List[float]]]:
+        self, texts: str | list[str], normalize: bool = True
+    ) -> list[float] | list[list[float]]:
         """Generate embeddings using DistilBERT service."""
         if self.distilbert_service is None:
             # Consistent fallback length for DistilBERT
@@ -944,8 +947,8 @@ class NLPServiceManager:
         return await self.distilbert_service.get_embeddings(texts, normalize)
 
     async def batch_embeddings(
-        self, texts: List[str], batch_size: Optional[int] = None
-    ) -> List[List[float]]:
+        self, texts: list[str], batch_size: int | None = None
+    ) -> list[list[float]]:
         """Generate embeddings for multiple texts in batches."""
         return await self.distilbert_service.batch_embeddings(texts, batch_size)
 
@@ -954,8 +957,8 @@ class NLPServiceManager:
         self,
         text: str,
         scaffold_type: str = "reasoning",
-        max_tokens: Optional[int] = None,
-        context: Optional[Dict[str, Any]] = None,
+        max_tokens: int | None = None,
+        context: dict[str, Any] | None = None,
     ) -> ScaffoldResult:
         """Generate scaffolding using Small Language Model service."""
         if self.small_language_model_service is None:
@@ -981,7 +984,7 @@ class NLPServiceManager:
         )
 
     async def summarize_context(
-        self, text: str, summary_type: str = "concise", max_tokens: Optional[int] = None
+        self, text: str, summary_type: str = "concise", max_tokens: int | None = None
     ) -> SummaryResult:
         """Summarize context using Small Language Model service."""
         if self.small_language_model_service is None:
@@ -996,7 +999,7 @@ class NLPServiceManager:
         self,
         context: str,
         prompt: str,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         fill_type: str = "continuation",
     ) -> ScaffoldResult:
         """Generate short fill using Small Language Model service."""
@@ -1013,7 +1016,7 @@ class NLPServiceManager:
         user_message: str,
         main_response: str,
         augmentation_type: str = "enhancement",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Augment response using Small Language Model service."""
         if self.small_language_model_service is None:
             return {"augmented_content": main_response, "status": "degraded"}
@@ -1022,7 +1025,7 @@ class NLPServiceManager:
         )
 
     # Combined NLP operations
-    async def process_message_full(self, text: str) -> Dict[str, Any]:
+    async def process_message_full(self, text: str) -> dict[str, Any]:
         """Process message with both spaCy parsing and DistilBERT embeddings."""
         try:
             # Run both operations concurrently
@@ -1055,7 +1058,7 @@ class NLPServiceManager:
             logger.error(f"Full message processing failed: {e}")
             raise
 
-    async def extract_entities_with_embeddings(self, text: str) -> List[Dict[str, Any]]:
+    async def extract_entities_with_embeddings(self, text: str) -> list[dict[str, Any]]:
         """Extract entities and generate embeddings for each entity."""
         parsed_message = await self.parse_message(text)
 
@@ -1108,15 +1111,15 @@ class NLPServiceManager:
         """Get current health status of all NLP services."""
         return await self.health_monitor.check_health()
 
-    def get_health_summary(self) -> Dict[str, Any]:
+    def get_health_summary(self) -> dict[str, Any]:
         """Get health summary."""
         return self.health_monitor.get_health_summary()
 
-    def get_health_trends(self, hours: int = 24) -> Dict[str, Any]:
+    def get_health_trends(self, hours: int = 24) -> dict[str, Any]:
         """Get health trends over specified time period."""
         return self.health_monitor.get_health_trends(hours)
 
-    async def run_diagnostic(self) -> Dict[str, Any]:
+    async def run_diagnostic(self) -> dict[str, Any]:
         """Run comprehensive diagnostic tests."""
         return await self.health_monitor.run_diagnostic()
 
@@ -1148,7 +1151,7 @@ class NLPServiceManager:
         """Get current NLP configuration."""
         return self.config
 
-    async def update_config(self, new_config: Dict[str, Any]):
+    async def update_config(self, new_config: dict[str, Any]):
         """Update NLP configuration."""
         try:
             # Update main config
@@ -1205,7 +1208,7 @@ class NLPServiceManager:
             and small_language_model_status.fallback_mode
         )
 
-    def get_service_info(self) -> Dict[str, Any]:
+    def get_service_info(self) -> dict[str, Any]:
         """Get information about all NLP services."""
         spacy_status = self.spacy_service.get_health_status()
         distilbert_status = self.distilbert_service.get_health_status()
@@ -1243,7 +1246,7 @@ class NLPServiceManager:
 
 
 _nlp_manager_lock = threading.RLock()
-_nlp_manager_instance: Optional[NLPServiceManager] = None
+_nlp_manager_instance: NLPServiceManager | None = None
 
 
 def get_nlp_service_manager() -> NLPServiceManager:
@@ -1292,6 +1295,6 @@ def reset_nlp_service_manager() -> None:
 __all__ = [
     "NLPServiceManager",
     "get_nlp_service_manager",
-    "reset_nlp_service_manager",
     "nlp_service_manager",
+    "reset_nlp_service_manager",
 ]

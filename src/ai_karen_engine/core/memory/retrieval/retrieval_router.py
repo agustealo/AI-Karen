@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import asyncio
-import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
 
-from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
+from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.memory.graph.service import get_leangraph_service
+from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
 from ai_karen_engine.core.runtime.resilience import get_safe_stage_runner
 
 from ..neuro import (
@@ -16,15 +14,20 @@ from ..neuro import (
     MemoryClass,
     classify_memory_candidate,
     decide_activation_mode,
-    evaluate_guardrails,
     emit_memory_event,
+    evaluate_guardrails,
 )
 from ..neuro.scoring import blended_score
-from ..types import MemoryEntry, MemoryMetadata, MemoryNamespace, MemoryQuery, MemoryType
+from ..types import (
+    MemoryEntry,
+    MemoryMetadata,
+    MemoryNamespace,
+    MemoryQuery,
+    MemoryType,
+)
 from .fusion import dedupe_by_id, reciprocal_rank_fusion
 from .rerank import rerank_entries
 
-from ai_karen_engine.core.logging import get_logger
 logger = get_logger(__name__)
 
 
@@ -34,7 +37,7 @@ class HybridRetrievalRouter:
         self.redis = get_redis_manager()
         self.leangraph = get_leangraph_service()
 
-    async def recall(self, query: MemoryQuery) -> List[MemoryEntry]:
+    async def recall(self, query: MemoryQuery) -> list[MemoryEntry]:
         start = time.time()
         correlation_id = str(uuid.uuid4())
         emit_memory_event("memory.recall.started", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "stores_queried": ["redis"]})
@@ -48,8 +51,8 @@ class HybridRetrievalRouter:
         emit_memory_event("memory.activation.completed", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "memory_activation_mode": activation.mode.value, "token_budget": activation.top_k})
 
         should_query_lexical = activation.mode.value in {"fast", "deep", "procedural", "profile"}
-        hot: List[MemoryEntry] = []
-        lexical: List[MemoryEntry] = []
+        hot: list[MemoryEntry] = []
+        lexical: list[MemoryEntry] = []
         if activation.mode.value != "none":
             emit_memory_event("memory.recall.store.started", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "stores_queried": ["redis"]})
             hot = await self.safe_runner.run_stage(
@@ -57,7 +60,7 @@ class HybridRetrievalRouter:
             ) or []
             emit_memory_event("memory.recall.store.completed", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "stores_queried": ["redis"], "result_count": len(hot)})
 
-        graph: List[MemoryEntry] = []
+        graph: list[MemoryEntry] = []
         if activation.include_graph:
             emit_memory_event("memory.recall.store.started", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "stores_queried": ["graph"]})
             graph = await self.safe_runner.run_stage(
@@ -86,7 +89,7 @@ class HybridRetrievalRouter:
         })
         emit_memory_event("memory.recall.fusion.completed", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "result_count": len(fused)})
 
-        guarded: List[MemoryEntry] = []
+        guarded: list[MemoryEntry] = []
         for e in dedupe_by_id(fused):
             candidate = self._to_candidate(e, query)
             emit_memory_event("memory.guard.started", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "memory_classes": [candidate.memory_class.value]})
@@ -116,7 +119,7 @@ class HybridRetrievalRouter:
         emit_memory_event("memory.recall.completed", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "memory_activation_mode": activation.mode.value, "stores_queried": ["redis"] + (["graph"] if activation.include_graph else []), "result_count": len(fused), "selected_count": len(ranked)})
         return ranked
 
-    async def _query_redis(self, query: MemoryQuery) -> List[MemoryEntry]:
+    async def _query_redis(self, query: MemoryQuery) -> list[MemoryEntry]:
         data = await self.redis.get_session(str(query.tenant_id), str(query.user_id), session_id=query.session_id)
         if not data:
             data = await self.redis.get_short_term(str(query.tenant_id), str(query.user_id))
@@ -125,7 +128,7 @@ class HybridRetrievalRouter:
         content = str(data.get("summary") or data.get("last_message") or data)
         return [self._entry(query, content, "redis", MemoryType.EPISODIC, semantic=0.3, lexical=0.4)]
 
-    async def _query_graph(self, query: MemoryQuery) -> List[MemoryEntry]:
+    async def _query_graph(self, query: MemoryQuery) -> list[MemoryEntry]:
         if not query.text:
             return []
         try:
@@ -139,10 +142,10 @@ class HybridRetrievalRouter:
             return []
         return [self._entry(query, str(r), "graph", MemoryType.SEMANTIC, semantic=0.65) for r in (results or [])]
 
-    async def _query_profile(self, query: MemoryQuery) -> List[MemoryEntry]:
+    async def _query_profile(self, query: MemoryQuery) -> list[MemoryEntry]:
         return []
 
-    async def _query_procedural(self, query: MemoryQuery) -> List[MemoryEntry]:
+    async def _query_procedural(self, query: MemoryQuery) -> list[MemoryEntry]:
         return []
 
     def _entry(self, query: MemoryQuery, content: str, source: str, mem_type: MemoryType, *, semantic: float = 0.0, lexical: float = 0.0) -> MemoryEntry:

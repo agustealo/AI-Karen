@@ -5,14 +5,14 @@ Orchestrates multiple projection workers to fan out memory events.
 """
 
 import asyncio
-from typing import Dict, Any, Optional
 import logging
+from typing import Any
 
-from .base import ProjectionWorker
-from .redis_worker import RedisWorker
-from .leangraph_worker import LeanGraphWorker
-from .duckdb_worker import DuckDBWorker
 from ...runtime.resilience import get_safe_stage_runner
+from .base import ProjectionWorker
+from .duckdb_worker import DuckDBWorker
+from .leangraph_worker import LeanGraphWorker
+from .redis_worker import RedisWorker
 
 logger = logging.getLogger(__name__)
 
@@ -20,14 +20,14 @@ class ProjectionManager:
     """Manages the fan-out of memory projections."""
 
     def __init__(self):
-        self.workers: Dict[str, ProjectionWorker] = {
+        self.workers: dict[str, ProjectionWorker] = {
             "redis": RedisWorker(),
             "leangraph": LeanGraphWorker(),
             "duckdb": DuckDBWorker()
         }
         self.safe_runner = get_safe_stage_runner()
 
-    async def project_event(self, event_data: Dict[str, Any], assertion_data: Optional[Dict[str, Any]] = None):
+    async def project_event(self, event_data: dict[str, Any], assertion_data: dict[str, Any] | None = None):
         """
         Fan out the event to all registered workers.
         Uses SafeStageRunner for each projection to ensure isolation and resilience.

@@ -4,10 +4,10 @@ Contradiction Scoring for AI Karen.
 Detects contradictions between new signals and existing memory assertions.
 """
 
-import logging
-from typing import List, Dict, Any
+from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
+
 logger = get_logger(__name__)
 
 class ContradictionScorer:
@@ -16,7 +16,7 @@ class ContradictionScorer:
     def __init__(self):
         pass
 
-    def detect_contradictions(self, new_text: str, existing_assertions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def detect_contradictions(self, new_text: str, existing_assertions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Compare new text against existing assertions.
         Returns a list of contradiction hints.

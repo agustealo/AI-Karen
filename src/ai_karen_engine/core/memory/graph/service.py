@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import time
-from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
+
 from .adapters.kuzu_adapter import KuzuGraphAdapter
 from .config import LeanGraphConfig
 from .models import AssertionNode, EntityNode, GraphEdge, MemoryEventNode

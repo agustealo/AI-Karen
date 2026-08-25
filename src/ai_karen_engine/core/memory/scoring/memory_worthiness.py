@@ -4,13 +4,13 @@ Memory Worthiness Scorer for AI Karen.
 Determines if a signal should be admitted to durable memory.
 """
 
-import logging
-from typing import Dict, Any
-
-from .semantic_signal_scorer import get_semantic_scorer
-from ...runtime.resilience import get_safe_stage_runner
+from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
+
+from ...runtime.resilience import get_safe_stage_runner
+from .semantic_signal_scorer import get_semantic_scorer
+
 logger = get_logger(__name__)
 
 class MemoryWorthinessScorer:
@@ -25,7 +25,7 @@ class MemoryWorthinessScorer:
         except Exception:
             pass
 
-    async def evaluate(self, text: str, signal_type: str) -> Dict[str, Any]:
+    async def evaluate(self, text: str, signal_type: str) -> dict[str, Any]:
         """Evaluate memory worthiness."""
         
         def distilbert_wrapper(t: str):

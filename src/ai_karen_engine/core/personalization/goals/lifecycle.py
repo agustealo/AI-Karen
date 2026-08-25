@@ -10,29 +10,24 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from ..contracts import UserGoal, UserGoalStatus
 from .contracts import (
+    CompletionEvidenceSource,
     Goal,
-    GoalConflict,
-    GoalEvidence,
-    GoalProgress,
     GoalRevision,
     GoalSnapshot,
     GoalState,
-    CompletionEvidenceSource,
     IntentionState,
     IntentionTriggerType,
-    ProspectiveState,
     to_snapshot,
-    _map_user_goal_status,
 )
 
 logger = logging.getLogger(__name__)
 
 
-_VALID_TRANSITIONS: Dict[GoalState, Set[GoalState]] = {
+_VALID_TRANSITIONS: dict[GoalState, set[GoalState]] = {
     GoalState.PROPOSED: {
         GoalState.ACTIVE,
         GoalState.PAUSED,
@@ -93,29 +88,29 @@ class GoalStore:
     """
 
     def __init__(self) -> None:
-        self._goals: Dict[str, UserGoal] = {}
+        self._goals: dict[str, UserGoal] = {}
 
     def upsert(self, goal: UserGoal) -> None:
         self._goals[goal.goal_id] = goal
 
-    def get(self, goal_id: str) -> Optional[UserGoal]:
+    def get(self, goal_id: str) -> UserGoal | None:
         return self._goals.get(goal_id)
 
-    def list_active(self, user_id: str, tenant_id: str) -> List[UserGoal]:
+    def list_active(self, user_id: str, tenant_id: str) -> list[UserGoal]:
         return [
             g
             for g in self._goals.values()
             if g.user_id == user_id and g.tenant_id == tenant_id and g.status == UserGoalStatus.ACTIVE
         ]
 
-    def list_for_user(self, user_id: str, tenant_id: str) -> List[UserGoal]:
+    def list_for_user(self, user_id: str, tenant_id: str) -> list[UserGoal]:
         return [
             g
             for g in self._goals.values()
             if g.user_id == user_id and g.tenant_id == tenant_id
         ]
 
-    def all(self) -> List[UserGoal]:
+    def all(self) -> list[UserGoal]:
         return list(self._goals.values())
 
 
@@ -123,8 +118,8 @@ class GoalLifecycle:
     """Manages rich GoalState transitions and goal hierarchy logic."""
 
     def __init__(self) -> None:
-        self._goals: Dict[str, Goal] = {}
-        self._snapshots: List[GoalSnapshot] = []
+        self._goals: dict[str, Goal] = {}
+        self._snapshots: list[GoalSnapshot] = []
 
     # ---- CRUD ----
 
@@ -135,26 +130,26 @@ class GoalLifecycle:
         self._snapshots.append(to_snapshot(goal))
         return goal
 
-    def get(self, goal_id: str) -> Optional[Goal]:
+    def get(self, goal_id: str) -> Goal | None:
         return self._goals.get(goal_id)
 
-    def get_snapshot(self, goal_id: str) -> Optional[GoalSnapshot]:
+    def get_snapshot(self, goal_id: str) -> GoalSnapshot | None:
         goal = self._goals.get(goal_id)
         if goal is None:
             return None
         return to_snapshot(goal)
 
-    def list_for_user(self, user_id: str, tenant_id: str) -> List[Goal]:
+    def list_for_user(self, user_id: str, tenant_id: str) -> list[Goal]:
         return [
             g
             for g in self._goals.values()
             if g.tenant_id == tenant_id and (g.user_id == user_id or user_id is None)
         ]
 
-    def all(self) -> List[Goal]:
+    def all(self) -> list[Goal]:
         return list(self._goals.values())
 
-    def all_snapshots(self) -> List[GoalSnapshot]:
+    def all_snapshots(self) -> list[GoalSnapshot]:
         return list(self._snapshots)
 
     # ---- State transitions ----
@@ -169,7 +164,7 @@ class GoalLifecycle:
         goal: Goal,
         target: GoalState,
         reason: str = "",
-        evidence_ref: Optional[str] = None,
+        evidence_ref: str | None = None,
     ) -> Goal:
         if not self.can_transition(goal, target):
             raise ValueError(
@@ -243,13 +238,13 @@ class GoalLifecycle:
 
     # ---- Expiry ----
 
-    def check_expired(self, goal: Goal, now: Optional[datetime] = None) -> bool:
+    def check_expired(self, goal: Goal, now: datetime | None = None) -> bool:
         if goal.expires_at is None:
             return False
         now = now or datetime.utcnow()
         return now > goal.expires_at
 
-    def expire_if_needed(self, goal: Goal, now: Optional[datetime] = None) -> Goal:
+    def expire_if_needed(self, goal: Goal, now: datetime | None = None) -> Goal:
         if self.check_expired(goal, now):
             if goal.state not in (GoalState.COMPLETED, GoalState.ABANDONED, GoalState.EXPIRED):
                 self.transition(goal, GoalState.EXPIRED, "ttl exceeded")
@@ -289,7 +284,7 @@ class GoalLifecycle:
         parent.last_observed_at = datetime.utcnow()
         return parent
 
-    def dependency_blocks(self, goal: Goal, all_goals: Dict[str, Goal]) -> bool:
+    def dependency_blocks(self, goal: Goal, all_goals: dict[str, Goal]) -> bool:
         """Returns True if any dependency is not in a completed/satisfied state."""
         for dep_id in goal.depends_on:
             dep = all_goals.get(dep_id)
@@ -300,7 +295,7 @@ class GoalLifecycle:
             return True
         return False
 
-    def check_dependencies(self, goal: Goal, all_goals: Dict[str, Goal]) -> Goal:
+    def check_dependencies(self, goal: Goal, all_goals: dict[str, Goal]) -> Goal:
         """If a dependency blocks activation, mark the goal BLOCKED."""
         if goal.state == GoalState.ACTIVE and self.dependency_blocks(goal, all_goals):
             self.transition(goal, GoalState.BLOCKED, "dependency not satisfied")
@@ -317,7 +312,7 @@ class GoalLifecycle:
 
     # ---- Intention lifecycle ----
 
-    def evaluate_trigger(self, intention, all_goals: Dict[str, Goal]) -> bool:
+    def evaluate_trigger(self, intention, all_goals: dict[str, Goal]) -> bool:
         """Evaluate whether an intention's trigger is met."""
         if intention.state in (IntentionState.FULFILLED, IntentionState.INVALIDATED, IntentionState.CANCELLED):
             return False
@@ -333,12 +328,12 @@ class GoalLifecycle:
             return goal.state == GoalState.COMPLETED
         return False
 
-    def activate_when_ready(self, intention, all_goals: Dict[str, Goal]) -> Any:
+    def activate_when_ready(self, intention, all_goals: dict[str, Goal]) -> Any:
         """Transition an intention from WAITING to READY/ACTIVE if triggered."""
         if intention.state == IntentionState.WAITING:
             if self.evaluate_trigger(intention, all_goals):
                 from .contracts import (
-                    Intention, IntentionState,
+                    IntentionState,
                 )
                 if intention.state == IntentionState.WAITING and self.evaluate_trigger(intention, all_goals):
                     intention.state = IntentionState.READY
@@ -352,7 +347,7 @@ def _is_same_scope(goal: Goal, target: GoalState) -> bool:
 
 
 __all__ = [
-    "GoalStore",
     "GoalLifecycle",
+    "GoalStore",
     "to_snapshot",
 ]

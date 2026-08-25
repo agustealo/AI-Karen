@@ -5,10 +5,12 @@ Defines the structured representations of user and organizational profiles,
 synthesized from durable memory assertions and facts.
 """
 
-from typing import List, Dict, Any
-from datetime import datetime
-from pydantic import BaseModel, Field
 import uuid
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, Field
+
 
 class CommunicationStyle(BaseModel):
     """Synthesized communication preferences."""
@@ -16,7 +18,7 @@ class CommunicationStyle(BaseModel):
     verbosity: str = "medium"
     technical_depth: str = "balanced"
     preferred_format: str = "markdown"
-    directives: List[str] = Field(default_factory=list)
+    directives: list[str] = Field(default_factory=list)
 
 class UserPreference(BaseModel):
     """Specific user preferences."""
@@ -24,17 +26,17 @@ class UserPreference(BaseModel):
     value: Any
     confidence: float
     last_reinforced: datetime
-    provenance_ids: List[uuid.UUID] = Field(default_factory=list)
+    provenance_ids: list[uuid.UUID] = Field(default_factory=list)
 
 class ProfileSummary(BaseModel):
     """Compact summary of a profile for runtime consumption."""
     user_id: uuid.UUID
     tenant_id: uuid.UUID
     name: str
-    roles: List[str] = Field(default_factory=list)
+    roles: list[str] = Field(default_factory=list)
     communication_style: CommunicationStyle = Field(default_factory=CommunicationStyle)
-    top_preferences: Dict[str, Any] = Field(default_factory=dict)
-    active_constraints: List[str] = Field(default_factory=list)
+    top_preferences: dict[str, Any] = Field(default_factory=dict)
+    active_constraints: list[str] = Field(default_factory=list)
     stable_facts_count: int = 0
     last_updated: datetime = Field(default_factory=datetime.utcnow)
     version: str = "1.0.0"

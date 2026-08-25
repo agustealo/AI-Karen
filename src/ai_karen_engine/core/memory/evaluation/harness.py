@@ -5,13 +5,14 @@ Provides tools for benchmarking memory retrieval, extraction quality,
 and profile stability. Inspired by LoCoMo and LongMemEval research.
 """
 
-from typing import List, Dict, Any
-import time
 import json
 import os
+import time
 from pathlib import Path
+from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
+
 from ..retrieval.retrieval_router import get_retrieval_router
 from ..types import MemoryQuery
 
@@ -23,7 +24,7 @@ class MemoryEvalHarness:
     def __init__(self):
         self.router = get_retrieval_router()
 
-    async def evaluate_retrieval(self, dataset: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def evaluate_retrieval(self, dataset: list[dict[str, Any]]) -> dict[str, Any]:
         """
         Evaluate retrieval accuracy against a known dataset.
         Dataset format: [{'query': '...', 'expected_id': '...'}]
@@ -57,7 +58,6 @@ class MemoryEvalHarness:
     async def run_stability_test(self, user_id: str):
         """Evaluate if profile facts remain stable over multiple contradictory inputs."""
         # Implementation of profile stability benchmarking
-        pass
 
 # Global instance
 eval_harness = MemoryEvalHarness()
@@ -66,11 +66,11 @@ def get_eval_harness() -> MemoryEvalHarness:
     return eval_harness
 
 
-async def run_neuro_recall_benchmark(dataset_path: str) -> Dict[str, Any]:
+async def run_neuro_recall_benchmark(dataset_path: str) -> dict[str, Any]:
     """Labs-only benchmark runner for JSONL datasets (read/eval only)."""
     if os.getenv("KARI_NEURO_RECALL_LABS_ENABLED", "false").lower() not in {"1", "true", "yes"}:
         raise RuntimeError("NeuroRecall benchmark runner is labs-only.")
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for line in Path(dataset_path).read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue

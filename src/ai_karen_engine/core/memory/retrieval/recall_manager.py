@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import json
-import logging
 import math
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple, runtime_checkable
+from typing import (
+    Any,
+    Protocol,
+    runtime_checkable,
+)
 
+from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.memory.types import (
+    DEFAULT_DECAY_LAMBDA,
     RecallNamespace,
     RecallPriority,
     RecallStatus,
@@ -20,10 +26,8 @@ from ai_karen_engine.core.memory.types import (
     clamp,
     decay_score,
     ttl_to_expires,
-    DEFAULT_DECAY_LAMBDA,
 )
 
-from ai_karen_engine.core.logging import get_logger
 log = get_logger("ai_karen.memory.recall_manager")
 
 
@@ -36,22 +40,22 @@ class RecallSortMode(str, Enum):
 
 @dataclass(slots=True)
 class RecallContext:
-    tenant_id: Optional[str] = None
-    user_id: Optional[str] = None
-    session_id: Optional[str] = None
-    correlation_id: Optional[str] = None
-    source: Optional[str] = None
-    source_type: Optional[str] = None
-    labels: Dict[str, str] = field(default_factory=dict)
+    tenant_id: str | None = None
+    user_id: str | None = None
+    session_id: str | None = None
+    correlation_id: str | None = None
+    source: str | None = None
+    source_type: str | None = None
+    labels: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class RecallPayload:
-    text: Optional[str] = None
-    json: Optional[Any] = None
-    blob_b64: Optional[str] = None
-    mime_type: Optional[str] = None
-    encoding: Optional[str] = "utf-8"
+    text: str | None = None
+    json: Any | None = None
+    blob_b64: str | None = None
+    mime_type: str | None = None
+    encoding: str | None = "utf-8"
 
 
 @dataclass(slots=True)
@@ -64,26 +68,26 @@ class RecallItem:
     visibility: RecallVisibility = RecallVisibility.PRIVATE
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    expires_at: Optional[datetime] = None
-    tags: List[str] = field(default_factory=list)
-    metadata: Dict[str, str] = field(default_factory=dict)
+    expires_at: datetime | None = None
+    tags: list[str] = field(default_factory=list)
+    metadata: dict[str, str] = field(default_factory=dict)
     payload: RecallPayload = field(default_factory=RecallPayload)
-    embedding: Optional[List[float]] = None
-    embed_model: Optional[str] = None
-    embed_dim: Optional[int] = None
-    score: Optional[float] = None
-    distance: Optional[float] = None
+    embedding: list[float] | None = None
+    embed_model: str | None = None
+    embed_dim: int | None = None
+    score: float | None = None
+    distance: float | None = None
     decay_lambda: float = DEFAULT_DECAY_LAMBDA
     context: RecallContext = field(default_factory=RecallContext)
 
-    def normalized_score(self, now: Optional[datetime] = None) -> float:
+    def normalized_score(self, now: datetime | None = None) -> float:
         if self.score is None:
             return 0.0
         now = now or datetime.now(timezone.utc)
         age_s = max(0.0, (now - self.created_at).total_seconds())
         return clamp(decay_score(self.score, age_s, self.decay_lambda), 0.0, 1.0)
 
-    def is_expired(self, now: Optional[datetime] = None) -> bool:
+    def is_expired(self, now: datetime | None = None) -> bool:
         if self.expires_at is None:
             return False
         now = now or datetime.now(timezone.utc)
@@ -92,22 +96,22 @@ class RecallItem:
 
 @dataclass(slots=True)
 class RecallQuery:
-    task: Optional[str] = None
-    text: Optional[str] = None
-    embedding: Optional[List[float]] = None
+    task: str | None = None
+    text: str | None = None
+    embedding: list[float] | None = None
     top_k: int = 5
     min_score: float = 0.0
     max_length: int = 256
     device: str = "auto"
-    namespaces: Optional[List[RecallNamespace]] = None
-    types: Optional[List[RecallType]] = None
-    tags_any: Optional[List[str]] = None
-    tags_all: Optional[List[str]] = None
-    since: Optional[datetime] = None
-    until: Optional[datetime] = None
-    user_id: Optional[str] = None
-    tenant_id: Optional[str] = None
-    session_id: Optional[str] = None
+    namespaces: list[RecallNamespace] | None = None
+    types: list[RecallType] | None = None
+    tags_any: list[str] | None = None
+    tags_all: list[str] | None = None
+    since: datetime | None = None
+    until: datetime | None = None
+    user_id: str | None = None
+    tenant_id: str | None = None
+    session_id: str | None = None
     include_archived: bool = False
     rerank: bool = False
 
@@ -122,9 +126,9 @@ class RecallResult:
     question: str
     plan: str
     line_index: int
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         result = {
             "rank": self.rank,
             "score": self.score,
@@ -140,43 +144,43 @@ class RecallResult:
 @dataclass(slots=True)
 class RecallStats:
     total_items: int = 0
-    by_namespace: Dict[str, int] = field(default_factory=dict)
-    by_type: Dict[str, int] = field(default_factory=dict)
+    by_namespace: dict[str, int] = field(default_factory=dict)
+    by_type: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class RecallManagerConfig:
-    short_term: Optional[Any] = None
-    long_term: Optional[Any] = None
-    persistent: Optional[Any] = None
-    ephemeral: Optional[Any] = None
-    embedder: Optional[Any] = None
-    reranker: Optional[Any] = None
+    short_term: Any | None = None
+    long_term: Any | None = None
+    persistent: Any | None = None
+    ephemeral: Any | None = None
+    embedder: Any | None = None
+    reranker: Any | None = None
     fast_topk_multiplier: int = 3
-    default_embed_model: Optional[str] = None
+    default_embed_model: str | None = None
 
 
 @runtime_checkable
 class EmbeddingClient(Protocol):
-    def embed_texts(self, texts: Sequence[str], *, model: Optional[str] = None) -> List[List[float]]: ...
-    def embed_query(self, text: str, *, model: Optional[str] = None) -> List[float]: ...
+    def embed_texts(self, texts: Sequence[str], *, model: str | None = None) -> list[list[float]]: ...
+    def embed_query(self, text: str, *, model: str | None = None) -> list[float]: ...
 
 
 @runtime_checkable
 class Reranker(Protocol):
-    def rerank(self, query: str, candidates: Sequence[RecallItem]) -> List[Tuple[str, float]]: ...
+    def rerank(self, query: str, candidates: Sequence[RecallItem]) -> list[tuple[str, float]]: ...
 
 
 class InMemoryStore:
     def __init__(self, namespace: RecallNamespace):
         self.namespace = namespace
-        self._items: Dict[str, RecallItem] = {}
+        self._items: dict[str, RecallItem] = {}
 
     def upsert(self, items: Sequence[RecallItem]) -> None:
         for item in items:
             self._items[item.recall_id] = item
 
-    def get(self, recall_id: str) -> Optional[RecallItem]:
+    def get(self, recall_id: str) -> RecallItem | None:
         return self._items.get(recall_id)
 
     def delete(self, recall_id: str) -> bool:
@@ -192,20 +196,20 @@ class InMemoryStore:
     def search(
         self,
         *,
-        text: Optional[str],
-        query_vec: Optional[List[float]],
+        text: str | None,
+        query_vec: list[float] | None,
         top_k: int,
-        types: Optional[Sequence[RecallType]],
-        tags_any: Optional[Sequence[str]],
-        tags_all: Optional[Sequence[str]],
+        types: Sequence[RecallType] | None,
+        tags_any: Sequence[str] | None,
+        tags_all: Sequence[str] | None,
         min_score: float,
-        since: Optional[float],
-        until: Optional[float],
-        user_id: Optional[str],
-        tenant_id: Optional[str],
+        since: float | None,
+        until: float | None,
+        user_id: str | None,
+        tenant_id: str | None,
         include_archived: bool,
-    ) -> List[Tuple[RecallItem, float]]:
-        hits: List[Tuple[RecallItem, float]] = []
+    ) -> list[tuple[RecallItem, float]]:
+        hits: list[tuple[RecallItem, float]] = []
         query_terms = {term for term in (text or "").lower().split() if term}
         for item in self._items.values():
             if item.namespace != self.namespace:
@@ -250,13 +254,13 @@ class InMemoryStore:
 
 
 class RecallManager:
-    def __init__(self, cfg: Optional[Any] = None):
+    def __init__(self, cfg: Any | None = None):
         if isinstance(cfg, dict):
             allowed = {f.name for f in dataclass_fields(RecallManagerConfig)}
             filtered = {k: v for k, v in cfg.items() if k in allowed}
             cfg = RecallManagerConfig(**filtered)
         self.cfg = cfg or RecallManagerConfig()
-        self.stores: Dict[RecallNamespace, InMemoryStore] = {
+        self.stores: dict[RecallNamespace, InMemoryStore] = {
             RecallNamespace.SHORT_TERM: InMemoryStore(RecallNamespace.SHORT_TERM),
             RecallNamespace.LONG_TERM: InMemoryStore(RecallNamespace.LONG_TERM),
             RecallNamespace.PERSISTENT: InMemoryStore(RecallNamespace.PERSISTENT),
@@ -312,7 +316,7 @@ class RecallManager:
         self.stores[item.namespace].upsert([item])
         return item
 
-    async def retrieve_recalls(self, query: RecallQuery) -> List[RecallResult]:
+    async def retrieve_recalls(self, query: RecallQuery) -> list[RecallResult]:
         text = query.search_text()
         if not text:
             return []
@@ -331,7 +335,7 @@ class RecallManager:
             include_archived=query.include_archived,
         )
 
-        results: List[RecallResult] = []
+        results: list[RecallResult] = []
         for idx, (item, score) in enumerate(hits[: query.top_k], start=1):
             results.append(
                 RecallResult(
@@ -350,9 +354,9 @@ class RecallManager:
             )
         return results
 
-    async def load_recalls_from_file(self, file_path: str) -> List[RecallItem]:
+    async def load_recalls_from_file(self, file_path: str) -> list[RecallItem]:
         path = Path(file_path)
-        loaded: List[RecallItem] = []
+        loaded: list[RecallItem] = []
         if not path.exists():
             return loaded
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -366,7 +370,7 @@ class RecallManager:
             loaded.append(self.add_recall(data))
         return loaded
 
-    async def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> dict[str, Any]:
         by_namespace = {ns.value: store.count() for ns, store in self.stores.items()}
         return {
             "initialized": True,
@@ -395,13 +399,13 @@ class RecallManager:
         namespace: RecallNamespace,
         rtype: RecallType,
         text: str,
-        tags: Optional[Sequence[str]] = None,
-        metadata: Optional[Mapping[str, str]] = None,
+        tags: Sequence[str] | None = None,
+        metadata: Mapping[str, str] | None = None,
         priority: RecallPriority = RecallPriority.MEDIUM,
         visibility: RecallVisibility = RecallVisibility.PRIVATE,
-        ttl_seconds: Optional[int] = None,
-        embed_model: Optional[str] = None,
-        score: Optional[float] = None,
+        ttl_seconds: int | None = None,
+        embed_model: str | None = None,
+        score: float | None = None,
         decay_lambda: float = DEFAULT_DECAY_LAMBDA,
     ) -> RecallItem:
         item = RecallItem(
@@ -421,19 +425,19 @@ class RecallManager:
         self.stores[namespace].upsert([item])
         return item
 
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         return {ns.value: store.count() for ns, store in self.stores.items()}
 
 
 def build_default_manager(
     *,
-    short_store: Optional[Any] = None,
-    long_store: Optional[Any] = None,
-    persistent_store: Optional[Any] = None,
-    ephemeral_store: Optional[Any] = None,
-    embedder: Optional[Any] = None,
-    reranker: Optional[Any] = None,
-    default_embed_model: Optional[str] = None,
+    short_store: Any | None = None,
+    long_store: Any | None = None,
+    persistent_store: Any | None = None,
+    ephemeral_store: Any | None = None,
+    embedder: Any | None = None,
+    reranker: Any | None = None,
+    default_embed_model: str | None = None,
     fast_topk_multiplier: int = 3,
 ) -> RecallManager:
     cfg = RecallManagerConfig(
@@ -450,21 +454,21 @@ def build_default_manager(
 
 
 __all__ = [
-    "RecallType",
-    "RecallNamespace",
-    "RecallPriority",
-    "RecallStatus",
-    "RecallVisibility",
+    "EmbeddingClient",
+    "InMemoryStore",
     "RecallContext",
-    "RecallPayload",
     "RecallItem",
+    "RecallManager",
+    "RecallManagerConfig",
+    "RecallNamespace",
+    "RecallPayload",
+    "RecallPriority",
     "RecallQuery",
     "RecallResult",
     "RecallStats",
-    "RecallManagerConfig",
-    "RecallManager",
-    "EmbeddingClient",
+    "RecallStatus",
+    "RecallType",
+    "RecallVisibility",
     "Reranker",
-    "InMemoryStore",
     "build_default_manager",
 ]

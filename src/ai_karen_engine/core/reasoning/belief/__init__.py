@@ -6,40 +6,43 @@ contradiction detection, temporal reasoning, and belief revision.
 
 from __future__ import annotations
 
+from .assessment import BeliefEngine
 from .contracts import (
+    EVIDENCE_STRENGTH_WEIGHTS,
+    SOURCE_CREDIBILITY,
+    STALENESS_THRESHOLD_HOURS,
     BeliefAssessment,
     BeliefClaim,
     BeliefContradiction,
     BeliefRevision,
     BeliefVerdict,
     ClaimComparison,
+    ClaimScope,
     ClaimStatus,
     ClaimTemporalValidity,
-    ClaimScope,
+    ConfidenceDimension,
     ConfidenceMetrics,
     ContradictionKind,
     ContradictionNature,
-    ConfidenceDimension,
-    UncertaintySource,
     Evidence,
     EvidenceRelation,
     EvidenceStrength,
     EvidenceType,
     RevisionAction,
-    EVIDENCE_STRENGTH_WEIGHTS,
-    SOURCE_CREDIBILITY,
-    STALENESS_THRESHOLD_HOURS,
+    UncertaintySource,
     make_claim_id,
     make_contradiction_id,
     make_evidence_id,
     make_revision_id,
 )
-from .assessment import BeliefEngine
 from .contradiction import ContradictionDetector
-from .temporal import TemporalReasoner
 from .revision import BeliefRevisionEngine
+from .temporal import TemporalReasoner
 
 __all__ = [
+    "EVIDENCE_STRENGTH_WEIGHTS",
+    "SOURCE_CREDIBILITY",
+    "STALENESS_THRESHOLD_HOURS",
     "BeliefAssessment",
     "BeliefClaim",
     "BeliefContradiction",
@@ -48,22 +51,19 @@ __all__ = [
     "BeliefRevisionEngine",
     "BeliefVerdict",
     "ClaimComparison",
+    "ClaimScope",
     "ClaimStatus",
     "ClaimTemporalValidity",
-    "ClaimScope",
     "ConfidenceDimension",
     "ConfidenceMetrics",
     "ContradictionDetector",
     "ContradictionKind",
     "ContradictionNature",
-    "EVIDENCE_STRENGTH_WEIGHTS",
     "Evidence",
     "EvidenceRelation",
     "EvidenceStrength",
     "EvidenceType",
     "RevisionAction",
-    "SOURCE_CREDIBILITY",
-    "STALENESS_THRESHOLD_HOURS",
     "TemporalReasoner",
     "UncertaintySource",
     "make_claim_id",

@@ -14,8 +14,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional, Protocol, runtime_checkable
-
+from typing import Any, Protocol, runtime_checkable
 
 # ===================================
 # EXPERIENCE / REFLECTION INPUT
@@ -287,6 +286,7 @@ class ReflectionPolicy:
     detect_successes: bool = True
     detect_patterns: bool = True
     detect_preferences: bool = True
+    detect_goals: bool = True
     min_confidence_for_candidate: float = 0.3
     deduplication_window_hours: float = 24.0
     promotion_policy: PromotionPolicy = field(default_factory=PromotionPolicy)
@@ -305,25 +305,23 @@ def make_candidate_id() -> str:
 
 
 __all__ = [
-    "OutcomeEvidence",
-    "ExperienceEvent",
-    "ReflectionContext",
-    "ReflectionInput",
-    "ReflectionCandidateType",
-    "PromotionAction",
-    "EvidenceSourceDiversity",
-    "TimeDistribution",
-    "FailureLessonCandidate",
-    "ReflectionCandidate",
-    "PromotionResult",
-    "ReflectionEvent",
     "BeliefAssessmentLike",
-    "GoalContextLike",
     "ConsolidationPolicyLike",
-    "PromotionPolicy",
-    "ReflectionPolicy",
-    "make_event_id",
-    "make_candidate_id",
-    "ReflectionCandidateType",
+    "EvidenceSourceDiversity",
+    "ExperienceEvent",
+    "FailureLessonCandidate",
+    "GoalContextLike",
+    "OutcomeEvidence",
     "PromotionAction",
+    "PromotionPolicy",
+    "PromotionResult",
+    "ReflectionCandidate",
+    "ReflectionCandidateType",
+    "ReflectionContext",
+    "ReflectionEvent",
+    "ReflectionInput",
+    "ReflectionPolicy",
+    "TimeDistribution",
+    "make_candidate_id",
+    "make_event_id",
 ]

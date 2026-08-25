@@ -2,11 +2,11 @@
 Memory Projections Package.
 """
 
-from .manager import get_projection_manager, ProjectionManager
 from .base import ProjectionWorker
+from .manager import ProjectionManager, get_projection_manager
 
 __all__ = [
-    "get_projection_manager",
     "ProjectionManager",
-    "ProjectionWorker"
+    "ProjectionWorker",
+    "get_projection_manager"
 ]

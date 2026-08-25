@@ -15,7 +15,12 @@ Version: 1.0.0 (Unified Architecture)
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple, runtime_checkable
+from collections.abc import Sequence
+from typing import (
+    Any,
+    Protocol,
+    runtime_checkable,
+)
 
 from ai_karen_engine.core.memory.types import (
     EmbeddingVector,
@@ -23,7 +28,6 @@ from ai_karen_engine.core.memory.types import (
     MemoryQuery,
     MemoryQueryResult,
 )
-
 
 # ===================================
 # STORAGE PROTOCOLS
@@ -58,7 +62,7 @@ class StorageBackend(Protocol):
         """
         ...
 
-    def store_batch(self, entries: Sequence[MemoryEntry]) -> List[str]:
+    def store_batch(self, entries: Sequence[MemoryEntry]) -> list[str]:
         """
         Store multiple memory entries.
 
@@ -73,7 +77,7 @@ class StorageBackend(Protocol):
         """
         ...
 
-    def retrieve(self, entry_id: str) -> Optional[MemoryEntry]:
+    def retrieve(self, entry_id: str) -> MemoryEntry | None:
         """
         Retrieve a memory entry by ID.
 
@@ -85,7 +89,7 @@ class StorageBackend(Protocol):
         """
         ...
 
-    def retrieve_batch(self, entry_ids: Sequence[str]) -> List[MemoryEntry]:
+    def retrieve_batch(self, entry_ids: Sequence[str]) -> list[MemoryEntry]:
         """
         Retrieve multiple memory entries by ID.
 
@@ -102,8 +106,8 @@ class StorageBackend(Protocol):
         vector: EmbeddingVector,
         *,
         top_k: int = 10,
-        filters: Optional[Dict[str, Any]] = None
-    ) -> List[Tuple[MemoryEntry, float]]:
+        filters: dict[str, Any] | None = None
+    ) -> list[tuple[MemoryEntry, float]]:
         """
         Search by vector similarity.
 
@@ -123,8 +127,8 @@ class StorageBackend(Protocol):
         query: str,
         *,
         top_k: int = 10,
-        filters: Optional[Dict[str, Any]] = None
-    ) -> List[Tuple[MemoryEntry, float]]:
+        filters: dict[str, Any] | None = None
+    ) -> list[tuple[MemoryEntry, float]]:
         """
         Search by text query (requires text search capability).
 
@@ -174,7 +178,7 @@ class StorageBackend(Protocol):
         """
         ...
 
-    def count(self, filters: Optional[Dict[str, Any]] = None) -> int:
+    def count(self, filters: dict[str, Any] | None = None) -> int:
         """
         Count memories matching filters.
 
@@ -189,10 +193,10 @@ class StorageBackend(Protocol):
     def list_ids(
         self,
         *,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         offset: int = 0,
-        filters: Optional[Dict[str, Any]] = None
-    ) -> List[str]:
+        filters: dict[str, Any] | None = None
+    ) -> list[str]:
         """
         List memory IDs.
 
@@ -225,7 +229,7 @@ class EmbeddingProvider(Protocol):
     should implement this protocol.
     """
 
-    def embed_text(self, text: str, *, model: Optional[str] = None) -> EmbeddingVector:
+    def embed_text(self, text: str, *, model: str | None = None) -> EmbeddingVector:
         """
         Generate embedding for a single text.
 
@@ -245,8 +249,8 @@ class EmbeddingProvider(Protocol):
         self,
         texts: Sequence[str],
         *,
-        model: Optional[str] = None
-    ) -> List[EmbeddingVector]:
+        model: str | None = None
+    ) -> list[EmbeddingVector]:
         """
         Generate embeddings for multiple texts.
 
@@ -262,7 +266,7 @@ class EmbeddingProvider(Protocol):
         """
         ...
 
-    def embed_query(self, query: str, *, model: Optional[str] = None) -> EmbeddingVector:
+    def embed_query(self, query: str, *, model: str | None = None) -> EmbeddingVector:
         """
         Generate embedding for a query (may use different strategy than documents).
 
@@ -309,8 +313,8 @@ class Reranker(Protocol):
         query: str,
         candidates: Sequence[MemoryEntry],
         *,
-        top_k: Optional[int] = None
-    ) -> List[Tuple[MemoryEntry, float]]:
+        top_k: int | None = None
+    ) -> list[tuple[MemoryEntry, float]]:
         """
         Re-rank candidate memories for a query.
 
@@ -381,7 +385,7 @@ class MemoryConsolidator(Protocol):
     Based on HippoRAG hippocampal consolidation model.
     """
 
-    def identify_candidates(self, **criteria) -> List[MemoryEntry]:
+    def identify_candidates(self, **criteria) -> list[MemoryEntry]:
         """
         Identify memories eligible for consolidation.
 
@@ -408,7 +412,7 @@ class MemoryConsolidator(Protocol):
         """
         ...
 
-    async def consolidate_batch(self, entries: Sequence[MemoryEntry]) -> List[MemoryEntry]:
+    async def consolidate_batch(self, entries: Sequence[MemoryEntry]) -> list[MemoryEntry]:
         """
         Consolidate multiple memories.
 
@@ -443,7 +447,7 @@ class MemoryManager(Protocol):
         """Store a memory."""
         ...
 
-    def retrieve(self, entry_id: str) -> Optional[MemoryEntry]:
+    def retrieve(self, entry_id: str) -> MemoryEntry | None:
         """Retrieve a memory by ID."""
         ...
 
@@ -469,7 +473,7 @@ class MemoryManager(Protocol):
         *,
         top_k: int = 10,
         **filters
-    ) -> List[MemoryEntry]:
+    ) -> list[MemoryEntry]:
         """
         Quick recall by text query.
 
@@ -519,19 +523,19 @@ class RecallPort(Protocol):
     use to retrieve memories. Implementations live in runtime/ or platform/.
     """
 
-    def query(self, query_text: str, *, top_k: int = 10, **filters) -> List[MemoryEntry]:
+    def query(self, query_text: str, *, top_k: int = 10, **filters) -> list[MemoryEntry]:
         """Query memories by text."""
         ...
 
-    def decompose(self, query: str) -> List[str]:
+    def decompose(self, query: str) -> list[str]:
         """Decompose a query into sub-queries for multi-hop retrieval."""
         ...
 
-    def fuse(self, results: List[List[MemoryEntry]]) -> List[MemoryEntry]:
+    def fuse(self, results: list[list[MemoryEntry]]) -> list[MemoryEntry]:
         """Fuse multiple retrieval result lists."""
         ...
 
-    def rerank(self, query: str, candidates: Sequence[MemoryEntry], *, top_k: Optional[int] = None) -> List[Tuple[MemoryEntry, float]]:
+    def rerank(self, query: str, candidates: Sequence[MemoryEntry], *, top_k: int | None = None) -> list[tuple[MemoryEntry, float]]:
         """Re-rank candidates for a query."""
         ...
 
@@ -548,15 +552,15 @@ class RetrievalPort(Protocol):
     Implementations live in platform/ (postgres, redis, milvus, etc.).
     """
 
-    def retrieve(self, query: str, *, top_k: int = 10, **filters) -> List[MemoryEntry]:
+    def retrieve(self, query: str, *, top_k: int = 10, **filters) -> list[MemoryEntry]:
         """Retrieve memories matching a query."""
         ...
 
-    def retrieve_by_id(self, entry_id: str) -> Optional[MemoryEntry]:
+    def retrieve_by_id(self, entry_id: str) -> MemoryEntry | None:
         """Retrieve a specific memory by ID."""
         ...
 
-    def retrieve_batch(self, entry_ids: Sequence[str]) -> List[MemoryEntry]:
+    def retrieve_batch(self, entry_ids: Sequence[str]) -> list[MemoryEntry]:
         """Retrieve multiple memories by ID."""
         ...
 
@@ -573,7 +577,7 @@ class ConsolidationPort(Protocol):
     Implementations live in platform/.
     """
 
-    def identify_candidates(self, **criteria) -> List[MemoryEntry]:
+    def identify_candidates(self, **criteria) -> list[MemoryEntry]:
         """Identify memories eligible for consolidation."""
         ...
 
@@ -581,7 +585,7 @@ class ConsolidationPort(Protocol):
         """Consolidate a memory (e.g., episodic → semantic)."""
         ...
 
-    def consolidate_batch(self, entries: Sequence[MemoryEntry]) -> List[MemoryEntry]:
+    def consolidate_batch(self, entries: Sequence[MemoryEntry]) -> list[MemoryEntry]:
         """Consolidate multiple memories."""
         ...
 
@@ -599,15 +603,15 @@ class EmbeddingPort(Protocol):
     Core must not instantiate EmbeddingManager directly.
     """
 
-    def embed_text(self, text: str, *, model: Optional[str] = None) -> EmbeddingVector:
+    def embed_text(self, text: str, *, model: str | None = None) -> EmbeddingVector:
         """Generate embedding for a single text."""
         ...
 
-    def embed_batch(self, texts: Sequence[str], *, model: Optional[str] = None) -> List[EmbeddingVector]:
+    def embed_batch(self, texts: Sequence[str], *, model: str | None = None) -> list[EmbeddingVector]:
         """Generate embeddings for multiple texts."""
         ...
 
-    def embed_query(self, query: str, *, model: Optional[str] = None) -> EmbeddingVector:
+    def embed_query(self, query: str, *, model: str | None = None) -> EmbeddingVector:
         """Generate embedding for a query."""
         ...
 
@@ -617,10 +621,10 @@ class EmbeddingPort(Protocol):
 # ===================================
 
 # Storage result (ID, success flag, optional error)
-StorageResult = Tuple[str, bool, Optional[str]]
+StorageResult = tuple[str, bool, str | None]
 
 # Search result (Memory, score)
-SearchResult = Tuple[MemoryEntry, float]
+SearchResult = tuple[MemoryEntry, float]
 
 
 # ===================================

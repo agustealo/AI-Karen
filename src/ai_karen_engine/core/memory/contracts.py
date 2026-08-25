@@ -90,9 +90,9 @@ class MemoryClaim:
         return max(0.0, base - penalty)
 
 
-MemorySalience = SalienceScore
-
-
+# ===================================
+# SALIENCE SCORING
+# ===================================
 
 @dataclass
 class SalienceScore:
@@ -136,6 +136,9 @@ class SalienceScore:
             self.error_significance,
             self.success_significance,
         ])
+
+
+MemorySalience = SalienceScore
 
 
 # ===================================

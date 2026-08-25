@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
-from ai_karen_engine.core.memory.neuro import MemoryCandidate, MemoryClass, classify_memory_candidate
 from ai_karen_engine.core.memory.memory_writeback import InteractionType
+from ai_karen_engine.core.memory.neuro import (
+    MemoryCandidate,
+    MemoryClass,
+    classify_memory_candidate,
+)
 
 
 @dataclass
@@ -22,7 +27,7 @@ class NeuroVaultMigrator:
     def __init__(self, writeback_system: Any):
         self.writeback_system = writeback_system
 
-    async def migrate_entries(self, entries: Iterable[Dict[str, Any]]) -> MigrationResult:
+    async def migrate_entries(self, entries: Iterable[dict[str, Any]]) -> MigrationResult:
         result = MigrationResult()
         for raw in entries:
             try:
@@ -55,7 +60,7 @@ class NeuroVaultMigrator:
                 result.errors += 1
         return result
 
-    def _map_entry(self, raw: Dict[str, Any]) -> Optional[MemoryCandidate]:
+    def _map_entry(self, raw: dict[str, Any]) -> MemoryCandidate | None:
         tenant_id = str(raw.get("tenant_id") or "")
         user_id = str(raw.get("user_id") or "")
         text = str(raw.get("content") or raw.get("text") or "").strip()

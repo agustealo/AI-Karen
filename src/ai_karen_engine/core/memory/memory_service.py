@@ -6,20 +6,17 @@ This service is being refactored to use the new unified memory service.
 """
 
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timedelta
-from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
 
 try:
     from pydantic import BaseModel, ConfigDict, Field
 except ImportError:
-    from ai_karen_engine.pydantic_stub import BaseModel, Field
+    from ai_karen_engine.pydantic_stub import Field
 
 from ai_karen_engine.interfaces.ui.memory_models import (
-    UIMemoryType as UIUIMemoryType,
     UISource,
     WebUIMemoryEntry,
     WebUIMemoryQuery,
@@ -29,25 +26,25 @@ logger = get_logger(__name__)
 
 
 class MemoryContextBuilder:
-    conversation_id: Optional[str] = None
-    ui_source: Optional[UISource] = None
-    memory_types: List[UIMemoryType] = Field(default_factory=list)
-    tags: List[str] = Field(default_factory=list)
-    importance_range: Optional[Tuple[int, int]] = None
+    conversation_id: str | None = None
+    ui_source: UISource | None = None
+    memory_types: list[UIMemoryType] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    importance_range: tuple[int, int] | None = None
     only_user_confirmed: bool = True
     only_ai_generated: bool = False
-    time_range: Optional[Tuple[datetime, datetime]] = None
+    time_range: tuple[datetime, datetime] | None = None
     top_k: int = 10
     similarity_threshold: float = 0.7
     include_embeddings: bool = False
     curated_only: bool = False
-    memory_classes: List[str] = Field(
+    memory_classes: list[str] = Field(
         default_factory=lambda: list(DEFAULT_CURATED_MEMORY_CLASSES)
     )
 
     def to_memory_query(self) -> MemoryQuery:
         """Convert to base MemoryQuery for compatibility."""
-        metadata_filter: Dict[str, Any] = {}
+        metadata_filter: dict[str, Any] = {}
         if self.curated_only:
             metadata_filter = build_curated_metadata_filter(metadata_filter)
         return MemoryQuery(
@@ -82,12 +79,12 @@ class MemoryContextBuilder:
 
     async def build_context(
         self,
-        tenant_id: Union[str, uuid.UUID],
+        tenant_id: str | uuid.UUID,
         query: str,
         user_id: str,
-        session_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> dict[str, Any]:
         """Build conversation context from relevant memories using NLP-enhanced retrieval."""
         try:
             # Use NLP to analyze the query for better context building
@@ -206,7 +203,7 @@ class MemoryContextBuilder:
                 "error": str(e),
             }
 
-    async def _analyze_query_with_nlp(self, query: str) -> Dict[str, Any]:
+    async def _analyze_query_with_nlp(self, query: str) -> dict[str, Any]:
         """Analyze query using NLP to extract key information for better context building."""
         try:
             # Import spaCy service for query analysis
@@ -268,8 +265,8 @@ class MemoryContextBuilder:
             }
 
     async def _enhance_memory_ranking_with_nlp(
-        self, memories: List["WebUIMemoryEntry"], query_analysis: Dict[str, Any]
-    ) -> List["WebUIMemoryEntry"]:
+        self, memories: list["WebUIMemoryEntry"], query_analysis: dict[str, Any]
+    ) -> list["WebUIMemoryEntry"]:
         """Enhance memory ranking using NLP analysis of query and memory content."""
         try:
             # Import spaCy service for memory analysis
@@ -337,8 +334,8 @@ class MemoryContextBuilder:
             return memories
 
     async def _get_conversation_context(
-        self, tenant_id: Union[str, uuid.UUID], conversation_id: str
-    ) -> Optional[Dict[str, Any]]:
+        self, tenant_id: str | uuid.UUID, conversation_id: str
+    ) -> dict[str, Any] | None:
         """Get conversation context from database."""
         try:
             if self.memory_service.db_client:
@@ -377,11 +374,11 @@ class WebUIMemoryService(UnifiedMemoryService):
 
     def __init__(
         self,
-        db_client: Optional[MultiTenantPostgresClient] = None,
-        embedding_manager: Optional[EmbeddingManager] = None,
-        redis_client: Optional[Any] = None,
-        policy_manager: Optional[Any] = None,
-        base_memory_manager: Optional[MemoryManager] = None,
+        db_client: MultiTenantPostgresClient | None = None,
+        embedding_manager: EmbeddingManager | None = None,
+        redis_client: Any | None = None,
+        policy_manager: Any | None = None,
+        base_memory_manager: MemoryManager | None = None,
     ):
         """Initialize the production Web UI memory service on top of the unified service."""
         if base_memory_manager is None:
@@ -419,7 +416,7 @@ class WebUIMemoryService(UnifiedMemoryService):
 
     @staticmethod
     def _infer_web_memory_type(
-        web_data: Dict[str, Any],
+        web_data: dict[str, Any],
         base_memory: MemoryEntry,
     ) -> UIMemoryType:
         """Map stored curated metadata back onto the web UI memory taxonomy."""
@@ -453,16 +450,16 @@ class WebUIMemoryService(UnifiedMemoryService):
     async def build_context(
         self,
         *,
-        tenant_id: Optional[Union[str, uuid.UUID]] = None,
+        tenant_id: str | uuid.UUID | None = None,
         user_id: str,
-        query: Optional[str] = None,
-        prompt: Optional[str] = None,
-        session_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
+        query: str | None = None,
+        prompt: str | None = None,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
         **_: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """LangGraph-compatible context builder backed by the production memory service."""
-        resolved_tenant_id: Union[str, uuid.UUID] = (
+        resolved_tenant_id: str | uuid.UUID = (
             tenant_id or conversation_id or session_id or user_id
         )
         return await self.build_conversation_context(
@@ -475,20 +472,20 @@ class WebUIMemoryService(UnifiedMemoryService):
 
     async def store_web_ui_memory(
         self,
-        tenant_id: Union[str, uuid.UUID],
+        tenant_id: str | uuid.UUID,
         content: str,
         user_id: str,
         ui_source: UISource,
-        session_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
         memory_type: UIMemoryType = UIMemoryType.GENERAL,
-        tags: Optional[List[str]] = None,
-        importance_score: Optional[int] = None,
+        tags: list[str] | None = None,
+        importance_score: int | None = None,
         ai_generated: bool = False,
-        metadata: Optional[Dict[str, Any]] = None,
-        ttl_hours: Optional[int] = None,
-        tenant_filters: Optional[Dict[str, Any]] = None,
-    ) -> Optional[str]:
+        metadata: dict[str, Any] | None = None,
+        ttl_hours: int | None = None,
+        tenant_filters: dict[str, Any] | None = None,
+    ) -> str | None:
         """Store memory with web UI specific features."""
         if not self.base_manager:
             logger.warning("Memory manager unavailable - skipping memory store")
@@ -557,10 +554,10 @@ class WebUIMemoryService(UnifiedMemoryService):
 
     async def query_memories(
         self,
-        tenant_id: Union[str, uuid.UUID],
+        tenant_id: str | uuid.UUID,
         query: WebUIMemoryQuery,
-        tenant_filters: Optional[Dict[str, Any]] = None,
-    ) -> List[WebUIMemoryEntry]:
+        tenant_filters: dict[str, Any] | None = None,
+    ) -> list[WebUIMemoryEntry]:
         """Query memories with web UI specific filtering."""
         if not self.base_manager:
             logger.warning("Memory manager unavailable - returning empty results")
@@ -627,12 +624,12 @@ class WebUIMemoryService(UnifiedMemoryService):
 
     async def build_conversation_context(
         self,
-        tenant_id: Union[str, uuid.UUID],
+        tenant_id: str | uuid.UUID,
         query: str,
         user_id: str,
-        session_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> dict[str, Any]:
         """Build conversation context from relevant memories."""
         self.web_ui_metrics["context_builds"] += 1
         return await self.context_builder.build_context(
@@ -640,7 +637,7 @@ class WebUIMemoryService(UnifiedMemoryService):
         )
 
     async def confirm_memory(
-        self, tenant_id: Union[str, uuid.UUID], memory_id: str, confirmed: bool = True
+        self, tenant_id: str | uuid.UUID, memory_id: str, confirmed: bool = True
     ) -> bool:
         """Confirm or reject an AI-generated memory."""
         try:
@@ -663,7 +660,7 @@ class WebUIMemoryService(UnifiedMemoryService):
             return False
 
     async def update_memory_importance(
-        self, tenant_id: Union[str, uuid.UUID], memory_id: str, importance_score: int
+        self, tenant_id: str | uuid.UUID, memory_id: str, importance_score: int
     ) -> bool:
         """Update memory importance score."""
         if not (1 <= importance_score <= 10):
@@ -686,10 +683,10 @@ class WebUIMemoryService(UnifiedMemoryService):
 
     async def get_memory_analytics(
         self,
-        tenant_id: Union[str, uuid.UUID],
-        user_id: Optional[str] = None,
-        time_range: Optional[Tuple[datetime, datetime]] = None,
-    ) -> Dict[str, Any]:
+        tenant_id: str | uuid.UUID,
+        user_id: str | None = None,
+        time_range: tuple[datetime, datetime] | None = None,
+    ) -> dict[str, Any]:
         """Get memory analytics for web UI dashboard."""
         try:
             if self.db_client:
@@ -814,9 +811,9 @@ class WebUIMemoryService(UnifiedMemoryService):
 
     async def _update_web_ui_fields(
         self,
-        tenant_id: Union[str, uuid.UUID],
+        tenant_id: str | uuid.UUID,
         memory_id: str,
-        web_ui_metadata: Dict[str, Any],
+        web_ui_metadata: dict[str, Any],
     ):
         """Compatibility shim for older schemas.
 
@@ -824,11 +821,11 @@ class WebUIMemoryService(UnifiedMemoryService):
         Base memory persistence already writes those fields, so no follow-up SQL update
         is required here.
         """
-        return None
+        return
 
     async def _get_web_ui_memory_data(
-        self, tenant_id: Union[str, uuid.UUID], memory_ids: List[str]
-    ) -> Dict[str, Dict[str, Any]]:
+        self, tenant_id: str | uuid.UUID, memory_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
         """Get web UI specific data for memory entries."""
         try:
             if not memory_ids:
@@ -877,7 +874,7 @@ class WebUIMemoryService(UnifiedMemoryService):
             return {}
 
     def _passes_web_ui_filters(
-        self, web_data: Dict[str, Any], query: WebUIMemoryQuery
+        self, web_data: dict[str, Any], query: WebUIMemoryQuery
     ) -> bool:
         """Check if memory passes web UI specific filters."""
         # UI source filter
@@ -916,18 +913,18 @@ class WebUIMemoryService(UnifiedMemoryService):
         return True
 
     async def _increment_access_count(
-        self, tenant_id: Union[str, uuid.UUID], memory_id: str
+        self, tenant_id: str | uuid.UUID, memory_id: str
     ):
         """Increment access count for a memory.
 
         Access metrics are not materialized as dedicated columns in the current
         schema, so this is a no-op compatibility shim.
         """
-        return None
+        return
 
     async def _generate_auto_tags(
         self, content: str, memory_type: UIMemoryType
-    ) -> List[str]:
+    ) -> list[str]:
         """Generate automatic tags for memory content using spaCy NLP."""
         try:
             # Import spaCy service for entity-based tagging
@@ -1039,7 +1036,7 @@ class WebUIMemoryService(UnifiedMemoryService):
 
             return list(set(tags))
 
-    async def _extract_facts(self, content: str) -> List[str]:
+    async def _extract_facts(self, content: str) -> list[str]:
         """Extract facts from memory content using spaCy NLP."""
         try:
             # Import spaCy service for fact extraction
@@ -1110,7 +1107,7 @@ class WebUIMemoryService(UnifiedMemoryService):
 
             return facts
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         """Get combined metrics from base manager and web UI service."""
         base_metrics = self.base_manager.metrics.copy() if self.base_manager else {}
         base_metrics.update(self.web_ui_metrics)
@@ -1118,13 +1115,13 @@ class WebUIMemoryService(UnifiedMemoryService):
 
 
 __all__ = [
-    "WebUIMemoryService",
+    "MemoryContextBuilder",
     "MemoryService",
-    "WebUIMemoryEntry",
-    "WebUIMemoryQuery",
     "UIMemoryType",
     "UISource",
-    "MemoryContextBuilder",
+    "WebUIMemoryEntry",
+    "WebUIMemoryQuery",
+    "WebUIMemoryService",
 ]
 
 

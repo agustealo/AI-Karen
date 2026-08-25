@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from ai_karen_engine.core.memory.contracts import ClaimStatus as ClaimStatus, MemoryClaim as MemoryClaim
+from ai_karen_engine.core.memory.contracts import ClaimStatus as ClaimStatus
+from ai_karen_engine.core.memory.contracts import MemoryClaim as MemoryClaim
 
 
 class MemoryClaimStore:

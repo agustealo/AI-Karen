@@ -4,7 +4,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
-from ai_karen_engine.core.memory.memory_runtime_manager import recall_context
+from ai_karen_engine.core.memory.protocols import RecallPort
+from ai_karen_engine.core.memory.types import MemoryEntry
 
 
 Result = Dict[str, Any]
@@ -48,6 +49,35 @@ class SRRetriever(Protocol):
         ...
 
 
+class RecallPortSRRetriever(SRRetriever):
+    """Adapts RecallPort to the SRRetriever protocol used by reasoning."""
+
+    def __init__(self, recall_port: RecallPort):
+        self._recall_port = recall_port
+
+    def query(
+        self,
+        text: str,
+        *,
+        top_k: int = 5,
+        metadata_filter: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Query using RecallPort."""
+        results = self._recall_port.query(text, top_k=top_k)
+        return [{"id": r.id, "content": r.content, "score": 1.0} for r in results]
+
+    def ingest(
+        self,
+        text: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        *,
+        ttl_seconds: Optional[float] = None,
+        force: bool = False,
+    ) -> Optional[int]:
+        """Ingest is not supported via RecallPort."""
+        return None
+
+
 class SRCompositeRetriever(SRRetriever):
     """Chain multiple SR retrievers; first successful wins for query."""
 
@@ -80,18 +110,29 @@ class SRCompositeRetriever(SRRetriever):
         ttl_seconds: Optional[float] = None,
         force: bool = False,
     ) -> Optional[int]:
-        if not self._retrievers:
-            return None
-        return self._retrievers[0].ingest(
-            text, metadata, ttl_seconds=ttl_seconds, force=force
-        )
+        last_err: Optional[Exception] = None
+        for r in self._retrievers:
+            try:
+                return r.ingest(text, metadata=metadata, ttl_seconds=ttl_seconds, force=force)
+            except Exception as e:
+                last_err = e
+                continue
+        if last_err:
+            raise last_err
+        return None
+
 
 
 class ReasoningEvidenceAdapter:
     """Normalize hybrid memory retrieval into a reasoning-ready evidence bundle."""
 
-    def __init__(self, *, top_k: int = 8) -> None:
+    def __init__(self, *, top_k: int = 8, recall_port: Optional[RecallPort] = None) -> None:
         self.top_k = top_k
+        self._recall_port = recall_port
+
+    def set_recall_port(self, recall_port: RecallPort) -> None:
+        """Set the recall port for memory retrieval."""
+        self._recall_port = recall_port
 
     async def retrieve_bundle(
         self,
@@ -106,29 +147,19 @@ class ReasoningEvidenceAdapter:
         bundle = EvidenceBundle(retrieval_mode="hybrid")
 
         try:
-            if not tenant_id:
-                bundle.fusion_summary = {"status": "memory_disabled", "reason": "missing_tenant_id"}
+            if self._recall_port is None:
+                bundle.fusion_summary = {"status": "memory_disabled", "reason": "recall_port_not_configured"}
                 return bundle
-            merged = await recall_context(
-                user_id=user_id,
-                tenant_id=tenant_id,
-                query=text,
-                top_k=self.top_k,
-                include_embeddings=False,
-            )
-            results = merged.get("results", []) if isinstance(merged, dict) else []
+
+            results = self._recall_port.query(text, top_k=self.top_k)
 
             for item in results:
-                metadata = item.get("metadata") or {}
+                metadata = getattr(item, "metadata", None) or {}
                 hit: Result = {
-                    "id": item.get("id"),
-                    "score": float(
-                        item.get("similarity_score")
-                        or item.get("score")
-                        or 0.0
-                    ),
+                    "id": item.id,
+                    "score": 1.0,
                     "payload": {
-                        "text": item.get("content") or item.get("result") or "",
+                        "text": item.content,
                         "metadata": metadata,
                     },
                 }

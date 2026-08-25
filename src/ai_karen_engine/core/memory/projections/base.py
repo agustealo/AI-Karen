@@ -6,7 +6,8 @@ Defines the interface and common logic for projecting memory events to various s
 
 import abc
 import time
-from typing import Any, Dict, Optional
+from typing import Any
+
 from ai_karen_engine.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -18,7 +19,7 @@ class ProjectionWorker(abc.ABC):
         self.name = name
 
     @abc.abstractmethod
-    async def project(self, event_data: Dict[str, Any], assertion_data: Optional[Dict[str, Any]] = None) -> bool:
+    async def project(self, event_data: dict[str, Any], assertion_data: dict[str, Any] | None = None) -> bool:
         """
         Project the memory event/assertion to the target store.
         
@@ -29,7 +30,6 @@ class ProjectionWorker(abc.ABC):
         Returns:
             True if successful, False otherwise.
         """
-        pass
 
     def get_projection_lag(self, event_timestamp: float) -> float:
         """Calculate the lag between event creation and projection."""
@@ -37,7 +37,7 @@ class ProjectionWorker(abc.ABC):
 
 class ProjectionResult:
     """Represents the result of a projection attempt."""
-    def __init__(self, success: bool, error: Optional[str] = None, retryable: bool = True):
+    def __init__(self, success: bool, error: str | None = None, retryable: bool = True):
         self.success = success
         self.error = error
         self.retryable = retryable

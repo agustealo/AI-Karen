@@ -15,8 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 # ===================================
 # TYPE ALIASES
@@ -154,21 +153,19 @@ class BeliefVerdict(str, Enum):
 @dataclass(slots=True)
 class ClaimTemporalValidity:
     """Temporal information for a claim."""
-    asserted_at: Optional[datetime] = None
-    observed_at: Optional[datetime] = None
-    valid_from: Optional[datetime] = None
-    valid_until: Optional[datetime] = None
-    last_verified_at: Optional[datetime] = None
+    asserted_at: datetime | None = None
+    observed_at: datetime | None = None
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    last_verified_at: datetime | None = None
 
-    @property
-    def is_expired(self, now: Optional[datetime] = None) -> bool:
+    def is_expired(self, now: datetime | None = None) -> bool:
         now = now or datetime.utcnow()
         if self.valid_until is not None and now > self.valid_until:
             return True
         return False
 
-    @property
-    def age_seconds(self, now: Optional[datetime] = None) -> float:
+    def age_seconds(self, now: datetime | None = None) -> float:
         now = now or datetime.utcnow()
         ref = self.last_verified_at or self.observed_at or self.asserted_at
         if ref is None:
@@ -189,18 +186,18 @@ class BeliefClaim:
     object: str
     status: ClaimStatus
     source: EvidenceType
-    source_ref: Optional[str]
+    source_ref: str | None
     scope: ClaimScope
     confidence: float
     tenant_id: str
-    user_id: Optional[str]
+    user_id: str | None
     claim_format: str  # "triple" | "text" | "structured"
     provenance: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     temporal: ClaimTemporalValidity = field(default_factory=ClaimTemporalValidity)
-    evidence_ids: List[EvidenceId] = field(default_factory=list)
-    contradictions: List[str] = field(default_factory=list)
-    superseded_by: Optional[ClaimId] = None
+    evidence_ids: list[EvidenceId] = field(default_factory=list)
+    contradictions: list[str] = field(default_factory=list)
+    superseded_by: ClaimId | None = None
     version: int = 1
 
     def __post_init__(self) -> None:
@@ -213,19 +210,19 @@ class Evidence:
     evidence_id: str
     type: EvidenceType
     source: str
-    source_ref: str
+    source_ref: str | None
     content: str
     summary: str = ""
     strength: EvidenceStrength = EvidenceStrength.MODERATE
     relation: EvidenceRelation = EvidenceRelation.SUPPORTS
     confidence: float = 0.0
-    observed_at: Optional[datetime] = None
-    expires_at: Optional[datetime] = None
+    observed_at: datetime | None = None
+    expires_at: datetime | None = None
     authority: str = ""
     tenant_id: str = ""
-    user_id: Optional[str] = None
-    claim_ids: List[ClaimId] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    user_id: str | None = None
+    claim_ids: list[ClaimId] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
     sensitivity: str = "internal"
     redacted: bool = False
 
@@ -261,16 +258,16 @@ class BeliefContradiction:
     """Records a contradiction between two claims or evidence items."""
     contradiction_id: str
     claim_a_id: str
-    claim_b_id: Optional[str]
+    claim_b_id: str | None
     kind: ContradictionKind
     nature: ContradictionNature
     severity: str
     description: str
-    evidence_refs: List[str] = field(default_factory=list)
+    evidence_refs: list[str] = field(default_factory=list)
     detected_at: datetime = field(default_factory=datetime.utcnow)
     tenant_id: str = ""
     resolved: bool = False
-    resolution: Optional[str] = None
+    resolution: str | None = None
 
 
 @dataclass(slots=True)
@@ -312,10 +309,10 @@ class BeliefAssessment:
     status: ClaimStatus
     overall_confidence: float
     confidence_metrics: ConfidenceMetrics
-    reason_codes: List[str] = field(default_factory=list)
-    evidence_refs: List[str] = field(default_factory=list)
-    uncertainty_sources: List[UncertaintySource] = field(default_factory=list)
-    contradictions: List[BeliefContradiction] = field(default_factory=list)
+    reason_codes: list[str] = field(default_factory=list)
+    evidence_refs: list[str] = field(default_factory=list)
+    uncertainty_sources: list[UncertaintySource] = field(default_factory=list)
+    contradictions: list[BeliefContradiction] = field(default_factory=list)
     verdict: BeliefVerdict = BeliefVerdict.ACTIVE
 
     def __post_init__(self) -> None:
@@ -330,9 +327,9 @@ class ClaimComparison:
     relationship: str  # "same", "contradictory", "corroborating", "independent"
     confidence_a: float
     confidence_b: float
-    assessment_a: Optional[BeliefAssessment] = None
-    assessment_b: Optional[BeliefAssessment] = None
-    evidence_overlap: List[str] = field(default_factory=list)
+    assessment_a: BeliefAssessment | None = None
+    assessment_b: BeliefAssessment | None = None
+    evidence_overlap: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -342,26 +339,26 @@ class BeliefRevision:
     claim_id: str
     action: RevisionAction
     reason: str
-    evidence_ref: Optional[str]
+    evidence_ref: str | None
     confidence_before: float
     confidence_after: float
     revised_at: datetime = field(default_factory=datetime.utcnow)
     tenant_id: str = ""
-    superseded_claim_id: Optional[str] = None
+    superseded_claim_id: str | None = None
 
 
 # ===================================
 # EVIDENCE WEIGHTS
 # ===================================
 
-EVIDENCE_STRENGTH_WEIGHTS: Dict[EvidenceStrength, float] = {
+EVIDENCE_STRENGTH_WEIGHTS: dict[EvidenceStrength, float] = {
     EvidenceStrength.WEAK: 0.3,
     EvidenceStrength.MODERATE: 0.6,
     EvidenceStrength.STRONG: 0.85,
     EvidenceStrength.DEFINITIVE: 1.0,
 }
 
-SOURCE_CREDIBILITY: Dict[EvidenceType, float] = {
+SOURCE_CREDIBILITY: dict[EvidenceType, float] = {
     EvidenceType.USER_STATEMENT: 0.85,
     EvidenceType.OBSERVATION: 0.6,
     EvidenceType.TOOL_RESULT: 0.7,
@@ -396,32 +393,32 @@ def make_revision_id() -> str:
 
 
 __all__ = [
-    "ClaimId",
-    "EvidenceId",
-    "ClaimStatus",
-    "ConfidenceDimension",
-    "UncertaintySource",
-    "EvidenceType",
-    "EvidenceRelation",
-    "EvidenceStrength",
-    "ClaimScope",
-    "ContradictionKind",
-    "ContradictionNature",
-    "RevisionAction",
-    "BeliefVerdict",
-    "ClaimTemporalValidity",
-    "BeliefClaim",
-    "Evidence",
-    "BeliefContradiction",
-    "ConfidenceMetrics",
-    "BeliefAssessment",
-    "ClaimComparison",
-    "BeliefRevision",
     "EVIDENCE_STRENGTH_WEIGHTS",
     "SOURCE_CREDIBILITY",
     "STALENESS_THRESHOLD_HOURS",
+    "BeliefAssessment",
+    "BeliefClaim",
+    "BeliefContradiction",
+    "BeliefRevision",
+    "BeliefVerdict",
+    "ClaimComparison",
+    "ClaimId",
+    "ClaimScope",
+    "ClaimStatus",
+    "ClaimTemporalValidity",
+    "ConfidenceDimension",
+    "ConfidenceMetrics",
+    "ContradictionKind",
+    "ContradictionNature",
+    "Evidence",
+    "EvidenceId",
+    "EvidenceRelation",
+    "EvidenceStrength",
+    "EvidenceType",
+    "RevisionAction",
+    "UncertaintySource",
     "make_claim_id",
-    "make_evidence_id",
     "make_contradiction_id",
+    "make_evidence_id",
     "make_revision_id",
 ]

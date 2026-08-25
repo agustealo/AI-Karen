@@ -28,21 +28,27 @@ from typing import Any
 
 from ai_karen_engine.core.memory.contracts import (
     MemoryClaim as MemoryClaim,
+)
+from ai_karen_engine.core.memory.contracts import (
     ProspectiveMemory as ProspectiveMemory,
+)
+from ai_karen_engine.core.memory.contracts import (
     RecallScoreComponents as RecallScoreComponents,
+)
+from ai_karen_engine.core.memory.contracts import (
     RelationshipModel as RelationshipModel,
+)
+from ai_karen_engine.core.memory.contracts import (
     SalienceScore as SalienceScore,
+)
+from ai_karen_engine.core.memory.contracts import (
     SelfModel as SelfModel,
+)
+from ai_karen_engine.core.memory.contracts import (
     UserModel as UserModel,
 )
-from .base import (
-    MemoryEntry as MemoryEntry,
-    MemoryNamespace as MemoryNamespace,
-    MemoryPriority as MemoryPriority,
-    MemoryStatus as MemoryStatus,
-    MemoryType as MemoryType,
-    MemoryVisibility as MemoryVisibility,
-)
+
+from .base import *
 
 
 class CognitiveMemoryType(str, Enum):

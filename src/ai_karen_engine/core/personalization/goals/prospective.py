@@ -10,28 +10,21 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
 
 from .contracts import (
     Commitment,
-    CommitmentCondition,
     CommitmentEvidence,
-    CommitmentParty,
     CommitmentSource,
     CommitmentStatus,
     CommitmentStrength,
+    Goal,
+    GoalState,
     Intention,
     IntentionEvidence,
-    IntentionPriority,
     IntentionState,
     IntentionTriggerType,
     ProspectiveMemory,
     ProspectiveState,
-    ProspectiveTrigger,
-    Goal,
-    GoalEvidence,
-    GoalState,
-    EvidenceSourceType,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,19 +34,19 @@ class IntentionLifecycle:
     """Manages intention state transitions and trigger evaluation."""
 
     def __init__(self) -> None:
-        self._intentions: Dict[str, Intention] = {}
+        self._intentions: dict[str, Intention] = {}
 
     def add(self, intention: Intention) -> Intention:
         self._intentions[intention.intention_id] = intention
         return intention
 
-    def get(self, intention_id: str) -> Optional[Intention]:
+    def get(self, intention_id: str) -> Intention | None:
         return self._intentions.get(intention_id)
 
-    def all(self) -> List[Intention]:
+    def all(self) -> list[Intention]:
         return list(self._intentions.values())
 
-    def all_for_user(self, user_id: str, tenant_id: str) -> List[Intention]:
+    def all_for_user(self, user_id: str, tenant_id: str) -> list[Intention]:
         return [
             i for i in self._intentions.values()
             if i.tenant_id == tenant_id and i.user_id == user_id
@@ -61,7 +54,7 @@ class IntentionLifecycle:
 
     def can_transition(self, intention: Intention, target: IntentionState) -> bool:
         current = intention.state
-        valid: Dict[IntentionState, set] = {
+        valid: dict[IntentionState, set] = {
             IntentionState.FORMED: {
                 IntentionState.WAITING, IntentionState.READY,
                 IntentionState.ACTIVE, IntentionState.CANCELLED,
@@ -119,7 +112,7 @@ class IntentionLifecycle:
     def evaluate_trigger(
         self,
         intention: Intention,
-        goals: Dict[str, Goal],
+        goals: dict[str, Goal],
     ) -> bool:
         """Evaluate whether an intention's trigger condition is met."""
         if intention.state in (
@@ -154,20 +147,18 @@ class IntentionLifecycle:
             if intention.activated_at is not None:
                 return (datetime.utcnow() - intention.activated_at).total_seconds() > 0
             return True
-        elif trigger == IntentionTriggerType.USER_RELEVANT:
-            return True
-        elif trigger == IntentionTriggerType.PROJECT_RELEVANT:
+        elif trigger == IntentionTriggerType.USER_RELEVANT or trigger == IntentionTriggerType.PROJECT_RELEVANT:
             return True
         return False
 
     def tick(
         self,
-        goals: Dict[str, Goal],
-        now: Optional[datetime] = None,
-    ) -> List[Intention]:
+        goals: dict[str, Goal],
+        now: datetime | None = None,
+    ) -> list[Intention]:
         """Evaluate all intentions and update dormant ones to READY/ACTIVE."""
         now = now or datetime.utcnow()
-        activated: List[Intention] = []
+        activated: list[Intention] = []
         for intention in self._intentions.values():
             if intention.state == IntentionState.WAITING:
                 if self.evaluate_trigger(intention, goals):
@@ -199,19 +190,19 @@ class CommitmentLifecycle:
     MIN_COMMITMENT_CONFIDENCE = 0.7
 
     def __init__(self) -> None:
-        self._commitments: Dict[str, Commitment] = {}
+        self._commitments: dict[str, Commitment] = {}
 
     def add(self, commitment: Commitment) -> Commitment:
         self._commitments[commitment.commitment_id] = commitment
         return commitment
 
-    def get(self, commitment_id: str) -> Optional[Commitment]:
+    def get(self, commitment_id: str) -> Commitment | None:
         return self._commitments.get(commitment_id)
 
-    def all(self) -> List[Commitment]:
+    def all(self) -> list[Commitment]:
         return list(self._commitments.values())
 
-    def all_for_user(self, user_id: str, tenant_id: str) -> List[Commitment]:
+    def all_for_user(self, user_id: str, tenant_id: str) -> list[Commitment]:
         return [
             c for c in self._commitments.values()
             if c.tenant_id == tenant_id and c.user_id == user_id
@@ -236,7 +227,7 @@ class CommitmentLifecycle:
         self, commitment: Commitment, target: CommitmentStatus
     ) -> bool:
         current = commitment.status
-        valid: Dict[CommitmentStatus, set] = {
+        valid: dict[CommitmentStatus, set] = {
             CommitmentStatus.PROPOSED: {
                 CommitmentStatus.ACKNOWLEDGED,
                 CommitmentStatus.ACTIVE,
@@ -327,17 +318,17 @@ class ProspectiveMemoryManager:
     """Manages prospective memory items and their semantic triggers."""
 
     def __init__(self) -> None:
-        self._items: Dict[str, ProspectiveMemory] = {}
+        self._items: dict[str, ProspectiveMemory] = {}
 
     def add(self, pm: ProspectiveMemory) -> ProspectiveMemory:
         self._items[pm.pm_id] = pm
         return pm
 
-    def get(self, pm_id: str) -> Optional[ProspectiveMemory]:
+    def get(self, pm_id: str) -> ProspectiveMemory | None:
         return self._items.get(pm_id)
 
-    def all_dormant(self, tenant_id: str, user_id: Optional[str] = None) -> List[ProspectiveMemory]:
-        result: List[ProspectiveMemory] = []
+    def all_dormant(self, tenant_id: str, user_id: str | None = None) -> list[ProspectiveMemory]:
+        result: list[ProspectiveMemory] = []
         for pm in self._items.values():
             if pm.state != ProspectiveState.DORMANT:
                 continue
@@ -351,8 +342,8 @@ class ProspectiveMemoryManager:
     def evaluate_trigger(
         self,
         pm: ProspectiveMemory,
-        intentions: Dict[str, Intention],
-        goals: Dict[str, Goal],
+        intentions: dict[str, Intention],
+        goals: dict[str, Goal],
     ) -> bool:
         """Evaluate whether the prospective memory's trigger is met."""
         if pm.state != ProspectiveState.DORMANT:
@@ -386,23 +377,19 @@ class ProspectiveMemoryManager:
             if trigger.condition:
                 return True
             return False
-        elif trigger_type == IntentionTriggerType.USER_RELEVANT:
-            return True
-        elif trigger_type == IntentionTriggerType.TIME_RELEVANT:
-            return True
-        elif trigger_type == IntentionTriggerType.PROJECT_RELEVANT:
+        elif trigger_type == IntentionTriggerType.USER_RELEVANT or trigger_type == IntentionTriggerType.TIME_RELEVANT or trigger_type == IntentionTriggerType.PROJECT_RELEVANT:
             return True
         return False
 
     def check_all(
         self,
-        intentions: Dict[str, Intention],
-        goals: Dict[str, Goal],
+        intentions: dict[str, Intention],
+        goals: dict[str, Goal],
         tenant_id: str,
-        user_id: Optional[str] = None,
-    ) -> List[ProspectiveMemory]:
+        user_id: str | None = None,
+    ) -> list[ProspectiveMemory]:
         """Check all dormant prospective memories and trigger those whose conditions are met."""
-        triggered: List[ProspectiveMemory] = []
+        triggered: list[ProspectiveMemory] = []
         for pm in self.all_dormant(tenant_id, user_id):
             if self.evaluate_trigger(pm, intentions, goals):
                 pm.state = ProspectiveState.TRIGGERED
@@ -432,9 +419,9 @@ def make_commitment_evidence(
     source: CommitmentSource,
     confidence: float,
     strength: CommitmentStrength,
-    source_ref: Optional[str] = None,
+    source_ref: str | None = None,
     tenant_id: str = "",
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
 ) -> CommitmentEvidence:
     """Factory for commitment evidence."""
     return CommitmentEvidence(
@@ -450,11 +437,11 @@ def make_commitment_evidence(
 
 
 __all__ = [
-    "IntentionLifecycle",
     "CommitmentLifecycle",
+    "IntentionLifecycle",
     "ProspectiveMemoryManager",
-    "make_intention_id",
-    "make_commitment_id",
-    "make_pm_id",
     "make_commitment_evidence",
+    "make_commitment_id",
+    "make_intention_id",
+    "make_pm_id",
 ]

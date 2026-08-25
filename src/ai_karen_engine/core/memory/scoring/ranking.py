@@ -4,10 +4,10 @@ Ranking for AI Karen Memory System.
 Ranks retrieved memory candidates based on relevance, confidence, and recency.
 """
 
-import logging
-from typing import List, Dict, Any
+from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
+
 logger = get_logger(__name__)
 
 class MemoryRanker:
@@ -16,7 +16,7 @@ class MemoryRanker:
     def __init__(self):
         pass
         
-    def rank(self, candidates: List[Dict[str, Any]], query: str = "") -> List[Dict[str, Any]]:
+    def rank(self, candidates: list[dict[str, Any]], query: str = "") -> list[dict[str, Any]]:
         """Rank candidates using a combined score."""
         
         for candidate in candidates:

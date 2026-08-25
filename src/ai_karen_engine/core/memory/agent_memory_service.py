@@ -6,32 +6,33 @@ storage, retrieval, semantic search, memory sharing, and lifecycle management.
 """
 
 import asyncio
+import json
 import logging
 import time
-import uuid
-import json
 import traceback
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union, Set, Tuple
-from enum import Enum
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from enum import Enum
+from typing import Any
 
 import numpy as np
+
 try:
-    from pydantic import BaseModel, Field, ConfigDict
+    from pydantic import BaseModel, ConfigDict, Field
 except ImportError:
-    from ai_karen_engine.pydantic_stub import BaseModel, Field, ConfigDict
+    pass
 
 from ai_karen_engine.core.services.base import BaseService, ServiceConfig
 
 # Try to import Unified Memory Service components
 try:
     from ai_karen_engine.core.memory.unified_memory_service import (
-        UnifiedMemoryService,
+        ContextHit,
         MemoryCommitRequest,
         MemoryQueryRequest,
-        ContextHit,
         MemoryUsageStats,
+        UnifiedMemoryService,
     )
     HAS_UNIFIED_MEMORY = True
 except ImportError:
@@ -59,9 +60,7 @@ except ImportError:
     AgentOrchestrator = None
 
 # Import internal agent modules
-from .internal import agent_schemas
-from .internal import agent_metrics
-from .internal import agent_validation
+from .internal import agent_metrics, agent_validation
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +117,7 @@ class MemoryNamespace:
     agent_id: str
     namespace: str
     created_at: datetime = field(default_factory=datetime.utcnow)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -128,7 +127,7 @@ class MemoryGraphEdge:
     target_memory_id: str
     relationship_type: str
     strength: float = 0.5  # 0.0 to 1.0
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -136,11 +135,11 @@ class MemorySharingRequest:
     """Request for sharing memory between agents."""
     source_agent_id: str
     target_agent_id: str
-    memory_ids: List[str]
+    memory_ids: list[str]
     access_level: MemoryAccessLevel
     sharing_policy: MemorySharingPolicy
-    expires_at: Optional[datetime] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    expires_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -148,10 +147,10 @@ class MemoryFusionRequest:
     """Request for fusing memories between agents."""
     source_agent_id: str
     target_agent_id: str
-    memory_ids: List[str]
+    memory_ids: list[str]
     fusion_strategy: MemoryFusionStrategy
     conflict_resolution: str = "auto"  # auto, manual, source_priority, target_priority
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class EnhancedAgentMemory(BaseService):
@@ -227,7 +226,7 @@ class EnhancedAgentMemory(BaseService):
         - Operation metrics collection
     """
     
-    def __init__(self, config: Optional[ServiceConfig] = None):
+    def __init__(self, config: ServiceConfig | None = None):
         super().__init__(config or ServiceConfig(name="agent_memory"))
         self._initialized = False
         self._lock = asyncio.Lock()
@@ -240,31 +239,31 @@ class EnhancedAgentMemory(BaseService):
         self._validation_service: Any = None
         
         # Legacy memory store for backward compatibility
-        self._memory_store: Dict[str, Dict[str, Any]] = {}
+        self._memory_store: dict[str, dict[str, Any]] = {}
         
         # Agent memory namespaces for isolation
-        self._namespaces: Dict[str, Dict[str, MemoryNamespace]] = {}
+        self._namespaces: dict[str, dict[str, MemoryNamespace]] = {}
         
         # Memory graph for relationship tracking
-        self._memory_graph_edges: Dict[str, List[MemoryGraphEdge]] = {}
+        self._memory_graph_edges: dict[str, list[MemoryGraphEdge]] = {}
         
         # Memory sharing registry
-        self._shared_memories: Dict[str, Dict[str, List[str]]] = {}  # target_agent_id -> source_agent_id -> memory_ids
-        self._sharing_requests: Dict[str, MemorySharingRequest] = {}  # request_id -> request
+        self._shared_memories: dict[str, dict[str, list[str]]] = {}  # target_agent_id -> source_agent_id -> memory_ids
+        self._sharing_requests: dict[str, MemorySharingRequest] = {}  # request_id -> request
         
         # Memory versioning and history
-        self._memory_versions: Dict[str, List[Dict[str, Any]]] = {}  # memory_id -> versions
-        self._memory_history: Dict[str, List[Dict[str, Any]]] = {}  # memory_id -> history
+        self._memory_versions: dict[str, list[dict[str, Any]]] = {}  # memory_id -> versions
+        self._memory_history: dict[str, list[dict[str, Any]]] = {}  # memory_id -> history
         
         # Memory embeddings for semantic search
-        self._memory_embeddings: Dict[str, np.ndarray] = {}  # memory_id -> embedding
+        self._memory_embeddings: dict[str, np.ndarray] = {}  # memory_id -> embedding
         
         # Karen's Unified Memory Service integration
-        self._memory_sync_status: Dict[str, MemorySyncStatus] = {}  # memory_id -> sync_status
-        self._sync_queue: List[Dict[str, Any]] = []  # Queue for memory sync operations
-        self._conflict_resolution_strategies: Dict[str, str] = {}  # memory_id -> resolution_strategy
-        self._memory_access_permissions: Dict[str, Dict[str, Set[str]]] = {}  # agent_id -> permission_type -> memory_ids
-        self._operation_log: List[Dict[str, Any]] = []  # Log of memory operations
+        self._memory_sync_status: dict[str, MemorySyncStatus] = {}  # memory_id -> sync_status
+        self._sync_queue: list[dict[str, Any]] = []  # Queue for memory sync operations
+        self._conflict_resolution_strategies: dict[str, str] = {}  # memory_id -> resolution_strategy
+        self._memory_access_permissions: dict[str, dict[str, set[str]]] = {}  # agent_id -> permission_type -> memory_ids
+        self._operation_log: list[dict[str, Any]] = []  # Log of memory operations
         
         # Configuration
         self._config = {
@@ -413,12 +412,12 @@ class EnhancedAgentMemory(BaseService):
         except Exception as e:
             self.logger.error(f"Failed to load persisted data: {e}")
     
-    async def store_memory(self, agent_id: str, memory_type: str, content: Dict[str, Any],
-                         tags: Optional[List[str]] = None, importance: float = 0.5,
-                         expires_at: Optional[datetime] = None,
-                         metadata: Optional[Dict[str, Any]] = None,
-                         access_level: Optional[MemoryAccessLevel] = None,
-                         namespace: Optional[str] = None) -> str:
+    async def store_memory(self, agent_id: str, memory_type: str, content: dict[str, Any],
+                         tags: list[str] | None = None, importance: float = 0.5,
+                         expires_at: datetime | None = None,
+                         metadata: dict[str, Any] | None = None,
+                         access_level: MemoryAccessLevel | None = None,
+                         namespace: str | None = None) -> str:
         """
         Store a memory for an agent with enhanced capabilities.
         
@@ -612,7 +611,7 @@ class EnhancedAgentMemory(BaseService):
         self.logger.info(f"Stored memory {memory_id} for agent {agent_id}")
         return memory_id
     
-    async def retrieve_memory(self, memory_id: str, agent_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    async def retrieve_memory(self, memory_id: str, agent_id: str | None = None) -> dict[str, Any] | None:
         """
         Retrieve a memory by ID with enhanced capabilities.
         
@@ -685,10 +684,10 @@ class EnhancedAgentMemory(BaseService):
             
             return False
     
-    async def search_memories(self, agent_id: str, query: str, memory_type: Optional[str] = None,
+    async def search_memories(self, agent_id: str, query: str, memory_type: str | None = None,
                            limit: int = 10, semantic: bool = True,
-                           namespace: Optional[str] = None,
-                           include_shared: bool = True) -> List[Dict[str, Any]]:
+                           namespace: str | None = None,
+                           include_shared: bool = True) -> list[dict[str, Any]]:
         """
         Search for memories matching a query with enhanced capabilities.
         
@@ -838,9 +837,9 @@ class EnhancedAgentMemory(BaseService):
         
         return results[:limit]
     
-    async def list_memories(self, agent_id: str, memory_type: Optional[str] = None,
-                          limit: int = 50, namespace: Optional[str] = None,
-                          include_shared: bool = True) -> List[Dict[str, Any]]:
+    async def list_memories(self, agent_id: str, memory_type: str | None = None,
+                          limit: int = 50, namespace: str | None = None,
+                          include_shared: bool = True) -> list[dict[str, Any]]:
         """
         List memories for an agent with enhanced capabilities.
         
@@ -928,8 +927,8 @@ class EnhancedAgentMemory(BaseService):
         
         return results[:limit]
     
-    async def update_memory(self, memory_id: str, updates: Dict[str, Any], 
-                          agent_id: Optional[str] = None) -> bool:
+    async def update_memory(self, memory_id: str, updates: dict[str, Any], 
+                          agent_id: str | None = None) -> bool:
         """
         Update a memory with enhanced capabilities.
         
@@ -1074,7 +1073,7 @@ class EnhancedAgentMemory(BaseService):
             
             return False
     
-    async def delete_memory(self, memory_id: str, agent_id: Optional[str] = None, 
+    async def delete_memory(self, memory_id: str, agent_id: str | None = None, 
                           hard_delete: bool = False) -> bool:
         """
         Delete a memory with enhanced capabilities.
@@ -1210,8 +1209,8 @@ class EnhancedAgentMemory(BaseService):
             
             return False
     
-    async def clear_agent_memories(self, agent_id: str, memory_type: Optional[str] = None,
-                                 namespace: Optional[str] = None, hard_delete: bool = False) -> int:
+    async def clear_agent_memories(self, agent_id: str, memory_type: str | None = None,
+                                 namespace: str | None = None, hard_delete: bool = False) -> int:
         """
         Clear memories for an agent with enhanced capabilities.
         
@@ -1267,7 +1266,7 @@ class EnhancedAgentMemory(BaseService):
         self.logger.info(f"Cleared {count} memories for agent {agent_id}")
         return count
     
-    async def get_memory_stats(self, agent_id: str) -> Dict[str, Any]:
+    async def get_memory_stats(self, agent_id: str) -> dict[str, Any]:
         """
         Get memory statistics for an agent with enhanced capabilities.
         
@@ -1341,10 +1340,10 @@ class EnhancedAgentMemory(BaseService):
         return stats
     
     async def share_memory(self, source_agent_id: str, target_agent_id: str, 
-                         memory_ids: List[str], access_level: MemoryAccessLevel,
+                         memory_ids: list[str], access_level: MemoryAccessLevel,
                          sharing_policy: MemorySharingPolicy,
-                         expires_at: Optional[datetime] = None,
-                         metadata: Optional[Dict[str, Any]] = None) -> str:
+                         expires_at: datetime | None = None,
+                         metadata: dict[str, Any] | None = None) -> str:
         """
         Share memories between agents.
         
@@ -1425,9 +1424,9 @@ class EnhancedAgentMemory(BaseService):
         return request_id
     
     async def fuse_memories(self, source_agent_id: str, target_agent_id: str,
-                          memory_ids: List[str], fusion_strategy: MemoryFusionStrategy,
+                          memory_ids: list[str], fusion_strategy: MemoryFusionStrategy,
                           conflict_resolution: str = "auto",
-                          metadata: Optional[Dict[str, Any]] = None) -> str:
+                          metadata: dict[str, Any] | None = None) -> str:
         """
         Fuse memories between agents.
         
@@ -1538,9 +1537,9 @@ class EnhancedAgentMemory(BaseService):
         self.logger.info(f"Fused {len(valid_memory_ids)} memories into agent {target_agent_id}")
         return request_id
     
-    async def _apply_fusion_strategy(self, memory_ids: List[str], 
+    async def _apply_fusion_strategy(self, memory_ids: list[str], 
                                    fusion_strategy: MemoryFusionStrategy,
-                                   conflict_resolution: str) -> Optional[Dict[str, Any]]:
+                                   conflict_resolution: str) -> dict[str, Any] | None:
         """Apply a fusion strategy to a list of memories."""
         if not memory_ids:
             return None
@@ -1686,7 +1685,7 @@ class EnhancedAgentMemory(BaseService):
             self.logger.error(f"Unknown fusion strategy: {fusion_strategy}")
             return None
     
-    async def get_memory_graph(self, agent_id: Optional[str] = None) -> Dict[str, Any]:
+    async def get_memory_graph(self, agent_id: str | None = None) -> dict[str, Any]:
         """
         Get memory graph for relationship tracking.
         
@@ -1754,7 +1753,7 @@ class EnhancedAgentMemory(BaseService):
         
         return graph
     
-    async def get_memory_versions(self, memory_id: str) -> List[Dict[str, Any]]:
+    async def get_memory_versions(self, memory_id: str) -> list[dict[str, Any]]:
         """
         Get version history for a memory.
         
@@ -1776,7 +1775,7 @@ class EnhancedAgentMemory(BaseService):
             else:
                 return []
     
-    async def get_memory_history(self, memory_id: str) -> List[Dict[str, Any]]:
+    async def get_memory_history(self, memory_id: str) -> list[dict[str, Any]]:
         """
         Get history for a memory.
         
@@ -1807,7 +1806,7 @@ class EnhancedAgentMemory(BaseService):
         """Stop the enhanced agent memory service."""
         self.logger.info("Enhanced Agent Memory service stopped")
     
-    async def sync_with_karen_memory(self, agent_id: str, force_sync: bool = False) -> Dict[str, Any]:
+    async def sync_with_karen_memory(self, agent_id: str, force_sync: bool = False) -> dict[str, Any]:
         """
         Synchronize agent memory with Karen's Unified Memory Service.
         
@@ -1932,9 +1931,9 @@ class EnhancedAgentMemory(BaseService):
                 success=False
             )
             
-            return {"success": False, "message": f"Sync failed: {str(e)}"}
+            return {"success": False, "message": f"Sync failed: {e!s}"}
     
-    async def sync_memory_entry(self, memory_id: str, agent_id: str) -> Dict[str, Any]:
+    async def sync_memory_entry(self, memory_id: str, agent_id: str) -> dict[str, Any]:
         """
         Synchronize a specific memory entry with Karen's memory.
         
@@ -2065,9 +2064,9 @@ class EnhancedAgentMemory(BaseService):
                 success=False
             )
             
-            return {"success": False, "message": f"Sync failed: {str(e)}"}
+            return {"success": False, "message": f"Sync failed: {e!s}"}
     
-    async def batch_sync_memory(self, agent_id: str, memory_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def batch_sync_memory(self, agent_id: str, memory_ids: list[str] | None = None) -> dict[str, Any]:
         """
         Synchronize multiple memory entries with Karen's memory.
         
@@ -2147,9 +2146,9 @@ class EnhancedAgentMemory(BaseService):
                 success=False
             )
             
-            return {"success": False, "message": f"Batch sync failed: {str(e)}"}
+            return {"success": False, "message": f"Batch sync failed: {e!s}"}
     
-    async def get_sync_status(self, memory_id: Optional[str] = None, agent_id: Optional[str] = None) -> Dict[str, Any]:
+    async def get_sync_status(self, memory_id: str | None = None, agent_id: str | None = None) -> dict[str, Any]:
         """
         Get the synchronization status of memory entries.
         
@@ -2210,9 +2209,9 @@ class EnhancedAgentMemory(BaseService):
                 
         except Exception as e:
             self.logger.error(f"Failed to get sync status: {e}")
-            return {"success": False, "message": f"Failed to get sync status: {str(e)}"}
+            return {"success": False, "message": f"Failed to get sync status: {e!s}"}
     
-    async def convert_agent_memory_to_karen_format(self, agent_memory: Dict[str, Any]) -> Dict[str, Any]:
+    async def convert_agent_memory_to_karen_format(self, agent_memory: dict[str, Any]) -> dict[str, Any]:
         """
         Convert agent memory to Karen's memory format.
         
@@ -2292,9 +2291,9 @@ class EnhancedAgentMemory(BaseService):
             
         except Exception as e:
             self.logger.error(f"Failed to convert agent memory to Karen format: {e}")
-            raise ValueError(f"Memory conversion failed: {str(e)}")
+            raise ValueError(f"Memory conversion failed: {e!s}")
     
-    async def convert_karen_memory_to_agent_format(self, karen_memory: Any) -> Dict[str, Any]:
+    async def convert_karen_memory_to_agent_format(self, karen_memory: Any) -> dict[str, Any]:
         """
         Convert Karen's memory to agent memory format.
         
@@ -2382,9 +2381,9 @@ class EnhancedAgentMemory(BaseService):
             
         except Exception as e:
             self.logger.error(f"Failed to convert Karen memory to agent format: {e}")
-            raise ValueError(f"Memory conversion failed: {str(e)}")
+            raise ValueError(f"Memory conversion failed: {e!s}")
     
-    async def convert_memory_query(self, agent_query: Dict[str, Any]) -> Any:
+    async def convert_memory_query(self, agent_query: dict[str, Any]) -> Any:
         """
         Convert agent memory query to Karen's memory query format.
         
@@ -2426,9 +2425,9 @@ class EnhancedAgentMemory(BaseService):
                 
         except Exception as e:
             self.logger.error(f"Failed to convert agent query to Karen format: {e}")
-            raise ValueError(f"Query conversion failed: {str(e)}")
+            raise ValueError(f"Query conversion failed: {e!s}")
     
-    async def convert_memory_response(self, karen_response: Any) -> Dict[str, Any]:
+    async def convert_memory_response(self, karen_response: Any) -> dict[str, Any]:
         """
         Convert Karen's memory response to agent memory response format.
         
@@ -2480,9 +2479,9 @@ class EnhancedAgentMemory(BaseService):
             
         except Exception as e:
             self.logger.error(f"Failed to convert Karen response to agent format: {e}")
-            raise ValueError(f"Response conversion failed: {str(e)}")
+            raise ValueError(f"Response conversion failed: {e!s}")
     
-    async def detect_memory_conflicts(self, memory_id: str, karen_memory: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def detect_memory_conflicts(self, memory_id: str, karen_memory: dict[str, Any]) -> dict[str, Any] | None:
         """
         Detect conflicts between agent memory and Karen's memory.
         
@@ -2593,7 +2592,7 @@ class EnhancedAgentMemory(BaseService):
             self.logger.error(f"Failed to detect memory conflicts for {memory_id}: {e}")
             return None
     
-    async def resolve_memory_conflicts(self, memory_id: str, conflict_details: Dict[str, Any], resolution_strategy: Optional[str] = None) -> Dict[str, Any]:
+    async def resolve_memory_conflicts(self, memory_id: str, conflict_details: dict[str, Any], resolution_strategy: str | None = None) -> dict[str, Any]:
         """
         Resolve conflicts between agent memory and Karen's memory.
         
@@ -2714,9 +2713,9 @@ class EnhancedAgentMemory(BaseService):
             except Exception as log_error:
                 self.logger.error(f"Failed to log memory conflict: {log_error}")
             
-            return {"success": False, "message": f"Conflict resolution failed: {str(e)}"}
+            return {"success": False, "message": f"Conflict resolution failed: {e!s}"}
     
-    async def apply_resolution_strategy(self, agent_memory: Dict[str, Any], conflict_details: Dict[str, Any], resolution_strategy: str) -> Optional[Dict[str, Any]]:
+    async def apply_resolution_strategy(self, agent_memory: dict[str, Any], conflict_details: dict[str, Any], resolution_strategy: str) -> dict[str, Any] | None:
         """
         Apply a specific resolution strategy to memory conflicts.
         
@@ -2790,8 +2789,8 @@ class EnhancedAgentMemory(BaseService):
             self.logger.error(f"Failed to apply resolution strategy {resolution_strategy}: {e}")
             return None
     
-    async def log_memory_conflict(self, memory_id: str, agent_id: str, conflict_details: Dict[str, Any],
-                                resolution_strategy: str, resolved: bool, error: Optional[str] = None) -> None:
+    async def log_memory_conflict(self, memory_id: str, agent_id: str, conflict_details: dict[str, Any],
+                                resolution_strategy: str, resolved: bool, error: str | None = None) -> None:
         """
         Log memory conflicts for later analysis.
         
@@ -3011,7 +3010,7 @@ class EnhancedAgentMemory(BaseService):
             self.logger.error(f"Failed to set memory access permission: {e}")
             return False
     
-    async def get_memory_access_permissions(self, agent_id: Optional[str] = None, memory_id: Optional[str] = None) -> Dict[str, Any]:
+    async def get_memory_access_permissions(self, agent_id: str | None = None, memory_id: str | None = None) -> dict[str, Any]:
         """
         Get memory access permissions for agents.
         
@@ -3111,8 +3110,8 @@ class EnhancedAgentMemory(BaseService):
             return {"error": str(e)}
     
     async def log_memory_operation(self, operation_type: MemoryOperationType, agent_id: str,
-                                memory_id: Optional[str] = None,
-                                details: Optional[Dict[str, Any]] = None,
+                                memory_id: str | None = None,
+                                details: dict[str, Any] | None = None,
                                 success: bool = True) -> None:
         """
         Log memory operations with appropriate details.
@@ -3160,13 +3159,13 @@ class EnhancedAgentMemory(BaseService):
         except Exception as e:
             self.logger.error(f"Failed to log memory operation: {e}")
     
-    async def get_memory_operation_log(self, agent_id: Optional[str] = None,
-                                     memory_id: Optional[str] = None,
-                                     operation_type: Optional[MemoryOperationType] = None,
-                                     start_time: Optional[datetime] = None,
-                                     end_time: Optional[datetime] = None,
-                                     success: Optional[bool] = None,
-                                     limit: int = 100) -> Dict[str, Any]:
+    async def get_memory_operation_log(self, agent_id: str | None = None,
+                                     memory_id: str | None = None,
+                                     operation_type: MemoryOperationType | None = None,
+                                     start_time: datetime | None = None,
+                                     end_time: datetime | None = None,
+                                     success: bool | None = None,
+                                     limit: int = 100) -> dict[str, Any]:
         """
         Retrieve memory operation logs based on filters.
         
@@ -3246,7 +3245,7 @@ class EnhancedAgentMemory(BaseService):
             self.logger.error(f"Failed to get memory operation log: {e}")
             return {"error": str(e), "logs": []}
     
-    async def clear_memory_operation_log(self, retention_days: Optional[int] = None) -> Dict[str, Any]:
+    async def clear_memory_operation_log(self, retention_days: int | None = None) -> dict[str, Any]:
         """
         Clear old memory operation logs based on retention policy.
         

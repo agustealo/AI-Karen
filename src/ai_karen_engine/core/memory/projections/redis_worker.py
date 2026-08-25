@@ -4,21 +4,23 @@ Redis Projection Worker for AI Karen Memory System.
 Projects memory ledger events into Redis for fast hot-state retrieval.
 """
 
-import asyncio
 import json
 from datetime import datetime
-from typing import Any, Dict, Optional
-from ai_karen_engine.core.logging import get_logger
+from typing import Any
+
+from ai_karen_engine.core.memory.redis_connection_manager import (
+    RedisConnectionManager,
+    get_redis_manager,
+)
 
 from .base import ProjectionWorker
-from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager, RedisConnectionManager
 
 logger = logging.getLogger(__name__)
 
 class RedisWorker(ProjectionWorker):
     """Worker responsible for Redis hot-state projections."""
 
-    def __init__(self, client: Optional[RedisConnectionManager] = None, recent_limit: int = 20):
+    def __init__(self, client: RedisConnectionManager | None = None, recent_limit: int = 20):
         super().__init__("redis")
         self.client = client or get_redis_manager()
         self.recent_limit = recent_limit
@@ -37,9 +39,9 @@ class RedisWorker(ProjectionWorker):
 
     def _build_hot_record(
         self,
-        event_data: Dict[str, Any],
-        assertion_data: Optional[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+        event_data: dict[str, Any],
+        assertion_data: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         payload = event_data.get("payload", {}) or {}
         record = {
             "event_id": str(event_data.get("event_id")),
@@ -75,7 +77,7 @@ class RedisWorker(ProjectionWorker):
 
         return self._json_safe(record)
 
-    async def project(self, event_data: Dict[str, Any], assertion_data: Optional[Dict[str, Any]] = None) -> bool:
+    async def project(self, event_data: dict[str, Any], assertion_data: dict[str, Any] | None = None) -> bool:
         """
         Store the latest memory snapshot in Redis hot cache.
         """

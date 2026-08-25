@@ -15,7 +15,7 @@ import hashlib
 import logging
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from .reflection_contracts import (
     BeliefAssessmentLike,
@@ -29,8 +29,6 @@ from .reflection_contracts import (
     PromotionResult,
     ReflectionCandidate,
     ReflectionCandidateType,
-    ReflectionContext,
-    ReflectionEvent,
     ReflectionInput,
     ReflectionPolicy,
     make_candidate_id,
@@ -43,18 +41,18 @@ logger = logging.getLogger(__name__)
 class ReflectionEngine:
     """Transforms experience events into reflection candidates."""
 
-    def __init__(self, policy: Optional[ReflectionPolicy] = None) -> None:
+    def __init__(self, policy: ReflectionPolicy | None = None) -> None:
         self._policy = policy or ReflectionPolicy()
         self._dedup_signatures: set[str] = set()
-        self._events_log: List[ExperienceEvent] = []
+        self._events_log: list[ExperienceEvent] = []
 
     def reflect(
         self,
         input_data: ReflectionInput,
-    ) -> List[ReflectionCandidate]:
+    ) -> list[ReflectionCandidate]:
         """Reflect on experience events and produce learning candidates."""
         self._events_log.extend(input_data.events)
-        candidates: List[ReflectionCandidate] = []
+        candidates: list[ReflectionCandidate] = []
         events = input_data.events[: self._policy.max_events_per_session]
 
         if self._policy.detect_failures:
@@ -68,7 +66,7 @@ class ReflectionEngine:
         if self._policy.detect_goals:
             candidates.extend(self._detect_goal_updates(events))
 
-        deduped: List[ReflectionCandidate] = []
+        deduped: list[ReflectionCandidate] = []
         for c in candidates:
             sig = self._dedup_signature(c)
             if sig not in self._dedup_signatures:
@@ -78,14 +76,14 @@ class ReflectionEngine:
         deduped.sort(key=lambda c: c.confidence * c.salience, reverse=True)
         return deduped[: input_data.max_candidates]
 
-    def _detect_failures(self, events: List[ExperienceEvent]) -> List[ReflectionCandidate]:
+    def _detect_failures(self, events: list[ExperienceEvent]) -> list[ReflectionCandidate]:
         """Detect failure lessons from unsuccessful outcomes."""
-        failures: List[ExperienceEvent] = []
+        failures: list[ExperienceEvent] = []
         for ev in events:
             if ev.outcome is not None and ev.outcome.execution_status == "failure":
                 failures.append(ev)
 
-        candidates: List[ReflectionCandidate] = []
+        candidates: list[ReflectionCandidate] = []
         for ev in failures:
             if not ev.explicit:
                 continue
@@ -122,7 +120,7 @@ class ReflectionEngine:
             candidates.append(candidate)
         return candidates
 
-    def _detect_successes(self, events: List[ExperienceEvent]) -> List[ReflectionCandidate]:
+    def _detect_successes(self, events: list[ExperienceEvent]) -> list[ReflectionCandidate]:
         """Detect success patterns from successful outcomes."""
         successes = [
             ev for ev in events
@@ -132,7 +130,7 @@ class ReflectionEngine:
         ]
 
         if len(successes) < 2:
-            single_candidates: List[ReflectionCandidate] = []
+            single_candidates: list[ReflectionCandidate] = []
             if len(successes) == 1:
                 ev = successes[0]
                 candidate = ReflectionCandidate(
@@ -172,15 +170,15 @@ class ReflectionEngine:
             return [candidate]
         return []
 
-    def _detect_patterns(self, events: List[ExperienceEvent]) -> List[ReflectionCandidate]:
+    def _detect_patterns(self, events: list[ExperienceEvent]) -> list[ReflectionCandidate]:
         """Detect repeated behavior patterns."""
-        pattern_groups: Dict[str, List[ExperienceEvent]] = defaultdict(list)
+        pattern_groups: dict[str, list[ExperienceEvent]] = defaultdict(list)
         for ev in events:
             key = self._pattern_key(ev)
             if key:
                 pattern_groups[key].append(ev)
 
-        candidates: List[ReflectionCandidate] = []
+        candidates: list[ReflectionCandidate] = []
         for pattern_key, group in pattern_groups.items():
             if len(group) < 2:
                 continue
@@ -202,13 +200,13 @@ class ReflectionEngine:
             candidates.append(candidate)
         return candidates
 
-    def _detect_preferences(self, events: List[ExperienceEvent]) -> List[ReflectionCandidate]:
+    def _detect_preferences(self, events: list[ExperienceEvent]) -> list[ReflectionCandidate]:
         """Detect preference signals from explicit user feedback."""
         preference_events = [ev for ev in events if ev.explicit]
         if len(preference_events) < 1:
             return []
 
-        candidates: List[ReflectionCandidate] = []
+        candidates: list[ReflectionCandidate] = []
         for ev in preference_events:
             if ev.metadata.get("preference_ref"):
                 candidate = ReflectionCandidate(
@@ -229,13 +227,13 @@ class ReflectionEngine:
                 candidates.append(candidate)
         return candidates
 
-    def _detect_goal_updates(self, events: List[ExperienceEvent]) -> List[ReflectionCandidate]:
+    def _detect_goal_updates(self, events: list[ExperienceEvent]) -> list[ReflectionCandidate]:
         """Detect goal state changes from events."""
         goal_events = [ev for ev in events if ev.goal_refs]
         if not goal_events:
             return []
 
-        candidates: List[ReflectionCandidate] = []
+        candidates: list[ReflectionCandidate] = []
         for ev in goal_events:
             candidate = ReflectionCandidate(
                 candidate_id=make_candidate_id(),
@@ -268,9 +266,9 @@ class ReflectionEngine:
         action_type = ev.metadata.get("action_type", "")
         return f"{ev.outcome.execution_status}:{action_type}"
 
-    def _shared_context(self, successes: List[ExperienceEvent]) -> List[str]:
+    def _shared_context(self, successes: list[ExperienceEvent]) -> list[str]:
         """Find shared context keys across successful events."""
-        context_sets: List[set[str]] = []
+        context_sets: list[set[str]] = []
         for ev in successes:
             ctx: set[str] = set()
             action_type = ev.metadata.get("action_type")
@@ -301,21 +299,28 @@ class PromotionGate:
     GoalContextLike protocols for cross-sprint interoperability.
     """
 
-    def __init__(self, policy: Optional[PromotionPolicy] = None) -> None:
+    def __init__(self, policy: PromotionPolicy | None = None) -> None:
         self._policy = policy or PromotionPolicy()
 
     def evaluate(
         self,
         candidate: ReflectionCandidate,
-        belief_assessments: Optional[List[BeliefAssessmentLike]] = None,
-        goal_contexts: Optional[List[GoalContextLike]] = None,
-        existing_claims: Optional[List[Any]] = None,
-        consolidation_policy: Optional[ConsolidationPolicyLike] = None,
+        belief_assessments: list[BeliefAssessmentLike] | None = None,
+        goal_contexts: list[GoalContextLike] | None = None,
+        existing_claims: list[Any] | None = None,
+        consolidation_policy: ConsolidationPolicyLike | None = None,
     ) -> PromotionResult:
         """Evaluate a candidate for promotion, deferral, or rejection."""
-        reasons: List[str] = []
-        messages: List[str] = []
+        reasons: list[str] = []
+        messages: list[str] = []
         policy = self._policy
+
+        if candidate.confidence < 0.2:
+            return self._result(
+                candidate, PromotionAction.REJECT,
+                ["confidence_below_minimum"],
+                [f"confidence {candidate.confidence} below minimum viable threshold"],
+            )
 
         is_explicit = (
             candidate.is_explicit
@@ -419,7 +424,7 @@ class PromotionGate:
         )
 
     def _belief_confidence(
-        self, assessments: Optional[List[BeliefAssessmentLike]]
+        self, assessments: list[BeliefAssessmentLike] | None
     ) -> float | None:
         if not assessments:
             return None
@@ -438,8 +443,8 @@ class PromotionGate:
         self,
         candidate: ReflectionCandidate,
         action: PromotionAction,
-        reason_codes: List[str],
-        messages: List[str],
+        reason_codes: list[str],
+        messages: list[str],
     ) -> PromotionResult:
         return PromotionResult(
             candidate_id=candidate.candidate_id,
@@ -480,8 +485,8 @@ def make_experience_event(
 
 
 __all__ = [
-    "ReflectionEngine",
     "PromotionGate",
-    "make_experience_event",
+    "ReflectionEngine",
     "make_event_id",
+    "make_experience_event",
 ]

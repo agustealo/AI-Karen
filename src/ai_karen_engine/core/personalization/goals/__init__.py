@@ -7,6 +7,7 @@ prospective memory.
 
 from __future__ import annotations
 
+from .conflicts import ConflictDetector
 from .contracts import (
     Commitment,
     CommitmentCondition,
@@ -49,7 +50,6 @@ from .lifecycle import (
     GoalLifecycle,
     GoalStore,
 )
-from .conflicts import ConflictDetector
 from .prioritization import GoalPrioritizer
 from .prospective import (
     CommitmentLifecycle,
@@ -82,10 +82,10 @@ __all__ = [
     "GoalLifecycle",
     "GoalOrigin",
     "GoalOutcome",
+    "GoalPrioritizer",
     "GoalPriority",
     "GoalPriorityAssessment",
     "GoalProgress",
-    "GoalPrioritizer",
     "GoalRevision",
     "GoalSnapshot",
     "GoalState",

@@ -5,8 +5,9 @@ Heuristic and pattern-based fallback extraction rules when spaCy is unavailable.
 """
 
 import re
-from typing import List
+
 from .signal_models import MemorySignal
+
 
 class RuleBasedExtractor:
     """Extracts memory signals using regular expressions and heuristics."""
@@ -18,7 +19,7 @@ class RuleBasedExtractor:
             re.compile(r"(?i)(never (use|do) .+)")
         ]
         
-    def extract(self, text: str) -> List[MemorySignal]:
+    def extract(self, text: str) -> list[MemorySignal]:
         """Apply fallback rules to extract signals."""
         signals = []
         

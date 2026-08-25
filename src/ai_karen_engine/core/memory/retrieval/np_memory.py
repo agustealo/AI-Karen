@@ -1,6 +1,5 @@
 import json
-import logging
-from typing import Any, List, Tuple
+from typing import Any
 
 from tqdm import tqdm
 
@@ -41,7 +40,7 @@ def conditional_no_grad():
     return identity_decorator
 
 
-def load_jsonl(path: str) -> List[dict]:
+def load_jsonl(path: str) -> list[dict]:
     items = []
     with open(path, "r", encoding="utf-8") as f:
         for ln, line in enumerate(f, 1):
@@ -56,7 +55,7 @@ def load_jsonl(path: str) -> List[dict]:
     return items
 
 
-def extract_pairs(items: List[dict], key_field: str, value_field: str) -> List[Tuple[str, object, int]]:
+def extract_pairs(items: list[dict], key_field: str, value_field: str) -> list[tuple[str, object, int]]:
     pairs = []
     for i, obj in enumerate(items):
         if key_field in obj and value_field in obj:
@@ -71,7 +70,7 @@ def extract_pairs(items: List[dict], key_field: str, value_field: str) -> List[T
 
 @conditional_no_grad()
 def embed_texts(
-    texts: List[str],
+    texts: list[str],
     tokenizer,
     model,
     device,
@@ -105,13 +104,13 @@ def embed_texts(
 
 def retrieve(
     task: str,
-    pairs: List[Tuple[str, object, int]],
+    pairs: list[tuple[str, object, int]],
     tokenizer, 
     model,
     device_str: str = "auto",
     top_k: int = 5,
     max_length: int = 256,
-) -> List[dict]:
+) -> list[dict]:
     _ensure_torch_available()
 
     if device_str == "cpu":

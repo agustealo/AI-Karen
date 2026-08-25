@@ -21,7 +21,7 @@ class LeanGraphConfig:
     graph_enable_entity_mentions: bool = True
 
     @classmethod
-    def from_env(cls) -> "LeanGraphConfig":
+    def from_env(cls) -> LeanGraphConfig:
         return cls(
             graph_relationships_enabled=_bool("KARI_GRAPH_RELATIONSHIPS_ENABLED", True),
             graph_backend=os.getenv("KARI_GRAPH_BACKEND", "kuzu"),

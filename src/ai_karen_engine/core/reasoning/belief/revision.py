@@ -9,25 +9,20 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
 
+from .assessment import BeliefEngine
 from .contracts import (
+    BeliefClaim,
+    BeliefRevision,
     ClaimStatus,
     ContradictionNature,
     Evidence,
     EvidenceRelation,
     EvidenceStrength,
     EvidenceType,
-    BeliefAssessment,
-    BeliefClaim,
-    BeliefContradiction,
-    BeliefRevision,
-    ConfidenceMetrics,
     RevisionAction,
     make_revision_id,
 )
-from .assessment import BeliefEngine
 from .contradiction import ContradictionDetector
 from .temporal import TemporalReasoner
 
@@ -39,21 +34,21 @@ class BeliefRevisionEngine:
 
     def __init__(
         self,
-        engine: Optional[BeliefEngine] = None,
-        detector: Optional[ContradictionDetector] = None,
-        temporal: Optional[TemporalReasoner] = None,
+        engine: BeliefEngine | None = None,
+        detector: ContradictionDetector | None = None,
+        temporal: TemporalReasoner | None = None,
     ) -> None:
         self._engine = engine or BeliefEngine()
         self._detector = detector or ContradictionDetector()
         self._temporal = temporal or TemporalReasoner()
-        self._revision_history: List[BeliefRevision] = []
+        self._revision_history: list[BeliefRevision] = []
 
     def revise(
         self,
         claim: BeliefClaim,
-        new_evidence: List[Evidence],
-        existing_evidence: List[Evidence],
-    ) -> Tuple[RevisionAction, BeliefRevision]:
+        new_evidence: list[Evidence],
+        existing_evidence: list[Evidence],
+    ) -> tuple[RevisionAction, BeliefRevision]:
         """Determine the revision action for a claim given new evidence."""
         all_evidence = existing_evidence + new_evidence
         contradictions = self._detector.detect(claim, all_evidence)
@@ -138,7 +133,7 @@ class BeliefRevisionEngine:
         self,
         claim_a: BeliefClaim,
         claim_b: BeliefClaim,
-    ) -> Optional[BeliefClaim]:
+    ) -> BeliefClaim | None:
         """Merge two corroborating claims into one."""
         if claim_a.subject != claim_b.subject:
             return None
@@ -151,10 +146,7 @@ class BeliefRevisionEngine:
 
         merged_confidence = (claim_a.confidence + claim_b.confidence) / 2.0
         merged_evidence = list(set(claim_a.evidence_ids + claim_b.evidence_ids))
-        merged_status = max(
-            claim_a.status, claim_b.status,
-            key=lambda s: ClaimStatus._value2member_map_.get(s, 0) if isinstance(s, str) else 0,
-        )
+        merged_status = claim_a.status if claim_a.confidence >= claim_b.confidence else claim_b.status
 
         merged = BeliefClaim(
             claim_id=f"merged_{uuid.uuid4().hex[:12]}",
@@ -180,7 +172,7 @@ class BeliefRevisionEngine:
     def verify(
         self,
         claim: BeliefClaim,
-        evidence: List[Evidence],
+        evidence: list[Evidence],
     ) -> bool:
         """INFERRED claims cannot be auto-verified, but explicit verification can promote them."""
         if claim.status == ClaimStatus.INFERRED:
@@ -258,10 +250,10 @@ class BeliefRevisionEngine:
         self._revision_history.append(revision)
         return revision
 
-    def revision_history(self, claim_id: str) -> List[BeliefRevision]:
+    def revision_history(self, claim_id: str) -> list[BeliefRevision]:
         return [r for r in self._revision_history if r.claim_id == claim_id]
 
-    def all_revisions(self) -> List[BeliefRevision]:
+    def all_revisions(self) -> list[BeliefRevision]:
         return list(self._revision_history)
 
     # ---- private helpers ----
@@ -270,11 +262,11 @@ class BeliefRevisionEngine:
         self,
         action: RevisionAction,
         claim: BeliefClaim,
-        evidence: Optional[Evidence],
+        evidence: Evidence | None,
         new_confidence: float,
         old_confidence: float,
         reason: str,
-    ) -> Tuple[RevisionAction, BeliefRevision]:
+    ) -> tuple[RevisionAction, BeliefRevision]:
         new_confidence = max(0.0, min(1.0, new_confidence))
         ev_ref = evidence.evidence_id if evidence else None
         revision = BeliefRevision(
@@ -295,7 +287,7 @@ class BeliefRevisionEngine:
     def _revised_confidence(
         self,
         claim: BeliefClaim,
-        evidence: List[Evidence],
+        evidence: list[Evidence],
     ) -> float:
         assessment = self._engine.assess(claim, evidence)
         return assessment.overall_confidence

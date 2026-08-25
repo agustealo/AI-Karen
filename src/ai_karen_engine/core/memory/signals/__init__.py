@@ -2,14 +2,14 @@
 Memory Signals Package.
 """
 
-from .signal_models import MemorySignal, ExtractionResult
 from .memory_signal_extractor import MemorySignalExtractor
-from .signal_pipeline import get_signal_pipeline, SignalPipeline
+from .signal_models import ExtractionResult, MemorySignal
+from .signal_pipeline import SignalPipeline, get_signal_pipeline
 
 __all__ = [
-    "MemorySignal",
     "ExtractionResult",
+    "MemorySignal",
     "MemorySignalExtractor",
-    "get_signal_pipeline",
-    "SignalPipeline"
+    "SignalPipeline",
+    "get_signal_pipeline"
 ]

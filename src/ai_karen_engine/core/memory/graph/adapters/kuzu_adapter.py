@@ -5,6 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from ai_karen_engine.core.logging import get_logger
+
 from ..config import LeanGraphConfig
 from ..models import AssertionNode, EntityNode, GraphEdge, MemoryEventNode
 

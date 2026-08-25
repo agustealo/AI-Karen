@@ -20,9 +20,8 @@ Use Cases:
 from __future__ import annotations
 
 import asyncio
-import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
 
@@ -50,7 +49,7 @@ class OfflineMode:
         self,
         check_interval: int = 30,  # seconds
         check_timeout: int = 3,  # seconds
-        health_endpoints: Optional[List[str]] = None,
+        health_endpoints: list[str] | None = None,
     ):
         """
         Initialize offline mode detector.
@@ -72,7 +71,7 @@ class OfflineMode:
         self.last_check = None
         self.last_sync = None
         self._running = False
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
         
         # Callbacks
         self.on_state_change = None
@@ -158,7 +157,7 @@ class OfflineMode:
                 except Exception as ex:
                     logger.error(f"[OfflineMode] State change callback error: {ex}")
     
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """
         Get current offline status for frontend.
         
@@ -183,7 +182,7 @@ class OfflineMode:
             "capabilities": capabilities,
         }
     
-    def update_last_sync(self, timestamp: Optional[datetime] = None) -> None:
+    def update_last_sync(self, timestamp: datetime | None = None) -> None:
         """Update last sync timestamp (for Phase 3)."""
         self.last_sync = timestamp or datetime.utcnow()
         logger.info(f"[OfflineMode] Last sync: {self.last_sync.isoformat()}")
@@ -210,13 +209,13 @@ class OfflineMode:
 
 
 # Singleton instance
-_offline_mode_instance: Optional[OfflineMode] = None
+_offline_mode_instance: OfflineMode | None = None
 
 
 def get_offline_mode(
     check_interval: int = 30,
     check_timeout: int = 3,
-    health_endpoints: Optional[List[str]] = None,
+    health_endpoints: list[str] | None = None,
 ) -> OfflineMode:
     """
     Get or create global offline mode instance.

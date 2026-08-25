@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class MemoryClass(str, Enum):
@@ -34,30 +34,30 @@ class GuardOutcome(str, Enum):
 @dataclass(slots=True)
 class MemoryActivationDecision:
     mode: MemoryActivationMode = MemoryActivationMode.FAST
-    reasons: List[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
     max_latency_ms: int = 250
     top_k: int = 8
     include_profile: bool = False
     include_procedural: bool = False
     include_graph: bool = False
-    tenant_id: Optional[str] = None
-    user_id: Optional[str] = None
-    conversation_id: Optional[str] = None
-    correlation_id: Optional[str] = None
+    tenant_id: str | None = None
+    user_id: str | None = None
+    conversation_id: str | None = None
+    correlation_id: str | None = None
 
 
 @dataclass(slots=True)
 class ProcedureArtifact:
     id: str
     name: str
-    trigger_patterns: List[str]
-    tool_sequence: List[str]
+    trigger_patterns: list[str]
+    tool_sequence: list[str]
     success_count: int = 0
     failure_count: int = 0
     confidence: float = 0.0
     tenant_scope: str = "tenant"
-    permissions: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    permissions: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -66,11 +66,11 @@ class LessonArtifact:
     lesson_type: str
     failure_signature: str
     correction: str
-    applies_to: List[str] = field(default_factory=list)
+    applies_to: list[str] = field(default_factory=list)
     severity: str = "medium"
     confidence: float = 0.0
-    quarantine_refs: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    quarantine_refs: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -86,7 +86,7 @@ class ConsolidationDecision:
 @dataclass(slots=True)
 class MemoryGuardDecision:
     outcome: GuardOutcome
-    reasons: List[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
     risk_score: float = 0.0
     required_review: bool = False
 
@@ -102,8 +102,8 @@ class MemoryCandidate:
     confidence: float = 0.0
     importance: float = 0.0
     freshness: float = 1.0
-    provenance: Dict[str, Any] = field(default_factory=dict)
+    provenance: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
-    expires_at: Optional[datetime] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    expires_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)

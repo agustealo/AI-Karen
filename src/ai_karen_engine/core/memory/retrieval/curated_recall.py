@@ -7,8 +7,8 @@ orchestrator, memory processor, and higher-level memory services do not drift.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Mapping, Sequence
-
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 CURATED_MEMORY_KIND = "curated_memory"
 DEFAULT_CURATED_MEMORY_CLASSES = (
@@ -21,7 +21,7 @@ DEFAULT_CURATED_MEMORY_CLASSES = (
 
 def build_curated_metadata_filter(
     base_filter: Mapping[str, Any] | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return a metadata filter that scopes retrieval to curated artifacts."""
     metadata_filter = dict(base_filter or {})
     metadata_filter["curated"] = True

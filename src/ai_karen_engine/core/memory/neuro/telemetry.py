@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
 
 logger = get_logger("kari.memory.neuro")
 
-DEFAULT_EVENT_FIELDS: Dict[str, Any] = {
+DEFAULT_EVENT_FIELDS: dict[str, Any] = {
     "correlation_id": None,
     "request_id": None,
     "tenant_id": None,
@@ -28,6 +28,6 @@ DEFAULT_EVENT_FIELDS: Dict[str, Any] = {
 }
 
 
-def emit_memory_event(event: str, payload: Dict[str, Any]) -> None:
+def emit_memory_event(event: str, payload: dict[str, Any]) -> None:
     merged = {**DEFAULT_EVENT_FIELDS, **(payload or {})}
     logger.info(event, extra=merged)

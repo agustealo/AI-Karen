@@ -7,7 +7,6 @@ deterministic degraded/unavailable signaling for route-layer error contracts.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
 
@@ -15,7 +14,7 @@ from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
 @dataclass(frozen=True)
 class MemoryRuntimeResolution:
     available: bool
-    service: Optional[WebUIMemoryService]
+    service: WebUIMemoryService | None
     reason: str
 
 

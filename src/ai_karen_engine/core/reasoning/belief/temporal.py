@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
 
 from .contracts import (
-    ClaimStatus,
     BeliefClaim,
     ClaimTemporalValidity,
     Evidence,
@@ -27,7 +25,7 @@ class TemporalReasoner:
     def is_valid(
         self,
         claim: BeliefClaim,
-        now: Optional[datetime] = None,
+        now: datetime | None = None,
     ) -> bool:
         """Check whether a claim is temporally valid at the given time."""
         now = now or datetime.utcnow()
@@ -46,14 +44,14 @@ class TemporalReasoner:
         self,
         claim: BeliefClaim,
         threshold_hours: float = 24.0 * 7,
-        now: Optional[datetime] = None,
+        now: datetime | None = None,
     ) -> bool:
         """Check if a claim is stale (not verified recently enough)."""
         now = now or datetime.utcnow()
         age = claim.temporal.age_seconds(now)
         return age > threshold_hours * 3600.0
 
-    def effective_time(self, claim: BeliefClaim) -> Optional[datetime]:
+    def effective_time(self, claim: BeliefClaim) -> datetime | None:
         """The most recent temporal reference for a claim."""
         return (
             claim.temporal.last_verified_at
@@ -75,7 +73,7 @@ class TemporalReasoner:
             last_verified_at=new_observed_at,
         )
 
-    def age_hours(self, claim: BeliefClaim, now: Optional[datetime] = None) -> float:
+    def age_hours(self, claim: BeliefClaim, now: datetime | None = None) -> float:
         """Return the age of the claim in hours."""
         now = now or datetime.utcnow()
         age = claim.temporal.age_seconds(now)
@@ -86,7 +84,7 @@ class TemporalReasoner:
     def is_current(
         self,
         claim: BeliefClaim,
-        now: Optional[datetime] = None,
+        now: datetime | None = None,
     ) -> bool:
         """Check if the claim reflects current reality (not stale)."""
         return not self.is_stale(claim, now=now)
@@ -106,10 +104,10 @@ class TemporalReasoner:
     def validate_temporal_consistency(
         self,
         claim: BeliefClaim,
-        evidence: List[Evidence],
-    ) -> List[str]:
+        evidence: list[Evidence],
+    ) -> list[str]:
         """Return list of temporal consistency violations."""
-        violations: List[str] = []
+        violations: list[str] = []
         now = datetime.utcnow()
 
         if not self.is_valid(claim, now):

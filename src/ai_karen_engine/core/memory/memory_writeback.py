@@ -10,19 +10,15 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
 
 try:
     from pydantic import BaseModel, ConfigDict, Field
 except ImportError:
-    from ai_karen_engine.pydantic_stub import BaseModel, ConfigDict, Field
+    from ai_karen_engine.pydantic_stub import BaseModel, Field
 
-from ai_karen_engine.core.memory.retrieval.curated_recall import (
-    DEFAULT_CURATED_MEMORY_CLASSES,
-    is_curated_memory_metadata,
-)
 from ai_karen_engine.core.memory.neuro import (
     MemoryCandidate,
     MemoryClass,
@@ -32,9 +28,16 @@ from ai_karen_engine.core.memory.neuro import (
     emit_memory_event,
     evaluate_guardrails,
 )
-from ai_karen_engine.core.memory.neuro.contracts import LessonArtifact, ProcedureArtifact
+from ai_karen_engine.core.memory.neuro.contracts import (
+    LessonArtifact,
+    ProcedureArtifact,
+)
 from ai_karen_engine.core.memory.neuro.lesson_memory import LessonMemoryStore
 from ai_karen_engine.core.memory.neuro.procedural_memory import ProceduralMemoryStore
+from ai_karen_engine.core.memory.retrieval.curated_recall import (
+    DEFAULT_CURATED_MEMORY_CLASSES,
+    is_curated_memory_metadata,
+)
 from ai_karen_engine.core.runtime.resilience import get_safe_stage_runner
 
 logger = get_logger(__name__)
@@ -71,7 +74,7 @@ class ShardLink:
     usage_timestamp: datetime
     response_id: str
     user_id: str
-    org_id: Optional[str] = None
+    org_id: str | None = None
 
 
 @dataclass
@@ -81,14 +84,14 @@ class WritebackEntry:
     id: str
     content: str
     interaction_type: InteractionType
-    source_shards: List[ShardLink]
+    source_shards: list[ShardLink]
     user_id: str
-    org_id: Optional[str]
-    session_id: Optional[str]
+    org_id: str | None
+    session_id: str | None
     correlation_id: str
-    tags: List[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
     importance: int = 5
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.utcnow)
 
 
@@ -99,7 +102,7 @@ class WritebackCandidate:
     memory_class: MemoryClass
     confidence: float
     requires_review: bool = False
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class FeedbackMetrics(BaseModel):
@@ -111,7 +114,7 @@ class FeedbackMetrics(BaseModel):
     used_shard_rate: float = 0.0
     ignored_top_hit_rate: float = 0.0
     average_relevance_score: float = 0.0
-    shard_usage_distribution: Dict[str, int] = Field(default_factory=dict)
+    shard_usage_distribution: dict[str, int] = Field(default_factory=dict)
     time_window_hours: int = 24
 
 
@@ -121,21 +124,21 @@ class MemoryWritebackSystem:
     Links copilot responses to source memory shards for feedback loops.
     """
 
-    def __init__(self, unified_memory_service, redis_client: Optional[Any] = None):
+    def __init__(self, unified_memory_service, redis_client: Any | None = None):
         """Initialize write-back system"""
         self.memory_service = unified_memory_service
         self.redis_client = redis_client
         self.safe_runner = get_safe_stage_runner()
         self.procedural_store = ProceduralMemoryStore()
         self.lesson_store = LessonMemoryStore()
-        self.quarantine_log: Dict[str, List[Dict[str, Any]]] = {}
+        self.quarantine_log: dict[str, list[dict[str, Any]]] = {}
 
         # Shard link tracking
-        self._shard_links: Dict[str, List[ShardLink]] = {}
-        self._pending_writebacks: List[WritebackEntry] = []
+        self._shard_links: dict[str, list[ShardLink]] = {}
+        self._pending_writebacks: list[WritebackEntry] = []
 
         # Feedback metrics tracking
-        self._feedback_metrics: Dict[str, FeedbackMetrics] = {}
+        self._feedback_metrics: dict[str, FeedbackMetrics] = {}
 
         # Configuration
         self.writeback_batch_size = 10
@@ -160,12 +163,12 @@ class MemoryWritebackSystem:
         self,
         response_id: str,
         response_content: str,
-        source_context_hits: List[Any],  # ContextHit objects
+        source_context_hits: list[Any],  # ContextHit objects
         user_id: str,
-        org_id: Optional[str] = None,
+        org_id: str | None = None,
         interaction_type: InteractionType = InteractionType.COPILOT_RESPONSE,
-        correlation_id: Optional[str] = None,
-    ) -> List[ShardLink]:
+        correlation_id: str | None = None,
+    ) -> list[ShardLink]:
         """
         Link a response to its source memory shards for feedback tracking.
         Creates shard links that will be used for feedback loop measurement.
@@ -225,13 +228,13 @@ class MemoryWritebackSystem:
         content: str,
         interaction_type: InteractionType,
         user_id: str,
-        org_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        source_shards: Optional[List[ShardLink]] = None,
-        tags: Optional[List[str]] = None,
+        org_id: str | None = None,
+        session_id: str | None = None,
+        source_shards: list[ShardLink] | None = None,
+        tags: list[str] | None = None,
         importance: int = 5,
-        metadata: Optional[Dict[str, Any]] = None,
-        correlation_id: Optional[str] = None,
+        metadata: dict[str, Any] | None = None,
+        correlation_id: str | None = None,
     ) -> str:
         """
         Queue a memory write-back entry for batch processing.
@@ -388,14 +391,16 @@ class MemoryWritebackSystem:
             logger.error(f"Failed to process writeback batch: {e}")
             return 0
 
-    def _build_commit_request(self, entry: WritebackEntry) -> Optional[Any]:
+    def _build_commit_request(self, entry: WritebackEntry) -> Any | None:
         """
         Build a commit request only for explicitly curated artifacts.
 
         Stage 3 promotion must never embed raw response text blindly. Entries
         without curated metadata remain feedback-only and are skipped.
         """
-        from ai_karen_engine.core.memory.unified_memory_service import MemoryCommitRequest
+        from ai_karen_engine.core.memory.unified_memory_service import (
+            MemoryCommitRequest,
+        )
 
         metadata = dict(entry.metadata or {})
         candidate_infos = self._extract_candidates(entry)
@@ -454,7 +459,7 @@ class MemoryWritebackSystem:
             metadata=enhanced_metadata,
         )
 
-    def _extract_candidates(self, entry: WritebackEntry) -> List[WritebackCandidate]:
+    def _extract_candidates(self, entry: WritebackEntry) -> list[WritebackCandidate]:
         text = (entry.content or "").strip()
         if not text:
             return []
@@ -531,8 +536,8 @@ class MemoryWritebackSystem:
 
     async def calculate_feedback_metrics(
         self,
-        user_id: Optional[str] = None,
-        org_id: Optional[str] = None,
+        user_id: str | None = None,
+        org_id: str | None = None,
         time_window_hours: int = 24,
     ) -> FeedbackMetrics:
         """
@@ -713,7 +718,7 @@ class MemoryWritebackSystem:
             return "short"
 
     async def _update_feedback_metrics(
-        self, user_id: str, org_id: Optional[str], shard_links: List[ShardLink]
+        self, user_id: str, org_id: str | None, shard_links: list[ShardLink]
     ):
         """Update feedback metrics with new shard links"""
         try:
@@ -810,7 +815,7 @@ class MemoryWritebackSystem:
         except Exception as e:
             logger.error(f"Error during writeback system shutdown: {e}")
 
-    def get_system_metrics(self) -> Dict[str, Any]:
+    def get_system_metrics(self) -> dict[str, Any]:
         """Get writeback system metrics"""
         return {
             **self.metrics,
@@ -824,10 +829,10 @@ class MemoryWritebackSystem:
 
 # Export public interface
 __all__ = [
-    "MemoryWritebackSystem",
-    "InteractionType",
-    "ShardUsageType",
-    "ShardLink",
-    "WritebackEntry",
     "FeedbackMetrics",
+    "InteractionType",
+    "MemoryWritebackSystem",
+    "ShardLink",
+    "ShardUsageType",
+    "WritebackEntry",
 ]

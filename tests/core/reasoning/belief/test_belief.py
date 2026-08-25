@@ -246,7 +246,7 @@ class TestTemporalTruth:
         claim = make_claim()
         claim.temporal.valid_until = datetime.utcnow() - timedelta(hours=1)
         assert not reasoner.is_valid(claim)
-        assert claim.temporal.is_expired
+        assert claim.temporal.is_expired()
 
 
 class TestContradictionDetection:

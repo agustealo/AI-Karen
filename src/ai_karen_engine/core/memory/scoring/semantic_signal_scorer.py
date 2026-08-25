@@ -4,11 +4,11 @@ Semantic Signal Scorer for AI Karen Memory System.
 Uses DistilBERT for scoring salience, novelty, and other memory properties.
 """
 
-import logging
+
+from ai_karen_engine.core.logging import get_logger
 
 from ...runtime.resilience import get_safe_stage_runner
 
-from ai_karen_engine.core.logging import get_logger
 logger = get_logger(__name__)
 
 class SemanticSignalScorer:

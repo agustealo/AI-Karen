@@ -2,40 +2,43 @@
 Profile Synthesis Domain for AI Karen Memory System.
 """
 
-from .profile_models import (
-    ProfileSummary, CommunicationStyle, UserPreference, ProfileGrowth
-)
-from .profile_service import get_profile_service, ProfileService
+from .contradiction_resolver import ContradictionResolver
+from .growth_tracker import GrowthTracker
 from .profile_manager import (
-    RouterPolicy,
     Guardrails,
-    MemoryBudget,
-    ProviderPreferences,
     LLMProfile,
+    MemoryBudget,
     ProfileManager,
+    ProviderPreferences,
+    RouterPolicy,
     get_profile_manager,
 )
-from .contradiction_resolver import ContradictionResolver
+from .profile_models import (
+    CommunicationStyle,
+    ProfileGrowth,
+    ProfileSummary,
+    UserPreference,
+)
+from .profile_service import ProfileService, get_profile_service
 from .reinforcement_tracker import ReinforcementTracker
 from .scope_resolver import ScopeResolver
-from .growth_tracker import GrowthTracker
 
 __all__ = [
-    "ProfileSummary",
     "CommunicationStyle",
-    "UserPreference",
-    "ProfileGrowth",
-    "get_profile_service",
-    "ProfileService",
-    "RouterPolicy",
-    "Guardrails",
-    "MemoryBudget",
-    "ProviderPreferences",
-    "LLMProfile",
-    "ProfileManager",
-    "get_profile_manager",
     "ContradictionResolver",
+    "GrowthTracker",
+    "Guardrails",
+    "LLMProfile",
+    "MemoryBudget",
+    "ProfileGrowth",
+    "ProfileManager",
+    "ProfileService",
+    "ProfileSummary",
+    "ProviderPreferences",
     "ReinforcementTracker",
+    "RouterPolicy",
     "ScopeResolver",
-    "GrowthTracker"
+    "UserPreference",
+    "get_profile_manager",
+    "get_profile_service"
 ]

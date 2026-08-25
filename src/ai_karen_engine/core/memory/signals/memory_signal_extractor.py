@@ -11,10 +11,9 @@ loaded its own spaCy model independently of the canonical adapter.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
 
 from .signal_models import MemorySignal
-from .spacy_service import SpacyService, ParsedMessage
+from .spacy_service import ParsedMessage, SpacyService
 
 logger = logging.getLogger(__name__)
 
@@ -25,16 +24,16 @@ _PREFERENCE_SOURCE = "spacy_dep"
 class MemorySignalExtractor:
     """Transform spaCy parsed output into memory signal candidates."""
 
-    def __init__(self, spacy_service: Optional[SpacyService] = None):
+    def __init__(self, spacy_service: SpacyService | None = None):
         self.spacy_service = spacy_service or SpacyService()
 
-    async def extract(self, text: str) -> List[MemorySignal]:
+    async def extract(self, text: str) -> list[MemorySignal]:
         """Extract memory signals from text using canonical spaCy parsing."""
         if not text or not text.strip():
             return []
 
         parsed = await self.spacy_service.parse_message(text)
-        signals: List[MemorySignal] = []
+        signals: list[MemorySignal] = []
 
         if parsed.entities:
             signals.append(
@@ -52,7 +51,7 @@ class MemorySignalExtractor:
 
         return signals
 
-    def _extract_preferences(self, parsed: ParsedMessage) -> List[MemorySignal]:
+    def _extract_preferences(self, parsed: ParsedMessage) -> list[MemorySignal]:
         """Detect preference and directive cues from dependency parsing."""
         signals = []
         seen = set()

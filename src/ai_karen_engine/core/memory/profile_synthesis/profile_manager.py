@@ -12,7 +12,7 @@ import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.integrations.registry import get_registry
@@ -37,7 +37,7 @@ class Guardrails:
     code_execution_safety: bool = True
     max_tokens_per_request: int = 4096
     rate_limit_per_minute: int = 60
-    allowed_capabilities: Set[str] = field(
+    allowed_capabilities: set[str] = field(
         default_factory=lambda: {"text", "code", "reasoning"}
     )
 
@@ -82,10 +82,10 @@ class LLMProfile:
 class ProfileManager:
     """Manages LLM profiles with validation and compatibility checking."""
 
-    def __init__(self, profiles_path: Optional[Path] = None):
+    def __init__(self, profiles_path: Path | None = None):
         self.profiles_path = self._resolve_profiles_path(profiles_path)
-        self._profiles: Dict[str, LLMProfile] = {}
-        self._active_profile: Optional[str] = None
+        self._profiles: dict[str, LLMProfile] = {}
+        self._active_profile: str | None = None
         self._registry = get_registry()
 
         self.profiles_path.parent.mkdir(parents=True, exist_ok=True)
@@ -118,7 +118,7 @@ class ProfileManager:
             self._create_default_profiles()
 
     @staticmethod
-    def _resolve_profiles_path(profiles_path: Optional[Path]) -> Path:
+    def _resolve_profiles_path(profiles_path: Path | None) -> Path:
         if profiles_path is not None:
             return profiles_path
 
@@ -160,7 +160,7 @@ class ProfileManager:
         except Exception as e:
             logger.error("Failed to save profiles to %s: %s", self.profiles_path, e)
 
-    def _serialize_profile(self, profile: LLMProfile) -> Dict[str, Any]:
+    def _serialize_profile(self, profile: LLMProfile) -> dict[str, Any]:
         return {
             "name": profile.name,
             "description": profile.description,
@@ -177,7 +177,7 @@ class ProfileManager:
             "is_system": profile.is_system,
         }
 
-    def _deserialize_profile(self, data: Dict[str, Any]) -> Optional[LLMProfile]:
+    def _deserialize_profile(self, data: dict[str, Any]) -> LLMProfile | None:
         try:
             guardrails_data = data.get("guardrails", {})
             if "allowed_capabilities" in guardrails_data:
@@ -317,13 +317,13 @@ class ProfileManager:
                 self._profiles[first_profile].is_active = True
             self._save_profiles()
 
-    def list_profiles(self) -> List[LLMProfile]:
+    def list_profiles(self) -> list[LLMProfile]:
         return list(self._profiles.values())
 
-    def get_profile(self, name: str) -> Optional[LLMProfile]:
+    def get_profile(self, name: str) -> LLMProfile | None:
         return self._profiles.get(name)
 
-    def get_active_profile(self) -> Optional[LLMProfile]:
+    def get_active_profile(self) -> LLMProfile | None:
         if self._active_profile:
             return self._profiles.get(self._active_profile)
         return None
@@ -338,7 +338,7 @@ class ProfileManager:
         logger.info("Created profile: %s", profile.name)
         return True
 
-    def update_profile(self, name: str, updates: Dict[str, Any]) -> bool:
+    def update_profile(self, name: str, updates: dict[str, Any]) -> bool:
         if name not in self._profiles:
             return False
 
@@ -389,7 +389,7 @@ class ProfileManager:
         logger.info("Switched to profile: %s", name)
         return True
 
-    def validate_profile(self, profile: LLMProfile) -> Dict[str, List[str]]:
+    def validate_profile(self, profile: LLMProfile) -> dict[str, list[str]]:
         errors = {
             "providers": [],
             "capabilities": [],
@@ -439,8 +439,8 @@ class ProfileManager:
         return errors
 
     def get_routing_decision(
-        self, task_type: str, context: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        self, task_type: str, context: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         active_profile = self.get_active_profile()
         if not active_profile:
             return {
@@ -491,7 +491,7 @@ class ProfileManager:
         }
 
 
-_profile_manager: Optional[ProfileManager] = None
+_profile_manager: ProfileManager | None = None
 
 
 def get_profile_manager() -> ProfileManager:
@@ -502,11 +502,11 @@ def get_profile_manager() -> ProfileManager:
 
 
 __all__ = [
-    "RouterPolicy",
     "Guardrails",
-    "MemoryBudget",
-    "ProviderPreferences",
     "LLMProfile",
+    "MemoryBudget",
     "ProfileManager",
+    "ProviderPreferences",
+    "RouterPolicy",
     "get_profile_manager",
 ]

@@ -15,10 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..contracts import PreferenceScope, UserGoal, UserGoalStatus
-
 
 # ===================================
 # TYPE ALIASES
@@ -203,14 +202,14 @@ class GoalEvidence:
     evidence_id: str
     claim: str
     source_type: EvidenceSourceType
-    source_ref: Optional[str]
+    source_ref: str | None
     observed_value: Any
     polarity: str
     confidence: float
     observed_at: datetime
     tenant_id: str = ""
-    user_id: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    user_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
@@ -222,8 +221,8 @@ class GoalProgress:
     completed_steps: int = 0
     total_steps: int = 0
     percentage: float = 0.0
-    last_updated: Optional[datetime] = None
-    milestones: List[str] = field(default_factory=list)
+    last_updated: datetime | None = None
+    milestones: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.percentage = max(0.0, min(1.0, self.percentage))
@@ -235,8 +234,8 @@ class GoalOutcome:
     outcome_id: str
     success: bool
     description: str
-    evidence_refs: List[str] = field(default_factory=list)
-    achieved_at: Optional[datetime] = None
+    evidence_refs: list[str] = field(default_factory=list)
+    achieved_at: datetime | None = None
 
 
 @dataclass
@@ -250,7 +249,7 @@ class GoalRevision:
     reason: str
     revised_at: datetime
     tenant_id: str = ""
-    user_id: Optional[str] = None
+    user_id: str | None = None
 
 
 @dataclass
@@ -262,7 +261,7 @@ class Goal:
     """
     goal_id: str
     tenant_id: str
-    user_id: Optional[str]
+    user_id: str | None
     description: str
     goal_type: GoalType
     origin: GoalOrigin
@@ -270,26 +269,26 @@ class Goal:
     priority: GoalPriority
     scope: PreferenceScope
     confidence: float
-    evidence_refs: List[str]
+    evidence_refs: list[str]
     started_at: datetime
     last_observed_at: datetime
-    target_date: Optional[datetime] = None
-    parent_goal_id: Optional[str] = None
-    child_goal_ids: List[str] = field(default_factory=list)
-    depends_on: List[str] = field(default_factory=list)
-    blocks: List[str] = field(default_factory=list)
-    contributes_to: List[str] = field(default_factory=list)
-    conflicts_with: List[str] = field(default_factory=list)
-    progress: Optional[GoalProgress] = None
-    outcome: Optional[GoalOutcome] = None
-    revisions: List[GoalRevision] = field(default_factory=list)
-    completion_evidence_required: List[CompletionEvidenceSource] = field(default_factory=list)
-    completion_evidence: List[str] = field(default_factory=list)
-    completion_evidence_sources: List[CompletionEvidenceSource] = field(default_factory=list)
-    completed_at: Optional[datetime] = None
-    expires_at: Optional[datetime] = None
-    superseded_by: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    target_date: datetime | None = None
+    parent_goal_id: str | None = None
+    child_goal_ids: list[str] = field(default_factory=list)
+    depends_on: list[str] = field(default_factory=list)
+    blocks: list[str] = field(default_factory=list)
+    contributes_to: list[str] = field(default_factory=list)
+    conflicts_with: list[str] = field(default_factory=list)
+    progress: GoalProgress | None = None
+    outcome: GoalOutcome | None = None
+    revisions: list[GoalRevision] = field(default_factory=list)
+    completion_evidence_required: list[CompletionEvidenceSource] = field(default_factory=list)
+    completion_evidence: list[str] = field(default_factory=list)
+    completion_evidence_sources: list[CompletionEvidenceSource] = field(default_factory=list)
+    completed_at: datetime | None = None
+    expires_at: datetime | None = None
+    superseded_by: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
@@ -379,26 +378,26 @@ class GoalSnapshot:
     """
     goal_id: str
     tenant_id: str
-    user_id: Optional[str]
+    user_id: str | None
     description: str
     state: GoalState
     priority: GoalPriority
     goal_type: GoalType
     origin: GoalOrigin
     confidence: float
-    evidence_refs: List[str]
-    parent_goal_id: Optional[str]
-    child_goal_ids: List[str]
-    depends_on: List[str]
-    blocks: List[str]
-    conflicts_with: List[str]
-    target_date: Optional[datetime]
-    completed_at: Optional[datetime]
-    expires_at: Optional[datetime]
-    superseded_by: Optional[str]
-    completion_evidence: List[str]
-    completion_evidence_sources: List[CompletionEvidenceSource]
-    outcome: Optional[GoalOutcome]
+    evidence_refs: list[str]
+    parent_goal_id: str | None
+    child_goal_ids: list[str]
+    depends_on: list[str]
+    blocks: list[str]
+    conflicts_with: list[str]
+    target_date: datetime | None
+    completed_at: datetime | None
+    expires_at: datetime | None
+    superseded_by: str | None
+    completion_evidence: list[str]
+    completion_evidence_sources: list[CompletionEvidenceSource]
+    outcome: GoalOutcome | None
 
 
 def to_snapshot(goal: Goal) -> GoalSnapshot:
@@ -438,10 +437,10 @@ class GoalConflict:
     conflict_type: ConflictType
     severity: ConflictSeverity
     description: str
-    evidence_refs: List[str] = field(default_factory=list)
+    evidence_refs: list[str] = field(default_factory=list)
     detected_at: datetime = field(default_factory=datetime.utcnow)
     tenant_id: str = ""
-    resolution_candidates: List[str] = field(default_factory=list)
+    resolution_candidates: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -449,8 +448,8 @@ class GoalPriorityAssessment:
     """Result of a cognitive priority assessment."""
     goal_id: str
     score: float
-    reason_codes: List[str] = field(default_factory=list)
-    evidence_refs: List[str] = field(default_factory=list)
+    reason_codes: list[str] = field(default_factory=list)
+    evidence_refs: list[str] = field(default_factory=list)
     assessed_at: datetime = field(default_factory=datetime.utcnow)
 
     def __post_init__(self) -> None:
@@ -467,20 +466,20 @@ class Intention:
     intention_id: str
     goal_id: str
     tenant_id: str
-    user_id: Optional[str]
+    user_id: str | None
     description: str
     state: IntentionState
     priority: IntentionPriority
     trigger_type: IntentionTriggerType
     trigger_condition: str
     context: str
-    evidence_refs: List[str] = field(default_factory=list)
+    evidence_refs: list[str] = field(default_factory=list)
     confidence: float = 0.0
     formed_at: datetime = field(default_factory=datetime.utcnow)
-    activated_at: Optional[datetime] = None
-    fulfilled_at: Optional[datetime] = None
-    invalidated_at: Optional[datetime] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    activated_at: datetime | None = None
+    fulfilled_at: datetime | None = None
+    invalidated_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
@@ -496,8 +495,8 @@ class IntentionEvidence:
     confidence: float
     observed_at: datetime
     tenant_id: str = ""
-    user_id: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    user_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
@@ -513,7 +512,7 @@ class CommitmentCondition:
     condition_id: str
     description: str
     met: bool = False
-    evidence_ref: Optional[str] = None
+    evidence_ref: str | None = None
 
 
 @dataclass
@@ -521,13 +520,13 @@ class CommitmentEvidence:
     """Evidence that a commitment was made."""
     evidence_id: str
     source: CommitmentSource
-    source_ref: Optional[str]
+    source_ref: str | None
     confidence: float
     observed_at: datetime
     strength: CommitmentStrength
     tenant_id: str = ""
-    user_id: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    user_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
@@ -543,21 +542,21 @@ class Commitment:
     """
     commitment_id: str
     tenant_id: str
-    user_id: Optional[str]
-    parties: List[CommitmentParty]
+    user_id: str | None
+    parties: list[CommitmentParty]
     description: str
     source: CommitmentSource
     strength: CommitmentStrength
     status: CommitmentStatus
     confidence: float
-    conditions: List[CommitmentCondition] = field(default_factory=list)
-    evidence: List[CommitmentEvidence] = field(default_factory=list)
-    deadline: Optional[datetime] = None
+    conditions: list[CommitmentCondition] = field(default_factory=list)
+    evidence: list[CommitmentEvidence] = field(default_factory=list)
+    deadline: datetime | None = None
     committed_at: datetime = field(default_factory=datetime.utcnow)
-    fulfilled_at: Optional[datetime] = None
-    failed_at: Optional[datetime] = None
-    superseded_by: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    fulfilled_at: datetime | None = None
+    failed_at: datetime | None = None
+    superseded_by: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
@@ -579,9 +578,9 @@ class ProspectiveTrigger:
     trigger_type: IntentionTriggerType
     target_ref: str
     description: str
-    condition: Optional[str] = None
+    condition: str | None = None
     tenant_id: str = ""
-    user_id: Optional[str] = None
+    user_id: str | None = None
 
 
 @dataclass
@@ -594,60 +593,60 @@ class ProspectiveMemory:
     description: str
     trigger: ProspectiveTrigger
     state: ProspectiveState
-    target_intention_id: Optional[str]
-    target_goal_id: Optional[str]
-    evidence_refs: List[str] = field(default_factory=list)
+    target_intention_id: str | None
+    target_goal_id: str | None
+    evidence_refs: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.utcnow)
-    triggered_at: Optional[datetime] = None
-    archived_at: Optional[datetime] = None
+    triggered_at: datetime | None = None
+    archived_at: datetime | None = None
     tenant_id: str = ""
-    user_id: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    user_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # ===================================
 # BACKWARD COMPATIBILITY RE-EXPORT
 # ===================================
 
-from .lifecycle import GoalStore  # noqa: E402
+from .lifecycle import GoalStore
 
 __all__ = [
-    "GoalId",
-    "GoalType",
-    "GoalOrigin",
-    "GoalPriority",
-    "GoalState",
-    "ConflictType",
-    "ConflictSeverity",
-    "CompletionEvidenceSource",
-    "IntentionState",
-    "IntentionPriority",
-    "IntentionTriggerType",
-    "CommitmentParty",
-    "CommitmentSource",
-    "CommitmentStrength",
-    "CommitmentStatus",
-    "ProspectiveState",
-    "EvidenceSourceType",
-    "GoalRelationship",
-    "GoalEvidence",
-    "GoalProgress",
-    "GoalOutcome",
-    "GoalRevision",
-    "Goal",
-    "GoalSnapshot",
-    "GoalConflict",
-    "GoalPriorityAssessment",
-    "Intention",
-    "IntentionEvidence",
+    "Commitment",
     "CommitmentCondition",
     "CommitmentEvidence",
-    "Commitment",
-    "ProspectiveTrigger",
-    "ProspectiveMemory",
-    "goal_from_user_goal",
-    "to_snapshot",
+    "CommitmentParty",
+    "CommitmentSource",
+    "CommitmentStatus",
+    "CommitmentStrength",
+    "CompletionEvidenceSource",
+    "ConflictSeverity",
+    "ConflictType",
+    "EvidenceSourceType",
+    "Goal",
+    "GoalConflict",
+    "GoalEvidence",
+    "GoalId",
+    "GoalOrigin",
+    "GoalOutcome",
+    "GoalPriority",
+    "GoalPriorityAssessment",
+    "GoalProgress",
+    "GoalRelationship",
+    "GoalRevision",
+    "GoalSnapshot",
+    "GoalState",
     "GoalStore",
+    "GoalType",
+    "Intention",
+    "IntentionEvidence",
+    "IntentionPriority",
+    "IntentionState",
+    "IntentionTriggerType",
+    "ProspectiveMemory",
+    "ProspectiveState",
+    "ProspectiveTrigger",
     "UserGoal",
     "UserGoalStatus",
+    "goal_from_user_goal",
+    "to_snapshot",
 ]

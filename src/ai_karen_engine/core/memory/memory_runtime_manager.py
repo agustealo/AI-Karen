@@ -19,19 +19,21 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
+from collections.abc import Sequence
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from ai_karen_engine.core.logging import get_logger
+
 from ..runtime.resilience import get_feature_flags
 from .ledger_models import (
-    ContradictionEvent,
     ConsentScope,
+    ContradictionEvent,
     MemoryAssertion,
     MemoryEpisode,
     MemoryEvent,
@@ -47,7 +49,7 @@ from .signals import MemorySignal, get_signal_pipeline
 logger = get_logger(__name__)
 
 
-_METRICS: Dict[str, int] = {
+_METRICS: dict[str, int] = {
     "interactions_processed": 0,
     "signals_extracted": 0,
     "signals_admitted": 0,
@@ -72,7 +74,7 @@ def _coerce_uuid(value: Any) -> uuid.UUID:
     return uuid.UUID(str(value))
 
 
-def _coerce_datetime(value: Any) -> Optional[datetime]:
+def _coerce_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -108,7 +110,7 @@ class MemoryRuntimeManager:
         self.worthiness_scorer = MemoryWorthinessScorer()
         self.flags = get_feature_flags()
         self._db_session_factory = None
-        self._projection_workers: Optional[Dict[str, Any]] = None
+        self._projection_workers: dict[str, Any] | None = None
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._retrieval_adapter = retrieval_adapter
         self._consolidation_adapter = consolidation_adapter
@@ -144,11 +146,11 @@ class MemoryRuntimeManager:
         user_id: Any,
         query: str,
         top_k: int = 10,
-        tiers: Optional[Sequence[str]] = None,
-        tenant_id: Optional[str] = None,
+        tiers: Sequence[str] | None = None,
+        tenant_id: str | None = None,
         include_embeddings: bool = False,
         **kwargs,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Synthesize context recall by querying the PostgreSQL ledger.
         Legacy-compatible wrapper for cognitive routes and context assembly.
@@ -241,7 +243,7 @@ class MemoryRuntimeManager:
         tenant_id: str,
         user_id: str,
         source_type: str,
-        source_ref: Optional[str],
+        source_ref: str | None,
         signal: MemorySignal,
     ) -> str:
         raw = "|".join(
@@ -263,9 +265,9 @@ class MemoryRuntimeManager:
         tenant_id: str,
         user_id: str,
         source_type: str = "chat",
-        source_ref: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        source_ref: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Process an interaction, extract signals, and manage memory.
         """
@@ -277,7 +279,7 @@ class MemoryRuntimeManager:
         )
         _METRICS["signals_extracted"] += len(extraction_result.signals)
 
-        admitted_signals: List[Dict[str, Any]] = []
+        admitted_signals: list[dict[str, Any]] = []
         for signal in extraction_result.signals:
             worthiness = await self.worthiness_scorer.evaluate(
                 signal.text, signal.signal_type
@@ -336,12 +338,12 @@ class MemoryRuntimeManager:
 
     async def _commit_to_ledger(
         self,
-        admitted_signals: Sequence[Dict[str, Any]],
+        admitted_signals: Sequence[dict[str, Any]],
         tenant_id: str,
         user_id: str,
         source_type: str,
-        source_ref: Optional[str],
-        metadata: Optional[Dict[str, Any]] = None,
+        source_ref: str | None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Write to Postgres ledger and enqueue projections."""
         if not self._db_session_factory:
@@ -350,7 +352,7 @@ class MemoryRuntimeManager:
 
         tenant_uuid = _coerce_uuid(tenant_id)
         user_uuid = _coerce_uuid(user_id)
-        committed_events: List[Dict[str, Any]] = []
+        committed_events: list[dict[str, Any]] = []
 
         async with self._db_session_factory() as session:
             for item in admitted_signals:
@@ -563,7 +565,7 @@ class MemoryRuntimeManager:
         event_id: str,
         target_store: str,
         status: str,
-        last_error: Optional[str] = None,
+        last_error: str | None = None,
     ) -> None:
         if not self._db_session_factory:
             return
@@ -585,7 +587,7 @@ class MemoryRuntimeManager:
 
     async def _trigger_projections(
         self,
-        committed_events: Sequence[Dict[str, Any]],
+        committed_events: Sequence[dict[str, Any]],
         tenant_id: str,
         user_id: str,
     ) -> None:
@@ -625,7 +627,7 @@ class MemoryRuntimeManager:
 
     async def _trigger_profile_synthesis(
         self,
-        committed_events: Sequence[Dict[str, Any]],
+        committed_events: Sequence[dict[str, Any]],
         tenant_id: str,
         user_id: str,
     ) -> None:
@@ -637,7 +639,7 @@ class MemoryRuntimeManager:
             len(committed_events),
         )
 
-    def _emit_echocore_candidates(self, committed_events: Sequence[Dict[str, Any]]) -> None:
+    def _emit_echocore_candidates(self, committed_events: Sequence[dict[str, Any]]) -> None:
         """Emit candidates for EchoCore offline consolidation."""
         _METRICS["echocore_candidates"] += len(committed_events)
         logger.info(
@@ -648,15 +650,15 @@ class MemoryRuntimeManager:
     async def inspect_memory_state(
         self,
         *,
-        tenant_id: Optional[str] = None,
-        user_id: Optional[str] = None,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
         limit: int = 20,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Return a structured memory inspection snapshot for operators and users."""
         _METRICS["inspector_requests"] += 1
         self._ensure_db_session_factory()
 
-        snapshot: Dict[str, Any] = {
+        snapshot: dict[str, Any] = {
             "status": "degraded" if not self._db_session_factory else "success",
             "tenant_id": tenant_id,
             "user_id": user_id,
@@ -701,12 +703,12 @@ class MemoryRuntimeManager:
         user_uuid = _coerce_uuid(user_id) if user_id else None
 
         async with self._db_session_factory() as session:
-            event_filters: List[Any] = []
-            assertion_filters: List[Any] = []
-            fact_filters: List[Any] = []
-            episode_filters: List[Any] = []
-            consent_filters: List[Any] = []
-            retention_filters: List[Any] = []
+            event_filters: list[Any] = []
+            assertion_filters: list[Any] = []
+            fact_filters: list[Any] = []
+            episode_filters: list[Any] = []
+            consent_filters: list[Any] = []
+            retention_filters: list[Any] = []
             if tenant_uuid is not None:
                 event_filters.append(MemoryEvent.tenant_id == tenant_uuid)
                 assertion_filters.append(MemoryAssertion.tenant_id == tenant_uuid)
@@ -813,14 +815,14 @@ class MemoryRuntimeManager:
             )
             projections = projection_result.scalars().all()
 
-            def _serialize_datetime(value: Any) -> Optional[str]:
+            def _serialize_datetime(value: Any) -> str | None:
                 if value is None:
                     return None
                 if isinstance(value, datetime):
                     return value.isoformat()
                 return str(value)
 
-            def _serialize_event(row: MemoryEvent) -> Dict[str, Any]:
+            def _serialize_event(row: MemoryEvent) -> dict[str, Any]:
                 return {
                     "event_id": str(row.event_id),
                     "tenant_id": str(row.tenant_id),
@@ -977,8 +979,8 @@ class MemoryRuntimeManager:
         self,
         *,
         tenant_id: str,
-        user_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
         """Return consent scope rows for a tenant/user pair."""
         self._ensure_db_session_factory()
         if not self._db_session_factory:
@@ -1020,7 +1022,7 @@ class MemoryRuntimeManager:
         user_id: str,
         scope_name: str,
         granted: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create or update a consent scope entry."""
         _METRICS["consent_updates"] += 1
         self._ensure_db_session_factory()
@@ -1069,8 +1071,8 @@ class MemoryRuntimeManager:
     async def list_retention_policies(
         self,
         *,
-        tenant_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
         """Return retention policy rows for a tenant or global scope."""
         self._ensure_db_session_factory()
         if not self._db_session_factory:
@@ -1109,9 +1111,9 @@ class MemoryRuntimeManager:
         self,
         *,
         memory_class: str,
-        ttl_days: Optional[int],
-        tenant_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        ttl_days: int | None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
         """Create or update a retention policy entry."""
         _METRICS["retention_updates"] += 1
         self._ensure_db_session_factory()
@@ -1152,9 +1154,9 @@ class MemoryRuntimeManager:
         self,
         *,
         enabled: bool,
-        tenant_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
         """Set the active memory shadow-mode gate."""
         if tenant_id:
             self.flags.set_tenant_override(tenant_id, "memory_shadow_mode_enabled", enabled)
@@ -1231,15 +1233,15 @@ async def recall_context(
     user_id: Any,
     tenant_id: str,
     query: str,
-    conversation_id: Optional[str] = None,
-    session_id: Optional[str] = None,
+    conversation_id: str | None = None,
+    session_id: str | None = None,
     top_k: int = 10,
-    correlation_id: Optional[str] = None,
-    activation: Optional[Any] = None,
-    tiers: Optional[Sequence[str]] = None,
+    correlation_id: str | None = None,
+    activation: Any | None = None,
+    tiers: Sequence[str] | None = None,
     include_embeddings: bool = False,
     **kwargs,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Compatibility recall API used by cognitive routes and UI helpers.
 
@@ -1256,8 +1258,8 @@ async def recall_context(
         if not tenant_id:
             raise ValueError("tenant_id is required for memory recall; refusing default tenant fallback")
 
-        from .types import MemoryQuery
         from .retrieval.retrieval_router import get_retrieval_router
+        from .types import MemoryQuery
 
         # Build unified query model
         query_model = MemoryQuery(
@@ -1271,7 +1273,7 @@ async def recall_context(
         router = get_retrieval_router()
         items = await router.recall(query_model)
         
-        formatted: List[Dict[str, Any]] = []
+        formatted: list[dict[str, Any]] = []
         for item in items:
             formatted.append({
                 "id": item.id,
@@ -1292,10 +1294,10 @@ async def recall_context(
 
 async def update_memory(
     memory_id: str,
-    updates: Dict[str, Any],
-    user_ctx: Optional[Dict[str, Any]] = None,
+    updates: dict[str, Any],
+    user_ctx: dict[str, Any] | None = None,
     **kwargs,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Compatibility update API.
 
@@ -1335,7 +1337,7 @@ async def update_memory(
     return result
 
 
-async def export_promoted_artifacts(*, limit: int = 100, **kwargs) -> Dict[str, Any]:
+async def export_promoted_artifacts(*, limit: int = 100, **kwargs) -> dict[str, Any]:
     """
     Compatibility export hook for offline consolidation pipelines.
 
@@ -1352,7 +1354,7 @@ async def export_promoted_artifacts(*, limit: int = 100, **kwargs) -> Dict[str, 
             user_id=user_id,
             limit=limit,
         )
-        artifacts: List[Dict[str, Any]] = []
+        artifacts: list[dict[str, Any]] = []
 
         for row in inspection.get("recent_profile_facts", [])[:limit]:
             artifacts.append(
@@ -1432,7 +1434,7 @@ async def export_promoted_artifacts(*, limit: int = 100, **kwargs) -> Dict[str, 
         }
 
 
-def get_metrics() -> Dict[str, Any]:
+def get_metrics() -> dict[str, Any]:
     """Return runtime and compatibility metrics."""
     from ..runtime.resilience import get_resilience_health_monitor
 

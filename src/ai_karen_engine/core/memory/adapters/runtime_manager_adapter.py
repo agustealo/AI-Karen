@@ -10,8 +10,6 @@ Version: 1.0.0 (Cognitive Architecture)
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-
 from ai_karen_engine.core.memory.protocols import ConsolidationPort, RetrievalPort
 from ai_karen_engine.core.memory.types import MemoryEntry
 
@@ -25,7 +23,7 @@ class MemoryRuntimeManagerAdapter(RetrievalPort, ConsolidationPort):
     def __init__(self, memory_runtime_manager):
         self._manager = memory_runtime_manager
 
-    def retrieve(self, query: str, *, top_k: int = 10, **filters) -> List[MemoryEntry]:
+    def retrieve(self, query: str, *, top_k: int = 10, **filters) -> list[MemoryEntry]:
         """Retrieve memories matching a query."""
         try:
             results = self._manager.recall_context(query, limit=top_k, **filters)
@@ -33,14 +31,14 @@ class MemoryRuntimeManagerAdapter(RetrievalPort, ConsolidationPort):
         except Exception:
             return []
 
-    def retrieve_by_id(self, entry_id: str) -> Optional[MemoryEntry]:
+    def retrieve_by_id(self, entry_id: str) -> MemoryEntry | None:
         """Retrieve a specific memory by ID."""
         try:
             return self._manager.get_memory(entry_id)
         except Exception:
             return None
 
-    def retrieve_batch(self, entry_ids: List[str]) -> List[MemoryEntry]:
+    def retrieve_batch(self, entry_ids: list[str]) -> list[MemoryEntry]:
         """Retrieve multiple memories by ID."""
         results = []
         for entry_id in entry_ids:
@@ -49,7 +47,7 @@ class MemoryRuntimeManagerAdapter(RetrievalPort, ConsolidationPort):
                 results.append(entry)
         return results
 
-    def identify_candidates(self, **criteria) -> List[MemoryEntry]:
+    def identify_candidates(self, **criteria) -> list[MemoryEntry]:
         """Identify memories eligible for consolidation."""
         try:
             return self._manager.get_consolidation_candidates(**criteria)
@@ -63,7 +61,7 @@ class MemoryRuntimeManagerAdapter(RetrievalPort, ConsolidationPort):
         except Exception:
             return entry
 
-    async def consolidate_batch(self, entries: List[MemoryEntry]) -> List[MemoryEntry]:
+    async def consolidate_batch(self, entries: list[MemoryEntry]) -> list[MemoryEntry]:
         """Consolidate multiple memories."""
         results = []
         for entry in entries:

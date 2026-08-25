@@ -19,29 +19,36 @@ Cognitive architecture:
 - Reflection engine (evidence checking, promotion gates)
 """
 
+from .ledger_models import (
+    ConsentScope,
+    ContradictionEvent,
+    MemoryAssertion,
+    MemoryEpisode,
+    MemoryEvent,
+    MemoryRelation,
+    ProfileFact,
+    ProjectionStatus,
+    ReinforcementEvent,
+    RetentionPolicy,
+)
 from .memory_runtime_manager import (
-    get_memory_manager, 
     MemoryRuntimeManager,
-    init_memory,
     close,
+    get_memory_manager,
+    get_metrics,
+    init_memory,
     recall_context,
     update_memory,
-    get_metrics
-)
-from .ledger_models import (
-    MemoryEvent, MemoryAssertion, MemoryEpisode, ProfileFact,
-    MemoryRelation, ReinforcementEvent, ContradictionEvent,
-    ProjectionStatus, ConsentScope, RetentionPolicy
 )
 
 try:
-    from .profile_synthesis import get_profile_service, ProfileService
+    from .profile_synthesis import ProfileService, get_profile_service
 except ImportError:
     get_profile_service = None
     ProfileService = None
 
 try:
-    from .retrieval import get_retrieval_router, HybridRetrievalRouter
+    from .retrieval import HybridRetrievalRouter, get_retrieval_router
 except ImportError:
     get_retrieval_router = None
     HybridRetrievalRouter = None
@@ -50,7 +57,8 @@ get_eval_harness = None
 MemoryEvalHarness = None
 
 try:
-    from .evaluation import get_eval_harness as _get_eval_harness, MemoryEvalHarness as _MemoryEvalHarness
+    from .evaluation import MemoryEvalHarness as _MemoryEvalHarness
+    from .evaluation import get_eval_harness as _get_eval_harness
 except ImportError:
     _get_eval_harness = None
     _MemoryEvalHarness = None
@@ -60,13 +68,13 @@ else:
 
 try:
     from .neuro import (
-        MemoryClass,
-        MemoryActivationMode,
-        MemoryActivationDecision,
-        MemoryCandidate,
         ConsolidationDecision,
-        ProcedureArtifact,
         LessonArtifact,
+        MemoryActivationDecision,
+        MemoryActivationMode,
+        MemoryCandidate,
+        MemoryClass,
+        ProcedureArtifact,
     )
 except ImportError:
     MemoryClass = None
@@ -79,21 +87,32 @@ except ImportError:
 
 # Cognitive architecture exports
 from .contracts import (
-    MemoryClaim,
     ClaimStatus,
+    MemoryClaim,
+    MemoryLifecycleState,
+    ProspectiveMemory,
+    RecallScoreComponents,
+    RelationshipModel,
     SalienceScore,
     SelfModel,
     UserModel,
-    RelationshipModel,
-    ProspectiveMemory,
-    MemoryLifecycleState,
-    RecallScoreComponents,
 )
-from .policy import SaliencePolicy, ForgettingPolicy, ConsolidationPolicy, RetrievalPolicy
-from .types import CognitiveMemoryType, CognitiveMemoryEntry, MemoryContext, AssociativeActivation, ReflectionCandidate
+from .policy import (
+    ConsolidationPolicy,
+    ForgettingPolicy,
+    RetrievalPolicy,
+    SaliencePolicy,
+)
+from .types import (
+    AssociativeActivation,
+    CognitiveMemoryEntry,
+    CognitiveMemoryType,
+    MemoryContext,
+    ReflectionCandidate,
+)
 
 try:
-    from .lifecycle import MemoryLifecycle, LifecycleHook, LifecycleEvent
+    from .lifecycle import LifecycleEvent, LifecycleHook, MemoryLifecycle
 except ImportError:
     MemoryLifecycle = None
     LifecycleHook = None

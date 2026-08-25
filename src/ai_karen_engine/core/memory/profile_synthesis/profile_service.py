@@ -7,14 +7,15 @@ Consumes durable memory facts and publishes a compact ProfileSummary.
 
 import uuid
 from datetime import datetime
-from typing import Any, List
+from typing import Any
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 
 from ai_karen_engine.core.logging import get_logger
-from .profile_models import ProfileSummary, CommunicationStyle, ProfileGrowth
-from ..ledger_models import ProfileFact
+
 from ...runtime.resilience import get_safe_stage_runner
+from ..ledger_models import ProfileFact
+from .profile_models import CommunicationStyle, ProfileGrowth, ProfileSummary
 
 logger = get_logger(__name__)
 
@@ -71,7 +72,7 @@ class ProfileService:
             
             return summary
 
-    async def _synthesize_style(self, facts: List[ProfileFact]) -> CommunicationStyle:
+    async def _synthesize_style(self, facts: list[ProfileFact]) -> CommunicationStyle:
         """Resolve conflicting style facts into a single model."""
         # Simple majority or most recent logic for now
         style = CommunicationStyle()

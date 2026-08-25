@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
 
 from .contracts import (
     ConflictSeverity,
@@ -27,17 +26,17 @@ class ConflictDetector:
     """Detects conflicts between goals."""
 
     def __init__(self) -> None:
-        self._severity_weights: Dict[ConflictType, ConflictSeverity] = {
+        self._severity_weights: dict[ConflictType, ConflictSeverity] = {
             ConflictType.DEPENDENCY: ConflictSeverity.HIGH,
             ConflictType.VALUE: ConflictSeverity.CRITICAL,
             ConflictType.SCOPE: ConflictSeverity.MEDIUM,
             ConflictType.TEMPORAL: ConflictSeverity.LOW,
         }
 
-    def detect_conflicts(self, goals: List[Goal]) -> List[GoalConflict]:
+    def detect_conflicts(self, goals: list[Goal]) -> list[GoalConflict]:
         """Detect all conflicts among a set of goals."""
-        conflicts: List[GoalConflict] = []
-        goals_by_id: Dict[str, Goal] = {g.goal_id: g for g in goals}
+        conflicts: list[GoalConflict] = []
+        goals_by_id: dict[str, Goal] = {g.goal_id: g for g in goals}
 
         for i, goal_a in enumerate(goals):
             for goal_b in goals[i + 1:]:
@@ -53,12 +52,12 @@ class ConflictDetector:
 
         return conflicts
 
-    def _detect_pairwise(self, goal_a: Goal, goal_b: Goal) -> List[GoalConflict]:
+    def _detect_pairwise(self, goal_a: Goal, goal_b: Goal) -> list[GoalConflict]:
         """Detect conflicts between two goals."""
         if goal_a.tenant_id != goal_b.tenant_id:
             return []
 
-        conflicts: List[GoalConflict] = []
+        conflicts: list[GoalConflict] = []
 
         value_conflict = self._check_value_conflict(goal_a, goal_b)
         if value_conflict:
@@ -78,7 +77,7 @@ class ConflictDetector:
 
         return conflicts
 
-    def _check_value_conflict(self, goal_a: Goal, goal_b: Goal) -> Optional[GoalConflict]:
+    def _check_value_conflict(self, goal_a: Goal, goal_b: Goal) -> GoalConflict | None:
         """Detect when two goals have directly opposing values."""
         if not goal_a.conflicts_with or not goal_b.conflicts_with:
             both_blocked = (goal_a.target_date is not None and goal_b.target_date is not None)
@@ -103,7 +102,7 @@ class ConflictDetector:
             f"Declared conflict: {goal_a.goal_id} <-> {goal_b.goal_id}",
         )
 
-    def _check_scope_conflict(self, goal_a: Goal, goal_b: Goal) -> Optional[GoalConflict]:
+    def _check_scope_conflict(self, goal_a: Goal, goal_b: Goal) -> GoalConflict | None:
         """Detect scope overlap with incompatible values."""
         if goal_a.scope != goal_b.scope:
             return None
@@ -116,7 +115,7 @@ class ConflictDetector:
             )
         return None
 
-    def _check_temporal_conflict(self, goal_a: Goal, goal_b: Goal) -> Optional[GoalConflict]:
+    def _check_temporal_conflict(self, goal_a: Goal, goal_b: Goal) -> GoalConflict | None:
         """Detect temporal overlap with conflicting deadlines."""
         if goal_a.target_date is None and goal_b.target_date is None:
             return None
@@ -133,7 +132,7 @@ class ConflictDetector:
                 pass
         return None
 
-    def _check_dependency_conflict(self, goal_a: Goal, goal_b: Goal) -> Optional[GoalConflict]:
+    def _check_dependency_conflict(self, goal_a: Goal, goal_b: Goal) -> GoalConflict | None:
         """Detect circular or blocking dependency conflicts."""
         if goal_a.goal_id in goal_b.depends_on and goal_b.goal_id in goal_a.depends_on:
             return self._make_conflict(
@@ -149,12 +148,12 @@ class ConflictDetector:
                 )
         return None
 
-    def _check_circular_deps(self, goal: Goal, all_goals: Dict[str, Goal]) -> Optional[GoalConflict]:
+    def _check_circular_deps(self, goal: Goal, all_goals: dict[str, Goal]) -> GoalConflict | None:
         """Detect circular dependency chains."""
         visited: set = set()
-        stack: List[str] = [goal.goal_id]
+        stack: list[str] = [goal.goal_id]
 
-        def dfs(node_id: str, path: set) -> Optional[Tuple[str, str]]:
+        def dfs(node_id: str, path: set) -> tuple[str, str] | None:
             if node_id in path:
                 cycle_start = node_id
                 return (cycle_start, node_id)
@@ -200,9 +199,9 @@ class ConflictDetector:
             tenant_id=goal_a.tenant_id,
         )
 
-    def recommend_resolution(self, conflict: GoalConflict) -> List[str]:
+    def recommend_resolution(self, conflict: GoalConflict) -> list[str]:
         """Recommend resolution candidates (CORTEX decides)."""
-        candidates: List[str] = []
+        candidates: list[str] = []
         if conflict.severity == ConflictSeverity.CRITICAL:
             candidates.extend(["supersede_lower_priority", "decompose_conflict"])
         elif conflict.severity == ConflictSeverity.HIGH:
@@ -218,7 +217,7 @@ def _normalize_desc(desc: str) -> str:
     return desc.strip().lower().rstrip(".")
 
 
-_OPPOSITE_PAIRS: List[Tuple[str, str]] = [
+_OPPOSITE_PAIRS: list[tuple[str, str]] = [
     ("remain local", "use cloud"),
     ("remain local-first", "use cloud-only"),
     ("local first", "cloud only"),

@@ -8,25 +8,23 @@ assessments.  Pure logic only -- no database fetching, no provider calls.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import datetime
 
 from .contracts import (
-    ClaimStatus,
-    Evidence,
-    EvidenceRelation,
-    EvidenceStrength,
-    EvidenceType,
+    EVIDENCE_STRENGTH_WEIGHTS,
+    SOURCE_CREDIBILITY,
+    STALENESS_THRESHOLD_HOURS,
     BeliefAssessment,
     BeliefClaim,
     BeliefContradiction,
     BeliefVerdict,
+    ClaimStatus,
     ConfidenceMetrics,
-    ClaimScope,
+    ContradictionNature,
+    Evidence,
+    EvidenceRelation,
+    EvidenceType,
     UncertaintySource,
-    EVIDENCE_STRENGTH_WEIGHTS,
-    SOURCE_CREDIBILITY,
-    STALENESS_THRESHOLD_HOURS,
     make_contradiction_id,
 )
 
@@ -42,14 +40,14 @@ class BeliefEngine:
     def assess(
         self,
         claim: BeliefClaim,
-        evidence: List[Evidence],
+        evidence: list[Evidence],
     ) -> BeliefAssessment:
         """Assess a claim given a collection of evidence items."""
         metrics = ConfidenceMetrics()
-        reason_codes: List[str] = []
-        uncertainty_sources: List[UncertaintySource] = []
-        evidence_refs: List[str] = [e.evidence_id for e in evidence]
-        contradictions_list: List[BeliefContradiction] = []
+        reason_codes: list[str] = []
+        uncertainty_sources: list[UncertaintySource] = []
+        evidence_refs: list[str] = [e.evidence_id for e in evidence]
+        contradictions_list: list[BeliefContradiction] = []
 
         # Source confidence
         metrics.source_confidence = SOURCE_CREDIBILITY.get(claim.source, 0.5)
@@ -116,7 +114,7 @@ class BeliefEngine:
         self,
         claim_a: BeliefClaim,
         claim_b: BeliefClaim,
-        evidence: List[Evidence],
+        evidence: list[Evidence],
     ) -> str:
         """Compare two claims and return their relationship."""
         if claim_a.subject == claim_b.subject and claim_a.predicate == claim_b.predicate:
@@ -130,15 +128,15 @@ class BeliefEngine:
 
     def assess_batch(
         self,
-        claims: List[BeliefClaim],
-        evidence_map: Dict[str, List[Evidence]],
-    ) -> List[BeliefAssessment]:
+        claims: list[BeliefClaim],
+        evidence_map: dict[str, list[Evidence]],
+    ) -> list[BeliefAssessment]:
         """Assess multiple claims efficiently."""
         return [self.assess(c, evidence_map.get(c.claim_id, [])) for c in claims]
 
     # ---- private helpers ----
 
-    def _aggregate_evidence_strength(self, evidence: List[Evidence]) -> float:
+    def _aggregate_evidence_strength(self, evidence: list[Evidence]) -> float:
         if not evidence:
             return 0.0
         total = 0.0
@@ -153,8 +151,8 @@ class BeliefEngine:
     def _belief_confidence(
         self,
         claim: BeliefClaim,
-        supporting: List[Evidence],
-        contradicting: List[Evidence],
+        supporting: list[Evidence],
+        contradicting: list[Evidence],
     ) -> float:
         sup_weight = self._aggregate_evidence_strength(supporting) if supporting else 0.0
         con_weight = self._aggregate_evidence_strength(contradicting) if contradicting else 0.0
@@ -182,11 +180,11 @@ class BeliefEngine:
     def _freshness(
         self,
         claim: BeliefClaim,
-        evidence: List[Evidence],
+        evidence: list[Evidence],
     ) -> tuple[float, bool]:
         """Compute freshness confidence and detect staleness."""
         now = datetime.utcnow()
-        reference_time: Optional[datetime] = None
+        reference_time: datetime | None = None
 
         for e in evidence:
             if e.observed_at is not None:
@@ -213,18 +211,18 @@ class BeliefEngine:
     def _consistency(
         self,
         claim: BeliefClaim,
-        contradicting: List[Evidence],
-    ) -> tuple[float, List[BeliefContradiction]]:
+        contradicting: list[Evidence],
+    ) -> tuple[float, list[BeliefContradiction]]:
         """Compute consistency confidence and collect contradictions."""
-        contradictions: List[BeliefContradiction] = []
+        contradictions: list[BeliefContradiction] = []
         for e in contradicting:
             contradictions.append(
                 BeliefContradiction(
                     contradiction_id=make_contradiction_id(),
                     claim_a_id=claim.claim_id,
                     claim_b_id=None,
-                    kind=contradicting[0].type if contradicting else EvidenceType.OBSERVATION,
-                    nature="contradiction",
+                    kind=EvidenceType.OBSERVATION,
+                    nature=ContradictionNature.CONTRADICTION,
                     severity="medium",
                     description=f"Evidence {e.evidence_id} contradicts claim",
                     evidence_refs=[e.evidence_id],
@@ -240,9 +238,9 @@ class BeliefEngine:
     def _verdict(
         self,
         claim: BeliefClaim,
-        evidence: List[Evidence],
+        evidence: list[Evidence],
         confidence: float,
-        contradictions: List[BeliefContradiction],
+        contradictions: list[BeliefContradiction],
     ) -> BeliefVerdict:
         """Determine the final verdict."""
         if claim.status == ClaimStatus.RETRACTED:
@@ -259,7 +257,7 @@ class BeliefEngine:
             return BeliefVerdict.CONFLICTING
         if confidence < 0.2:
             return BeliefVerdict.INSUFFICIENT_EVIDENCE
-        if claim.temporal.is_expired:
+        if claim.temporal.is_expired():
             return BeliefVerdict.STALE_EVIDENCE
         return BeliefVerdict.ACTIVE
 

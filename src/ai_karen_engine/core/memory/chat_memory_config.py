@@ -10,7 +10,6 @@ Chat Memory & Auth Configuration
 import os
 import re
 from pathlib import Path
-from typing import Optional
 
 try:
     from pydantic import Field
@@ -154,7 +153,7 @@ class ProductionAuthSettings(BaseSettings):
     api_rate_limit: int = Field(100, description="API requests per minute")
 
     # Cookie security
-    cookie_secure: Optional[bool] = Field(
+    cookie_secure: bool | None = Field(
         None,
         description="Send session cookies with the 'secure' flag",
         json_schema_extra={"env": "COOKIE_SECURE"},

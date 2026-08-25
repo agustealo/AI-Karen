@@ -9,15 +9,14 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .contracts import (
     Goal,
-    GoalOrigin,
     GoalPriority,
     GoalPriorityAssessment,
-    GoalState,
     GoalSnapshot,
+    GoalState,
     GoalType,
     to_snapshot,
 )
@@ -29,7 +28,7 @@ class GoalPrioritizer:
     """Computes cognitive priority for goals."""
 
     def __init__(self) -> None:
-        self._weights: Dict[str, float] = {
+        self._weights: dict[str, float] = {
             "explicit_priority": 0.25,
             "urgency": 0.20,
             "importance": 0.15,
@@ -39,18 +38,18 @@ class GoalPrioritizer:
             "hierarchy_depth": 0.04,
             "context_relevance": 0.03,
         }
-        self._priority_values: Dict[GoalPriority, float] = {
+        self._priority_values: dict[GoalPriority, float] = {
             GoalPriority.LOW: 0.25,
             GoalPriority.MEDIUM: 0.5,
             GoalPriority.HIGH: 0.75,
             GoalPriority.CRITICAL: 1.0,
         }
 
-    def assess(self, goal: Goal, context: Optional[Dict[str, Any]] = None) -> GoalPriorityAssessment:
+    def assess(self, goal: Goal, context: dict[str, Any] | None = None) -> GoalPriorityAssessment:
         """Compute a priority assessment for a single goal."""
         context = context or {}
-        reason_codes: List[str] = []
-        evidence_refs: List[str] = list(goal.evidence_refs)
+        reason_codes: list[str] = []
+        evidence_refs: list[str] = list(goal.evidence_refs)
 
         explicit = self._priority_from_explicit(goal)
         urgency = self._urgency_score(goal, context)
@@ -98,17 +97,17 @@ class GoalPrioritizer:
 
     def select_active(
         self,
-        goals: List[Goal],
-        context: Optional[Dict[str, Any]] = None,
+        goals: list[Goal],
+        context: dict[str, Any] | None = None,
         top_k: int = 5,
-    ) -> List[Goal]:
+    ) -> list[Goal]:
         """Select goals eligible for active work.
 
         Excludes PAUSED, EXPIRED, ABANDONED, SUPERSEDED, COMPLETED,
         and goals whose dependencies are not yet satisfiable.
         """
         now = datetime.utcnow()
-        eligible: List[Goal] = []
+        eligible: list[Goal] = []
         for g in goals:
             if g.state in (GoalState.ACTIVE, GoalState.SATISFIED, GoalState.AT_RISK, GoalState.PROPOSED):
                 if g.expires_at is not None and now > g.expires_at:
@@ -121,15 +120,15 @@ class GoalPrioritizer:
 
     def rank(
         self,
-        goals: List[Goal],
-        context: Optional[Dict[str, Any]] = None,
-    ) -> List[GoalPriorityAssessment]:
+        goals: list[Goal],
+        context: dict[str, Any] | None = None,
+    ) -> list[GoalPriorityAssessment]:
         """Rank all goals by priority assessment."""
         results = [self.assess(g, context) for g in goals]
         results.sort(key=lambda a: a.score, reverse=True)
         return results
 
-    def to_snapshots(self, goals: List[Goal]) -> List[GoalSnapshot]:
+    def to_snapshots(self, goals: list[Goal]) -> list[GoalSnapshot]:
         return [to_snapshot(g) for g in goals]
 
     # ---- private helpers ----
@@ -137,7 +136,7 @@ class GoalPrioritizer:
     def _priority_from_explicit(self, goal: Goal) -> float:
         return self._priority_values.get(goal.priority, 0.5)
 
-    def _urgency_score(self, goal: Goal, context: Dict[str, Any]) -> float:
+    def _urgency_score(self, goal: Goal, context: dict[str, Any]) -> float:
         now = datetime.utcnow()
         if goal.target_date is not None:
             remaining = (goal.target_date - now).total_seconds()
@@ -152,7 +151,7 @@ class GoalPrioritizer:
             return max(0.0, min(1.0, float(explicit_urgency)))
         return 0.3
 
-    def _importance_score(self, goal: Goal, context: Dict[str, Any]) -> float:
+    def _importance_score(self, goal: Goal, context: dict[str, Any]) -> float:
         importance = context.get("goal_importance", {}).get(goal.goal_id, 0.5)
         if not isinstance(importance, (int, float)):
             importance = 0.5
@@ -168,19 +167,19 @@ class GoalPrioritizer:
         reference = remaining + 86400.0
         return max(0.0, min(1.0, 1.0 - remaining / reference)) if reference > 0 else 0.0
 
-    def _dependency_pressure(self, goal: Goal, context: Dict[str, Any]) -> float:
+    def _dependency_pressure(self, goal: Goal, context: dict[str, Any]) -> float:
         dep_count = context.get("dependency_count", {}).get(goal.goal_id, 0)
         return max(0.0, min(1.0, float(dep_count) / 5.0))
 
-    def _blocking_impact(self, goal: Goal, context: Dict[str, Any]) -> float:
+    def _blocking_impact(self, goal: Goal, context: dict[str, Any]) -> float:
         blocked_count = context.get("blocked_count", {}).get(goal.goal_id, 0)
         return max(0.0, min(1.0, float(blocked_count) / 5.0))
 
-    def _hierarchy_factor(self, goal: Goal, context: Dict[str, Any]) -> float:
+    def _hierarchy_factor(self, goal: Goal, context: dict[str, Any]) -> float:
         depth = context.get("hierarchy_depth", {}).get(goal.goal_id, 0)
         return max(0.0, min(1.0, float(depth) / 5.0))
 
-    def _context_relevance(self, goal: Goal, context: Dict[str, Any]) -> float:
+    def _context_relevance(self, goal: Goal, context: dict[str, Any]) -> float:
         relevance = context.get("goal_relevance", {}).get(goal.goal_id, 0.3)
         if not isinstance(relevance, (int, float)):
             relevance = 0.3
