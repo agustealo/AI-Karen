@@ -1,0 +1,55 @@
+name: Core AI Isolation Proof
+
+on:
+  push:
+    paths:
+      - "src/ai_karen_engine/core/model_runtime/**"
+      - "src/ai_karen_engine/core/expression/**"
+      - "src/ai_karen_engine/integrations/provider_execution_bridge.py"
+      - "tests/architecture/test_core_ai_isolation.py"
+      - "tests/unit/core/model_runtime/test_provider_execution.py"
+      - ".github/workflows/core-ai-isolation-ci.yml"
+      - "start.py"
+  pull_request:
+    paths:
+      - "src/ai_karen_engine/core/model_runtime/**"
+      - "src/ai_karen_engine/core/expression/**"
+      - "src/ai_karen_engine/integrations/provider_execution_bridge.py"
+      - "tests/architecture/test_core_ai_isolation.py"
+      - "tests/unit/core/model_runtime/test_provider_execution.py"
+      - ".github/workflows/core-ai-isolation-ci.yml"
+      - "start.py"
+  workflow_dispatch:
+
+jobs:
+  core-ai-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: src:tests
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install proof dependencies
+        run: python -m pip install --upgrade pip pytest pytest-timeout
+
+      - name: Compile isolation surface
+        run: |
+          python -m compileall \
+            src/ai_karen_engine/core/model_runtime/provider_execution.py \
+            src/ai_karen_engine/core/expression/engines \
+            src/ai_karen_engine/integrations/provider_execution_bridge.py \
+            start.py
+
+      - name: Run hard architecture isolation gate
+        run: pytest tests/architecture/test_core_ai_isolation.py -q
+
+      - name: Run provider execution ownership tests
+        run: pytest tests/unit/core/model_runtime/test_provider_execution.py -q
