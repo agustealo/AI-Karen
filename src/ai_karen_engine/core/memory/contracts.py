@@ -1,16 +1,8 @@
-"""
-Cognitive Memory Contracts for AI-Karen
+"""Cognitive memory contracts for AI-Karen.
 
-This module defines the core contracts for Karen's cognitive memory architecture:
-- MemoryClaim: beliefs with confidence, provenance, temporal validity, contradictions
-- SelfModel: Karen's identity and stable properties
-- UserModel: learned user knowledge
-- RelationshipModel: Karen↔User relationship history
-- ProspectiveMemory: intentions and commitments
-- SalienceScore: importance, novelty, surprise, goal relevance
-
-Author: AI-Karen Core Team
-Version: 1.0.0 (Cognitive Architecture)
+Memory owns the canonical claim lifecycle, temporal validity, and durable
+cognitive memory semantics. Concrete persistence, vector stores, caches, and
+provider implementations remain outside Core.
 """
 
 from __future__ import annotations
@@ -20,97 +12,95 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-# ===================================
-# MEMORY CLAIM
-# ===================================
 
 class ClaimStatus(str, Enum):
-    """Epistemic lifecycle state of a memory claim.
+    """Canonical epistemic lifecycle shared by memory and belief reasoning."""
 
-    Tracks the certainty and validity status of a claim as it moves
-    through Karen's cognitive memory pipeline.
-
-    OBSERVED       - directly captured from interaction
-    INFERRED       - derived by Karen's reasoning
-    USER_ASSERTED  - explicitly stated by the user
-    VERIFIED       - confirmed by evidence or user
-    DISPUTED       - conflicting claims exist
-    SUPERSEDED     - replaced by a newer, more accurate claim
-    STALE          - outdated (not yet retracted)
-    RETRACTED      - explicitly withdrawn
-    """
     OBSERVED = "observed"
     INFERRED = "inferred"
     USER_ASSERTED = "user_asserted"
+    SUPPORTED = "supported"
     VERIFIED = "verified"
     DISPUTED = "disputed"
+    CONTRADICTED = "contradicted"
     SUPERSEDED = "superseded"
     STALE = "stale"
     RETRACTED = "retracted"
+    UNKNOWN = "unknown"
 
 
 MemoryLifecycleState = ClaimStatus
 
 
+def utc_now() -> datetime:
+    return datetime.now(tz=timezone.utc)
+
+
 @dataclass
 class MemoryClaim:
-    """
-    A memory claim with full provenance and uncertainty tracking.
+    """A durable memory claim with provenance, confidence, and temporal truth."""
 
-    This is the fundamental unit of durable belief in Karen's cognitive system.
-    """
     subject: str
     predicate: str
     object: Any
     confidence: float = 0.5
     provenance: list[str] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
-    asserted_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    asserted_at: datetime = field(default_factory=utc_now)
+    observed_at: datetime | None = None
+    event_time: datetime | None = None
     valid_from: datetime | None = None
     valid_until: datetime | None = None
     last_confirmed: datetime | None = None
+    superseded_at: datetime | None = None
+    deleted_at: datetime | None = None
     contradiction_refs: list[str] = field(default_factory=list)
     supersedes: str | None = None
     status: ClaimStatus = ClaimStatus.OBSERVED
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        self.confidence = max(0.0, min(1.0, self.confidence))
+        for name in (
+            "asserted_at",
+            "observed_at",
+            "event_time",
+            "valid_from",
+            "valid_until",
+            "last_confirmed",
+            "superseded_at",
+            "deleted_at",
+        ):
+            value = getattr(self, name)
+            if value is not None and value.tzinfo is None:
+                setattr(self, name, value.replace(tzinfo=timezone.utc))
+
     def is_valid(self, at: datetime | None = None) -> bool:
-        """Check if claim is valid at given time."""
-        check_time = at or datetime.now(tz=timezone.utc)
+        check_time = at or utc_now()
+        if check_time.tzinfo is None:
+            check_time = check_time.replace(tzinfo=timezone.utc)
+        if self.deleted_at is not None:
+            return False
         if self.valid_from and check_time < self.valid_from:
             return False
         if self.valid_until and check_time > self.valid_until:
             return False
-        return self.status not in {ClaimStatus.SUPERSEDED, ClaimStatus.RETRACTED, ClaimStatus.STALE}
+        return self.status not in {
+            ClaimStatus.SUPERSEDED,
+            ClaimStatus.RETRACTED,
+            ClaimStatus.STALE,
+            ClaimStatus.CONTRADICTED,
+        }
 
     def effective_confidence(self) -> float:
-        """Calculate effective confidence considering contradictions."""
-        base = self.confidence
         penalty = 0.1 * len(self.contradiction_refs)
-        return max(0.0, base - penalty)
+        return max(0.0, self.confidence - penalty)
 
-
-# ===================================
-# SALIENCE SCORING
-# ===================================
 
 @dataclass
 class SalienceScore:
-    """
-    Multi-dimensional salience score for memory importance.
+    """Multi-dimensional memory salience score."""
 
-    Combines:
-    - novelty: how new/unexpected is this
-    - surprise: deviation from expectations
-    - user_emphasis: explicit "remember this" signals
-    - goal_relevance: alignment with current goals
-    - consequence: stakes of the information
-    - repetition: how often seen
-    - relationship_relevance: importance to relationship
-    - decision_importance: impact on decisions
-    - error_significance: failures/errors are more salient
-    - success_significance: successes are more salient
-    """
     novelty: float = 0.0
     surprise: float = 0.0
     user_emphasis: float = 0.0
@@ -123,35 +113,29 @@ class SalienceScore:
     success_significance: float = 0.0
 
     def total(self) -> float:
-        """Compute total salience score."""
-        return sum([
-            self.novelty,
-            self.surprise,
-            self.user_emphasis,
-            self.goal_relevance,
-            self.consequence,
-            self.repetition,
-            self.relationship_relevance,
-            self.decision_importance,
-            self.error_significance,
-            self.success_significance,
-        ])
+        return sum(
+            [
+                self.novelty,
+                self.surprise,
+                self.user_emphasis,
+                self.goal_relevance,
+                self.consequence,
+                self.repetition,
+                self.relationship_relevance,
+                self.decision_importance,
+                self.error_significance,
+                self.success_significance,
+            ]
+        )
 
 
 MemorySalience = SalienceScore
 
 
-# ===================================
-# SELF MODEL
-# ===================================
-
 @dataclass
 class SelfModel:
-    """
-    Karen's governed model of itself.
+    """Karen's governed self-model without consciousness claims."""
 
-    This provides continuity without pretending consciousness.
-    """
     identity: dict[str, Any] = field(default_factory=dict)
     stable_principles: list[str] = field(default_factory=list)
     capabilities: list[str] = field(default_factory=list)
@@ -164,17 +148,10 @@ class SelfModel:
     significant_decisions: list[dict[str, Any]] = field(default_factory=list)
 
 
-# ===================================
-# USER MODEL
-# ===================================
-
 @dataclass
 class UserModel:
-    """
-    Karen's model of the user.
+    """Evidence-backed user model; one event never silently becomes canon."""
 
-    Evidence-backed: no one-event canon.
-    """
     explicit_preferences: dict[str, Any] = field(default_factory=dict)
     inferred_preferences: dict[str, float] = field(default_factory=dict)
     communication_patterns: dict[str, Any] = field(default_factory=dict)
@@ -187,17 +164,10 @@ class UserModel:
     evolving_beliefs: list[MemoryClaim] = field(default_factory=list)
 
 
-# ===================================
-# RELATIONSHIP MODEL
-# ===================================
-
 @dataclass
 class RelationshipModel:
-    """
-    Karen↔User relationship model.
+    """Karen-user relationship continuity with evidence-backed shared history."""
 
-    Tracks shared history and relationship-specific context.
-    """
     shared_projects: list[str] = field(default_factory=list)
     past_decisions: list[dict[str, Any]] = field(default_factory=list)
     interaction_style: dict[str, Any] = field(default_factory=dict)
@@ -206,38 +176,21 @@ class RelationshipModel:
     interaction_history: list[dict[str, Any]] = field(default_factory=list)
 
 
-# ===================================
-# PROSPECTIVE MEMORY
-# ===================================
-
 @dataclass
 class ProspectiveMemory:
-    """
-    Future intention or commitment.
+    """Future intention or commitment; scheduling remains Platform-owned."""
 
-    Distinct from scheduler infrastructure (cron = PLATFORM).
-    This is cognitive: remembering that there is unfinished business.
-    """
     intention: str
     trigger: dict[str, Any] = field(default_factory=dict)
-    status: str = "open"  # open, completed, cancelled
-    priority: str = "medium"  # low, medium, high, critical
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    created_from: str | None = None  # conversation_id or source
+    status: str = "open"
+    priority: str = "medium"
+    created_at: datetime = field(default_factory=utc_now)
+    created_from: str | None = None
     completed_at: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-# ===================================
-# MEMORY LIFECYCLE STATE
-# ===================================
-
 class MemoryProcessingStage(str, Enum):
-    """Stages in the memory processing pipeline.
-
-    These describe the sequence of cognitive operations Karen's brain
-    performs on a memory claim, from initial encoding to eventual forgetting.
-    """
     ENCODE = "encode"
     ASSOCIATE = "associate"
     CONSOLIDATE = "consolidate"
@@ -247,30 +200,10 @@ class MemoryProcessingStage(str, Enum):
     FORGET = "forget"
 
 
-# ===================================
-# RECALL SCORE COMPONENTS
-# ===================================
-
 @dataclass
 class RecallScoreComponents:
-    """
-    Components of the multi-factor recall score.
+    """Components of multi-factor NeuroRecall ranking."""
 
-    RecallScore =
-        semantic_similarity
-      + associative_activation
-      + temporal_relevance
-      + salience
-      + relationship_relevance
-      + current_goal_relevance
-      + repetition_strength
-      + causal_relevance
-      + unresolved_intention_relevance
-      + explicit_user_priority
-      - contradiction_penalty
-      - staleness
-      - interference
-    """
     semantic_similarity: float = 0.0
     associative_activation: float = 0.0
     temporal_relevance: float = 0.0
@@ -286,22 +219,35 @@ class RecallScoreComponents:
     interference: float = 0.0
 
     def total(self) -> float:
-        """Compute total recall score."""
-        positive = sum([
-            self.semantic_similarity,
-            self.associative_activation,
-            self.temporal_relevance,
-            self.salience,
-            self.relationship_relevance,
-            self.current_goal_relevance,
-            self.repetition_strength,
-            self.causal_relevance,
-            self.unresolved_intention_relevance,
-            self.explicit_user_priority,
-        ])
-        negative = sum([
-            self.contradiction_penalty,
-            self.staleness,
-            self.interference,
-        ])
+        positive = sum(
+            [
+                self.semantic_similarity,
+                self.associative_activation,
+                self.temporal_relevance,
+                self.salience,
+                self.relationship_relevance,
+                self.current_goal_relevance,
+                self.repetition_strength,
+                self.causal_relevance,
+                self.unresolved_intention_relevance,
+                self.explicit_user_priority,
+            ]
+        )
+        negative = self.contradiction_penalty + self.staleness + self.interference
         return max(0.0, positive - negative)
+
+
+__all__ = [
+    "ClaimStatus",
+    "MemoryClaim",
+    "MemoryLifecycleState",
+    "MemoryProcessingStage",
+    "MemorySalience",
+    "ProspectiveMemory",
+    "RecallScoreComponents",
+    "RelationshipModel",
+    "SalienceScore",
+    "SelfModel",
+    "UserModel",
+    "utc_now",
+]
