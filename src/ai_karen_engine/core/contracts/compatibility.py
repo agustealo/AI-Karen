@@ -48,6 +48,20 @@ COGNITIVE_COMPATIBILITY_SHIMS: tuple[CompatibilityShim, ...] = (
         reason="goal evidence predates canonical epistemic evidence vocabulary",
         remove_after=date(2026, 9, 15),
     ),
+    CompatibilityShim(
+        legacy_symbol="ai_karen_engine.core.reasoning.contracts.ReasoningEvidence.timestamp",
+        canonical_symbol="ai_karen_engine.core.reasoning.contracts.ReasoningEvidence.recorded_at",
+        owner="reasoning",
+        reason="legacy float timestamp view retained while consumers migrate to aware datetime",
+        remove_after=date(2026, 10, 1),
+    ),
+    CompatibilityShim(
+        legacy_symbol="ai_karen_engine.core.reasoning.contracts.ReasoningEvidence.valid_at",
+        canonical_symbol="ai_karen_engine.core.reasoning.contracts.ReasoningEvidence.valid_from",
+        owner="reasoning",
+        reason="legacy validity alias retained while temporal contracts converge",
+        remove_after=date(2026, 10, 1),
+    ),
 )
 
 
