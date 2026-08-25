@@ -1,27 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Protocol
+from enum import Enum
+from typing import Any, Protocol
 
 from ai_karen_engine.core.contracts.cognitive import ReasoningDepth
 from ai_karen_engine.core.reasoning.contracts import (
-    ReasoningAction,
-    ReasoningAssessment,
     ReasoningBudget,
-    ReasoningContradiction,
-    ReasoningDisposition,
     ReasoningEvidence,
-    ReasoningEvidenceNeed,
-    ReasoningErrorCode,
-    ReasoningEscalationRequest,
-    ReasoningHypothesis,
     ReasoningRequest as CanonicalReasoningRequest,
     ReasoningResult as CanonicalReasoningResult,
-    ReasoningStatus,
 )
 
 
-class RouteFamily(str, __import__("enum").Enum):
+class RouteFamily(str, Enum):
     CHAT = "chat"
     SEARCH = "search"
     MEMORY = "memory"
@@ -32,7 +24,7 @@ class RouteFamily(str, __import__("enum").Enum):
     DEGRADED = "degraded"
 
 
-class ExecutionMode(str, __import__("enum").Enum):
+class ExecutionMode(str, Enum):
     DIRECT = "direct"
     LANGGRAPH = "langgraph"
     DEGRADED = "degraded"
@@ -41,9 +33,9 @@ class ExecutionMode(str, __import__("enum").Enum):
 @dataclass(slots=True)
 class IntentSignal:
     primary_intent: str
-    subtype: Optional[str] = None
-    secondary_intents: List[str] = field(default_factory=list)
-    entities: List[str] = field(default_factory=list)
+    subtype: str | None = None
+    secondary_intents: list[str] = field(default_factory=list)
+    entities: list[str] = field(default_factory=list)
     confidence: float = 0.0
     category: str = "general"
     requested_modality: str = "text"
@@ -64,8 +56,8 @@ class PredictorSignal:
 class KireSignal:
     requires_reasoning: bool
     reasoning_depth: ReasoningDepth
-    reasoning_modes: List[str] = field(default_factory=list)
-    strategy_hint: Optional[str] = None
+    reasoning_modes: list[str] = field(default_factory=list)
+    strategy_hint: str | None = None
     should_use_memory: bool = True
     should_use_tools: bool = False
     should_use_retrieval_reasoning: bool = False
@@ -80,9 +72,9 @@ class RoutingDecision:
     route_family: RouteFamily
     execution_mode: ExecutionMode
     target_graph: str = "default_chat_graph"
-    target_service: Optional[str] = None
-    target_plugin: Optional[str] = None
-    target_agent: Optional[str] = None
+    target_service: str | None = None
+    target_plugin: str | None = None
+    target_agent: str | None = None
     allow_reasoning: bool = False
     allow_tools: bool = False
     allow_memory_read: bool = True
@@ -94,9 +86,9 @@ class RoutingDecision:
 class UserContext:
     user_id: str
     tenant_id: str
-    roles: List[str] = field(default_factory=list)
-    session_id: Optional[str] = None
-    thread_id: Optional[str] = None
+    roles: list[str] = field(default_factory=list)
+    session_id: str | None = None
+    thread_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.tenant_id or self.tenant_id == "default":
@@ -107,7 +99,7 @@ class UserContext:
 class RuntimeRequest:
     message: str
     user: UserContext
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -117,54 +109,58 @@ class CortexOutput:
     kire: KireSignal
     routing: RoutingDecision
     correlation_id: str
-    audit_tags: List[str] = field(default_factory=list)
+    audit_tags: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
 class OrchestrationInput:
     message: str
     user: UserContext
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
     cortex: CortexOutput
 
 
 @dataclass(slots=True)
 class ReasoningRequest:
+    """Legacy CORTEX reasoning envelope adapted to the canonical contract."""
+
     message: str
     user: UserContext
-    memory_context: Dict[str, Any]
-    tool_context: Dict[str, Any]
+    memory_context: dict[str, Any]
+    tool_context: dict[str, Any]
     intent: IntentSignal
     predictors: PredictorSignal
     kire: KireSignal
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_canonical(self) -> CanonicalReasoningRequest:
-        evidence: List[ReasoningEvidence] = []
+        evidence: list[ReasoningEvidence] = []
         recall = (self.memory_context or {}).get("recall") or []
-        for idx, item in enumerate(recall):
-            if isinstance(item, dict):
-                evidence.append(
-                    ReasoningEvidence(
-                        evidence_id=str(item.get("id", f"mem-{idx}")),
-                        type="memory",
-                        source="memory_recall",
-                        source_ref=str(item.get("timestamp", "")),
-                        content=str(item.get("content", "")),
-                        relevance=0.5,
-                        confidence=0.5,
-                        tenant_id=self.user.tenant_id,
-                    )
+        for index, item in enumerate(recall):
+            if not isinstance(item, dict):
+                continue
+            evidence.append(
+                ReasoningEvidence(
+                    evidence_id=str(item.get("id", f"mem-{index}")),
+                    type="memory",
+                    source="memory_recall",
+                    source_ref=str(item.get("timestamp", "")),
+                    content=str(item.get("content", "")),
+                    relevance=float(item.get("relevance", 0.5)),
+                    confidence=float(item.get("confidence", 0.5)),
+                    tenant_id=self.user.tenant_id,
                 )
+            )
 
+        correlation_id = str(self.metadata.get("correlation_id", ""))
         return CanonicalReasoningRequest(
-            request_id=self.metadata.get("correlation_id", ""),
-            correlation_id=self.metadata.get("correlation_id", ""),
+            request_id=correlation_id,
+            correlation_id=correlation_id,
             tenant_id=self.user.tenant_id,
             user_id=self.user.user_id,
             conversation_id=self.user.thread_id,
             objective=self.message,
-            reasoning_modes=list(self.kire.reasoning_modes or []),
+            reasoning_modes=list(self.kire.reasoning_modes),
             evidence=evidence,
             constraints={
                 "reasoning_depth": self.kire.reasoning_depth.value,
@@ -174,9 +170,9 @@ class ReasoningRequest:
                 "should_use_graph": self.kire.should_use_graph_reasoning,
                 "should_use_retrieval": self.kire.should_use_retrieval_reasoning,
             },
-            policy_decision_id=self.metadata.get("policy_decision_id", ""),
+            policy_decision_id=str(self.metadata.get("policy_decision_id", "")),
             budget=ReasoningBudget(),
-            metadata=self.metadata,
+            metadata=dict(self.metadata),
         )
 
     @classmethod
@@ -185,91 +181,87 @@ class ReasoningRequest:
             depth = ReasoningDepth(canonical.constraints.get("reasoning_depth", "standard"))
         except ValueError:
             depth = ReasoningDepth.STANDARD
-        kire = KireSignal(
-            requires_reasoning=True,
-            reasoning_depth=depth,
-            reasoning_modes=list(canonical.reasoning_modes or []),
-            should_use_memory=bool(canonical.evidence),
-            should_use_tools=False,
-            should_use_retrieval_reasoning=canonical.constraints.get("should_use_retrieval", False),
-            should_use_causal_reasoning=canonical.constraints.get("should_use_causal", False),
-            should_use_graph_reasoning=canonical.constraints.get("should_use_graph", False),
-            should_self_refine=canonical.constraints.get("should_self_refine", False),
-            should_verify=canonical.constraints.get("should_verify", False),
-        )
         return cls(
             message=canonical.objective,
             user=UserContext(
                 user_id=canonical.user_id,
                 tenant_id=canonical.tenant_id,
-                session_id=None,
                 thread_id=canonical.conversation_id,
             ),
             memory_context={},
             tool_context={},
             intent=IntentSignal(primary_intent="reasoning"),
             predictors=PredictorSignal(),
-            kire=kire,
-            metadata=canonical.metadata,
+            kire=KireSignal(
+                requires_reasoning=True,
+                reasoning_depth=depth,
+                reasoning_modes=list(canonical.reasoning_modes),
+                should_use_memory=bool(canonical.evidence),
+                should_use_tools=False,
+                should_use_retrieval_reasoning=bool(canonical.constraints.get("should_use_retrieval", False)),
+                should_use_causal_reasoning=bool(canonical.constraints.get("should_use_causal", False)),
+                should_use_graph_reasoning=bool(canonical.constraints.get("should_use_graph", False)),
+                should_self_refine=bool(canonical.constraints.get("should_self_refine", False)),
+                should_verify=bool(canonical.constraints.get("should_verify", False)),
+            ),
+            metadata=dict(canonical.metadata),
         )
 
 
 @dataclass(slots=True)
 class ReasoningResult:
+    """Legacy result adapter. Canonical confidence is explicitly converted."""
+
     summary: str
-    evidence: List[Dict[str, Any]] = field(default_factory=list)
-    hypotheses: List[str] = field(default_factory=list)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    hypotheses: list[str] = field(default_factory=list)
     confidence: float = 0.0
-    verification_notes: List[str] = field(default_factory=list)
-    refined_answer: Optional[str] = None
-    diagnostics: Dict[str, Any] = field(default_factory=dict)
+    verification_notes: list[str] = field(default_factory=list)
+    refined_answer: str | None = None
+    diagnostics: dict[str, Any] = field(default_factory=dict)
     success: bool = True
     degraded: bool = False
     reasoning_type: str = "synthesis"
-    memory_ids: List[str] = field(default_factory=list)
-    graph_paths_used: List[str] = field(default_factory=list)
-    contradictions_found: List[Dict[str, Any]] = field(default_factory=list)
+    memory_ids: list[str] = field(default_factory=list)
+    graph_paths_used: list[str] = field(default_factory=list)
+    contradictions_found: list[dict[str, Any]] = field(default_factory=list)
     needs_human_confirmation: bool = False
-    fallback_used: Optional[str] = None
-    evidence_source_mix: Dict[str, int] = field(default_factory=dict)
+    fallback_used: str | None = None
+    evidence_source_mix: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def from_canonical(cls, canonical: CanonicalReasoningResult) -> "ReasoningResult":
-        hypotheses = [h.statement for h in (canonical.hypotheses or [])]
-        evidence = [
-            {
-                "id": e.evidence_id,
-                "type": e.type,
-                "source": e.source,
-                "source_ref": e.source_ref,
-                "content": e.content,
-                "relevance": e.relevance,
-                "confidence": e.confidence,
-                "payload": e.metadata,
-            }
-            for e in (canonical.evidence or [])
-        ]
-        contradictions = [
-            {
-                "claim_a": c.claim_a,
-                "claim_b": c.claim_b,
-                "severity": c.severity,
-                "resolvable": c.resolvable,
-                "recommended_action": c.recommended_action,
-            }
-            for c in (canonical.contradictions or [])
-        ]
-        confidence = canonical.assessment.confidence if canonical.assessment else 0.0
         return cls(
             summary=canonical.conclusion,
-            evidence=evidence,
-            hypotheses=hypotheses,
-            confidence=confidence,
-            diagnostics=canonical.diagnostics or {},
+            evidence=[
+                {
+                    "id": item.evidence_id,
+                    "type": item.type,
+                    "source": item.source,
+                    "source_ref": item.source_ref,
+                    "content": item.content,
+                    "relevance": item.relevance,
+                    "confidence": item.confidence,
+                    "payload": item.metadata,
+                }
+                for item in canonical.evidence
+            ],
+            hypotheses=[item.statement for item in canonical.hypotheses],
+            confidence=float(canonical.assessment.confidence),
+            diagnostics=dict(canonical.diagnostics),
             success=canonical.status not in ("failed", "budget_exhausted"),
             degraded=canonical.status in ("failed", "budget_exhausted"),
-            reasoning_type=(canonical.diagnostics or {}).get("reasoning_type", "reasoning"),
-            contradictions_found=contradictions,
+            reasoning_type=canonical.diagnostics.get("reasoning_type", "reasoning"),
+            contradictions_found=[
+                {
+                    "claim_a": item.claim_a,
+                    "claim_b": item.claim_b,
+                    "severity": item.severity,
+                    "resolvable": item.resolvable,
+                    "recommended_action": item.recommended_action,
+                }
+                for item in canonical.contradictions
+            ],
             needs_human_confirmation=canonical.status == "needs_human_confirmation",
         )
 
@@ -277,11 +269,11 @@ class ReasoningResult:
 @dataclass(slots=True)
 class OrchestrationResult:
     final_text: str
-    reasoning_result: Optional[ReasoningResult] = None
-    tool_results: List[Dict[str, Any]] = field(default_factory=list)
-    memory_reads: List[Dict[str, Any]] = field(default_factory=list)
-    memory_writes: List[Dict[str, Any]] = field(default_factory=list)
-    diagnostics: Dict[str, Any] = field(default_factory=dict)
+    reasoning_result: ReasoningResult | None = None
+    tool_results: list[dict[str, Any]] = field(default_factory=list)
+    memory_reads: list[dict[str, Any]] = field(default_factory=list)
+    memory_writes: list[dict[str, Any]] = field(default_factory=list)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 class IntentEngine(Protocol):
