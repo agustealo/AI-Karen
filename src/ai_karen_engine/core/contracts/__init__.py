@@ -1,5 +1,22 @@
 from __future__ import annotations
 
+from .cognitive import (
+    BehaviorConfidence,
+    CognitiveScope,
+    CognitiveVersion,
+    ConfidenceValue,
+    EpistemicConfidence,
+    LearningConfidence,
+    MetaConfidence,
+    PreferenceConfidence,
+    ReasoningConfidence,
+    ReasoningDepth,
+    RetrievalConfidence,
+    SalienceConfidence,
+    VerificationReason,
+    VerificationRequirement,
+)
+from .compatibility import COGNITIVE_COMPATIBILITY_SHIMS, CompatibilityShim, expired_shims
 from .learning import (
     BUILDER_VERSION,
     SCHEMA_VERSION,
@@ -15,11 +32,28 @@ from .learning import (
 __all__ = [
     "BUILDER_VERSION",
     "SCHEMA_VERSION",
+    "BehaviorConfidence",
+    "COGNITIVE_COMPATIBILITY_SHIMS",
+    "CognitiveScope",
+    "CognitiveVersion",
+    "CompatibilityShim",
+    "ConfidenceValue",
     "DatasetExclusionReason",
+    "EpistemicConfidence",
     "ExcludedRecord",
     "LabelQuality",
+    "LearningConfidence",
     "LearningDatasetManifest",
     "LearningDatasetQuery",
     "LearningExample",
     "LearningTask",
+    "MetaConfidence",
+    "PreferenceConfidence",
+    "ReasoningConfidence",
+    "ReasoningDepth",
+    "RetrievalConfidence",
+    "SalienceConfidence",
+    "VerificationReason",
+    "VerificationRequirement",
+    "expired_shims",
 ]
