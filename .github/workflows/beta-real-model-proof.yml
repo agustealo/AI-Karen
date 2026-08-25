@@ -3,17 +3,13 @@ name: Beta Real Model Proof
 on:
   push:
     paths:
-      - "src/ai_karen_engine/core/expression/**"
-      - "src/ai_karen_engine/core/model_runtime/provider_endpoint.py"
-      - "src/ai_karen_engine/core/model_runtime/provider_execution.py"
+      - "src/ai_karen_engine/core/**"
       - "tests/beta/**"
       - "tests/architecture/test_core_ai_machine_isolation.py"
       - ".github/workflows/beta-real-model-proof.yml"
   pull_request:
     paths:
-      - "src/ai_karen_engine/core/expression/**"
-      - "src/ai_karen_engine/core/model_runtime/provider_endpoint.py"
-      - "src/ai_karen_engine/core/model_runtime/provider_execution.py"
+      - "src/ai_karen_engine/core/**"
       - "tests/beta/**"
       - "tests/architecture/test_core_ai_machine_isolation.py"
       - ".github/workflows/beta-real-model-proof.yml"
@@ -42,8 +38,16 @@ jobs:
             src/ai_karen_engine/core/expression/errors.py \
             src/ai_karen_engine/core/expression/engines/builtin_provider_engine.py \
             src/ai_karen_engine/core/expression/engines/openai_compatible_engine.py \
+            src/ai_karen_engine/core/model_runtime/provider_contracts.py \
             src/ai_karen_engine/core/model_runtime/provider_endpoint.py \
-            src/ai_karen_engine/core/model_runtime/provider_execution.py
+            src/ai_karen_engine/core/model_runtime/provider_execution.py \
+            src/ai_karen_engine/core/model_runtime/openai_compatible_client.py \
+            src/ai_karen_engine/core/model_runtime/inference_port.py \
+            src/ai_karen_engine/core/model_runtime/model_manager.py \
+            src/ai_karen_engine/core/model_runtime/providers/vllm_runtime.py \
+            src/ai_karen_engine/core/model_runtime/providers/transformers_runtime.py \
+            src/ai_karen_engine/core/runtime/session_state_port.py \
+            src/ai_karen_engine/core/runtime/degraded_mode.py
 
       - name: Prove Core AI Machine isolation
         env:
@@ -51,6 +55,7 @@ jobs:
         run: pytest tests/architecture/test_core_ai_machine_isolation.py -q
 
       - name: Run beta real-model wiring proof
+        if: ${{ always() }}
         env:
           PYTHONPATH: src
         run: pytest tests/beta/test_real_model_wiring.py -q
