@@ -1,8 +1,8 @@
 # CORE-SPLIT-2 Implementation Sprint
 
-**Phase**: Architecture Refactoring - Core/Platform/Runtime Separation
+**Phase**: Architecture Refactoring - Core/Platform/Runtime Separation + Cognitive Memory Lifecycle
 **Priority**: High - Foundational reorganization
-**Completion Gate**: All 18 criteria must pass
+**Completion Gate**: All 18 technical criteria + 19 cognitive behavior criteria must pass
 
 ## Prerequisites
 
@@ -12,6 +12,9 @@
 [ ] Development branch created from main
 [ ] CI pipeline updated with new architecture test rules
 [ ] Documentation updated with new layer definitions
+[ ] Cognitive Continuity Invariant added to ARCHITECTURE.md
+[ ] Memory cognitive architecture designed: lifecycle, types, associative recall, forgetting
+[ ] Cognitive proof suite test plan approved
 ```
 
 ## Phase 1: Foundation & Safety (Do First)
@@ -66,13 +69,13 @@
 
 ---
 
-## Phase 2: Memory Decontamination (Critical Path)
+## Phase 2: Memory Decontamination + Cognitive Architecture (Critical Path)
 
-### 2.1 Extract Core Memory Contracts
-**Owner**: Memory Team
-**Risk**: Medium - Interface changes
+### 2.1 Define Cognitive Memory Contracts and Lifecycle
+**Owner**: Memory Team + Cognitive Architecture Team
+**Risk**: Medium - Interface design
 **Blocking**: No - Can proceed in parallel with 2.2
-**Estimated Time**: 2-3 days
+**Estimated Time**: 3-4 days
 
 ```text
 [ ] Create core/memory/contracts.py
@@ -88,11 +91,40 @@
     [ ] Define ConsolidationPolicy
     [ ] Define RetrievalPolicy
     [ ] Define ContextBudgetPolicy
+    [ ] Define ForgettingPolicy (decay, suppression, consolidation triggers)
+    [ ] Define SalienceScoringPolicy (novelty, surprise, emphasis, goal relevance)
+
+[ ] Create core/memory/lifecycle/
+    [ ] Define MemoryLifecycle enum: PERCEIVE → ENCODE → SCORE_SALIENCE → ASSOCIATE → STORE_EPISODE → REPLAY_REFLECT → CONSOLIDATE → GENERALIZE → RETRIEVE → RECONSOLIDATE → DECAY_SUPERSEDE_FORGET
+    [ ] Extract memory lifecycle hooks
+    [ ] Define state transitions
+    [ ] Extract cleanup policies
+    [ ] Define reconsolidation protocol (revise interpretation, preserve provenance)
+
+[ ] Create core/memory/claims/
+    [ ] Define MemoryClaim model: subject, predicate, object, confidence, provenance, evidence, asserted_at, valid_from, valid_until, last_confirmed, contradiction_refs, supersedes, status
+    [ ] Define ClaimStatus enum: OBSERVED, INFERRED, USER_ASSERTED, VERIFIED, DISPUTED, SUPERSEDED, STALE, RETRACTED
+    [ ] Implement contradiction detection and lowering confidence
+
+[ ] Create core/memory/types/ (12 memory systems)
+    [ ] WorkingMemory: current mental workspace
+    [ ] EpisodicMemory: specific interactions and experiences
+    [ ] SemanticMemory: durable facts and generalized knowledge
+    [ ] AutobiographicalMemory: Karen-user history and meaningful shared events
+    [ ] PreferenceMemory: likes, dislikes, styles, recurring choices
+    [ ] ProceduralMemory: successful ways of doing things
+    [ ] ProspectiveMemory: intentions, commitments, unfinished work
+    [ ] RelationalMemory: people, projects, objects and how they connect
+    [ ] TemporalMemory: when something was true and for how long
+    [ ] SalienceMemory: importance, surprise, emotional relevance, consequences
+    [ ] BeliefMemory: claims with confidence and evidence
+    [ ] MetaMemory: what Karen knows, doubts, forgot, or needs to verify
 
 [ ] Create core/memory/scoring/
     [ ] Extract recall scoring logic
     [ ] Extract relevance scoring
     [ ] Extract temporal decay
+    [ ] Extract salience scoring (novelty, surprise, user emphasis, goal relevance, consequence, repetition)
     [ ] Remove UI-specific scoring
 
 [ ] Create core/memory/retrieval/
@@ -105,22 +137,25 @@
     [ ] Extract consolidation logic
     [ ] Extract memory merging
     [ ] Extract conflict resolution
-
-[ ] Create core/memory/lifecycle/
-    [ ] Extract memory lifecycle hooks
-    [ ] Define state transitions
-    [ ] Extract cleanup policies
+    [ ] Extract forgetting logic (decay, suppression, consolidation-based compression)
 ```
 
 **Files**:
 - `src/ai_karen_engine/core/memory/contracts.py` (new)
 - `src/ai_karen_engine/core/memory/policy.py` (new)
+- `src/ai_karen_engine/core/memory/lifecycle/` (new)
+- `src/ai_karen_engine/core/memory/claims/` (new)
+- `src/ai_karen_engine/core/memory/types/` (new)
 - `src/ai_karen_engine/core/memory/scoring/` (new)
 - `src/ai_karen_engine/core/memory/retrieval/` (new)
 - `src/ai_karen_engine/core/memory/consolidation/` (new)
-- `src/ai_karen_engine/core/memory/lifecycle/` (new)
 
 **Tests**: `tests/core/memory/test_*.py`
+- `test_lifecycle.py`
+- `test_claims.py`
+- `test_salience.py`
+- `test_forgetting.py`
+- `test_consolidation.py`
 
 ### 2.2 Remove Platform Dependencies from Core Memory
 **Owner**: Memory Team
@@ -149,6 +184,36 @@
     [ ] Add deprecation notice for old API
     [ ] Create adapter layer for backward compatibility
 
+[ ] Create core/memory/self_model/
+    [ ] Define SelfModel: identity, stable principles, capabilities, capability limits, role relationships, learned strategies, current commitments, active goals, confidence, history of significant decisions
+    [ ] Separate from UserModel and RelationshipModel
+    [ ] Ensure SelfModel is governed and does not pretend consciousness
+
+[ ] Create core/memory/user_model/
+    [ ] Define UserModel: explicit preferences, inferred preferences, communication patterns, projects, goals, relationships, routines, skills, decisions, evolving beliefs
+    [ ] Implement evidence-backed updates (no one-event canon)
+
+[ ] Create core/memory/relationship_model/
+    [ ] Define RelationshipModel: Karen↔User shared projects, past decisions, interaction style, trust-relevant facts, unresolved threads, interaction history
+    [ ] Ensure cross-tenant isolation
+
+[ ] Create core/memory/prospective/
+    [ ] Define ProspectiveMemory: intention, trigger, status, priority, created_from
+    [ ] Implement trigger-based resurfacing
+    [ ] Distinguish from scheduler infrastructure (cron = PLATFORM)
+
+[ ] Create core/memory/reflection/
+    [ ] Define ReflectionEngine: derives knowledge from experience
+    [ ] Implement evidence checking before promotion
+    [ ] Implement promotion/defer/reject gates
+    [ ] Ensure one isolated event does not become strong user preference
+
+[ ] Create core/memory/associative/
+    [ ] Implement spreading activation graph
+    [ ] Define RecallScore = semantic_similarity + associative_activation + temporal_relevance + salience + relationship_relevance + current_goal_relevance + repetition_strength + causal_relevance + unresolved_intention_relevance + explicit_user_priority - contradiction_penalty - staleness - interference
+    [ ] Implement activation spreading from recalled concepts to neighbors
+    [ ] Ensure reasoning retrieval consumes RecallPort, does not own storage
+
 [ ] Update imports across codebase
     [ ] Update all callers to use new interfaces
     [ ] Update type annotations
@@ -159,6 +224,186 @@
 - `src/ai_karen_engine/core/memory/memory_service.py` (refactor)
 - `src/ai_karen_engine/runtime/memory/coordinator.py` (new)
 - `src/ai_karen_engine/runtime/memory/context_adapter.py` (new)
+
+### 2.3 Create Platform Memory Implementations
+**Owner**: Platform Team
+**Risk**: Medium - New implementations
+**Blocking**: No - Can proceed in parallel with 2.2
+**Estimated Time**: 4-5 days
+
+```text
+[ ] Create platform/memory/ structure
+    [ ] postgres/
+    [ ] redis/
+    [ ] milvus/
+    [ ] elasticsearch/
+    [ ] kuzu/
+    [ ] duckdb/
+
+[ ] Create platform/memory/postgres/
+    [ ] Implement RetrievalPort for Postgres
+    [ ] Implement EmbeddingPort for Postgres
+    [ ] Implement ConsolidationPort for Postgres
+    [ ] Implement MemoryClaim persistence with temporal validity
+    [ ] Implement contradiction/supersession tracking
+    [ ] Add health checks
+    [ ] Add connection pooling
+
+[ ] Create platform/memory/redis/
+    [ ] Implement caching layer
+    [ ] Implement session management
+    [ ] Implement prospective memory trigger store
+    [ ] Add health checks
+
+[ ] Create platform/memory/milvus/
+    [ ] Implement vector search
+    [ ] Implement RetrievalPort for vector stores
+    [ ] Add health checks
+
+[ ] Create platform/memory/elasticsearch/
+    [ ] Implement text search
+    [ ] Implement RetrievalPort for text stores
+    [ ] Add health checks
+
+[ ] Create platform/memory/kuzu/
+    [ ] Implement graph retrieval for associative memory
+    [ ] Implement RetrievalPort for graph stores
+    [ ] Add health checks
+
+[ ] Create platform/memory/duckdb/
+    [ ] Implement analytics queries
+    [ ] Implement RetrievalPort for analytics
+    [ ] Add health checks
+```
+
+**Files**:
+- `src/ai_karen_engine/platform/memory/postgres/` (new)
+- `src/ai_karen_engine/platform/memory/redis/` (new)
+- `src/ai_karen_engine/platform/memory/milvus/` (new)
+- `src/ai_karen_engine/platform/memory/elasticsearch/` (new)
+- `src/ai_karen_engine/platform/memory/kuzu/` (new)
+- `src/ai_karen_engine/platform/memory/duckdb/` (new)
+
+### 2.4 Move UI-Specific Memory Models
+**Owner**: UI Team
+**Risk**: Low - Moving existing code
+**Blocking**: Yes - Depends on 2.2
+**Estimated Time**: 1-2 days
+
+```text
+[ ] Create interfaces/ui/memory_models.py
+    [ ] Move WebUIMemoryService
+    [ ] Move UI-specific DTOs
+    [ ] Move UI-specific types
+
+[ ] Update UI imports
+    [ ] Update all UI code to use new location
+    [ ] Update type annotations
+    [ ] Update documentation
+
+[ ] Deprecate old paths
+    [ ] Add deprecation warnings
+    [ ] Document migration path
+    [ ] Set removal deadline (2 sprints)
+```
+
+**Files**:
+- `src/ai_karen_engine/interfaces/ui/memory_models.py` (new)
+
+### 2.5 Cognitive Proof Suite
+**Owner**: Cognitive Architecture Team + QA
+**Risk**: Medium - New test requirements
+**Blocking**: Yes - Required before completion gate
+**Estimated Time**: 3-4 days
+
+```text
+[ ] Create tests/cognitive/test_memory_lifecycle.py
+    [ ] Verify perceive → encode → score → associate → store → replay → consolidate → generalize → retrieve → reconsolidate → decay flow
+    [ ] Verify reconsolidation revises interpretation while preserving provenance
+    [ ] Verify memory states transition correctly
+
+[ ] Create tests/cognitive/test_memory_types.py
+    [ ] Verify all 12 memory types are represented
+    [ ] Verify WorkingMemory is bounded and transient
+    [ ] Verify EpisodicMemory stores specific interactions
+    [ ] Verify SemanticMemory stores generalized knowledge
+    [ ] Verify AutobiographicalMemory tracks Karen-user history
+    [ ] Verify PreferenceMemory tracks likes/dislikes/styles
+    [ ] Verify ProceduralMemory tracks successful patterns
+    [ ] Verify ProspectiveMemory tracks intentions/commitments
+    [ ] Verify RelationalMemory tracks connections
+    [ ] Verify TemporalMemory tracks validity periods
+    [ ] Verify SalienceMemory tracks importance/surprise
+    [ ] Verify BeliefMemory tracks claims with confidence
+    [ ] Verify MetaMemory tracks what Karen knows/doubts/forgot
+
+[ ] Create tests/cognitive/test_associative_recall.py
+    [ ] Verify recall uses spreading activation, not just vector similarity
+    [ ] Verify activation spreads to graph neighbors
+    [ ] Verify Porsche Cayenne example: discussing "starter" activates battery, fuse, hatch, etc.
+    [ ] Verify RecallScore formula components are weighted correctly
+    [ ] Verify cross-tenant memories cannot activate
+
+[ ] Create tests/cognitive/test_controlled_forgetting.py
+    [ ] Verify low-value unused memories decay in retrieval rank
+    [ ] Verify irrelevant memories lose activation in current context (suppression)
+    [ ] Verify repeated episodes consolidate into semantic memory
+    [ ] Verify one isolated event does not become strong preference
+    [ ] Verify deleted/retracted memories cannot reappear from indexes
+
+[ ] Create tests/cognitive/test_uncertainty_contradiction.py
+    [ ] Verify MemoryClaim includes confidence, provenance, evidence, temporal validity
+    [ ] Verify contradictory memories lower confidence
+    [ ] Verify newer preference supersedes older preference
+    [ ] Verify old episode remains available as provenance
+    [ ] Verify CORTEX cannot treat inferred memory as verified fact
+
+[ ] Create tests/cognitive/test_self_user_relationship.py
+    [ ] Verify SelfModel exists and is governed
+    [ ] Verify UserModel is evidence-backed (no one-event canon)
+    [ ] Verify RelationshipModel tracks shared projects and unresolved threads
+    [ ] Verify cross-tenant isolation in all models
+
+[ ] Create tests/cognitive/test_prospective_memory.py
+    [ ] Verify ProspectiveMemory tracks intentions and commitments
+    [ ] Verify trigger-based resurfacing works
+    [ ] Verify ProspectiveMemory is CORE, scheduler is PLATFORM
+
+[ ] Create tests/cognitive/test_reflection.py
+    [ ] Verify ReflectionEngine derives knowledge from experience
+    [ ] Verify evidence checking before promotion
+    [ ] Verify promotion/defer/reject gates
+    [ ] Verify 8 rejections of unified diffs promotes preference for complete files
+
+[ ] Create tests/cognitive/test_memory_cortex_coupling.py
+    [ ] Verify retrieved memories influence CORTEX action selection
+    [ ] Verify memory feeds CORTEX decisions, not just prompt text
+    [ ] Verify CORTEX sees preference + project-state memory and chooses accordingly
+
+[ ] Create tests/cognitive/test_provenance_temporal.py
+    [ ] Verify event time is distinct from conversation time
+    [ ] Verify temporal validity ranges are respected
+    [ ] Verify memory reconstruction preserves provenance
+    [ ] Verify provider replacement does not change memory semantics
+
+[ ] Create tests/cognitive/test_resilience.py
+    [ ] Verify Redis/Milvus outage degrades honestly rather than inventing recall
+    [ ] Verify missing backend does not fabricate memories
+    [ ] Verify health checks are evidence-backed
+```
+
+**Files**:
+- `tests/cognitive/test_memory_lifecycle.py` (new)
+- `tests/cognitive/test_memory_types.py` (new)
+- `tests/cognitive/test_associative_recall.py` (new)
+- `tests/cognitive/test_controlled_forgetting.py` (new)
+- `tests/cognitive/test_uncertainty_contradiction.py` (new)
+- `tests/cognitive/test_self_user_relationship.py` (new)
+- `tests/cognitive/test_prospective_memory.py` (new)
+- `tests/cognitive/test_reflection.py` (new)
+- `tests/cognitive/test_memory_cortex_coupling.py` (new)
+- `tests/cognitive/test_provenance_temporal.py` (new)
+- `tests/cognitive/test_resilience.py` (new)
 
 ### 2.3 Create Platform Memory Implementations
 **Owner**: Platform Team
@@ -471,7 +716,7 @@
 
 ---
 
-## Phase 4: Recall Authority Consolidation
+## Phase 4: Recall Authority Consolidation + Associative Recall
 
 ### 4.1 Audit Retrieval Systems
 **Owner**: Memory Team
@@ -491,6 +736,7 @@
     [ ] no_parametric_cbr.py responsibilities
     [ ] Strategy determination responsibilities
     [ ] Query decomposition responsibilities
+    [ ] Spreading activation implementation
 
 [ ] Audit core/reasoning/retrieval/
     [ ] vector_stores.py responsibilities
@@ -504,7 +750,7 @@
 
 [ ] Propose ownership structure
     [ ] Memory: stores and exposes memory candidates
-    [ ] NeuroRecall: retrieval strategy, query decomposition, fusion, reranking
+    [ ] NeuroRecall: retrieval strategy, query decomposition, fusion, reranking, spreading activation, associative recall
     [ ] Reasoning: consumes RecallPort, no storage ownership
 ```
 
@@ -522,6 +768,8 @@
     [ ] decompose() method
     [ ] fuse() method
     [ ] rerank() method
+    [ ] spread_activation() method for associative recall
+    [ ] retrieve_with_associations() method
 
 [ ] Define MemoryPort interface (core)
     [ ] store() method
@@ -541,6 +789,8 @@
     [ ] Keep query decomposition
     [ ] Keep fusion implementation
     [ ] Keep reranking implementation
+    [ ] Keep spreading activation implementation
+    [ ] Keep associative recall implementation
     [ ] Add RecallPort implementation
 
 [ ] Update core/reasoning/retrieval/
@@ -553,6 +803,7 @@
 **Files**:
 - `src/ai_karen_engine/core/recall/ports.py` (new)
 - `src/ai_karen_engine/core/memory/ports.py` (new)
+- `src/ai_karen_engine/core/neuro_recall/associative.py` (new)
 
 ### 4.3 Consolidate Memory Retrieval
 **Owner**: Memory Team
@@ -571,6 +822,12 @@
     [ ] Create RecallPort adapter for memory systems
     [ ] Keep core/memory focused on storage
     [ ] Remove strategy logic
+
+[ ] Implement associative recall in neuro_recall
+    [ ] Build spreading activation graph from memory associations
+    [ ] Implement activation spreading from query concepts to neighbors
+    [ ] Implement RecallScore formula
+    [ ] Integrate with fusion and reranking
 
 [ ] Update memory retrieval usage
     [ ] Update all callers to use RecallPort
@@ -1387,6 +1644,26 @@
 
 ---
 
+---
+
+## Cognitive Continuity Invariant
+
+Add the following to `ARCHITECTURE.md` as a first-class architectural requirement:
+
+> **Cognitive Continuity Invariant**
+>
+> Karen's behavior MUST be capable of being influenced by relevant prior experience, learned user knowledge, temporal state, active goals, relationships, unresolved intentions, and consolidated learning without requiring raw conversation history to remain in the model context.
+>
+> Memory retrieval MUST NOT depend solely on vector similarity.
+>
+> Durable beliefs MUST retain provenance, confidence, temporal validity, and contradiction/supersession relationships.
+>
+> Episodic memory, semantic consolidation, associative recall, temporal reasoning, and controlled forgetting are Core cognitive responsibilities.
+>
+> Concrete storage, vector databases, caches, graph databases, embedding implementations, and scheduling infrastructure are not Core.
+
+---
+
 ## Completion Gate Checklist
 
 **All items must pass before CORE-SPLIT-2 is considered complete**
@@ -1420,6 +1697,8 @@
 [ ] One recall authority exists
 [ ] Reasoning retrieval doesn't own storage
 [ ] Memory storage adapters outside cognitive domain
+[ ] NeuroRecall owns spreading activation and associative recall
+[ ] RecallScore uses semantic + associative + temporal + salience + relationship + goal + repetition + causal + unresolved intention + explicit priority - contradiction - staleness - interference
 ```
 
 ### Personalization/Adaptive
@@ -1429,12 +1708,49 @@
 [ ] Adaptive persistence moved to platform
 ```
 
+### Cognitive Architecture
+```text
+[ ] Memory lifecycle defined: PERCEIVE → ENCODE → SCORE_SALIENCE → ASSOCIATE → STORE_EPISODE → REPLAY_REFLECT → CONSOLIDATE → GENERALIZE → RETRIEVE → RECONSOLIDATE → DECAY_SUPERSEDE_FORGET
+[ ] All 12 memory types implemented: Working, Episodic, Semantic, Autobiographical, Preference, Procedural, Prospective, Relational, Temporal, Salience, Belief, Meta-memory
+[ ] MemoryClaim model implemented with confidence, provenance, evidence, temporal validity, contradiction_refs, supersedes, status
+[ ] ClaimStatus enum implemented: OBSERVED, INFERRED, USER_ASSERTED, VERIFIED, DISPUTED, SUPERSEDED, STALE, RETRACTED
+[ ] SelfModel, UserModel, RelationshipModel implemented and governed
+[ ] ProspectiveMemory implemented with trigger-based resurfacing
+[ ] ReflectionEngine implemented with evidence checking and promotion gates
+[ ] Controlled forgetting implemented: decay, suppression, consolidation
+[ ] Reconsolidation preserves provenance while revising interpretation
+[ ] Memory feeds CORTEX decisions, not just prompt text
+```
+
 ### Architecture Tests
 ```text
 [ ] Core architecture tests enforce all rules
 [ ] No xfails without owner, sprint, sunset, expiry
 [ ] All xfails have expiry < 2 sprints
 [ ] All architecture tests pass
+```
+
+### Cognitive Proof Suite
+```text
+[ ] recalls explicit user preference after session boundary
+[ ] retrieves related memory without lexical overlap
+[ ] newer preference supersedes older preference
+[ ] old episode remains available as provenance
+[ ] distinguishes event time from conversation time
+[ ] repeated episodes consolidate into semantic memory
+[ ] one isolated event does not become strong user preference
+[ ] contradictory memories lower confidence
+[ ] unresolved intention can resurface when relevant
+[ ] irrelevant old memories decay in retrieval rank
+[ ] high-salience decision survives longer than trivial detail
+[ ] recall spans associative graph neighbors
+[ ] retrieved memories influence CORTEX action selection
+[ ] CORTEX cannot treat inferred memory as verified fact
+[ ] cross-tenant memories can never activate
+[ ] deleted/retracted memories cannot reappear from vector/graph indexes
+[ ] memory reconstruction preserves provenance
+[ ] provider replacement does not change memory semantics
+[ ] Redis/Milvus outage degrades honestly rather than inventing recall
 ```
 
 ---
@@ -1503,6 +1819,21 @@
 - 100% of health checks are evidence-backed
 ```
 
+### Cognitive Architecture
+```text
+- Memory lifecycle contracts enforce PERCEIVE → ENCODE → SCORE_SALIENCE → ASSOCIATE → STORE_EPISODE → REPLAY_REFLECT → CONSOLIDATE → GENERALIZE → RETRIEVE → RECONSOLIDATE → DECAY_SUPERSEDE_FORGET
+- All 12 memory types have Core contracts and Platform implementations
+- MemoryClaim model with temporal validity and contradiction tracking
+- SelfModel, UserModel, RelationshipModel governed and isolated
+- ProspectiveMemory trigger-based resurfacing works
+- ReflectionEngine promotes/defer/rejects with evidence checking
+- Controlled forgetting: decay, suppression, consolidation
+- Reconsolidation preserves provenance while revising interpretation
+- Recall uses associative spreading activation, not just vector similarity
+- Memory feeds CORTEX decisions, not just prompt text
+- Cognitive proof suite: 19/19 criteria pass
+```
+
 ### Code Quality
 ```text
 - All new code passes linting
@@ -1529,9 +1860,9 @@
 ## Timeline Estimate
 
 ### Phase 1: Foundation & Safety - 1 week
-### Phase 2: Memory Decontamination - 2 weeks
+### Phase 2: Memory Decontamination + Cognitive Architecture - 3 weeks
 ### Phase 3: Agent-Client Retirement - 2 weeks
-### Phase 4: Recall Authority Consolidation - 1 week
+### Phase 4: Recall Authority Consolidation + Associative Recall - 2 weeks
 ### Phase 5: Personalization/Adaptive Split - 2 weeks
 ### Phase 6: Context & Prompt Split - 1 week
 ### Phase 7: Learning Trajectory Split - 1 week
@@ -1541,16 +1872,17 @@
 ### Phase 11: Extension Isolation - 1 week
 ### Phase 12: Final Architecture Tests - 1 week
 
-**Total Estimated Time: 15 weeks**
+**Total Estimated Time: 17 weeks**
 
 ---
 
 ## Risk Assessment
 
 ### High Risk
-- Memory decontamination (Phase 2)
+- Memory decontamination + cognitive architecture (Phase 2)
 - Agent-client retirement (Phase 3)
 - Personalization persistence split (Phase 5)
+- Cognitive proof suite validation (Phase 2.5)
 
 ### Medium Risk
 - Recall authority consolidation (Phase 4)
