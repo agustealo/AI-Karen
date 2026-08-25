@@ -1,7 +1,7 @@
-"""Cognitive Memory Contracts for AI-Karen.
+"""Cognitive memory contracts for AI-Karen.
 
-Memory owns the canonical claim lifecycle. Belief/reasoning may assess claims,
-but must not invent a second claim-state enum.
+Memory owns the canonical claim lifecycle and cognitive memory semantics.
+Concrete persistence remains outside Core.
 """
 
 from __future__ import annotations
@@ -13,8 +13,6 @@ from typing import Any
 
 
 class ClaimStatus(str, Enum):
-    """Canonical epistemic lifecycle state for memory/belief claims."""
-
     OBSERVED = "observed"
     INFERRED = "inferred"
     USER_ASSERTED = "user_asserted"
@@ -31,13 +29,19 @@ class ClaimStatus(str, Enum):
 MemoryLifecycleState = ClaimStatus
 
 
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 @dataclass
 class MemoryClaim:
-    """A memory claim with provenance, uncertainty, and temporal validity."""
-
     subject: str
     predicate: str
     object: Any
+    tenant_id: str
+    user_id: str | None = None
     confidence: float = 0.5
     provenance: list[str] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
@@ -53,8 +57,25 @@ class MemoryClaim:
     status: ClaimStatus = ClaimStatus.OBSERVED
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("memory claim tenant_id must be explicit and non-default")
+        self.asserted_at = _utc(self.asserted_at)
+        for name in (
+            "event_time",
+            "valid_from",
+            "valid_until",
+            "last_confirmed",
+            "superseded_at",
+            "deleted_at",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                setattr(self, name, _utc(value))
+        self.confidence = max(0.0, min(1.0, self.confidence))
+
     def is_valid(self, at: datetime | None = None) -> bool:
-        check_time = at or datetime.now(timezone.utc)
+        check_time = _utc(at or datetime.now(timezone.utc))
         if self.valid_from and check_time < self.valid_from:
             return False
         if self.valid_until and check_time > self.valid_until:
@@ -66,8 +87,7 @@ class MemoryClaim:
         }
 
     def effective_confidence(self) -> float:
-        penalty = 0.1 * len(self.contradiction_refs)
-        return max(0.0, min(1.0, self.confidence - penalty))
+        return max(0.0, min(1.0, self.confidence - 0.1 * len(self.contradiction_refs)))
 
 
 @dataclass
@@ -85,7 +105,7 @@ class SalienceScore:
 
     def total(self) -> float:
         return sum(
-            [
+            (
                 self.novelty,
                 self.surprise,
                 self.user_emphasis,
@@ -96,7 +116,7 @@ class SalienceScore:
                 self.decision_importance,
                 self.error_significance,
                 self.success_significance,
-            ]
+            )
         )
 
 
@@ -144,6 +164,8 @@ class RelationshipModel:
 @dataclass
 class ProspectiveMemory:
     intention: str
+    tenant_id: str
+    user_id: str | None = None
     trigger: dict[str, Any] = field(default_factory=dict)
     status: str = "open"
     priority: str = "medium"
@@ -151,6 +173,10 @@ class ProspectiveMemory:
     created_from: str | None = None
     completed_at: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("prospective memory tenant_id must be explicit and non-default")
 
 
 class MemoryProcessingStage(str, Enum):
@@ -181,7 +207,7 @@ class RecallScoreComponents:
 
     def total(self) -> float:
         positive = sum(
-            [
+            (
                 self.semantic_similarity,
                 self.associative_activation,
                 self.temporal_relevance,
@@ -192,10 +218,12 @@ class RecallScoreComponents:
                 self.causal_relevance,
                 self.unresolved_intention_relevance,
                 self.explicit_user_priority,
-            ]
+            )
         )
-        negative = self.contradiction_penalty + self.staleness + self.interference
-        return max(0.0, positive - negative)
+        return max(
+            0.0,
+            positive - self.contradiction_penalty - self.staleness - self.interference,
+        )
 
 
 __all__ = [
