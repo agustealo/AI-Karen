@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import sys
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +9,10 @@ from ai_karen_engine.core.expression.engines.builtin_provider_engine import (
     BuiltinProviderEngine,
 )
 from ai_karen_engine.core.model_runtime.provider_endpoint import BUILTIN_PROVIDER_ENDPOINTS
+from ai_karen_engine.core.model_runtime.provider_execution import (
+    get_provider_execution_registry,
+    register_provider_factory,
+)
 
 
 REQUIRED_GENERATIVE_CAPABILITIES = {"chat_completion", "text_generation"}
@@ -33,6 +36,14 @@ def _task() -> ExpressionTask:
     )
 
 
+@pytest.fixture(autouse=True)
+def _reset_provider_execution_registry():
+    registry = get_provider_execution_registry()
+    registry.clear_factory()
+    yield
+    registry.clear_factory()
+
+
 def test_local_generative_endpoints_use_canonical_capabilities() -> None:
     endpoints = {endpoint.provider_id: endpoint for endpoint in BUILTIN_PROVIDER_ENDPOINTS}
 
@@ -46,7 +57,7 @@ def test_local_generative_endpoints_use_canonical_capabilities() -> None:
 
 
 @pytest.mark.asyncio
-async def test_builtin_provider_executes_real_provider_and_preserves_provenance(
+async def test_builtin_provider_executes_registered_provider_and_preserves_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from ai_karen_engine.core.expression.engines import builtin_provider_engine as module
@@ -70,29 +81,14 @@ async def test_builtin_provider_executes_real_provider_and_preserves_provenance(
             assert payload["messages"] == _task().messages
             return "BETA_REAL_MODEL_OK"
 
-    registry_module = ModuleType(
-        "ai_karen_engine.core.model_runtime.provider_registry_service"
-    )
-    registry_module.get_provider_registry_service = lambda: FakeRegistry()
-    monkeypatch.setitem(
-        sys.modules,
-        "ai_karen_engine.core.model_runtime.provider_registry_service",
-        registry_module,
-    )
-
-    llm_registry_module = ModuleType("ai_karen_engine.integrations.llm_registry")
-    llm_registry_module.get_provider = lambda *args, **kwargs: FakeProvider()
-    monkeypatch.setitem(
-        sys.modules,
-        "ai_karen_engine.integrations.llm_registry",
-        llm_registry_module,
-    )
-
+    monkeypatch.setattr(module, "get_provider_registry_service", lambda: FakeRegistry())
     monkeypatch.setattr(
         module,
         "evaluate_provider_policy",
         lambda provider_id: SimpleNamespace(classification="builtin_engine"),
     )
+
+    register_provider_factory(lambda provider_id, **kwargs: FakeProvider())
 
     result = await BuiltinProviderEngine().generate(_task())
 
