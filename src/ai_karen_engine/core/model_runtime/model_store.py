@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 
-from ai_karen_engine.integrations.registry import ModelMetadata, get_registry
+from ai_karen_engine.core.model_runtime.model_registry_compat import ModelMetadata, get_registry
 
 logger = logging.getLogger(__name__)
 

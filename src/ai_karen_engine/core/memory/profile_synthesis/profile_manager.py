@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
-from ai_karen_engine.integrations.registry import get_registry
+from ai_karen_engine.core.model_runtime.model_registry_compat import get_registry
 
 logger = get_logger("kari.profile_manager")
 

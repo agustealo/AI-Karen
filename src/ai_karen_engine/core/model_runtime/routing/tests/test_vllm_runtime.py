@@ -17,8 +17,8 @@ from unittest.mock import Mock
 
 # Import VLLMRuntime and related classes
 from ai_karen_engine.core.model_runtime.providers.vllm_runtime import VLLMRuntime
-from ai_karen_engine.integrations.llm_utils import ProviderNotAvailable, GenerationFailed
-from ai_karen_engine.integrations.providers.openai_provider import OpenAIProvider
+from ai_karen_engine.core.model_runtime.llm_adapter import ProviderNotAvailable, GenerationFailed
+from ai_karen_engine.core.model_runtime.openai_compatible_provider_compat import OpenAIProvider
 
 
 class TestVLLMRuntimeConfig:

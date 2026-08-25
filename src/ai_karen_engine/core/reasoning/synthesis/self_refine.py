@@ -233,7 +233,7 @@ class SelfRefiner:
         prompt = self._build_initial_prompt(query, context)
 
         try:
-            from ai_karen_engine.integrations.llm_utils import LLMUtils
+            from ai_karen_engine.core.model_runtime.llm_adapter import LLMUtils
             if isinstance(self.llm, LLMUtils):
                 return self.llm.generate_text(prompt, max_tokens=500)
             else:
@@ -322,7 +322,7 @@ Be specific and actionable. Focus on the most important issues.
 Feedback:"""
 
         try:
-            from ai_karen_engine.integrations.llm_utils import LLMUtils
+            from ai_karen_engine.core.model_runtime.llm_adapter import LLMUtils
             if isinstance(self.llm, LLMUtils):
                 return self.llm.generate_text(
                     prompt,
@@ -413,7 +413,7 @@ Provide an improved response that addresses the feedback while maintaining the g
 Improved Response:"""
 
         try:
-            from ai_karen_engine.integrations.llm_utils import LLMUtils
+            from ai_karen_engine.core.model_runtime.llm_adapter import LLMUtils
             if isinstance(self.llm, LLMUtils):
                 refined = self.llm.generate_text(
                     prompt,
@@ -511,7 +511,7 @@ def create_self_refiner(
     # Auto-create LLM if not provided
     if llm is None:
         try:
-            from ai_karen_engine.integrations.llm_utils import LLMUtils
+            from ai_karen_engine.core.model_runtime.llm_adapter import LLMUtils
             llm = LLMUtils()
         except ImportError:
             logger.warning("Could not import LLMUtils, proceeding without")

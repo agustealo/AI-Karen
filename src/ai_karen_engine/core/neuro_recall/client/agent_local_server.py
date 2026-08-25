@@ -74,8 +74,8 @@ from ai_karen_engine.core.reasoning.soft_reasoning.engine import (
 from ai_karen_engine.core.reasoning.synthesis.ice_wrapper import (
     PremiumICEWrapper, ICEWritebackPolicy
 )
-from ai_karen_engine.integrations.llm_registry import get_registry
-from ai_karen_engine.integrations.llm_utils import LLMUtils
+from ai_karen_engine.core.model_runtime.runtime_registry_adapter import get_registry
+from ai_karen_engine.core.model_runtime.llm_adapter import LLMUtils
 
 # ----- Local/Direct model backends (optional) -----
 from openai import AsyncOpenAI  # For local OpenAI-compatible servers only

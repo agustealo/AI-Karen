@@ -220,7 +220,7 @@ class NLPServiceManager:
         **kwargs,
     ) -> dict[str, Any]:
         """Delegate generation to the centralized provider system."""
-        from ai_karen_engine.integrations.llm_registry import get_registry
+        from ai_karen_engine.core.model_runtime.runtime_registry_adapter import get_registry
 
         registry = get_registry()
 

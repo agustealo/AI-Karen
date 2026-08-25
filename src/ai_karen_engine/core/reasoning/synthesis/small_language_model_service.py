@@ -120,7 +120,7 @@ def _get_local_model_client():
         return local_model_client
 
     try:
-        from ai_karen_engine.integrations.providers.fallback_provider import (
+        from ai_karen_engine.core.model_runtime.unavailable_provider import (
             FallbackProvider,
         )
 

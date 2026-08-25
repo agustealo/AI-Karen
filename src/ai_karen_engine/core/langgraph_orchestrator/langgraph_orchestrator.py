@@ -63,7 +63,7 @@ from ai_karen_engine.services.formatting.response_policy_enforcer import Respons
 from ai_karen_engine.services.formatting.pretty_output_layer import (
     PrettyOutputLayer,
 )
-from ai_karen_engine.copilotkit.session_state_manager import SessionStateManager
+from ai_karen_engine.core.runtime.session_state_manager_compat import SessionStateManager
 from ai_karen_engine.utils.chat_helpers import (
     build_user_identity_line,
     build_structured_context_sections,

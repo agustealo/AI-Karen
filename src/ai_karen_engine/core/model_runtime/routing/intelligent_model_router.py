@@ -32,7 +32,7 @@ from ai_karen_engine.core.model_runtime.discovery.model_discovery_engine import 
     ModelCategory,
 )
 from .llm_router_service import LLMRouter, ChatRequest, RoutingPolicy
-from ai_karen_engine.integrations.registry import get_registry
+from ai_karen_engine.core.model_runtime.model_registry_compat import get_registry
 
 logger = logging.getLogger("kari.intelligent_model_router")
 

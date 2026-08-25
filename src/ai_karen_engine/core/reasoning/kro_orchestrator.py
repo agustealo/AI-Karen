@@ -189,7 +189,7 @@ class HelperModels:
 
         try:
             # Initialize default model for scaffolding
-            from ai_karen_engine.integrations.llm_registry import get_registry
+            from ai_karen_engine.core.model_runtime.runtime_registry_adapter import get_registry
             registry = get_registry()
             self.default_model_provider = registry.get_provider("builtin_transformers")
 
@@ -357,7 +357,7 @@ class KROOrchestrator:
         enable_optimization: bool = True,
     ):
         """Initialize KRO with dependencies."""
-        from ai_karen_engine.integrations.llm_registry import get_registry
+        from ai_karen_engine.core.model_runtime.runtime_registry_adapter import get_registry
 
         self.llm_registry = llm_registry or get_registry()
         self.helpers = HelperModels()

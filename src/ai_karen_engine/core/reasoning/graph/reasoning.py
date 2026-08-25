@@ -14,8 +14,8 @@ from ai_karen_engine.core.reasoning.soft_reasoning.engine import (
     WritebackConfig,
 )
 from ai_karen_engine.core.reasoning.graph.capsule import CapsuleGraph
-from ai_karen_engine.integrations.llm_utils import LLMUtils
-from ai_karen_engine.integrations.llm_registry import get_registry
+from ai_karen_engine.core.model_runtime.llm_adapter import LLMUtils
+from ai_karen_engine.core.model_runtime.runtime_registry_adapter import get_registry
 
 logger = logging.getLogger("ai_karen.reasoning.graph")
 

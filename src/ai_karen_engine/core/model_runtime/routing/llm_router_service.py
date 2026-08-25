@@ -33,8 +33,8 @@ from ai_karen_engine.config.runtime_provider_manager import RuntimeProviderManag
 from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
 
 from ai_karen_engine.core.model_runtime.runtime_contracts import ProviderRouteDecision
-# from ai_karen_engine.integrations.llm_registry import get_registry, LLMRegistry  <- Moved to local scope
-from ai_karen_engine.integrations.llm_utils import LLMProviderBase
+# from ai_karen_engine.core.model_runtime.runtime_registry_adapter import get_registry, LLMRegistry  <- Moved to local scope
+from ai_karen_engine.core.model_runtime.llm_adapter import LLMProviderBase
 from ai_karen_engine.services.response import ResponseContract, ResponsePromptBuilder, ResponseSanitizer
 from ai_karen_engine.services.response.response_validator import ResponseValidator
 from ai_karen_engine.core.model_runtime.model_validation import infer_model_capabilities, ModelCapabilityProfile
@@ -271,7 +271,7 @@ class LLMRouter:
     def __init__(self, registry: Optional[Any] = None):
         """Initialize Enhanced LLM Router"""
         # TEMP-MIGRATION: local import to avoid circular dependency during services/models -> core/model_runtime convergence
-        from ai_karen_engine.integrations.llm_registry import get_registry  # TEMP-MIGRATION
+        from ai_karen_engine.core.model_runtime.runtime_registry_adapter import get_registry  # TEMP-MIGRATION
 
         self.registry: Any = registry or get_registry()
         self.provider_health: Dict[str, ProviderHealth] = {}
@@ -1755,7 +1755,7 @@ class LLMRouter:
                 )
 
                 # NEW: If provider is not available, don't waste time retrying
-                from ai_karen_engine.integrations.llm_utils import ProviderNotAvailable
+                from ai_karen_engine.core.model_runtime.llm_adapter import ProviderNotAvailable
                 if isinstance(exc, ProviderNotAvailable):
                     logger.warning(f"[%s] Provider %s is not available - skipping retries", request_id, provider_name)
                     break
@@ -2397,7 +2397,7 @@ class LLMRouter:
         This method explicitly catches ProviderNotAvailable and GenerationFailed exceptions
         to provide clear fallback paths and accurate metadata.
         """
-        from ai_karen_engine.integrations.llm_utils import (
+        from ai_karen_engine.core.model_runtime.llm_adapter import (
             ProviderNotAvailable,
             GenerationFailed,
         )
@@ -2730,7 +2730,7 @@ class LLMRouter:
             ProviderNotAvailable: If the provider is not configured or unreachable
             GenerationFailed: If generation fails for any reason
         """
-        from ai_karen_engine.integrations.llm_utils import (
+        from ai_karen_engine.core.model_runtime.llm_adapter import (
             ProviderNotAvailable,
             GenerationFailed,
         )
