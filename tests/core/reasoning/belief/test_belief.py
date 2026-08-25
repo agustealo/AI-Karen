@@ -50,7 +50,7 @@ def make_claim(
     claim_id: str = "claim_1",
     subject: str = "preferred_provider",
     predicate: str = "is",
-    obj: str = "Ollama",
+    object: str = "Ollama",
     status: ClaimStatus = ClaimStatus.OBSERVED,
     source: EvidenceType = EvidenceType.OBSERVATION,
     confidence: float = 0.8,
@@ -75,7 +75,7 @@ def make_claim(
         claim_id=claim_id,
         subject=subject,
         predicate=predicate,
-        object=obj,
+        object=object,
         status=status,
         source=source,
         source_ref="ref-1",
@@ -95,7 +95,7 @@ def make_claim(
 
 def make_evidence(
     evidence_id: str = "ev1",
-    etype: EvidenceType = EvidenceType.OBSERVATION,
+    type: EvidenceType = EvidenceType.OBSERVATION,
     relation: EvidenceRelation = EvidenceRelation.SUPPORTS,
     strength: EvidenceStrength = EvidenceStrength.MODERATE,
     confidence: float = 0.8,
@@ -109,7 +109,7 @@ def make_evidence(
     observed_at = observed_at or datetime.utcnow()
     return Evidence(
         evidence_id=evidence_id,
-        type=etype,
+        type=type,
         source=source,
         source_ref=source_ref,
         content=content,

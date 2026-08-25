@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Union
+from typing import Any
 
 # ===================================
 # ENUMS AND CLASSIFICATIONS
@@ -169,7 +169,7 @@ RecallStatus = MemoryStatus
 RecallVisibility = MemoryVisibility
 
 # JSON-like metadata
-JSONLike = Union[dict[str, Any], list[Any], str, int, float, bool, None]
+JSONLike = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 
 # ===================================
@@ -304,11 +304,11 @@ class MemoryEntry:
         """Check if memory has expired."""
         if self.expires_at is None:
             return False
-        return datetime.utcnow() > self.expires_at
+        return datetime.now(tz=timezone.utc) > self.expires_at
 
     def update_access(self) -> None:
         """Update access tracking."""
-        self.last_accessed = datetime.utcnow()
+        self.last_accessed = datetime.now(tz=timezone.utc)
         self.access_count += 1
 
     def to_dict(self) -> dict[str, Any]:
@@ -450,12 +450,12 @@ def decay_score(
 
 def ttl_to_expires(ttl_seconds: float) -> datetime:
     """Convert TTL in seconds to expiration datetime."""
-    return datetime.utcnow() + timedelta(seconds=ttl_seconds)
+    return datetime.now(tz=timezone.utc) + timedelta(seconds=ttl_seconds)
 
 
 def now_utc() -> datetime:
     """Get current UTC datetime."""
-    return datetime.utcnow()
+    return datetime.now(tz=timezone.utc)
 
 
 def create_memory_entry(

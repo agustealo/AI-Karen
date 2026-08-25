@@ -16,7 +16,7 @@ Version: 1.0.0 (Cognitive Architecture)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -25,7 +25,20 @@ from typing import Any
 # ===================================
 
 class ClaimStatus(str, Enum):
-    """Status of a memory claim."""
+    """Epistemic lifecycle state of a memory claim.
+
+    Tracks the certainty and validity status of a claim as it moves
+    through Karen's cognitive memory pipeline.
+
+    OBSERVED       - directly captured from interaction
+    INFERRED       - derived by Karen's reasoning
+    USER_ASSERTED  - explicitly stated by the user
+    VERIFIED       - confirmed by evidence or user
+    DISPUTED       - conflicting claims exist
+    SUPERSEDED     - replaced by a newer, more accurate claim
+    STALE          - outdated (not yet retracted)
+    RETRACTED      - explicitly withdrawn
+    """
     OBSERVED = "observed"
     INFERRED = "inferred"
     USER_ASSERTED = "user_asserted"
@@ -34,6 +47,12 @@ class ClaimStatus(str, Enum):
     SUPERSEDED = "superseded"
     STALE = "stale"
     RETRACTED = "retracted"
+
+
+MemoryLifecycleState = ClaimStatus
+
+
+MemorySalience = SalienceScore
 
 
 @dataclass
@@ -60,7 +79,7 @@ class MemoryClaim:
 
     def is_valid(self, at: datetime | None = None) -> bool:
         """Check if claim is valid at given time."""
-        check_time = at or datetime.utcnow()
+        check_time = at or datetime.now(tz=timezone.utc)
         if self.valid_from and check_time < self.valid_from:
             return False
         if self.valid_until and check_time > self.valid_until:
@@ -213,19 +232,19 @@ class ProspectiveMemory:
 # MEMORY LIFECYCLE STATE
 # ===================================
 
-class MemoryLifecycleState(str, Enum):
-    """States in the memory lifecycle."""
-    PERCEIVE = "perceive"
+class MemoryProcessingStage(str, Enum):
+    """Stages in the memory processing pipeline.
+
+    These describe the sequence of cognitive operations Karen's brain
+    performs on a memory claim, from initial encoding to eventual forgetting.
+    """
     ENCODE = "encode"
-    SCORE_SALIENCE = "score_salience"
     ASSOCIATE = "associate"
-    STORE_EPISODE = "store_episode"
-    REPLAY_REFLECT = "replay_reflect"
     CONSOLIDATE = "consolidate"
-    GENERALIZE = "generalize"
-    RETRIEVE = "retrieve"
+    RECALL = "recall"
     RECONSOLIDATE = "reconsolidate"
-    DECAY_SUPERSEDE_FORGET = "decay_supersede_forget"
+    DECAY = "decay"
+    FORGET = "forget"
 
 
 # ===================================

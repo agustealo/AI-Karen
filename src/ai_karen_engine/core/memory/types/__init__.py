@@ -23,32 +23,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-
-# ===================================
-# COGNITIVE MEMORY TYPE ENUM
-# ===================================
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ai_karen_engine.core.memory.contracts import (
-    MemoryClaim,
-    ProspectiveMemory,
-    RecallScoreComponents,
-    RelationshipModel,
-    SalienceScore,
-    SelfModel,
-    UserModel,
-)
-
-from .base import (
-    MemoryEntry,
-    MemoryNamespace,
-    MemoryPriority,
-    MemoryStatus,
-    MemoryVisibility,
+    MemoryClaim as MemoryClaim,
+    ProspectiveMemory as ProspectiveMemory,
+    RecallScoreComponents as RecallScoreComponents,
+    RelationshipModel as RelationshipModel,
+    SalienceScore as SalienceScore,
+    SelfModel as SelfModel,
+    UserModel as UserModel,
 )
 from .base import (
+    MemoryEntry as MemoryEntry,
+    MemoryNamespace as MemoryNamespace,
+    MemoryPriority as MemoryPriority,
+    MemoryStatus as MemoryStatus,
     MemoryType as BaseMemoryType,
+    MemoryVisibility as MemoryVisibility,
 )
 
 

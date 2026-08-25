@@ -103,13 +103,23 @@ def _json_safe(value: Any) -> Any:
 class MemoryRuntimeManager:
     """Single write authority for Karen's memory system."""
 
-    def __init__(self):
+    def __init__(self, retrieval_adapter=None, consolidation_adapter=None):
         self.signal_pipeline = get_signal_pipeline()
         self.worthiness_scorer = MemoryWorthinessScorer()
         self.flags = get_feature_flags()
         self._db_session_factory = None
         self._projection_workers: Optional[Dict[str, Any]] = None
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._retrieval_adapter = retrieval_adapter
+        self._consolidation_adapter = consolidation_adapter
+
+    def set_retrieval_adapter(self, adapter) -> None:
+        """Set the retrieval port adapter (CORE-SPLIT-2 migration)."""
+        self._retrieval_adapter = adapter
+
+    def set_consolidation_adapter(self, adapter) -> None:
+        """Set the consolidation port adapter (CORE-SPLIT-2 migration)."""
+        self._consolidation_adapter = adapter
 
     def set_db_session_factory(self, factory):
         """Set the SQLAlchemy async session factory."""
@@ -144,6 +154,18 @@ class MemoryRuntimeManager:
         Legacy-compatible wrapper for cognitive routes and context assembly.
         """
         _METRICS["recall_requests"] += 1
+
+        if self._retrieval_adapter is not None:
+            try:
+                results = self._retrieval_adapter.retrieve(query, top_k=top_k)
+                return {
+                    "results": results,
+                    "status": "ok",
+                    "source": "adapter",
+                }
+            except Exception as exc:
+                logger.debug("Retrieval adapter failed, falling back: %s", exc)
+
         self._ensure_db_session_factory()
         
         if not self._db_session_factory:
