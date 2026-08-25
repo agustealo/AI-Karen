@@ -84,7 +84,7 @@ class TestSemanticBehaviorRules:
             reason=ContextReason.RECENT_IRRELEVANT,
             freshness=ContextFreshness.RECENT,
         )
-        plan = _plan([irrelevant, relevant], max_items=1)
+        plan = _plan([irrelevant, relevant], max_items=3)
         selected = plan.select()
         assert len(selected) == 1
         assert selected[0].candidate_id == "relevant"
@@ -100,7 +100,7 @@ class TestSemanticBehaviorRules:
             priority=ContextPriority.MEDIUM,
             reason=ContextReason.RECENT_RELEVANT,
         )
-        plan = _plan([recent, salience], max_items=1)
+        plan = _plan([recent, salience], max_items=3)
         selected = plan.select()
         assert len(selected) == 1
         assert selected[0].candidate_id == "salience"
@@ -118,7 +118,7 @@ class TestSemanticBehaviorRules:
             reason=ContextReason.INFERRED_ASSUMPTION,
             trust_level=ContextTrustLevel.INFERRED,
         )
-        plan = _plan([inferred, explicit], max_items=1)
+        plan = _plan([inferred, explicit], max_items=3)
         selected = plan.select()
         assert len(selected) == 1
         assert selected[0].candidate_id == "explicit"
@@ -131,7 +131,7 @@ class TestSemanticBehaviorRules:
             trust_level=ContextTrustLevel.CONTRADICTED,
         )
         normal = _candidate("normal", priority=ContextPriority.MEDIUM)
-        plan = _plan([contradicted, normal], max_items=2)
+        plan = _plan([contradicted, normal], max_items=4)
         selected = plan.select()
         assert len(selected) == 1
         assert selected[0].candidate_id == "normal"
@@ -150,7 +150,7 @@ class TestSemanticBehaviorRules:
             reason=ContextReason.RECENT_RELEVANT,
             freshness=ContextFreshness.RECENT,
         )
-        plan = _plan([stale, fresh], max_items=2)
+        plan = _plan([stale, fresh], max_items=4)
         selected = plan.select()
         assert stale not in selected
         assert fresh in selected
@@ -166,7 +166,7 @@ class TestSemanticBehaviorRules:
             priority=ContextPriority.HIGH,
             reason=ContextReason.CONVERSATIONAL_TRIVIA,
         )
-        plan = _plan([trivia, active_goal], max_items=1)
+        plan = _plan([trivia, active_goal], max_items=3)
         selected = plan.select()
         assert len(selected) == 1
         assert selected[0].candidate_id == "goal"
@@ -177,7 +177,7 @@ class TestSemanticBehaviorRules:
             priority=ContextPriority.LOW,
             reason=ContextReason.UNRESOLVED_INTENTION,
         )
-        plan = _plan([intention], max_items=1)
+        plan = _plan([intention], max_items=3)
         selected = plan.select()
         assert len(selected) == 1
         assert selected[0].candidate_id == "intention"
@@ -187,7 +187,7 @@ class TestSemanticBehaviorRules:
         medium = _candidate("medium", priority=ContextPriority.MEDIUM)
         high = _candidate("high", priority=ContextPriority.HIGH)
         critical = _candidate("critical", priority=ContextPriority.CRITICAL)
-        plan = _plan([low, medium, high, critical], max_items=2)
+        plan = _plan([low, medium, high, critical], max_items=4)
         selected = plan.select()
         assert len(selected) == 2
         assert critical in selected
@@ -204,7 +204,7 @@ class TestSemanticBehaviorRules:
             priority=ContextPriority.HIGH,
             reason=ContextReason.CONVERSATIONAL_TRIVIA,
         )
-        plan = _plan([trivia, policy], max_items=1)
+        plan = _plan([trivia, policy], max_items=3)
         selected = plan.select()
         assert len(selected) == 1
         assert selected[0].candidate_id == "policy"
@@ -215,7 +215,7 @@ class TestSemanticBehaviorRules:
             priority=ContextPriority.HIGH,
             reason=ContextReason.EXPLICIT_USER_FACT,
         )
-        plan = _plan([candidate], max_items=1)
+        plan = _plan([candidate], max_items=3)
         selected = plan.select()
         assert len(selected) == 1
         explanations = plan.explain_selection(selected)

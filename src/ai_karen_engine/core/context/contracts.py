@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class ContextKind(str, Enum):
@@ -64,7 +64,7 @@ class ContextReason(str, Enum):
     CONFLICT = "conflict"
 
 
-_PRIORITY_SCORE: Dict[ContextPriority, int] = {
+_PRIORITY_SCORE: dict[ContextPriority, int] = {
     ContextPriority.CRITICAL: 1000,
     ContextPriority.HIGH: 750,
     ContextPriority.MEDIUM: 500,
@@ -72,7 +72,7 @@ _PRIORITY_SCORE: Dict[ContextPriority, int] = {
     ContextPriority.MINIMAL: 0,
 }
 
-_REASON_MODIFIER: Dict[ContextReason, int] = {
+_REASON_MODIFIER: dict[ContextReason, int] = {
     ContextReason.ACTIVE_GOAL: 300,
     ContextReason.EXPLICIT_USER_FACT: 250,
     ContextReason.HIGH_SALIENCE_MEMORY: 200,
@@ -88,7 +88,7 @@ _REASON_MODIFIER: Dict[ContextReason, int] = {
     ContextReason.CONTRADICTED: -1000,
 }
 
-_FRESHNESS_MODIFIER: Dict[ContextFreshness, int] = {
+_FRESHNESS_MODIFIER: dict[ContextFreshness, int] = {
     ContextFreshness.REAL_TIME: 50,
     ContextFreshness.RECENT: 30,
     ContextFreshness.SHORT_LIVED: 10,
@@ -97,7 +97,7 @@ _FRESHNESS_MODIFIER: Dict[ContextFreshness, int] = {
     ContextFreshness.STALE: -500,
 }
 
-_TRUST_MODIFIER: Dict[ContextTrustLevel, int] = {
+_TRUST_MODIFIER: dict[ContextTrustLevel, int] = {
     ContextTrustLevel.EXPLICIT: 0,
     ContextTrustLevel.INFERRED: -20,
     ContextTrustLevel.ASSUMED: -50,
@@ -136,7 +136,7 @@ class ContextConflict:
 class ContextOmission:
     reason: ContextReason
     detail: str = ""
-    omitted_ids: List[str] = field(default_factory=list)
+    omitted_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -148,9 +148,9 @@ class ContextCandidate:
     reason: ContextReason = ContextReason.RECENT_RELEVANT
     trust_level: ContextTrustLevel = ContextTrustLevel.EXPLICIT
     freshness: ContextFreshness = ContextFreshness.LONG_LIVED
-    source: Optional[ContextSource] = None
-    conflicts: List[ContextConflict] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    source: ContextSource | None = None
+    conflicts: list[ContextConflict] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def score(self) -> int:
         base = _PRIORITY_SCORE.get(self.priority, 0)
@@ -171,22 +171,22 @@ class ContextRequirement:
     freshness: ContextFreshness = ContextFreshness.LONG_LIVED
     max_items: int = 3
     min_trust_level: ContextTrustLevel = ContextTrustLevel.EXPLICIT
-    tags: List[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
 class ContextPlan:
-    requirements: List[ContextRequirement] = field(default_factory=list)
-    candidates: List[ContextCandidate] = field(default_factory=list)
-    included: List[ContextCandidate] = field(default_factory=list)
-    omitted: List[ContextOmission] = field(default_factory=list)
-    conflicts: List[ContextConflict] = field(default_factory=list)
+    requirements: list[ContextRequirement] = field(default_factory=list)
+    candidates: list[ContextCandidate] = field(default_factory=list)
+    included: list[ContextCandidate] = field(default_factory=list)
+    omitted: list[ContextOmission] = field(default_factory=list)
+    conflicts: list[ContextConflict] = field(default_factory=list)
     budget: ContextBudget = field(default_factory=ContextBudget)
     explanation: str = ""
     trace_id: str = ""
 
-    def select(self) -> List[ContextCandidate]:
-        selected: List[ContextCandidate] = []
+    def select(self) -> list[ContextCandidate]:
+        selected: list[ContextCandidate] = []
         seen_ids: set[str] = set()
 
         def sort_key(c: ContextCandidate) -> tuple[int, int, str]:
@@ -206,8 +206,8 @@ class ContextPlan:
 
         return selected
 
-    def explain_selection(self, selected: List[ContextCandidate]) -> List[str]:
-        explanations: List[str] = []
+    def explain_selection(self, selected: list[ContextCandidate]) -> list[str]:
+        explanations: list[str] = []
         for candidate in selected:
             explanations.append(
                 f"selected {candidate.candidate_id} "

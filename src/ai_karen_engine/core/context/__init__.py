@@ -9,8 +9,8 @@ from .contracts import (
     ContextOmission,
     ContextPlan,
     ContextPriority,
-    ContextRequirement,
     ContextReason,
+    ContextRequirement,
     ContextSource,
     ContextTrustLevel,
 )
@@ -24,8 +24,8 @@ __all__ = [
     "ContextOmission",
     "ContextPlan",
     "ContextPriority",
-    "ContextRequirement",
     "ContextReason",
+    "ContextRequirement",
     "ContextSource",
     "ContextTrustLevel",
 ]
