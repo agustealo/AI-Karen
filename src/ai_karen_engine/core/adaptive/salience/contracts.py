@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from ai_karen_engine.core.contracts.cognitive import SalienceConfidence
+
 
 class SalienceDimension(str, Enum):
     NOVELTY = "novelty"
@@ -49,10 +51,9 @@ class SalienceSource(str, Enum):
 
 @dataclass(slots=True)
 class SalienceContext:
-    """Semantic context for a salience assessment. No raw provider/session objects."""
     request_id: str
     correlation_id: str
-    tenant_id: str = "default"
+    tenant_id: str
     user_id: str | None = None
     session_id: str | None = None
     intent: str = "general"
@@ -61,18 +62,21 @@ class SalienceContext:
     recent_predictions: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("salience tenant_id must be explicit and non-default")
+
 
 @dataclass(slots=True)
 class SalienceSignal:
-    """A single salience dimension signal."""
     dimension: SalienceDimension
     value: float = 0.0
-    confidence: float = 0.0
+    confidence: SalienceConfidence = field(default_factory=SalienceConfidence)
     source: SalienceSource = SalienceSource.ADAPTIVE_SIGNAL
     reason_codes: list[SalienceReasonCode] = field(default_factory=list)
     decay_rate: float = 0.1
     retrigger_count: int = 0
-    last_activated_at: str | None = None
+    last_activated_at: datetime | None = None
     persistence_class: str = "standard"
     source_ref: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -80,7 +84,6 @@ class SalienceSignal:
 
 @dataclass(slots=True)
 class ExpectedState:
-    """Expected state for prediction error calculation."""
     description: str
     confidence: float = 0.0
     source_ref: str = ""
@@ -88,7 +91,6 @@ class ExpectedState:
 
 @dataclass(slots=True)
 class ObservedState:
-    """Observed state for prediction error calculation."""
     description: str
     confidence: float = 0.0
     source_ref: str = ""
@@ -96,7 +98,6 @@ class ObservedState:
 
 @dataclass(slots=True)
 class PredictionError:
-    """Prediction error between expected and observed states."""
     expected: ExpectedState
     observed: ObservedState
     error_magnitude: float = 0.0
@@ -106,18 +107,16 @@ class PredictionError:
 
 @dataclass(slots=True)
 class UserEmphasisSignal:
-    """Signal that user has explicitly emphasized something."""
     emphasis_type: str
     target: str
     strength: float = 0.0
-    confidence: float = 0.0
+    confidence: SalienceConfidence = field(default_factory=SalienceConfidence)
     source_text: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class RelationshipRelevanceSignal:
-    """Signal that something affects a relationship."""
     relationship_id: str
     relationship_type: str = "general"
     relevance_strength: float = 0.0
@@ -129,28 +128,33 @@ class RelationshipRelevanceSignal:
 
 @dataclass(slots=True)
 class MemorySalienceSignal:
-    """Salience metadata for memory consumption. Does NOT persist memory."""
     memory_id: str
+    tenant_id: str
     salience_value: float = 0.0
     dimensions: dict[str, float] = field(default_factory=dict)
     reason_codes: list[str] = field(default_factory=list)
-    tenant_id: str = "default"
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("memory salience tenant_id must be explicit and non-default")
 
 
 @dataclass(slots=True)
 class GoalSalienceAdjustment:
-    """Salience adjustment for goal system consumption. Does NOT mutate goal state."""
     goal_id: str
+    tenant_id: str
     adjustment: float = 0.0
     reason_codes: list[str] = field(default_factory=list)
-    tenant_id: str = "default"
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("goal salience tenant_id must be explicit and non-default")
 
 
 @dataclass(slots=True)
 class SalienceAssessment:
-    """Multi-dimensional salience assessment."""
     novelty: float = 0.0
     urgency: float = 0.0
     goal_relevance: float = 0.0
@@ -166,7 +170,7 @@ class SalienceAssessment:
     interruption_cost: float = 0.0
     user_emphasis: float = 0.0
     overall: float = 0.0
-    confidence: float = 0.0
+    confidence: SalienceConfidence = field(default_factory=SalienceConfidence)
     reason_codes: list[SalienceReasonCode] = field(default_factory=list)
     source_refs: list[str] = field(default_factory=list)
     activation: float = 0.0
@@ -177,13 +181,12 @@ class SalienceAssessment:
 
     def __post_init__(self) -> None:
         if self.overall == 0.0:
-            computed = self._compute_overall()
-            self.overall = computed
-            self.activation = computed
-            self.modulation = 1.0 - self.interruption_cost
+            self.overall = self._compute_overall()
+            self.activation = self._compute_activation()
+            self.modulation = max(0.0, min(1.0, 1.0 - self.interruption_cost))
 
-    def _compute_overall(self) -> float:
-        activation_dims = [
+    def _compute_activation(self) -> float:
+        dimensions = (
             self.novelty,
             self.urgency,
             self.goal_relevance,
@@ -197,23 +200,17 @@ class SalienceAssessment:
             self.contradiction,
             self.user_emphasis,
             self.repetition,
-        ]
-        inhibition_dims = [
-            self.interruption_cost,
-        ]
-        
-        if not activation_dims:
-            return 0.0
-            
-        activation = max(0.0, min(1.0, max(activation_dims)))
-        inhibition = 1.0 - max(0.0, min(1.0, max(inhibition_dims) if inhibition_dims else 0.0))
-        
-        return max(0.0, min(1.0, activation * inhibition))
+        )
+        return max(0.0, min(1.0, max(dimensions, default=0.0)))
+
+    def _compute_overall(self) -> float:
+        activation = self._compute_activation()
+        modulation = max(0.0, min(1.0, 1.0 - self.interruption_cost))
+        return max(0.0, min(1.0, activation * modulation))
 
 
 @dataclass(slots=True)
 class SalienceAssessmentRequest:
-    """Request for salience assessment."""
     context: SalienceContext
     signals: list[SalienceSignal] = field(default_factory=list)
     prediction_errors: list[PredictionError] = field(default_factory=list)
@@ -224,9 +221,8 @@ class SalienceAssessmentRequest:
 
 @dataclass(slots=True)
 class SalienceAssessmentResult:
-    """Result of salience assessment."""
     assessment: SalienceAssessment
     memory_signals: list[MemorySalienceSignal] = field(default_factory=list)
     goal_adjustments: list[GoalSalienceAdjustment] = field(default_factory=list)
     diagnostics: dict[str, Any] = field(default_factory=dict)
-    assessed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    assessed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
