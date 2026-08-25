@@ -84,8 +84,17 @@ def _parse_dt(value: Any) -> datetime | None:
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
-        return value
-    return datetime.fromisoformat(str(value))
+        return value.replace(tzinfo=None) if value.tzinfo is not None else value
+    text = str(value)
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt
 
 
 def _parse_claim_text(text: str) -> tuple[str, str, str]:

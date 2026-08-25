@@ -60,11 +60,10 @@ from ai_karen_engine.core.adaptive.contracts import ActionOutcomeObservation
 from ai_karen_engine.core.memory.scoring.ranking import MemoryRanker
 
 
-_FIXTURES_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
-    "fixtures",
-    "cognitive",
+_REPO_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
+_FIXTURES_DIR = os.path.join(_REPO_ROOT, "tests", "fixtures", "cognitive")
 
 
 def fixtures_dir() -> str:
@@ -116,10 +115,13 @@ def load_scenarios(fixtures_dir: str | None = None) -> list[Scenario]:
 
     base = fixtures_dir or _FIXTURES_DIR
     scenarios: list[Scenario] = []
-    for fname in sorted(os.listdir(base)):
-        if not fname.endswith((".yaml", ".yml")):
-            continue
-        with open(os.path.join(base, fname), "r", encoding="utf-8") as fh:
+    yaml_files: list[str] = []
+    for root, _dirs, files in os.walk(base):
+        for fname in sorted(files):
+            if fname.endswith((".yaml", ".yml")):
+                yaml_files.append(os.path.join(root, fname))
+    for path in yaml_files:
+        with open(path, "r", encoding="utf-8") as fh:
             doc = yaml.safe_load(fh)
         if doc is None:
             continue
