@@ -5,7 +5,7 @@ def test_degraded_mode_no_llm_router():
     """Verify that generate_degraded_mode_response uses ExpressionGateway, not LLMRouter."""
     from ai_karen_engine.core.runtime.degraded_mode import generate_degraded_mode_response
     
-    with patch("ai_karen_engine.core.expression.gateway.ExpressionGateway.generate") as mock_generate:
+    with patch("ai_karen_engine.core.expression.ExpressionGateway.generate") as mock_generate:
         mock_generate.return_value = MagicMock()
         mock_generate.return_value.text = "Mocked answer"
         mock_generate.return_value.provider = "mock_provider"
@@ -35,7 +35,7 @@ def test_control_plane_no_llm_router():
     
     probe = ProviderRouterProbe()
     
-    with patch("ai_karen_engine.core.expression.gateway.ExpressionGateway.generate") as mock_generate:
+    with patch("ai_karen_engine.core.expression.ExpressionGateway.generate") as mock_generate:
         mock_generate.return_value = MagicMock()
         mock_generate.return_value.engine_id = "builtin"
         

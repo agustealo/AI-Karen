@@ -99,28 +99,12 @@ def _build_bootstrap_runtime_catalog(error: Optional[Exception] = None) -> Runti
             requires_api_key=False,
             requires_base_url=False,
         ),
-        RuntimeProvider(
-            id="builtin_vllm",
-            label="vLLM",
-            provider_label="vLLM",
-            category="builtin",
-            enabled=True,
-            configured=True,
-            healthy=False,
-            runtime_engine="vllm",
-            transport="process_or_http",
-            models=[],
-            health=ProviderHealthInfo(status="degraded", last_checked_at=datetime.now(timezone.utc)),
-            degradation_reason="vLLM health/model discovery unavailable during catalog boot.",
-            requires_api_key=False,
-            requires_base_url=False,
-        ),
     ]
     return RuntimeProviderCatalog(
         providers=providers,
         default_provider="builtin_transformers",
         default_model="auto",
-        fallback_order=["builtin_transformers", "builtin_vllm"],
+        fallback_order=["builtin_transformers"],
         catalog_version="bootstrap",
         errors=[{"error_type": "settings_payload_failed", "message": error_message}],
     )
@@ -224,7 +208,7 @@ async def get_runtime_provider_catalog(
 
         default_provider = settings_response.get("default_provider") or settings_response.get("selected_provider") or "builtin_transformers"
         default_model = settings_response.get("default_model") or settings_response.get("selected_model") or "auto"
-        fallback_order = settings_response.get("fallback_hierarchy") or ["builtin_transformers", "builtin_vllm", "openai", "gemini"]
+        fallback_order = settings_response.get("fallback_hierarchy") or ["builtin_transformers", "openai", "gemini"]
 
         if not catalog_providers:
             return _build_bootstrap_runtime_catalog()

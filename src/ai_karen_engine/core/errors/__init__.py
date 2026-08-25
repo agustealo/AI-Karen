@@ -14,7 +14,13 @@ from ai_karen_engine.core.errors.exceptions import (
     AIProcessingError
 )
 from ai_karen_engine.core.errors.handlers import ErrorHandler, ErrorResponse, ErrorCode, get_error_handler
-from ai_karen_engine.core.errors.middleware import error_middleware
+try:
+    from ai_karen_engine.core.errors.middleware import error_middleware
+except ImportError:
+    try:
+        from ai_karen_engine.platform.errors.middleware import PlatformErrorMiddleware as error_middleware  # type: ignore[no-redef]
+    except ImportError:
+        error_middleware = None  # type: ignore[assignment]
 from ai_karen_engine.core.errors.response_validation import validate_response_text
 
 __all__ = [

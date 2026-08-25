@@ -45,7 +45,7 @@ class TestVLLMRuntimeConfig:
 
         assert vllm.base_url == "http://localhost:8001/v1"
         assert vllm.model == "test-model"
-        assert vllm.provider_name == "builtin_vllm"
+        assert vllm.provider_name == "custom_openai_compatible"
 
     def test_vllm_runtime_uses_env_variable(self, monkeypatch):
         """Test that VLLMRuntime reads canonical builtin vLLM env first."""
@@ -82,7 +82,7 @@ class TestVLLMRuntimeHealthCheck:
             model="test-model",
             base_url="http://localhost:8001/v1",
             health_url="http://localhost:8001/health",
-            provider_name="builtin_vllm",
+            provider_name="custom_openai_compatible",
         )
         provider.initialization_error = None
 
@@ -108,7 +108,7 @@ class TestVLLMRuntimeHealthCheck:
             model="test-model",
             base_url="http://localhost:8001/v1",
             health_url="http://localhost:8001/health",
-            provider_name="builtin_vllm",
+            provider_name="custom_openai_compatible",
         )
         provider.initialization_error = None
 
@@ -132,7 +132,7 @@ class TestVLLMRuntimeHealthCheck:
             model="test-model",
             base_url="http://localhost:8001/v1",
             health_url="http://localhost:8001/health",
-            provider_name="builtin_vllm",
+            provider_name="custom_openai_compatible",
         )
         provider.initialization_error = None
 
@@ -169,7 +169,7 @@ class TestVLLMRuntimeHealthCheck:
             mock_provider.health_check.assert_called_once()
 
             # Verify status structure
-            assert status["provider"] == "builtin_vllm"
+            assert status["provider"] == "custom_openai_compatible"
             assert status["runtime"] == "vllm"
             assert status["mode"] == "live_vllm"
 
@@ -411,11 +411,11 @@ class TestVLLMRuntimeMetadata:
         """Test that VLLMRuntime uses the correct provider name in metadata."""
         vllm = VLLMRuntime(
             base_url="http://localhost:8001/v1",
-            provider_name="builtin_vllm"
+            provider_name="custom_openai_compatible"
         )
 
-        assert vllm.provider_name == "builtin_vllm"
-        assert vllm._provider.provider_name == "builtin_vllm"
+        assert vllm.provider_name == "custom_openai_compatible"
+        assert vllm._provider.provider_name == "custom_openai_compatible"
         assert vllm._provider.display_name == "vLLM"
 
     def test_health_check_includes_runtime_metadata(self):
@@ -429,7 +429,7 @@ class TestVLLMRuntimeMetadata:
             status = vllm.health_check()
 
             # Verify runtime metadata
-            assert status["provider"] == "builtin_vllm"
+            assert status["provider"] == "custom_openai_compatible"
             assert status["runtime"] == "vllm"
             assert status["mode"] == "live_vllm"
 
@@ -497,12 +497,12 @@ class TestVLLMRuntimeIntegration:
 
             router._is_provider_healthy = AsyncMock(return_value=True)
 
-            # Execute fallback - should skip vLLM and deterministic Transformers, then use Ollama.
+            # Execute fallback - should skip custom providers and deterministic Transformers, then use Ollama.
             result = await router.generate_with_degraded_runtime_fallback(
                 request=request,
-                requested_provider="builtin_vllm",
+                requested_provider="custom_openai_compatible",
                 requested_model="test-model",
-                failure_reason="vLLM unavailable"
+                failure_reason="Custom provider unavailable"
             )
 
             assert result["metadata"]["llm"]["actual_provider"] == "ollama"
