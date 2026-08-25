@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import Any
 
 from .base import BaseExpressionEngine
 from ..contracts import ExpressionResult, ExpressionTask
+from ...model_runtime.provider_execution import execute_provider_endpoint
 from ...model_runtime.provider_policy import evaluate_provider_policy
 
 logger = logging.getLogger(__name__)
@@ -15,15 +15,15 @@ logger = logging.getLogger(__name__)
 class BuiltinProviderEngine(BaseExpressionEngine):
     """Execute text generation through first-party local model runtimes.
 
-    vLLM is the normal generative-serving target. Transformers remains available
-    for specialized ML capabilities, not as an implicit text-generation fallback.
+    Provider selection remains owned by the canonical Core registry. Execution
+    uses Core-owned endpoint protocols rather than importing integration/plugin
+    implementations back into the AI machine.
     """
 
     engine_id = "builtin"
 
     async def generate(self, task: ExpressionTask) -> ExpressionResult:
         started = time.perf_counter()
-        payload = self._build_payload(task)
         prompt = self._extract_prompt(task.messages)
 
         from ai_karen_engine.core.model_runtime.provider_registry_service import (
@@ -45,7 +45,8 @@ class BuiltinProviderEngine(BaseExpressionEngine):
         skipped: list[dict[str, Any]] = []
         text = ""
         actual_provider: str | None = None
-        model: Any = None
+        model: str | None = None
+        runtime_engine: str | None = None
 
         if not endpoint:
             return self._failure_result(
@@ -56,78 +57,57 @@ class BuiltinProviderEngine(BaseExpressionEngine):
                 skipped=skipped,
             )
 
-        providers_to_try = [endpoint.provider_id]
+        provider_ids = [endpoint.provider_id]
         capable_ids = [
             item.provider_id
             for item in registry.resolve_capable_targets(
                 required_caps, healthy_only=True
             )
         ]
-        if endpoint.provider_id != "builtin_vllm" and "builtin_vllm" in capable_ids:
-            providers_to_try.append("builtin_vllm")
+        for fallback_id in ("builtin_vllm", "lmstudio-desktop", "llamacpp-server", "ollama-local"):
+            if fallback_id in capable_ids and fallback_id not in provider_ids:
+                provider_ids.append(fallback_id)
 
-        for provider_id in providers_to_try:
+        for provider_id in provider_ids:
             attempt_start = time.perf_counter()
-            model_id = payload.get("model")
+            model_id = task.preferred_model
             if model_id == "auto":
                 model_id = None
 
             try:
                 decision = evaluate_provider_policy(provider_id)
-                if decision.classification != "builtin_engine":
-                    skipped.append(
-                        {"provider": provider_id, "reason": "not_builtin"}
-                    )
+                if decision.classification != "builtin_engine" and provider_id == endpoint.provider_id:
+                    skipped.append({"provider": provider_id, "reason": "not_builtin"})
                     continue
 
-                from ai_karen_engine.integrations.llm_registry import get_provider
-
-                provider = get_provider(provider_id, model=model_id)
-                if not provider:
+                target = registry.get_provider_endpoint(provider_id)
+                if target is None:
                     attempts.append(
                         {
                             "provider": provider_id,
                             "model": model_id,
                             "status": "failed",
-                            "error_type": "provider_not_found",
+                            "error_type": "provider_endpoint_not_found",
                             "latency_ms": (time.perf_counter() - attempt_start) * 1000,
                         }
                     )
                     continue
 
-                if hasattr(provider, "generate_text_async"):
-                    out = await provider.generate_text_async(prompt, **payload)
-                elif hasattr(provider, "generate_text"):
-                    loop = asyncio.get_running_loop()
-                    out = await loop.run_in_executor(
-                        None, lambda: provider.generate_text(prompt, **payload)
-                    )
-                else:
-                    loop = asyncio.get_running_loop()
-                    out = await loop.run_in_executor(
-                        None, lambda: provider.generate(prompt, **payload)
-                    )
-
-                response_text = str(out or "").strip()
-                if not response_text:
-                    attempts.append(
-                        {
-                            "provider": provider_id,
-                            "model": model_id,
-                            "status": "failed",
-                            "error_type": "empty_response",
-                            "latency_ms": (time.perf_counter() - attempt_start) * 1000,
-                        }
-                    )
-                    continue
-
-                text = response_text
-                actual_provider = provider_id
-                model = getattr(provider, "model", model_id)
+                execution = await execute_provider_endpoint(
+                    target,
+                    messages=task.messages,
+                    model=model_id,
+                    max_tokens=task.max_tokens,
+                    temperature=task.temperature,
+                )
+                text = execution.text
+                actual_provider = execution.provider_id
+                model = execution.model
+                runtime_engine = execution.runtime_engine
                 attempts.append(
                     {
-                        "provider": provider_id,
-                        "model": str(model or model_id or "auto"),
+                        "provider": actual_provider,
+                        "model": model or model_id or "auto",
                         "status": "success",
                         "latency_ms": (time.perf_counter() - attempt_start) * 1000,
                     }
@@ -145,7 +125,6 @@ class BuiltinProviderEngine(BaseExpressionEngine):
                     }
                 )
 
-        runtime_engine = "vllm" if actual_provider == "builtin_vllm" else None
         degraded = not bool(text)
         fallback_level = 0
         if actual_provider and preferred and preferred != "auto" and actual_provider != preferred:
@@ -170,7 +149,7 @@ class BuiltinProviderEngine(BaseExpressionEngine):
             "requested_provider": task.preferred_provider,
             "requested_model": task.preferred_model,
             "actual_provider": actual_provider,
-            "actual_model": str(model) if model else None,
+            "actual_model": model,
             "runtime_engine": runtime_engine,
             "response_source": response_source,
             "fallback_level": fallback_level if actual_provider else 99,
@@ -190,7 +169,7 @@ class BuiltinProviderEngine(BaseExpressionEngine):
             task_id=task.task_id,
             text=text,
             provider=actual_provider,
-            model=str(model) if model else None,
+            model=model,
             engine_id=self.engine_id,
             engine_mode="builtin_provider_engine",
             runtime_engine=runtime_engine,
@@ -208,17 +187,6 @@ class BuiltinProviderEngine(BaseExpressionEngine):
         if not messages:
             return ""
         return messages[-1].get("content", "")
-
-    @staticmethod
-    def _build_payload(task: ExpressionTask) -> dict[str, Any]:
-        return {
-            "messages": task.messages,
-            "provider": task.preferred_provider,
-            "model": task.preferred_model,
-            "max_tokens": task.max_tokens,
-            "temperature": task.temperature,
-            "timeout_ms": task.timeout_ms,
-        }
 
     def _failure_result(
         self,
