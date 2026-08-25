@@ -11,6 +11,7 @@ from ai_karen_engine.core.contracts.cognitive import (
     EpistemicConfidence,
     LearningConfidence,
     MetaConfidence,
+    ReasoningConfidence,
     RetrievalConfidence,
     SalienceConfidence,
 )
@@ -72,12 +73,24 @@ class ContextSnapshot:
 
 
 @dataclass(slots=True)
+class ReasoningSnapshot:
+    reasoning_id: str
+    confidence: ReasoningConfidence = field(default_factory=ReasoningConfidence)
+    evidence_sufficiency: float = 0.0
+    contradiction_severity: str = "low"
+    uncertainty_reasons: list[str] = field(default_factory=list)
+    evidence_refs: list[str] = field(default_factory=list)
+    policy_version: str = "1.0.0"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class MetaSnapshot:
     assessment_id: str
     status: str = "stable"
     confidence: MetaConfidence = field(default_factory=MetaConfidence)
     memory_reliability: RetrievalConfidence = field(default_factory=RetrievalConfidence)
-    reasoning_confidence: float = 0.0
+    reasoning_confidence: ReasoningConfidence = field(default_factory=ReasoningConfidence)
     evidence_consistency: float = 0.0
     is_looping: bool = False
     calibration_score: float = 0.0
@@ -142,6 +155,7 @@ class CognitiveState:
     goals: list[GoalSnapshot] = field(default_factory=list)
     salience: SalienceSnapshot | None = None
     context: ContextSnapshot | None = None
+    reasoning: ReasoningSnapshot | None = None
     meta: MetaSnapshot | None = None
     adaptive: AdaptiveSnapshot | None = None
     policy: PolicySnapshot | None = None
@@ -156,7 +170,7 @@ class CognitiveState:
             raise ValueError("cognitive tenant_id must be explicit and non-default")
 
     def is_complete(self) -> bool:
-        required_fields = [self.belief, self.salience, self.context, self.meta]
+        required_fields = [self.belief, self.salience, self.context, self.reasoning, self.meta]
         return all(value is not None for value in required_fields)
 
     def with_policy_version(self, version: str) -> "CognitiveState":
@@ -173,6 +187,7 @@ class CognitiveState:
             goals=list(self.goals),
             salience=self.salience,
             context=self.context,
+            reasoning=self.reasoning,
             meta=self.meta,
             adaptive=self.adaptive,
             policy=self.policy,
@@ -193,5 +208,6 @@ __all__ = [
     "GoalSnapshot",
     "MetaSnapshot",
     "PolicySnapshot",
+    "ReasoningSnapshot",
     "SalienceSnapshot",
 ]
