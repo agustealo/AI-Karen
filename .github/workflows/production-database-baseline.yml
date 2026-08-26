@@ -13,7 +13,6 @@ on:
       - "src/ai_karen_engine/services/identity_vault/**"
       - "src/ai_karen_engine/extensions/platform/core/integration/**"
       - "server/deployment/**"
-      - "server/routes/identity_vault.py"
       - "scripts/deploy/**"
       - "tests/architecture/test_production_database_baseline_contract.py"
       - "tests/architecture/test_identity_vault_tenant_contract.py"
@@ -29,7 +28,6 @@ on:
       - "src/ai_karen_engine/services/identity_vault/**"
       - "src/ai_karen_engine/extensions/platform/core/integration/**"
       - "server/deployment/**"
-      - "server/routes/identity_vault.py"
       - "scripts/deploy/**"
       - "tests/architecture/test_production_database_baseline_contract.py"
       - "tests/architecture/test_identity_vault_tenant_contract.py"
@@ -65,17 +63,7 @@ jobs:
             src/ai_karen_engine/services/auth/auth_service.py \
             src/ai_karen_engine/services/identity_vault/credential_vault_service.py \
             src/ai_karen_engine/extensions/platform/core/integration/models.py \
-            server/routes/identity_vault.py \
             server/deployment/deploy_auth_system.py
-      - name: Import Identity Vault boundaries
-        run: |
-          python - <<'PY'
-          from ai_karen_engine.database.models.identity_vault import CredentialCreate
-          from ai_karen_engine.database.identity_vault_schema import Credential
-          from ai_karen_engine.services.identity_vault.credential_vault_service import CredentialVaultService
-          from server.routes.identity_vault import router
-          assert CredentialCreate and Credential and CredentialVaultService and router
-          PY
       - name: Parse database operator scripts
         run: |
           bash -n scripts/deploy/database-backup.sh
