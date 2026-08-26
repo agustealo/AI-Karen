@@ -13,7 +13,8 @@ def test_canonical_application_entrypoint_exists() -> None:
     source = APP_ENTRYPOINT.read_text(encoding="utf-8")
 
     assert "def create_app()" in source
-    assert "from server.app import create_app as create_legacy_app" in source
+    assert "from server import app as legacy_app" in source
+    assert "return legacy_app.app" in source
     assert "sys.path" not in source
 
 
