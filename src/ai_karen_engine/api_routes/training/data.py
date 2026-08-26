@@ -31,7 +31,7 @@ from ai_karen_engine.learning.training_data_manager import (
 from ai_karen_engine.learning.autonomous_learner import TrainingExample, LearningDataType
 from ai_karen_engine.core.cortex.analysis import SpacyAnalyzer
 from ai_karen_engine.core.memory.signals.spacy_service import SpacyService
-from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
+from ai_karen_engine.core.services.dependencies import get_memory_service
 from ai_karen_engine.auth.rbac_middleware import (
     require_permission, get_current_user, Permission, 
     check_training_access, check_data_access
@@ -59,13 +59,14 @@ def get_training_manager() -> TrainingDataManager:
     return _training_manager
 
 
-def _create_autonomous_learner() -> "AutonomousLearner":
+async def _create_autonomous_learner() -> "AutonomousLearner":
     """Create an autonomous learner directly from the live training components."""
     from ai_karen_engine.learning.autonomous_learner import AutonomousLearner
 
+    memory_service = await get_memory_service()
     return AutonomousLearner(
         spacy_analyzer=SpacyAnalyzer(spacy_service=SpacyService()),
-        memory_service=WebUIMemoryService(),
+        memory_service=memory_service,
     )
 
 
@@ -90,7 +91,6 @@ class CreateCuratedDatasetRequest(BaseModel):
 
     name: str = Field(..., description="Dataset name")
     description: str = Field(..., description="Dataset description")
-    tenant_id: Optional[str] = Field(None, description="Tenant scope for curated memory")
     min_confidence: float = Field(0.7, ge=0.0, le=1.0)
     max_examples: int = Field(250, ge=1, le=5000)
     tags: Optional[List[str]] = Field(None, description="Dataset tags")
@@ -288,8 +288,13 @@ async def create_dataset_from_curated_memory(
         raise HTTPException(status_code=403, detail="DATA_WRITE permission required")
 
     try:
-        tenant_id = request.tenant_id or current_user.tenant_id or current_user.user_id
-        learner = _create_autonomous_learner()
+        tenant_id = current_user.tenant_id
+        if not tenant_id or str(tenant_id) == "default":
+            raise HTTPException(
+                status_code=403,
+                detail="Explicit tenant scope is required for curated memory datasets",
+            )
+        learner = await _create_autonomous_learner()
         curated_metadata = await learner.metadata_collector.curate_training_data(
             tenant_id=tenant_id,
             min_confidence=request.min_confidence,

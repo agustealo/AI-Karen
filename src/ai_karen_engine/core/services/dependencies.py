@@ -126,7 +126,9 @@ async def get_persona_service() -> Any:
 
 async def get_conversation_service() -> Any:
     async def factory() -> Any:
-        from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
+        from ai_karen_engine.core.memory.service_factory import (
+            create_unified_memory_service,
+        )
         from ai_karen_engine.database.client import MultiTenantPostgresClient
         from ai_karen_engine.database.conversation_manager import ConversationManager
         from ai_karen_engine.services.memory.conversation_service import ConversationService
@@ -134,7 +136,7 @@ async def get_conversation_service() -> Any:
         memory_service = await _get_runtime_service("memory_service")
         if memory_service is None:
             try:
-                memory_service = WebUIMemoryService()
+                memory_service = create_unified_memory_service()
             except Exception as exc:
                 logger.error("Memory service unavailable for conversation service: %s", exc)
                 raise RuntimeError("memory_service unavailable") from exc

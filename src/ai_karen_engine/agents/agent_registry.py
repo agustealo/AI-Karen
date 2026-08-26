@@ -281,13 +281,11 @@ class AgentRegistry(BaseService):
             
             # Initialize memory service if available
             if HAS_MEMORY_SERVICE and UnifiedMemoryService is not None:
-                from ai_karen_engine.database.client import MultiTenantPostgresClient
-                from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
-
-                self._memory_service = UnifiedMemoryService(
-                    db_client=MultiTenantPostgresClient(),
-                    embedding_manager=EmbeddingManager()
+                from ai_karen_engine.core.memory.service_factory import (
+                    create_unified_memory_service,
                 )
+
+                self._memory_service = create_unified_memory_service()
                 await self._memory_service.initialize()
             else:
                 self._memory_service = None

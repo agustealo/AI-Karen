@@ -492,30 +492,12 @@ class AgentOrchestrator(BaseService):
 
             elif service_name == "memory_service":
                 try:
-                    from ai_karen_engine.core.memory.unified_memory_service import (
-                        UnifiedMemoryService,
-                    )
-                    from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
-                    from ai_karen_engine.database.client import (
-                        MultiTenantPostgresClient,
+                    from ai_karen_engine.core.memory.service_factory import (
+                        create_unified_memory_service,
                     )
 
-                    # These would normally be injected via dependency injection
-                    # For now, we'll create placeholder instances
-                    db_client = None  # Would be injected
-                    embedding_manager = None  # Would be injected
-
-                    if all([db_client, embedding_manager]):
-                        service = UnifiedMemoryService(
-                            db_client=db_client,
-                            embedding_manager=embedding_manager,
-                        )
-                        logger.info("UnifiedMemoryService discovered and initialized")
-                    else:
-                        logger.warning(
-                            "UnifiedMemoryService dependencies not available"
-                        )
-                        return None
+                    service = create_unified_memory_service()
+                    logger.info("UnifiedMemoryService discovered and initialized")
                 except ImportError:
                     logger.warning("Memory service not available for discovery")
                     return None
