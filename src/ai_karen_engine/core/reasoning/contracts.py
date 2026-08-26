@@ -275,6 +275,11 @@ class ReasoningResult:
     diagnostics: JsonMap = field(default_factory=dict)
     schema_version: str = "v1"
 
+    @property
+    def summary(self) -> str:
+        """Deprecated compatibility view for pre-convergence runtime callers."""
+        return self.conclusion
+
 
 class EvidenceProvider(Protocol):
     async def retrieve(self, request: ReasoningRequest, context: Any) -> list[ReasoningEvidence]: ...
