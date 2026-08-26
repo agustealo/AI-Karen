@@ -438,7 +438,7 @@ def get_extension_by_id(session: Session, extension_id: str) -> Optional[Extensi
 
 def get_extension_by_name(session: Session, name: str) -> Optional[ExtensionModel]:
     """Get extension by name."""
-    return session.query(ExtensionModel).filter(ExtensionModel.name == extension_id).first()
+    return session.query(ExtensionModel).filter(ExtensionModel.name == name).first()
 
 
 def get_extensions_by_state(session: Session, state: ExtensionState) -> List[ExtensionModel]:
