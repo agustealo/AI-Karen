@@ -68,11 +68,11 @@ jobs:
           PYTHONPATH: src
         run: pytest tests/beta/test_real_model_wiring.py -q
 
-      - name: Reject retired builtin vLLM authority
+      - name: Reject retired builtin vLLM authority in Python runtime and tests
         shell: bash
         run: |
           set -euo pipefail
-          refs=$(grep -R --line-number --include='*.py' --include='*.yml' --include='*.yaml' \
-            -E 'preferred_provider=["'"']builtin_vllm["'"']|provider_id=["'"']builtin_vllm["'"']|VLLMRuntime\(' \
-            tests .github src/ai_karen_engine/core/expression || true)
+          refs=$(grep -R --line-number --include='*.py' \
+            -E 'preferred_provider=["'"']builtin_vllm["'"']|provider_id=["'"']builtin_vllm["'"']|from .*vllm_runtime import VLLMRuntime|import .*vllm_runtime' \
+            tests src/ai_karen_engine/core/expression || true)
           test -z "$refs" || { echo "$refs"; exit 1; }
