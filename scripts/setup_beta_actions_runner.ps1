@@ -151,12 +151,15 @@ Write-Host "Git: $(& git --version)"
 $selectedModel = Test-LocalModelEndpoint -BaseUrl $ModelBaseUrl -ExpectedModel $ModelName
 $release = Get-LatestRunnerRelease
 Install-RunnerFiles -Release $release -Destination $RunnerRoot
-Register-Runner \
-    -Destination $RunnerRoot \
-    -RepoUrl $RepositoryUrl \
-    -Token $RegistrationToken \
-    -Name $RunnerName \
-    -AsService:$RunAsService
+
+$registrationArgs = @{
+    Destination = $RunnerRoot
+    RepoUrl = $RepositoryUrl
+    Token = $RegistrationToken
+    Name = $RunnerName
+    AsService = $RunAsService
+}
+Register-Runner @registrationArgs
 
 Write-Host ""
 Write-Host "AI KAREN beta runner registration complete."
