@@ -1,31 +1,30 @@
 """
-Production Authentication Routes
+Production Authentication Routes.
 
-Enhanced authentication endpoints with security hardening, rate limiting,
-and first-run setup flow.
+Thin ingress for authentication, account bootstrap, session rotation, profile
+management, and security context. Durable user/session/tenant truth remains owned
+by the canonical AuthService.
 """
 
-import logging
 import asyncio
+import logging
 from datetime import datetime, timezone
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Request, HTTPException, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_karen_engine.auth.models import UserData
-from ai_karen_engine.auth.session import get_current_user as get_authenticated_user
-from ai_karen_engine.auth.rbac_middleware import get_rbac_manager
 from ai_karen_engine.auth.auth_middleware import get_rate_limiter
+from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.auth.rbac_middleware import get_rbac_manager
+from ai_karen_engine.auth.session import get_current_user as get_authenticated_user
+from ai_karen_engine.database.dependencies import get_async_db_session_dependency
 from ai_karen_engine.services.auth.auth_service import (
     AuthService as CoreAuthService,
     UserRole,
 )
-from ai_karen_engine.database.dependencies import get_async_db_session_dependency
-
-# AuthService is imported locally where needed to avoid circular imports
 
 logger = logging.getLogger("kari.auth_routes")
 
@@ -38,7 +37,6 @@ def _has_role(current_user: Any, role: str) -> bool:
     return any(str(item).strip().lower() == role.lower() for item in (roles or []))
 
 
-# Request/Response Models
 class LoginRequest(BaseModel):
     """Login request model."""
 
@@ -48,7 +46,6 @@ class LoginRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_login_identifier(self):
-        """Ensure either email or username is provided."""
         if not self.email and not self.username:
             raise ValueError("Either email or username must be provided")
         return self
@@ -138,8 +135,6 @@ class ChangePasswordRequest(BaseModel):
         return self
 
 
-# Initialize service with default configuration
-# Global auth service instance for singleton usage
 _auth_service_instance: Optional[CoreAuthService] = None
 _auth_service_init_lock = asyncio.Lock()
 
@@ -147,7 +142,7 @@ _auth_service_init_lock = asyncio.Lock()
 async def get_auth_service(
     db_session: AsyncSession = Depends(get_async_db_session_dependency),
 ) -> CoreAuthService:
-    """Get the singleton auth service instance with request-specific DB session."""
+    """Return the canonical singleton AuthService with request-scoped DB context."""
     global _auth_service_instance
 
     if _auth_service_instance is None:
@@ -156,22 +151,18 @@ async def get_auth_service(
                 logger.info("Creating singleton AuthService instance")
                 _auth_service_instance = CoreAuthService()
 
-    # CoreAuthService.initialize() has its own internal lock and is safe to call concurrently.
-    # We call it here to ensure it's ready before use, without holding our local init lock.
     if not _auth_service_instance._initialized:
         await _auth_service_instance.initialize()
 
-    # Set the request-specific session in ContextVar-safe way (via set_db_session)
     _auth_service_instance.set_db_session(db_session)
     return _auth_service_instance
 
 
-# Router - now with explicit /auth prefix for API gateway consistency
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
 def get_client_ip(request: Request) -> str:
-    """Get client IP address from request."""
+    """Get client IP address from trusted proxy headers or socket context."""
     forwarded_for = request.headers.get("X-Forwarded-For")
     if forwarded_for:
         return forwarded_for.split(",")[0].strip()
@@ -184,13 +175,12 @@ def get_client_ip(request: Request) -> str:
 
 
 def get_user_agent(request: Request) -> str:
-    """Get user agent from request."""
+    """Get user agent string."""
     return request.headers.get("User-Agent", "unknown")
 
 
 def _serialize_permissions(user_payload: Dict[str, Any]) -> List[str]:
     """Resolve canonical permission strings for the authenticated user."""
-
     rbac_manager = get_rbac_manager()
     user = UserData.from_dict(user_payload)
     permissions = {
@@ -208,7 +198,7 @@ def _user_value(user: Any, key: str, default: Any = None) -> Any:
 
 
 def _ensure_authenticated_user_payload(user: Any) -> Dict[str, Any]:
-    """Normalize and validate an authenticated user payload."""
+    """Normalize authenticated context without inventing identity or tenant scope."""
     if isinstance(user, dict):
         payload = dict(user)
     else:
@@ -230,30 +220,32 @@ def _ensure_authenticated_user_payload(user: Any) -> Dict[str, Any]:
             detail="Authenticated user context is missing a user identifier",
         )
 
+    tenant_id = str(payload.get("tenant_id") or payload.get("org_id") or "").strip()
+    if not tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated user context is missing durable tenant scope",
+        )
+
     payload["user_id"] = user_id
-    payload["tenant_id"] = str(
-        payload.get("tenant_id") or payload.get("org_id") or "default"
-    )
+    payload["tenant_id"] = tenant_id
     payload["roles"] = list(payload.get("roles") or [])
     payload["preferences"] = dict(payload.get("preferences") or {})
-    # Generate default username from email if not provided
-    username = payload.get("username") or ""
-    if not username and payload.get("email"):
-        username = payload["email"].split("@")[0]
-    payload["username"] = username
 
+    username = str(payload.get("username") or "").strip()
+    if not username and payload.get("email"):
+        username = str(payload["email"]).split("@", 1)[0]
+    payload["username"] = username
     payload["full_name"] = payload.get("full_name") or payload.get("name") or ""
     payload["email"] = payload.get("email") or ""
     return payload
 
 
 def _serialize_user_response(user: Any) -> Dict[str, Any]:
-    """Normalize a user-like object into the public response shape."""
+    """Normalize a canonical user into the public response shape."""
     payload = _ensure_authenticated_user_payload(user)
-    user_id = payload["user_id"]
     created_at = _user_value(user, "created_at", None)
     last_login = _user_value(user, "last_login", None)
-    tenant_id = payload["tenant_id"]
     status_value = _user_value(user, "status", None)
     is_active = (
         getattr(status_value, "value", None) == "active"
@@ -262,7 +254,7 @@ def _serialize_user_response(user: Any) -> Dict[str, Any]:
     )
 
     return {
-        "user_id": user_id,
+        "user_id": payload["user_id"],
         "email": payload["email"],
         "username": payload["username"],
         "full_name": payload["full_name"],
@@ -272,30 +264,14 @@ def _serialize_user_response(user: Any) -> Dict[str, Any]:
         if created_at
         else datetime.now(timezone.utc).isoformat(),
         "last_login": last_login.isoformat() if last_login else None,
-        "tenant_id": tenant_id,
+        "tenant_id": payload["tenant_id"],
         "preferences": payload["preferences"],
     }
 
 
 def _resolve_current_user_id(user: Any) -> str:
-    """Resolve current user ID from either a dict payload or a user-like object."""
-    payload = _ensure_authenticated_user_payload(user)
-    return payload["user_id"]
-
-
-# Startup/shutdown handlers commented out to prevent blocking during app startup
-# The AuthService is already initialized when the module loads
-# @router.on_event("startup")
-# async def startup_auth_service():
-#     """Initialize authentication service on startup."""
-#     await auth_service.initialize()
-#     await auth_service.start()
-
-
-# @router.on_event("shutdown")
-# async def shutdown_auth_service():
-#     """Shutdown authentication service."""
-#     await auth_service.stop()
+    """Resolve current user ID from validated authenticated context."""
+    return _ensure_authenticated_user_payload(user)["user_id"]
 
 
 @router.get("/status")
@@ -303,9 +279,10 @@ async def auth_status() -> Dict[str, Any]:
     """Get authentication service status."""
     auth_service_instance = await get_auth_service()
     stats = await auth_service_instance.get_auth_stats()
+    service_status = str(stats.get("service_status") or "error")
 
     return {
-        "status": "healthy",
+        "status": "healthy" if service_status == "running" else "unhealthy",
         "service": "production-auth",
         "mode": "jwt-authentication",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -362,17 +339,17 @@ async def first_run_setup(
     """Set up the first admin user through the canonical auth authority."""
     try:
         auth_svc = await get_auth_service()
-    except Exception:
-        # If auth service fails to initialize, return error
+    except Exception as exc:
+        logger.exception("Auth service unavailable for first-run setup")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Auth service unavailable for first-run setup",
-        )
+        ) from exc
 
-    # Validate password confirmation
     if request.password != request.confirm_password:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Passwords do not match"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passwords do not match",
         )
 
     try:
@@ -382,74 +359,68 @@ async def first_run_setup(
             full_name=request.full_name,
         )
 
-        # Authenticate the new admin user
-        ip_address = get_client_ip(http_request)
-        user_agent = get_user_agent(http_request)
-
         auth_user, access_token, refresh_token = await auth_svc.authenticate_user(
             request.email,
             request.password,
-            ip_address=ip_address,
-            user_agent=user_agent,
+            ip_address=get_client_ip(http_request),
+            user_agent=get_user_agent(http_request),
         )
 
-        if not auth_user:
+        if not auth_user or not access_token or not refresh_token:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to authenticate newly created admin user",
             )
 
-        # Return login response
         user_data = {
             "user_id": user.id,
             "email": user.email,
+            "username": user.username,
             "full_name": user.full_name,
             "roles": user.roles,
             "is_active": user.status.value == "active",
             "tenant_id": user.tenant_id,
             "preferences": user.preferences,
         }
-
         permissions = _serialize_permissions(user_data)
         user_data["permissions"] = permissions
 
-        response_data = {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_type": "bearer",
-            "expires_in": auth_svc.config.access_token_expire_minutes * 60,
-            "user": user_data,
-            "permissions": permissions,
-            "message": "First admin user created and authenticated successfully",
-        }
-
         response = JSONResponse(
-            content=response_data, status_code=status.HTTP_201_CREATED
+            content={
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "token_type": "bearer",
+                "expires_in": auth_svc.config.access_token_expire_minutes * 60,
+                "user": user_data,
+                "permissions": permissions,
+                "message": "First admin user created and authenticated successfully",
+            },
+            status_code=status.HTTP_201_CREATED,
         )
-
-        is_secure = http_request.url.scheme == "https"
         response.set_cookie(
             key="kari_session",
-            value=access_token or "",
+            value=access_token,
             max_age=auth_svc.config.access_token_expire_minutes * 60,
             httponly=True,
-            secure=is_secure,
+            secure=http_request.url.scheme == "https",
             samesite="lax",
             path="/",
         )
-
         return response
 
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except HTTPException:
         raise
-    except Exception:
+    except Exception as exc:
         logger.exception("Failed to create first admin user")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create admin user",
-        )
+        ) from exc
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -460,57 +431,48 @@ async def login(
     limiter: Any = Depends(get_rate_limiter),
 ) -> JSONResponse:
     """Authenticate user and return tokens."""
-    ip_address = get_client_ip(http_request)
-    user_agent = get_user_agent(http_request)
-
-    # Determine login identifier (email or username)
     login_identifier = request.email or request.username or ""
-
-    # Check rate limit before proceeding
     if not limiter._check_rate_limit(login_identifier, "login_attempts"):
-        logger.warning(f"Rate limit exceeded for login attempts: {login_identifier}")
+        logger.warning("Rate limit exceeded for login attempts: %s", login_identifier)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many login attempts. Please try again later.",
         )
 
-    logger.info(f"Login attempt for identifier: {login_identifier}")
-
+    logger.info("Login attempt for identifier: %s", login_identifier)
     try:
-        coro = auth_svc.authenticate_user(
-            login_identifier,  # positional string
-            request.password,  # positional string
-            ip_address=ip_address,
-            user_agent=user_agent,
+        user, access_token, refresh_token_or_error = await auth_svc.authenticate_user(
+            login_identifier,
+            request.password,
+            ip_address=get_client_ip(http_request),
+            user_agent=get_user_agent(http_request),
         )
-        user, access_token, refresh_token_or_error = await coro
-        logger.info(f"Authenticate user succeeded: user={user is not None}")
-    except Exception as e:
-        logger.error(f"Exception in authenticate_user: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Unexpected authentication failure")
         raise
 
     if not user:
-        # Record failed attempt for rate limiting
         limiter._record_failed_attempt(
-            login_identifier, "login_attempts", refresh_token_or_error
+            login_identifier,
+            "login_attempts",
+            refresh_token_or_error,
         )
-        # refresh_token_or_error contains error message
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=refresh_token_or_error,
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Guard against None access_token (should not happen when user is not None)
-    if access_token is None:
+    if access_token is None or not refresh_token_or_error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate access token",
+            detail="Failed to generate session credentials",
         )
 
     user_data = {
         "user_id": user.id,
         "email": user.email,
+        "username": user.username,
         "full_name": user.full_name,
         "roles": user.roles,
         "is_active": user.status.value == "active",
@@ -521,31 +483,25 @@ async def login(
     permissions = _serialize_permissions(user_data)
     user_data["permissions"] = permissions
 
-    response_data = {
-        "access_token": access_token,
-        "refresh_token": refresh_token_or_error,  # This is refresh_token on success
-        "token_type": "bearer",
-        "expires_in": auth_svc.config.access_token_expire_minutes * 60,
-        "user": user_data,
-        "permissions": permissions,
-    }
-    response = JSONResponse(content=response_data)
-
-    # Determine if we should use secure cookies (HTTPS only)
-    is_secure = http_request.url.scheme == "https"
-
-    # Set the kari_session cookie with the access token
-    # This allows the auth middleware to authenticate requests via cookie
+    response = JSONResponse(
+        content={
+            "access_token": access_token,
+            "refresh_token": refresh_token_or_error,
+            "token_type": "bearer",
+            "expires_in": auth_svc.config.access_token_expire_minutes * 60,
+            "user": user_data,
+            "permissions": permissions,
+        }
+    )
     response.set_cookie(
         key="kari_session",
         value=access_token,
-        max_age=auth_svc.config.access_token_expire_minutes * 60,  # Convert to seconds
-        httponly=True,  # Prevent JavaScript access (XSS protection)
-        secure=is_secure,  # Only send over HTTPS in production
-        samesite="lax",  # CSRF protection while allowing navigation
-        path="/",  # Available for all routes
+        max_age=auth_svc.config.access_token_expire_minutes * 60,
+        httponly=True,
+        secure=http_request.url.scheme == "https",
+        samesite="lax",
+        path="/",
     )
-
     return response
 
 
@@ -563,22 +519,23 @@ async def refresh_token(
         status_code = status.HTTP_401_UNAUTHORIZED
         if error == "Database unavailable":
             status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-            logger.warning("Refresh token rotation unavailable because database is unavailable")
-
+            logger.warning(
+                "Refresh token rotation unavailable because database is unavailable"
+            )
         raise HTTPException(
             status_code=status_code,
             detail=error,
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    response_data = {
-        "access_token": access_token,
-        "refresh_token": new_refresh_token,
-        "token_type": "bearer",
-        "expires_in": auth_svc.config.access_token_expire_minutes * 60,
-    }
-
-    response = JSONResponse(content=response_data)
+    response = JSONResponse(
+        content={
+            "access_token": access_token,
+            "refresh_token": new_refresh_token,
+            "token_type": "bearer",
+            "expires_in": auth_svc.config.access_token_expire_minutes * 60,
+        }
+    )
     response.set_cookie(
         key="kari_session",
         value=access_token,
@@ -588,7 +545,6 @@ async def refresh_token(
         samesite="lax",
         path="/",
     )
-
     return response
 
 
@@ -597,6 +553,8 @@ async def logout(
     request: RefreshTokenRequest,
     current_user=Depends(get_authenticated_user),
 ) -> JSONResponse:
+    """Invalidate the supplied canonical refresh session."""
+    _ensure_authenticated_user_payload(current_user)
     auth_svc = await get_auth_service()
     await auth_svc.logout(request.refresh_token)
 
@@ -612,23 +570,30 @@ async def validate_session(
     current_user=Depends(get_authenticated_user),
     auth_svc: CoreAuthService = Depends(get_auth_service),
 ) -> Dict[str, Any]:
-    """Validate current session and return user information."""
-    current_user_id = _resolve_current_user_id(current_user)
-    canonical_user = await auth_svc.get_user_by_id(current_user_id)
-    if canonical_user is not None:
-        user_payload = _serialize_user_response(canonical_user)
-    else:
-        # Fallback to middleware-provided context if canonical lookup fails.
-        user_payload = _ensure_authenticated_user_payload(current_user)
+    """Validate current session and return canonical user information."""
+    middleware_payload = _ensure_authenticated_user_payload(current_user)
+    canonical_user = await auth_svc.get_user_by_id(middleware_payload["user_id"])
+    if canonical_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated user no longer exists",
+        )
+
+    user_payload = _serialize_user_response(canonical_user)
+    if user_payload["tenant_id"] != middleware_payload["tenant_id"]:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated tenant context is stale",
+        )
+
     permissions = _serialize_permissions(user_payload)
     user_payload["permissions"] = permissions
-    is_authenticated = current_user.get("authenticated", False)
     return {
         "valid": True,
         "user": user_payload,
         "permissions": permissions,
-        "authenticated": is_authenticated,
-        "session_valid": is_authenticated,
+        "authenticated": True,
+        "session_valid": True,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -638,23 +603,24 @@ async def get_current_user_info(
     current_user=Depends(get_authenticated_user),
     auth_svc: CoreAuthService = Depends(get_auth_service),
 ) -> Dict[str, Any]:
-    """Get current user information."""
-    current_user_id = _resolve_current_user_id(current_user)
-    canonical_user = await auth_svc.get_user_by_id(current_user_id)
-    response = (
-        _serialize_user_response(canonical_user)
-        if canonical_user is not None
-        else _serialize_user_response(current_user)
-    )
+    """Get current canonical user information."""
+    middleware_payload = _ensure_authenticated_user_payload(current_user)
+    canonical_user = await auth_svc.get_user_by_id(middleware_payload["user_id"])
+    if canonical_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated user no longer exists",
+        )
+
+    response = _serialize_user_response(canonical_user)
+    if response["tenant_id"] != middleware_payload["tenant_id"]:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated tenant context is stale",
+        )
     response["authenticated"] = True
     response["last_active"] = datetime.now(timezone.utc).isoformat()
     return response
-
-
-@router.put("/test")
-async def test_put_endpoint() -> Dict[str, Any]:
-    """Simple test endpoint to check if PUT works."""
-    return {"message": "PUT endpoint works"}
 
 
 @router.put("/me")
@@ -663,13 +629,10 @@ async def update_current_user_info(
     current_user=Depends(get_authenticated_user),
     auth_svc: CoreAuthService = Depends(get_auth_service),
 ) -> Dict[str, Any]:
-    """Update current user information."""
+    """Update current user information through canonical AuthService."""
+    current_user_id = _resolve_current_user_id(current_user)
 
     try:
-        current_user_id = _resolve_current_user_id(current_user)
-        logger.info(f"PUT /me called for user_id: {current_user_id}")
-
-        logger.info(f"Using auth_service for user {current_user_id}")
         updated_user, error = await auth_svc.update_user_profile(
             current_user_id,
             email=str(request.email) if request.email is not None else None,
@@ -682,40 +645,36 @@ async def update_current_user_info(
             status_code = status.HTTP_400_BAD_REQUEST
             if error == "User not found":
                 status_code = status.HTTP_404_NOT_FOUND
-            elif error == "User with this email already exists":
+            elif error in {
+                "User with this email already exists",
+                "User with this username already exists",
+            }:
                 status_code = status.HTTP_409_CONFLICT
-
-            debug_msg = (
-                f"{error or 'Failed to update profile'} - ID was '{current_user_id}'"
+            logger.warning("Profile update rejected for user %s: %s", current_user_id, error)
+            raise HTTPException(
+                status_code=status_code,
+                detail=error or "Failed to update profile",
             )
-            logger.error(f"Profile update failed: {debug_msg}")
-            raise HTTPException(status_code=status_code, detail=debug_msg)
 
-        logger.info(f"Profile update successful for user {current_user_id}")
         return _serialize_user_response(updated_user)
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(
-            f"Unexpected error in PUT /me for user {current_user_id}: {e}",
-            exc_info=True,
-        )
+    except Exception as exc:
+        logger.exception("Unexpected profile update failure for user %s", current_user_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update user profile: {str(e)}",
-        )
+            detail="Failed to update user profile",
+        ) from exc
 
 
 @router.post("/change-password")
 async def change_password(
     request: ChangePasswordRequest,
     current_user=Depends(get_authenticated_user),
-) -> Dict[str, str]:
-    """Change the current user's password."""
-
+) -> JSONResponse:
+    """Change current user's password and terminate the current session."""
     current_user_id = _resolve_current_user_id(current_user)
-
     auth_svc = await get_auth_service()
     error = await auth_svc.change_user_password(
         current_user_id,
@@ -742,30 +701,38 @@ async def change_password(
 
 @router.post("/create-user", response_model=UserResponse)
 async def create_user(
-    request: CreateUserRequest, current_user=Depends(get_authenticated_user)
+    request: CreateUserRequest,
+    current_user=Depends(get_authenticated_user),
 ) -> JSONResponse:
-    """Create a new user (admin only)."""
-    # Check if current user has admin privileges
-    if not _has_role(current_user, "admin") and not _has_role(current_user, "super_admin"):
+    """Create a user inside the authenticated admin's durable tenant."""
+    if not _has_role(current_user, "admin") and not _has_role(
+        current_user, "super_admin"
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Insufficient privileges to create users",
         )
 
+    actor = _ensure_authenticated_user_payload(current_user)
     auth_svc = await get_auth_service()
     user, error = await auth_svc.create_user(
         email=request.email,
         password=request.password,
         full_name=request.full_name,
+        tenant_id=actor["tenant_id"],
         roles=request.roles,
     )
 
     if not user:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error,
+        )
 
     user_data = {
         "user_id": user.id,
         "email": user.email,
+        "username": user.username,
         "full_name": user.full_name,
         "roles": user.roles,
         "is_active": user.status.value == "active",
@@ -774,7 +741,6 @@ async def create_user(
         "tenant_id": user.tenant_id,
         "preferences": user.preferences,
     }
-
     return JSONResponse(content=user_data, status_code=status.HTTP_201_CREATED)
 
 
@@ -783,15 +749,18 @@ async def get_auth_stats(
     current_user=Depends(get_authenticated_user),
 ) -> Dict[str, Any]:
     """Get authentication statistics (admin only)."""
-    # Check if current user has admin privileges
-    if not _has_role(current_user, "admin") and not _has_role(current_user, "super_admin"):
+    if not _has_role(current_user, "admin") and not _has_role(
+        current_user, "super_admin"
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Insufficient privileges to view authentication statistics",
         )
 
+    actor = _ensure_authenticated_user_payload(current_user)
     auth_svc = await get_auth_service()
     stats = await auth_svc.get_auth_stats()
+    stats["tenant_id"] = actor["tenant_id"]
     return stats
 
 
@@ -800,12 +769,13 @@ async def get_security_context(
     current_user=Depends(get_authenticated_user),
 ) -> Dict[str, Any]:
     """Get security context for authenticated user."""
+    payload = _ensure_authenticated_user_payload(current_user)
+    roles = payload["roles"]
+    privileged = _has_role(payload, "admin") or _has_role(payload, "super_admin")
     return {
-        "userRoles": current_user.get("roles", []),
-        "securityMode": "safe",  # Default to safe mode
-        "canAccessSensitive": current_user.get("roles", []).intersection(
-            ["admin", "super_admin"]
-        )
-        != set(),
-        "redactionLevel": "partial",  # Default to partial redaction
+        "userRoles": roles,
+        "tenantId": payload["tenant_id"],
+        "securityMode": "safe",
+        "canAccessSensitive": privileged,
+        "redactionLevel": "partial",
     }
