@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from ai_karen_engine.core.contracts.values import JsonValue
 from ai_karen_engine.core.reasoning.belief.contracts import EvidenceType
 
 from ..contracts import PreferenceScope, UserGoal, UserGoalStatus
@@ -158,7 +159,7 @@ class GoalEvidence:
     claim: str
     source_type: EvidenceType
     source_ref: str | None
-    observed_value: Any
+    observed_value: JsonValue
     polarity: str
     confidence: float
     observed_at: datetime
@@ -197,8 +198,8 @@ class GoalRevision:
     revision_id: str
     goal_id: str
     field_changed: str
-    old_value: Any
-    new_value: Any
+    old_value: JsonValue
+    new_value: JsonValue
     reason: str
     revised_at: datetime
     tenant_id: str | None = None
