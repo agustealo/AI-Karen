@@ -1,19 +1,22 @@
-"""Agent performance profiles.
+"""Compatibility view for agent performance profiles.
 
-Consumes AgentMedusa registration/execution metadata.
-Creates derived profiles without modifying Medusa registry semantics.
+Canonical derived agent-performance evidence lives in
+``ai_karen_engine.core.intelligence.ml.performance_profiles``. This module does
+not own AgentMedusa registration semantics.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from ai_karen_engine.core.adaptive.contracts import AgentPerformanceProfile
-from ai_karen_engine.core.adaptive.learning.aggregates import EvidenceAggregator
+from ai_karen_engine.core.intelligence.ml.performance_profiles import (
+    AgentPerformanceProfile,
+    EvidenceAggregator,
+)
 
 
 class AgentProfileStore:
-    """Read-only view over agent performance profiles."""
+    """Read-only compatibility view over agent performance profiles."""
 
     def __init__(self, aggregator: EvidenceAggregator | None = None) -> None:
         self._aggregator = aggregator or EvidenceAggregator()
