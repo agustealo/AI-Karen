@@ -54,6 +54,8 @@ class MemoryFetchNode:
 
             if not tenant_id:
                 warnings.append("Memory disabled for this turn: missing tenant_id")
+            if not user_id:
+                warnings.append("Memory disabled for this turn: missing user_id")
 
             if user_id:
                 try:
@@ -102,11 +104,11 @@ class MemoryFetchNode:
             }
 
             memory_start = time.time()
-            if tenant_id and self._memory_recall is not None:
+            if tenant_id and user_id and self._memory_recall is not None:
                 try:
                     recalled = await self._memory_recall(
                         tenant_id=str(tenant_id),
-                        user_id=user_id,
+                        user_id=str(user_id),
                         query=prompt,
                         session_id=state.get("session_id"),
                         conversation_id=state.get("session_id"),
