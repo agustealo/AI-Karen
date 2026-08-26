@@ -19,19 +19,41 @@ from ai_karen_engine.config.config_manager import AIKarenConfig, get_config
 logger = logging.getLogger(__name__)
 
 
+def _require_identity_scope(user: UserData) -> UserData:
+    """Require server-authenticated user and tenant scope.
+
+    Tenant scope is security authority. Missing identity fields fail closed
+    instead of falling into synthetic ``default`` / ``dev-tenant`` scopes.
+    Development bypass remains supported only when its configured developer
+    context explicitly supplies both values.
+    """
+
+    user_id = str(user.get("user_id") or "").strip()
+    tenant_id = str(user.get("tenant_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authenticated user identity is incomplete")
+    if not tenant_id:
+        raise HTTPException(status_code=401, detail="Authenticated tenant context is required")
+    return user
+
+
 async def get_user_context(request: Request) -> UserData:
     try:
         from ai_karen_engine.core.security.auth_config import auth_config
 
         if auth_config.should_bypass_auth():
             logger.info("Auth bypass active: providing configured developer context")
-            return UserData.from_dict(auth_config.get_dev_user_context())
+            return _require_identity_scope(
+                UserData.from_dict(auth_config.get_dev_user_context())
+            )
 
         from ai_karen_engine.auth.auth_middleware import get_current_user as get_real_user
 
         try:
             user_dict = await get_real_user(request)
-            return UserData.from_dict(user_dict)
+            return _require_identity_scope(UserData.from_dict(user_dict))
+        except HTTPException:
+            raise
         except Exception as auth_err:
             logger.warning("Production auth failed: %s", auth_err)
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -48,17 +70,29 @@ bypass_user_context_func = get_user_context
 async def get_current_user_id(
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ) -> str:
-    if isinstance(user_ctx, dict):
-        return str(user_ctx.get("user_id", "anonymous"))
-    return str(getattr(user_ctx, "user_id", "anonymous"))
+    user_id = (
+        user_ctx.get("user_id")
+        if isinstance(user_ctx, dict)
+        else getattr(user_ctx, "user_id", None)
+    )
+    resolved = str(user_id or "").strip()
+    if not resolved:
+        raise HTTPException(status_code=401, detail="Authenticated user identity is incomplete")
+    return resolved
 
 
 async def get_current_tenant_id(
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ) -> str:
-    if isinstance(user_ctx, dict):
-        return str(user_ctx.get("tenant_id", "dev-tenant"))
-    return str(getattr(user_ctx, "tenant_id", "dev-tenant"))
+    tenant_id = (
+        user_ctx.get("tenant_id")
+        if isinstance(user_ctx, dict)
+        else getattr(user_ctx, "tenant_id", None)
+    )
+    resolved = str(tenant_id or "").strip()
+    if not resolved:
+        raise HTTPException(status_code=401, detail="Authenticated tenant context is required")
+    return resolved
 
 
 async def _get_runtime_service(service_name: str) -> Any | None:
