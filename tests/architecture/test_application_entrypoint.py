@@ -36,6 +36,11 @@ def test_docker_runs_canonical_asgi_entrypoint_directly() -> None:
     assert "EXPOSE 8000 9090" not in source
 
 
+def test_retired_startup_layers_do_not_reappear() -> None:
+    assert not (REPO_ROOT / "start.py").exists()
+    assert not (REPO_ROOT / "server" / "run.py").exists()
+
+
 def test_docker_does_not_install_unused_poetry_launcher_dependency() -> None:
     source = DOCKERFILE.read_text(encoding="utf-8")
 
