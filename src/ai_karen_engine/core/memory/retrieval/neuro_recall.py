@@ -6,9 +6,10 @@ memory and it does not select providers/models, build prompts, or execute tools.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, Sequence, runtime_checkable
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.memory.types import MemoryEntry, MemoryQuery
@@ -64,12 +65,30 @@ class RecallRetriever(Protocol):
 class NeuroRecall:
     """Single production recall strategy service for the memory domain."""
 
-    def __init__(self, retriever: RecallRetriever | None = None) -> None:
-        if retriever is None:
+    def __init__(
+        self,
+        retriever: RecallRetriever | None = None,
+        *,
+        retrievers: Sequence[RecallRetriever] | None = None,
+    ) -> None:
+        if retriever is not None and retrievers is not None:
+            raise TypeError("provide retriever or retrievers, not both")
+
+        if retrievers is not None:
+            selected = tuple(retrievers)
+        elif retriever is not None:
+            selected = (retriever,)
+        else:
             from .retrieval_router import get_retrieval_router
 
-            retriever = get_retrieval_router()
-        self._retriever = retriever
+            selected = (get_retrieval_router(),)
+
+        if not selected:
+            raise ValueError("NeuroRecall requires at least one retriever")
+        for candidate in selected:
+            if not hasattr(candidate, "recall"):
+                raise TypeError("every NeuroRecall retriever must provide async recall(query)")
+        self._retrievers = selected
 
     async def recall(self, request: RecallRequest) -> RecallResult:
         request.validate()
@@ -84,21 +103,34 @@ class NeuroRecall:
             top_k=effective_top_k,
         )
 
-        try:
-            memories = await self._retriever.recall(query)
-        except RecallScopeError:
-            raise
-        except Exception as exc:
-            logger.warning(
-                "memory.neuro_recall.degraded",
-                extra={
-                    "tenant_id": request.tenant_id,
-                    "user_id": request.user_id,
-                    "correlation_id": request.correlation_id,
-                    "request_id": request.request_id,
-                    "error_type": type(exc).__name__,
-                },
-            )
+        raw_results = await asyncio.gather(
+            *(retriever.recall(query) for retriever in self._retrievers),
+            return_exceptions=True,
+        )
+
+        failures: list[BaseException] = []
+        memories: list[MemoryEntry] = []
+        for index, value in enumerate(raw_results):
+            if isinstance(value, BaseException):
+                if isinstance(value, RecallScopeError):
+                    raise value
+                failures.append(value)
+                logger.warning(
+                    "memory.neuro_recall.retriever_failed",
+                    extra={
+                        "tenant_id": request.tenant_id,
+                        "user_id": request.user_id,
+                        "correlation_id": request.correlation_id,
+                        "request_id": request.request_id,
+                        "retriever_index": index,
+                        "retriever_type": type(self._retrievers[index]).__name__,
+                        "error_type": type(value).__name__,
+                    },
+                )
+                continue
+            memories.extend(value)
+
+        if failures and not memories:
             return RecallResult(
                 memories=(),
                 tenant_id=request.tenant_id,
@@ -111,30 +143,45 @@ class NeuroRecall:
             )
 
         scoped: list[MemoryEntry] = []
-        provenance: list[dict[str, Any]] = []
+        provenance_by_id: dict[str, dict[str, Any]] = {}
         for memory in memories:
             metadata = getattr(memory, "metadata", None)
             memory_tenant = getattr(metadata, "tenant_id", None) if metadata else None
             memory_user = getattr(metadata, "user_id", None) if metadata else None
 
-            # Defense in depth: retrievers are expected to scope upstream, but
-            # NeuroRecall refuses any result that cannot prove the same scope.
+            # Defense in depth: retrievers must scope upstream, and NeuroRecall
+            # independently rejects results that cannot prove the same scope.
             if str(memory_tenant or "") != request.tenant_id:
                 continue
             if str(memory_user or "") != request.user_id:
                 continue
 
+            memory_id = str(memory.id)
+            if memory_id in provenance_by_id:
+                continue
+
             scoped.append(memory)
             custom = getattr(metadata, "custom", {}) if metadata else {}
-            provenance.append(
-                {
-                    "memory_id": memory.id,
-                    "source": getattr(metadata, "source", None) if metadata else None,
-                    "source_store": custom.get("source_store") if isinstance(custom, dict) else None,
-                    "correlation_id": request.correlation_id,
-                }
-            )
+            provenance_by_id[memory_id] = {
+                "memory_id": memory_id,
+                "source": getattr(metadata, "source", None) if metadata else None,
+                "source_store": custom.get("source_store") if isinstance(custom, dict) else None,
+                "correlation_id": request.correlation_id,
+            }
 
+        scoped.sort(
+            key=lambda item: (
+                float(getattr(item, "relevance", 0.0) or 0.0),
+                float(getattr(item, "confidence", 0.0) or 0.0),
+                getattr(item, "timestamp", None),
+            ),
+            reverse=True,
+        )
+        selected = scoped[:effective_top_k]
+        provenance = tuple(provenance_by_id[str(item.id)] for item in selected)
+
+        degraded = bool(failures)
+        degradation_reason = "partial_retrieval_failure" if failures else None
         logger.info(
             "memory.neuro_recall.completed",
             extra={
@@ -142,16 +189,21 @@ class NeuroRecall:
                 "user_id": request.user_id,
                 "correlation_id": request.correlation_id,
                 "request_id": request.request_id,
-                "result_count": len(scoped),
+                "retriever_count": len(self._retrievers),
+                "failed_retriever_count": len(failures),
+                "result_count": len(selected),
+                "degraded": degraded,
             },
         )
         return RecallResult(
-            memories=tuple(scoped[:effective_top_k]),
+            memories=tuple(selected),
             tenant_id=request.tenant_id,
             user_id=request.user_id,
             query=request.query,
             latency_ms=(time.perf_counter() - started) * 1000,
-            provenance=tuple(provenance[:effective_top_k]),
+            degraded=degraded,
+            degradation_reason=degradation_reason,
+            provenance=provenance,
         )
 
 

@@ -1,8 +1,7 @@
 """Canonical memory retrieval package.
 
-NeuroRecall is the production recall authority. The older recall_manager module
-remains a compatibility implementation for direct legacy imports only and is
-not re-exported here.
+NeuroRecall is the production recall authority. Retrieval helpers in this
+package are strategy components, not independent public recall runtimes.
 """
 
 from .curated_recall import (

@@ -1,4 +1,4 @@
-"""Tests for canonical NeuroRecall scope isolation."""
+"""Tests for canonical NeuroRecall scope isolation and source fusion."""
 
 import pytest
 
@@ -20,15 +20,23 @@ class _FakeRetriever:
         return list(self.memories)
 
 
-def _memory(memory_id: str, tenant_id: str, user_id: str) -> MemoryEntry:
+def _memory(
+    memory_id: str,
+    tenant_id: str,
+    user_id: str,
+    *,
+    relevance: float = 0.0,
+    source_store: str = "test",
+) -> MemoryEntry:
     return MemoryEntry(
         id=memory_id,
         content=f"memory:{memory_id}",
+        relevance=relevance,
         metadata=MemoryMetadata(
             tenant_id=tenant_id,
             user_id=user_id,
-            source="test",
-            custom={"source_store": "test"},
+            source=source_store,
+            custom={"source_store": source_store},
         ),
     )
 
@@ -90,3 +98,40 @@ async def test_retrieval_failure_is_degraded_not_cross_scope_fallback():
     assert result.memories == ()
     assert result.degraded is True
     assert result.degradation_reason == "retrieval_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_multiple_retrievers_are_fused_by_neuro_recall():
+    durable = _FakeRetriever(
+        [_memory("durable", "tenant-1", "user-1", relevance=0.8, source_store="postgres")]
+    )
+    hot = _FakeRetriever(
+        [_memory("hot", "tenant-1", "user-1", relevance=0.6, source_store="redis")]
+    )
+
+    result = await NeuroRecall(retrievers=(durable, hot)).recall(
+        RecallRequest(query="hello", tenant_id="tenant-1", user_id="user-1")
+    )
+
+    assert [memory.id for memory in result.memories] == ["durable", "hot"]
+    assert [item["source_store"] for item in result.provenance] == ["postgres", "redis"]
+    assert result.degraded is False
+
+
+@pytest.mark.asyncio
+async def test_partial_retriever_failure_preserves_good_scoped_results():
+    class _BrokenRetriever:
+        async def recall(self, query):
+            raise RuntimeError("projection unavailable")
+
+    durable = _FakeRetriever(
+        [_memory("durable", "tenant-1", "user-1", relevance=0.8, source_store="postgres")]
+    )
+
+    result = await NeuroRecall(retrievers=(durable, _BrokenRetriever())).recall(
+        RecallRequest(query="hello", tenant_id="tenant-1", user_id="user-1")
+    )
+
+    assert [memory.id for memory in result.memories] == ["durable"]
+    assert result.degraded is True
+    assert result.degradation_reason == "partial_retrieval_failure"

@@ -33,9 +33,21 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             consolidation_adapter=consolidation_adapter,
             recall_service=None,
         )
-        # retrieval_adapter is retained only for write-side compatibility in the
-        # inherited implementation. Runtime recall flows through NeuroRecall.
-        self._neuro_recall = recall_service or NeuroRecall()
+        self._neuro_recall = recall_service or self._build_neuro_recall()
+
+    @staticmethod
+    def _build_neuro_recall() -> NeuroRecall:
+        """Compose production recall sources at the runtime boundary."""
+        from ai_karen_engine.platform.memory.postgres import PostgresRecallRetriever
+
+        from .retrieval.retrieval_router import get_retrieval_router
+
+        return NeuroRecall(
+            retrievers=(
+                PostgresRecallRetriever(),
+                get_retrieval_router(),
+            )
+        )
 
     def set_recall_service(self, service: Any) -> None:
         """Replace the canonical async recall service for tests/adapters."""
