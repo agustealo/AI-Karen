@@ -38,7 +38,7 @@ DATABASE_URL='postgresql://...' \
 
 The command writes a PostgreSQL custom-format dump, SHA-256 checksum, and non-secret metadata beneath `KAREN_BACKUP_ROOT` or `./backups/postgres`.
 
-This command covers the primary PostgreSQL store only. Redis, object storage, model artifacts, and external services are separate recovery domains and must not be represented as protected by this backup. Milvus and Elasticsearch are not part of the current AI Karen memory architecture and must not be reintroduced as implied recovery dependencies.
+This command covers the primary PostgreSQL store only. **Redis, Milvus, Elasticsearch**, object storage, model artifacts, and external services are separate recovery domains whenever they are deployed and must never be represented as protected by this PostgreSQL backup. Milvus and Elasticsearch are not part of the current canonical AI Karen memory architecture; naming them here documents backup boundaries rather than making them runtime dependencies.
 
 ## Restore Contract
 
@@ -73,7 +73,7 @@ Tenant-scoping and RLS migrations are production security boundaries and must no
 
 ## Production Baseline 2026-08
 
-The pre-production construction history was consolidated into six ordered baseline stages on 2026-08-27.
+The pre-production construction history was consolidated into eight ordered baseline stages on 2026-08-27, beginning with the required PostgreSQL extension prerequisite and followed by the seven domain/schema stages.
 The baseline preserves the execution order and SQL semantics of the prior migration chain while removing repair-file sprawl.
 The previous files remain available in Git history and are not executable migration authorities.
 
