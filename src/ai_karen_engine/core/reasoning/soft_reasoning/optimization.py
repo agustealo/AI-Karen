@@ -254,12 +254,13 @@ class BayesianOptimizer:
             length_scale=self.config.length_scale,
             length_scale_bounds="fixed",
         )
+        sklearn_seed = int(self.config.random_seed) % (2**32)
         return GaussianProcessRegressor(
             kernel=kernel,
             alpha=max(self.config.noise_variance, 1e-16),
             optimizer=None,
             normalize_y=self.config.normalize_y,
-            random_state=self.config.random_seed,
+            random_state=sklearn_seed,
         )
 
     def _gp_predict_batch(
