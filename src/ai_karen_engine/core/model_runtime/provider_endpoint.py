@@ -52,9 +52,9 @@ class ProviderEndpoint:
     locality: Locality = field(default=Locality.LOCAL)
 
 
-# These endpoints are the canonical built-in runtime inventory.  Local desktop
-# runtimes live here as well so capability names are normalized at the registry
-# boundary instead of being translated independently by expression engines.
+# Canonical runtime inventory. Specialized Core ML runtimes remain available for
+# machine capabilities, while conversational generation is owned by configured
+# provider endpoints rather than a privileged built-in chat provider.
 BUILTIN_PROVIDER_ENDPOINTS: tuple[ProviderEndpoint, ...] = (
     ProviderEndpoint(
         provider_id="builtin_transformers",
@@ -70,8 +70,6 @@ BUILTIN_PROVIDER_ENDPOINTS: tuple[ProviderEndpoint, ...] = (
         runtime_engine=RuntimeEngine.TRANSFORMERS,
         locality=Locality.LOCAL,
         capabilities=(
-            "text_generation",
-            "chat_completion",
             "embeddings",
             "reranking",
             "classification",
@@ -82,6 +80,7 @@ BUILTIN_PROVIDER_ENDPOINTS: tuple[ProviderEndpoint, ...] = (
             "ocr_helper",
         ),
         default_model="auto",
+        metadata={"role": "specialized_ml_runtime", "priority": 100},
     ),
     ProviderEndpoint(
         provider_id="lmstudio-desktop",
