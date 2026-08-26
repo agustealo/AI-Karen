@@ -2,6 +2,10 @@
 
 Core owns the exploration algorithm and verifier/generation ports. Runtime owns
 model selection and injects an adapter for an already-resolved model runtime.
+
+The contracts separate model-generation coherence signals from verifier scores
+so KAREN can support both its richer verifier objective and a paper-consistent
+Soft Reasoning profile without hiding research-critical values in metadata.
 """
 
 from __future__ import annotations
@@ -26,6 +30,9 @@ class SoftGenerationOutput:
     finish_reason: str = ""
     model_id: str = ""
     runtime_engine: str = ""
+    sequence_log_probability: float | None = None
+    mean_token_log_probability: float | None = None
+    first_token_probability: float | None = None
     metadata: dict[str, object] = field(default_factory=dict)
 
 
@@ -67,6 +74,9 @@ class SoftExplorationTrace:
     seed: int
     runtime_engine: str
     model_id: str
+    optimizer_surrogate_kind: str = "kernel_regression"
+    acquisition_function: str = "ucb"
+    research_profile: str = "karen_default"
 
 
 @runtime_checkable
