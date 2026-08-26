@@ -81,6 +81,7 @@ def test_application_factory_does_not_run_migrations() -> None:
 def test_migration_status_is_read_only_supabase_history() -> None:
     validator = _read("src/ai_karen_engine/services/database/migration_validator.py")
     assert "supabase_migrations.schema_migrations" in validator
+    assert "Path.cwd()" not in validator
     assert "CREATE TABLE" not in validator.upper()
     assert "ALTER TABLE" not in validator.upper()
     assert "DROP TABLE" not in validator.upper()
@@ -91,6 +92,10 @@ def test_deployment_uses_guarded_canonical_migration_command() -> None:
     deploy = _read("server/deployment/deploy_auth_system.py")
     operator = _read("scripts/deploy/migrate-production-database.sh")
     assert "migrate-production-database.sh" in deploy
+    assert "get_migration_validator" in deploy
+    assert "validation_status" in deploy
+    assert "pending_count" in deploy
+    assert "'migrations': await self._get_migration_status()" in deploy
     assert "database-backup.sh" in operator
     assert "supabase db push" in operator
 
