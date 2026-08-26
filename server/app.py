@@ -4,8 +4,8 @@ FastAPI application factory for Kari Server.
 Creates and configures the FastAPI app with all components.
 
 This module remains transitional while application composition moves into
-``ai_karen_engine``. Health, readiness, and startup lifecycle authority no
-longer live in the root ``server`` package.
+``ai_karen_engine``. Health, readiness, startup lifecycle, and extension
+lifecycle authority no longer live in the root ``server`` package.
 """
 
 import logging
@@ -37,17 +37,6 @@ except ImportError:
     REGISTRY = None
 
 logger = logging.getLogger("kari")
-
-# Extension system integration
-try:
-    from ai_karen_engine.extensions.platform.core.host.factory import (
-        initialize_extensions_for_production as initialize_extensions,
-    )
-
-    EXTENSIONS_AVAILABLE = True
-except ImportError:
-    EXTENSIONS_AVAILABLE = False
-    logger.warning("Extension system not available")
 
 
 def create_app() -> FastAPI:
@@ -106,65 +95,6 @@ def create_app() -> FastAPI:
 
     logger.info("Debug endpoints have been removed for production deployment")
     logger.info("Developer API has been removed for production deployment")
-
-    if EXTENSIONS_AVAILABLE:
-
-        async def initialize_extension_system() -> None:
-            """Initialize the production extension system and monitoring."""
-            if not getattr(app.state, "database_available", False):
-                logger.info(
-                    "Skipping extension system initialization (database not available)"
-                )
-                return
-
-            try:
-                from ai_karen_engine.extensions.platform.core.host.factory import (
-                    ExtensionServiceConfig,
-                    initialize_extensions_for_production,
-                )
-
-                ext_config = ExtensionServiceConfig(
-                    extension_root="src/ai_karen_engine/extensions/plugins",
-                )
-                extension_manager = initialize_extensions_for_production(ext_config)
-                app.state.extension_system = extension_manager
-
-                try:
-                    from server.extension_health_monitor import (
-                        initialize_extension_health_monitor,
-                    )
-
-                    if extension_manager:
-                        await initialize_extension_health_monitor(extension_manager)
-                        logger.info("Extension health monitoring initialized")
-                    else:
-                        logger.warning("Extension manager unavailable")
-                except Exception as monitor_error:
-                    logger.warning(
-                        "Extension health monitoring failed: %s", monitor_error
-                    )
-
-            except Exception as exc:
-                logger.warning("Extension system initialization error: %s", exc)
-
-        app.router.on_startup.append(initialize_extension_system)
-    else:
-        logger.info("Extension system disabled")
-
-    async def shutdown_extension_health_monitoring() -> None:
-        """Shutdown extension health monitoring on application shutdown."""
-        try:
-            from server.extension_health_monitor import (
-                shutdown_extension_health_monitor,
-            )
-
-            await shutdown_extension_health_monitor()
-            logger.info("Extension health monitoring shutdown completed")
-        except Exception as exc:
-            logger.warning("Extension health monitoring shutdown error: %s", exc)
-
-    app.router.on_shutdown.append(shutdown_extension_health_monitoring)
-
     logger.info("Copilot routes handled through router system")
 
     try:
@@ -218,18 +148,6 @@ def create_app() -> FastAPI:
 
         if not allow_public_metrics and api_key != settings.secret_key:
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
-
-        try:
-            from server.extension_health_monitor import get_extension_health_monitor
-
-            extension_monitor = get_extension_health_monitor()
-            if extension_monitor:
-                health = await extension_monitor.check_extension_system_health()
-                extension_monitor.update_extension_metrics(health)
-        except Exception as exc:
-            logger.warning(
-                "Failed to update extension metrics before serving: %s", exc
-            )
 
         return Response(
             content=generate_latest(REGISTRY),
