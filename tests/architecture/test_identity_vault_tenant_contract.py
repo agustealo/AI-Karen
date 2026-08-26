@@ -83,13 +83,24 @@ def test_relationship_writes_validate_tenant_ownership() -> None:
     assert "tenant_id=tenant_id" in text
 
 
-def test_runtime_uses_canonical_encryption_and_same_session_audit() -> None:
+def test_runtime_encrypts_secrets_hashes_bearer_tokens_and_uses_same_session_audit() -> None:
     text = _read(SERVICE)
-    assert "from ai_karen_engine.core.security.encryption_utils import decrypt_data, encrypt_data" in text
+    assert "from ai_karen_engine.core.security.encryption_utils import encrypt_data" in text
     assert "hmac.new" not in text
+    assert "def _token_digest" in text
+    assert "hashlib.sha256(value.encode" in text
+    assert "session_token=self._token_digest(session_data.session_token)" in text
+    assert "lease_token=self._token_digest(lease_data.lease_token)" in text
     assert "_audit(\n        self,\n        session: AsyncSession" in text
     assert "audit_metadata=safe_metadata" in text
     assert "***REDACTED***" in text
+
+
+def test_provider_token_refresh_is_never_synthesized() -> None:
+    text = _read(SERVICE)
+    assert "token_urlsafe" not in text
+    assert "Identity Vault will not synthesize provider tokens" in text
+    assert "OAuth token refresh requires a governed provider adapter" in text
 
 
 def test_forward_migration_quarantines_unowned_rows() -> None:
