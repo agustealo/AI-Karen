@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-"""Central runtime authority for model selection and execution."""
+"""Central runtime authority for model selection and execution.
+
+Specialist capabilities such as Soft Reasoning may consume an already-selected,
+already-cached runtime through ``resolve_runtime``. They must never construct a
+parallel model instance or bypass ProviderRegistryService.
+"""
 
 import asyncio
 import inspect
@@ -114,6 +119,29 @@ class ModelManager:
             metadata=dict(endpoint.metadata),
         )
 
+    def resolve_runtime(self, selection: RuntimeSelection) -> Any:
+        """Return the canonical cached runtime for an authorized selection.
+
+        This is the supported specialist-capability boundary. Callers may inspect
+        typed runtime capabilities or borrow model internals through an adapter,
+        but provider/model selection remains owned by ModelManager.
+        """
+
+        endpoint = self._resolve_endpoint(selection.provider_id)
+        if endpoint is None:
+            raise ProviderNotAvailable(
+                f"Provider endpoint not found: {selection.provider_id}"
+            )
+        if endpoint.endpoint_type != selection.endpoint_type:
+            raise ProviderNotAvailable(
+                "Runtime selection endpoint type no longer matches provider registry"
+            )
+        runtime = self._runtime_cache.get(selection.provider_id)
+        if runtime is None:
+            runtime = self._build_runtime(endpoint)
+            self._runtime_cache[selection.provider_id] = runtime
+        return runtime
+
     def _normalize_capability(
         self, capability: str | ProviderCapability
     ) -> Optional[ProviderCapability]:
@@ -180,7 +208,7 @@ class ModelManager:
             raise ProviderNotAvailable("No capable model provider is available")
 
         prompt = self._messages_to_prompt(messages)
-        provider = self._get_runtime(selection)
+        provider = self.resolve_runtime(selection)
 
         if not self._provider_is_healthy(selection.provider_id):
             raise ProviderNotAvailable(f"Provider unhealthy: {selection.provider_id}")
@@ -298,28 +326,24 @@ class ModelManager:
             return await asyncio.to_thread(lambda: result)
         raise AttributeError("Provider does not expose an embedding method")
 
+    # Private compatibility alias. New specialist Runtime code should use
+    # resolve_runtime() so the ownership boundary is explicit.
     def _get_runtime(self, selection: RuntimeSelection) -> Any:
-        provider_id = selection.provider_id
-        runtime = self._runtime_cache.get(provider_id)
-        if runtime is not None:
-            return runtime
-        endpoint = self._resolve_endpoint(provider_id)
-        if not endpoint:
-            raise RuntimeError(f"Provider endpoint not found: {provider_id}")
-        runtime = self._build_runtime(endpoint)
-        self._runtime_cache[provider_id] = runtime
-        return runtime
+        return self.resolve_runtime(selection)
 
     def _build_runtime(self, endpoint: ProviderEndpoint) -> Any:
         if endpoint.endpoint_type == ProviderEndpointType.BUILTIN_TRANSFORMERS:
             from ai_karen_engine.config.config_manager import get_default_model
-            from ai_karen_engine.core.model_runtime.providers.core_helpers_runtime import CoreHelpersRuntime
+            from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+                TransformersRuntime,
+            )
+
             model_path = endpoint.default_model or None
             if not model_path or model_path == "auto":
                 model_path = get_default_model("builtin_transformers") or "auto"
-            return CoreHelpersRuntime(
-                text_model=model_path,
-                embedding_model="/app/models/transformers/distilbert-base-uncased",
+            return TransformersRuntime(
+                model_path=model_path,
+                provider_name=endpoint.provider_id,
             )
 
         if not endpoint.base_url:
