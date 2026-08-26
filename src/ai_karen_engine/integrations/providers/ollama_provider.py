@@ -1,9 +1,9 @@
-"""Optional Ollama HTTP provider adapter for AI KAREN.
+"""Ollama provider adapter for AI KAREN.
 
-Ollama is an integration, not a core runtime dependency.  The adapter performs
-no provider routing, prompt assembly, memory access, fallback selection, or
-startup orchestration.  Network access is explicitly opt-in through
-``KARI_OLLAMA_ENABLED=true``.
+Ollama is a third-party provider integration. It owns only translation between
+KAREN's provider contract and Ollama's HTTP API. Provider enablement, routing,
+fallback policy, prompt assembly, memory, startup, and deployment remain owned
+by their canonical systems exactly as they are for every other provider.
 """
 
 from __future__ import annotations
@@ -23,15 +23,8 @@ from ai_karen_engine.integrations.llm_utils import (
 logger = logging.getLogger("kari.ollama_provider")
 
 
-def _env_flag(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 class OllamaProvider(LLMProviderBase):
-    """Thin, explicitly enabled adapter for an external Ollama runtime."""
+    """Thin HTTP adapter for an explicitly configured Ollama endpoint."""
 
     def __init__(
         self,
@@ -42,34 +35,16 @@ class OllamaProvider(LLMProviderBase):
     ):
         self.provider_name = "ollama"
         self.model = str(model or "").strip()
-        self.enabled = _env_flag("KARI_OLLAMA_ENABLED", False)
-
-        configured_base_url = str(
-            base_url or os.getenv("OLLAMA_BASE_URL") or ""
-        ).strip()
-        if self.enabled and not configured_base_url:
-            configured_base_url = (
-                "http://host.docker.internal:11434"
-                if os.path.exists("/.dockerenv")
-                else "http://localhost:11434"
-            )
-
-        self.base_url = self._normalize_base_url(configured_base_url)
+        self.base_url = self._normalize_base_url(
+            str(base_url or os.getenv("OLLAMA_BASE_URL") or "")
+        )
         self.timeout = int(timeout)
         self.max_retries = int(max_retries)
         self.initialization_error: Optional[str] = None
         self.last_usage: Dict[str, Any] = {}
 
-        if not self.enabled:
-            self.initialization_error = (
-                "Ollama integration is disabled; set KARI_OLLAMA_ENABLED=true "
-                "to opt in"
-            )
-            self._requests = None
-            return
-
         if not self.base_url:
-            self.initialization_error = "Ollama integration has no configured base URL"
+            self.initialization_error = "Ollama provider has no configured base URL"
             self._requests = None
             return
 
@@ -90,18 +65,14 @@ class OllamaProvider(LLMProviderBase):
             normalized = f"{normalized}/api"
         return normalized
 
-    def _require_enabled(self) -> None:
-        if not self.enabled:
-            raise GenerationFailed(
-                "Ollama integration is disabled; set KARI_OLLAMA_ENABLED=true to opt in"
-            )
+    def _require_configured(self) -> None:
         if self.initialization_error:
             raise GenerationFailed(self.initialization_error)
         if not self.base_url:
-            raise GenerationFailed("Ollama integration has no configured base URL")
+            raise GenerationFailed("Ollama provider has no configured base URL")
 
     def _endpoint(self, path: str) -> str:
-        self._require_enabled()
+        self._require_configured()
         return f"{self.base_url}{path}"
 
     def _build_messages(
@@ -129,7 +100,7 @@ class OllamaProvider(LLMProviderBase):
         return messages or None
 
     def _request(self, path: str, payload: Optional[Dict[str, Any]] = None) -> Any:
-        self._require_enabled()
+        self._require_configured()
         if self._requests is None:
             raise GenerationFailed(self.initialization_error or "requests unavailable")
 
@@ -180,7 +151,7 @@ class OllamaProvider(LLMProviderBase):
     def generate_text(
         self, prompt: Union[str, Sequence[Dict[str, Any]]], **kwargs
     ) -> str:
-        self._require_enabled()
+        self._require_configured()
         if not self.model:
             raise GenerationFailed("No Ollama model selected")
 
@@ -247,7 +218,7 @@ class OllamaProvider(LLMProviderBase):
         raise NotImplementedError("Ollama embeddings are not implemented in Karen")
 
     def get_models(self) -> List[str]:
-        self._require_enabled()
+        self._require_configured()
         result = self._request("/tags")
         models = result.get("models") or []
         resolved: List[str] = []
@@ -262,14 +233,13 @@ class OllamaProvider(LLMProviderBase):
 
     def get_provider_info(self) -> Dict[str, Any]:
         models: List[str] = []
-        if self.enabled and not self.initialization_error:
+        if not self.initialization_error:
             try:
                 models = self.get_models()
             except Exception:
                 models = []
         return {
             "name": "ollama",
-            "enabled": self.enabled,
             "model": self.model,
             "base_url": self.base_url,
             "available_models": models,
@@ -281,18 +251,11 @@ class OllamaProvider(LLMProviderBase):
         }
 
     def health_check(self) -> Dict[str, Any]:
-        if not self.enabled:
-            return {
-                "status": "disabled",
-                "provider": "ollama",
-                "enabled": False,
-            }
         if self.initialization_error:
             return {
                 "status": "unhealthy",
                 "error": self.initialization_error,
                 "provider": "ollama",
-                "enabled": True,
             }
         try:
             start = time.time()
@@ -300,15 +263,9 @@ class OllamaProvider(LLMProviderBase):
             return {
                 "status": "healthy",
                 "provider": "ollama",
-                "enabled": True,
                 "response_time": time.time() - start,
                 "models_found": len(models),
                 "sample_models": models[:5],
             }
         except Exception as exc:
-            return {
-                "status": "unhealthy",
-                "provider": "ollama",
-                "enabled": True,
-                "error": str(exc),
-            }
+            return {"status": "unhealthy", "provider": "ollama", "error": str(exc)}
