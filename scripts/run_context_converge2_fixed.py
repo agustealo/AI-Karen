@@ -15,6 +15,12 @@ text = replace_once(
     ''' + '"""' + '''        diagnostics_engine = DiagnosticsEngine(\n            decision_engine=self._decision_engine,\n            llm_router=self._llm_router,\n            profile_manager=self._profile_manager,\n        )\n''' + '"""' + ''',
     'orchestrator diagnostics ContextManager wiring',
 )
+text = replace_once(
+    text,
+    ''' + '"""' + '''        if self._context_manager:\n            self._context_manager.clear_context_cache()\n''' + '"""' + ''',
+    "",
+    'orchestrator ContextManager shutdown hook',
+)
 _remaining = [
     f"{index}: {line}"
     for index, line in enumerate(text.splitlines(), start=1)
