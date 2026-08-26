@@ -1,17 +1,23 @@
+from __future__ import annotations
+
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any, Dict, Optional
 
-from ..contracts.orchestration_state import LangGraphOrchestrationState
+from ai_karen_engine.core.memory.profile_synthesis import get_profile_service
+from ai_karen_engine.utils.chat_helpers import wants_long_form_markdown_article
+
 from ..context.context_manager_adapter import (
     ensure_session_state_manager,
     load_session_continuity,
 )
+from ..contracts.orchestration_state import LangGraphOrchestrationState
 from ..utils.message_serialization import message_to_history_entry
-from ai_karen_engine.utils.chat_helpers import wants_long_form_markdown_article
-from ai_karen_engine.core.memory.profile_synthesis import get_profile_service
 
 logger = logging.getLogger(__name__)
+
+MemoryRecall = Callable[..., Awaitable[dict[str, Any]]]
 
 
 class MemoryFetchNode:
@@ -20,11 +26,11 @@ class MemoryFetchNode:
     def __init__(
         self,
         *,
-        memory_service: Optional[Any] = None,
+        memory_recall: Optional[MemoryRecall] = None,
         session_state_manager: Optional[Any] = None,
     ) -> None:
         self.profile_service = get_profile_service()
-        self._memory_service = memory_service
+        self._memory_recall = memory_recall
         self._session_state_manager = session_state_manager
         self._session_state_resolution_failed = False
 
@@ -34,7 +40,6 @@ class MemoryFetchNode:
         logger.info("Memory fetch processing (Profile-Synthesis-Aware)")
 
         try:
-            errors = state.setdefault("errors", [])
             warnings = state.setdefault("warnings", [])
             messages = state.get("messages", [])
             user_id = state.get("user_id")
@@ -95,24 +100,31 @@ class MemoryFetchNode:
             }
 
             memory_start = time.time()
-            if tenant_id and self._memory_service is not None:
-                build_context = getattr(self._memory_service, "build_context", None)
-                if callable(build_context):
-                    try:
-                        retrieved = await build_context(
-                            tenant_id=tenant_id,
-                            user_id=user_id,
-                            query=prompt,
-                            session_id=state.get("session_id"),
-                            conversation_id=state.get("session_id"),
+            if tenant_id and self._memory_recall is not None:
+                try:
+                    recalled = await self._memory_recall(
+                        tenant_id=str(tenant_id),
+                        user_id=user_id,
+                        query=prompt,
+                        session_id=state.get("session_id"),
+                        conversation_id=state.get("session_id"),
+                        top_k=10,
+                    )
+                    if isinstance(recalled, dict):
+                        results = recalled.get("results", [])
+                        if isinstance(results, list):
+                            context["memories"] = results
+                        context.setdefault("context_metadata", {}).update(
+                            {
+                                "memory_status": recalled.get("status"),
+                                "memory_count": len(context["memories"]),
+                                "memory_source": recalled.get("source", "memory_runtime"),
+                            }
                         )
-                        if isinstance(retrieved, dict):
-                            context.update(retrieved)
-                    except Exception as memory_err:
-                        logger.warning("Tenant-scoped memory recall failed: %s", memory_err)
-                        warnings.append("Memory recall unavailable for this turn")
-                else:
-                    logger.warning("Injected memory service has no build_context contract")
+                        if recalled.get("status") == "degraded":
+                            warnings.append("Memory recall unavailable for this turn")
+                except Exception as memory_err:
+                    logger.warning("Tenant-scoped memory recall failed: %s", memory_err)
                     warnings.append("Memory recall unavailable for this turn")
 
             memory_latency = (time.time() - memory_start) * 1000
@@ -129,12 +141,11 @@ class MemoryFetchNode:
                         f"Retrieved salvaged session state for {session_id}"
                     )
 
-            if conversation_history:
-                is_long_form = wants_long_form_markdown_article(
-                    current_user_message=conversation_history[-1]["content"],
-                    recent_messages=conversation_history,
-                )
-                state["memory_context"]["is_long_form_requested"] = is_long_form
+            is_long_form = wants_long_form_markdown_article(
+                current_user_message=conversation_history[-1]["content"],
+                recent_messages=conversation_history,
+            )
+            state["memory_context"]["is_long_form_requested"] = is_long_form
 
             if context.get("memories"):
                 warnings.append(
@@ -151,13 +162,13 @@ class MemoryFetchNode:
 async def memory_fetch_node(
     state: LangGraphOrchestrationState,
     *,
-    memory_service: Optional[Any] = None,
+    memory_recall: Optional[MemoryRecall] = None,
     session_state_manager: Optional[Any] = None,
 ) -> LangGraphOrchestrationState:
     """Execute memory fetch with composition-root supplied dependencies."""
 
     node = MemoryFetchNode(
-        memory_service=memory_service,
+        memory_recall=memory_recall,
         session_state_manager=session_state_manager,
     )
     return await node(state)
