@@ -10,6 +10,10 @@ on:
       - 'src/ai_karen_engine/core/cortex/**'
       - 'src/ai_karen_engine/core/reasoning/**'
       - 'src/ai_karen_engine/core/model_runtime/**'
+      - 'src/ai_karen_engine/core/langgraph_orchestrator/**'
+      - 'src/ai_karen_engine/core/runtime/workflow_runtime.py'
+      - 'src/ai_karen_engine/core/runtime/workflow_generation.py'
+      - 'src/ai_karen_engine/agent_medusa/**'
       - 'src/ai_karen_engine/core/adaptive/**'
       - 'src/ai_karen_engine/core/personalization/**'
       - 'src/ai_karen_engine/core/context/**'
@@ -18,6 +22,7 @@ on:
       - 'tests/benchmarks/cognitive/**'
       - 'tests/fixtures/cognitive/**'
       - 'tests/architecture/cognitive_contracts/**'
+      - 'tests/architecture/test_cognitive_execution_authority.py'
       - '.github/workflows/cognitive-proof-ci.yml'
   pull_request:
     branches: [main, develop]
@@ -28,6 +33,10 @@ on:
       - 'src/ai_karen_engine/core/cortex/**'
       - 'src/ai_karen_engine/core/reasoning/**'
       - 'src/ai_karen_engine/core/model_runtime/**'
+      - 'src/ai_karen_engine/core/langgraph_orchestrator/**'
+      - 'src/ai_karen_engine/core/runtime/workflow_runtime.py'
+      - 'src/ai_karen_engine/core/runtime/workflow_generation.py'
+      - 'src/ai_karen_engine/agent_medusa/**'
       - 'src/ai_karen_engine/core/adaptive/**'
       - 'src/ai_karen_engine/core/personalization/**'
       - 'src/ai_karen_engine/core/context/**'
@@ -36,6 +45,7 @@ on:
       - 'tests/benchmarks/cognitive/**'
       - 'tests/fixtures/cognitive/**'
       - 'tests/architecture/cognitive_contracts/**'
+      - 'tests/architecture/test_cognitive_execution_authority.py'
       - '.github/workflows/cognitive-proof-ci.yml'
   workflow_dispatch:
 
@@ -48,7 +58,7 @@ env:
 
 jobs:
   cognitive-proof:
-    name: Cognitive Benchmark + Policy Dominance
+    name: Cognitive Benchmark + Execution Authority
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -75,6 +85,10 @@ jobs:
             src/ai_karen_engine/core/cortex \
             src/ai_karen_engine/core/reasoning \
             src/ai_karen_engine/core/model_runtime \
+            src/ai_karen_engine/core/langgraph_orchestrator \
+            src/ai_karen_engine/core/runtime/workflow_runtime.py \
+            src/ai_karen_engine/core/runtime/workflow_generation.py \
+            src/ai_karen_engine/agent_medusa \
             src/ai_karen_engine/core/adaptive \
             src/ai_karen_engine/core/personalization \
             src/ai_karen_engine/core/context \
@@ -83,6 +97,11 @@ jobs:
       - name: Run cognitive contract architecture gates
         run: |
           pytest tests/architecture/cognitive_contracts -q --timeout=300 --tb=short
+
+      - name: Run cognitive execution authority gates
+        run: |
+          pytest tests/architecture/test_cognitive_execution_authority.py \
+            -q --timeout=300 --tb=short
 
       - name: Run reasoning capability unit proof
         if: ${{ always() }}
