@@ -13,11 +13,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Exact WebUIMemoryService census
+      - name: Exact memory consumer census
         shell: bash
         run: |
           set -euo pipefail
           echo '=== WebUIMemoryService references ==='
           grep -R --line-number --include='*.py' 'WebUIMemoryService' src tests || true
-          echo '=== memory_service imports/usages around service dependencies ==='
-          grep -R --line-number --include='*.py' 'memory_service' src/ai_karen_engine/core/services src/ai_karen_engine/services src/ai_karen_engine/training src/ai_karen_engine || true
+          echo '=== training learner factory call sites ==='
+          grep -R --line-number --include='*.py' '_create_autonomous_learner' src tests || true
+          echo '=== scheduler manager dependency call sites ==='
+          grep -R --line-number --include='*.py' 'get_scheduler_manager' src tests || true
+          echo '=== UnifiedMemoryService constructions ==='
+          grep -R --line-number --include='*.py' 'UnifiedMemoryService(' src tests || true
