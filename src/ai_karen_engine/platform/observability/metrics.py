@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Any
 
@@ -18,22 +18,42 @@ class CardinalityError(ValueError):
     """Raised when a metric label would exceed the bounded label vocabulary."""
 
 
-class _Counter:
+class _LabeledMetric:
     def __init__(self, name: str, description: str, label_names: tuple[str, ...]) -> None:
         self.name = name
         self.description = description
         self.label_names = label_names
+
+    def _label_key(self, kwargs: Mapping[str, str]) -> tuple[str, ...]:
+        expected = set(self.label_names)
+        supplied = set(kwargs)
+        if supplied != expected:
+            missing = sorted(expected - supplied)
+            extra = sorted(supplied - expected)
+            details: list[str] = []
+            if missing:
+                details.append(f"missing={missing}")
+            if extra:
+                details.append(f"extra={extra}")
+            raise ValueError(
+                f"Metric '{self.name}' label mismatch: {', '.join(details) or 'unknown'}"
+            )
+        return tuple(str(kwargs[label]) for label in self.label_names)
+
+
+class _Counter(_LabeledMetric):
+    def __init__(self, name: str, description: str, label_names: tuple[str, ...]) -> None:
+        super().__init__(name, description, label_names)
         self._values: dict[tuple[str, ...], float] = {}
 
     def labels(self, **kwargs: str) -> _BoundCounter:
-        key = tuple(kwargs[l] for l in self.label_names)
-        return _BoundCounter(self, key)
+        return _BoundCounter(self, self._label_key(kwargs))
 
     def _inc(self, key: tuple[str, ...], amount: float) -> None:
         self._values[key] = self._values.get(key, 0.0) + amount
 
     def value(self, **kwargs: str) -> float:
-        key = tuple(kwargs[l] for l in self.label_names)
+        key = self._label_key(kwargs)
         return self._values.get(key, 0.0)
 
     def collect(self) -> dict[tuple[str, ...], float]:
@@ -49,33 +69,44 @@ class _BoundCounter:
         self._counter._inc(self._label_values, amount)
 
 
-class _Gauge:
+class _Gauge(_LabeledMetric):
     def __init__(self, name: str, description: str, label_names: tuple[str, ...]) -> None:
-        self.name = name
-        self.description = description
-        self.label_names = label_names
+        super().__init__(name, description, label_names)
         self._values: dict[tuple[str, ...], float] = {}
 
-    def labels(self, **kwargs: str) -> _Gauge:
-        return self
+    def labels(self, **kwargs: str) -> _BoundGauge:
+        return _BoundGauge(self, self._label_key(kwargs))
 
-    def set(self, value: float) -> None:
-        self._values[()] = value
+    def _set(self, key: tuple[str, ...], value: float) -> None:
+        self._values[key] = value
 
-    def inc(self, amount: float = 1.0) -> None:
-        self._values[()] = self._values.get((), 0.0) + amount
+    def _inc(self, key: tuple[str, ...], amount: float) -> None:
+        self._values[key] = self._values.get(key, 0.0) + amount
 
-    def dec(self, amount: float = 1.0) -> None:
-        self._values[()] = self._values.get((), 0.0) - amount
-
-    def value(self) -> float:
-        return self._values.get((), 0.0)
+    def value(self, **kwargs: str) -> float:
+        key = self._label_key(kwargs)
+        return self._values.get(key, 0.0)
 
     def collect(self) -> dict[tuple[str, ...], float]:
         return dict(self._values)
 
 
-class _Histogram:
+class _BoundGauge:
+    def __init__(self, gauge: _Gauge, label_values: tuple[str, ...]) -> None:
+        self._gauge = gauge
+        self._label_values = label_values
+
+    def set(self, value: float) -> None:
+        self._gauge._set(self._label_values, value)
+
+    def inc(self, amount: float = 1.0) -> None:
+        self._gauge._inc(self._label_values, amount)
+
+    def dec(self, amount: float = 1.0) -> None:
+        self._gauge._inc(self._label_values, -amount)
+
+
+class _Histogram(_LabeledMetric):
     def __init__(
         self,
         name: str,
@@ -83,20 +114,27 @@ class _Histogram:
         label_names: tuple[str, ...],
         buckets: tuple[float, ...] | None = None,
     ) -> None:
-        self.name = name
-        self.description = description
-        self.label_names = label_names
-        self.buckets = buckets or (10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0)
+        super().__init__(name, description, label_names)
+        self.buckets = buckets or (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
         self._values: dict[tuple[str, ...], list[float]] = {}
 
-    def labels(self, **kwargs: str) -> _Histogram:
-        return self
+    def labels(self, **kwargs: str) -> _BoundHistogram:
+        return _BoundHistogram(self, self._label_key(kwargs))
 
-    def observe(self, value: float) -> None:
-        self._values.setdefault((), []).append(value)
+    def _observe(self, key: tuple[str, ...], value: float) -> None:
+        self._values.setdefault(key, []).append(value)
 
     def collect(self) -> dict[tuple[str, ...], list[float]]:
-        return dict(self._values)
+        return {key: list(values) for key, values in self._values.items()}
+
+
+class _BoundHistogram:
+    def __init__(self, histogram: _Histogram, label_values: tuple[str, ...]) -> None:
+        self._histogram = histogram
+        self._label_values = label_values
+
+    def observe(self, value: float) -> None:
+        self._histogram._observe(self._label_values, value)
 
 
 class MetricsCollector:
@@ -105,7 +143,8 @@ class MetricsCollector:
     Centralizes metric names and enforces a bounded label vocabulary so that
     high-cardinality identifiers (user_id, request_id, raw prompts, URLs) are
     never promoted to metric labels. Works with zero external telemetry
-    infrastructure; an optional Prometheus adapter can read the same data.
+    infrastructure; adapters may expose the same collector to Prometheus or
+    other monitoring systems without becoming a second metrics authority.
     """
 
     def __init__(self) -> None:
@@ -166,13 +205,28 @@ class MetricsCollector:
         with self._lock:
             return {
                 "counters": {
-                    name: counter.collect() for name, counter in self._counters.items()
+                    name: {
+                        "description": counter.description,
+                        "label_names": counter.label_names,
+                        "values": counter.collect(),
+                    }
+                    for name, counter in self._counters.items()
                 },
                 "gauges": {
-                    name: gauge.collect() for name, gauge in self._gauges.items()
+                    name: {
+                        "description": gauge.description,
+                        "label_names": gauge.label_names,
+                        "values": gauge.collect(),
+                    }
+                    for name, gauge in self._gauges.items()
                 },
                 "histograms": {
-                    name: histogram.collect()
+                    name: {
+                        "description": histogram.description,
+                        "label_names": histogram.label_names,
+                        "buckets": histogram.buckets,
+                        "values": histogram.collect(),
+                    }
                     for name, histogram in self._histograms.items()
                 },
             }
