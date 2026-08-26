@@ -1,0 +1,59 @@
+# Canonical production overlay for AI Karen.
+#
+# Usage:
+#   docker compose \
+#     --env-file .env.production \
+#     -f docker-compose.yml \
+#     -f deploy/compose/docker-compose.prod.yml \
+#     up -d
+#
+# This file intentionally contains no secret defaults. Required production
+# secrets must be supplied by the deployment environment.
+
+services:
+  redis:
+    ports: !reset []
+    command:
+      - redis-server
+      - /usr/local/etc/redis/redis.conf
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD is required for production}
+
+  api:
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      AUTH_DEV_MODE: "false"
+      AUTH_ALLOW_DEV_LOGIN: "false"
+      KARI_AUTH_BYPASS: "false"
+      KARI_FAST_STARTUP: "false"
+      KARI_SKIP_STARTUP_CHECK: "false"
+      KARI_SKIP_AUTO_INIT: "false"
+      ALLOW_PUBLIC_COPILOT: "false"
+
+      AUTH_JWT_SECRET_KEY: ${AUTH_JWT_SECRET_KEY:?AUTH_JWT_SECRET_KEY is required for production}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required for production}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required for production}@redis:6379/0
+
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required for production}
+      POSTGRES_URL: ${POSTGRES_URL:?POSTGRES_URL is required for production}
+      AUTH_DATABASE_URL: ${AUTH_DATABASE_URL:?AUTH_DATABASE_URL is required for production}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required for production}
+      DB_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required for production}
+      DB_HOST: ${DB_HOST:?DB_HOST is required for production}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:?DB_USER is required for production}
+      DB_NAME: ${DB_NAME:?DB_NAME is required for production}
+
+    restart: unless-stopped
+    stop_grace_period: 45s
+
+  prometheus:
+    ports: !reset []
+
+  grafana:
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required when observability is enabled}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    ports: !reset []
