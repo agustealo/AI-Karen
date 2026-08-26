@@ -1,109 +1,58 @@
-"""Offline evaluation corpus.
+"""Compatibility view over the canonical Intelligence/ML evaluation corpus.
 
-Synthetic test cases for adaptive policy evaluation.
+The historical adaptive corpus encoded execution-policy actions such as
+``use_tool`` and ``use_multi_agent`` directly in evaluation fixtures. Those
+labels duplicated CORTEX/RuntimePolicy authority and made evaluation data act
+like a second router.
+
+Canonical evaluation ownership now lives in
+``ai_karen_engine.core.intelligence.ml.evaluation``. This module preserves the
+legacy ``EvaluationCorpus`` import path while exposing neutral prediction-task
+cases only.
 """
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from ai_karen_engine.core.intelligence.ml.evaluation import CanonicalEvaluationCorpus
+from ai_karen_engine.core.intelligence.ml.evaluation.contracts import EvaluationCase
+
+
+def _legacy_view(case: EvaluationCase) -> dict[str, Any]:
+    """Return a stable dictionary view without reintroducing routing labels."""
+
+    return {
+        "name": case.case_id,
+        "case_id": case.case_id,
+        "task": case.task.value,
+        "input_text": case.input_text,
+        "expected_label": case.expected_label,
+        "expected_value": case.expected_value,
+        "tags": list(case.tags),
+        "difficulty": case.difficulty,
+        "source": case.source,
+        "dataset_version": case.dataset_version,
+        "features": dict(case.features),
+    }
 
 
 class EvaluationCorpus:
-    """Collection of synthetic evaluation cases."""
+    """Legacy facade over :class:`CanonicalEvaluationCorpus`.
 
-    def __init__(self) -> None:
-        self._cases: list[dict[str, Any]] = []
-        self._load_default_cases()
-
-    def _load_default_cases(self) -> None:
-        self._cases = [
-            {
-                "name": "simple_greeting",
-                "expected_top_actions": ["respond_directly"],
-                "task_complexity": "simple",
-                "ambiguity": "clear",
-                "risk": "low",
-            },
-            {
-                "name": "memory_dependent_query",
-                "expected_top_actions": ["retrieve_memory", "respond_directly"],
-                "task_complexity": "simple",
-                "ambiguity": "clear",
-                "risk": "low",
-            },
-            {
-                "name": "ambiguous_request",
-                "expected_top_actions": ["ask_clarification", "respond_directly"],
-                "task_complexity": "simple",
-                "ambiguity": "ambiguous",
-                "risk": "low",
-            },
-            {
-                "name": "repo_audit",
-                "expected_top_actions": ["use_tool", "use_workflow"],
-                "task_complexity": "complex",
-                "ambiguity": "clear",
-                "risk": "low",
-            },
-            {
-                "name": "calendar_lookup",
-                "expected_top_actions": ["use_tool", "respond_directly"],
-                "task_complexity": "moderate",
-                "ambiguity": "clear",
-                "risk": "low",
-            },
-            {
-                "name": "multi_step_workflow",
-                "expected_top_actions": ["use_workflow", "use_multi_agent"],
-                "task_complexity": "complex",
-                "ambiguity": "moderate",
-                "risk": "medium",
-            },
-            {
-                "name": "high_risk_mutation",
-                "expected_top_actions": ["suggest_action", "ask_clarification"],
-                "task_complexity": "moderate",
-                "ambiguity": "clear",
-                "risk": "critical",
-            },
-            {
-                "name": "local_only_task",
-                "expected_top_actions": ["respond_directly", "retrieve_memory"],
-                "task_complexity": "simple",
-                "ambiguity": "clear",
-                "risk": "low",
-            },
-            {
-                "name": "repeated_workflow_suggestion",
-                "expected_top_actions": ["respond_directly", "suggest_action"],
-                "task_complexity": "moderate",
-                "ambiguity": "clear",
-                "risk": "low",
-            },
-            {
-                "name": "tool_outage",
-                "expected_top_actions": ["respond_directly", "ask_clarification"],
-                "task_complexity": "moderate",
-                "ambiguity": "clear",
-                "risk": "low",
-            },
-            {
-                "name": "agent_unavailable",
-                "expected_top_actions": ["use_tool", "use_workflow"],
-                "task_complexity": "complex",
-                "ambiguity": "moderate",
-                "risk": "medium",
-            },
-        ]
+    The class intentionally does not expose ``expected_top_actions`` or any
+    execution-topology decision. Consumers needing typed cases should migrate
+    to ``CanonicalEvaluationCorpus`` directly.
+    """
 
     def list_cases(self) -> list[dict[str, Any]]:
-        return list(self._cases)
+        return [_legacy_view(case) for case in CanonicalEvaluationCorpus.all_cases()]
 
     def get_case(self, name: str) -> dict[str, Any] | None:
-        for case in self._cases:
-            if case["name"] == name:
-                return case
+        for case in CanonicalEvaluationCorpus.all_cases():
+            if case.case_id == name:
+                return _legacy_view(case)
         return None
+
+
+__all__ = ["EvaluationCorpus"]
