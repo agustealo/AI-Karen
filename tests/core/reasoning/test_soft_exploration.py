@@ -23,6 +23,10 @@ class FakeGenerationRuntime:
     enabled: bool = True
     hidden_size: int = 8
     calls: int = 0
+    prompts: list[str] | None = None
+
+    def __post_init__(self) -> None:
+        self.prompts = []
 
     def capabilities(self) -> SoftGenerationCapabilities:
         return SoftGenerationCapabilities(
@@ -33,6 +37,8 @@ class FakeGenerationRuntime:
         )
 
     def first_token_embedding(self, prompt: str) -> list[float]:
+        assert self.prompts is not None
+        self.prompts.append(prompt)
         return [0.0] * self.hidden_size
 
     def generate_with_first_token_embedding(
@@ -43,6 +49,8 @@ class FakeGenerationRuntime:
         max_tokens: int,
         seed: int,
     ) -> SoftGenerationOutput:
+        assert self.prompts is not None
+        self.prompts.append(prompt)
         self.calls += 1
         signal = sum(first_token_embedding)
         return SoftGenerationOutput(
@@ -58,6 +66,10 @@ class FakeGenerationRuntime:
 @dataclass
 class FakeVerifier:
     calls: int = 0
+    objectives: list[str] | None = None
+
+    def __post_init__(self) -> None:
+        self.objectives = []
 
     def score(
         self,
@@ -66,6 +78,8 @@ class FakeVerifier:
         *,
         evidence: tuple[str, ...] | list[str],
     ) -> SoftVerificationScore:
+        assert self.objectives is not None
+        self.objectives.append(objective)
         self.calls += 1
         signal = float(response.rsplit("=", 1)[1])
         score = max(0.0, min(1.0, 0.5 + signal * 0.05))
@@ -95,7 +109,8 @@ def test_soft_exploration_uses_embedding_candidates_and_verifier_within_budget()
     )
 
     trace = engine.explore(
-        "solve this",
+        "SYSTEM: soft-reasoning-v1\nUSER: solve this",
+        objective="solve this",
         evidence=("fact one",),
         max_model_calls=5,
         max_output_tokens=32,
@@ -111,6 +126,10 @@ def test_soft_exploration_uses_embedding_candidates_and_verifier_within_budget()
     assert trace.runtime_engine == "fake-local-runtime"
     assert trace.model_id == "fake-model"
     assert trace.projection_dimension == 4
+    assert runtime.prompts is not None
+    assert set(runtime.prompts) == {"SYSTEM: soft-reasoning-v1\nUSER: solve this"}
+    assert verifier.objectives is not None
+    assert set(verifier.objectives) == {"solve this"}
 
 
 def test_soft_exploration_is_reproducible_for_same_correlation_id() -> None:
@@ -126,7 +145,8 @@ def test_soft_exploration_is_reproducible_for_same_correlation_id() -> None:
         verifier=FakeVerifier(),
         config=config,
     ).explore(
-        "reason carefully",
+        "PROMPT-V1: reason carefully",
+        objective="reason carefully",
         max_model_calls=4,
         max_output_tokens=16,
         correlation_id="same-correlation",
@@ -136,7 +156,8 @@ def test_soft_exploration_is_reproducible_for_same_correlation_id() -> None:
         verifier=FakeVerifier(),
         config=config,
     ).explore(
-        "reason carefully",
+        "PROMPT-V1: reason carefully",
+        objective="reason carefully",
         max_model_calls=4,
         max_output_tokens=16,
         correlation_id="same-correlation",
@@ -157,7 +178,8 @@ def test_soft_exploration_rejects_runtime_without_embedding_control() -> None:
 
     with pytest.raises(SoftReasoningUnavailable):
         engine.explore(
-            "reason",
+            "PROMPT-V1: reason",
+            objective="reason",
             max_model_calls=4,
             max_output_tokens=16,
         )
@@ -172,7 +194,8 @@ def test_soft_exploration_fails_closed_when_model_call_budget_is_too_small() -> 
 
     with pytest.raises(SoftReasoningBudgetError):
         engine.explore(
-            "reason",
+            "PROMPT-V1: reason",
+            objective="reason",
             max_model_calls=3,
             max_output_tokens=16,
         )
