@@ -17,7 +17,6 @@ from ai_karen_engine.core.model_runtime.model_manager import (
     get_model_manager,
 )
 from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpointType
-from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
 from ai_karen_engine.core.reasoning.soft_reasoning.contracts import SoftVerificationScore
 from ai_karen_engine.core.reasoning.soft_reasoning.exploration import (
     SoftExplorationConfig,
@@ -36,7 +35,6 @@ from ai_karen_engine.core.runtime.prompt.soft_reasoning_prompts import (
     ensure_soft_reasoning_prompts,
 )
 from ai_karen_engine.core.runtime.soft_reasoning_runtime import (
-    TransformersGenerationSession,
     TransformersSoftGenerationAdapter,
     TransformersSoftReasoningConfig,
 )
@@ -110,7 +108,9 @@ class RuntimeSoftReasoningComposer:
     ) -> ComposedSoftReasoning:
         selection = self._select_transformers(preferred_provider)
         runtime = self._models.resolve_runtime(selection)
-        if not isinstance(runtime, TransformersGenerationSession):
+        if not callable(getattr(runtime, "generation_components", None)) or not callable(
+            getattr(runtime, "runtime_capabilities", None)
+        ):
             raise SoftReasoningCompositionUnavailable(
                 "selected runtime does not expose Transformers generation internals"
             )
@@ -149,7 +149,6 @@ class RuntimeSoftReasoningComposer:
         )
         generation.validate_prompt_contract(prepared_prompt)
 
-        # initial k + four refinement batches, each followed by one verifier call
         batches = 1 + config.max_iterations
         maximum_total_model_calls = (
             config.initial_samples
@@ -170,7 +169,7 @@ class RuntimeSoftReasoningComposer:
         )
 
     def _select_transformers(self, preferred_provider: str | None) -> RuntimeSelection:
-        context = {
+        context: dict[str, object] = {
             "preferred_runtime_family": "transformers",
             "local_first": True,
         }
@@ -219,14 +218,10 @@ class RuntimeSoftReasoningComposer:
             {"role": "user", "content": "\n\n".join(user_parts)},
         ]
         rendered = self._prompts.render_text_prompt(messages).rstrip()
-        # Marker must be the final prompt token; the specialized runtime adapter
-        # validates this after tokenizer-specific encoding.
         return f"{rendered}\n{marker_token}"
 
 
 def get_runtime_soft_reasoning_composer() -> RuntimeSoftReasoningComposer:
-    """Canonical application-level factory; no subsystem constructs its peers."""
-
     return RuntimeSoftReasoningComposer(
         model_manager=get_model_manager(),
         prompt_registry=get_prompt_registry(),
