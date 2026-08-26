@@ -4,9 +4,17 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PROBES = REPO_ROOT / "src" / "ai_karen_engine" / "api_routes" / "monitoring" / "probes.py"
+PROBES = (
+    REPO_ROOT
+    / "src"
+    / "ai_karen_engine"
+    / "api_routes"
+    / "monitoring"
+    / "probes.py"
+)
 APP = REPO_ROOT / "src" / "ai_karen_engine" / "app.py"
 DOCKERFILE = REPO_ROOT / "Dockerfile"
+LEGACY_HEALTH = REPO_ROOT / "server" / "health_endpoints.py"
 
 
 def test_canonical_probes_define_liveness_and_readiness() -> None:
@@ -47,3 +55,34 @@ def test_container_healthcheck_uses_liveness_not_dependency_health() -> None:
 
     assert "http://localhost:8000/health/live" in source
     assert "http://localhost:8000/ready" not in source
+
+
+def test_legacy_server_health_module_is_ping_only() -> None:
+    source = LEGACY_HEALTH.read_text(encoding="utf-8")
+
+    assert '@app.get("/ping"' in source
+    assert '@app.get("/api/ping"' in source
+
+    forbidden_route_tokens = (
+        '@app.get("/health"',
+        '@app.get("/api/health"',
+        '"/api/health/database"',
+        '"/api/health/redis"',
+        '"/api/health/ai-providers"',
+        '"/api/health/system"',
+        '"/api/health/extensions"',
+        '"/api/health/extensions/recovery',
+    )
+    for token in forbidden_route_tokens:
+        assert token not in source
+
+    forbidden_authority_tokens = (
+        "get_database_manager",
+        "get_redis_manager",
+        "get_provider_registry_service",
+        "get_extension_health_monitor",
+        "get_extension_service_recovery_manager",
+        "psutil",
+    )
+    for token in forbidden_authority_tokens:
+        assert token not in source
