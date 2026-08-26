@@ -33,7 +33,7 @@ replacement = '''    async def _resolve_memory_recall(self) -> Any:\n        """
 source = source[:start] + replacement + source[end:]
 
 old_node = '''        async def _memory_fetch_node(state: LangGraphOrchestrationState) -> Any:\n            memory_service = await self._resolve_memory_service()\n            return await memory_fetch_node(\n                state,\n                memory_service=memory_service,\n                session_state_manager=self._session_state_manager,\n            )\n'''
-new_node = '''        async def _memory_fetch_node(state: LangGraphOrchestrationState) -> Any:\n            memory_recall = await self._resolve_memory_recall()\n            return await memory_fetch_node(\n                state,\n                memory_recall=memory_recall,\n                session_state_manager=self._session_state_manager,\n            )\n'''
+new_node = '''        async def _memory_fetch_node(state: LangGraphOrchestrationState) -> Any:\n            memory_recall = await self._resolve_memory_recall()\n            return await memory_fetch_node(\n                state,\n                memory_recall=memory_recall,\n                memory_recall_top_k=self.config.memory_recall_top_k,\n                session_state_manager=self._session_state_manager,\n            )\n'''
 if old_node not in source:
     raise SystemExit("memory fetch graph wrapper not found")
 source = source.replace(old_node, new_node, 1)
@@ -51,7 +51,7 @@ if old_doc in doc:
     doc = doc.replace(old_doc, new_doc, 1)
 
 old_debt = '''### 1. Classify memory-domain retrieval shaping\n\n`MemoryContextBuilder` still applies a memory-domain retrieval/context cap before PromptRuntime. This must be explicitly classified as retrieval shaping versus duplicate final-prompt budgeting before changing it. PromptRuntime remains the final cross-section token authority.\n'''
-new_debt = '''### 1. Retire the remaining Web UI memory compatibility facade\n\nLangGraph no longer consumes `WebUIMemoryService` or its private `MemoryContextBuilder`. The remaining facade is still used by training, scheduling, learning, bootstrap, and older service dependencies. Migrate those consumers by domain before deleting the facade. PromptRuntime remains the final cross-section token authority; memory retrieval uses bounded result counts rather than a second prompt-token budget.\n'''
+new_debt = '''### 1. Retire the remaining Web UI memory compatibility facade\n\nLangGraph no longer consumes `WebUIMemoryService` or its private `MemoryContextBuilder`. The remaining facade is still used by training, scheduling, learning, bootstrap, and older service dependencies. Migrate those consumers by domain before deleting the facade. PromptRuntime remains the final cross-section token authority; memory retrieval uses a validated, config-driven result-count bound rather than a second prompt-token budget.\n'''
 if old_debt in doc:
     doc = doc.replace(old_debt, new_debt, 1)
 DOC.write_text(doc, encoding="utf-8")
