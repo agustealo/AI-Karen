@@ -10,20 +10,24 @@ from ai_karen_engine.core.cortex.behavior.contracts import (
     BehaviorScoreComponents,
     BehaviorSelectionContext,
     BehaviorType,
-    VerificationDepth,
-    VerificationReason,
-    VerificationRequirement,
 )
 from ai_karen_engine.core.cortex.behavior.eligibility import BehaviorEligibilityGate
+from ai_karen_engine.core.cortex.behavior.verification import VerificationDecider
 
 logger = logging.getLogger(__name__)
 
 
 class BehaviorSelector:
-    """Selects the best behavior from typed cognitive signals."""
+    """Select the best behavior from typed cognitive signals.
+
+    Behavior selection owns candidate filtering and utility ranking. Verification
+    policy is delegated to VerificationDecider so there is one policy authority
+    for low-confidence, high-risk, and conflicting-evidence decisions.
+    """
 
     def __init__(self) -> None:
         self.eligibility_gate = BehaviorEligibilityGate()
+        self.verification_decider = VerificationDecider()
 
     def select(
         self,
@@ -63,7 +67,7 @@ class BehaviorSelector:
                 reason_codes=["low_epistemic_confidence_abstain"],
             )
 
-        requires_verification = self._evaluate_verification(best, context)
+        verification = self.verification_decider.decide(context, best)
         return BehaviorDecision(
             decision_id=f"bd-{context.request_id}",
             selected_behavior=best.behavior_type,
@@ -74,7 +78,7 @@ class BehaviorSelector:
             goal_refs=best.goal_refs,
             belief_refs=best.belief_refs,
             memory_refs=best.memory_refs,
-            requires_verification=requires_verification,
+            requires_verification=verification if verification.required else None,
             requires_approval=(
                 BehaviorConstraint.REQUIRES_APPROVAL in best.constraints
                 or bool(context.policy and context.policy.approval_required)
@@ -161,31 +165,3 @@ class BehaviorSelector:
         if candidate.behavior_type in (BehaviorType.REFUSE, BehaviorType.ABSTAIN):
             return 0.0
         return context.policy.risk_level if context.policy else 0.0
-
-    def _evaluate_verification(
-        self,
-        candidate: BehaviorCandidate,
-        context: BehaviorSelectionContext,
-    ) -> VerificationRequirement | None:
-        if candidate.behavior_type == BehaviorType.VERIFY:
-            return VerificationRequirement(
-                required=True,
-                reason=VerificationReason.LOW_CONFIDENCE,
-                depth=VerificationDepth.STANDARD,
-                source="cortex",
-            )
-        if context.meta and context.meta.reasoning_confidence < 0.4:
-            return VerificationRequirement(
-                required=True,
-                reason=VerificationReason.LOW_REASONING_CONFIDENCE,
-                depth=VerificationDepth.STANDARD,
-                source="cortex",
-            )
-        if context.belief and context.belief.contradictions:
-            return VerificationRequirement(
-                required=True,
-                reason=VerificationReason.CONFLICTING_EVIDENCE,
-                depth=VerificationDepth.STANDARD,
-                source="cortex",
-            )
-        return None
