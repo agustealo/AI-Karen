@@ -16,6 +16,8 @@ Owns:
 - provider-runtime delegation
 - prompt-runtime delegation
 - memory recall coordination
+- request-context assembly
+- service resolution/lifecycle coordination
 - degraded-mode/runtime metadata
 - persistence and telemetry coordination
 
@@ -77,15 +79,14 @@ Owns:
 Simple chat does not belong here.
 
 ### `core/services/`
-Service governance and service plumbing.
+Core-facing service helpers only.
 
 Owns:
-- service registry/lifecycle infrastructure
-- service classification
-- dependency resolution
-- shared service-container helpers
+- base service primitives
+- lightweight dependency-injection container helpers
+- FastAPI dependency adapters that resolve through canonical Runtime service loading
 
-This domain is under DRY review. New registries must not be added when an existing canonical registry can be extended.
+It does not own a service registry, service classification runtime, health-monitoring registry, startup optimizer, or service lifecycle authority. Those duplicate registries/lifecycle managers were retired after reference audit. Runtime remains authoritative for live service resolution and lifecycle coordination.
 
 ### `core/model_runtime/`
 Model-runtime support.
@@ -121,17 +122,6 @@ Shadow-mode adaptive recommendation subsystem under consolidation review.
 
 It recommends only. It does not authorize or execute. New execution authority must not be added here. Useful learning/ranking behavior should converge on the canonical Intelligence/CORTEX/RuntimePolicy boundaries rather than creating a parallel decision runtime.
 
-### `core/observability/`
-LEGACY / TRANSITIONAL COMPATIBILITY SURFACE.
-
-Canonical observability implementation now lives in:
-
-```text
-src/ai_karen_engine/platform/observability/
-```
-
-Do not add new metrics, sinks, exporters, diagnostics buffers, event implementations, or telemetry infrastructure under `core/observability/`. Existing callers must migrate to the platform observability contracts/implementation before legacy Core observability modules are deleted.
-
 ## Removed / nonexistent domains
 
 `core/operations/` is not a live directory and must not be treated as an authority. Operational infrastructure belongs to explicit platform/runtime owners.
@@ -141,6 +131,10 @@ Do not add new metrics, sinks, exporters, diagnostics buffers, event implementat
 `core/context/` was removed after a repository-wide reference audit found no imports or consumers of its exported context-plan types. The package also contained its own scoring and selection behavior, which would compete with canonical runtime context assembly if activated. Request context assembly belongs to `core/runtime/`; reusable cross-cutting context contracts belong only in the canonical contract owner when a live consumer requires them.
 
 `core/automation/` was removed after a repository-wide reference audit found no imports or consumers of its automation and flow types. Its single contracts module mixed automation records with legacy flow orchestration, tool selection, memory, persona, Gmail, and weather schemas. Future automation belongs to an explicit automation/application or platform owner and must delegate agent/runtime execution through canonical runtime policy rather than recreating orchestration under Core.
+
+`core/observability/` was removed after all known callers had migrated and a fresh reference audit found no remaining package-path consumers. Canonical observability contracts and implementation live in `platform/observability/`. Core must not recreate metrics, sinks, exporters, telemetry buffers, event implementations, redaction implementations, regression detection, or observability tests under a second authority.
+
+The legacy Core service registry stack was removed after reference audit and migration of `core/services/dependencies.py` to Runtime lazy loading. Removed files include `registry.py`, `service_registry.py`, `classified_service_registry.py`, `service_classification.py`, and `service_lifecycle_manager.py`. Required services now fail honestly when unavailable instead of returning dummy service/metric success.
 
 ## Import guidance
 
@@ -161,16 +155,18 @@ Avoid:
 ```python
 from ai_karen_engine.core import BaseService
 from ai_karen_engine.core.observability import MetricsCollector
+from ai_karen_engine.core.services.service_registry import get_service_registry
 ```
 
 ## Architecture rules
 
-- Live chat execution and request-context assembly belong to `core/runtime/`.
+- Live chat execution, request-context assembly, and Core service resolution/lifecycle coordination belong to `core/runtime/`.
 - Capability identity belongs to `core/ai_runtime/`.
 - AI/ML intelligence belongs to `core/intelligence/`.
 - CORTEX decides; runtime executes.
 - LangGraph is only for true graph workflows.
 - Platform infrastructure, including observability implementations and future scheduling infrastructure, belongs under `platform/` or another explicit infrastructure owner.
 - Automation must not recreate provider routing, prompt assembly, memory ownership, plugin execution, or agent orchestration under Core.
+- Do not add a second service registry or lifecycle manager under `core/services/`.
 - Search before adding a new Core folder, registry, runtime, service, or helper.
 - One responsibility -> one owner -> one registry/config/runtime path.
