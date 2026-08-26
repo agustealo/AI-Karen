@@ -22,6 +22,7 @@ _PROBES_REGISTERED_STATE_KEY = "_canonical_probe_routes_registered"
 _METRICS_REGISTERED_STATE_KEY = "_canonical_metrics_routes_registered"
 _LEGACY_SHUTDOWN_PRUNED_STATE_KEY = "_legacy_shutdown_handlers_pruned"
 _LEGACY_PROVIDER_ROUTES_PRUNED_STATE_KEY = "_legacy_provider_routes_pruned"
+_LEGACY_MODEL_DUPLICATES_PRUNED_STATE_KEY = "_legacy_model_duplicates_pruned"
 _LEGACY_SHUTDOWN_HANDLER_NAMES = frozenset(
     {
         "_shutdown_database",
@@ -96,6 +97,48 @@ def _prune_legacy_provider_routes(app: FastAPI) -> None:
     setattr(app.state, _LEGACY_PROVIDER_ROUTES_PRUNED_STATE_KEY, True)
 
 
+def _prune_duplicate_legacy_model_routes(app: FastAPI) -> None:
+    """Remove unreachable duplicate route registrations from the legacy model API.
+
+    FastAPI/Starlette resolves matching routes in registration order, so when
+    ``api_routes.models.management`` registers the same path and HTTP method
+    more than once, every later duplicate is unreachable at runtime while still
+    polluting route metadata/OpenAPI generation. Preserve the first registered
+    route to keep current runtime behavior unchanged and remove only later
+    duplicates from the same legacy module.
+    """
+
+    if getattr(app.state, _LEGACY_MODEL_DUPLICATES_PRUNED_STATE_KEY, False):
+        return
+
+    seen_legacy_keys: set[tuple[str, frozenset[str]]] = set()
+    retained_routes = []
+
+    for route in app.router.routes:
+        endpoint = getattr(route, "endpoint", None)
+        endpoint_module = getattr(endpoint, "__module__", None)
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+
+        if (
+            endpoint_module != _LEGACY_PROVIDER_ENDPOINT_MODULE
+            or not isinstance(path, str)
+            or not methods
+        ):
+            retained_routes.append(route)
+            continue
+
+        key = (path, frozenset(str(method).upper() for method in methods))
+        if key in seen_legacy_keys:
+            continue
+
+        seen_legacy_keys.add(key)
+        retained_routes.append(route)
+
+    app.router.routes[:] = retained_routes
+    setattr(app.state, _LEGACY_MODEL_DUPLICATES_PRUNED_STATE_KEY, True)
+
+
 def create_app() -> FastAPI:
     """Return the current canonical AI KAREN ASGI application.
 
@@ -114,6 +157,7 @@ def create_app() -> FastAPI:
     app = legacy_app.app
     _prune_legacy_shutdown_handlers(app)
     _prune_legacy_provider_routes(app)
+    _prune_duplicate_legacy_model_routes(app)
 
     if not getattr(app.state, _PROBES_REGISTERED_STATE_KEY, False):
         app.include_router(probe_router)
