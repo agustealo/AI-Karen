@@ -258,7 +258,10 @@ class ExecutionContext:
 class AuthorizedExecutionPlan:
     """Single runtime instruction after RuntimePolicy evaluation.
 
-    Nothing below RuntimePolicy needs to re-decide authorization.
+    Nothing below RuntimePolicy needs to re-decide authorization. The
+    ``deep``/``standard`` handling below is a compatibility shim for the
+    pre-typed ChatRuntime plan builder and must be removed when that caller
+    forwards ``ExecutionDecision.reasoning_modes`` directly.
     """
 
     execution_id: str
@@ -280,6 +283,22 @@ class AuthorizedExecutionPlan:
     degradation_state: Optional[DegradationState] = None
     audit_context: Dict[str, Any] = field(default_factory=dict)
     provenance: Optional[DecisionProvenance] = None
+
+    def __post_init__(self) -> None:
+        raw_modes = [str(mode).strip().lower() for mode in self.reasoning_modes if str(mode).strip()]
+        if raw_modes == ["standard"]:
+            self.reasoning_modes = []
+            return
+        if raw_modes == ["deep"]:
+            self.reasoning_modes = [
+                "causal",
+                "evidence_synthesis",
+                "verification",
+                "refinement",
+                "metacognition",
+            ]
+            return
+        self.reasoning_modes = raw_modes
 
 
 @dataclass(slots=True)
