@@ -8,10 +8,13 @@ These typed contracts replace raw dictionaries at every boundary:
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+
+from ai_karen_engine.core.runtime.contracts import ExecutionBudget
 
 try:
     from pydantic import BaseModel, ConfigDict, Field
@@ -46,6 +49,12 @@ class ExtensionLifecycleState(str, Enum):
     UNAVAILABLE = "unavailable"
 
 
+class Idempotency(str, Enum):
+    UNKNOWN = "unknown"
+    IDEMPOTENT = "idempotent"
+    NON_IDEMPOTENT = "non_idempotent"
+
+
 class SideEffectLevel(str, Enum):
     NONE = "none"
     READ = "read"
@@ -70,12 +79,6 @@ class ResponseSource(str, Enum):
     DEGRADED = "degraded"
 
 
-class Idempotency(str, Enum):
-    UNKNOWN = "unknown"
-    IDEMPOTENT = "idempotent"
-    NON_IDEMPOTENT = "non_idempotent"
-
-
 class RiskClass(str, Enum):
     SAFE = "safe"
     LOW = "low"
@@ -96,6 +99,40 @@ class ResultTrust(str, Enum):
     VERIFIED = "verified"
     UNTRUSTED_EXTERNAL = "untrusted_external"
     UNVERIFIED = "unverified"
+
+
+@runtime_checkable
+class ActionExecutionGatePort(Protocol):
+    """Typed port for side-effect authorization.
+
+    Adapts to the canonical ActionExecutionGate in core/runtime/contracts.py.
+    The extensions package must never reimplement RBAC; it delegates to this
+    interface.
+    """
+
+    async def authorize(
+        self,
+        principal: str,
+        tenant: str,
+        plugin_id: str,
+        capability_id: str,
+        side_effect_level: str,
+        resource_scope: Mapping[str, Any],
+        permissions: tuple[str, ...],
+        risk_class: str,
+        requires_network: bool,
+        requires_filesystem: bool,
+        requires_credentials: bool,
+        requires_external_api: bool,
+        trust_tier: str,
+        isolation_mode: str,
+    ) -> tuple[bool, str, List[str], bool, Mapping[str, Any]]:
+        """Authorize side effects.
+
+        Returns:
+            (allowed, decision_id, reason_codes, human_gate_required, approved_resource_scope)
+        """
+        ...
 
 
 class ExtensionCapability(BaseModel):
@@ -238,21 +275,61 @@ class ExtensionHealthRecord:
     dependency_status: Dict[str, str] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class ExtensionExecutionContext:
-    """Scoped execution context for an extension invocation."""
+    """Immutable trusted execution context for an extension invocation.
+
+    Trusted fields (roles, permissions, allowed_capabilities,
+    policy_decision_id) MUST be populated by runtime/policy, never from
+    plugin payload. Use `for_runtime` to construct a trusted context.
+    """
 
     request_id: str
     correlation_id: str
     user_id: str
-    tenant_id: str = "default"
-    session_id: Optional[str] = None
-    conversation_id: Optional[str] = None
-    policy_decision_id: Optional[str] = None
-    allowed_capabilities: List[str] = field(default_factory=list)
-    resource_scope: Dict[str, Any] = field(default_factory=dict)
-    budget: Optional[Dict[str, Any]] = None
-    audit_context: Dict[str, Any] = field(default_factory=dict)
+    tenant_id: str
+    session_id: str | None
+    conversation_id: str | None
+
+    roles: tuple[str, ...] = field(default_factory=tuple)
+    permissions: tuple[str, ...] = field(default_factory=tuple)
+    allowed_capabilities: tuple[str, ...] = field(default_factory=tuple)
+
+    policy_decision_id: str | None = None
+    resource_scope: Mapping[str, Any] = field(default_factory=dict)
+    budget: ExecutionBudget | None = None
+
+    @classmethod
+    def for_runtime(
+        cls,
+        request_id: str,
+        correlation_id: str,
+        user_id: str,
+        tenant_id: str,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        roles: tuple[str, ...] | None = None,
+        permissions: tuple[str, ...] | None = None,
+        allowed_capabilities: tuple[str, ...] | None = None,
+        policy_decision_id: str | None = None,
+        resource_scope: Mapping[str, Any] | None = None,
+        budget: ExecutionBudget | None = None,
+    ) -> ExtensionExecutionContext:
+        """Runtime-only factory for trusted context construction."""
+        return cls(
+            request_id=request_id,
+            correlation_id=correlation_id,
+            user_id=user_id,
+            tenant_id=tenant_id or "default",
+            session_id=session_id,
+            conversation_id=conversation_id,
+            roles=roles or (),
+            permissions=permissions or (),
+            allowed_capabilities=allowed_capabilities or (),
+            policy_decision_id=policy_decision_id,
+            resource_scope=resource_scope or {},
+            budget=budget,
+        )
 
 
 @dataclass

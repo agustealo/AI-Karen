@@ -32,6 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 from ai_karen_engine.extensions.contracts import (
+    ActionExecutionGatePort,
     CapabilityInvocationRequest,
     DataClassification,
     ExtensionCapability,
@@ -42,16 +43,26 @@ from ai_karen_engine.extensions.contracts import (
     ExtensionManifest,
     ResponseSource,
     ResultTrust,
+    SideEffectLevel,
     TrustTier,
 )
 from ai_karen_engine.extensions.errors import (
+    ExtensionCredentialDeniedError,
     ExtensionError,
+    ExtensionExecutionEngineError,
+    ExtensionFilesystemDeniedError,
+    ExtensionHumanGateRequiredError,
+    ExtensionIsolationPolicyViolationError,
+    ExtensionNetworkDeniedError,
     ExtensionNotFoundError,
     ExtensionNotRegisteredError,
-    ExtensionDisabledError,
     ExtensionPermissionError,
+    ExtensionPolicyDeniedError,
+    ExtensionPromptContractDeniedError,
+    ExtensionSchemaError,
+    ExtensionTenantDeniedError,
+    ExtensionTimeoutClampedError,
     ExtensionTimeoutError,
-    ExtensionExecutionEngineError,
 )
 
 logger = logging.getLogger("kari.extensions.executor")
@@ -111,7 +122,7 @@ class ExtensionExecutionService:
 
         ext_request = self._convert_to_ext_request(request, resolved)
 
-        result = await self.execute(ext_request, authorized_plan)
+        result = await self.execute(ext_request)
 
         self._enrich_result_with_provenance(result, resolved)
 
@@ -129,6 +140,8 @@ class ExtensionExecutionService:
             payload=request.payload,
             context=request.context,
             authorized_plan=request.authorized_plan,
+            timeout_override_ms=getattr(request, "timeout_override_ms", None),
+            idempotency_key=getattr(request, "idempotency_key", None),
         )
 
     def _enrich_result_with_provenance(
