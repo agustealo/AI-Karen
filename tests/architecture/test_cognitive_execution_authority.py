@@ -1,8 +1,8 @@
 """Architecture proof for cognitive execution authority convergence.
 
-These tests intentionally inspect source/AST rather than importing runtime-heavy
-modules. Their job is to prevent authority from drifting back into LangGraph,
-Reasoning, or AgentMedusa through convenience wiring.
+These tests inspect source/AST rather than importing runtime-heavy modules. They
+prevent authority from drifting back into LangGraph, Reasoning, or AgentMedusa
+through convenience wiring.
 """
 
 from __future__ import annotations
@@ -13,10 +13,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src" / "ai_karen_engine"
-LANGGRAPH = SRC / "core" / "langgraph_orchestrator"
+CORE = SRC / "core"
+LANGGRAPH = CORE / "langgraph_orchestrator"
+REASONING = CORE / "reasoning"
 REASONING_NODE = LANGGRAPH / "nodes" / "reasoning.py"
 LANGGRAPH_POLICY = LANGGRAPH / "runtime_policy.py"
 WORKFLOW_STATE = LANGGRAPH / "contracts" / "orchestration_state.py"
+WORKFLOW_RUNTIME = CORE / "runtime" / "workflow_runtime.py"
 MEDUSA_NODE = SRC / "agent_medusa" / "agent_medusa_node.py"
 MEDUSA_COORDINATOR = SRC / "agent_medusa" / "coordinator" / "medusa_coordinator.py"
 
@@ -51,6 +54,26 @@ def test_langgraph_reasoning_decodes_but_does_not_synthesize_authorization() -> 
     assert "AuthorizedExecutionPlan(**plan_data)" in source
 
 
+def test_langgraph_reasoning_uses_canonical_reasoning_contract_not_cortex_envelope() -> None:
+    source = _source(REASONING_NODE)
+    assert "from ai_karen_engine.core.reasoning.contracts import" in source
+    assert "from ai_karen_engine.core.cortex.contracts import" not in source
+    assert "ReasoningRequest(" in source
+    assert "policy_decision_id=plan.policy_decision_id" in source
+    assert "reasoning_modes=reasoning_modes" in source
+
+
+def test_langgraph_reasoning_modes_come_only_from_authorized_plan() -> None:
+    source = _source(REASONING_NODE)
+    mode_source = source.split("def _authorized_reasoning_modes", 1)[1].split(
+        "def _should_run_reasoning", 1
+    )[0]
+    assert "plan.reasoning_modes" in mode_source
+    assert "plan.allowed_capabilities" in mode_source
+    assert "reasoning_hints" not in mode_source
+    assert "detected_intent" not in mode_source
+
+
 def test_langgraph_policy_node_is_validation_only() -> None:
     calls = _calls(LANGGRAPH_POLICY)
     assert "RuntimePolicyEnforcer" not in calls, (
@@ -78,6 +101,25 @@ def test_medusa_branch_selection_uses_authorized_topology_only() -> None:
     assert "extension.action" not in branch_source
 
 
+def test_workflow_runtime_preserves_trusted_identity_and_authorization() -> None:
+    source = _source(WORKFLOW_RUNTIME)
+    assert '"request_id": request_id' in source
+    assert '"correlation_id": ctx.correlation_id' in source
+    assert '"conversation_id": conversation_id' in source
+    assert '"tenant_id": ctx.tenant_id' in source
+    assert '"runtime_policy": serialized_plan' in source
+    assert 'request_config["policy_decision_id"] = serialized_plan["policy_decision_id"]' in source
+
+
+def test_workflow_runtime_serializes_slot_dataclass_budget_not_dunder_dict() -> None:
+    source = _source(WORKFLOW_RUNTIME)
+    serialize_source = source.split("def _serialize_plan", 1)[1]
+    assert '"budget": _dataclass_dict(plan.budget)' in serialize_source
+    assert "plan.budget.__dict__" not in serialize_source
+    assert "is_dataclass" in source
+    assert "asdict(value)" in source
+
+
 def test_workflow_state_carries_runtime_authorization_from_runtime_config() -> None:
     source = _source(WORKFLOW_STATE)
     assert 'request_config.get("runtime_policy")' in source
@@ -85,6 +127,30 @@ def test_workflow_state_carries_runtime_authorization_from_runtime_config() -> N
     assert '"execution_requirements": cast(' in source
     assert '"correlation_id": correlation_id' in source
     assert '"request_id": request_id' in source
+
+
+def test_reasoning_strategy_adapters_import_strategy_authority_from_strategy_module() -> None:
+    for name in (
+        "causal_strategy.py",
+        "metacognition_strategy.py",
+        "refiner_strategy.py",
+        "verifier_strategy.py",
+    ):
+        source = _source(REASONING / "strategies" / name)
+        assert (
+            "from ai_karen_engine.core.reasoning.strategy import ReasoningStrategyEngine"
+            in source
+        )
+        assert "ReasoningStrategyEngine," not in source.split(
+            "from ai_karen_engine.core.reasoning.contracts import", 1
+        )[1].split(")", 1)[0]
+
+
+def test_reasoning_strategy_registry_has_concrete_descriptor_type() -> None:
+    source = _source(REASONING / "strategy.py")
+    assert "class ReasoningStrategyModel" in source
+    assert "def to_model" in source
+    assert "return ReasoningStrategyModel(" in source
 
 
 def test_agent_medusa_requires_runtime_authorized_multi_agent_topology() -> None:
@@ -101,7 +167,7 @@ def test_agent_medusa_coordinator_does_not_self_authorize() -> None:
 
 
 def test_canonical_authority_doc_names_all_cognitive_execution_owners() -> None:
-    architecture = _source(SRC / "core" / "ARCHITECTURE.md")
+    architecture = _source(CORE / "ARCHITECTURE.md")
     for owner in (
         "Intelligence",
         "CORTEX",
