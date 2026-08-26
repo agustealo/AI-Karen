@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from enum import Enum
 
 from sqlalchemy import (
-    Column, String, Integer, Float, Boolean, DateTime, Text, 
+    Column, String, Integer, Float, Boolean, DateTime, Text,
     ForeignKey, JSON, Index, UniqueConstraint, CheckConstraint
 )
 from sqlalchemy.ext.declarative import declarative_base
@@ -29,7 +29,7 @@ Base = declarative_base()
 
 class ExtensionState(Enum):
     """Extension lifecycle states."""
-    
+
     UNKNOWN = "unknown"
     REGISTERED = "registered"
     LOADING = "loading"
@@ -45,7 +45,7 @@ class ExtensionState(Enum):
 
 class ExtensionType(Enum):
     """Extension types."""
-    
+
     CORE = "core"
     PLUGIN = "plugin"
     THEME = "theme"
@@ -57,13 +57,10 @@ class ExtensionType(Enum):
 
 class ExtensionModel(Base):
     """Extension model for storing extension metadata and configuration."""
-    
+
     __tablename__ = "extensions"
-    
-    # Primary key
+
     id = Column(String(255), primary_key=True)
-    
-    # Basic metadata
     name = Column(String(255), nullable=False, index=True)
     display_name = Column(String(255), nullable=True)
     description = Column(Text, nullable=True)
@@ -72,58 +69,40 @@ class ExtensionModel(Base):
     email = Column(String(255), nullable=True)
     homepage = Column(String(500), nullable=True)
     license = Column(String(100), nullable=True)
-    
-    # Extension type and category
     extension_type = Column(String(50), nullable=False, default=ExtensionType.PLUGIN.value)
     category = Column(String(100), nullable=True)
-    tags = Column(JSON, nullable=True)  # List of tags
-    
-    # State and status
+    tags = Column(JSON, nullable=True)
     state = Column(String(50), nullable=False, default=ExtensionState.UNKNOWN.value)
     enabled = Column(Boolean, nullable=False, default=True)
     auto_start = Column(Boolean, nullable=False, default=True)
     priority = Column(Integer, nullable=False, default=50)
-    
-    # File system information
     path = Column(String(500), nullable=False, unique=True)
     entry_point = Column(String(500), nullable=True)
     manifest_path = Column(String(500), nullable=True)
-    
-    # Dependencies
-    dependencies = Column(JSON, nullable=True)  # List of dependency extension IDs
-    python_dependencies = Column(JSON, nullable=True)  # List of Python packages
-    system_dependencies = Column(JSON, nullable=True)  # List of system packages
-    
-    # Configuration
-    configuration = Column(JSON, nullable=True)  # Extension configuration
-    default_configuration = Column(JSON, nullable=True)  # Default configuration
-    configuration_schema = Column(JSON, nullable=True)  # JSON schema for validation
-    
-    # Permissions and security
-    permissions = Column(JSON, nullable=True)  # Required permissions
-    security_level = Column(String(50), nullable=True)  # Security level
+    dependencies = Column(JSON, nullable=True)
+    python_dependencies = Column(JSON, nullable=True)
+    system_dependencies = Column(JSON, nullable=True)
+    configuration = Column(JSON, nullable=True)
+    default_configuration = Column(JSON, nullable=True)
+    configuration_schema = Column(JSON, nullable=True)
+    permissions = Column(JSON, nullable=True)
+    security_level = Column(String(50), nullable=True)
     sandbox_enabled = Column(Boolean, nullable=False, default=True)
-    
-    # Resource limits
-    memory_limit = Column(Integer, nullable=True)  # Memory limit in MB
-    cpu_limit = Column(Float, nullable=True)  # CPU limit as percentage
-    disk_limit = Column(Integer, nullable=True)  # Disk limit in MB
-    network_limit = Column(Integer, nullable=True)  # Network limit in MB
-    
-    # Timestamps
+    memory_limit = Column(Integer, nullable=True)
+    cpu_limit = Column(Float, nullable=True)
+    disk_limit = Column(Integer, nullable=True)
+    network_limit = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     installed_at = Column(DateTime(timezone=True), nullable=True)
     last_started = Column(DateTime(timezone=True), nullable=True)
     last_stopped = Column(DateTime(timezone=True), nullable=True)
-    
-    # Relationships
+
     versions = relationship("ExtensionVersionModel", back_populates="extension", cascade="all, delete-orphan")
     metrics = relationship("ExtensionMetricModel", back_populates="extension", cascade="all, delete-orphan")
     dependencies_rel = relationship("ExtensionDependencyModel", back_populates="extension", cascade="all, delete-orphan")
     permissions_rel = relationship("ExtensionPermissionModel", back_populates="extension", cascade="all, delete-orphan")
-    
-    # Indexes
+
     __table_args__ = (
         Index('idx_extension_name', 'name'),
         Index('idx_extension_type', 'extension_type'),
@@ -131,7 +110,7 @@ class ExtensionModel(Base):
         Index('idx_extension_enabled', 'enabled'),
         UniqueConstraint('name', 'version', name='uq_extension_name_version'),
     )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert model to dictionary."""
         return {
@@ -177,50 +156,33 @@ class ExtensionModel(Base):
 
 class ExtensionVersionModel(Base):
     """Extension version model for tracking extension versions and updates."""
-    
+
     __tablename__ = "extension_versions"
-    
-    # Primary key
+
     id = Column(String(255), primary_key=True)
-    
-    # Foreign key to extension
     extension_id = Column(String(255), ForeignKey("extensions.id"), nullable=False)
-    
-    # Version information
     version = Column(String(50), nullable=False)
-    version_code = Column(Integer, nullable=False)  # Integer version for comparison
+    version_code = Column(Integer, nullable=False)
     release_notes = Column(Text, nullable=True)
     changelog = Column(Text, nullable=True)
-    
-    # Update channels
-    update_channel = Column(String(50), nullable=False, default="stable")  # stable, beta, dev
+    update_channel = Column(String(50), nullable=False, default="stable")
     is_prerelease = Column(Boolean, nullable=False, default=False)
     is_latest = Column(Boolean, nullable=False, default=False)
-    
-    # Download and installation
     download_url = Column(String(500), nullable=True)
-    download_size = Column(Integer, nullable=True)  # Size in bytes
-    checksum = Column(String(255), nullable=True)  # SHA256 checksum
-    signature = Column(Text, nullable=True)  # Digital signature
-    
-    # Compatibility
+    download_size = Column(Integer, nullable=True)
+    checksum = Column(String(255), nullable=True)
+    signature = Column(Text, nullable=True)
     min_core_version = Column(String(50), nullable=True)
     max_core_version = Column(String(50), nullable=True)
-    compatible_extensions = Column(JSON, nullable=True)  # List of compatible extension versions
-    
-    # Security
-    security_scan_result = Column(JSON, nullable=True)  # Security scan results
-    vulnerability_score = Column(Integer, nullable=True)  # 0-100, lower is better
-    
-    # Timestamps
+    compatible_extensions = Column(JSON, nullable=True)
+    security_scan_result = Column(JSON, nullable=True)
+    vulnerability_score = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     released_at = Column(DateTime(timezone=True), nullable=True)
     installed_at = Column(DateTime(timezone=True), nullable=True)
-    
-    # Relationships
+
     extension = relationship("ExtensionModel", back_populates="versions")
-    
-    # Indexes
+
     __table_args__ = (
         Index('idx_extension_version_extension', 'extension_id'),
         Index('idx_extension_version_version', 'version'),
@@ -228,7 +190,7 @@ class ExtensionVersionModel(Base):
         Index('idx_extension_version_latest', 'is_latest'),
         UniqueConstraint('extension_id', 'version', name='uq_extension_version'),
     )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert model to dictionary."""
         return {
@@ -258,38 +220,27 @@ class ExtensionVersionModel(Base):
 
 class ExtensionMetricModel(Base):
     """Extension metrics model for storing performance and usage metrics."""
-    
+
     __tablename__ = "extension_metrics"
-    
-    # Primary key
+
     id = Column(String(255), primary_key=True)
-    
-    # Foreign key to extension
     extension_id = Column(String(255), ForeignKey("extensions.id"), nullable=False)
-    
-    # Metric information
     metric_name = Column(String(255), nullable=False)
-    metric_type = Column(String(50), nullable=False)  # counter, gauge, histogram, timer
+    metric_type = Column(String(50), nullable=False)
     metric_unit = Column(String(50), nullable=True)
-    
-    # Metric value
     value = Column(Float, nullable=False)
-    tags = Column(JSON, nullable=True)  # Additional tags
-    
-    # Timestamp
+    tags = Column(JSON, nullable=True)
     timestamp = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    
-    # Relationships
+
     extension = relationship("ExtensionModel", back_populates="metrics")
-    
-    # Indexes
+
     __table_args__ = (
         Index('idx_extension_metric_extension', 'extension_id'),
         Index('idx_extension_metric_name', 'metric_name'),
         Index('idx_extension_metric_timestamp', 'timestamp'),
         Index('idx_extension_metric_type', 'metric_type'),
     )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert model to dictionary."""
         return {
@@ -306,36 +257,27 @@ class ExtensionMetricModel(Base):
 
 class ExtensionDependencyModel(Base):
     """Extension dependency model for tracking extension dependencies."""
-    
+
     __tablename__ = "extension_dependencies"
-    
-    # Primary key
+
     id = Column(String(255), primary_key=True)
-    
-    # Foreign keys
     extension_id = Column(String(255), ForeignKey("extensions.id"), nullable=False)
     dependency_id = Column(String(255), ForeignKey("extensions.id"), nullable=False)
-    
-    # Dependency information
-    dependency_type = Column(String(50), nullable=False)  # required, optional, conflicts
-    version_constraint = Column(String(100), nullable=True)  # Version constraint (e.g., ">=1.0.0,<2.0.0")
+    dependency_type = Column(String(50), nullable=False)
+    version_constraint = Column(String(100), nullable=True)
     auto_install = Column(Boolean, nullable=False, default=False)
-    
-    # Timestamp
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    
-    # Relationships
+
     extension = relationship("ExtensionModel", foreign_keys=[extension_id], back_populates="dependencies_rel")
     dependency = relationship("ExtensionModel", foreign_keys=[dependency_id])
-    
-    # Indexes
+
     __table_args__ = (
         Index('idx_extension_dependency_extension', 'extension_id'),
         Index('idx_extension_dependency_dependency', 'dependency_id'),
         Index('idx_extension_dependency_type', 'dependency_type'),
         UniqueConstraint('extension_id', 'dependency_id', name='uq_extension_dependency'),
     )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert model to dictionary."""
         return {
@@ -351,39 +293,26 @@ class ExtensionDependencyModel(Base):
 
 class ExtensionPermissionModel(Base):
     """Extension permission model for tracking extension permissions and access control."""
-    
+
     __tablename__ = "extension_permissions"
-    
-    # Primary key
+
     id = Column(String(255), primary_key=True)
-    
-    # Foreign key to extension
     extension_id = Column(String(255), ForeignKey("extensions.id"), nullable=False)
-    
-    # Permission information
     permission_name = Column(String(255), nullable=False)
-    permission_type = Column(String(50), nullable=False)  # system, data, api, network, file, execution, ui
-    permission_scope = Column(String(50), nullable=False)  # global, tenant, user, extension
-    access_level = Column(String(50), nullable=False)  # none, read, write, admin, super_admin
-    
-    # Permission details
+    permission_type = Column(String(50), nullable=False)
+    permission_scope = Column(String(50), nullable=False)
+    access_level = Column(String(50), nullable=False)
     description = Column(Text, nullable=True)
-    resource_limits = Column(JSON, nullable=True)  # Resource limits for this permission
-    granted_to = Column(JSON, nullable=True)  # List of user/role IDs this is granted to
-    denied_to = Column(JSON, nullable=True)  # List of user/role IDs this is denied to
-    
-    # Status
+    resource_limits = Column(JSON, nullable=True)
+    granted_to = Column(JSON, nullable=True)
+    denied_to = Column(JSON, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     expires_at = Column(DateTime(timezone=True), nullable=True)
-    
-    # Timestamps
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
-    
-    # Relationships
+
     extension = relationship("ExtensionModel", back_populates="permissions_rel")
-    
-    # Indexes
+
     __table_args__ = (
         Index('idx_extension_permission_extension', 'extension_id'),
         Index('idx_extension_permission_name', 'permission_name'),
@@ -393,7 +322,7 @@ class ExtensionPermissionModel(Base):
         Index('idx_extension_permission_active', 'is_active'),
         UniqueConstraint('extension_id', 'permission_name', name='uq_extension_permission'),
     )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert model to dictionary."""
         return {
@@ -416,40 +345,29 @@ class ExtensionPermissionModel(Base):
 
 class ExtensionEventModel(Base):
     """Extension event model for tracking extension lifecycle events."""
-    
+
     __tablename__ = "extension_events"
-    
-    # Primary key
+
     id = Column(String(255), primary_key=True)
-    
-    # Foreign key to extension
     extension_id = Column(String(255), ForeignKey("extensions.id"), nullable=False)
-    
-    # Event information
-    event_type = Column(String(100), nullable=False)  # installed, uninstalled, started, stopped, error, updated
-    event_level = Column(String(20), nullable=False)  # debug, info, warning, error, critical
+    event_type = Column(String(100), nullable=False)
+    event_level = Column(String(20), nullable=False)
     message = Column(Text, nullable=True)
-    details = Column(JSON, nullable=True)  # Additional event details
-    
-    # Context
-    user_id = Column(String(255), nullable=True)  # User who triggered the event
-    session_id = Column(String(255), nullable=True)  # Session ID
-    request_id = Column(String(255), nullable=True)  # Request ID
-    
-    # Timestamp
+    details = Column(JSON, nullable=True)
+    user_id = Column(String(255), nullable=True)
+    session_id = Column(String(255), nullable=True)
+    request_id = Column(String(255), nullable=True)
     timestamp = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    
-    # Relationships
+
     extension = relationship("ExtensionModel")
-    
-    # Indexes
+
     __table_args__ = (
         Index('idx_extension_event_extension', 'extension_id'),
         Index('idx_extension_event_type', 'event_type'),
         Index('idx_extension_event_level', 'event_level'),
         Index('idx_extension_event_timestamp', 'timestamp'),
     )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert model to dictionary."""
         return {
@@ -468,37 +386,24 @@ class ExtensionEventModel(Base):
 
 class ExtensionConfigModel(Base):
     """Extension configuration model for storing extension configuration."""
-    
+
     __tablename__ = "extension_configs"
-    
-    # Primary key
+
     id = Column(String(255), primary_key=True)
-    
-    # Foreign key to extension
     extension_id = Column(String(255), ForeignKey("extensions.id"), nullable=False)
-    
-    # Configuration information
     config_key = Column(String(255), nullable=False)
     config_value = Column(JSON, nullable=False)
-    config_type = Column(String(50), nullable=False)  # string, number, boolean, object, array
-    is_sensitive = Column(Boolean, nullable=False, default=False)  # Whether this is sensitive data
-    
-    # Validation
-    is_valid = Column(Boolean, nullable=True)  # Whether the current value is valid
-    validation_error = Column(Text, nullable=True)  # Validation error message
-    
-    # Metadata
+    config_type = Column(String(50), nullable=False)
+    is_sensitive = Column(Boolean, nullable=False, default=False)
+    is_valid = Column(Boolean, nullable=True)
+    validation_error = Column(Text, nullable=True)
     description = Column(Text, nullable=True)
     default_value = Column(JSON, nullable=True)
-    
-    # Timestamps
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
-    
-    # Relationships
+
     extension = relationship("ExtensionModel")
-    
-    # Indexes
+
     __table_args__ = (
         Index('idx_extension_config_extension', 'extension_id'),
         Index('idx_extension_config_key', 'config_key'),
@@ -506,7 +411,7 @@ class ExtensionConfigModel(Base):
         Index('idx_extension_config_sensitive', 'is_sensitive'),
         UniqueConstraint('extension_id', 'config_key', name='uq_extension_config'),
     )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert model to dictionary."""
         return {
@@ -525,17 +430,6 @@ class ExtensionConfigModel(Base):
         }
 
 
-# Database utility functions
-def create_extension_tables(engine):
-    """Create all extension-related tables."""
-    Base.metadata.create_all(engine)
-
-
-def drop_extension_tables(engine):
-    """Drop all extension-related tables."""
-    Base.metadata.drop_all(engine)
-
-
 # Query utility functions
 def get_extension_by_id(session: Session, extension_id: str) -> Optional[ExtensionModel]:
     """Get extension by ID."""
@@ -544,7 +438,7 @@ def get_extension_by_id(session: Session, extension_id: str) -> Optional[Extensi
 
 def get_extension_by_name(session: Session, name: str) -> Optional[ExtensionModel]:
     """Get extension by name."""
-    return session.query(ExtensionModel).filter(ExtensionModel.name == name).first()
+    return session.query(ExtensionModel).filter(ExtensionModel.name == extension_id).first()
 
 
 def get_extensions_by_state(session: Session, state: ExtensionState) -> List[ExtensionModel]:
@@ -571,16 +465,16 @@ def get_extension_metrics(
 ) -> List[ExtensionMetricModel]:
     """Get extension metrics with optional filtering."""
     query = session.query(ExtensionMetricModel).filter(ExtensionMetricModel.extension_id == extension_id)
-    
+
     if metric_name:
         query = query.filter(ExtensionMetricModel.metric_name == metric_name)
-    
+
     if start_time:
         query = query.filter(ExtensionMetricModel.timestamp >= start_time)
-    
+
     if end_time:
         query = query.filter(ExtensionMetricModel.timestamp <= end_time)
-    
+
     return query.order_by(ExtensionMetricModel.timestamp.desc()).all()
 
 
@@ -594,19 +488,19 @@ def get_extension_events(
 ) -> List[ExtensionEventModel]:
     """Get extension events with optional filtering."""
     query = session.query(ExtensionEventModel).filter(ExtensionEventModel.extension_id == extension_id)
-    
+
     if event_type:
         query = query.filter(ExtensionEventModel.event_type == event_type)
-    
+
     if event_level:
         query = query.filter(ExtensionEventModel.event_level == event_level)
-    
+
     if start_time:
         query = query.filter(ExtensionEventModel.timestamp >= start_time)
-    
+
     if end_time:
         query = query.filter(ExtensionEventModel.timestamp <= end_time)
-    
+
     return query.order_by(ExtensionEventModel.timestamp.desc()).all()
 
 
@@ -621,8 +515,6 @@ __all__ = [
     "ExtensionConfigModel",
     "ExtensionState",
     "ExtensionType",
-    "create_extension_tables",
-    "drop_extension_tables",
     "get_extension_by_id",
     "get_extension_by_name",
     "get_extensions_by_state",
