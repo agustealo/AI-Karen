@@ -4,8 +4,8 @@ FastAPI application factory for Kari Server.
 Creates and configures the FastAPI app with all components.
 
 This module remains transitional while application composition moves into
-``ai_karen_engine``. Health, readiness, startup lifecycle, and extension
-lifecycle authority no longer live in the root ``server`` package.
+``ai_karen_engine``. Health, readiness, startup lifecycle, extension lifecycle,
+and extension listing authority no longer live in the root ``server`` package.
 """
 
 import logging
@@ -153,27 +153,6 @@ def create_app() -> FastAPI:
             content=generate_latest(REGISTRY),
             media_type=CONTENT_TYPE_LATEST,
         )
-
-    @app.get("/plugins", tags=["plugins"])
-    async def list_plugins():
-        """List registered and enabled extensions."""
-        try:
-            from ai_karen_engine.extensions.registry import ExtensionRegistry
-
-            registry = ExtensionRegistry()
-            registered = registry.list_registered()
-            enabled = registry.list_enabled()
-            return {
-                "enabled": sorted(r.manifest.id for r in enabled),
-                "available": sorted(r.manifest.id for r in registered),
-                "count": len(registered),
-            }
-        except Exception:
-            return {
-                "enabled": [],
-                "available": [],
-                "count": 0,
-            }
 
     logger.info("FastAPI application created and configured successfully")
     return app
