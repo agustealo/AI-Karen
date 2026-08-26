@@ -130,10 +130,7 @@ class VerifierGuidedObjective(SoftVerifierPort):
                 confidence=1.0,
                 passed=False,
                 feedback="empty_candidate_response",
-                components={
-                    "empty_response": 1.0,
-                    "objective_kind": 0.0,
-                },
+                components={"empty_response": 1.0},
             )
 
         judgment = self._judge.judge(
