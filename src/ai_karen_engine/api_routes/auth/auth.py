@@ -341,8 +341,11 @@ async def check_first_run() -> Dict[str, Any]:
         auth_service_instance = await get_auth_service()
         is_first_run = await auth_service_instance.is_first_run()
     except Exception:
-        # If auth service fails, assume first run is required
-        is_first_run = True
+        logger.exception("Unable to determine first-run state")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="First-run state unavailable",
+        )
 
     return {
         "first_run_required": is_first_run,
@@ -550,17 +553,18 @@ async def login(
 async def refresh_token(
     request: RefreshTokenRequest, http_request: Request
 ) -> JSONResponse:
-    """Refresh access token using refresh token."""
+    """Rotate the refresh token and return a fresh token pair."""
     auth_svc = await get_auth_service()
-    access_token, error = await auth_svc.refresh_access_token(request.refresh_token)
+    access_token, new_refresh_token, error = await auth_svc.refresh_access_token(
+        request.refresh_token
+    )
 
-    if not access_token:
-        # Map specific transient errors to 503 to prevent frontend logout loops
+    if not access_token or not new_refresh_token:
         status_code = status.HTTP_401_UNAUTHORIZED
-        if "Database unavailable" in str(error) or "Session not found in memory" in str(error):
+        if error == "Database unavailable":
             status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-            logger.warning(f"Refresh token failed due to transient error: {error}")
-            
+            logger.warning("Refresh token rotation unavailable because database is unavailable")
+
         raise HTTPException(
             status_code=status_code,
             detail=error,
@@ -569,6 +573,7 @@ async def refresh_token(
 
     response_data = {
         "access_token": access_token,
+        "refresh_token": new_refresh_token,
         "token_type": "bearer",
         "expires_in": auth_svc.config.access_token_expire_minutes * 60,
     }
