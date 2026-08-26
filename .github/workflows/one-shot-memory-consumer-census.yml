@@ -1,0 +1,23 @@
+name: One-shot Memory Consumer Census
+
+on:
+  push:
+    branches:
+      - memory/migrate-remaining-consumers
+
+permissions:
+  contents: read
+
+jobs:
+  census:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exact WebUIMemoryService census
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== WebUIMemoryService references ==='
+          grep -R --line-number --include='*.py' 'WebUIMemoryService' src tests || true
+          echo '=== memory_service imports/usages around service dependencies ==='
+          grep -R --line-number --include='*.py' 'memory_service' src/ai_karen_engine/core/services src/ai_karen_engine/services src/ai_karen_engine/training src/ai_karen_engine || true
