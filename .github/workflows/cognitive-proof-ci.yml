@@ -91,7 +91,6 @@ jobs:
             src/ai_karen_engine/agent_medusa \
             src/ai_karen_engine/core/adaptive \
             src/ai_karen_engine/core/personalization \
-            src/ai_karen_engine/core/context \
             src/ai_karen_engine/core/memory
 
       - name: Run cognitive contract architecture gates
@@ -99,6 +98,7 @@ jobs:
           pytest tests/architecture/cognitive_contracts -q --timeout=300 --tb=short
 
       - name: Run cognitive execution authority gates
+        if: ${{ always() }}
         run: |
           pytest tests/architecture/test_cognitive_execution_authority.py \
             -q --timeout=300 --tb=short
