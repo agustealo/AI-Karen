@@ -343,8 +343,8 @@ class CapabilityInvocationRequest:
     capability_id: str
     capability_version_constraint: Optional[str] = None
     payload: Dict[str, Any] = field(default_factory=dict)
-    context: ExtensionExecutionContext = field(default_factory=lambda: ExtensionExecutionContext(
-        request_id="", correlation_id="", user_id=""
+    context: ExtensionExecutionContext = field(default_factory=lambda: ExtensionExecutionContext.for_runtime(
+        request_id="", correlation_id="", user_id="", tenant_id="default"
     ))
     provider_hint: Optional[str] = None
     authorized_plan: Optional[Dict[str, Any]] = None

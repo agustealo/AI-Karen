@@ -57,18 +57,17 @@ class ExtensionRuntimeAdapter:
                 ExtensionExecutionContext,
             )
 
-            context = ExtensionExecutionContext(
+            context = ExtensionExecutionContext.for_runtime(
                 request_id=action.execution_id or "",
                 correlation_id=action.correlation_id or "",
                 user_id=action.user_id or "",
                 tenant_id=action.tenant_id or "default",
                 session_id=action.session_id,
                 conversation_id=action.conversation_id,
+                roles=tuple(action.user_roles or ()),
+                permissions=(),
+                allowed_capabilities=tuple(action.allowed_capabilities or ()),
                 policy_decision_id=action.policy_decision_id,
-                allowed_capabilities=action.allowed_capabilities or [],
-                audit_context={
-                    "user_roles": action.user_roles or [],
-                },
             )
 
             request = ExtensionExecutionRequest(

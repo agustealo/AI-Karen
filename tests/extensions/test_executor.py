@@ -53,6 +53,8 @@ def _manifest() -> ExtensionManifest:
         enabled_by_default=False,
         trusted_ui=False,
         dependencies=[],
+        trust_tier="first_party",
+        isolation_mode="subprocess",
     )
 
 
@@ -72,13 +74,13 @@ async def test_execute_success():
         plugin_id="echo",
         capability="echo",
         payload={"message": "hello"},
-        context=ExtensionExecutionContext(
+        context=ExtensionExecutionContext.for_runtime(
             request_id="req-1",
             correlation_id="corr-1",
             user_id="user-1",
             tenant_id="tenant-1",
             policy_decision_id="policy-1",
-            allowed_capabilities=[],
+            allowed_capabilities=(),
         ),
         authorized_plan={"allowed_plugins": ["echo"], "allowed_capabilities": []},
     )
@@ -103,7 +105,7 @@ async def test_disabled_plugin_denied():
         plugin_id="echo",
         capability="echo",
         payload={"message": "hello"},
-        context=ExtensionExecutionContext(
+        context=ExtensionExecutionContext.for_runtime(
             request_id="req-1",
             correlation_id="corr-1",
             user_id="user-1",
@@ -123,7 +125,7 @@ async def test_not_found():
         plugin_id="missing",
         capability="echo",
         payload={},
-        context=ExtensionExecutionContext(
+        context=ExtensionExecutionContext.for_runtime(
             request_id="req-1",
             correlation_id="corr-1",
             user_id="user-1",
