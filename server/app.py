@@ -4,7 +4,8 @@ FastAPI application factory for Kari Server.
 Creates and configures the FastAPI app with all components.
 
 This module remains transitional while application composition moves into
-``ai_karen_engine``. Health and readiness authority no longer lives here.
+``ai_karen_engine``. Health, readiness, and startup lifecycle authority no
+longer live in the root ``server`` package.
 """
 
 import logging
@@ -26,9 +27,9 @@ from .middleware import configure_middleware
 from .performance import load_performance_settings
 from .routers import wire_routers
 from .security import api_key_header, validate_environment_security
-from .startup import create_lifespan, register_startup_tasks
 from .validation import initialize_validation_framework
 from ai_karen_engine.server.exception_handlers import setup_exception_handlers
+from ai_karen_engine.server.startup import create_lifespan
 
 try:
     from prometheus_client import REGISTRY
@@ -101,11 +102,6 @@ def create_app() -> FastAPI:
         wire_routers(app, settings)
         logger.info("Routers wired successfully")
 
-    register_startup_tasks(app)
-
-    from .startup import register_shutdown_tasks
-
-    register_shutdown_tasks(app)
     register_admin_endpoints(app, settings)
 
     logger.info("Debug endpoints have been removed for production deployment")
