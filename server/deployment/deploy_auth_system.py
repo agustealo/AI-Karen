@@ -17,30 +17,37 @@ from auth_monitoring import initialize_auth_monitor
 
 logger = logging.getLogger(__name__)
 
+
 class AuthSystemDeployer:
     """Main deployer for authentication system components."""
-    
+
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.db_config = config.get('database', {})
         self.deployment_config = config.get('deployment', {})
-        
-        # Initialize components
+
         self.config_deployer = ConfigDeployer(
             Path(config.get('config_dir', 'config'))
         )
         self.zero_downtime_updater = ZeroDowntimeUpdater(
             self.deployment_config
         )
-        
-        # Initialize monitoring
+
         if config.get('monitoring', {}).get('enabled', True):
             self.auth_monitor = initialize_auth_monitor(
                 config.get('monitoring', {})
             )
         else:
             self.auth_monitor = None
-    
+
+    async def _get_migration_status(self) -> Dict[str, Any]:
+        """Read canonical Supabase migration state without mutating schema."""
+        from ai_karen_engine.services.database.migration_validator import (
+            get_migration_validator,
+        )
+
+        return await get_migration_validator().get_state()
+
     async def deploy_full_system(self, environment: str = "production") -> Dict[str, Any]:
         """Deploy the complete authentication system."""
         deployment_result = {
@@ -50,11 +57,10 @@ class AuthSystemDeployer:
             'success': True,
             'errors': []
         }
-        
+
         try:
             logger.info(f"Starting full authentication system deployment for {environment}")
-            
-            # Step 1: Run database migrations
+
             logger.info("Step 1: Running canonical guarded database migrations")
             repo_root = Path(__file__).resolve().parents[2]
             migration_script = repo_root / "scripts" / "deploy" / "migrate-production-database.sh"
@@ -72,66 +78,68 @@ class AuthSystemDeployer:
             deployment_result['steps']['migrations'] = migration_result
             if process.returncode != 0:
                 raise RuntimeError(f"Database migrations failed: {migration_result['stderr']}")
-            
-            # Step 2: Deploy configuration
+
+            migration_status = await self._get_migration_status()
+            deployment_result['steps']['migration_status'] = migration_status
+            if migration_status.get('validation_status') != 'up_to_date':
+                raise RuntimeError(
+                    "Canonical migration verification failed after deployment: "
+                    f"{migration_status}"
+                )
+
             logger.info("Step 2: Deploying configuration")
             config_updates = self.get_config_updates_for_environment(environment)
-            
+
             if config_updates:
                 config_result = await self.config_deployer.deploy_config(
                     config_updates, environment
                 )
                 deployment_result['steps']['configuration'] = config_result
-                
+
                 if not config_result.get('success', False):
                     raise RuntimeError(f"Configuration deployment failed: {config_result.get('error')}")
             else:
                 deployment_result['steps']['configuration'] = {'message': 'No configuration updates needed'}
-            
-            # Step 3: Zero-downtime service update
+
             logger.info("Step 3: Performing zero-downtime service update")
-            
+
             async with self.zero_downtime_updater.update_context(f'auth_system_deploy_{environment}'):
-                # Add health checks
                 self.setup_health_checks()
-                
-                # Update services
                 service_result = await self.update_services(environment)
                 deployment_result['steps']['services'] = service_result
-                
+
                 if not service_result.get('success', False):
                     raise RuntimeError(f"Service update failed: {service_result.get('error')}")
-            
-            # Step 4: Start monitoring
+
             if self.auth_monitor:
                 logger.info("Step 4: Starting authentication monitoring")
                 asyncio.create_task(self.auth_monitor.start_monitoring())
                 deployment_result['steps']['monitoring'] = {'status': 'started'}
-            
+
             deployment_result['completed_at'] = asyncio.get_event_loop().time()
             deployment_result['duration_seconds'] = (
                 deployment_result['completed_at'] - deployment_result['started_at']
             )
-            
-            logger.info(f"Authentication system deployment completed successfully in {deployment_result['duration_seconds']:.1f}s")
-            
+
+            logger.info(
+                "Authentication system deployment completed successfully in %.1fs",
+                deployment_result['duration_seconds'],
+            )
+
         except Exception as e:
             deployment_result['success'] = False
             deployment_result['errors'].append(str(e))
             deployment_result['failed_at'] = asyncio.get_event_loop().time()
-            
+
             logger.error(f"Authentication system deployment failed: {e}")
-            
-            # Attempt rollback
             await self.rollback_deployment(deployment_result)
-        
+
         return deployment_result
-    
+
     def get_config_updates_for_environment(self, environment: str) -> Dict[str, Any]:
         """Get configuration updates for specific environment."""
         config_updates = {}
-        
-        # Auth configuration
+
         auth_config = {
             'environment': environment,
             'jwt_secret_key': self.config.get('jwt_secret_key', 'change-me-in-production'),
@@ -146,10 +154,9 @@ class AuthSystemDeployer:
                 'audit_enabled': True
             }
         }
-        
+
         config_updates['auth.json'] = auth_config
-        
-        # Extension configuration
+
         extension_config = {
             'environment': environment,
             'authentication': {
@@ -165,125 +172,119 @@ class AuthSystemDeployer:
                 'interval_seconds': 30 if environment == 'production' else 60
             }
         }
-        
+
         config_updates['extensions.json'] = extension_config
-        
         return config_updates
-    
+
     def setup_health_checks(self):
         """Setup health checks for zero-downtime updates."""
+
         async def check_database():
             try:
-                return True
-            except Exception:
+                status = await self._get_migration_status()
+                return (
+                    status.get('validation_status') == 'up_to_date'
+                    and status.get('pending_count') == 0
+                )
+            except Exception as exc:
+                logger.error("Database health check failed: %s", exc)
                 return False
-        
+
         async def check_auth_endpoints():
-            # This would typically make HTTP requests to auth endpoints
-            # For now, simulate a health check
             await asyncio.sleep(0.1)
             return True
-        
+
         async def check_extension_apis():
-            # This would typically test extension API endpoints
             await asyncio.sleep(0.1)
             return True
-        
+
         self.zero_downtime_updater.add_health_check('database', check_database)
         self.zero_downtime_updater.add_health_check('auth_endpoints', check_auth_endpoints)
         self.zero_downtime_updater.add_health_check('extension_apis', check_extension_apis)
-    
+
     async def update_services(self, environment: str) -> Dict[str, Any]:
         """Update services during deployment."""
         try:
-            # This would typically restart or reload services
-            # For now, simulate service updates
-            
             services_to_update = [
                 'auth_service',
                 'extension_api',
                 'background_tasks'
             ]
-            
+
             async def restart_service(service_name: str):
                 logger.info(f"Restarting service: {service_name}")
-                await asyncio.sleep(1)  # Simulate restart time
+                await asyncio.sleep(1)
                 logger.info(f"Service {service_name} restarted successfully")
-            
-            # Perform rolling restart
+
             success = await self.zero_downtime_updater.rolling_restart_services(
                 services_to_update, restart_service
             )
-            
+
             return {
                 'success': success,
                 'services_updated': services_to_update if success else [],
                 'message': 'Services updated successfully' if success else 'Service update failed'
             }
-            
+
         except Exception as e:
             return {
                 'success': False,
                 'error': str(e)
             }
-    
+
     async def rollback_deployment(self, deployment_result: Dict[str, Any]):
         """Rollback deployment in case of failure."""
         logger.info("Attempting deployment rollback")
-        
+
         try:
-            # Rollback configuration if it was deployed
             config_step = deployment_result.get('steps', {}).get('configuration')
             if config_step and config_step.get('backup_id'):
                 logger.info("Rolling back configuration")
                 await self.config_deployer.rollback_config(config_step['backup_id'])
-            
+
             # Database rollback is intentionally not attempted here.
             # Production recovery uses the verified pre-migration backup/restore contract.
-
             logger.info("Deployment rollback completed")
-            
+
         except Exception as e:
             logger.error(f"Deployment rollback failed: {e}")
-    
+
     async def get_deployment_status(self) -> Dict[str, Any]:
-        """Get current deployment status."""
+        """Get current deployment status from backend authorities."""
         status = {
-            'migrations': {'authority': 'supabase/migrations', 'mode': 'deployment-owned'},
+            'migrations': await self._get_migration_status(),
             'configuration': await self.config_deployer.get_deployment_history(5),
             'monitoring': None
         }
-        
+
         if self.auth_monitor:
             status['monitoring'] = self.auth_monitor.get_monitoring_status()
-        
+
         return status
 
 
 async def main():
     """CLI interface for authentication system deployment."""
     parser = argparse.ArgumentParser(description='Authentication System Deployer')
-    parser.add_argument('command', choices=['deploy', 'status', 'rollback'], 
+    parser.add_argument('command', choices=['deploy', 'status', 'rollback'],
                        help='Deployment command')
-    parser.add_argument('--environment', default='production', 
+    parser.add_argument('--environment', default='production',
                        choices=['development', 'staging', 'production'],
                        help='Target environment')
     parser.add_argument('--config', help='Configuration file path')
     parser.add_argument('--backup-id', help='Backup ID for rollback')
-    
+
     args = parser.parse_args()
-    
-    # Load configuration
+
     if args.config:
         config_path = Path(args.config)
     else:
         config_path = Path(__file__).parent / "deployment_config.json"
-    
+
     if config_path.exists():
         with open(config_path) as f:
             config = json.load(f)
     else:
-        # Default configuration
         config = {
             'database': {
                 'host': 'localhost',
@@ -307,34 +308,34 @@ async def main():
             },
             'jwt_secret_key': 'your-secret-key-change-in-production'
         }
-    
+
     deployer = AuthSystemDeployer(config)
-    
+
     try:
         if args.command == 'deploy':
             result = await deployer.deploy_full_system(args.environment)
-            
+
             if result['success']:
                 print(f"Deployment successful in {result.get('duration_seconds', 0):.1f}s")
                 print(f"Steps completed: {list(result['steps'].keys())}")
             else:
                 print(f"Deployment failed: {result.get('errors', [])}")
                 return 1
-        
+
         elif args.command == 'status':
             status = await deployer.get_deployment_status()
             print(json.dumps(status, indent=2, default=str))
-        
+
         elif args.command == 'rollback':
             if not args.backup_id:
                 print("Backup ID required for rollback")
                 return 1
-            
+
             await deployer.config_deployer.rollback_config(args.backup_id)
             print(f"Rollback completed for backup: {args.backup_id}")
-        
+
         return 0
-        
+
     except Exception as e:
         logger.error(f"Deployment command failed: {e}")
         print(f"Error: {e}")
@@ -343,13 +344,11 @@ async def main():
 
 if __name__ == "__main__":
     import sys
-    
-    # Setup logging
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
-    # Run main
+
     exit_code = asyncio.run(main())
     sys.exit(exit_code)
