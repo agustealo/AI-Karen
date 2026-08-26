@@ -1,90 +1,86 @@
-# Ollama Integration Contract
+# Ollama Provider Contract
 
-Status: **Canonical integration contract**
+Status: **Canonical provider contract**
 
-Ollama is an optional local model-serving integration for AI KAREN. It is not part of the core runtime and is not required for application startup, readiness, memory, reasoning, AgentMedusa, CORTEX, or extension execution.
+Ollama is a third-party LLM provider that KAREN may connect to through a configured endpoint. That endpoint may be local, remote, hosted, tunneled, or cloud-managed. KAREN must not infer architectural privilege from where the endpoint runs.
+
+Ollama is not a KAREN runtime subsystem, built-in engine, fallback tier, startup dependency, readiness dependency, model owner, or local-first authority.
 
 ## Ownership
 
-KAREN owns:
+KAREN's canonical provider/runtime systems own:
 
-- request normalization and execution lifecycle;
-- CORTEX decisions and runtime policy;
+- provider registration and configuration;
+- provider enablement and availability;
+- provider/model selection;
+- fallback policy;
 - prompt assembly;
 - memory recall and persistence;
-- provider/model routing and fallback policy;
+- CORTEX decisions;
+- AgentMedusa orchestration;
+- RBAC and policy gates;
 - degraded-mode metadata;
 - audit and telemetry.
 
-The Ollama adapter owns only:
+The Ollama provider adapter owns only protocol translation required to use Ollama's API:
 
-- translating KAREN generation requests to the Ollama HTTP API;
-- Ollama model discovery through `/api/tags`;
-- Ollama-specific response parsing;
-- adapter health information.
+- generation requests;
+- model discovery;
+- response parsing;
+- provider-specific health calls.
 
-## Enablement
+This is the same boundary expected of any third-party provider adapter.
 
-Ollama is fail-closed and disabled by default.
+## Configuration
 
-```text
-KARI_OLLAMA_ENABLED=false   # default
-```
+Ollama must be configured through the same provider configuration path used by other third-party providers. There is no Ollama-specific runtime enablement gate.
 
-To opt in:
+A configured endpoint may be local:
 
 ```text
-KARI_OLLAMA_ENABLED=true
-OLLAMA_BASE_URL=http://localhost:11434
+provider: ollama
+base_url: http://localhost:11434
+model: <configured-model>
 ```
 
-For Docker deployments using the optional Compose service, use the `ollama` profile and point the API at the service when appropriate:
+or remote/cloud:
 
 ```text
-docker compose --profile ollama up
-OLLAMA_BASE_URL=http://ollama:11434
-KARI_OLLAMA_ENABLED=true
+provider: ollama
+base_url: https://ollama.example.com
+model: <configured-model>
 ```
 
-The provider adapter must not make network requests while disabled.
+The adapter must not invent a host, port, model, priority, routing role, or fallback position when configuration is absent.
 
 ## Runtime topology
 
 ```text
 ChatRuntime
   -> canonical provider/model routing
-  -> OllamaProvider adapter, only when explicitly enabled/selected
-  -> Ollama HTTP API
-  -> local model
+  -> provider adapter selected from registry/config
+  -> Ollama endpoint
 ```
 
-Ollama must never own provider selection, prompt construction, memory, tools, agent orchestration, RBAC, fallback order, or readiness.
+Ollama must never own provider selection, prompt construction, memory, tools, agent orchestration, RBAC, fallback order, readiness, or deployment policy.
 
-## Health and readiness
+## Local vs cloud
 
-A disabled or unavailable Ollama instance must not make `/health/live` or `/ready` fail. Provider health belongs to provider/degraded-mode telemetry.
+`local` and `cloud` describe deployment topology, not provider authority.
 
-Expected disabled adapter health:
-
-```json
-{
-  "status": "disabled",
-  "provider": "ollama",
-  "enabled": false
-}
-```
+An Ollama endpoint on `localhost` and an Ollama endpoint on a remote host are the same provider contract from KAREN's perspective. Location may contribute to policy metadata such as privacy, latency, cost, or local-first preference, but it must not create a separate Ollama execution path.
 
 ## Transitional debt
 
-The current provider configuration monolith still contains legacy Ollama catalog defaults, including a guessed base URL/default model, and the root Compose file still supplies a convenience `OLLAMA_BASE_URL`. These values are transitional only. Runtime safety no longer depends on them because the adapter refuses network activity unless `KARI_OLLAMA_ENABLED=true`.
+The live repository still contains legacy system-level Ollama assumptions outside the adapter. They are not canonical and must be removed during provider convergence:
 
-A follow-up provider-config convergence should:
+1. `llm_provider_config.py` still creates a guessed Ollama base URL based on Docker/localhost.
+2. The same catalog entry classifies Ollama as `ProviderType.LOCAL` even though Ollama may be local or remote/cloud.
+3. The catalog hardcodes an Ollama default model.
+4. Root Compose still injects an Ollama URL into the API environment and contains an Ollama-specific service profile.
+5. `OpenAIProvider` contains provider-name special cases for Ollama/local endpoints when deciding API-key behavior.
 
-1. make the catalog entry itself disabled by default;
-2. remove the guessed default model;
-3. stop inventing an Ollama URL in the provider catalog and API Compose environment;
-4. keep the optional Compose `ollama` profile as a deployment convenience only;
-5. ensure the UI displays backend provider configuration/health rather than special-casing Ollama.
+The convergence target is provider-neutral configuration: endpoint, authentication requirements, capabilities, health contract, models, and deployment metadata describe the provider. Runtime code must not branch on `provider == "ollama"` except inside an Ollama-specific protocol adapter when the protocol genuinely requires it.
 
 ## Proof
 
