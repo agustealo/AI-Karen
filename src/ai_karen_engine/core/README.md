@@ -127,9 +127,6 @@ Automation domain contracts only. This folder is not an automation execution run
 ### `core/context/`
 Context contracts only. Live request context assembly belongs to the owning runtime boundary.
 
-### `core/cron/`
-Cron/job specifications only. Infrastructure scheduling/execution belongs to platform/database operations, not Core execution authority.
-
 ### `core/observability/`
 LEGACY / TRANSITIONAL COMPATIBILITY SURFACE.
 
@@ -144,6 +141,8 @@ Do not add new metrics, sinks, exporters, diagnostics buffers, event implementat
 ## Removed / nonexistent domains
 
 `core/operations/` is not a live directory and must not be treated as an authority. Operational infrastructure belongs to explicit platform/runtime owners.
+
+`core/cron/` was removed after a repository-wide reference audit found no imports, registry consumers, scheduler wiring, tests, or concrete job-name references. If scheduling is implemented later, it belongs to an explicit platform/database scheduling owner rather than Core.
 
 ## Import guidance
 
@@ -173,6 +172,6 @@ from ai_karen_engine.core.observability import MetricsCollector
 - AI/ML intelligence belongs to `core/intelligence/`.
 - CORTEX decides; runtime executes.
 - LangGraph is only for true graph workflows.
-- Platform infrastructure, including observability implementations, belongs under `platform/`.
+- Platform infrastructure, including observability implementations and future scheduling infrastructure, belongs under `platform/` or another explicit infrastructure owner.
 - Search before adding a new Core folder, registry, runtime, service, or helper.
 - One responsibility -> one owner -> one registry/config/runtime path.
