@@ -16,7 +16,7 @@ The root `server/` package may temporarily contain compatibility and composition
 
 ### Application composition
 
-- `server/app.py`: TRANSITIONAL. Preserve complete live API behavior until endpoint/lifecycle helpers are migrated together. Target owner: `src/ai_karen_engine/app.py` plus canonical API/platform helpers.
+- `server/app.py`: TRANSITIONAL. Health/readiness ownership has been removed. Remaining composition responsibilities should continue moving into `src/ai_karen_engine/app.py` plus canonical API/platform helpers.
 - `server/startup.py`: TRANSITIONAL. Target owner: canonical application lifespan/bootstrap seam. It coordinates startup only and must not absorb runtime authority.
 - `server/routers.py`: TRANSITIONAL. Target owner: thin API route registration under `src/ai_karen_engine/api_routes/` / application composition.
 - `server/middleware.py`: TRANSITIONAL. Target owner: canonical API/platform middleware.
@@ -36,14 +36,17 @@ The root `server/` package may temporarily contain compatibility and composition
 ### Observability / health
 
 - `server/metrics.py`: TRANSITIONAL. Target owner: `platform/observability/`. Preserve current callers while migrating; do not recreate a Core metrics authority.
-- `server/health_endpoints.py`: RETIRED AUTHORITY / COMPATIBILITY SHIM. It registers no routes and contains no health logic. Connectivity aliases now live in `src/ai_karen_engine/api_routes/monitoring/probes.py`; detailed health lives in `src/ai_karen_engine/api_routes/monitoring/health.py`. Delete this shim together with the remaining import/call in `server/app.py` during the isolated app-factory extraction.
-- `server/app.py` still contains dead inline health source blocks for `/health`, `/api/health/database`, `/api/health/database/test`, `/api/health/database/monitor`, and `/api/health/degraded-mode`. `ai_karen_engine.app:create_app` now removes those `server.app` handlers from the live FastAPI route table before returning the application, so they are no longer runtime authorities. The next isolated `server/app.py` rewrite should physically delete those dead blocks and then remove the health shim import/call.
+- `server/health_endpoints.py`: DELETED. It must not reappear.
+- `server/app.py`: owns no `/health` or `/api/health/*` routes.
+- Connectivity/liveness/readiness authority: `src/ai_karen_engine/api_routes/monitoring/probes.py`.
+- Detailed health/degraded-mode authority: `src/ai_karen_engine/api_routes/monitoring/health.py`.
 - `server/enhanced_database_health_monitor.py`: REVIEW/MERGE. Database-health implementation belongs with the canonical database/platform owner.
 - `server/extension_health_monitor.py`: REVIEW/MERGE. Extension health belongs with governed extension/platform observability seams.
 
 ### Database
 
 - `server/database_config.py`: TRANSITIONAL. Supabase migrations are the schema authority. Runtime database connectivity/config belongs to the canonical database/platform adapter, not application startup DDL.
+- `server/app.py` shutdown cleanup reads the settings-bound database configuration from `app.state.database_config`; no undefined module-global database configuration is permitted.
 
 ### Admin API
 
