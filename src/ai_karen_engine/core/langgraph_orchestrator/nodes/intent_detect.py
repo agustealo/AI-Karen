@@ -1,131 +1,94 @@
 import logging
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
 from ..contracts.orchestration_state import LangGraphOrchestrationState
-from ..decision_engine import DecisionEngine
 
 logger = logging.getLogger(__name__)
 
 
 class IntentDetectNode:
-    """Intent detection and classification"""
+    """Compatibility checkpoint that consumes Runtime-propagated CORTEX intent.
 
-    def __init__(self, decision_engine=None):
-        self._decision_engine = decision_engine or DecisionEngine()
+    LangGraph must not classify intent, infer reasoning requirements, or expand
+    tool eligibility. Runtime/CORTEX already decided those values before graph
+    execution.
+    """
+
+    def __init__(self, decision_engine: Any = None) -> None:
+        self._compat_decision_engine = decision_engine
 
     async def __call__(
         self, state: LangGraphOrchestrationState
     ) -> LangGraphOrchestrationState:
-        """Intent detection and classification"""
-        logger.info("Intent detection processing")
+        logger.info("Runtime intent checkpoint processing")
 
-        try:
-            messages = state.get("messages", [])
-            if not messages:
-                state["detected_intent"] = "unknown"
-                state["intent_confidence"] = 0.0
-                state["intent_analysis"] = {"reason": "no_messages"}
-                return state
+        requirements = state.get("execution_requirements")
+        request_config = state.get("request_config") or {}
+        runtime_policy = state.get("runtime_policy")
 
-            prompt = (
-                messages[-1].content
-                if hasattr(messages[-1], "content")
-                else str(messages[-1])
+        if not isinstance(requirements, dict):
+            raise PermissionError(
+                "Workflow intent requires Runtime-propagated execution requirements"
             )
-            context = state.get("memory_context") or {}
-
-            analysis = await self._decision_engine.analyze_intent(prompt, context)
-            state["intent_analysis"] = analysis
-            state["detected_intent"] = analysis.get(
-                "primary_intent", analysis.get("intent", "unknown")
+        if not isinstance(runtime_policy, dict):
+            raise PermissionError(
+                "Workflow intent requires AuthorizedExecutionPlan from RuntimePolicy"
             )
-            state["intent_confidence"] = analysis.get("confidence", 0.0)
-            reasoning_metadata = (
-                analysis.get("metadata", {}) if isinstance(analysis, dict) else {}
+
+        intent = requirements.get("intent")
+        if not intent:
+            raise PermissionError("Runtime execution requirements are missing intent")
+
+        confidence = float(requirements.get("intent_confidence") or 0.0)
+        required_tools = [str(value) for value in requirements.get("tool_requirements") or []]
+        allowed_tools = {str(value) for value in runtime_policy.get("allowed_tools") or []}
+
+        unauthorized_tools = [tool for tool in required_tools if tool not in allowed_tools]
+        if unauthorized_tools:
+            raise PermissionError(
+                "Runtime requested tools outside AuthorizedExecutionPlan: "
+                + ", ".join(sorted(unauthorized_tools))
             )
-            if reasoning_metadata:
-                state.setdefault("warnings", []).extend(
-                    [
-                        warning
-                        for warning in [
-                            f"Reasoning identified knowledge gaps: {', '.join(reasoning_metadata.get('knowledge_gaps', [])[:3])}"
-                            if reasoning_metadata.get("knowledge_gaps")
-                            else None
-                        ]
-                        if warning
-                    ]
-                )
 
-            suggested_tools = analysis.get("suggested_tools", []) or []
-            entities = analysis.get("entities", []) or []
-            tool_calls: List[Dict[str, Any]] = []
+        state["detected_intent"] = str(intent)
+        state["intent_confidence"] = confidence
+        state["intent_analysis"] = {
+            "source": "runtime_cortex_decision",
+            "primary_intent": str(intent),
+            "confidence": confidence,
+            "policy_decision_id": runtime_policy.get("policy_decision_id"),
+        }
 
-            for tool_name in suggested_tools:
-                parameters: Dict[str, Any] = {}
-                for entity in entities:
-                    entity_type = (entity.get("type") or "").lower()
-                    value = entity.get("value")
-                    if not value:
-                        continue
-                    if entity_type == "location":
-                        parameters.setdefault("location", value)
-                    elif entity_type == "book":
-                        parameters.setdefault("book_title", value)
-                    elif entity_type == "time":
-                        parameters.setdefault("time_reference", value)
-
-                tool_calls.append({"tool": tool_name, "parameters": parameters})
-
-            state["tool_calls"] = tool_calls or None
-
-            if analysis.get("requires_clarification"):
-                state.setdefault("warnings", []).append(
-                    "Intent engine suggests clarifying user request"
-                )
-
-            metadata = analysis.get("metadata", {}) if isinstance(analysis, dict) else {}
-            reasoning_hints = {
-                "requires_reasoning": bool(
-                    metadata.get("knowledge_gaps")
-                    or analysis.get("requires_clarification")
-                    or state["detected_intent"] in {"troubleshoot", "debug_error", "decision_making"}
-                ),
-                "reasoning_depth": "deep"
-                if metadata.get("knowledge_gaps") or analysis.get("requires_clarification")
-                else "standard",
-                "reasoning_modes": [],
-                "should_use_retrieval_reasoning": bool(state.get("memory_context")),
-                "should_use_causal_reasoning": state["detected_intent"] in {"troubleshoot", "debug_error"},
-                "should_use_graph_reasoning": state["detected_intent"] in {"information_retrieval", "decision_making", "troubleshoot"}
-                or bool(metadata.get("knowledge_gaps")),
-                "should_use_soft_reasoning": bool(analysis.get("requires_clarification"))
-                or analysis.get("confidence", 0.0) < 0.7,
-                "should_self_refine": bool(analysis.get("requires_clarification"))
-                or analysis.get("confidence", 0.0) < 0.65,
-                "should_verify": bool(metadata.get("knowledge_gaps"))
-                or analysis.get("confidence", 0.0) < 0.75,
+        tool_parameters = request_config.get("tool_parameters")
+        parameter_map = tool_parameters if isinstance(tool_parameters, dict) else {}
+        tool_calls: List[Dict[str, Any]] = [
+            {
+                "tool": tool,
+                "parameters": dict(parameter_map.get(tool) or {}),
             }
-            if reasoning_hints["should_use_causal_reasoning"]:
-                reasoning_hints["reasoning_modes"].append("causal")
-            if reasoning_hints["should_use_graph_reasoning"]:
-                reasoning_hints["reasoning_modes"].append("graph")
-            if reasoning_hints["should_use_retrieval_reasoning"]:
-                reasoning_hints["reasoning_modes"].append("retrieval")
-            if reasoning_hints["should_use_soft_reasoning"]:
-                reasoning_hints["reasoning_modes"].append("soft")
+            for tool in required_tools
+        ]
+        state["tool_calls"] = tool_calls or None
 
-            state["reasoning_hints"] = reasoning_hints
-
-        except Exception as e:
-            logger.error(f"Intent detection error: {e}")
-            state.setdefault("errors", []).append(f"Intent detection error: {str(e)}")
-
+        # Reasoning is authorized by RuntimePolicy. This compatibility field is
+        # descriptive only and must never expand allowed reasoning modes.
+        authorized_modes = [
+            str(value) for value in runtime_policy.get("reasoning_modes") or []
+        ]
+        state["reasoning_hints"] = {
+            "source": "runtime_policy",
+            "requires_reasoning": bool(authorized_modes),
+            "reasoning_depth": requirements.get("reasoning_depth") or "standard",
+            "reasoning_modes": authorized_modes,
+        }
         return state
 
 
 async def intent_detect_node(
     state: LangGraphOrchestrationState,
-    decision_engine=None,
+    decision_engine: Any = None,
 ) -> LangGraphOrchestrationState:
-    """Convenience wrapper for IntentDetectNode"""
+    """Compatibility wrapper for the Runtime intent checkpoint."""
+
     node = IntentDetectNode(decision_engine)
     return await node(state)
