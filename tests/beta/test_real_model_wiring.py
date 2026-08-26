@@ -6,11 +6,21 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from ai_karen_engine.core.expression.contracts import ExpressionTask
-from ai_karen_engine.core.expression.engines.builtin_provider_engine import (
-    BuiltinProviderEngine,
+from ai_karen_engine.core.expression.engines.openai_compatible_engine import (
+    OpenAICompatibleEngine,
 )
-from ai_karen_engine.core.model_runtime.provider_endpoint import BUILTIN_PROVIDER_ENDPOINTS
+from ai_karen_engine.core.model_runtime.provider_endpoint import (
+    BUILTIN_PROVIDER_ENDPOINTS,
+    ProviderEndpoint,
+    ProviderEndpointType,
+)
 from ai_karen_engine.core.model_runtime.provider_execution import ProviderExecutionResult
+from ai_karen_engine.core.model_runtime.runtime_engine import (
+    EndpointKind,
+    EndpointProtocol,
+    Locality,
+    RuntimeEngine,
+)
 
 
 REQUIRED_GENERATIVE_CAPABILITIES = {"chat_completion", "text_generation"}
@@ -20,17 +30,41 @@ def _task() -> ExpressionTask:
     return ExpressionTask(
         task_id="beta-proof",
         kind="chat",
-        messages=[{"role": "user", "content": "Return BETA_REAL_MODEL_OK"}],
+        messages=[{"role": "user", "content": "Return BETA_PROVIDER_WIRING_OK"}],
         response_mode="text",
         required_capabilities=["chat_completion"],
         forbidden_capabilities=[],
-        preferred_provider="builtin_vllm",
+        preferred_provider="auto",
         preferred_model="beta-model",
         max_tokens=32,
         temperature=0.0,
         timeout_ms=5000,
         correlation_id="beta-correlation",
         request_id="beta-request",
+    )
+
+
+def _custom_vllm_endpoint() -> ProviderEndpoint:
+    return ProviderEndpoint(
+        provider_id="beta-vllm-openai-compatible",
+        display_name="Beta vLLM OpenAI-Compatible Endpoint",
+        endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+        base_url="http://127.0.0.1:8000/v1",
+        enabled=True,
+        builtin=False,
+        tenant_scoped=True,
+        timeout_seconds=5.0,
+        supports_streaming=True,
+        supports_embeddings=False,
+        supports_models_endpoint=True,
+        fallback_eligible=True,
+        capabilities=("chat_completion", "text_generation", "streaming"),
+        default_model="beta-model",
+        kind=EndpointKind.LOCAL_ENDPOINT,
+        protocol=EndpointProtocol.OPENAI_COMPATIBLE,
+        runtime_engine=RuntimeEngine.VLLM,
+        locality=Locality.LOCAL,
+        metadata={"priority": 1},
     )
 
 
@@ -44,28 +78,29 @@ def test_local_generative_endpoints_use_canonical_capabilities() -> None:
         )
         assert endpoint.base_url
         assert endpoint.fallback_eligible is True
+        assert endpoint.protocol is EndpointProtocol.OPENAI_COMPATIBLE
 
 
 @pytest.mark.asyncio
-async def test_builtin_provider_executes_core_endpoint_and_preserves_provenance(
+async def test_openai_compatible_provider_executes_registered_vllm_endpoint_and_preserves_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ai_karen_engine.core.expression.engines import builtin_provider_engine as module
+    from ai_karen_engine.core.expression.engines import openai_compatible_engine as module
 
-    endpoint = SimpleNamespace(provider_id="builtin_vllm")
+    endpoint = _custom_vllm_endpoint()
 
     class FakeRegistry:
-        def select_best_target(self, **kwargs):
-            assert kwargs["required_capabilities"] == REQUIRED_GENERATIVE_CAPABILITIES
-            assert kwargs["healthy_only"] is True
-            return endpoint
-
-        def resolve_capable_targets(self, *args, **kwargs):
-            return [endpoint]
-
         def get_provider_endpoint(self, provider_id: str):
-            assert provider_id == "builtin_vllm"
-            return endpoint
+            return endpoint if provider_id == endpoint.provider_id else None
+
+        def get_provider_status(self, provider_id: str):
+            assert provider_id == endpoint.provider_id
+            return SimpleNamespace(is_available=True)
+
+        def resolve_capable_targets(self, *, required_capabilities, healthy_only):
+            assert required_capabilities == REQUIRED_GENERATIVE_CAPABILITIES
+            assert healthy_only is True
+            return [endpoint]
 
     registry_module = ModuleType(
         "ai_karen_engine.core.model_runtime.provider_registry_service"
@@ -79,50 +114,51 @@ async def test_builtin_provider_executes_core_endpoint_and_preserves_provenance(
 
     async def fake_execute_provider_endpoint(target, **kwargs):
         assert target is endpoint
+        assert target.endpoint_type is ProviderEndpointType.OPENAI_COMPATIBLE
+        assert target.protocol is EndpointProtocol.OPENAI_COMPATIBLE
+        assert target.runtime_engine is RuntimeEngine.VLLM
         assert kwargs["messages"] == _task().messages
         assert kwargs["model"] == "beta-model"
         assert kwargs["max_tokens"] == 32
         assert kwargs["temperature"] == 0.0
         return ProviderExecutionResult(
-            text="BETA_REAL_MODEL_OK",
+            text="BETA_PROVIDER_WIRING_OK",
             model="beta-model",
-            provider_id="builtin_vllm",
+            provider_id=endpoint.provider_id,
             runtime_engine="vllm",
         )
 
     monkeypatch.setattr(module, "execute_provider_endpoint", fake_execute_provider_endpoint)
-    monkeypatch.setattr(
-        module,
-        "evaluate_provider_policy",
-        lambda provider_id: SimpleNamespace(classification="builtin_engine"),
-    )
 
-    result = await BuiltinProviderEngine().generate(_task())
+    engine = OpenAICompatibleEngine()
+    engine.engine_id = "local"
+    result = await engine.generate(_task())
 
-    assert result.text == "BETA_REAL_MODEL_OK"
-    assert result.provider == "builtin_vllm"
+    assert result.text == "BETA_PROVIDER_WIRING_OK"
+    assert result.provider == endpoint.provider_id
     assert result.model == "beta-model"
     assert result.runtime_engine == "vllm"
-    assert result.response_source == "provider_runtime"
+    assert result.engine_mode == "openai_compatible"
     assert result.degraded is False
-    assert result.metadata["actual_provider"] == "builtin_vllm"
-    assert result.metadata["actual_model"] == "beta-model"
-    assert result.metadata["fallback_level"] == 0
     assert result.attempts[-1]["status"] == "success"
 
-    # The proof must not need the legacy integration registry at all.
+    # Core executes the endpoint contract directly. It does not need a vLLM
+    # provider implementation or the legacy integration registry.
     assert "ai_karen_engine.integrations.llm_registry" not in sys.modules
 
 
-def test_builtin_failure_is_not_labeled_as_static_model_output() -> None:
-    result = BuiltinProviderEngine()._failure_result(
+def test_openai_compatible_failure_is_honest_model_unavailability() -> None:
+    engine = OpenAICompatibleEngine()
+    engine.engine_id = "local"
+    result = engine._failure_result(
         _task(),
         started=0.0,
         reason="provider_unavailable",
+        provider="beta-vllm-openai-compatible",
     )
 
     assert result.text == ""
-    assert result.provider is None
-    assert result.response_source == "model_unavailable"
-    assert result.metadata["response_source"] == "model_unavailable"
-    assert result.metadata["actual_provider"] is None
+    assert result.provider == "beta-vllm-openai-compatible"
+    assert result.degraded is True
+    assert result.degradation_reason == "provider_unavailable"
+    assert result.engine_mode == "openai_compatible"
