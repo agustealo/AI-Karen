@@ -1,8 +1,8 @@
 """Architecture gates for cognitive authority convergence.
 
 These tests prevent retired orchestration authority from reappearing inside Core,
-ensure CORTEX has one verification-policy owner, and keep ML/NLP prediction
-authority under ``core.intelligence``.
+ensure CORTEX has one verification-policy owner, keep ML/NLP prediction authority
+under ``core.intelligence``, and keep provider/platform selection out of reasoning.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ INTELLIGENCE = CORE / "intelligence"
 SELECTOR = CORTEX / "behavior" / "selector.py"
 DEFAULTS = REASONING / "defaults.py"
 REASONING_INIT = REASONING / "__init__.py"
+REASONING_GRAPH = REASONING / "graph" / "reasoning.py"
+VECTOR_STORES = REASONING / "retrieval" / "vector_stores.py"
 
 
 def _python_sources(root: Path) -> list[tuple[Path, str]]:
@@ -115,3 +117,21 @@ def test_core_does_not_import_retired_cortex_prediction_or_analysis_paths() -> N
                         violations.append(f"{path.relative_to(CORE)} imports {alias.name}")
 
     assert not violations, "Retired CORTEX prediction/NLP authority is still referenced: " + "; ".join(violations)
+
+
+def test_reasoning_graph_does_not_discover_active_provider_or_model() -> None:
+    source = REASONING_GRAPH.read_text(encoding="utf-8")
+    assert "runtime_registry_adapter" not in source
+    assert "get_registry" not in source
+    assert "get_active" not in source
+    assert "llm: LLMUtils" in source
+    assert "requires a runtime-injected generation client" in source
+
+
+def test_reasoning_retrieval_keeps_platform_adapters_out_of_core() -> None:
+    source = VECTOR_STORES.read_text(encoding="utf-8")
+    public_surface = REASONING_INIT.read_text(encoding="utf-8")
+    assert "LlamaIndexVectorAdapter" not in source
+    assert "llama_index" not in source
+    assert "LlamaIndexVectorAdapter" not in public_surface
+    assert "class VectorStore(Protocol)" in source
