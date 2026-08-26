@@ -44,12 +44,21 @@ def test_runtime_database_code_cannot_create_or_drop_primary_schema() -> None:
         ROOT / "src/ai_karen_engine/database",
         ROOT / "src/ai_karen_engine/services/auth",
         ROOT / "src/ai_karen_engine/services/identity_vault",
+        ROOT / "src/ai_karen_engine/extensions/platform/core/integration",
     ]
     for source_root in roots:
         for path in source_root.rglob("*.py"):
             text = path.read_text(encoding="utf-8", errors="ignore")
             assert "metadata.create_all" not in text, path
             assert "metadata.drop_all" not in text, path
+
+
+def test_extension_models_do_not_export_schema_mutation_helpers() -> None:
+    models = _read("src/ai_karen_engine/extensions/platform/core/integration/models.py")
+    assert "def create_extension_tables" not in models
+    assert "def drop_extension_tables" not in models
+    assert '"create_extension_tables"' not in models
+    assert '"drop_extension_tables"' not in models
 
 
 def test_auth_and_identity_vault_preflight_are_read_only() -> None:
