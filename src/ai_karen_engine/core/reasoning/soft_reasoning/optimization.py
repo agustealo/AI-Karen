@@ -9,7 +9,7 @@ optimization until Runtime wires a true GP-backed optimizer.
 
 The current implementation remains useful as a low-dependency local-first search
 fallback and is intentionally named ``BayesianOptimizer`` for compatibility with
-existing callers. Its diagnostics should report the surrogate kind explicitly.
+existing callers. Its diagnostics report the surrogate kind explicitly.
 """
 
 from __future__ import annotations
@@ -238,9 +238,7 @@ class BayesianOptimizer:
 
     def _rbf_kernel(self, x1: List[float], x2: List[float]) -> float:
         squared_dist = sum((a - b) ** 2 for a, b in zip(x1, x2))
-        return math.exp(
-            -squared_dist / (2 * self.config.length_scale**2)
-        )
+        return math.exp(-squared_dist / (2 * self.config.length_scale**2))
 
     @staticmethod
     def _default_perturb(embedding: List[float]) -> List[float]:
