@@ -5,7 +5,13 @@ The algorithm follows the architectural shape of Zhu et al. (ICML 2025):
 2. explore a low-dimensional latent space projected into hidden space;
 3. generate candidate solutions under controlled embedding perturbations;
 4. score candidates with an injected verifier objective;
-5. use Bayesian optimisation to refine the latent perturbation.
+5. use surrogate-guided Bayesian-style optimisation to refine the latent perturbation.
+
+Research fidelity boundary:
+The default KAREN profile currently uses the lightweight kernel-regression
+surrogate in ``optimization.py``. A paper-faithful profile must use a true
+Gaussian-process posterior, Expected Improvement, and a reward that includes a
+typed generation-coherence/log-probability term in addition to verifier reward.
 
 The engine is intentionally unaware of providers, memory stores, plugins,
 tools, HTTP, UI, and prompt assembly. Runtime must inject the model capability,
@@ -52,6 +58,7 @@ class SoftExplorationConfig:
     exploration_weight: float = 2.0
     convergence_threshold: float = 0.01
     default_seed: int = 17
+    research_profile: str = "karen_default"
 
     def __post_init__(self) -> None:
         if self.projection_dimension <= 0:
@@ -64,10 +71,12 @@ class SoftExplorationConfig:
             raise ValueError("perturbation_std must be positive")
         if self.embedding_scale <= 0:
             raise ValueError("embedding_scale must be positive")
+        if not self.research_profile.strip():
+            raise ValueError("research_profile must not be empty")
 
 
 class SoftExplorationEngine:
-    """Verifier-guided Bayesian search over first-token embedding perturbations."""
+    """Verifier-guided search over first-token embedding perturbations."""
 
     def __init__(
         self,
@@ -226,6 +235,9 @@ class SoftExplorationEngine:
             seed=seed,
             runtime_engine=capabilities.runtime_engine,
             model_id=capabilities.model_id,
+            optimizer_surrogate_kind=optimization.surrogate_kind,
+            acquisition_function=self._config.acquisition.value,
+            research_profile=self._config.research_profile,
         )
 
     def _seed(self, correlation_id: str) -> int:
