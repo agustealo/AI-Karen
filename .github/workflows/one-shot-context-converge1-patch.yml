@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Apply converge-1 patch
-        run: python scripts/apply_context_converge1.py
+        run: python scripts/run_context_converge1_fixed.py
       - name: Compile touched Python boundaries
         run: |
           python -m py_compile \
@@ -38,7 +38,7 @@ jobs:
             src/ai_karen_engine/utils/chat_helpers.py
       - name: Remove one-shot scaffolding and commit
         run: |
-          rm -f scripts/apply_context_converge1.py scripts/audit_context_converge1.py
+          rm -f scripts/apply_context_converge1.py scripts/run_context_converge1_fixed.py scripts/audit_context_converge1.py
           rm -f .github/workflows/one-shot-context-converge1-audit.yml .github/workflows/one-shot-context-converge1-patch.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
