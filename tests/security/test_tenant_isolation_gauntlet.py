@@ -1,24 +1,35 @@
 from __future__ import annotations
 
+import importlib.util
+import sys
+from pathlib import Path
+
 import pytest
 
-from ai_karen_engine.services.auth.tenant_isolation import (
-    CrossTenantAccessError,
-    TenantAccessLevel,
-    TenantContext,
-    TenantIsolationError,
-    TenantValidator,
-    VectorStoreTenantFilter,
-)
+
+ROOT = Path(__file__).resolve().parents[2]
+MODULE_PATH = ROOT / "src/ai_karen_engine/services/auth/tenant_isolation.py"
+SPEC = importlib.util.spec_from_file_location("tenant_isolation_under_test", MODULE_PATH)
+assert SPEC is not None and SPEC.loader is not None
+MODULE = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = MODULE
+SPEC.loader.exec_module(MODULE)
+
+CrossTenantAccessError = MODULE.CrossTenantAccessError
+TenantAccessLevel = MODULE.TenantAccessLevel
+TenantContext = MODULE.TenantContext
+TenantIsolationError = MODULE.TenantIsolationError
+TenantValidator = MODULE.TenantValidator
+VectorStoreTenantFilter = MODULE.VectorStoreTenantFilter
 
 
 def _context(
     *,
     tenant_id: str = "tenant-a",
     user_id: str = "user-a",
-    access_level: TenantAccessLevel = TenantAccessLevel.STRICT,
+    access_level=TenantAccessLevel.STRICT,
     allowed_tenants: set[str] | None = None,
-) -> TenantContext:
+):
     return TenantContext(
         tenant_id=tenant_id,
         user_id=user_id,
