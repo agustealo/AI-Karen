@@ -12,12 +12,13 @@ Docker, local launchers, production launchers, tests, and future deployment adap
 
 ## Ownership Rules
 
-The root `server/` package may temporarily contain compatibility and composition helpers while responsibilities move to their canonical owners. No new runtime, provider, prompt, memory, agent, extension, auth-policy, persistence, or observability authority may be added here.
+The root `server/` package may temporarily contain compatibility and composition helpers while responsibilities move to their canonical owners. No new runtime, provider, prompt, memory, agent, extension, auth-policy, persistence, startup-lifecycle, or observability authority may be added here.
 
 ### Application composition
 
-- `server/app.py`: TRANSITIONAL. Health/readiness ownership has been removed. Remaining composition responsibilities should continue moving into `src/ai_karen_engine/app.py` plus canonical API/platform helpers.
-- `server/startup.py`: TRANSITIONAL. Target owner: canonical application lifespan/bootstrap seam. It coordinates startup only and must not absorb runtime authority.
+- `server/app.py`: TRANSITIONAL. Health/readiness and startup-lifecycle ownership have been removed. It imports `create_lifespan` directly from `ai_karen_engine.server.startup`. Remaining composition responsibilities should continue moving into `src/ai_karen_engine/app.py` plus canonical API/platform helpers.
+- `server/startup.py`: DELETED. It must not reappear. Root-server startup callbacks, provider/model warmup policy, memory initialization, extension recovery, and fallback ownership are retired.
+- `src/ai_karen_engine/server/startup.py`: CURRENT canonical lifespan/bootstrap seam. It composes subsystem owners and remains a migration target for any behavior that still belongs deeper in runtime, database, memory, extensions, or observability.
 - `server/routers.py`: TRANSITIONAL. Target owner: thin API route registration under `src/ai_karen_engine/api_routes/` / application composition.
 - `server/middleware.py`: TRANSITIONAL. Target owner: canonical API/platform middleware.
 - `server/validation.py`: REVIEW/MERGE. Validation belongs with the contract/config/security owner that defines the validated concern.
@@ -46,7 +47,7 @@ The root `server/` package may temporarily contain compatibility and composition
 ### Database
 
 - `server/database_config.py`: TRANSITIONAL. Supabase migrations are the schema authority. Runtime database connectivity/config belongs to the canonical database/platform adapter, not application startup DDL.
-- `server/app.py` shutdown cleanup reads the settings-bound database configuration from `app.state.database_config`; no undefined module-global database configuration is permitted.
+- Database startup/shutdown sequencing must be owned by canonical lifespan/database lifecycle, not root-server event callbacks.
 
 ### Admin API
 
@@ -83,7 +84,10 @@ ai_karen_engine.app:create_app
 transitional server composition helpers
         |
         v
-canonical Runtime / CORTEX / PromptRuntime / Memory / Extensions / Platform
+canonical FastAPI lifespan
+        |
+        v
+Runtime / Database / Memory / Extensions / Observability owners
 ```
 
-The migration is complete only when the middle transitional layer disappears without changing the public application entrypoint.
+The migration is complete only when the remaining transitional server composition layer disappears without changing the public application entrypoint.
