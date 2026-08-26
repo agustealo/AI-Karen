@@ -5,6 +5,7 @@ import hashlib
 import os
 import uuid
 
+import jwt
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -54,6 +55,7 @@ async def test_same_refresh_token_concurrency_allows_one_rotation_then_revokes_f
             )
         )
 
+    tenant_id = uuid.uuid4()
     user_id = uuid.uuid4()
     session_id = uuid.uuid4()
     refresh_token = "R1-concurrent-refresh-token"
@@ -64,12 +66,23 @@ async def test_same_refresh_token_concurrency_allows_one_rotation_then_revokes_f
     async with session_factory() as db_session:
         async with db_session.begin():
             db_session.add(
+                Tenant(
+                    id=tenant_id,
+                    name="Refresh Concurrency Tenant",
+                    slug="refresh-concurrency",
+                    subscription_tier="basic",
+                    settings={},
+                    is_active=True,
+                )
+            )
+            db_session.add(
                 AuthUser(
                     user_id=user_id,
                     email="concurrency@example.test",
                     username="concurrency",
                     full_name="Concurrency Test",
                     password_hash=seed_service._hash_password("Original1!"),
+                    tenant_id=tenant_id,
                     roles=["user"],
                     preferences={},
                     is_verified=True,
@@ -106,6 +119,16 @@ async def test_same_refresh_token_concurrency_allows_one_rotation_then_revokes_f
     assert successes[0][0]
     assert successes[0][1]
     assert successes[0][1] != refresh_token
+
+    rotated_access_token = successes[0][0]
+    assert rotated_access_token is not None
+    decoded = jwt.decode(
+        rotated_access_token,
+        _auth_config().jwt_secret_key,
+        algorithms=[_auth_config().jwt_algorithm],
+        options={"verify_aud": False},
+    )
+    assert decoded["tenant_id"] == str(tenant_id)
 
     async with session_factory() as db_session:
         session_result = await db_session.execute(
