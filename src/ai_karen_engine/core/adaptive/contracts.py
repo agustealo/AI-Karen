@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from ai_karen_engine.core.contracts.values import JsonMap
+
 
 class AdaptiveActionType(str, Enum):
     RESPOND_DIRECTLY = "respond_directly"
@@ -76,7 +78,7 @@ class UserStateSnapshot:
     user_id: str
     tenant_id: str | None = None
     session_id: str | None = None
-    explicit_preferences: dict[str, Any] = field(default_factory=dict)
+    explicit_preferences: JsonMap = field(default_factory=dict)
     locality_preference: str = "any"
     clarification_tolerance: float = 0.5
     verification_preference: str = "standard"
@@ -131,11 +133,11 @@ class SystemCapabilitySnapshot:
 
 @dataclass(slots=True)
 class HistoricalEvidence:
-    capability_profiles: dict[str, Any] = field(default_factory=dict)
-    agent_profiles: dict[str, Any] = field(default_factory=dict)
-    model_profiles: dict[str, Any] = field(default_factory=dict)
-    user_specific_evidence: dict[str, Any] = field(default_factory=dict)
-    global_evidence: dict[str, Any] = field(default_factory=dict)
+    capability_profiles: JsonMap = field(default_factory=dict)
+    agent_profiles: JsonMap = field(default_factory=dict)
+    model_profiles: JsonMap = field(default_factory=dict)
+    user_specific_evidence: JsonMap = field(default_factory=dict)
+    global_evidence: JsonMap = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -188,8 +190,8 @@ class AdaptiveRecommendation:
     target_id: str | None = None
     utility_score: float = 0.0
     confidence: float = 0.0
-    evidence: dict[str, Any] = field(default_factory=dict)
-    policy_constraints: dict[str, Any] = field(default_factory=dict)
+    evidence: JsonMap = field(default_factory=dict)
+    policy_constraints: JsonMap = field(default_factory=dict)
     explanation_codes: list[RecommendationReasonCode] = field(default_factory=list)
     score_components: ScoreComponents | None = None
     model_policy_version: str = "baseline"
@@ -221,7 +223,7 @@ class SuggestionCandidate:
     confidence: float = 0.0
     interruption_cost: float = 0.0
     urgency: str = "normal"
-    evidence: dict[str, Any] = field(default_factory=dict)
+    evidence: JsonMap = field(default_factory=dict)
     expires_at: datetime | None = None
     dedupe_key: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -233,7 +235,7 @@ class ActionOutcomeObservation:
     observation_id: str
     source_outcome_id: str
     task_signature_ref: dict[str, Any] = field(default_factory=dict)
-    user_scope: dict[str, Any] = field(default_factory=dict)
+    user_scope: JsonMap = field(default_factory=dict)
     action_type: str = ""
     target_id: str | None = None
     execution_status: str = ""
