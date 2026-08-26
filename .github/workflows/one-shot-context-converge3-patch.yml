@@ -28,8 +28,8 @@ jobs:
             src/ai_karen_engine/core/langgraph_orchestrator/langgraph_orchestrator.py \
             src/ai_karen_engine/core/langgraph_orchestrator/nodes/memory_fetch.py \
             src/ai_karen_engine/core/runtime/session_state_manager_compat.py
-      - name: Install focused proof dependency
-        run: python -m pip install --disable-pip-version-check pytest
+      - name: Install focused proof dependencies
+        run: python -m pip install --disable-pip-version-check pytest pydantic
       - name: Run context memory authority proofs
         env:
           PYTHONPATH: src
