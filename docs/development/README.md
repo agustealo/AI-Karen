@@ -15,6 +15,7 @@ This directory contains the current developer-facing architecture and engineerin
 - [`MEMORY.md`](MEMORY.md) — STM, episodic, LTM, NeuroRecall, NeuroVault, PostgreSQL/Supabase, Redis, scope/governance.
 - [`REASONING_LANGGRAPH_MEDUSA.md`](REASONING_LANGGRAPH_MEDUSA.md) — canonical reasoning, LangChain usage rules, LangGraph boundaries, AgentMedusa topology.
 - [`EXTENSIONS_TOOLS.md`](EXTENSIONS_TOOLS.md) — extension manifests, permissions, ActionExecutionGate, credentials, lifecycle and APIs.
+- [`OLLAMA.md`](OLLAMA.md) — optional Ollama adapter contract, explicit enablement, health/readiness boundary, and remaining config debt.
 - [`SECURITY_OBSERVABILITY.md`](SECURITY_OBSERVABILITY.md) — auth/RBAC/tenant/security rules, telemetry, metrics, health/readiness, degraded truth.
 - [`REPOSITORY_ENGINEERING.md`](REPOSITORY_ENGINEERING.md) — file/folder rules, DRY methodology, cleanup classification, configuration, deletion process.
 - [`TESTING_RELEASE.md`](TESTING_RELEASE.md) — proof commands, architecture tests, provider/prompt/memory/security tests, beta/release gates.
