@@ -129,7 +129,7 @@ class PromptRuntimeService:
         profile: Optional[Dict[str, Any]] = None,
         workflow_context: Optional[Dict[str, Any]] = None,
         cortex_intent: Optional[Dict[str, Any]] = None,
-        token_budget: int = 4096,
+        token_budget: Any = 4096,
         prompt_id: Optional[str] = None,
         prompt_version: Optional[str] = None,
     ) -> PromptAssemblyRequest:
@@ -170,7 +170,7 @@ class PromptRuntimeService:
             memory_items=memory_items,
             cortex_intent=dict(cortex_intent or {}),
             workflow_context=dict(workflow_context or {}),
-            token_budget=max(1, int(token_budget or 4096)),
+            token_budget=self._normalize_token_budget(token_budget),
             messages=[dict(message) for message in messages],
             prompt_id=prompt_id,
             prompt_version=prompt_version,
@@ -215,6 +215,14 @@ class PromptRuntimeService:
             seen.add(key)
             deduped.append(item)
         return deduped
+
+    @staticmethod
+    def _normalize_token_budget(value: Any, default: int = 4096) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(1, parsed)
 
     @staticmethod
     def _instruction_lines(value: Any) -> List[str]:

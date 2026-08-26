@@ -122,7 +122,7 @@ class ResponseSynthesisNode:
                         "primary_intent": intent,
                         "subtype": subtype,
                     },
-                    token_budget=int(
+                    token_budget=(
                         request_preferences.get("token_budget")
                         or request_preferences.get("max_input_tokens")
                         or 4096

@@ -28,7 +28,7 @@ from .file_context_store import (
     ContextErrorType,
     ContextFile,
     FileContextStore,
-    FileFileContextUpdateRequest,
+    FileContextUpdateRequest,
     FileUploadStatus,
 )
 
@@ -147,7 +147,7 @@ class FileUploadService:
         Initialize File Upload Service.
 
         Args:
-            context_manager: Context Manager instance
+            file_context_store: File-context metadata store
             storage_path: Path for storing uploaded files
             max_file_size: Maximum file size in bytes
             allowed_file_types: Set of allowed file types
