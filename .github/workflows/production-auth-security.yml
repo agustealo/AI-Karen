@@ -5,6 +5,7 @@ on:
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
       - "src/ai_karen_engine/services/auth/**"
+      - "src/ai_karen_engine/core/services/base.py"
       - "src/ai_karen_engine/database/models/session_security.py"
       - "src/ai_karen_engine/monitoring/**"
       - "supabase/migrations/*auth_refresh_token_history.sql"
@@ -19,6 +20,7 @@ on:
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
       - "src/ai_karen_engine/services/auth/**"
+      - "src/ai_karen_engine/core/services/base.py"
       - "src/ai_karen_engine/database/models/session_security.py"
       - "src/ai_karen_engine/monitoring/**"
       - "supabase/migrations/*auth_refresh_token_history.sql"
@@ -67,6 +69,7 @@ jobs:
         run: |
           python -m compileall -q \
             src/ai_karen_engine/services/auth/auth_service.py \
+            src/ai_karen_engine/core/services/base.py \
             src/ai_karen_engine/database/models/session_security.py \
             src/ai_karen_engine/api_routes/auth/auth.py \
             src/ai_karen_engine/monitoring
