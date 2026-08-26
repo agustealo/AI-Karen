@@ -14,7 +14,17 @@ from ai_karen_engine.core.model_runtime.runtime_contracts import (
 
 
 class LangGraphOrchestrationState(TypedDict):
-    """Typed state for orchestration graph"""
+    """Typed state for an already-authorized orchestration workflow.
+
+    Runtime owns global execution authority. This state carries the immutable
+    authorization and execution metadata required by graph nodes; graph nodes
+    must not manufacture replacement authorization.
+    """
+
+    # Identity / execution trace
+    request_id: str
+    correlation_id: str
+    conversation_id: Optional[str]
 
     # Input/Output
     messages: List[BaseMessage]
@@ -27,6 +37,8 @@ class LangGraphOrchestrationState(TypedDict):
     user_permissions: Optional[Dict[str, Any]]
     auth_context: Optional[Dict[str, Any]]
     user_profile: Optional[Dict[str, Any]]
+    runtime_policy: Optional[Dict[str, Any]]
+    execution_requirements: Optional[Dict[str, Any]]
 
     # Safety & Guardrails
     safety_status: Optional[str]  # "safe", "unsafe", "review_required"
@@ -88,7 +100,6 @@ class LangGraphOrchestrationState(TypedDict):
     # Medusa Extensions
     agent_trace: Optional[List[str]]
     medusa_status: Optional[str]
-    runtime_policy: Optional[Dict[str, Any]]
 
     # Degraded Mode Support
     degraded_mode: bool
@@ -106,17 +117,50 @@ def create_initial_state(
     session_id: str,
     config: Optional[Dict[str, Any]] = None,
 ) -> LangGraphOrchestrationState:
-    """Centralized factory for creating initial state"""
+    """Create workflow state from Runtime-provided execution configuration."""
     runtime_config = config or {}
+    request_config = runtime_config.get("request_config") or {}
+    if not isinstance(request_config, dict):
+        request_config = {}
+
+    correlation_id = str(
+        runtime_config.get("correlation_id")
+        or request_config.get("correlation_id")
+        or request_config.get("response_id")
+        or session_id
+    )
+    request_id = str(
+        runtime_config.get("request_id")
+        or request_config.get("request_id")
+        or request_config.get("response_id")
+        or correlation_id
+    )
+    runtime_policy = runtime_config.get("runtime_policy")
+    if runtime_policy is None:
+        runtime_policy = request_config.get("runtime_policy")
+    execution_requirements = runtime_config.get("execution_requirements")
+    if execution_requirements is None:
+        execution_requirements = request_config.get("execution_requirements")
+
     return {
+        "request_id": request_id,
+        "correlation_id": correlation_id,
+        "conversation_id": str(
+            runtime_config.get("conversation_id")
+            or request_config.get("conversation_id")
+            or session_id
+        ),
         "messages": messages,
         "user_id": user_id,
         "session_id": session_id,
-        "tenant_id": None,
+        "tenant_id": runtime_config.get("tenant_id")
+        or request_config.get("tenant_id"),
         "auth_status": None,
         "user_permissions": None,
-        "auth_context": cast(Dict[str, Any], runtime_config.get("auth_context") or {}),
+        "auth_context": cast(Dict[str, Any], request_config.get("auth_context") or runtime_config.get("auth_context") or {}),
         "user_profile": None,
+        "runtime_policy": cast(Optional[Dict[str, Any]], runtime_policy),
+        "execution_requirements": cast(Optional[Dict[str, Any]], execution_requirements),
         "safety_status": None,
         "safety_flags": None,
         "safety_evaluation": None,
@@ -148,17 +192,14 @@ def create_initial_state(
         "approval_reason": None,
         "errors": [],
         "warnings": [],
-        "streaming_enabled": bool(runtime_config.get("streaming_enabled", False)),
+        "streaming_enabled": bool(request_config.get("streaming_enabled", runtime_config.get("streaming_enabled", False))),
         "stream_chunks": None,
-        "request_config": runtime_config,
-        # Degraded mode fields
+        "request_config": request_config,
         "degraded_mode": False,
         "degradation_reasons": [],
         "fallbacks_applied": [],
-        # File upload fields
         "uploaded_files": None,
         "file_context": None,
-        # Other salvaged fields
         "structured_content": None,
         "actions": None,
         "telemetry": None,
@@ -166,7 +207,6 @@ def create_initial_state(
         "formatted_response": None,
         "agent_trace": None,
         "medusa_status": None,
-        "runtime_policy": runtime_config.get("runtime_policy"),
     }
 
 
@@ -176,7 +216,7 @@ def create_streaming_initial_state(
     session_id: str,
     config: Optional[Dict[str, Any]] = None,
 ) -> LangGraphOrchestrationState:
-    """Factory for streaming initial state (sets streaming_enabled=True)"""
+    """Factory for streaming initial state (sets streaming_enabled=True)."""
     state = create_initial_state(messages, user_id, session_id, config)
     state["streaming_enabled"] = True
     state["stream_chunks"] = []
@@ -186,7 +226,7 @@ def create_streaming_initial_state(
 def merge_state_error(
     state: LangGraphOrchestrationState, error: str
 ) -> LangGraphOrchestrationState:
-    """Append error to state"""
+    """Append error to state."""
     state.setdefault("errors", []).append(error)
     return state
 
@@ -194,7 +234,7 @@ def merge_state_error(
 def append_warning(
     state: LangGraphOrchestrationState, warning: str
 ) -> LangGraphOrchestrationState:
-    """Append warning to state"""
+    """Append warning."""
     state.setdefault("warnings", []).append(warning)
     return state
 
@@ -202,6 +242,6 @@ def append_warning(
 def append_agent_trace(
     state: LangGraphOrchestrationState, trace: str
 ) -> LangGraphOrchestrationState:
-    """Append agent trace"""
+    """Append an agent trace entry."""
     state.setdefault("agent_trace", []).append(trace)
     return state
