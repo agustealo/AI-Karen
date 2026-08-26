@@ -1,0 +1,42 @@
+name: One-shot Memory Facade Census
+
+on:
+  push:
+    branches:
+      - memory/delete-webui-facade
+
+permissions:
+  contents: read
+
+jobs:
+  census:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Parse facade surface
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          p = Path('src/ai_karen_engine/core/memory/memory_service.py')
+          tree = ast.parse(p.read_text(encoding='utf-8'))
+          print('TOP_LEVEL_SURFACE')
+          for node in tree.body:
+              if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                  print(f'{type(node).__name__}:{node.name}:line={node.lineno}')
+          PY
+      - name: Repository reference census
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== MODULE IMPORT REFERENCES ==='
+          grep -R --line-number --exclude='memory_service.py' --exclude-dir='.git' 'core\.memory\.memory_service\|from .*memory_service import\|import .*memory_service' . || true
+          echo '=== FACADE SYMBOL REFERENCES ==='
+          grep -R --line-number --exclude='memory_service.py' --exclude-dir='.git' 'WebUIMemoryService\|MemoryContextBuilder\|store_web_ui_memory\|build_conversation_context\|query_memories' . || true
+          echo '=== UI MODEL REFERENCES ==='
+          grep -R --line-number --exclude='memory_service.py' --exclude-dir='.git' 'WebUIMemoryEntry\|WebUIMemoryQuery\|UISource\|UIMemoryType' src tests docs 2>/dev/null || true
+      - name: Compile facade explicitly
+        run: python -m py_compile src/ai_karen_engine/core/memory/memory_service.py
