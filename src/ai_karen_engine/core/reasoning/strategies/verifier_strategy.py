@@ -9,21 +9,18 @@ from typing import Any, List
 
 from ai_karen_engine.core.reasoning.contracts import (
     ReasoningBudget,
+    ReasoningContradiction,
     ReasoningEvidence,
-    ReasoningHypothesis,
     ReasoningResult,
     ReasoningStatus,
-    ReasoningStrategyEngine,
 )
+from ai_karen_engine.core.reasoning.strategy import ReasoningStrategyEngine
 from ai_karen_engine.core.reasoning.soft_reasoning.verifier import ReasoningVerifier
 from ai_karen_engine.core.runtime.contracts import ExecutionContext
 
 
 class Verifier(ReasoningStrategyEngine):
-    """Verification strategy.
-
-    Evaluates reasoning outputs against criteria.
-    """
+    """Verification strategy."""
 
     strategy_id = "verify"
     version = "v1"
@@ -61,7 +58,7 @@ class Verifier(ReasoningStrategyEngine):
                     ReasoningContradiction(
                         claim_a=objective,
                         claim_b=result.feedback,
-                        severity="high" if result.overall_score < 0.4 else "medium",
+                        severity=("high" if result.overall_score < 0.4 else "medium"),
                         resolvable=True,
                         recommended_action="refine",
                     )
@@ -76,7 +73,10 @@ class Verifier(ReasoningStrategyEngine):
                 assumptions=[],
                 unknowns=[],
                 contradictions=contradictions,
-                assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(
+                assessment=__import__(
+                    "ai_karen_engine.core.reasoning.contracts",
+                    fromlist=["ReasoningAssessment"],
+                ).ReasoningAssessment(
                     confidence=result.overall_score,
                     evidence_sufficiency=result.confidence,
                     contradiction_severity="high" if not result.passed else "low",
@@ -91,11 +91,14 @@ class Verifier(ReasoningStrategyEngine):
                     "score": result.overall_score,
                 },
             )
-
         except Exception as exc:
             return self._empty_result(f"Verification failed: {exc}")
 
     def _empty_result(self, reason: str) -> ReasoningResult:
+        contracts = __import__(
+            "ai_karen_engine.core.reasoning.contracts",
+            fromlist=["ReasoningAssessment", "ReasoningErrorCode"],
+        )
         return ReasoningResult(
             reasoning_id="",
             disposition="abstain",
@@ -105,10 +108,10 @@ class Verifier(ReasoningStrategyEngine):
             assumptions=[],
             unknowns=[],
             contradictions=[],
-            assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(),
+            assessment=contracts.ReasoningAssessment(),
             evidence_needs=[],
             suggested_next_actions=[],
             status=ReasoningStatus.FAILED.value,
-            error_code=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningErrorCode"]).ReasoningErrorCode.STRATEGY_FAILURE.value,
+            error_code=contracts.ReasoningErrorCode.STRATEGY_FAILURE.value,
             diagnostics={"error": reason},
         )
