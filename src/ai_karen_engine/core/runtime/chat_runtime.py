@@ -888,7 +888,7 @@ class ChatRuntime:
         """Assemble prompt using canonical PromptRuntime."""
         from ai_karen_engine.core.runtime.prompt import (
             PromptAssemblyRequest,
-            get_prompt_assembler,
+            get_prompt_runtime_service,
         )
 
         ctx = request.context
@@ -914,7 +914,7 @@ class ChatRuntime:
             messages=[dict(msg) for msg in request.messages],
         )
 
-        result = await get_prompt_assembler().assemble(assembly_request)
+        result = await get_prompt_runtime_service().assemble_prompt(assembly_request)
         return result.messages
 
     def _extract_user_message(self, messages: List[Dict[str, Any]]) -> str:
