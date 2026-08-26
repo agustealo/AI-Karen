@@ -90,11 +90,14 @@ def test_execution_decision_keeps_reasoning_modes_separate_from_capabilities() -
     assert "Capability and\n    reasoning-mode domains are intentionally distinct" in source
 
 
-def test_live_cortex_asks_runtime_policy_to_authorize_memory_write() -> None:
+def test_live_cortex_requires_explicit_memory_write_recommendation_and_policy_grant() -> None:
     source = _source(RUNTIME_DECIDER)
 
+    assert 'analysis.get("memory_write_requested", False)' in source
+    assert 'meta.get("memory_write_requested", False)' in source
+    assert 'analysis.get("memory_write_denied", False)' in source
     assert 'requested_capabilities.append("memory.write")' in source
-    assert 'memory_write_allowed = "memory.write" in required_capabilities' in source
+    assert 'memory_write_requested and "memory.write" in required_capabilities' in source
     assert '"memory_write_requested": memory_write_requested' in source
     assert '"memory_write_authorized": memory_write_allowed' in source
 
