@@ -17,15 +17,19 @@ from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.config.config_manager import AIKarenConfig, get_config
 
 logger = logging.getLogger(__name__)
+_SYNTHETIC_TENANT_IDS = frozenset({"default", "dev-tenant"})
 
 
-def _require_identity_scope(user: UserData) -> UserData:
+def _require_identity_scope(
+    user: UserData,
+    *,
+    allow_synthetic_tenant: bool = False,
+) -> UserData:
     """Require server-authenticated user and tenant scope.
 
-    Tenant scope is security authority. Missing identity fields fail closed
-    instead of falling into synthetic ``default`` / ``dev-tenant`` scopes.
-    Development bypass remains supported only when its configured developer
-    context explicitly supplies both values.
+    Tenant scope is security authority. Missing identity fields fail closed.
+    Legacy synthetic scopes are rejected in production-authenticated requests;
+    configured development bypass may use an explicit synthetic dev tenant.
     """
 
     user_id = str(user.get("user_id") or "").strip()
@@ -34,6 +38,8 @@ def _require_identity_scope(user: UserData) -> UserData:
         raise HTTPException(status_code=401, detail="Authenticated user identity is incomplete")
     if not tenant_id:
         raise HTTPException(status_code=401, detail="Authenticated tenant context is required")
+    if not allow_synthetic_tenant and tenant_id.lower() in _SYNTHETIC_TENANT_IDS:
+        raise HTTPException(status_code=401, detail="Authenticated tenant context is not authoritative")
     return user
 
 
@@ -44,7 +50,8 @@ async def get_user_context(request: Request) -> UserData:
         if auth_config.should_bypass_auth():
             logger.info("Auth bypass active: providing configured developer context")
             return _require_identity_scope(
-                UserData.from_dict(auth_config.get_dev_user_context())
+                UserData.from_dict(auth_config.get_dev_user_context()),
+                allow_synthetic_tenant=True,
             )
 
         from ai_karen_engine.auth.auth_middleware import get_current_user as get_real_user
