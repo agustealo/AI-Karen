@@ -1,3 +1,14 @@
+"""Legacy Core observability compatibility surface.
+
+Canonical observability implementation authority lives in
+``ai_karen_engine.platform.observability``.
+
+Do not add new metrics, sinks, exporters, diagnostics buffers, event
+implementations, or telemetry infrastructure here. Existing imports are kept
+only while callers migrate to the platform owner; this package is a retirement
+candidate once the reference audit reaches zero external callers.
+"""
+
 from __future__ import annotations
 
 from ai_karen_engine.core.observability.context import (
