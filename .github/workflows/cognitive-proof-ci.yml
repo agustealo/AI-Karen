@@ -11,6 +11,9 @@ on:
       - 'src/ai_karen_engine/core/reasoning/**'
       - 'src/ai_karen_engine/core/model_runtime/**'
       - 'src/ai_karen_engine/core/langgraph_orchestrator/**'
+      - 'src/ai_karen_engine/core/runtime/prompt/**'
+      - 'src/ai_karen_engine/core/runtime/soft_reasoning_runtime.py'
+      - 'src/ai_karen_engine/core/runtime/soft_reasoning_verifier.py'
       - 'src/ai_karen_engine/core/runtime/workflow_runtime.py'
       - 'src/ai_karen_engine/core/runtime/workflow_generation.py'
       - 'src/ai_karen_engine/agent_medusa/**'
@@ -34,6 +37,9 @@ on:
       - 'src/ai_karen_engine/core/reasoning/**'
       - 'src/ai_karen_engine/core/model_runtime/**'
       - 'src/ai_karen_engine/core/langgraph_orchestrator/**'
+      - 'src/ai_karen_engine/core/runtime/prompt/**'
+      - 'src/ai_karen_engine/core/runtime/soft_reasoning_runtime.py'
+      - 'src/ai_karen_engine/core/runtime/soft_reasoning_verifier.py'
       - 'src/ai_karen_engine/core/runtime/workflow_runtime.py'
       - 'src/ai_karen_engine/core/runtime/workflow_generation.py'
       - 'src/ai_karen_engine/agent_medusa/**'
@@ -74,7 +80,7 @@ jobs:
       - name: Install cognitive proof dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-timeout pyyaml python-dotenv numpy scikit-learn
+          pip install pytest pytest-timeout pyyaml python-dotenv numpy scikit-learn pydantic
 
       - name: Compile cognitive contract surface
         run: |
@@ -86,6 +92,9 @@ jobs:
             src/ai_karen_engine/core/reasoning \
             src/ai_karen_engine/core/model_runtime \
             src/ai_karen_engine/core/langgraph_orchestrator \
+            src/ai_karen_engine/core/runtime/prompt \
+            src/ai_karen_engine/core/runtime/soft_reasoning_runtime.py \
+            src/ai_karen_engine/core/runtime/soft_reasoning_verifier.py \
             src/ai_karen_engine/core/runtime/workflow_runtime.py \
             src/ai_karen_engine/core/runtime/workflow_generation.py \
             src/ai_karen_engine/agent_medusa \
