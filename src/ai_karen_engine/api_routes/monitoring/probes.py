@@ -5,9 +5,10 @@ from __future__ import annotations
 These probes intentionally stay small. They do not duplicate provider health,
 extension diagnostics, degraded-mode reporting, or detailed infrastructure
 observability. Detailed health remains available through the monitoring health
-router; these endpoints answer only whether the process is alive and whether
-the application has completed the minimum required startup state to serve
-production traffic.
+router; these endpoints answer only whether the process is alive, whether the
+application has completed the minimum required startup state to serve
+production traffic, and the two historical ping aliases used for connectivity
+checks.
 """
 
 from datetime import datetime, timezone
@@ -20,6 +21,27 @@ router = APIRouter(tags=["system"])
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _ping_payload() -> Dict[str, Any]:
+    return {
+        "status": "ok",
+        "timestamp": _timestamp(),
+    }
+
+
+@router.get("/ping")
+async def root_ping() -> Dict[str, Any]:
+    """Historical root connectivity alias."""
+
+    return _ping_payload()
+
+
+@router.get("/api/ping")
+async def api_ping() -> Dict[str, Any]:
+    """Historical API connectivity alias."""
+
+    return _ping_payload()
 
 
 @router.get("/health/live")
