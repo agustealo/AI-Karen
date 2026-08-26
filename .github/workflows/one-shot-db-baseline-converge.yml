@@ -1,0 +1,57 @@
+name: One-shot DB Baseline Converge
+
+on:
+  push:
+    branches: [db/baseline-1-production-schema]
+    paths:
+      - "scripts/dev/apply_db_baseline_convergence.py"
+      - ".github/workflows/one-shot-db-baseline-converge.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  converge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Apply convergence
+        run: python scripts/dev/apply_db_baseline_convergence.py
+      - name: Compile touched Python boundaries
+        run: |
+          python -m py_compile \
+            src/ai_karen_engine/database/__init__.py \
+            src/ai_karen_engine/database/factory.py \
+            src/ai_karen_engine/services/database/migration_validator.py \
+            src/ai_karen_engine/services/database/operations_service.py \
+            server/deployment/deploy_auth_system.py \
+            tests/supabase_platform_smoke.py
+      - name: Prove baseline shape and retired authorities
+        run: |
+          test "$(find supabase/migrations -maxdepth 1 -name '*.sql' | wc -l)" -eq 6
+          test ! -e src/ai_karen_engine/database/migration_manager.py
+          test ! -d src/ai_karen_engine/database/migrations
+          test ! -d src/ai_karen_engine/database/migration
+          test ! -d docker/database/migrations/postgres
+          test ! -d server/chat/migrations
+          test ! -d server/migrations
+          ! grep -R "database.migration_manager" -n src server tests --include='*.py'
+          ! grep -R "Base.metadata.create_all\|Base.metadata.drop_all" -n src/ai_karen_engine/database --include='*.py'
+          grep -q "migrate-production-database.sh" server/deployment/deploy_auth_system.py
+      - name: Commit product changes only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase docs src server docker tests
+          if git diff --cached --quiet; then
+            echo "No product changes to commit"
+            exit 0
+          fi
+          git commit -m "refactor(db): establish canonical production baseline"
+          git push origin HEAD:db/baseline-1-production-schema
