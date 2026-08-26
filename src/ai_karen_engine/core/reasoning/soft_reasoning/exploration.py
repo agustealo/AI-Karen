@@ -7,12 +7,11 @@ The algorithm follows the architectural shape of Zhu et al. (ICML 2025):
 4. score candidates with an injected verifier objective;
 5. use Gaussian-process Bayesian optimisation to refine the latent perturbation.
 
-Research fidelity boundary:
-The optimizer now uses a real Gaussian Process posterior. The default KAREN
-profile still differs from the paper in acquisition/search defaults and reward
-composition: KAREN defaults to UCB and its structured verifier score, while a
-paper-faithful profile must select Expected Improvement and combine verifier
-reward with typed generation-coherence/log-probability data.
+The default ``karen_default`` profile uses KAREN's structured verifier objective
+and UCB acquisition. ``paper_2025`` is explicit rather than implicit: it uses a
+50-dimensional projected search space, Expected Improvement, and combines
+verifier success with typed generation coherence/log-probability. It fails
+closed when the runtime cannot provide the required probability signal.
 
 The engine is intentionally unaware of providers, memory stores, plugins,
 tools, HTTP, UI, and prompt assembly. Runtime must inject the model capability,
@@ -37,6 +36,10 @@ from ai_karen_engine.core.reasoning.soft_reasoning.optimization import (
     AcquisitionFunction,
     BayesianOptimizer,
     OptimizationConfig,
+)
+from ai_karen_engine.core.reasoning.soft_reasoning.paper_reward import (
+    PaperRewardComposer,
+    SoftReasoningCoherenceUnavailable,
 )
 
 
@@ -75,6 +78,20 @@ class SoftExplorationConfig:
         if not self.research_profile.strip():
             raise ValueError("research_profile must not be empty")
 
+    @classmethod
+    def paper_2025(cls) -> "SoftExplorationConfig":
+        """Return the explicit Zhu et al. search/reward profile.
+
+        Runtime must still inject a model adapter that exposes first-token
+        embedding control and generation log-probability/coherence signals.
+        """
+
+        return cls(
+            projection_dimension=50,
+            acquisition=AcquisitionFunction.EI,
+            research_profile="paper_2025",
+        )
+
 
 class SoftExplorationEngine:
     """Verifier-guided search over first-token embedding perturbations."""
@@ -89,6 +106,7 @@ class SoftExplorationEngine:
         self._generation = generation
         self._verifier = verifier
         self._config = config or SoftExplorationConfig()
+        self._paper_reward = PaperRewardComposer()
 
     def explore(
         self,
@@ -150,6 +168,7 @@ class SoftExplorationEngine:
                 initial_samples=self._config.initial_samples,
                 length_scale=1.0,
                 noise_variance=0.01,
+                random_seed=seed,
             )
         )
 
@@ -171,7 +190,11 @@ class SoftExplorationEngine:
             key = tuple(round(float(value), 12) for value in latent)
             existing = candidates.get(key)
             if existing is not None:
-                return existing.verification.score
+                return (
+                    existing.search_score
+                    if existing.search_score is not None
+                    else existing.verification.score
+                )
 
             guided_embedding = self._apply_projection(
                 base_embedding=base_embedding,
@@ -195,6 +218,14 @@ class SoftExplorationEngine:
             )
             verifier_calls += 1
 
+            search_score = float(verification.score)
+            if self._config.research_profile == "paper_2025":
+                try:
+                    paper_reward = self._paper_reward.compose(verification, output)
+                except SoftReasoningCoherenceUnavailable as exc:
+                    raise SoftReasoningUnavailable(str(exc)) from exc
+                search_score = paper_reward.score
+
             candidate_id = hashlib.sha256(
                 f"{correlation_id}|{model_calls}|{key}".encode("utf-8")
             ).hexdigest()[:16]
@@ -205,8 +236,9 @@ class SoftExplorationEngine:
                 output=output,
                 verification=verification,
                 iteration=model_calls - 1,
+                search_score=search_score,
             )
-            return verification.score
+            return search_score
 
         initial_latent = [0.0] * self._config.projection_dimension
         optimization = optimizer.optimize(
@@ -218,10 +250,21 @@ class SoftExplorationEngine:
         if not candidates:
             raise SoftReasoningUnavailable("soft exploration produced no candidates")
 
-        best = max(candidates.values(), key=lambda item: item.verification.score)
+        def candidate_score(candidate: SoftCandidate) -> float:
+            return (
+                candidate.search_score
+                if candidate.search_score is not None
+                else candidate.verification.score
+            )
+
+        best = max(candidates.values(), key=candidate_score)
         baseline = candidates.get(tuple(0.0 for _ in initial_latent))
-        baseline_score = baseline.verification.score if baseline else optimization.history[0][1]
-        best_score = best.verification.score
+        baseline_score = (
+            candidate_score(baseline)
+            if baseline is not None
+            else optimization.history[0][1]
+        )
+        best_score = candidate_score(best)
 
         ordered = tuple(sorted(candidates.values(), key=lambda item: item.iteration))
         return SoftExplorationTrace(
