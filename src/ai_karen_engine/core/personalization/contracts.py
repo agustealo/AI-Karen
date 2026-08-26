@@ -14,6 +14,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from ai_karen_engine.core.contracts.values import JsonMap, JsonValue
+
 
 # ===================================
 # ENUMS
@@ -216,8 +218,8 @@ class ModelRevision:
     revision_id: str
     property_key: str
     model_type: str
-    old_value: Any
-    new_value: Any
+    old_value: JsonValue
+    new_value: JsonValue
     old_status: ModelPropertyStatus
     new_status: ModelPropertyStatus
     reason: str
@@ -237,7 +239,7 @@ class IdentityFacet:
     facet_id: str
     domain: IdentityDomain
     key: str
-    value: Any
+    value: JsonValue
     description: str
     provenance: Provenance
     is_limitation: bool
@@ -282,7 +284,7 @@ class PreferenceSignal:
     """A user preference with full provenance."""
     signal_id: str
     key: str
-    value: Any
+    value: JsonValue
     polarity: str
     provenance: Provenance
     scope: PreferenceScope
@@ -333,7 +335,7 @@ class RelationshipContext:
     context_id: str
     relationship_type: RelationshipType
     key: str
-    value: Any
+    value: JsonValue
     provenance: Provenance
     shared_projects: List[str]
     working_rhythm: str
@@ -419,7 +421,7 @@ class PreferenceEvidence:
     preference_key: str
     source_type: PreferenceEvidenceSourceType
     source_ref: Optional[str]
-    observed_value: Any
+    observed_value: JsonValue
     polarity: str  # "positive" | "negative" | "neutral"
     confidence: float
     observed_at: datetime
@@ -436,8 +438,8 @@ class PreferenceContradiction:
     preference_id: str
     user_id: str
     tenant_id: str
-    old_value: Any
-    new_value: Any
+    old_value: JsonValue
+    new_value: JsonValue
     old_state: PreferenceState
     new_state: PreferenceState
     resolution: Optional[str] = None  # "supersede" | "merge" | "keep_old" | "keep_new"
@@ -452,7 +454,7 @@ class PreferenceRecord:
     user_id: str
     tenant_id: str
     key: str
-    value: Any
+    value: JsonValue
     confidence: float
     stability: PreferenceStability
     state: PreferenceState
@@ -535,7 +537,7 @@ class CurrentUserState:
     current_project: Optional[str] = None
     current_objective: Optional[str] = None
     recent_topic: Optional[str] = None
-    temporary_preferences: Dict[str, Any] = field(default_factory=dict)
+    temporary_preferences: JsonMap = field(default_factory=dict)
     active_workflow: Optional[str] = None
     recent_corrections: List[str] = field(default_factory=list)
     expires_at: Optional[datetime] = None
@@ -564,7 +566,7 @@ class ResolvedPreferences:
     user_id: str
     tenant_id: str
     task_context: Dict[str, Any]
-    resolved: Dict[str, Any]
+    resolved: JsonMap
     confidence: float
     applied_scope: PreferenceScope
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -583,7 +585,7 @@ class UserModelHealthStatus:
     snapshot_cache: UserModelHealth
     evidence_processor: UserModelHealth
     overall: UserModelHealth
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: JsonMap = field(default_factory=dict)
 
 
 # ===================================
@@ -597,7 +599,7 @@ class PreferenceCandidate:
     user_id: str
     tenant_id: str
     key: str
-    value: Any
+    value: JsonValue
     category: PreferenceCategory
     scope: PreferenceScope
     stability: PreferenceStability
