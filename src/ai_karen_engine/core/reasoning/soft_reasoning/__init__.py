@@ -1,61 +1,77 @@
+"""Soft Reasoning capability.
+
+Canonical production path:
+- ``SoftExplorationEngine`` implements controlled first-token embedding search.
+- ``SoftGenerationPort`` is supplied by a compatible local model runtime.
+- ``SoftVerifierPort`` supplies the verifier-guided objective.
+- Bayesian optimisation refines a low-dimensional latent perturbation projected
+  into the model hidden space.
+
+The older ``SoftReasoningEngine`` is a retrieval/writeback compatibility
+implementation and is not the canonical Soft Reasoning algorithm. It remains
+importable temporarily while ICE/retrieval callers are migrated.
 """
-Soft Reasoning Module
 
-Implements the core Soft Reasoning approach from the research paper:
-"Soft Reasoning: Navigating Solution Spaces in Large Language Models
-through Controlled Embedding Exploration"
-
-Key components:
-- SoftReasoningEngine: Main engine for retrieval and reasoning
-- EmbeddingPerturber: Controlled perturbation of embeddings
-- BayesianOptimizer: Bayesian optimization for embedding refinement
-- ReasoningVerifier: Verifier-guided objectives for quality assessment
-"""
-
-from ai_karen_engine.core.reasoning.soft_reasoning.engine import (
-    SoftReasoningEngine,
-    RecallConfig,
-    WritebackConfig,
-    SRHealth,
+from ai_karen_engine.core.reasoning.soft_reasoning.contracts import (
+    SoftCandidate,
+    SoftExplorationTrace,
+    SoftGenerationCapabilities,
+    SoftGenerationOutput,
+    SoftGenerationPort,
+    SoftVerificationScore,
+    SoftVerifierPort,
 )
-from ai_karen_engine.core.reasoning.soft_reasoning.perturbation import (
-    EmbeddingPerturber,
-    PerturbationStrategy,
-    PerturbationConfig,
+from ai_karen_engine.core.reasoning.soft_reasoning.exploration import (
+    SoftExplorationConfig,
+    SoftExplorationEngine,
+    SoftReasoningBudgetError,
+    SoftReasoningUnavailable,
 )
 from ai_karen_engine.core.reasoning.soft_reasoning.optimization import (
+    AcquisitionFunction,
     BayesianOptimizer,
     OptimizationConfig,
     OptimizationResult,
-    AcquisitionFunction,
     optimize_embedding_batch,
 )
-from ai_karen_engine.core.reasoning.soft_reasoning.verifier import (
-    ReasoningVerifier,
-    VerifierConfig,
-    VerificationResult,
-    VerificationCriterion,
+from ai_karen_engine.core.reasoning.soft_reasoning.perturbation import (
+    EmbeddingPerturber,
+    PerturbationConfig,
+    PerturbationStrategy,
+)
+
+# Compatibility-only retrieval/writeback surface. Do not use for new Soft
+# Reasoning execution. Removal is gated on the ICE/retrieval migration.
+from ai_karen_engine.core.reasoning.soft_reasoning.engine import (
+    RecallConfig,
+    SRHealth,
+    SoftReasoningEngine,
+    WritebackConfig,
 )
 
 __all__ = [
-    # Core engine
-    "SoftReasoningEngine",
-    "RecallConfig",
-    "WritebackConfig",
-    "SRHealth",
-    # Perturbation
-    "EmbeddingPerturber",
-    "PerturbationStrategy",
-    "PerturbationConfig",
-    # Optimization
+    "AcquisitionFunction",
     "BayesianOptimizer",
+    "EmbeddingPerturber",
     "OptimizationConfig",
     "OptimizationResult",
-    "AcquisitionFunction",
+    "PerturbationConfig",
+    "PerturbationStrategy",
+    "SoftCandidate",
+    "SoftExplorationConfig",
+    "SoftExplorationEngine",
+    "SoftExplorationTrace",
+    "SoftGenerationCapabilities",
+    "SoftGenerationOutput",
+    "SoftGenerationPort",
+    "SoftReasoningBudgetError",
+    "SoftReasoningUnavailable",
+    "SoftVerificationScore",
+    "SoftVerifierPort",
     "optimize_embedding_batch",
-    # Verification
-    "ReasoningVerifier",
-    "VerifierConfig",
-    "VerificationResult",
-    "VerificationCriterion",
+    # Compatibility-only exports.
+    "RecallConfig",
+    "SRHealth",
+    "SoftReasoningEngine",
+    "WritebackConfig",
 ]
