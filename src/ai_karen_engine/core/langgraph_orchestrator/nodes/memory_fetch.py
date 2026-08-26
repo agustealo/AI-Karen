@@ -27,10 +27,12 @@ class MemoryFetchNode:
         self,
         *,
         memory_recall: Optional[MemoryRecall] = None,
+        memory_recall_top_k: int = 10,
         session_state_manager: Optional[Any] = None,
     ) -> None:
         self.profile_service = get_profile_service()
         self._memory_recall = memory_recall
+        self._memory_recall_top_k = memory_recall_top_k
         self._session_state_manager = session_state_manager
         self._session_state_resolution_failed = False
 
@@ -108,7 +110,7 @@ class MemoryFetchNode:
                         query=prompt,
                         session_id=state.get("session_id"),
                         conversation_id=state.get("session_id"),
-                        top_k=10,
+                        top_k=self._memory_recall_top_k,
                     )
                     if isinstance(recalled, dict):
                         results = recalled.get("results", [])
@@ -163,12 +165,14 @@ async def memory_fetch_node(
     state: LangGraphOrchestrationState,
     *,
     memory_recall: Optional[MemoryRecall] = None,
+    memory_recall_top_k: int = 10,
     session_state_manager: Optional[Any] = None,
 ) -> LangGraphOrchestrationState:
     """Execute memory fetch with composition-root supplied dependencies."""
 
     node = MemoryFetchNode(
         memory_recall=memory_recall,
+        memory_recall_top_k=memory_recall_top_k,
         session_state_manager=session_state_manager,
     )
     return await node(state)
