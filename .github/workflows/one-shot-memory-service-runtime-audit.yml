@@ -1,0 +1,37 @@
+name: One-shot Memory Service Runtime Audit
+
+on:
+  push:
+    branches:
+      - context/converge-3-memory-budget-classification
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install static audit tool
+        run: python -m pip install --disable-pip-version-check pyflakes
+      - name: Audit undefined runtime symbols
+        run: pyflakes src/ai_karen_engine/core/memory/memory_service.py || true
+      - name: Show Web UI memory contract
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          for path in [
+              Path('src/ai_karen_engine/core/memory/memory_service.py'),
+              Path('src/ai_karen_engine/interfaces/ui/memory_models.py'),
+          ]:
+              tree = ast.parse(path.read_text(encoding='utf-8'))
+              print(f'## {path}')
+              for node in tree.body:
+                  if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                      print(type(node).__name__, node.name, node.lineno)
+          PY
