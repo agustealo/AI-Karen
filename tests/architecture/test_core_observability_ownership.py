@@ -34,3 +34,12 @@ def test_core_observability_is_documented_as_transitional_only() -> None:
     )
     assert "Canonical observability implementation authority lives in" in package_init
     assert "ai_karen_engine.platform.observability" in package_init
+
+
+def test_core_redaction_is_only_a_platform_compatibility_facade() -> None:
+    source = (CORE_ROOT / "observability" / "redaction.py").read_text(
+        encoding="utf-8"
+    )
+    assert "ai_karen_engine.platform.observability.redaction" in source
+    assert "_REDACTION_PATTERNS" not in source
+    assert "_SENSITIVE_KEYS" not in source
