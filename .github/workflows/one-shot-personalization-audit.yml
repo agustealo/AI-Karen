@@ -1,0 +1,20 @@
+name: One-shot Personalization Audit
+on:
+  push:
+    branches: [audit/personalization-live]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run exact personalization census
+        run: python scripts/dev/audit_personalization_live.py | tee personalization-audit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: personalization-audit
+          path: personalization-audit.txt
