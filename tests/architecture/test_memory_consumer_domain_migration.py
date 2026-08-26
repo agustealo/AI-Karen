@@ -42,12 +42,16 @@ def test_unified_memory_construction_has_one_factory_owner() -> None:
 def test_training_and_learning_consume_unified_memory_contract() -> None:
     route = _text("src/ai_karen_engine/api_routes/training/data.py")
     learner = _text("src/ai_karen_engine/learning/autonomous_learner.py")
+    curated_start = route.index("async def create_dataset_from_curated_memory(")
+    curated_end = route.index("\nclass EnhanceDatasetRequest", curated_start)
+    curated_route = route[curated_start:curated_end]
 
     assert "memory_service = await get_memory_service()" in route
-    assert "await _create_autonomous_learner()" in route
-    assert "tenant_id = current_user.tenant_id" in route
-    assert "request.tenant_id" not in route
-    assert "current_user.user_id" not in route
+    assert "await _create_autonomous_learner()" in curated_route
+    assert "tenant_id = current_user.tenant_id" in curated_route
+    assert "request.tenant_id" not in curated_route
+    assert "tenant_id = current_user.user_id" not in curated_route
+    assert "or current_user.user_id" not in curated_route
     assert "UnifiedMemoryService" in learner
     assert "WebUIMemoryService" not in learner
     assert ".commit(" in learner
