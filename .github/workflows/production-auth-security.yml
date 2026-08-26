@@ -16,6 +16,7 @@ on:
       - "tests/architecture/test_auth_session_security_contract.py"
       - "tests/architecture/test_auth_session_validation_contract.py"
       - "tests/architecture/test_auth_readiness_contract.py"
+      - "tests/architecture/test_authenticated_tenant_context_contract.py"
       - ".github/workflows/production-auth-security.yml"
   pull_request:
     paths:
@@ -32,6 +33,7 @@ on:
       - "tests/architecture/test_auth_session_security_contract.py"
       - "tests/architecture/test_auth_session_validation_contract.py"
       - "tests/architecture/test_auth_readiness_contract.py"
+      - "tests/architecture/test_authenticated_tenant_context_contract.py"
       - ".github/workflows/production-auth-security.yml"
   workflow_dispatch:
 
@@ -87,6 +89,9 @@ jobs:
 
       - name: Prove password and session-validation authority
         run: pytest tests/architecture/test_auth_session_validation_contract.py -q
+
+      - name: Prove authenticated tenant route boundary
+        run: pytest tests/architecture/test_authenticated_tenant_context_contract.py -q
 
       - name: Prove tenant isolation gauntlet
         env:
