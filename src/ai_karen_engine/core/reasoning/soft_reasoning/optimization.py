@@ -1,15 +1,9 @@
 """Gaussian-process Bayesian optimisation for Soft Reasoning.
 
-This module owns only latent-space search. It does not know about providers,
-prompts, verification, memory, or model execution.
-
-Two search behaviours are supported deliberately:
-- KAREN profiles may use local Gaussian candidate proposals and best-improvement
-  convergence for low-cost local inference.
-- the ``paper_2025`` profile can reproduce the released Soft Reasoning search
-  mechanics: a true RBF Gaussian Process, Expected Improvement, Gaussian
-  initial samples, a large uniformly sampled acquisition pool, and convergence
-  on consecutive objective values.
+The optimizer supports both KAREN-tuned search and the mechanisms described in
+Zhu et al. (ICML 2025): RBF Gaussian Processes, Expected Improvement, explicit
+observation noise, noise-adaptive EI, large sampled candidate pools, and
+convergence on consecutive objective values.
 """
 
 from __future__ import annotations
@@ -55,6 +49,9 @@ class OptimizationConfig:
     candidate_pool_size: int = 64
     random_seed: int = 17
     improvement_offset: float = 0.0
+    adaptive_ei: bool = False
+    adaptive_delta: float = 0.1
+    objective_noise_variance: float = 0.01
 
     def __post_init__(self) -> None:
         if self.max_iterations < 0:
@@ -73,6 +70,10 @@ class OptimizationConfig:
             raise ValueError("exploration_weight must be non-negative")
         if self.improvement_offset < 0.0:
             raise ValueError("improvement_offset must be non-negative")
+        if not 0.0 < self.adaptive_delta < 1.0:
+            raise ValueError("adaptive_delta must be within (0, 1)")
+        if self.objective_noise_variance <= 0.0:
+            raise ValueError("objective_noise_variance must be positive")
 
 
 @dataclass
@@ -83,6 +84,7 @@ class OptimizationResult:
     converged: bool
     history: List[Tuple[List[float], float]]
     surrogate_kind: str = "gaussian_process"
+    adaptive_ei_scale: float = 1.0
 
 
 class BayesianOptimizer:
@@ -96,6 +98,53 @@ class BayesianOptimizer:
         self._best_score = float("-inf")
         self._best_embedding: Optional[List[float]] = None
         self._rng = random.Random(self.config.random_seed)
+
+    @property
+    def observations(self) -> tuple[tuple[tuple[float, ...], float], ...]:
+        return tuple(
+            (tuple(float(v) for v in embedding), float(score))
+            for embedding, score in self._observations
+        )
+
+    def observe(self, embedding: List[float], score: float) -> None:
+        if not embedding:
+            raise ValueError("embedding must not be empty")
+        self._record_observation(embedding, float(score))
+
+    def observe_batch(
+        self,
+        observations: List[Tuple[List[float], float]],
+    ) -> None:
+        for embedding, score in observations:
+            self.observe(embedding, score)
+
+    def suggest(
+        self,
+        base_embedding: List[float],
+        *,
+        count: int = 1,
+        candidate_fn: Optional[Callable[[List[float]], List[float]]] = None,
+    ) -> List[List[float]]:
+        if not self._observations:
+            raise ValueError("cannot suggest before at least one observation")
+        if count <= 0:
+            raise ValueError("count must be positive")
+        if count > self.config.candidate_pool_size:
+            raise ValueError("count cannot exceed candidate_pool_size")
+
+        base = self._best_embedding or base_embedding
+        candidates = [
+            candidate_fn(base) if candidate_fn else self._default_perturb(base)
+            for _ in range(self.config.candidate_pool_size)
+        ]
+        means, stds = self._gp_predict_batch(candidates)
+        acquisition_values = self._acquisition_values(means, stds)
+        ranked = sorted(
+            range(len(candidates)),
+            key=lambda index: acquisition_values[index],
+            reverse=True,
+        )
+        return [list(candidates[index]) for index in ranked[:count]]
 
     def optimize(
         self,
@@ -115,6 +164,7 @@ class BayesianOptimizer:
                 "acquisition": self.config.acquisition_fn.value,
                 "candidate_pool_size": self.config.candidate_pool_size,
                 "convergence_mode": self.config.convergence_mode.value,
+                "adaptive_ei": self.config.adaptive_ei,
             },
         )
 
@@ -124,10 +174,11 @@ class BayesianOptimizer:
         completed_iterations = 0
         previous_iteration_score: float | None = None
         for _ in range(self.config.max_iterations):
-            candidate = self._select_next_candidate(
+            candidate = self.suggest(
                 initial_embedding,
-                candidate_fn or perturb_fn,
-            )
+                count=1,
+                candidate_fn=candidate_fn or perturb_fn,
+            )[0]
             score = float(score_function(candidate))
             self._observations.append((list(candidate), score))
             completed_iterations += 1
@@ -166,6 +217,7 @@ class BayesianOptimizer:
                 for embedding, score in self._observations
             ],
             surrogate_kind=self.surrogate_kind,
+            adaptive_ei_scale=self._adaptive_ei_scale(),
         )
 
     def _initialize(
@@ -174,11 +226,7 @@ class BayesianOptimizer:
         score_function: Callable[[List[float]], float],
         perturb_fn: Optional[Callable[[List[float]], List[float]]],
     ) -> None:
-        self._observations.clear()
-        self._best_score = float("-inf")
-        self._best_embedding = None
-        self._rng.seed(self.config.random_seed)
-
+        self.reset()
         initial_score = float(score_function(initial_embedding))
         self._record_observation(initial_embedding, initial_score)
 
@@ -197,24 +245,6 @@ class BayesianOptimizer:
         if score > self._best_score:
             self._best_score = float(score)
             self._best_embedding = candidate
-
-    def _select_next_candidate(
-        self,
-        initial_embedding: List[float],
-        candidate_fn: Optional[Callable[[List[float]], List[float]]],
-    ) -> List[float]:
-        base = self._best_embedding or initial_embedding
-        candidates = [
-            candidate_fn(base) if candidate_fn else self._default_perturb(base)
-            for _ in range(self.config.candidate_pool_size)
-        ]
-        means, stds = self._gp_predict_batch(candidates)
-        acquisition_values = self._acquisition_values(means, stds)
-        best_idx = max(
-            range(len(candidates)),
-            key=lambda index: acquisition_values[index],
-        )
-        return list(candidates[best_idx])
 
     def _build_gp(self) -> GaussianProcessRegressor:
         kernel = ConstantKernel(
@@ -301,6 +331,8 @@ class BayesianOptimizer:
         return self._expected_improvement_from_stats(mean, std)
 
     def _expected_improvement_from_stats(self, mean: float, std: float) -> float:
+        if self.config.adaptive_ei:
+            std *= self._adaptive_ei_scale()
         if std < 1e-12:
             return 0.0
         improvement = mean - self._best_score - self.config.improvement_offset
@@ -308,6 +340,37 @@ class BayesianOptimizer:
         cdf_z = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
         pdf_z = math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
         return max(0.0, improvement * cdf_z + std * pdf_z)
+
+    def _adaptive_ei_scale(self) -> float:
+        """Return omega_k from the paper's noisy-observation EI formulation."""
+        if not self.config.adaptive_ei or not self._observations:
+            return 1.0
+        gamma = self._information_gain()
+        return math.sqrt(
+            max(0.0, gamma + 1.0 + math.log(1.0 / self.config.adaptive_delta))
+        )
+
+    def _information_gain(self) -> float:
+        x_train = np.asarray(
+            [embedding for embedding, _ in self._observations],
+            dtype=float,
+        )
+        if x_train.size == 0:
+            return 0.0
+        sq_norm = np.sum(x_train**2, axis=1).reshape(-1, 1)
+        sqdist = np.maximum(
+            0.0,
+            sq_norm + sq_norm.T - 2.0 * np.matmul(x_train, x_train.T),
+        )
+        kernel = self.config.signal_variance * np.exp(
+            -0.5 * sqdist / (self.config.length_scale**2)
+        )
+        lam = self.config.objective_noise_variance
+        matrix = np.eye(kernel.shape[0], dtype=float) + kernel / lam
+        sign, logdet = np.linalg.slogdet(matrix)
+        if sign <= 0 or not np.isfinite(logdet):
+            return 0.0
+        return max(0.0, 0.5 * float(logdet))
 
     def _probability_improvement(self, embedding: List[float]) -> float:
         mean, std = self._gp_predict(embedding)
