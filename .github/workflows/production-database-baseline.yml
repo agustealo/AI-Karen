@@ -10,6 +10,7 @@ on:
       - "src/ai_karen_engine/services/database/**"
       - "src/ai_karen_engine/services/auth/**"
       - "src/ai_karen_engine/services/identity_vault/**"
+      - "src/ai_karen_engine/extensions/platform/core/integration/**"
       - "server/deployment/**"
       - "scripts/deploy/**"
       - "tests/architecture/test_production_database_baseline_contract.py"
@@ -23,6 +24,7 @@ on:
       - "src/ai_karen_engine/services/database/**"
       - "src/ai_karen_engine/services/auth/**"
       - "src/ai_karen_engine/services/identity_vault/**"
+      - "src/ai_karen_engine/extensions/platform/core/integration/**"
       - "server/deployment/**"
       - "scripts/deploy/**"
       - "tests/architecture/test_production_database_baseline_contract.py"
@@ -54,6 +56,7 @@ jobs:
             src/ai_karen_engine/services/database/operations_service.py \
             src/ai_karen_engine/services/auth/auth_service.py \
             src/ai_karen_engine/services/identity_vault/credential_vault_service.py \
+            src/ai_karen_engine/extensions/platform/core/integration/models.py \
             server/deployment/deploy_auth_system.py
       - name: Parse database operator scripts
         run: |
