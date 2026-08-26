@@ -1,15 +1,16 @@
+"""Authorized specialist-reasoning adapter for LangGraph workflows."""
+
+from __future__ import annotations
+
 import logging
 from dataclasses import asdict
 from typing import Any
 
-from ai_karen_engine.core.cortex.contracts import (
-    IntentSignal,
-    KireSignal,
-    PredictorSignal,
+from ai_karen_engine.core.reasoning.contracts import (
+    ReasoningBudget,
+    ReasoningEvidence,
     ReasoningRequest,
     ReasoningResult,
-    ReasoningDepth,
-    UserContext,
 )
 from ai_karen_engine.core.reasoning.executor import get_reasoning_executor
 from ai_karen_engine.core.runtime.contracts import (
@@ -24,24 +25,22 @@ from ..contracts.orchestration_state import LangGraphOrchestrationState
 
 logger = logging.getLogger(__name__)
 
-
-def _should_run_reasoning(state: LangGraphOrchestrationState) -> bool:
-    hints = state.get("reasoning_hints") or {}
-    if not hints.get("requires_reasoning"):
-        return False
-    if not state.get("messages"):
-        return False
-    return True
-
-
-def select_reasoning_branch(state: LangGraphOrchestrationState) -> str:
-    return "reasoning" if _should_run_reasoning(state) else "skip"
+_MODE_ALIASES = {
+    "verify": "verification",
+    "refine": "refinement",
+    "causal": "causal",
+    "counterfactual": "counterfactual",
+    "evidence_synthesis": "evidence_synthesis",
+    "hypothesis_comparison": "hypothesis_comparison",
+    "soft_exploration": "soft_exploration",
+    "metacognition": "metacognition",
+}
 
 
 def _authorized_plan_from_state(
     state: LangGraphOrchestrationState,
 ) -> AuthorizedExecutionPlan:
-    """Deserialize Runtime's authorization without changing its permissions."""
+    """Decode Runtime's plan without granting or widening any permission."""
     raw_plan = state.get("runtime_policy")
     if not isinstance(raw_plan, dict):
         raise PermissionError(
@@ -69,120 +68,202 @@ def _authorized_plan_from_state(
         ) from exc
 
     request_config = state.get("request_config") or {}
-    state_policy_id = (
+    expected_policy_id = (
         str(request_config.get("policy_decision_id") or "")
         if isinstance(request_config, dict)
         else ""
     )
-    if state_policy_id and state_policy_id != plan.policy_decision_id:
+    if expected_policy_id and expected_policy_id != plan.policy_decision_id:
         raise PermissionError(
             "Reasoning policy_decision_id does not match Runtime authorization"
         )
     return plan
 
 
-class ReasoningNode:
-    """Specialist reasoning stage inside an already-authorized workflow.
+def _authorized_reasoning_modes(plan: AuthorizedExecutionPlan) -> list[str]:
+    """Resolve modes only from Runtime-authorized plan fields."""
+    modes: list[str] = []
+    seen: set[str] = set()
 
-    This node builds reasoning input/context only. It cannot create or expand an
-    AuthorizedExecutionPlan. The canonical ReasoningExecutor performs cognition.
+    for raw_mode in plan.reasoning_modes:
+        mode = str(raw_mode).strip().lower()
+        if mode and mode not in seen:
+            modes.append(mode)
+            seen.add(mode)
+
+    for capability in plan.allowed_capabilities:
+        value = str(capability).strip().lower()
+        if not value.startswith("reasoning."):
+            continue
+        suffix = value.split(".", 1)[1]
+        mode = _MODE_ALIASES.get(suffix, suffix)
+        if mode and mode not in seen:
+            modes.append(mode)
+            seen.add(mode)
+
+    return modes
+
+
+def _should_run_reasoning(state: LangGraphOrchestrationState) -> bool:
+    if not state.get("messages"):
+        return False
+    try:
+        plan = _authorized_plan_from_state(state)
+    except PermissionError:
+        return False
+    return bool(_authorized_reasoning_modes(plan))
+
+
+def select_reasoning_branch(state: LangGraphOrchestrationState) -> str:
+    return "reasoning" if _should_run_reasoning(state) else "skip"
+
+
+def _string_content(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("content", "text", "summary", "output", "value"):
+            candidate = value.get(key)
+            if candidate is not None:
+                return str(candidate).strip()
+    return str(value).strip()
+
+
+def _build_evidence(
+    state: LangGraphOrchestrationState,
+    *,
+    tenant_id: str,
+) -> list[ReasoningEvidence]:
+    """Adapt already-retrieved workflow context into typed reasoning evidence.
+
+    This adapter performs no recall and no persistence. It only converts evidence
+    already supplied to the authorized workflow by Runtime/canonical services.
     """
+    evidence: list[ReasoningEvidence] = []
+
+    memory_context = state.get("memory_context") or {}
+    memories = memory_context.get("memories", []) if isinstance(memory_context, dict) else []
+    if isinstance(memories, list):
+        for index, item in enumerate(memories[:20]):
+            content = _string_content(item)
+            if not content:
+                continue
+            item_id = (
+                str(item.get("id") or item.get("memory_id") or f"{index}")
+                if isinstance(item, dict)
+                else str(index)
+            )
+            evidence.append(
+                ReasoningEvidence(
+                    evidence_id=f"memory-{item_id}",
+                    type="memory",
+                    source="runtime_memory_context",
+                    source_ref=item_id,
+                    content=content,
+                    tenant_id=tenant_id,
+                    summary=(
+                        str(item.get("summary") or "")
+                        if isinstance(item, dict)
+                        else ""
+                    ),
+                    relevance=(
+                        float(item.get("relevance") or item.get("score") or 0.0)
+                        if isinstance(item, dict)
+                        else 0.0
+                    ),
+                    confidence=(
+                        float(item.get("confidence") or 0.0)
+                        if isinstance(item, dict)
+                        else 0.0
+                    ),
+                    provenance="runtime_memory_context",
+                )
+            )
+
+    tool_results = state.get("tool_results") or []
+    if isinstance(tool_results, list):
+        for index, item in enumerate(tool_results[:20]):
+            content = _string_content(item)
+            if not content:
+                continue
+            tool_name = (
+                str(item.get("tool_name") or item.get("tool") or "tool")
+                if isinstance(item, dict)
+                else "tool"
+            )
+            evidence.append(
+                ReasoningEvidence(
+                    evidence_id=f"tool-{index}",
+                    type="tool_result",
+                    source=tool_name,
+                    source_ref=f"tool-result-{index}",
+                    content=content,
+                    tenant_id=tenant_id,
+                    provenance="workflow_tool_result",
+                )
+            )
+
+    return evidence
+
+
+class ReasoningNode:
+    """Bridge an authorized workflow stage into canonical ReasoningExecutor."""
 
     def __init__(self, executor=None):
         self._executor = executor or get_reasoning_executor()
         self._safe_runner = get_safe_stage_runner()
 
-    def _build_request(self, state: LangGraphOrchestrationState) -> ReasoningRequest:
-        intent_name = state.get("detected_intent") or "general"
-        analysis = state.get("intent_analysis") or {}
-        metadata = analysis.get("metadata") or {}
-        hints = state.get("reasoning_hints") or {}
+    def _build_request(
+        self,
+        state: LangGraphOrchestrationState,
+        plan: AuthorizedExecutionPlan,
+    ) -> ReasoningRequest:
         messages = state.get("messages") or []
         last_message = ""
         if messages:
             last = messages[-1]
-            last_message = str(getattr(last, "content", last))
+            last_message = str(getattr(last, "content", last)).strip()
 
-        intent = IntentSignal(
-            primary_intent=str(intent_name),
-            entities=[
-                str(entity.get("value"))
-                for entity in analysis.get("entities", [])
-                if isinstance(entity, dict) and entity.get("value")
-            ],
-            confidence=float(
-                state.get("intent_confidence") or analysis.get("confidence") or 0.0
-            ),
-            category=str(
-                analysis.get("persona_recommendation")
-                or analysis.get("category")
-                or "general"
-            ),
-            requested_modality="text",
-        )
-        predictors = PredictorSignal(
-            ambiguity_score=float(
-                1.0 - min(1.0, float(analysis.get("confidence") or 0.0))
-            ),
-            complexity_score=float(metadata.get("quality_score") or 0.0),
-            tool_likelihood=1.0 if state.get("tool_calls") else 0.0,
-            memory_relevance=1.0 if state.get("memory_context") else 0.0,
-            multi_step_likelihood=(
-                1.0 if len(state.get("tool_calls") or []) > 1 else 0.0
-            ),
-            degraded_risk=0.5 if state.get("degraded_mode") else 0.0,
-        )
-        reasoning_depth = hints.get("reasoning_depth", "standard")
-        if reasoning_depth == "deep":
-            depth = ReasoningDepth.DEEP
-        elif reasoning_depth == "light":
-            depth = ReasoningDepth.LIGHT
-        else:
-            depth = ReasoningDepth.STANDARD
+        tenant_id = str(state.get("tenant_id") or "").strip()
+        user_id = str(state.get("user_id") or "").strip()
+        if not tenant_id or tenant_id == "default":
+            raise PermissionError("Reasoning requires explicit non-default tenant_id")
+        if not user_id:
+            raise PermissionError("Reasoning requires user_id")
 
-        kire = KireSignal(
-            requires_reasoning=True,
-            reasoning_depth=depth,
-            reasoning_modes=list(hints.get("reasoning_modes") or []),
-            should_use_memory=True,
-            should_use_tools=bool(state.get("tool_calls")),
-            should_use_retrieval_reasoning=bool(
-                hints.get("should_use_retrieval_reasoning")
-            ),
-            should_use_causal_reasoning=bool(
-                hints.get("should_use_causal_reasoning")
-            ),
-            should_use_graph_reasoning=bool(
-                hints.get("should_use_graph_reasoning")
-            ),
-            should_self_refine=bool(hints.get("should_self_refine")),
-            should_verify=bool(hints.get("should_verify")),
+        budget = plan.budget
+        request_budget = ReasoningBudget(
+            max_reasoning_steps=budget.max_reasoning_steps,
+            max_model_calls=budget.max_model_calls,
+            max_tool_requests=budget.max_tool_calls,
+            max_duration_ms=budget.max_duration_ms,
+            max_input_tokens=budget.max_input_tokens,
+            max_output_tokens=budget.max_output_tokens,
         )
-
-        user = UserContext(
-            user_id=str(state.get("user_id") or "anonymous"),
-            tenant_id=state.get("tenant_id"),
-            session_id=state.get("session_id"),
-        )
+        reasoning_modes = _authorized_reasoning_modes(plan)
 
         return ReasoningRequest(
-            message=last_message,
-            user=user,  # type: ignore[arg-type]
-            memory_context=state.get("memory_context") or {},
-            tool_context={
-                "tool_calls": state.get("tool_calls") or [],
-                "tool_results": state.get("tool_results") or [],
+            request_id=str(state.get("request_id") or ""),
+            correlation_id=str(state.get("correlation_id") or ""),
+            tenant_id=tenant_id,
+            user_id=user_id,
+            conversation_id=state.get("conversation_id") or state.get("session_id"),
+            objective=last_message,
+            reasoning_modes=reasoning_modes,
+            evidence=_build_evidence(state, tenant_id=tenant_id),
+            constraints={
+                "execution_plan": state.get("execution_plan") or {},
+                "reasoning_hints": state.get("reasoning_hints") or {},
+                "intent": state.get("detected_intent"),
             },
-            intent=intent,
-            predictors=predictors,
-            kire=kire,
+            policy_decision_id=plan.policy_decision_id,
+            budget=request_budget,
             metadata={
-                "conversation_history": state.get("conversation_history") or [],
-                "ui_context": state.get("request_config") or {},
-                "system_caps": state.get("request_config") or {},
-                "config_ui": state.get("request_config") or {},
-                "correlation_id": state.get("correlation_id"),
-                "reasoning_hints": hints,
+                "source": "langgraph_authorized_reasoning_stage",
+                "workflow_id": plan.workflow_id,
+                "execution_id": plan.execution_id,
             },
         )
 
@@ -192,10 +273,10 @@ class ReasoningNode:
         plan: AuthorizedExecutionPlan,
     ) -> ExecutionContext:
         return ExecutionContext(
-            request_id=state.get("request_id", ""),
-            correlation_id=state.get("correlation_id", ""),
-            user_id=state.get("user_id", ""),
-            tenant_id=state.get("tenant_id") or "default",
+            request_id=str(state.get("request_id") or ""),
+            correlation_id=str(state.get("correlation_id") or ""),
+            user_id=str(state.get("user_id") or ""),
+            tenant_id=str(state.get("tenant_id") or ""),
             session_id=state.get("session_id"),
             conversation_id=state.get("conversation_id"),
             policy_decision_id=plan.policy_decision_id,
@@ -220,14 +301,16 @@ class ReasoningNode:
         logger.info("Reasoning stage processing")
 
         if not _should_run_reasoning(state):
-            state.setdefault("reasoning_metadata", {})
             state["reasoning_result"] = None
-            state.setdefault("warnings", []).append("Reasoning stage skipped by policy")
+            state["reasoning_metadata"] = {
+                "skipped": True,
+                "reason": "not_authorized_or_no_reasoning_modes",
+            }
             return state
 
         try:
-            request = self._build_request(state)
             plan = _authorized_plan_from_state(state)
+            request = self._build_request(state, plan)
             context = self._build_context(state, plan)
             result = await self._safe_runner.run_stage(
                 "reasoning_executor",
@@ -241,57 +324,45 @@ class ReasoningNode:
             )
 
             if isinstance(result, ReasoningResult):
-                result_dict = (
-                    result.__dict__ if hasattr(result, "__dict__") else asdict(result)
-                )
+                result_dict = asdict(result)
             elif isinstance(result, dict):
                 result_dict = result
             else:
-                result_dict = {
-                    "summary": str(result),
-                    "confidence": 0.0,
-                    "evidence": [],
-                    "hypotheses": [],
-                    "verification_notes": ["Unexpected reasoning result type"],
-                    "diagnostics": {},
-                }
-
-            state["reasoning_result"] = result_dict
-            reasoning_type = result_dict.get("diagnostics", {}).get(
-                "reasoning_type", "reasoning"
-            )
-            state["reasoning_metadata"] = {
-                "reasoning_type": reasoning_type,
-                "confidence": result_dict.get("confidence", 0.0),
-                "verification_notes": result_dict.get("verification_notes", []),
-                "fallback_used": result_dict.get("diagnostics", {}).get(
-                    "degraded_mode", False
-                ),
-                "needs_human_confirmation": (
-                    result_dict.get("status") == "needs_human_confirmation"
-                ),
-                "memory_ids": [],
-                "graph_paths_used": [],
-                "policy_decision_id": plan.policy_decision_id,
-            }
-
-            if result_dict.get("diagnostics", {}).get("degraded_mode"):
-                state.setdefault("warnings", []).append(
-                    "Reasoning stage ran in degraded mode"
+                raise TypeError(
+                    f"ReasoningExecutor returned unsupported type: {type(result).__name__}"
                 )
 
+            state["reasoning_result"] = result_dict
+            assessment = result_dict.get("assessment") or {}
+            confidence = (
+                assessment.get("confidence", 0.0)
+                if isinstance(assessment, dict)
+                else 0.0
+            )
+            state["reasoning_metadata"] = {
+                "reasoning_modes": list(request.reasoning_modes),
+                "confidence": confidence,
+                "disposition": result_dict.get("disposition"),
+                "status": result_dict.get("status"),
+                "error_code": result_dict.get("error_code"),
+                "evidence_count": len(result_dict.get("evidence") or []),
+                "hypothesis_count": len(result_dict.get("hypotheses") or []),
+                "contradiction_count": len(result_dict.get("contradictions") or []),
+                "policy_decision_id": plan.policy_decision_id,
+            }
         except Exception as exc:
             logger.error("Reasoning stage error: %s", exc)
             state.setdefault("errors", []).append(f"Reasoning stage error: {exc}")
             state["reasoning_result"] = {
                 "success": False,
-                "reasoning_type": "reasoning",
-                "confidence": 0.0,
-                "summary": "Reasoning stage failed",
-                "evidence": [],
-                "hypotheses": [],
-                "verification_notes": [str(exc)],
+                "conclusion": "Reasoning stage failed",
+                "status": "failed",
+                "error_code": "workflow_reasoning_adapter_failure",
                 "diagnostics": {"error": str(exc)},
+            }
+            state["reasoning_metadata"] = {
+                "status": "failed",
+                "error": str(exc),
             }
 
         return state
