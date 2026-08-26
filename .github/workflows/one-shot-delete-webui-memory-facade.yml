@@ -53,12 +53,10 @@ jobs:
             tests/architecture/test_context_memory_boundary_convergence.py \
             tests/architecture/test_context_memory_recall_authority.py \
             -q
-      - name: Remove one-shot scaffolding and commit
+      - name: Commit source deletion
         shell: bash
         run: |
           set -euo pipefail
-          rm -f .github/workflows/one-shot-memory-facade-census.yml
-          rm -f .github/workflows/one-shot-delete-webui-memory-facade.yml
           rm -f scripts/dev/delete_webui_memory_facade.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
