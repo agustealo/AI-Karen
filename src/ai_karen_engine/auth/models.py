@@ -8,13 +8,18 @@ from typing import Any, Dict, Iterable, List, Optional
 
 @dataclass
 class UserData(dict):
-    """Dictionary backed user payload with attribute style access."""
+    """Dictionary backed user payload with attribute style access.
+
+    ``tenant_id`` is authoritative identity data. It is deliberately empty by
+    default so callers cannot accidentally manufacture a cross-tenant scope by
+    omitting it.
+    """
 
     user_id: str = ""
     email: Optional[str] = None
     username: Optional[str] = None
     roles: List[str] = field(default_factory=list)
-    tenant_id: str = "default"
+    tenant_id: str = ""
     full_name: Optional[str] = None
     preferences: Dict[str, Any] = field(default_factory=dict)
     org_id: Optional[str] = None
@@ -52,7 +57,12 @@ class UserData(dict):
     # Factories -------------------------------------------------------------
     @classmethod
     def from_dict(cls, payload: Dict[str, Any]) -> "UserData":
-        """Create a :class:`UserData` instance from a dictionary."""
+        """Create a :class:`UserData` instance from a dictionary.
+
+        Missing tenant scope remains missing. Validation of whether a tenant is
+        required belongs to the authenticated request boundary, not this data
+        container.
+        """
 
         if payload is None:
             raise ValueError("User payload is required")
@@ -62,7 +72,7 @@ class UserData(dict):
             "email": payload.get("email"),
             "username": payload.get("username"),
             "roles": list(payload.get("roles") or []),
-            "tenant_id": payload.get("tenant_id") or payload.get("org_id") or "default",
+            "tenant_id": payload.get("tenant_id") or payload.get("org_id") or "",
             "full_name": payload.get("full_name") or payload.get("name"),
             "preferences": dict(payload.get("preferences") or {}),
             "org_id": payload.get("org_id"),
