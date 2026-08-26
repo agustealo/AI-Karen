@@ -6,8 +6,8 @@ on:
       - "docker-compose.yml"
       - "deploy/compose/docker-compose.prod.yml"
       - ".env.production.example"
-      - "src/ai_karen_engine/core/runtime/operational_health.py"
-      - "src/ai_karen_engine/server/health_endpoints.py"
+      - "src/ai_karen_engine/api_routes/monitoring/probes.py"
+      - "src/ai_karen_engine/api_routes/monitoring/health.py"
       - "tests/architecture/test_production_deployment_contract.py"
       - "tests/architecture/test_operational_health_authority.py"
       - ".github/workflows/production-deployment-contract.yml"
@@ -16,12 +16,15 @@ on:
       - "docker-compose.yml"
       - "deploy/compose/docker-compose.prod.yml"
       - ".env.production.example"
-      - "src/ai_karen_engine/core/runtime/operational_health.py"
-      - "src/ai_karen_engine/server/health_endpoints.py"
+      - "src/ai_karen_engine/api_routes/monitoring/probes.py"
+      - "src/ai_karen_engine/api_routes/monitoring/health.py"
       - "tests/architecture/test_production_deployment_contract.py"
       - "tests/architecture/test_operational_health_authority.py"
       - ".github/workflows/production-deployment-contract.yml"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   production-deployment-contract:
@@ -65,3 +68,11 @@ jobs:
 
       - name: Prove production liveness probe is canonical
         run: grep -q 'http://localhost:8000/health/live' /tmp/ai-karen-production-compose.yml
+
+      - name: Reject retired health authority paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e server/health_endpoints.py
+          ! grep -R --line-number --include='*.yml' --include='*.yaml' \
+            'src/ai_karen_engine/server/health_endpoints.py' .github/workflows
