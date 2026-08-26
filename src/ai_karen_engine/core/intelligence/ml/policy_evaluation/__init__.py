@@ -32,6 +32,12 @@ from .estimators import (
     compute_overlap_diagnostics,
     validate_observation,
 )
+from .promotion import (
+    PolicyPromotionDecision,
+    PromotionConfig,
+    PromotionEvidence,
+    evaluate_promotion,
+)
 
 __all__ = [
     "ActionRiskClass",
@@ -48,13 +54,17 @@ __all__ = [
     "PolicyDecision",
     "PolicyEstimate",
     "PolicyObservation",
+    "PolicyPromotionDecision",
     "PolicyStatus",
     "PromotionBlockReason",
+    "PromotionConfig",
     "PromotionDecision",
+    "PromotionEvidence",
     "SNIPSEstimator",
     "UtilityComponents",
     "UtilityPolicy",
     "compute_overlap_diagnostics",
+    "evaluate_promotion",
     "validate_observation",
     "validate_probability_distribution",
 ]
