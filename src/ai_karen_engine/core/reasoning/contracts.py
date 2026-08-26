@@ -32,6 +32,14 @@ class ReasoningMode(str, Enum):
     METACOGNITION = "metacognition"
 
 
+_REASONING_MODE_ALIASES = {
+    "verify": ReasoningMode.VERIFICATION.value,
+    "refine": ReasoningMode.REFINEMENT.value,
+    "synthesis": ReasoningMode.EVIDENCE_SYNTHESIS.value,
+    "soft": ReasoningMode.SOFT_EXPLORATION.value,
+}
+
+
 class HypothesisStatus(str, Enum):
     PROPOSED = "proposed"
     SUPPORTED = "supported"
@@ -81,6 +89,29 @@ def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def normalize_reasoning_modes(values: list[str]) -> list[str]:
+    """Normalize aliases and reject non-reasoning capability leakage.
+
+    Reasoning modes are a closed semantic domain. Provider/runtime capability
+    names such as ``reasoning``, ``web`` or ``memory.write`` are not strategy
+    identifiers and must never be silently accepted here.
+    """
+    allowed = {mode.value for mode in ReasoningMode}
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        value = str(raw).strip().lower()
+        if not value:
+            continue
+        value = _REASONING_MODE_ALIASES.get(value, value)
+        if value not in allowed:
+            raise ValueError(f"unsupported reasoning mode: {raw}")
+        if value not in seen:
+            normalized.append(value)
+            seen.add(value)
+    return normalized
 
 
 @dataclass(slots=True)
@@ -220,6 +251,9 @@ class ReasoningRequest:
     def __post_init__(self) -> None:
         if not self.tenant_id or self.tenant_id == "default":
             raise ValueError("reasoning request requires explicit non-default tenant_id")
+        if not self.objective.strip():
+            raise ValueError("reasoning request requires a non-empty objective")
+        self.reasoning_modes = normalize_reasoning_modes(self.reasoning_modes)
 
 
 @dataclass(slots=True)
@@ -278,4 +312,5 @@ __all__ = [
     "ReasoningResult",
     "ReasoningStatus",
     "ReasoningToolClient",
+    "normalize_reasoning_modes",
 ]
