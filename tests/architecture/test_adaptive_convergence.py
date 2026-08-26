@@ -37,6 +37,18 @@ def test_adaptive_profile_views_use_canonical_ml_profiles() -> None:
         assert "core.adaptive.learning.aggregates" not in source
 
 
+def test_adaptive_evaluation_is_canonical_ml_compatibility_only() -> None:
+    source = (CORE_ROOT / "adaptive" / "evaluation" / "corpus.py").read_text(
+        encoding="utf-8"
+    )
+    assert "CanonicalEvaluationCorpus" in source
+    assert "core.intelligence.ml.evaluation" in source
+    assert "expected_top_actions" not in source
+    assert '"use_multi_agent"' not in source
+    assert '"use_workflow"' not in source
+    assert '"use_tool"' not in source
+
+
 def test_adaptive_package_is_documented_as_transitional() -> None:
     source = (CORE_ROOT / "adaptive" / "__init__.py").read_text(encoding="utf-8")
     assert "Transitional compatibility package" in source
