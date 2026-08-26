@@ -33,6 +33,7 @@ psutil
 matplotlib
 neo4j
 PyJWT
+PyYAML
 markdown
 pytesseract
 pymupdf
