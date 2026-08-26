@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 
 from ai_karen_engine.core.reasoning.contracts import (
     ReasoningAssessment,
@@ -21,14 +20,21 @@ from ai_karen_engine.core.runtime.contracts import (
 )
 
 
-@dataclass
 class RecordingStrategy(ReasoningStrategyEngine):
-    strategy_id: str
-    capabilities: list[str]
-    supports_model_calls: bool = False
-    supports_tools: bool = False
-    calls: int = 0
-    observed_model_budget: int | None = None
+    def __init__(
+        self,
+        strategy_id: str,
+        capabilities: list[str],
+        *,
+        supports_model_calls: bool = False,
+        supports_tools: bool = False,
+    ) -> None:
+        self.strategy_id = strategy_id
+        self.capabilities = list(capabilities)
+        self.supports_model_calls = supports_model_calls
+        self.supports_tools = supports_tools
+        self.calls = 0
+        self.observed_model_budget: int | None = None
 
     async def execute(self, request, context, evidence, budget):
         self.calls += 1
@@ -117,7 +123,9 @@ def make_context() -> ExecutionContext:
 
 def test_executor_runs_only_requested_and_authorized_modes() -> None:
     causal = RecordingStrategy("causal-test", ["causal"])
-    soft = RecordingStrategy("soft-test", ["soft_exploration"], supports_model_calls=True)
+    soft = RecordingStrategy(
+        "soft-test", ["soft_exploration"], supports_model_calls=True
+    )
     verifier = RecordingStrategy("verify-test", ["verification"])
     executor = ReasoningExecutor([causal, soft, verifier])
 
@@ -137,7 +145,9 @@ def test_executor_runs_only_requested_and_authorized_modes() -> None:
 
 
 def test_executor_rejects_mode_not_authorized_by_runtime_policy() -> None:
-    soft = RecordingStrategy("soft-test", ["soft_exploration"], supports_model_calls=True)
+    soft = RecordingStrategy(
+        "soft-test", ["soft_exploration"], supports_model_calls=True
+    )
     executor = ReasoningExecutor([soft])
 
     result = asyncio.run(
@@ -159,11 +169,7 @@ def test_executor_uses_plan_modes_when_request_modes_are_empty() -> None:
     executor = ReasoningExecutor([verifier])
 
     result = asyncio.run(
-        executor.execute(
-            make_request(),
-            make_plan("verification"),
-            make_context(),
-        )
+        executor.execute(make_request(), make_plan("verification"), make_context())
     )
 
     assert verifier.calls == 1
@@ -171,7 +177,9 @@ def test_executor_uses_plan_modes_when_request_modes_are_empty() -> None:
 
 
 def test_execution_budget_is_normalized_to_reasoning_budget() -> None:
-    soft = RecordingStrategy("soft-test", ["soft_exploration"], supports_model_calls=True)
+    soft = RecordingStrategy(
+        "soft-test", ["soft_exploration"], supports_model_calls=True
+    )
     executor = ReasoningExecutor([soft])
 
     result = asyncio.run(
