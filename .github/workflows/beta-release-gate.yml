@@ -53,8 +53,10 @@ jobs:
           pytest tests/architecture/test_context_langgraph_consumption.py -q
           pytest tests/beta/test_real_model_wiring.py -q
 
-      - name: Prove memory ownership
-        run: pytest tests/architecture/test_memory_consumer_domain_migration.py -q
+      - name: Prove memory and conversation ownership
+        run: |
+          pytest tests/architecture/test_memory_consumer_domain_migration.py -q
+          pytest tests/architecture/test_beta_conversation_reload_contract.py -q
 
       - name: Prove production auth and tenant security
         run: |
