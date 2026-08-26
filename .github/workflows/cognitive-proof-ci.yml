@@ -13,6 +13,7 @@ on:
       - 'src/ai_karen_engine/core/personalization/**'
       - 'src/ai_karen_engine/core/context/**'
       - 'src/ai_karen_engine/core/memory/**'
+      - 'tests/core/reasoning/**'
       - 'tests/benchmarks/cognitive/**'
       - 'tests/fixtures/cognitive/**'
       - 'tests/architecture/cognitive_contracts/**'
@@ -29,6 +30,7 @@ on:
       - 'src/ai_karen_engine/core/personalization/**'
       - 'src/ai_karen_engine/core/context/**'
       - 'src/ai_karen_engine/core/memory/**'
+      - 'tests/core/reasoning/**'
       - 'tests/benchmarks/cognitive/**'
       - 'tests/fixtures/cognitive/**'
       - 'tests/architecture/cognitive_contracts/**'
@@ -78,6 +80,10 @@ jobs:
       - name: Run cognitive contract architecture gates
         run: |
           pytest tests/architecture/cognitive_contracts -q --timeout=300 --tb=short
+
+      - name: Run reasoning capability unit proof
+        run: |
+          pytest tests/core/reasoning -q --timeout=300 --tb=short
 
       - name: Run full cognitive benchmark proof
         if: ${{ always() }}
