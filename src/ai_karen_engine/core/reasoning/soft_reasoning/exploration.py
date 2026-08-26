@@ -242,7 +242,10 @@ class SoftExplorationEngine:
         convergence_reason = "max_iterations"
 
         def gaussian_latent(_base: list[float] | None = None) -> list[float]:
-            return [rng.gauss(0.0, self._config.perturbation_std) for _ in range(self._config.projection_dimension)]
+            return [
+                rng.gauss(0.0, self._config.perturbation_std)
+                for _ in range(self._config.projection_dimension)
+            ]
 
         initial_latents = [
             gaussian_latent() for _ in range(self._config.initial_samples)
@@ -333,10 +336,7 @@ class SoftExplorationEngine:
 
             optimizer.observe_batch(observations)
             all_candidates.extend(batch_candidates)
-            batch_objective = max(
-                float(candidate.search_score) for candidate in batch_candidates
-                if candidate.search_score is not None
-            )
+            batch_objective = max(self._candidate_score(candidate) for candidate in batch_candidates)
 
             if (
                 previous_batch_objective is not None
@@ -353,16 +353,10 @@ class SoftExplorationEngine:
 
         if not all_candidates:
             raise SoftReasoningUnavailable("paper_2025 produced no candidates")
-        best = max(
-            all_candidates,
-            key=lambda candidate: float(candidate.search_score or float("-inf")),
-        )
+        best = max(all_candidates, key=self._candidate_score)
         initial_batch = all_candidates[: self._config.initial_samples]
-        baseline_score = max(
-            float(candidate.search_score or float("-inf"))
-            for candidate in initial_batch
-        )
-        best_score = float(best.search_score or baseline_score)
+        baseline_score = max(self._candidate_score(candidate) for candidate in initial_batch)
+        best_score = self._candidate_score(best)
         return SoftExplorationTrace(
             best_candidate=best,
             candidates=tuple(all_candidates),
@@ -407,7 +401,10 @@ class SoftExplorationEngine:
             max(0, max_model_calls - self._config.initial_samples),
         )
         optimizer = BayesianOptimizer(
-            replace(self._optimizer_config(seed, paper=False), max_iterations=max_iterations)
+            replace(
+                self._optimizer_config(seed, paper=False),
+                max_iterations=max_iterations,
+            )
         )
         candidates: dict[tuple[float, ...], SoftCandidate] = {}
         model_calls = 0
@@ -426,7 +423,7 @@ class SoftExplorationEngine:
             key = tuple(round(float(value), 12) for value in latent)
             existing = candidates.get(key)
             if existing is not None:
-                return float(existing.search_score or existing.verification.score)
+                return self._candidate_score(existing)
 
             guided_embedding = self._apply_projection(
                 base_embedding=base_embedding,
@@ -468,17 +465,19 @@ class SoftExplorationEngine:
         )
         if not candidates:
             raise SoftReasoningUnavailable("soft exploration produced no candidates")
-        best = max(candidates.values(), key=lambda item: float(item.search_score or 0.0))
+        best = max(candidates.values(), key=self._candidate_score)
         baseline = candidates.get(tuple(0.0 for _ in initial_latent))
         baseline_score = (
-            float(baseline.search_score or baseline.verification.score)
+            self._candidate_score(baseline)
             if baseline is not None
             else optimization.history[0][1]
         )
-        best_score = float(best.search_score or best.verification.score)
+        best_score = self._candidate_score(best)
         return SoftExplorationTrace(
             best_candidate=best,
-            candidates=tuple(sorted(candidates.values(), key=lambda item: item.iteration)),
+            candidates=tuple(
+                sorted(candidates.values(), key=lambda item: item.iteration)
+            ),
             baseline_score=baseline_score,
             best_score=best_score,
             improvement=best_score - baseline_score,
@@ -527,6 +526,12 @@ class SoftExplorationEngine:
         if max_output_tokens <= 0:
             raise SoftReasoningBudgetError("max_output_tokens must be positive")
 
+    @staticmethod
+    def _candidate_score(candidate: SoftCandidate) -> float:
+        if candidate.search_score is not None:
+            return float(candidate.search_score)
+        return float(candidate.verification.score)
+
     def _seed(self, correlation_id: str) -> int:
         if not correlation_id:
             return self._config.default_seed
@@ -566,7 +571,11 @@ class SoftExplorationEngine:
         )
 
     @staticmethod
-    def _candidate_id(correlation_id: str, index: int, latent: Sequence[float]) -> str:
+    def _candidate_id(
+        correlation_id: str,
+        index: int,
+        latent: Sequence[float],
+    ) -> str:
         key = tuple(round(float(value), 12) for value in latent)
         digest = hashlib.sha256(
             f"{correlation_id}|{index}|{key}".encode("utf-8")
