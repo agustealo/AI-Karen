@@ -1,26 +1,17 @@
 """Soft Reasoning capability.
 
-Canonical production path:
-- ``SoftExplorationEngine`` performs controlled first-token embedding search.
-- ``SoftGenerationPort`` is supplied by a compatible local model runtime.
-- ``VerifierGuidedObjective`` converts structured verifier judgments into the
-  scalar reward consumed by KAREN's default profile.
-- ``BayesianOptimizer`` uses a real Gaussian Process posterior with configurable
-  UCB/EI/PI/Thompson acquisition.
-- ``PaperRewardComposer`` supplies the explicit Zhu et al. verifier-plus-
-  generation-coherence reward used by ``SoftExplorationConfig.paper_2025()``.
+Canonical ownership:
+- Core owns typed exploration, reward, verifier, and GP-search mechanics.
+- Runtime owns provider/model selection, authorization, prompt preparation,
+  concrete model hooks, batch-verifier execution, and fallback.
 
-Research fidelity note:
-The canonical algorithm now contains the paper-critical GP search, Expected
-Improvement profile, projected 50-dimensional search profile, and typed
-verifier-plus-log-probability reward composition. Runtime must still inject an
-authorized local model adapter that exposes first-token embedding control and
-generation log-probabilities before ``paper_2025`` can execute. The default
-``karen_default`` profile intentionally remains KAREN-specific.
+``karen_default`` is KAREN-specific. ``paper_2025`` is a strict research profile
+that requires the paper's batch Multi-Generate verifier and token-level
+probability signals. The released reference code differs from the paper equation
+for coherence, so both semantics are explicit rather than conflated.
 
-The older retrieval/writeback ``SoftReasoningEngine`` remains available only as
-an on-demand compatibility surface while legacy callers are migrated. It is
-deliberately not imported during canonical Soft Reasoning startup.
+The older retrieval/writeback ``SoftReasoningEngine`` remains a lazy
+compatibility surface only.
 """
 
 from __future__ import annotations
@@ -28,6 +19,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ai_karen_engine.core.reasoning.soft_reasoning.contracts import (
+    SoftBatchVerification,
+    SoftBatchVerifierPort,
     SoftCandidate,
     SoftExplorationTrace,
     SoftGenerationCapabilities,
@@ -51,11 +44,13 @@ from ai_karen_engine.core.reasoning.soft_reasoning.objective import (
 from ai_karen_engine.core.reasoning.soft_reasoning.optimization import (
     AcquisitionFunction,
     BayesianOptimizer,
+    ConvergenceMode,
     OptimizationConfig,
     OptimizationResult,
     optimize_embedding_batch,
 )
 from ai_karen_engine.core.reasoning.soft_reasoning.paper_reward import (
+    CoherenceMode,
     PaperReward,
     PaperRewardComposer,
     PaperRewardConfig,
@@ -96,6 +91,8 @@ __all__ = [
     "BayesianOptimizer",
     "CandidateJudgePort",
     "CandidateJudgment",
+    "CoherenceMode",
+    "ConvergenceMode",
     "EmbeddingPerturber",
     "OptimizationConfig",
     "OptimizationResult",
@@ -104,6 +101,8 @@ __all__ = [
     "PaperRewardConfig",
     "PerturbationConfig",
     "PerturbationStrategy",
+    "SoftBatchVerification",
+    "SoftBatchVerifierPort",
     "SoftCandidate",
     "SoftExplorationConfig",
     "SoftExplorationEngine",
@@ -119,7 +118,6 @@ __all__ = [
     "VerifierGuidedObjective",
     "VerifierObjectiveConfig",
     "optimize_embedding_batch",
-    # Compatibility-only lazy exports. Remove after legacy caller migration.
     "RecallConfig",
     "SRHealth",
     "SoftReasoningEngine",
