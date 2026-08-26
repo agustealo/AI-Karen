@@ -16,8 +16,6 @@ class DatabaseServiceConfig:
         self,
         # Core database settings
         enable_multi_tenant: bool = True,
-        enable_migrations: bool = True,
-        auto_migrate: bool = False,
         # Manager settings
         enable_conversation_manager: bool = True,
         enable_memory_manager: bool = True,
@@ -32,9 +30,6 @@ class DatabaseServiceConfig:
         enable_audit_logging: bool = True,
     ):
         self.enable_multi_tenant = enable_multi_tenant
-        self.enable_migrations = enable_migrations
-        self.auto_migrate = auto_migrate
-
         self.enable_conversation_manager = enable_conversation_manager
         self.enable_memory_manager = enable_memory_manager
         self.enable_tenant_manager = enable_tenant_manager
@@ -86,35 +81,6 @@ class DatabaseServiceFactory:
 
         except Exception as e:
             logger.error(f"Failed to create database client: {e}")
-            return None
-
-    def create_migration_manager(self):
-        """Create and configure migration manager."""
-        if not self.config.enable_migrations:
-            logger.info("Migration manager disabled by configuration")
-            return None
-
-        try:
-            from ai_karen_engine.database.migration_manager import MigrationManager
-
-            manager = MigrationManager()
-            self._services["migration_manager"] = manager
-            logger.info("Migration manager created successfully")
-
-            # Auto-migrate if configured
-            if self.config.auto_migrate:
-                logger.info("Running auto-migration...")
-                try:
-                    # Run pending migrations
-                    manager.apply_pending_migrations()
-                    logger.info("Auto-migration completed successfully")
-                except Exception as e:
-                    logger.error(f"Auto-migration failed: {e}")
-
-            return manager
-
-        except Exception as e:
-            logger.error(f"Failed to create migration manager: {e}")
             return None
 
     def create_conversation_manager(self):
@@ -250,9 +216,9 @@ class DatabaseServiceFactory:
 
     def initialize_database(self):
         """
-        Initialize database: create tables, run migrations, seed data.
+        Initialize runtime database services and seed application data.
 
-        This should be called during application startup.
+        Schema migrations are deployment-owned and MUST be applied before startup.
         """
         logger.info("Initializing database...")
 
@@ -265,12 +231,6 @@ class DatabaseServiceFactory:
             if not db_client:
                 logger.error("Cannot initialize database: client creation failed")
                 return False
-
-            # Run migrations
-            if self.config.enable_migrations:
-                migration_manager = self.get_service("migration_manager")
-                if not migration_manager:
-                    migration_manager = self.create_migration_manager()
 
             # Initialize canonical repositories and Supabase platform
             self.create_canonical_repositories()
@@ -311,7 +271,6 @@ class DatabaseServiceFactory:
 
         # Create core services in dependency order
         self.create_database_client()
-        self.create_migration_manager()
         self.create_conversation_manager()
         self.create_memory_manager()
         self.create_tenant_manager()

@@ -70,3 +70,13 @@ Postgres Changes requires explicit architecture approval.
 
 Run RLS tests against preview branches before merging.
 Tenant-scoping and RLS migrations are production security boundaries and must not be bypassed during recovery.
+
+## Production Baseline 2026-08
+
+The pre-production construction history was consolidated into six ordered baseline stages on 2026-08-27.
+The baseline preserves the execution order and SQL semantics of the prior migration chain while removing repair-file sprawl.
+The previous files remain available in Git history and are not executable migration authorities.
+
+Primary PostgreSQL schema evolution has exactly one authority: `supabase/migrations/`.
+Application runtime, Docker init scripts, ORM metadata, and server subpackages must not apply or invent primary PostgreSQL schema changes.
+After this baseline cut, applied production history is immutable and all changes are new forward-only migrations.

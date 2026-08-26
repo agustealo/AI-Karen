@@ -504,3 +504,6 @@ When contributing to the database layer:
 4. Update migration scripts for schema modifications
 5. Ensure proper error handling and logging
 6. Follow security best practices for data handling
+
+
+Schema migration execution is deployment-owned. Runtime code is read-only with respect to schema evolution.

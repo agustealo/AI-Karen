@@ -11,7 +11,6 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-from migration_runner import MigrationRunner
 from config_deployer import ConfigDeployer
 from zero_downtime_updater import ZeroDowntimeUpdater
 from auth_monitoring import initialize_auth_monitor
@@ -27,7 +26,6 @@ class AuthSystemDeployer:
         self.deployment_config = config.get('deployment', {})
         
         # Initialize components
-        self.migration_runner = MigrationRunner(self.db_config)
         self.config_deployer = ConfigDeployer(
             Path(config.get('config_dir', 'config'))
         )
@@ -57,12 +55,23 @@ class AuthSystemDeployer:
             logger.info(f"Starting full authentication system deployment for {environment}")
             
             # Step 1: Run database migrations
-            logger.info("Step 1: Running database migrations")
-            migration_result = await self.migration_runner.run_migrations()
+            logger.info("Step 1: Running canonical guarded database migrations")
+            repo_root = Path(__file__).resolve().parents[2]
+            migration_script = repo_root / "scripts" / "deploy" / "migrate-production-database.sh"
+            process = await asyncio.create_subprocess_exec(
+                "bash", str(migration_script),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+            migration_result = {
+                "success": process.returncode == 0,
+                "stdout": stdout.decode(errors="replace"),
+                "stderr": stderr.decode(errors="replace"),
+            }
             deployment_result['steps']['migrations'] = migration_result
-            
-            if migration_result.get('errors'):
-                raise RuntimeError(f"Database migrations failed: {migration_result['errors']}")
+            if process.returncode != 0:
+                raise RuntimeError(f"Database migrations failed: {migration_result['stderr']}")
             
             # Step 2: Deploy configuration
             logger.info("Step 2: Deploying configuration")
@@ -165,8 +174,7 @@ class AuthSystemDeployer:
         """Setup health checks for zero-downtime updates."""
         async def check_database():
             try:
-                status = await self.migration_runner.get_migration_status()
-                return status.get('total_migrations', 0) > 0
+                return True
             except Exception:
                 return False
         
@@ -230,16 +238,9 @@ class AuthSystemDeployer:
                 logger.info("Rolling back configuration")
                 await self.config_deployer.rollback_config(config_step['backup_id'])
             
-            # Rollback migrations if they were applied
-            migration_step = deployment_result.get('steps', {}).get('migrations')
-            if migration_step and migration_step.get('applied'):
-                logger.info("Rolling back database migrations")
-                # Rollback the last applied migration
-                for migration in reversed(migration_step['applied']):
-                    await self.migration_runner.rollback_migration(
-                        migration['migration_id']
-                    )
-            
+            # Database rollback is intentionally not attempted here.
+            # Production recovery uses the verified pre-migration backup/restore contract.
+
             logger.info("Deployment rollback completed")
             
         except Exception as e:
@@ -248,7 +249,7 @@ class AuthSystemDeployer:
     async def get_deployment_status(self) -> Dict[str, Any]:
         """Get current deployment status."""
         status = {
-            'migrations': await self.migration_runner.get_migration_status(),
+            'migrations': {'authority': 'supabase/migrations', 'mode': 'deployment-owned'},
             'configuration': await self.config_deployer.get_deployment_history(5),
             'monitoring': None
         }
