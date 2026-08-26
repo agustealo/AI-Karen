@@ -110,5 +110,5 @@ def test_baseline_cutover_is_documented() -> None:
     baseline = _read("docs/database/BASELINE_2026_08.md")
     supabase_readme = _read("supabase/README.md")
     assert "only primary PostgreSQL schema-evolution authority" in baseline
-    assert "future" in baseline.lower() and "forward-only" in baseline.lower()
+    assert "Every subsequent schema change is a new forward-only Supabase migration" in baseline
     assert "Production Baseline 2026-08" in supabase_readme
