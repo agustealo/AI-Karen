@@ -10,21 +10,12 @@ CANONICAL_HEALTH = REPO_ROOT / "src" / "ai_karen_engine" / "extensions" / "healt
 LEGACY_HEALTH = REPO_ROOT / "server" / "extension_health_monitor.py"
 
 
-def test_base_lifespan_owns_extension_health_startup_and_shutdown() -> None:
-    source = STARTUP.read_text(encoding="utf-8")
-
-    assert "await init_extension_health_monitor(app)" in source
-    assert "await shutdown_extension_health_monitor()" in source
-    assert "from ai_karen_engine.extensions.health import (" in source
-    assert "ai_karen_engine.extensions.health_monitor" not in source
-
-
-def test_extension_health_uses_canonical_core_manager_host() -> None:
+def test_canonical_startup_owns_active_extension_bootstrap() -> None:
     source = STARTUP.read_text(encoding="utf-8")
 
     assert "get_extension_core_manager" in source
-    assert "extension_manager.host" in source
-    assert "app.state.extension_system = extension_manager" in source
+    assert "extension_manager = get_extension_core_manager()" in source
+    assert "asyncio.create_task(extension_manager.initialize())" in source
 
 
 def test_root_server_app_owns_no_extension_lifecycle() -> None:
@@ -35,11 +26,23 @@ def test_root_server_app_owns_no_extension_lifecycle() -> None:
         "initialize_extension_system",
         "shutdown_extension_health_monitoring",
         "server.extension_health_monitor",
+        "EXTENSIONS_AVAILABLE",
         "app.router.on_startup.append(initialize_extension_system)",
         "app.router.on_shutdown.append(shutdown_extension_health_monitoring)",
     )
     for token in forbidden:
         assert token not in source
+
+
+def test_metrics_endpoint_has_no_extension_lifecycle_side_effects() -> None:
+    source = SERVER_APP.read_text(encoding="utf-8")
+
+    metrics_source = source.split('@app.get("/metrics"', 1)[1].split(
+        '@app.get("/plugins"', 1
+    )[0]
+    assert "extension_health_monitor" not in metrics_source
+    assert "check_extension_system_health" not in metrics_source
+    assert "update_extension_metrics" not in metrics_source
 
 
 def test_canonical_extension_health_module_exists() -> None:
