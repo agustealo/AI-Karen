@@ -1,11 +1,11 @@
 """Typed contracts for research-grade Soft Reasoning.
 
-Core owns the exploration algorithm and verifier/generation ports. Runtime owns
-model selection and injects an adapter for an already-resolved model runtime.
+Core owns the exploration algorithm and typed ports. Runtime owns model
+selection, prompt preparation, authorization, and the concrete adapters.
 
-The contracts separate model-generation coherence signals from verifier scores
-so KAREN can support both its richer verifier objective and a paper-consistent
-Soft Reasoning profile without hiding research-critical values in metadata.
+The paper path needs two signals that must remain explicit:
+- token-level generation log probabilities for coherence;
+- batch-relative verifier judgments over k candidate solutions.
 """
 
 from __future__ import annotations
@@ -17,9 +17,6 @@ from ai_karen_engine.core.model_runtime.provider_contracts import (
     ModelRuntimeCapabilities,
 )
 
-# Compatibility alias. Canonical capability authority now lives in
-# core.model_runtime.provider_contracts. Remove this alias when Soft Reasoning
-# contract v3 is introduced.
 SoftGenerationCapabilities = ModelRuntimeCapabilities
 
 
@@ -30,10 +27,21 @@ class SoftGenerationOutput:
     finish_reason: str = ""
     model_id: str = ""
     runtime_engine: str = ""
+    token_log_probabilities: tuple[float, ...] = ()
     sequence_log_probability: float | None = None
     mean_token_log_probability: float | None = None
     first_token_probability: float | None = None
     metadata: dict[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.token_count < 0:
+            raise ValueError("token_count must be non-negative")
+        if self.token_log_probabilities and (
+            self.token_count != len(self.token_log_probabilities)
+        ):
+            raise ValueError(
+                "token_count must equal token_log_probabilities length when provided"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +57,23 @@ class SoftVerificationScore:
         object.__setattr__(
             self, "confidence", max(0.0, min(1.0, float(self.confidence)))
         )
+
+
+@dataclass(frozen=True, slots=True)
+class SoftBatchVerification:
+    """Batch-relative verifier result used by the paper profile.
+
+    Zhu et al. evaluate a set of candidate solutions together, generate a
+    verifier/refined answer, and derive binary candidate rewards from agreement
+    with that verifier result. Runtime adapters are responsible for answer
+    extraction/comparison; Core consumes only the typed per-candidate scores.
+    """
+
+    refined_output: str
+    candidate_scores: tuple[SoftVerificationScore, ...]
+    verifier_model_id: str = ""
+    runtime_engine: str = ""
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,16 +103,17 @@ class SoftExplorationTrace:
     optimizer_surrogate_kind: str = "gaussian_process"
     acquisition_function: str = "ucb"
     research_profile: str = "karen_default"
+    batches: int = 0
+    convergence_reason: str = ""
 
 
 @runtime_checkable
 class SoftGenerationPort(Protocol):
-    """Adapter for model-internal first-token embedding control."""
-
     def capabilities(self) -> ModelRuntimeCapabilities:
         ...
 
     def first_token_embedding(self, prompt: str) -> Sequence[float]:
+        """Return the reference embedding z used for exploration."""
         ...
 
     def generate_with_first_token_embedding(
@@ -103,8 +129,6 @@ class SoftGenerationPort(Protocol):
 
 @runtime_checkable
 class SoftVerifierPort(Protocol):
-    """Verifier objective used by Bayesian exploration."""
-
     def score(
         self,
         objective: str,
@@ -115,7 +139,23 @@ class SoftVerifierPort(Protocol):
         ...
 
 
+@runtime_checkable
+class SoftBatchVerifierPort(Protocol):
+    """Paper-style multi-candidate verifier supplied by Runtime."""
+
+    def verify_batch(
+        self,
+        objective: str,
+        responses: Sequence[str],
+        *,
+        evidence: Sequence[str],
+    ) -> SoftBatchVerification:
+        ...
+
+
 __all__ = [
+    "SoftBatchVerification",
+    "SoftBatchVerifierPort",
     "SoftCandidate",
     "SoftExplorationTrace",
     "SoftGenerationCapabilities",
