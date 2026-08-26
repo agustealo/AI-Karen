@@ -1,18 +1,22 @@
-"""Capability performance profiles.
+"""Compatibility view for capability performance profiles.
 
-Aggregated outcomes into CapabilityPerformanceProfile.
+Canonical derived capability-performance evidence lives in
+``ai_karen_engine.core.intelligence.ml.performance_profiles``. Capability
+availability/definition authority remains in the Core Capability Registry.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from ai_karen_engine.core.adaptive.contracts import CapabilityPerformanceProfile
-from ai_karen_engine.core.adaptive.learning.aggregates import EvidenceAggregator
+from ai_karen_engine.core.intelligence.ml.performance_profiles import (
+    CapabilityPerformanceProfile,
+    EvidenceAggregator,
+)
 
 
 class CapabilityProfileStore:
-    """Read-only view over capability performance profiles."""
+    """Read-only compatibility view over capability performance profiles."""
 
     def __init__(self, aggregator: EvidenceAggregator | None = None) -> None:
         self._aggregator = aggregator or EvidenceAggregator()
