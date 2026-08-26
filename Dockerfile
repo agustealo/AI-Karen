@@ -108,12 +108,11 @@ RUN mkdir -p /app/models/spacy && python -c "import spacy; nlp=spacy.load('en_co
 FROM ${PROFILE} AS app
 WORKDIR /app
 
-ENV PYTHONPATH=/app:/app/src:$PYTHONPATH
+ENV PYTHONPATH=/app:/app/src
 
 COPY . .
-RUN mkdir -p /app/models /app/logs /app/backups /app/certs
+RUN mkdir -p /app/models /app/logs /app/backups /app/certs /app/config
 RUN mkdir -p /app/plugin_marketplace/ai/model-orchestrator
-COPY config/ /app/config/
 
 ENV PLUGIN_DIR="/app/plugin_marketplace" \
     MODELS_ROOT="/app/models" \
