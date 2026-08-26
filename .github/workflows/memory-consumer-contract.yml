@@ -68,7 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          refs=$(grep -R --line-number --include='*.py' 'WebUIMemoryService' src/ai_karen_engine | grep -v 'core/memory/memory_service.py' || true)
+          test ! -e src/ai_karen_engine/core/memory/memory_service.py
+          refs=$(grep -R --line-number --include='*.py' 'WebUIMemoryService\|MemoryContextBuilder\|store_web_ui_memory' src/ai_karen_engine || true)
           test -z "$refs" || { echo "$refs"; exit 1; }
-          ! grep -R --line-number --include='*.py' 'store_web_ui_memory' src/ai_karen_engine/services/scheduling
           ! grep -R --line-number --include='*.py' 'UnifiedMemoryService(' src/ai_karen_engine/agents
