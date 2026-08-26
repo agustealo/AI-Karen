@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Dict, Any, List, Optional
-import logging
 from datetime import datetime
+from enum import Enum
+import logging
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class ContextFile:
 
 @dataclass
 class ContextData:
-    """Container for runtime context records and related files."""
+    """Container for legacy LangGraph context records and related files."""
 
     context_id: Optional[str] = None
     user_id: Optional[str] = None
@@ -106,8 +106,13 @@ class ContextUpdateRequest:
     saved_contexts: Optional[List[Dict[str, Any]]] = None
     file_context: Optional[List[Dict[str, Any]]] = None
 
+
 class ContextManager:
-    """Thin adapter over the current memory/context stack for LangGraph."""
+    """Compatibility adapter over the canonical memory/context runtime.
+
+    This class is not a context authority. It preserves LangGraph/file-upload
+    callers until they consume Runtime-produced prompt context directly.
+    """
 
     def __init__(self, memory_service: Optional[Any] = None):
         self.memory_service = memory_service
@@ -117,6 +122,7 @@ class ContextManager:
         self,
         *,
         user_id: str,
+        tenant_id: Optional[str],
         session_id: Optional[str],
         prompt: str,
         conversation_history: Optional[List[Dict[str, Any]]] = None,
@@ -125,6 +131,7 @@ class ContextManager:
     ) -> Dict[str, Any]:
         context: Dict[str, Any] = {
             "user_id": user_id,
+            "tenant_id": tenant_id,
             "session_id": session_id,
             "prompt": prompt,
             "conversation_history": conversation_history or [],
@@ -133,10 +140,14 @@ class ContextManager:
         }
 
         memory_service = self.memory_service
-        if memory_service is not None and hasattr(memory_service, "build_context"):
+        if (
+            memory_service is not None
+            and tenant_id
+            and hasattr(memory_service, "build_context")
+        ):
             try:
                 retrieved_context = await memory_service.build_context(
-                    tenant_id=user_id,
+                    tenant_id=tenant_id,
                     query=prompt,
                     user_id=user_id,
                     session_id=session_id,
@@ -146,10 +157,12 @@ class ContextManager:
                     context.update(retrieved_context)
             except TypeError:
                 logger.debug(
-                    "Memory service build_context signature mismatch; using local context adapter"
+                    "Memory service build_context signature mismatch; using LangGraph compatibility context"
                 )
             except Exception as exc:
-                logger.warning("Context build fallback triggered: %s", exc)
+                logger.warning("LangGraph context memory enrichment failed: %s", exc)
+        elif memory_service is not None and not tenant_id:
+            logger.warning("LangGraph memory enrichment skipped: missing tenant_id")
 
         return context
 
@@ -158,19 +171,13 @@ class ContextManager:
         return None
 
     async def get_context(self, context_id: str, **_: Any) -> ContextResponse:
-        """Return a runtime context record for file-upload compatibility."""
-
         if not context_id:
-            return ContextResponse(
-                success=False,
-                error_message="context_id is required",
-            )
+            return ContextResponse(success=False, error_message="context_id is required")
 
         context_data = self._context_store.get(context_id)
         if context_data is None:
             context_data = ContextData(context_id=context_id)
             self._context_store[context_id] = context_data
-
         return ContextResponse(success=True, context_data=context_data)
 
     async def update_context(
@@ -179,13 +186,8 @@ class ContextManager:
         request: Optional[ContextUpdateRequest] = None,
         **updates: Any,
     ) -> ContextResponse:
-        """Update a runtime context record in the local adapter store."""
-
         if not context_id:
-            return ContextResponse(
-                success=False,
-                error_message="context_id is required",
-            )
+            return ContextResponse(success=False, error_message="context_id is required")
 
         context_data = self._context_store.get(context_id)
         if context_data is None:
