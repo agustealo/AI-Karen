@@ -59,6 +59,7 @@ class SoftCandidate:
     output: SoftGenerationOutput
     verification: SoftVerificationScore
     iteration: int
+    search_score: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +75,7 @@ class SoftExplorationTrace:
     seed: int
     runtime_engine: str
     model_id: str
-    optimizer_surrogate_kind: str = "kernel_regression"
+    optimizer_surrogate_kind: str = "gaussian_process"
     acquisition_function: str = "ucb"
     research_profile: str = "karen_default"
 
