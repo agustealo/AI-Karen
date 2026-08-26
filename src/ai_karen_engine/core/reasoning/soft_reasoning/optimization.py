@@ -1,15 +1,14 @@
-"""Bayesian-search utilities for Soft Reasoning.
+"""Gaussian-process Bayesian optimisation for Soft Reasoning.
 
-Important research-fidelity boundary:
-This module currently implements a lightweight kernel-regression surrogate with
-Bayesian-optimization-style acquisition functions. It is *not* a mathematically
-complete Gaussian Process posterior implementation. The canonical
-``paper_2025`` Soft Reasoning profile must not claim paper-faithful GP Bayesian
-optimization until Runtime wires a true GP-backed optimizer.
+This module implements the optimizer used by the canonical Soft Reasoning
+exploration path. The surrogate is a real Gaussian Process posterior backed by
+``sklearn.gaussian_process.GaussianProcessRegressor`` rather than the previous
+kernel-regression approximation.
 
-The current implementation remains useful as a low-dependency local-first search
-fallback and is intentionally named ``BayesianOptimizer`` for compatibility with
-existing callers. Its diagnostics report the surrogate kind explicitly.
+The public ``BayesianOptimizer`` name is retained for compatibility, but its
+``surrogate_kind`` is now ``gaussian_process`` and acquisition values are
+computed from GP posterior mean/std. Expected Improvement remains available for
+a paper-aligned profile while KAREN may select UCB/PI/Thompson through config.
 """
 
 from __future__ import annotations
@@ -21,11 +20,15 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, List, Optional, Tuple
 
+import numpy as np
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import ConstantKernel, RBF, WhiteKernel
+
 logger = logging.getLogger(__name__)
 
 
 class AcquisitionFunction(Enum):
-    """Acquisition functions supported by the local surrogate search."""
+    """Acquisition functions supported by Gaussian-process search."""
 
     UCB = "ucb"
     EI = "ei"
@@ -35,7 +38,7 @@ class AcquisitionFunction(Enum):
 
 @dataclass
 class OptimizationConfig:
-    """Configuration for local surrogate-guided optimization."""
+    """Configuration for Gaussian-process Bayesian optimisation."""
 
     acquisition_fn: AcquisitionFunction = AcquisitionFunction.UCB
     exploration_weight: float = 2.0
@@ -44,6 +47,9 @@ class OptimizationConfig:
     initial_samples: int = 5
     length_scale: float = 1.0
     noise_variance: float = 0.01
+    candidate_pool_size: int = 32
+    random_seed: int = 17
+    improvement_offset: float = 0.0
 
     def __post_init__(self) -> None:
         if self.max_iterations < 0:
@@ -54,36 +60,42 @@ class OptimizationConfig:
             raise ValueError("length_scale must be positive")
         if self.noise_variance < 0.0:
             raise ValueError("noise_variance must be non-negative")
+        if self.candidate_pool_size <= 0:
+            raise ValueError("candidate_pool_size must be positive")
+        if self.exploration_weight < 0.0:
+            raise ValueError("exploration_weight must be non-negative")
+        if self.improvement_offset < 0.0:
+            raise ValueError("improvement_offset must be non-negative")
 
 
 @dataclass
 class OptimizationResult:
-    """Result from surrogate-guided embedding optimization."""
+    """Result from Gaussian-process embedding optimization."""
 
     best_embedding: List[float]
     best_score: float
     num_iterations: int
     converged: bool
     history: List[Tuple[List[float], float]]
-    surrogate_kind: str = "kernel_regression"
+    surrogate_kind: str = "gaussian_process"
 
 
 class BayesianOptimizer:
-    """Compatibility optimizer using a lightweight local surrogate.
+    """Gaussian-process Bayesian optimizer for latent embedding search.
 
-    This is not a full Gaussian Process implementation. It uses an RBF-kernel
-    weighted regression mean and a proximity-derived uncertainty estimate, then
-    applies UCB/EI/PI/Thompson-style acquisition functions. It is appropriate as
-    a deterministic low-dependency fallback, not as the paper-faithful optimizer.
+    Hyperparameters are fixed by ``OptimizationConfig`` instead of being fitted
+    implicitly by scikit-learn. This keeps optimization deterministic and makes
+    the research profile/configuration observable and testable.
     """
 
-    surrogate_kind = "kernel_regression"
+    surrogate_kind = "gaussian_process"
 
     def __init__(self, config: Optional[OptimizationConfig] = None):
         self.config = config or OptimizationConfig()
         self._observations: List[Tuple[List[float], float]] = []
         self._best_score = float("-inf")
         self._best_embedding: Optional[List[float]] = None
+        self._rng = random.Random(self.config.random_seed)
 
     def optimize(
         self,
@@ -92,6 +104,9 @@ class BayesianOptimizer:
         *,
         perturb_fn: Optional[Callable[[List[float]], List[float]]] = None,
     ) -> OptimizationResult:
+        if not initial_embedding:
+            raise ValueError("initial_embedding must not be empty")
+
         logger.info(
             "soft_reasoning.optimizer_started",
             extra={
@@ -103,18 +118,20 @@ class BayesianOptimizer:
         self._initialize(initial_embedding, score_function, perturb_fn)
 
         converged = False
-        for iteration in range(self.config.max_iterations):
+        completed_iterations = 0
+        for _ in range(self.config.max_iterations):
             candidate = self._select_next_candidate(initial_embedding, perturb_fn)
-            score = score_function(candidate)
-            self._observations.append((candidate, score))
+            score = float(score_function(candidate))
+            self._observations.append((list(candidate), score))
+            completed_iterations += 1
 
+            previous_best = self._best_score
             if score > self._best_score:
-                improvement = score - self._best_score
                 self._best_score = score
-                self._best_embedding = candidate
+                self._best_embedding = list(candidate)
+                improvement = score - previous_best
                 logger.debug(
-                    "Soft Reasoning iteration %d: score %.4f improvement %.4f",
-                    iteration,
+                    "Soft Reasoning GP iteration: score %.4f improvement %.4f",
                     score,
                     improvement,
                 )
@@ -124,14 +141,17 @@ class BayesianOptimizer:
 
         if self._best_embedding is None:
             self._best_embedding = list(initial_embedding)
-            self._best_score = score_function(initial_embedding)
+            self._best_score = float(score_function(initial_embedding))
 
         return OptimizationResult(
             best_embedding=list(self._best_embedding),
             best_score=float(self._best_score),
-            num_iterations=len(self._observations),
+            num_iterations=completed_iterations,
             converged=converged,
-            history=[(list(item), float(score)) for item, score in self._observations],
+            history=[
+                (list(embedding), float(score))
+                for embedding, score in self._observations
+            ],
             surrogate_kind=self.surrogate_kind,
         )
 
@@ -144,11 +164,10 @@ class BayesianOptimizer:
         self._observations.clear()
         self._best_score = float("-inf")
         self._best_embedding = None
+        self._rng.seed(self.config.random_seed)
 
-        initial_score = score_function(initial_embedding)
-        self._observations.append((list(initial_embedding), float(initial_score)))
-        self._best_score = float(initial_score)
-        self._best_embedding = list(initial_embedding)
+        initial_score = float(score_function(initial_embedding))
+        self._record_observation(initial_embedding, initial_score)
 
         for _ in range(self.config.initial_samples - 1):
             candidate = (
@@ -156,11 +175,15 @@ class BayesianOptimizer:
                 if perturb_fn
                 else self._default_perturb(initial_embedding)
             )
-            score = score_function(candidate)
-            self._observations.append((list(candidate), float(score)))
-            if score > self._best_score:
-                self._best_score = float(score)
-                self._best_embedding = list(candidate)
+            score = float(score_function(candidate))
+            self._record_observation(candidate, score)
+
+    def _record_observation(self, embedding: List[float], score: float) -> None:
+        candidate = list(embedding)
+        self._observations.append((candidate, float(score)))
+        if score > self._best_score:
+            self._best_score = float(score)
+            self._best_embedding = candidate
 
     def _select_next_candidate(
         self,
@@ -170,84 +193,142 @@ class BayesianOptimizer:
         base = self._best_embedding or initial_embedding
         candidates = [
             perturb_fn(base) if perturb_fn else self._default_perturb(base)
-            for _ in range(20)
+            for _ in range(self.config.candidate_pool_size)
         ]
-        acquisition_values = [self._acquisition_value(c) for c in candidates]
-        best_idx = max(range(len(candidates)), key=lambda i: acquisition_values[i])
-        return candidates[best_idx]
+        means, stds = self._gp_predict_batch(candidates)
+        acquisition_values = self._acquisition_values(means, stds)
+        best_idx = max(
+            range(len(candidates)),
+            key=lambda index: acquisition_values[index],
+        )
+        return list(candidates[best_idx])
+
+    def _build_gp(self) -> GaussianProcessRegressor:
+        kernel = (
+            ConstantKernel(1.0, constant_value_bounds="fixed")
+            * RBF(
+                length_scale=self.config.length_scale,
+                length_scale_bounds="fixed",
+            )
+            + WhiteKernel(
+                noise_level=max(self.config.noise_variance, 1e-12),
+                noise_level_bounds="fixed",
+            )
+        )
+        return GaussianProcessRegressor(
+            kernel=kernel,
+            alpha=max(self.config.noise_variance, 1e-12),
+            optimizer=None,
+            normalize_y=True,
+            random_state=self.config.random_seed,
+        )
+
+    def _gp_predict_batch(
+        self,
+        embeddings: List[List[float]],
+    ) -> Tuple[List[float], List[float]]:
+        if not embeddings:
+            return ([], [])
+        if not self._observations:
+            return ([0.0] * len(embeddings), [1.0] * len(embeddings))
+
+        x_train = np.asarray(
+            [embedding for embedding, _ in self._observations],
+            dtype=float,
+        )
+        y_train = np.asarray(
+            [score for _, score in self._observations],
+            dtype=float,
+        )
+        x_query = np.asarray(embeddings, dtype=float)
+
+        gp = self._build_gp()
+        gp.fit(x_train, y_train)
+        mean, std = gp.predict(x_query, return_std=True)
+        return (
+            [float(value) for value in mean.tolist()],
+            [max(0.0, float(value)) for value in std.tolist()],
+        )
+
+    def _gp_predict(self, embedding: List[float]) -> Tuple[float, float]:
+        means, stds = self._gp_predict_batch([embedding])
+        return (means[0], stds[0])
+
+    # Compatibility alias retained for callers that used the interim API.
+    def _surrogate_predict(self, embedding: List[float]) -> Tuple[float, float]:
+        return self._gp_predict(embedding)
+
+    def _acquisition_values(
+        self,
+        means: List[float],
+        stds: List[float],
+    ) -> List[float]:
+        return [
+            self._acquisition_value_from_stats(mean, std)
+            for mean, std in zip(means, stds)
+        ]
 
     def _acquisition_value(self, embedding: List[float]) -> float:
-        if self.config.acquisition_fn == AcquisitionFunction.UCB:
-            return self._ucb(embedding)
-        if self.config.acquisition_fn == AcquisitionFunction.EI:
-            return self._expected_improvement(embedding)
-        if self.config.acquisition_fn == AcquisitionFunction.PI:
-            return self._probability_improvement(embedding)
-        if self.config.acquisition_fn == AcquisitionFunction.THOMPSON:
-            return self._thompson_sampling(embedding)
-        return self._ucb(embedding)
+        mean, std = self._gp_predict(embedding)
+        return self._acquisition_value_from_stats(mean, std)
+
+    def _acquisition_value_from_stats(self, mean: float, std: float) -> float:
+        acquisition = self.config.acquisition_fn
+        if acquisition == AcquisitionFunction.UCB:
+            return mean + self.config.exploration_weight * std
+        if acquisition == AcquisitionFunction.EI:
+            return self._expected_improvement_from_stats(mean, std)
+        if acquisition == AcquisitionFunction.PI:
+            return self._probability_improvement_from_stats(mean, std)
+        if acquisition == AcquisitionFunction.THOMPSON:
+            return self._rng.gauss(mean, std)
+        return mean + self.config.exploration_weight * std
 
     def _ucb(self, embedding: List[float]) -> float:
-        mean, std = self._surrogate_predict(embedding)
+        mean, std = self._gp_predict(embedding)
         return mean + self.config.exploration_weight * std
 
     def _expected_improvement(self, embedding: List[float]) -> float:
-        mean, std = self._surrogate_predict(embedding)
-        if std < 1e-8:
+        mean, std = self._gp_predict(embedding)
+        return self._expected_improvement_from_stats(mean, std)
+
+    def _expected_improvement_from_stats(self, mean: float, std: float) -> float:
+        if std < 1e-12:
             return 0.0
-        improvement = mean - self._best_score
+        improvement = mean - self._best_score - self.config.improvement_offset
         z = improvement / std
-        cdf_z = 0.5 * (1.0 + math.erf(z / math.sqrt(2)))
-        pdf_z = math.exp(-0.5 * z * z) / math.sqrt(2 * math.pi)
+        cdf_z = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+        pdf_z = math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
         return max(0.0, improvement * cdf_z + std * pdf_z)
 
     def _probability_improvement(self, embedding: List[float]) -> float:
-        mean, std = self._surrogate_predict(embedding)
-        if std < 1e-8:
+        mean, std = self._gp_predict(embedding)
+        return self._probability_improvement_from_stats(mean, std)
+
+    def _probability_improvement_from_stats(self, mean: float, std: float) -> float:
+        if std < 1e-12:
             return 0.0
-        z = (mean - self._best_score) / std
-        return 0.5 * (1.0 + math.erf(z / math.sqrt(2)))
+        improvement = mean - self._best_score - self.config.improvement_offset
+        z = improvement / std
+        return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
 
     def _thompson_sampling(self, embedding: List[float]) -> float:
-        mean, std = self._surrogate_predict(embedding)
-        return random.gauss(mean, std)
-
-    def _surrogate_predict(self, embedding: List[float]) -> Tuple[float, float]:
-        """Return local kernel-regression mean and proximity uncertainty."""
-        if not self._observations:
-            return (0.0, 1.0)
-
-        similarities: List[float] = []
-        scores: List[float] = []
-        for observed_embedding, observed_score in self._observations:
-            similarities.append(self._rbf_kernel(embedding, observed_embedding))
-            scores.append(float(observed_score))
-
-        total_similarity = sum(similarities) + 1e-8
-        mean = sum(
-            similarity * score
-            for similarity, score in zip(similarities, scores)
-        ) / total_similarity
-        max_similarity = max(similarities)
-        variance_proxy = max(0.0, 1.0 - max_similarity + self.config.noise_variance)
-        return (mean, math.sqrt(variance_proxy))
-
-    # Backward-compatible private alias. Remove when no callers/tests reference it.
-    def _gp_predict(self, embedding: List[float]) -> Tuple[float, float]:
-        return self._surrogate_predict(embedding)
+        mean, std = self._gp_predict(embedding)
+        return self._rng.gauss(mean, std)
 
     def _rbf_kernel(self, x1: List[float], x2: List[float]) -> float:
+        """Compatibility helper exposing the configured RBF kernel value."""
         squared_dist = sum((a - b) ** 2 for a, b in zip(x1, x2))
-        return math.exp(-squared_dist / (2 * self.config.length_scale**2))
+        return math.exp(-squared_dist / (2.0 * self.config.length_scale**2))
 
-    @staticmethod
-    def _default_perturb(embedding: List[float]) -> List[float]:
-        return [x + random.gauss(0.0, 0.1) for x in embedding]
+    def _default_perturb(self, embedding: List[float]) -> List[float]:
+        return [value + self._rng.gauss(0.0, 0.1) for value in embedding]
 
     def reset(self) -> None:
         self._observations.clear()
         self._best_score = float("-inf")
         self._best_embedding = None
+        self._rng.seed(self.config.random_seed)
 
 
 def optimize_embedding_batch(
