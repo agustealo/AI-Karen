@@ -1,19 +1,23 @@
-"""
-AgentMedusa - Multi-Agent Runtime System
+"""AgentMedusa, Karen's canonical multi-agent execution runtime.
 
-AgentMedusa is a multi-agent runtime system that provides coordination,
-arbitration, and execution capabilities for AI agents.
+AgentMedusa owns multi-agent planning, coordination, arbitration, specialist
+execution topology, and run trajectories after RuntimePolicy has authorized a
+multi-agent plan. It does not own provider/model selection, prompt assembly,
+memory persistence, extension execution, authentication, or global policy.
 """
 
 from .contracts import (
-    RuntimeRequest,
-    RuntimeResponse,
+    AgentDefinition,
+    AgentLifecycleState,
+    AgentRegistration,
+    ArbitrationDecision,
+    ArbitrationRequest,
+    DeepExecutionPlan,
     ExecutionAction,
     MedusaRuntimePolicy,
-    ArbitrationRequest,
-    ArbitrationDecision,
+    RuntimeRequest,
+    RuntimeResponse,
     SubagentContract,
-    DeepExecutionPlan,
 )
 from .coordinator import MedusaCoordinator
 from .arbitration import MedusaArbitrator
@@ -27,11 +31,14 @@ from .adapters import (
     PersistenceAdapter,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "AI-Karen Team"
 
 __all__ = [
-    # Contracts
+    # Definition/runtime contracts
+    "AgentDefinition",
+    "AgentLifecycleState",
+    "AgentRegistration",
     "RuntimeRequest",
     "RuntimeResponse",
     "ExecutionAction",
@@ -40,16 +47,16 @@ __all__ = [
     "ArbitrationDecision",
     "SubagentContract",
     "DeepExecutionPlan",
-    # Core Components
+    # Multi-agent coordination
     "MedusaCoordinator",
     "MedusaArbitrator",
     "MedusaPlanner",
     # Execution
     "ExecutionEngine",
     "ExecutionPolicy",
-    # Telemetry
+    # Telemetry adapter surface
     "RuntimeTelemetry",
-    # Adapters
+    # Canonical runtime adapters
     "AuthContextAdapter",
     "ExtensionRuntimeAdapter",
     "MemoryRuntimeAdapter",

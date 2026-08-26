@@ -5,6 +5,8 @@ from .execution_action import ExecutionAction
 from .arbitration_contract import ArbitrationRequest, ArbitrationDecision
 from .policy_contract import MedusaRuntimePolicy
 from .subagent_contract import SubagentContract
+from .agent_definition import AgentDefinition
+from .registration import AgentRegistration, AgentLifecycleState
 
 __all__ = [
     "RuntimeRequest",
@@ -15,4 +17,7 @@ __all__ = [
     "ArbitrationDecision",
     "MedusaRuntimePolicy",
     "SubagentContract",
+    "AgentDefinition",
+    "AgentRegistration",
+    "AgentLifecycleState",
 ]
