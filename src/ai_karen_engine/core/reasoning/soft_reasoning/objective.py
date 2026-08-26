@@ -1,9 +1,15 @@
 """Structured verifier objective for Soft Reasoning.
 
-The Soft Reasoning paper requires a verifier-guided scalar reward. This module
-turns structured judgments from an injected verification runtime into that
-reward without selecting a provider, invoking memory, constructing prompts, or
-inventing heuristic correctness signals.
+The canonical KAREN objective converts structured judgments from an injected
+verification runtime into a scalar reward without selecting a provider,
+invoking memory, constructing prompts, or inventing provider authority.
+
+Research fidelity boundary:
+Zhu et al. (ICML 2025) combine verifier reward with a generation-coherence
+signal derived from model probabilities. This module deliberately implements
+KAREN's richer verifier objective only. A ``paper_2025`` profile must combine
+this verifier signal with typed sequence-coherence/log-probability data from
+``SoftGenerationOutput`` before claiming paper-faithful reward semantics.
 """
 
 from __future__ import annotations
@@ -95,7 +101,9 @@ class VerifierObjectiveConfig:
 
 
 class VerifierGuidedObjective(SoftVerifierPort):
-    """Calibrated scalar objective backed by structured verifier judgments."""
+    """KAREN verifier objective backed by structured runtime judgments."""
+
+    objective_kind = "karen_structured_verifier"
 
     def __init__(
         self,
@@ -122,7 +130,10 @@ class VerifierGuidedObjective(SoftVerifierPort):
                 confidence=1.0,
                 passed=False,
                 feedback="empty_candidate_response",
-                components={"empty_response": 1.0},
+                components={
+                    "empty_response": 1.0,
+                    "objective_kind": 0.0,
+                },
             )
 
         judgment = self._judge.judge(
