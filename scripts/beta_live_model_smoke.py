@@ -21,16 +21,12 @@ class SmokeConfig:
     @classmethod
     def from_environment(cls) -> "SmokeConfig":
         base_url = (
-            os.getenv("BETA_MODEL_BASE_URL", "http://127.0.0.1:1234/v1")
-            .strip()
-            .rstrip("/")
-        )
+            os.getenv("BETA_MODEL_BASE_URL", "").strip()
+            or "http://127.0.0.1:1234/v1"
+        ).rstrip("/")
         model = os.getenv("BETA_MODEL_NAME", "").strip() or None
         api_key = os.getenv("BETA_MODEL_API_KEY", "").strip() or None
         timeout_raw = os.getenv("BETA_MODEL_TIMEOUT_SECONDS", "90").strip()
-
-        if not base_url:
-            raise RuntimeError("BETA_MODEL_BASE_URL is required for live-model proof")
 
         try:
             timeout_seconds = float(timeout_raw)
