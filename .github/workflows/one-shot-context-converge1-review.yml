@@ -1,0 +1,53 @@
+name: One-shot Context Converge-1 Review
+
+on:
+  push:
+    branches:
+      - context/converge-1-langgraph-consumption
+
+permissions:
+  contents: write
+
+jobs:
+  review-fix:
+    if: ${{ !contains(github.event.head_commit.message, '[context-converge1-reviewed]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: context/converge-1-langgraph-consumption
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply forensic corrections
+        run: python scripts/fix_context_converge1_review.py
+      - name: Install focused dependencies
+        run: python -m pip install --disable-pip-version-check pytest pydantic
+      - name: Import and behavior proof
+        env:
+          PYTHONPATH: src
+        run: |
+          python -c "from ai_karen_engine.core.langgraph_orchestrator.context.file_upload_service import FileUploadService; from ai_karen_engine.core.langgraph_orchestrator.context.file_context_store import FileContextStore; print(FileUploadService, FileContextStore)"
+          pytest tests/architecture/test_context_authority_convergence.py tests/architecture/test_context_langgraph_consumption.py -q
+      - name: Compile touched boundaries
+        run: |
+          python -m py_compile \
+            src/ai_karen_engine/core/runtime/prompt/prompt_service.py \
+            src/ai_karen_engine/core/runtime/prompt/prompt_assembler.py \
+            src/ai_karen_engine/core/runtime/prompt/prompt_registry.py \
+            src/ai_karen_engine/core/runtime/provider_runtime.py \
+            src/ai_karen_engine/core/model_runtime/routing/llm_router_service.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/context/context_manager.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/context/file_context_store.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/context/file_upload_service.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/nodes/memory_fetch.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/nodes/response_synth.py
+      - name: Commit corrections and remove one-shot workflow
+        run: |
+          rm -f scripts/fix_context_converge1_review.py .github/workflows/one-shot-context-converge1-review.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(context): close converge-1 review findings [context-converge1-reviewed]'
+          git push origin HEAD:context/converge-1-langgraph-consumption
