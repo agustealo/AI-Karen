@@ -44,11 +44,6 @@ from ai_karen_engine.core.memory.profile_synthesis.profile_manager import (
 )
 from ai_karen_engine.services.tooling.tool_service import ToolInput, ToolOutput, ToolService
 from ai_karen_engine.core.runtime.chat_runtime_contract import ToolType
-from ai_karen_engine.core.memory.memory_service import (
-    MemoryType,
-    UISource,
-    WebUIMemoryService,
-)
 
 from ai_karen_engine.services.formatting.response_formatting_engine import (
     ResponseFormattingEngine,
@@ -125,6 +120,7 @@ class LangGraphOrchestrator:
         auth_service: Optional[Any] = None,
         safety_service: Optional[DistilBertService] = None,
         memory_service: Optional[Any] = None,
+        memory_recall: Optional[Any] = None,
         decision_engine: Optional[DecisionEngine] = None,
         tool_service: Optional[ToolService] = None,
         llm_router: Optional[Any] = None,
@@ -151,7 +147,10 @@ class LangGraphOrchestrator:
         self._auth_service_lock = asyncio.Lock()
         self._auth_service_failed = False
         self._safety_service: Optional[DistilBertService] = safety_service
-        self._memory_service: Optional[Any] = memory_service
+        self._legacy_memory_service: Optional[Any] = memory_service
+        self._memory_recall: Optional[Any] = memory_recall or getattr(
+            memory_service, "recall_context", None
+        )
         self._session_state_manager: Optional[SessionStateManager] = (
             session_state_manager
         )
@@ -165,7 +164,6 @@ class LangGraphOrchestrator:
         self._profile_manager: ProfileManager = profile_manager or ProfileManager()
 
         # Track fallback resolutions so we only warn once per dependency.
-        self._memory_resolution_failed = False
         self._tool_resolution_failed = False
         self._session_state_resolution_failed = False
 
@@ -304,41 +302,23 @@ class LangGraphOrchestrator:
 
         return self._auth_service
 
-    async def _resolve_memory_service(self) -> Optional[Any]:
-        """Return the injected memory service or lazily create the canonical implementation."""
+    async def _resolve_memory_recall(self) -> Any:
+        """Resolve the canonical Core memory recall callable.
 
-        if self._memory_service is not None or self._memory_resolution_failed:
-            return self._memory_service
+        ``memory_service`` remains a constructor compatibility input only. New
+        orchestration code consumes the Core recall contract directly.
+        """
 
-        try:
-            self._memory_service = WebUIMemoryService()
-            logger.info("Initialized canonical WebUIMemoryService for LangGraph runtime")
-        except Exception as exc:  # pragma: no cover - environment-dependent resources
-            if not self._memory_resolution_failed:
-                logger.warning("Memory service unavailable: %s", exc)
-            self._memory_resolution_failed = True
-            self._memory_service = None
+        if callable(self._memory_recall):
+            return self._memory_recall
 
-        return self._memory_service
+        from ai_karen_engine.core.memory.memory_runtime_manager import recall_context
+
+        self._memory_recall = recall_context
+        return self._memory_recall
 
     async def _ensure_session_state_manager(self) -> Optional[SessionStateManager]:
-        """Resolve session state manager lazily."""
-        if (
-            self._session_state_manager is not None
-            or self._session_state_resolution_failed
-        ):
-            return self._session_state_manager
-
-        try:
-            # Try to resolve via service registry or direct instantiation if available
-            self._session_state_manager = SessionStateManager(
-                memory_service=await self._resolve_memory_service()
-            )
-        except Exception as exc:
-            if not self._session_state_resolution_failed:
-                logger.warning("Session state manager unavailable: %s", exc)
-            self._session_state_resolution_failed = True
-            self._session_state_manager = None
+        """Return only a composition-edge injected session-state implementation."""
 
         return self._session_state_manager
 
@@ -376,10 +356,11 @@ class LangGraphOrchestrator:
             return safety_gate_node(state, profile_manager=self._profile_manager)
 
         async def _memory_fetch_node(state: LangGraphOrchestrationState) -> Any:
-            memory_service = await self._resolve_memory_service()
+            memory_recall = await self._resolve_memory_recall()
             return await memory_fetch_node(
                 state,
-                memory_service=memory_service,
+                memory_recall=memory_recall,
+                memory_recall_top_k=self.config.memory_recall_top_k,
                 session_state_manager=self._session_state_manager,
             )
 

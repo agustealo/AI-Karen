@@ -76,7 +76,7 @@ def test_langgraph_memory_boundary_preserves_tenant_identity() -> None:
     ).read_text(encoding="utf-8")
 
     assert 'tenant_id = state.get("tenant_id")' in node_source
-    assert "tenant_id=tenant_id" in node_source
+    assert "tenant_id=str(tenant_id)" in node_source
     assert "tenant_id=user_id" not in node_source
     assert "tenant_id or conversation_id" not in node_source
     assert "Memory disabled for this turn: missing tenant_id" in node_source
