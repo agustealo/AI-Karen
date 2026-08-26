@@ -20,6 +20,17 @@ def _function_source(path: Path, function_name: str) -> str:
     raise AssertionError(f"Function {function_name} not found in {path}")
 
 
+def test_first_run_status_fails_closed_when_state_is_unknown() -> None:
+    route_source = _function_source(AUTH_ROUTE, "check_first_run")
+    service_source = _function_source(AUTH_SERVICE, "is_first_run")
+
+    assert "HTTP_503_SERVICE_UNAVAILABLE" in route_source
+    assert "First-run state unavailable" in route_source
+    assert "is_first_run = True" not in route_source
+    assert "raise RuntimeError(\"First-run state unavailable\")" in service_source
+    assert "return True" not in service_source.split("except Exception", 1)[-1]
+
+
 def test_first_run_route_delegates_to_canonical_first_admin_authority() -> None:
     route_source = _function_source(AUTH_ROUTE, "first_run_setup")
 
