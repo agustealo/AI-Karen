@@ -1,69 +1,71 @@
+"""Reasoning synthesis public surface.
+
+This package keeps compatibility exports for ICE and synthesis specialists, but
+optional small-language-model runtime helpers are loaded only when explicitly
+requested. Importing metacognition or refinement must not require system/runtime
+dependencies such as psutil.
 """
-Synthesis and ICE Module
 
-Provides Integrated Cognitive Engine (ICE) wrapper, synthesis capabilities,
-and human-like cognitive processing.
+from __future__ import annotations
 
-Components:
-- PremiumICEWrapper / KariICEWrapper: ICE integration with policies
-- ICEWritebackPolicy: Writeback policies and configuration
-- ReasoningTrace: Trace of reasoning process
-- SynthesisSubEngine: Protocol for synthesis sub-engines
-
-Human-Like Cognition (NEW):
-- SelfRefiner: Iterative refinement with self-feedback (arXiv:2303.17651)
-- MetacognitiveMonitor: Self-monitoring and self-reflection
-- CognitiveOrchestrator: Human-like reasoning orchestration
-"""
+from typing import Any
 
 from ai_karen_engine.core.reasoning.synthesis.ice_wrapper import (
-    PremiumICEWrapper,
+    ICECircuitBreaker,
+    ICEPerformanceBaseline,
     ICEWritebackPolicy,
+    PremiumICEWrapper,
     ReasoningTrace,
     RecallStrategy,
     SynthesisMode,
-    ICEPerformanceBaseline,
-    ICECircuitBreaker,
-)
-from ai_karen_engine.core.reasoning.synthesis.subengines import (
-    SynthesisSubEngine,
-    LangGraphSubEngine,
-    DSPySubEngine,
-)
-
-# Human-Like Cognition modules
-from ai_karen_engine.core.reasoning.synthesis.self_refine import (
-    SelfRefiner,
-    RefinementConfig,
-    RefinementResult,
-    FeedbackPoint,
-    RefinementStage,
-    create_self_refiner,
 )
 from ai_karen_engine.core.reasoning.synthesis.metacognition import (
+    CognitiveState,
+    MetacognitiveConfig,
     MetacognitiveMonitor,
     MetacognitiveState,
-    MetacognitiveConfig,
-    CognitiveState,
-    ReasoningStrategy,
     PerformanceMetrics,
+    ReasoningStrategy,
 )
-from ai_karen_engine.core.reasoning.synthesis.small_language_model_service import (
-    SmallLanguageModelService,
-    SmallLanguageModelConfig,
-    ModelInfo,
-    SystemResources,
-    ScaffoldResult,
-    OutlineResult,
-    SummaryResult,
-    SmallLMHealthStatus,
+from ai_karen_engine.core.reasoning.synthesis.self_refine import (
+    FeedbackPoint,
+    RefinementConfig,
+    RefinementResult,
+    RefinementStage,
+    SelfRefiner,
+    create_self_refiner,
+)
+from ai_karen_engine.core.reasoning.synthesis.subengines import (
+    DSPySubEngine,
+    LangGraphSubEngine,
+    SynthesisSubEngine,
 )
 
-# Alias for backward compatibility
 KariICEWrapper = PremiumICEWrapper
 
+_OPTIONAL_SMALL_LM_EXPORTS = {
+    "SmallLanguageModelService",
+    "SmallLanguageModelConfig",
+    "ModelInfo",
+    "SystemResources",
+    "ScaffoldResult",
+    "OutlineResult",
+    "SummaryResult",
+    "SmallLMHealthStatus",
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _OPTIONAL_SMALL_LM_EXPORTS:
+        raise AttributeError(name)
+    from ai_karen_engine.core.reasoning.synthesis import small_language_model_service
+
+    value = getattr(small_language_model_service, name)
+    globals()[name] = value
+    return value
+
+
 __all__ = [
-    # Core ICE
     "PremiumICEWrapper",
     "KariICEWrapper",
     "ICEWritebackPolicy",
@@ -75,8 +77,6 @@ __all__ = [
     "SynthesisSubEngine",
     "LangGraphSubEngine",
     "DSPySubEngine",
-
-    # Human-Like Cognition
     "SelfRefiner",
     "RefinementConfig",
     "RefinementResult",
