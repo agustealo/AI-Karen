@@ -1,8 +1,8 @@
 """Soft Reasoning strategy for controlled embedding exploration.
 
-This strategy is capability-gated and must receive a fully constructed
-``SoftExplorationEngine`` from Runtime. It never discovers providers, models,
-memory stores, tools, plugins, or prompts on its own.
+Runtime injects a fully composed ``SoftExplorationEngine`` and a versioned
+prepared prompt. The strategy never selects providers, models, prompts, tools,
+plugins, or memory stores.
 """
 
 from __future__ import annotations
@@ -30,16 +30,8 @@ from ai_karen_engine.core.runtime.contracts import ExecutionContext
 
 
 class SoftReasoner(ReasoningStrategyEngine):
-    """Verifier-guided first-token embedding exploration.
-
-    The strategy reports the concrete research profile, acquisition function,
-    and optimizer surrogate used for every run. ``research_aligned`` must not be
-    interpreted as ``paper_faithful`` unless Runtime injects a profile that
-    actually provides the paper's GP/EI/coherence mechanics.
-    """
-
     strategy_id = "soft_exploration"
-    version = "v2"
+    version = "v3"
     capabilities = ["soft_exploration"]
     required_inputs = [
         "objective",
@@ -126,13 +118,23 @@ class SoftReasoner(ReasoningStrategyEngine):
             )
 
         best = trace.best_candidate
+        total_model_calls = int(trace.model_calls) + int(trace.verifier_calls)
+        if total_model_calls > budget.max_model_calls:
+            return self._failed(
+                "Soft reasoning exceeded the authorized total model-call budget",
+                ReasoningErrorCode.BUDGET_EXCEEDED,
+                evidence=evidence,
+                status=ReasoningStatus.ABSTAINED,
+            )
+
+        paper_faithful = self._is_paper_faithful(trace)
         hypothesis = ReasoningHypothesis(
             hypothesis_id=best.candidate_id,
             statement=best.output.text,
             confidence=best.verification.score,
             supporting_evidence_refs=[item.evidence_id for item in evidence],
             uncertainty=max(0.0, 1.0 - best.verification.confidence),
-            provenance=f"soft_reasoning:{trace.runtime_engine}:{trace.model_id}:v2",
+            provenance=f"soft_reasoning:{trace.runtime_engine}:{trace.model_id}:v3",
         )
 
         assessment = ReasoningAssessment(
@@ -152,8 +154,10 @@ class SoftReasoner(ReasoningStrategyEngine):
                 "best_score": trace.best_score,
                 "improvement": trace.improvement,
                 "candidate_count": len(trace.candidates),
-                "model_calls": trace.model_calls,
+                "generation_calls": trace.model_calls,
                 "verifier_calls": trace.verifier_calls,
+                "model_calls": total_model_calls,
+                "batches": trace.batches,
             },
         )
 
@@ -176,11 +180,7 @@ class SoftReasoner(ReasoningStrategyEngine):
                 "research_method": "first_token_embedding_bayesian_search",
                 "research_profile": trace.research_profile,
                 "research_fidelity": (
-                    "paper_faithful"
-                    if trace.research_profile == "paper_2025"
-                    and trace.optimizer_surrogate_kind == "gaussian_process"
-                    and trace.acquisition_function == "ei"
-                    else "research_aligned"
+                    "paper_faithful" if paper_faithful else "research_aligned"
                 ),
                 "optimizer_surrogate_kind": trace.optimizer_surrogate_kind,
                 "acquisition_function": trace.acquisition_function,
@@ -189,8 +189,13 @@ class SoftReasoner(ReasoningStrategyEngine):
                 "model_id": trace.model_id,
                 "projection_dimension": trace.projection_dimension,
                 "candidate_count": len(trace.candidates),
-                "model_calls": trace.model_calls,
+                "generation_calls": trace.model_calls,
                 "verifier_calls": trace.verifier_calls,
+                # ReasoningExecutor consumes this field as the authorized model
+                # call accounting contract. Verifier generations are not free.
+                "model_calls": total_model_calls,
+                "batches": trace.batches,
+                "convergence_reason": trace.convergence_reason,
                 "baseline_score": trace.baseline_score,
                 "best_score": trace.best_score,
                 "improvement": trace.improvement,
@@ -199,9 +204,24 @@ class SoftReasoner(ReasoningStrategyEngine):
                 "sequence_log_probability": best.output.sequence_log_probability,
                 "mean_token_log_probability": best.output.mean_token_log_probability,
                 "first_token_probability": best.output.first_token_probability,
+                "token_log_probability_count": len(best.output.token_log_probabilities),
                 "verifier_feedback": best.verification.feedback,
             },
             memory_candidates=[],
+        )
+
+    @staticmethod
+    def _is_paper_faithful(trace: Any) -> bool:
+        best = trace.best_candidate
+        return bool(
+            trace.research_profile == "paper_2025"
+            and trace.optimizer_surrogate_kind == "gaussian_process"
+            and trace.acquisition_function == "ei"
+            and trace.projection_dimension == 50
+            and trace.batches > 0
+            and trace.verifier_calls == trace.batches
+            and best.output.sequence_log_probability is not None
+            and len(best.output.token_log_probabilities) > 0
         )
 
     @staticmethod
