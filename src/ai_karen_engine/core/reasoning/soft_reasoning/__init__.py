@@ -3,7 +3,8 @@
 Canonical production path:
 - ``SoftExplorationEngine`` performs controlled first-token embedding search.
 - ``SoftGenerationPort`` is supplied by a compatible local model runtime.
-- ``SoftVerifierPort`` supplies the verifier-guided objective.
+- ``VerifierGuidedObjective`` converts structured verifier judgments into the
+  scalar reward consumed by Bayesian exploration.
 - Bayesian optimisation refines a low-dimensional latent perturbation projected
   into the model hidden space.
 
@@ -30,6 +31,12 @@ from ai_karen_engine.core.reasoning.soft_reasoning.exploration import (
     SoftExplorationEngine,
     SoftReasoningBudgetError,
     SoftReasoningUnavailable,
+)
+from ai_karen_engine.core.reasoning.soft_reasoning.objective import (
+    CandidateJudgePort,
+    CandidateJudgment,
+    VerifierGuidedObjective,
+    VerifierObjectiveConfig,
 )
 from ai_karen_engine.core.reasoning.soft_reasoning.optimization import (
     AcquisitionFunction,
@@ -71,6 +78,8 @@ def __getattr__(name: str) -> Any:
 __all__ = [
     "AcquisitionFunction",
     "BayesianOptimizer",
+    "CandidateJudgePort",
+    "CandidateJudgment",
     "EmbeddingPerturber",
     "OptimizationConfig",
     "OptimizationResult",
@@ -87,6 +96,8 @@ __all__ = [
     "SoftReasoningUnavailable",
     "SoftVerificationScore",
     "SoftVerifierPort",
+    "VerifierGuidedObjective",
+    "VerifierObjectiveConfig",
     "optimize_embedding_batch",
     # Compatibility-only lazy exports. Remove after ICE/retrieval migration.
     "RecallConfig",
