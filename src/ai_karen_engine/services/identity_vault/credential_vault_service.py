@@ -3,12 +3,13 @@
 The service owns vault data operations and audit emission. API DTOs live in
 ``database.models.identity_vault``; ORM mappings live in
 ``database.identity_vault_schema``; schema evolution is migration-owned.
+Provider token exchange/refresh remains provider-adapter owned and is never
+simulated by this service.
 """
 
 from __future__ import annotations
 
 import hashlib
-import secrets
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -19,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ai_karen_engine.core.logging import get_logger
-from ai_karen_engine.core.security.encryption_utils import decrypt_data, encrypt_data
+from ai_karen_engine.core.security.encryption_utils import encrypt_data
 from ai_karen_engine.core.services.base import BaseService, ServiceConfig, ServiceStatus
 from ai_karen_engine.database.client import MultiTenantPostgresClient
 from ai_karen_engine.database.identity_vault_schema import (
@@ -177,6 +178,12 @@ class CredentialVaultService(BaseService):
     @staticmethod
     def _enum_value(value: Any) -> Any:
         return getattr(value, "value", value)
+
+    @staticmethod
+    def _token_digest(value: str) -> str:
+        if not value:
+            raise ValueError("token value is required")
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
     async def _check_rate_limit(self, tenant_id: uuid.UUID, user_id: str, operation: str) -> None:
         now = datetime.utcnow()
@@ -889,9 +896,21 @@ class CredentialVaultService(BaseService):
                 credential_id=credential.id,
                 provider_id=provider.id,
                 grant_type=grant_data.grant_type,
-                authorization_code=grant_data.authorization_code,
-                access_token=grant_data.access_token,
-                refresh_token=grant_data.refresh_token,
+                authorization_code=(
+                    encrypt_data(grant_data.authorization_code).decode("ascii")
+                    if grant_data.authorization_code
+                    else None
+                ),
+                access_token=(
+                    encrypt_data(grant_data.access_token).decode("ascii")
+                    if grant_data.access_token
+                    else None
+                ),
+                refresh_token=(
+                    encrypt_data(grant_data.refresh_token).decode("ascii")
+                    if grant_data.refresh_token
+                    else None
+                ),
                 scopes=grant_data.scopes,
                 expires_at=grant_data.expires_at,
                 redirect_uri=grant_data.redirect_uri,
@@ -956,44 +975,11 @@ class CredentialVaultService(BaseService):
         refresh_token: str,
         new_scopes: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
-        async with self._session_scope() as session:
-            result = await session.execute(
-                self._tenant_query(AuthGrant, tenant_id).where(
-                    AuthGrant.credential_id == credential_id,
-                    AuthGrant.is_completed.is_(True),
-                )
-            )
-            grants = list(result.scalars().all())
-            grant: Optional[AuthGrant] = None
-            for candidate in grants:
-                if candidate.refresh_token and decrypt_data(candidate.refresh_token.encode("ascii")) == refresh_token:
-                    grant = candidate
-                    break
-            if grant is None or (grant.expires_at and grant.expires_at < datetime.utcnow()):
-                return None
-            new_access = secrets.token_urlsafe(48)
-            new_refresh = secrets.token_urlsafe(48)
-            grant.access_token = encrypt_data(new_access).decode("ascii")
-            grant.refresh_token = encrypt_data(new_refresh).decode("ascii")
-            grant.scopes = new_scopes or grant.scopes
-            grant.updated_at = datetime.utcnow()
-            await self._audit(
-                session,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                event_type=AuditEventType.REFRESHED,
-                action="oauth_token_refresh",
-                resource_type="grant",
-                resource_id=str(grant.id),
-                credential_id=grant.credential_id,
-                provider_id=grant.provider_id,
-            )
-            await session.commit()
-            return {
-                "access_token": new_access,
-                "refresh_token": new_refresh,
-                "scopes": grant.scopes,
-            }
+        """Reject synthetic refresh; provider adapters own token exchange."""
+        raise RuntimeError(
+            "OAuth token refresh requires a governed provider adapter; "
+            "Identity Vault will not synthesize provider tokens"
+        )
 
     async def create_account_session(
         self, session_data: AccountSessionCreate, tenant_id: uuid.UUID, user_id: str
@@ -1011,7 +997,7 @@ class CredentialVaultService(BaseService):
                 tenant_id=tenant_id,
                 credential_id=credential.id,
                 external_account_id=account.id,
-                session_token=session_data.session_token,
+                session_token=self._token_digest(session_data.session_token),
                 access_token=encrypt_data(session_data.access_token).decode("ascii") if session_data.access_token else None,
                 refresh_token=encrypt_data(session_data.refresh_token).decode("ascii") if session_data.refresh_token else None,
                 token_type=self._enum_value(session_data.token_type),
@@ -1128,7 +1114,11 @@ class CredentialVaultService(BaseService):
             )
             session.add(attempt)
             await session.flush()
-            event = AuditEventType.AUTHENTICATED if self._enum_value(attempt_data.status) == LoginStatus.SUCCESS.value else AuditEventType.UPDATED
+            event = (
+                AuditEventType.AUTHENTICATED
+                if self._enum_value(attempt_data.status) == LoginStatus.SUCCESS.value
+                else AuditEventType.UPDATED
+            )
             await self._audit(
                 session,
                 tenant_id=tenant_id,
@@ -1156,7 +1146,7 @@ class CredentialVaultService(BaseService):
             lease = TokenLease(
                 tenant_id=tenant_id,
                 credential_id=credential.id,
-                lease_token=lease_data.lease_token,
+                lease_token=self._token_digest(lease_data.lease_token),
                 access_token=encrypt_data(lease_data.access_token).decode("ascii") if lease_data.access_token else None,
                 expires_at=lease_data.expires_at,
                 scopes=lease_data.scopes,
@@ -1178,12 +1168,13 @@ class CredentialVaultService(BaseService):
             return lease
 
     async def get_token_lease(self, lease_token: str, tenant_id: uuid.UUID) -> Optional[TokenLease]:
+        digest = self._token_digest(lease_token)
         async with self._session_scope() as session:
             return await self._tenant_entity(
                 session,
                 TokenLease,
                 tenant_id,
-                TokenLease.lease_token == lease_token,
+                TokenLease.lease_token == digest,
                 TokenLease.is_active.is_(True),
             )
 
@@ -1194,9 +1185,10 @@ class CredentialVaultService(BaseService):
         user_id: str,
         reason: Optional[str] = None,
     ) -> bool:
+        digest = self._token_digest(lease_token)
         async with self._session_scope() as session:
             lease = await self._tenant_entity(
-                session, TokenLease, tenant_id, TokenLease.lease_token == lease_token
+                session, TokenLease, tenant_id, TokenLease.lease_token == digest
             )
             if lease is None:
                 return False
@@ -1243,9 +1235,16 @@ class CredentialVaultService(BaseService):
                         AccountCapability.DRIVE_WRITE,
                     ]
                 elif "github" in provider_key:
-                    capabilities = [AccountCapability.GITHUB_READ, AccountCapability.GITHUB_WRITE, AccountCapability.GITHUB_REPO]
+                    capabilities = [
+                        AccountCapability.GITHUB_READ,
+                        AccountCapability.GITHUB_WRITE,
+                        AccountCapability.GITHUB_REPO,
+                    ]
                 elif "openai" in provider_key:
-                    capabilities = [AccountCapability.OPENAI_CHAT, AccountCapability.OPENAI_EMBEDDINGS]
+                    capabilities = [
+                        AccountCapability.OPENAI_CHAT,
+                        AccountCapability.OPENAI_EMBEDDINGS,
+                    ]
             account.capabilities = [cap.value for cap in capabilities]
             account.last_verified_at = datetime.utcnow()
             account.updated_at = datetime.utcnow()
