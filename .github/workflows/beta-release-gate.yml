@@ -84,9 +84,13 @@ jobs:
           grep -q 'AUTH_ALLOW_DEV_LOGIN: "false"' /tmp/ai-karen-production-compose.yml
           grep -q 'EXTENSION_DEV_BYPASS_ENABLED: "false"' /tmp/ai-karen-production-compose.yml
           grep -q 'KARI_DEFER_ROUTER_WIRING: "false"' /tmp/ai-karen-production-compose.yml
+          grep -q 'AUTH_ENABLE_SESSION_VALIDATION: "true"' /tmp/ai-karen-production-compose.yml
+          grep -q 'KAREN_BUILTIN_VLLM_ENABLED: "false"' /tmp/ai-karen-production-compose.yml
           grep -q 'http://localhost:8000/health/live' /tmp/ai-karen-production-compose.yml
           grep -q 'NODE_ENV: production' /tmp/ai-karen-production-compose.yml
           ! grep -q 'npm run dev' /tmp/ai-karen-production-compose.yml
+          ! grep -q 'source: .*/AI-Karen' /tmp/ai-karen-production-compose.yml
+          ! grep -q 'target: /app$' /tmp/ai-karen-production-compose.yml
 
       - name: Reject retired authorities
         shell: bash
@@ -110,7 +114,7 @@ jobs:
 
   frontend-production-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: src/ui_launchers/Karen-AI-Theme
@@ -142,6 +146,14 @@ jobs:
 
       - name: Run frontend unit tests
         run: npx vitest run --passWithNoTests
+
+      - name: Install Chromium for first-run proof
+        run: npx playwright install --with-deps chromium
+
+      - name: Prove first-run browser journey
+        env:
+          CI: "true"
+        run: npx playwright test e2e/test_first_run_setup.spec.ts --project=chromium
 
       - name: Build production frontend
         env:
