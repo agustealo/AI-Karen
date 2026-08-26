@@ -121,12 +121,6 @@ Shadow-mode adaptive recommendation subsystem under consolidation review.
 
 It recommends only. It does not authorize or execute. New execution authority must not be added here. Useful learning/ranking behavior should converge on the canonical Intelligence/CORTEX/RuntimePolicy boundaries rather than creating a parallel decision runtime.
 
-### `core/automation/`
-Automation domain contracts only. This folder is not an automation execution runtime.
-
-### `core/context/`
-Context contracts only. Live request context assembly belongs to the owning runtime boundary.
-
 ### `core/observability/`
 LEGACY / TRANSITIONAL COMPATIBILITY SURFACE.
 
@@ -143,6 +137,10 @@ Do not add new metrics, sinks, exporters, diagnostics buffers, event implementat
 `core/operations/` is not a live directory and must not be treated as an authority. Operational infrastructure belongs to explicit platform/runtime owners.
 
 `core/cron/` was removed after a repository-wide reference audit found no imports, registry consumers, scheduler wiring, tests, or concrete job-name references. If scheduling is implemented later, it belongs to an explicit platform/database scheduling owner rather than Core.
+
+`core/context/` was removed after a repository-wide reference audit found no imports or consumers of its exported context-plan types. The package also contained its own scoring and selection behavior, which would compete with canonical runtime context assembly if activated. Request context assembly belongs to `core/runtime/`; reusable cross-cutting context contracts belong only in the canonical contract owner when a live consumer requires them.
+
+`core/automation/` was removed after a repository-wide reference audit found no imports or consumers of its automation and flow types. Its single contracts module mixed automation records with legacy flow orchestration, tool selection, memory, persona, Gmail, and weather schemas. Future automation belongs to an explicit automation/application or platform owner and must delegate agent/runtime execution through canonical runtime policy rather than recreating orchestration under Core.
 
 ## Import guidance
 
@@ -167,11 +165,12 @@ from ai_karen_engine.core.observability import MetricsCollector
 
 ## Architecture rules
 
-- Live chat execution belongs to `core/runtime/`.
+- Live chat execution and request-context assembly belong to `core/runtime/`.
 - Capability identity belongs to `core/ai_runtime/`.
 - AI/ML intelligence belongs to `core/intelligence/`.
 - CORTEX decides; runtime executes.
 - LangGraph is only for true graph workflows.
 - Platform infrastructure, including observability implementations and future scheduling infrastructure, belongs under `platform/` or another explicit infrastructure owner.
+- Automation must not recreate provider routing, prompt assembly, memory ownership, plugin execution, or agent orchestration under Core.
 - Search before adding a new Core folder, registry, runtime, service, or helper.
 - One responsibility -> one owner -> one registry/config/runtime path.
