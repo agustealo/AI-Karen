@@ -1,20 +1,19 @@
-"""CORTEX decision layer.
+"""Legacy CORTEX decision-package compatibility surface.
 
-CORTEX owns pre-runtime intelligence only:
-- intent normalization
-- predictor scoring
-- KIRE reasoning preparation
-- routing decisioning
-- RBAC pre-checks
+Canonical chat execution currently enters CORTEX through
+``core.runtime.cortex_execution_decider.CortexExecutionDecider``. This module
+retains the older serialized decision API for callers that have not migrated.
+It must not evolve into a second execution authority.
 
-It does not execute tools, memory writes, LangGraph nodes, or plugins.
+CORTEX owns cognitive recommendations only. RuntimePolicy owns authorization and
+Runtime owns execution. This module never executes tools, memory writes,
+LangGraph nodes, providers, or plugins.
 """
 
 from __future__ import annotations
 
-import logging
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.cortex.contracts import (
     CorrelationIdFactory,
@@ -24,23 +23,22 @@ from ai_karen_engine.core.cortex.contracts import (
     KireSignal,
     OrchestrationInput,
     PredictorSignal,
-    ReasoningDepth,
     ReasoningRequest,
     RouteFamily,
     RoutingDecision,
     RuntimeRequest,
     UserContext,
 )
-from ai_karen_engine.core.cortex.kire_signal_producer import KireSignalProducer
 from ai_karen_engine.core.cortex.errors import CortexDispatchError
 from ai_karen_engine.core.cortex.intent import resolve_intent as resolve_base_intent
+from ai_karen_engine.core.cortex.kire_signal_producer import KireSignalProducer
 from ai_karen_engine.core.cortex.routing_intents import (
     extract_routing_parameters,
     resolve_capability_decision,
     resolve_routing_intent as resolve_intent,
 )
-
 from ai_karen_engine.core.logging import get_logger
+
 logger = get_logger(__name__)
 
 try:
@@ -53,7 +51,9 @@ try:
     RBAC_AVAILABLE = True
 except ImportError:
     RBAC_AVAILABLE = False
-    logger.warning("[CORTEX] RBAC validator not available; routing permission checks disabled")
+    logger.warning(
+        "[CORTEX] compatibility RBAC validator unavailable; protected legacy routes will fail closed"
+    )
 
 
 def _build_runtime_request(
@@ -154,23 +154,44 @@ def _build_routing_decision(
     kire: KireSignal,
     route_family: RouteFamily,
 ) -> RoutingDecision:
-    execution_mode = (
-        ExecutionMode.DEGRADED
-        if predictors.degraded_risk >= 0.7
-        else ExecutionMode.LANGGRAPH
-    )
-    target_graph = "default_reasoning_graph" if route_family == RouteFamily.REASONING else "default_chat_graph"
+    """Build an advisory routing recommendation.
+
+    Direct execution is the default. LangGraph is selected only when KIRE
+    explicitly identifies graph reasoning or when a strong multi-step signal
+    indicates genuine workflow semantics. Durable memory writes remain denied
+    until RuntimePolicy grants ``memory.write``.
+    """
+    del intent
+    if predictors.degraded_risk >= 0.7:
+        execution_mode = ExecutionMode.DEGRADED
+    else:
+        graph_semantics = (
+            kire.should_use_graph_reasoning
+            or predictors.multi_step_likelihood >= 0.8
+        )
+        execution_mode = (
+            ExecutionMode.LANGGRAPH if graph_semantics else ExecutionMode.DIRECT
+        )
+
+    target_graph: str | None = None
+    if execution_mode == ExecutionMode.LANGGRAPH:
+        target_graph = (
+            "default_reasoning_graph"
+            if route_family == RouteFamily.REASONING
+            else "default_workflow_graph"
+        )
+
     return RoutingDecision(
         route_family=route_family,
         execution_mode=execution_mode,
         target_graph=target_graph,
-        target_service="kro_orchestrator" if route_family == RouteFamily.REASONING else None,
+        target_service="reasoning_executor" if route_family == RouteFamily.REASONING else None,
         target_plugin=None,
         target_agent=None,
         allow_reasoning=kire.requires_reasoning,
         allow_tools=kire.should_use_tools,
-        allow_memory_read=True,
-        allow_memory_write=True,
+        allow_memory_read=kire.should_use_memory,
+        allow_memory_write=False,
         require_approval_gate=kire.should_use_tools or route_family == RouteFamily.ADMIN,
     )
 
@@ -219,7 +240,7 @@ def build_reasoning_request(
     memory_context: Optional[Dict[str, Any]] = None,
     tool_context: Optional[Dict[str, Any]] = None,
 ) -> ReasoningRequest:
-    """Construct the KRO entry contract."""
+    """Construct the legacy CORTEX reasoning adapter contract."""
     return ReasoningRequest(
         message=request.message,
         user=request.user,
@@ -232,6 +253,14 @@ def build_reasoning_request(
     )
 
 
+def _legacy_route_requires_rbac(routing: RoutingDecision) -> bool:
+    return bool(
+        routing.allow_tools
+        or routing.target_plugin
+        or routing.route_family in (RouteFamily.ADMIN, RouteFamily.TOOL, RouteFamily.AGENT)
+    )
+
+
 async def evaluate_cortex(
     user_ctx: Dict[str, Any],
     query: str,
@@ -239,7 +268,8 @@ async def evaluate_cortex(
     context: Optional[Dict[str, Any]] = None,
     trace: Optional[List[Dict[str, Any]]] = None,
 ) -> CortexOutput:
-    """Build a Cortex output contract without executing runtime actions."""
+    """Build a compatibility Cortex recommendation without executing runtime actions."""
+    del mode
     if trace is None:
         trace = []
     runtime_request = _build_runtime_request(user_ctx, query, context)
@@ -271,7 +301,12 @@ async def evaluate_cortex(
         }
     )
 
-    if RBAC_AVAILABLE:
+    if _legacy_route_requires_rbac(routing):
+        if not RBAC_AVAILABLE:
+            trace.append({"stage": "rbac_unavailable_fail_closed"})
+            raise CortexDispatchError(
+                "Compatibility CORTEX route requires RBAC validation but the validator is unavailable"
+            )
         try:
             await validate_plugin_permission(
                 user_ctx,
@@ -326,7 +361,8 @@ async def dispatch(
     predictor_enabled: bool = True,
     trace: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Backward-compatible wrapper that returns a serialized Cortex decision package."""
+    """Backward-compatible serialized CORTEX recommendation wrapper."""
+    del memory_enabled, plugin_enabled, predictor_enabled
     if trace is None:
         trace = []
     try:
@@ -341,12 +377,17 @@ async def dispatch(
         return {
             "intent": cortex.intent.primary_intent,
             "confidence": cortex.intent.confidence,
-            "capability_decision": _normalize(resolve_capability_decision(query, confidence=cortex.intent.confidence).to_dict()),
+            "capability_decision": _normalize(
+                resolve_capability_decision(
+                    query, confidence=cortex.intent.confidence
+                ).to_dict()
+            ),
             "route_family": cortex.routing.route_family.value,
             "execution_mode": cortex.routing.execution_mode.value,
             "requires_reasoning": cortex.kire.requires_reasoning,
             "cortex": _normalize(asdict(cortex)),
             "trace": trace,
+            "compatibility_surface": True,
         }
 
     except Exception as ex:
