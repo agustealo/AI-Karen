@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Apply converge-2 patch
-        run: python scripts/apply_context_converge2.py
+        run: python scripts/run_context_converge2_fixed.py
       - name: Install focused test dependencies
         run: python -m pip install --disable-pip-version-check pytest pydantic
       - name: Compile touched boundaries
@@ -49,7 +49,7 @@ jobs:
           test "$(grep -c '^class MemoryContextBuilder:' src/ai_karen_engine/core/memory/memory_service.py)" -eq 1
       - name: Remove one-shot scaffolding and commit
         run: |
-          rm -f scripts/audit_context_converge2.py scripts/apply_context_converge2.py
+          rm -f scripts/audit_context_converge2.py scripts/apply_context_converge2.py scripts/run_context_converge2_fixed.py
           rm -f .github/workflows/one-shot-context-converge2-audit.yml .github/workflows/one-shot-context-converge2-patch.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
