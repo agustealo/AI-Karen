@@ -49,6 +49,20 @@ def test_adaptive_evaluation_is_canonical_ml_compatibility_only() -> None:
     assert '"use_tool"' not in source
 
 
+def test_adaptive_drift_is_quarantined_as_legacy_compatibility() -> None:
+    package_source = (CORE_ROOT / "adaptive" / "drift" / "__init__.py").read_text(
+        encoding="utf-8"
+    )
+    detector_source = (CORE_ROOT / "adaptive" / "drift" / "detector.py").read_text(
+        encoding="utf-8"
+    )
+    assert "not a production drift authority" in package_source
+    assert "core.intelligence.ml" in package_source
+    assert "compatibility_only" in detector_source
+    assert "self._threshold" not in detector_source
+    assert "def _compress" not in detector_source
+
+
 def test_adaptive_package_is_documented_as_transitional() -> None:
     source = (CORE_ROOT / "adaptive" / "__init__.py").read_text(encoding="utf-8")
     assert "Transitional compatibility package" in source
