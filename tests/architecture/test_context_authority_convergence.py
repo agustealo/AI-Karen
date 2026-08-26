@@ -82,5 +82,9 @@ def test_langgraph_memory_boundary_preserves_tenant_identity() -> None:
     assert "Memory disabled for this turn: missing tenant_id" in node_source
 
 
-def test_deleted_core_context_does_not_return_as_second_authority() -> None:
-    assert not (CORE / "context").exists()
+def test_core_context_is_alias_only_not_second_authority() -> None:
+    contracts = (CORE / "context" / "contracts.py").read_text(encoding="utf-8")
+    assert "ContextScope = CognitiveScope" in contracts
+    assert "from ai_karen_engine.core.cognitive.state import ContextSnapshot" in contracts
+    assert "class ContextScope" not in contracts
+    assert "class ContextSnapshot" not in contracts
