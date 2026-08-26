@@ -38,7 +38,7 @@ DATABASE_URL='postgresql://...' \
 
 The command writes a PostgreSQL custom-format dump, SHA-256 checksum, and non-secret metadata beneath `KAREN_BACKUP_ROOT` or `./backups/postgres`.
 
-This command covers the primary PostgreSQL store only. Redis, Milvus, Elasticsearch, object storage, model artifacts, and external services are separate recovery domains and must not be represented as protected by this backup.
+This command covers the primary PostgreSQL store only. Redis, object storage, model artifacts, and external services are separate recovery domains and must not be represented as protected by this backup. Milvus and Elasticsearch are not part of the current AI Karen memory architecture and must not be reintroduced as implied recovery dependencies.
 
 ## Restore Contract
 
