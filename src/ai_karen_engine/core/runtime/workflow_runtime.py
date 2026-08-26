@@ -129,6 +129,10 @@ class WorkflowRuntime:
             execution_requirements = {
                 "request_id": request_id,
                 "correlation_id": ctx.correlation_id,
+                "intent": decision.intent,
+                "intent_confidence": decision.intent_confidence,
+                "tool_requirements": list(decision.tool_requirements),
+                "plugin_candidates": list(decision.plugin_candidates),
                 "required_capabilities": list(decision.required_capabilities),
                 "forbidden_capabilities": list(decision.forbidden_capabilities),
                 "reasoning_depth": decision.reasoning_depth,
@@ -147,6 +151,10 @@ class WorkflowRuntime:
             }
             request_config.update(
                 {
+                    "intent": decision.intent,
+                    "intent_confidence": decision.intent_confidence,
+                    "tool_requirements": list(decision.tool_requirements),
+                    "plugin_candidates": list(decision.plugin_candidates),
                     "workflow_id": decision.workflow_id,
                     "workflow_version": decision.workflow_version,
                     "required_capabilities": list(decision.required_capabilities),
@@ -183,6 +191,16 @@ class WorkflowRuntime:
         )
         if execution_requirements is not None:
             request_config["execution_requirements"] = execution_requirements
+            request_config["intent"] = execution_requirements["intent"]
+            request_config["intent_confidence"] = execution_requirements[
+                "intent_confidence"
+            ]
+            request_config["tool_requirements"] = list(
+                execution_requirements["tool_requirements"]
+            )
+            request_config["plugin_candidates"] = list(
+                execution_requirements["plugin_candidates"]
+            )
         if serialized_plan is not None:
             request_config["runtime_policy"] = serialized_plan
             request_config["policy_decision_id"] = serialized_plan["policy_decision_id"]
