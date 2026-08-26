@@ -8,7 +8,8 @@ The algorithm follows the architectural shape of Zhu et al. (ICML 2025):
 5. use Bayesian optimisation to refine the latent perturbation.
 
 The engine is intentionally unaware of providers, memory stores, plugins,
-tools, HTTP, and UI. Runtime must inject the model capability and verifier.
+tools, HTTP, UI, and prompt assembly. Runtime must inject the model capability,
+verifier, and a versioned prepared prompt.
 """
 
 from __future__ import annotations
@@ -81,13 +82,16 @@ class SoftExplorationEngine:
 
     def explore(
         self,
-        objective: str,
+        prompt: str,
         *,
+        objective: str,
         evidence: Sequence[str] = (),
         max_model_calls: int,
         max_output_tokens: int,
         correlation_id: str = "",
     ) -> SoftExplorationTrace:
+        if not prompt.strip():
+            raise ValueError("prepared prompt must not be empty")
         if not objective.strip():
             raise ValueError("objective must not be empty")
         if max_output_tokens <= 0:
@@ -100,7 +104,7 @@ class SoftExplorationEngine:
             )
 
         base_embedding = tuple(
-            float(value) for value in self._generation.first_token_embedding(objective)
+            float(value) for value in self._generation.first_token_embedding(prompt)
         )
         if len(base_embedding) != capabilities.hidden_size:
             raise SoftReasoningUnavailable(
@@ -152,8 +156,6 @@ class SoftExplorationEngine:
         def score_latent(latent: list[float]) -> float:
             nonlocal model_calls, verifier_calls
             if model_calls >= max_model_calls:
-                # BayesianOptimizer should not exceed the configured iteration
-                # budget. This guard fails closed if a future optimizer change does.
                 return 0.0
 
             key = tuple(round(float(value), 12) for value in latent)
@@ -169,7 +171,7 @@ class SoftExplorationEngine:
             )
             call_seed = seed + model_calls
             output = self._generation.generate_with_first_token_embedding(
-                objective,
+                prompt,
                 guided_embedding,
                 max_tokens=max_output_tokens,
                 seed=call_seed,
@@ -211,9 +213,7 @@ class SoftExplorationEngine:
         baseline_score = baseline.verification.score if baseline else optimization.history[0][1]
         best_score = best.verification.score
 
-        ordered = tuple(
-            sorted(candidates.values(), key=lambda item: item.iteration)
-        )
+        ordered = tuple(sorted(candidates.values(), key=lambda item: item.iteration))
         return SoftExplorationTrace(
             best_candidate=best,
             candidates=ordered,
@@ -241,9 +241,6 @@ class SoftExplorationEngine:
         hidden_dim: int,
         rng: random.Random,
     ) -> tuple[tuple[float, ...], ...]:
-        # Random Gaussian projection mirrors the paper's low-dimensional search
-        # variable mapped into model hidden space while keeping Core independent
-        # of torch/numpy.
         normalizer = 1.0 / math.sqrt(float(latent_dim))
         return tuple(
             tuple(rng.gauss(0.0, 1.0) * normalizer for _ in range(hidden_dim))
