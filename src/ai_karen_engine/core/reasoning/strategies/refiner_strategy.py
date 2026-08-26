@@ -10,19 +10,17 @@ from typing import Any, List
 from ai_karen_engine.core.reasoning.contracts import (
     ReasoningBudget,
     ReasoningEvidence,
+    ReasoningHypothesis,
     ReasoningResult,
     ReasoningStatus,
-    ReasoningStrategyEngine,
 )
+from ai_karen_engine.core.reasoning.strategy import ReasoningStrategyEngine
 from ai_karen_engine.core.reasoning.synthesis.self_refine import SelfRefiner
 from ai_karen_engine.core.runtime.contracts import ExecutionContext
 
 
 class Refiner(ReasoningStrategyEngine):
-    """Self-refinement strategy.
-
-    Refines an initial answer through iterative feedback.
-    """
+    """Self-refinement strategy."""
 
     strategy_id = "refine"
     version = "v1"
@@ -63,13 +61,15 @@ class Refiner(ReasoningStrategyEngine):
 
             hypotheses = []
             if result.final_answer:
-                hypotheses.append(ReasoningHypothesis(
-                    hypothesis_id="refined",
-                    statement=result.final_answer,
-                    confidence=0.7,
-                    supporting_evidence_refs=[e.evidence_id for e in evidence],
-                    provenance="refiner",
-                ))
+                hypotheses.append(
+                    ReasoningHypothesis(
+                        hypothesis_id="refined",
+                        statement=result.final_answer,
+                        confidence=0.7,
+                        supporting_evidence_refs=[e.evidence_id for e in evidence],
+                        provenance="refiner",
+                    )
+                )
 
             return ReasoningResult(
                 reasoning_id="",
@@ -80,22 +80,26 @@ class Refiner(ReasoningStrategyEngine):
                 assumptions=[],
                 unknowns=[],
                 contradictions=[],
-                assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(
-                    confidence=0.7,
-                ),
+                assessment=__import__(
+                    "ai_karen_engine.core.reasoning.contracts",
+                    fromlist=["ReasoningAssessment"],
+                ).ReasoningAssessment(confidence=0.7),
                 evidence_needs=[],
                 suggested_next_actions=[],
                 status=ReasoningStatus.COMPLETED.value,
                 diagnostics={
                     "strategy": "refine",
-                    "stages": [s.value for s in (result.stages or [])],
+                    "stages": [stage.value for stage in (result.stages or [])],
                 },
             )
-
         except Exception as exc:
             return self._empty_result(f"Refinement failed: {exc}")
 
     def _empty_result(self, reason: str) -> ReasoningResult:
+        contracts = __import__(
+            "ai_karen_engine.core.reasoning.contracts",
+            fromlist=["ReasoningAssessment", "ReasoningErrorCode"],
+        )
         return ReasoningResult(
             reasoning_id="",
             disposition="abstain",
@@ -105,10 +109,10 @@ class Refiner(ReasoningStrategyEngine):
             assumptions=[],
             unknowns=[],
             contradictions=[],
-            assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(),
+            assessment=contracts.ReasoningAssessment(),
             evidence_needs=[],
             suggested_next_actions=[],
             status=ReasoningStatus.FAILED.value,
-            error_code=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningErrorCode"]).ReasoningErrorCode.STRATEGY_FAILURE.value,
+            error_code=contracts.ReasoningErrorCode.STRATEGY_FAILURE.value,
             diagnostics={"error": reason},
         )
