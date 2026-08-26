@@ -51,25 +51,8 @@ def test_canonical_application_wires_probes_idempotently() -> None:
     assert "probe_router" in source
     assert "_canonical_probe_routes_registered" in source
     assert "app.include_router(probe_router)" in source
-
-
-def test_canonical_boundary_prunes_legacy_inline_health_routes() -> None:
-    source = APP.read_text(encoding="utf-8")
-
-    expected_paths = (
-        '"/health"',
-        '"/api/health/database"',
-        '"/api/health/database/test"',
-        '"/api/health/database/monitor"',
-        '"/api/health/degraded-mode"',
-    )
-    for token in expected_paths:
-        assert token in source
-
-    assert "_prune_legacy_inline_health_routes" in source
-    assert 'endpoint_module == "server.app"' in source
-    assert "app.router.routes[:] = retained_routes" in source
-    assert "_legacy_inline_health_routes_pruned" in source
+    assert "_prune_legacy_inline_health_routes" not in source
+    assert "_legacy_inline_health_routes_pruned" not in source
 
 
 def test_container_healthcheck_uses_liveness_not_dependency_health() -> None:
@@ -79,42 +62,35 @@ def test_container_healthcheck_uses_liveness_not_dependency_health() -> None:
     assert "http://localhost:8000/ready" not in source
 
 
-def test_legacy_server_health_module_registers_no_routes() -> None:
-    source = LEGACY_HEALTH.read_text(encoding="utf-8")
+def test_retired_server_health_module_does_not_reappear() -> None:
+    assert not LEGACY_HEALTH.exists()
 
-    assert "def register_health_endpoints" in source
-    assert "@app." not in source
-    assert "@router." not in source
 
-    forbidden_authority_tokens = (
-        "get_database_manager",
-        "get_redis_manager",
-        "get_provider_registry_service",
-        "get_extension_health_monitor",
-        "get_extension_service_recovery_manager",
-        "psutil",
+def test_server_app_owns_no_health_routes() -> None:
+    source = LEGACY_SERVER_APP.read_text(encoding="utf-8")
+
+    forbidden_route_tokens = (
+        '@app.get("/health"',
+        '@app.get("/api/health',
+        '@app.post("/api/health',
+        '@app.put("/api/health',
+        '@app.delete("/api/health',
     )
-    for token in forbidden_authority_tokens:
+    for token in forbidden_route_tokens:
+        assert token not in source
+
+    forbidden_legacy_tokens = (
+        "register_health_endpoints",
+        "health_endpoints",
+        "degraded_mode_status_compat",
+        "get_database_health_monitor",
+    )
+    for token in forbidden_legacy_tokens:
         assert token not in source
 
 
-def test_remaining_inline_health_source_debt_is_bounded_until_deleted() -> None:
-    """Keep dead source blocks visible until the isolated server.app rewrite."""
-
+def test_server_app_database_shutdown_uses_app_state_not_undefined_global() -> None:
     source = LEGACY_SERVER_APP.read_text(encoding="utf-8")
-    expected_inline_routes = (
-        '@app.get("/health"',
-        '@app.get("/api/health/database"',
-        '@app.get("/api/health/database/test"',
-        '@app.get("/api/health/database/monitor"',
-        '@app.get("/api/health/degraded-mode"',
-    )
-    for token in expected_inline_routes:
-        assert token in source
 
-    health_route_decorators = [
-        line.strip()
-        for line in source.splitlines()
-        if line.strip().startswith("@app.") and '"/api/health' in line
-    ]
-    assert len(health_route_decorators) == 4
+    assert 'getattr(app.state, "database_config", None)' in source
+    assert "await db_config.cleanup()" in source
