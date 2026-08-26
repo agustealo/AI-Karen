@@ -63,7 +63,7 @@ CORTEX decides; runtime executes.
 ### `core/expression/`
 Provider-neutral expression/execution gateway contracts and engines.
 
-It must not become a second provider router, RuntimePolicy implementation, or observability authority.
+It must not become a second provider router, RuntimePolicy implementation, personalization authority, prompt registry, or observability authority.
 
 ### `core/langgraph_orchestrator/`
 Graph workflow executor for true graph-shaped work only.
@@ -77,6 +77,22 @@ Owns:
 - long-running workflow orchestration
 
 Simple chat does not belong here.
+
+### `core/personalization/`
+USER/PERSONALIZATION MODEL AUTHORITY.
+
+Owns:
+- user preferences and preference evidence
+- behavior patterns and drift
+- user goals
+- user/self/relationship model contracts
+- communication and interaction preferences
+- personalization snapshots and evaluation
+- personalization-domain persistence ports/adapters
+
+Personalization models the user and the Karen-user relationship. It does not own prompt construction, raw system prompts, memory storage, provider/model routing, agent execution, or UI visibility policy.
+
+Assistant identity/profile defaults, if a live consumer requires them, must be represented as small versioned references/contracts that compose through the canonical PromptRuntime and personalization paths. Do not recreate a top-level Persona runtime, service, registry, store, or preference system.
 
 ### `core/services/`
 Core-facing service helpers only.
@@ -132,6 +148,8 @@ It recommends only. It does not authorize or execute. New execution authority mu
 
 `core/automation/` was removed after a repository-wide reference audit found no imports or consumers of its automation and flow types. Its single contracts module mixed automation records with legacy flow orchestration, tool selection, memory, persona, Gmail, and weather schemas. Future automation belongs to an explicit automation/application or platform owner and must delegate agent/runtime execution through canonical runtime policy rather than recreating orchestration under Core.
 
+`core/persona/` was removed after a fresh repository-wide symbol and package reference audit found no live consumers. Its orphaned contract mixed hardcoded system prompts, user preference state, memory weighting and duplicate memory-entry types, request-context resolution, and UI selector flags. Those responsibilities already have canonical owners: user preferences and relationship modeling belong to `core/personalization/`; prompt text and instruction assembly belong to PromptRuntime/PromptRegistry; memory belongs to `core/memory/`; agent specialization belongs to AgentMedusa; UI visibility belongs to frontend/backend capability configuration. If assistant identity/profile selection later gains a live consumer, add only the minimum versioned reference/definition contract under an existing canonical owner rather than recreating `core/persona/` as a runtime authority.
+
 `core/observability/` was removed after all known callers had migrated and a fresh reference audit found no remaining package-path consumers. Canonical observability contracts and implementation live in `platform/observability/`. Core must not recreate metrics, sinks, exporters, telemetry buffers, event implementations, redaction implementations, regression detection, or observability tests under a second authority.
 
 The legacy Core service registry stack was removed after reference audit and migration of `core/services/dependencies.py` to Runtime lazy loading. Removed files include `registry.py`, `service_registry.py`, `classified_service_registry.py`, `service_classification.py`, and `service_lifecycle_manager.py`. Required services now fail honestly when unavailable instead of returning dummy service/metric success.
@@ -155,6 +173,7 @@ Avoid:
 ```python
 from ai_karen_engine.core import BaseService
 from ai_karen_engine.core.observability import MetricsCollector
+from ai_karen_engine.core.persona.contracts import Persona
 from ai_karen_engine.core.services.service_registry import get_service_registry
 ```
 
@@ -163,10 +182,15 @@ from ai_karen_engine.core.services.service_registry import get_service_registry
 - Live chat execution, request-context assembly, and Core service resolution/lifecycle coordination belong to `core/runtime/`.
 - Capability identity belongs to `core/ai_runtime/`.
 - AI/ML intelligence belongs to `core/intelligence/`.
+- User preferences, user models, goals, behavior, and relationship personalization belong to `core/personalization/`.
+- Prompt text/versioning and effective instruction assembly belong to the canonical PromptRuntime/PromptRegistry path, not persona/profile objects.
+- Memory state and recall belong to `core/memory/`; profile/persona objects must not define parallel memory entries or storage behavior.
+- Agent specialization, tools, permissions, execution budgets, and delegation belong to AgentMedusa/runtime policy, not assistant profiles.
 - CORTEX decides; runtime executes.
 - LangGraph is only for true graph workflows.
 - Platform infrastructure, including observability implementations and future scheduling infrastructure, belongs under `platform/` or another explicit infrastructure owner.
 - Automation must not recreate provider routing, prompt assembly, memory ownership, plugin execution, or agent orchestration under Core.
 - Do not add a second service registry or lifecycle manager under `core/services/`.
+- Do not recreate `core/persona/`, PersonaRuntime, PersonaService, PersonaStore, or a second personalization authority without a proven live responsibility that cannot fit an existing owner.
 - Search before adding a new Core folder, registry, runtime, service, or helper.
 - One responsibility -> one owner -> one registry/config/runtime path.
