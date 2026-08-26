@@ -5,36 +5,29 @@ Creates and configures the FastAPI app with all components.
 
 This module remains transitional while application composition moves into
 ``ai_karen_engine``. Health, readiness, startup lifecycle, extension lifecycle,
-and extension listing authority no longer live in the root ``server`` package.
+extension listing, and metrics exposition authority no longer live in the root
+``server`` package.
 """
 
 import logging
 import os
 
-from fastapi import Depends, FastAPI, HTTPException, Response
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from fastapi import FastAPI
 
 from .admin_endpoints import register_admin_endpoints
 from .config import Settings
-from .metrics import (
-    ERROR_COUNT,
-    PROMETHEUS_ENABLED,
-    REQUEST_COUNT,
-    REQUEST_LATENCY,
-    initialize_metrics,
-)
 from .middleware import configure_middleware
 from .performance import load_performance_settings
 from .routers import wire_routers
-from .security import api_key_header, validate_environment_security
+from .security import validate_environment_security
 from .validation import initialize_validation_framework
+from ai_karen_engine.platform.observability.http_metrics import (
+    ERROR_COUNT,
+    REQUEST_COUNT,
+    REQUEST_LATENCY,
+)
 from ai_karen_engine.server.exception_handlers import setup_exception_handlers
 from ai_karen_engine.server.startup import create_lifespan
-
-try:
-    from prometheus_client import REGISTRY
-except ImportError:
-    REGISTRY = None
 
 logger = logging.getLogger("kari")
 
@@ -63,7 +56,6 @@ def create_app() -> FastAPI:
 
     load_performance_settings(settings)
     initialize_validation_framework(settings)
-    initialize_metrics()
 
     lifespan = create_lifespan(settings)
 
@@ -132,27 +124,6 @@ def create_app() -> FastAPI:
             logger.info("Database shutdown completed successfully")
         except Exception as exc:
             logger.error("Error during database shutdown: %s", exc)
-
-    @app.get("/metrics", tags=["monitoring"])
-    async def metrics(api_key: str = Depends(api_key_header)):
-        """Serve Prometheus metrics with the existing API-key contract."""
-        if not PROMETHEUS_ENABLED:
-            raise HTTPException(
-                status_code=501,
-                detail="Metrics are not enabled",
-            )
-
-        allow_public_metrics = os.getenv(
-            "KARI_PUBLIC_METRICS", "false"
-        ).lower() in ("true", "yes")
-
-        if not allow_public_metrics and api_key != settings.secret_key:
-            raise HTTPException(status_code=401, detail="Invalid or missing API key")
-
-        return Response(
-            content=generate_latest(REGISTRY),
-            media_type=CONTENT_TYPE_LATEST,
-        )
 
     logger.info("FastAPI application created and configured successfully")
     return app
