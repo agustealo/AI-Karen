@@ -1,3 +1,5 @@
+"""Provider-neutral reasoning retrieval contracts and adapters."""
+
 from .adapters import (
     EvidenceBundle,
     ReasoningEvidenceAdapter,
@@ -5,10 +7,7 @@ from .adapters import (
     SRCompositeRetriever,
     SRRetriever,
 )
-from .vector_stores import (
-    LlamaIndexVectorAdapter,
-    VectorStore,
-)
+from .vector_stores import VectorStore
 
 __all__ = [
     "EvidenceBundle",
@@ -16,7 +15,5 @@ __all__ = [
     "Result",
     "SRCompositeRetriever",
     "SRRetriever",
-    "LlamaIndexVectorAdapter",
     "VectorStore",
 ]
-
