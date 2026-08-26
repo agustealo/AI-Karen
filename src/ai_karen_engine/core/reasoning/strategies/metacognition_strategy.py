@@ -9,21 +9,19 @@ from typing import Any, List
 
 from ai_karen_engine.core.reasoning.contracts import (
     ReasoningBudget,
+    ReasoningContradiction,
     ReasoningEvidence,
     ReasoningHypothesis,
     ReasoningResult,
     ReasoningStatus,
-    ReasoningStrategyEngine,
 )
+from ai_karen_engine.core.reasoning.strategy import ReasoningStrategyEngine
 from ai_karen_engine.core.reasoning.synthesis.metacognition import MetacognitiveMonitor
 from ai_karen_engine.core.runtime.contracts import ExecutionContext
 
 
 class MetacognitionStrategy(ReasoningStrategyEngine):
-    """Metacognitive reasoning strategy.
-
-    Monitors and adjusts reasoning based on confidence and performance.
-    """
+    """Metacognitive assessment strategy."""
 
     strategy_id = "metacognition"
     version = "v1"
@@ -59,16 +57,16 @@ class MetacognitionStrategy(ReasoningStrategyEngine):
             self._monitor.update_state(state, confidence=0.5)
             assessment = self._monitor.assess(state)
 
-            hypotheses = []
-            if assessment.strategy_adjustments:
-                for adj in assessment.strategy_adjustments:
-                    hypotheses.append(ReasoningHypothesis(
-                        hypothesis_id=f"meta-{adj}",
-                        statement=adj,
-                        confidence=0.5,
-                        supporting_evidence_refs=[e.evidence_id for e in evidence],
-                        provenance="metacognition",
-                    ))
+            hypotheses = [
+                ReasoningHypothesis(
+                    hypothesis_id=f"meta-{adjustment}",
+                    statement=adjustment,
+                    confidence=0.5,
+                    supporting_evidence_refs=[e.evidence_id for e in evidence],
+                    provenance="metacognition",
+                )
+                for adjustment in assessment.strategy_adjustments
+            ]
 
             contradictions = []
             if assessment.confidence < 0.5:
@@ -85,13 +83,18 @@ class MetacognitionStrategy(ReasoningStrategyEngine):
             return ReasoningResult(
                 reasoning_id="",
                 disposition="complete",
-                conclusion=f"Metacognitive assessment: confidence={assessment.confidence:.2f}",
+                conclusion=(
+                    f"Metacognitive assessment: confidence={assessment.confidence:.2f}"
+                ),
                 hypotheses=hypotheses,
                 evidence=evidence,
                 assumptions=[],
                 unknowns=[],
                 contradictions=contradictions,
-                assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(
+                assessment=__import__(
+                    "ai_karen_engine.core.reasoning.contracts",
+                    fromlist=["ReasoningAssessment"],
+                ).ReasoningAssessment(
                     confidence=assessment.confidence,
                     evidence_sufficiency=assessment.confidence,
                 ),
@@ -104,11 +107,14 @@ class MetacognitionStrategy(ReasoningStrategyEngine):
                     "adjustments": assessment.strategy_adjustments,
                 },
             )
-
         except Exception as exc:
             return self._empty_result(f"Metacognition failed: {exc}")
 
     def _empty_result(self, reason: str) -> ReasoningResult:
+        contracts = __import__(
+            "ai_karen_engine.core.reasoning.contracts",
+            fromlist=["ReasoningAssessment", "ReasoningErrorCode"],
+        )
         return ReasoningResult(
             reasoning_id="",
             disposition="abstain",
@@ -118,10 +124,10 @@ class MetacognitionStrategy(ReasoningStrategyEngine):
             assumptions=[],
             unknowns=[],
             contradictions=[],
-            assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(),
+            assessment=contracts.ReasoningAssessment(),
             evidence_needs=[],
             suggested_next_actions=[],
             status=ReasoningStatus.FAILED.value,
-            error_code=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningErrorCode"]).ReasoningErrorCode.STRATEGY_FAILURE.value,
+            error_code=contracts.ReasoningErrorCode.STRATEGY_FAILURE.value,
             diagnostics={"error": reason},
         )
