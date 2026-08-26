@@ -1,45 +1,54 @@
-"""Soft reasoning strategy adapter.
+"""Soft Reasoning strategy for controlled embedding exploration.
 
-Wraps SoftReasoningEngine so it participates as a typed reasoning strategy.
+This strategy is capability-gated and must receive a fully constructed
+``SoftExplorationEngine`` from Runtime. It never discovers providers, models,
+memory stores, tools, or plugins on its own.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, List
 
 from ai_karen_engine.core.reasoning.contracts import (
+    ReasoningAssessment,
     ReasoningBudget,
+    ReasoningDisposition,
+    ReasoningErrorCode,
     ReasoningEvidence,
+    ReasoningHypothesis,
     ReasoningResult,
     ReasoningStatus,
-    ReasoningStrategyEngine,
 )
-from ai_karen_engine.core.reasoning.soft_reasoning.engine import SoftReasoningEngine
+from ai_karen_engine.core.reasoning.soft_reasoning.exploration import (
+    SoftExplorationEngine,
+    SoftReasoningBudgetError,
+    SoftReasoningUnavailable,
+)
+from ai_karen_engine.core.reasoning.strategy import ReasoningStrategyEngine
 from ai_karen_engine.core.runtime.contracts import ExecutionContext
 
 
 class SoftReasoner(ReasoningStrategyEngine):
-    """Soft reasoning strategy.
+    """ICML-2025-style verifier-guided first-token embedding exploration."""
 
-    Uses embedding perturbation and novelty search to produce hypotheses.
-    """
-
-    strategy_id = "soft"
-    version = "v1"
-    capabilities = ["soft_exploration", "evidence_synthesis"]
-    required_inputs = ["objective"]
-    supports_model_calls = False
+    strategy_id = "soft_exploration"
+    version = "v2"
+    capabilities = ["soft_exploration"]
+    required_inputs = ["objective", "generation_embedding_control", "verifier"]
+    supports_model_calls = True
     supports_tools = False
-    expected_cost = "low"
-    max_steps = 2
+    expected_cost = "high"
+    max_steps = 1
     output_contract = {
         "hypotheses": True,
         "evidence": True,
+        "diagnostics": True,
     }
-    determinism = "deterministic"
+    determinism = "seeded_stochastic"
 
-    def __init__(self) -> None:
-        self._engine = SoftReasoningEngine()
+    def __init__(self, engine: SoftExplorationEngine) -> None:
+        self._engine = engine
 
     async def execute(
         self,
@@ -48,60 +57,144 @@ class SoftReasoner(ReasoningStrategyEngine):
         evidence: List[ReasoningEvidence],
         budget: ReasoningBudget,
     ) -> ReasoningResult:
-        objective = getattr(request, "objective", "")
+        objective = str(getattr(request, "objective", "") or "").strip()
         if not objective:
-            return self._empty_result("No objective provided")
-
-        try:
-            results = self._engine.query(objective, top_k=5)
-            hypotheses = []
-            for idx, item in enumerate(results):
-                hypotheses.append(ReasoningHypothesis(
-                    hypothesis_id=f"soft-{idx}",
-                    statement=str(item.get("content", item.get("snippet", "")))[:200],
-                    confidence=float(item.get("score", 0.0)),
-                    supporting_evidence_refs=[],
-                    provenance="soft_reasoning",
-                ))
-
-            return ReasoningResult(
-                reasoning_id="",
-                disposition="complete",
-                conclusion=f"Soft reasoning produced {len(hypotheses)} hypotheses",
-                hypotheses=hypotheses,
+            return self._failed(
+                "No objective provided",
+                ReasoningErrorCode.INVALID_REQUEST,
                 evidence=evidence,
-                assumptions=[],
-                unknowns=[],
-                contradictions=[],
-                assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(
-                    confidence=float(results[0].get("score", 0.0)) if results else 0.0,
-                ),
-                evidence_needs=[],
-                suggested_next_actions=[],
-                status=ReasoningStatus.COMPLETED.value,
-                diagnostics={
-                    "strategy": "soft",
-                    "results": len(results),
-                },
             )
 
+        evidence_text = tuple(
+            item.content for item in evidence if isinstance(item.content, str) and item.content
+        )
+        try:
+            trace = await asyncio.to_thread(
+                self._engine.explore,
+                objective,
+                evidence=evidence_text,
+                max_model_calls=budget.max_model_calls,
+                max_output_tokens=budget.max_output_tokens,
+                correlation_id=context.correlation_id,
+            )
+        except SoftReasoningUnavailable as exc:
+            return self._failed(
+                str(exc),
+                ReasoningErrorCode.STRATEGY_UNAVAILABLE,
+                evidence=evidence,
+                status=ReasoningStatus.ABSTAINED,
+            )
+        except SoftReasoningBudgetError as exc:
+            return self._failed(
+                str(exc),
+                ReasoningErrorCode.BUDGET_EXCEEDED,
+                evidence=evidence,
+                status=ReasoningStatus.ABSTAINED,
+            )
         except Exception as exc:
-            return self._empty_result(f"Soft reasoning failed: {exc}")
+            return self._failed(
+                f"Soft exploration failed: {exc}",
+                ReasoningErrorCode.STRATEGY_FAILURE,
+                evidence=evidence,
+            )
 
-    def _empty_result(self, reason: str) -> ReasoningResult:
+        best = trace.best_candidate
+        hypothesis = ReasoningHypothesis(
+            hypothesis_id=best.candidate_id,
+            statement=best.output.text,
+            confidence=best.verification.score,
+            supporting_evidence_refs=[item.evidence_id for item in evidence],
+            uncertainty=max(0.0, 1.0 - best.verification.confidence),
+            provenance=(
+                f"soft_reasoning:{trace.runtime_engine}:{trace.model_id}:v2"
+            ),
+        )
+
+        assessment = ReasoningAssessment(
+            confidence=best.verification.score,
+            evidence_sufficiency=(
+                sum(item.confidence for item in evidence) / len(evidence)
+                if evidence
+                else 0.0
+            ),
+            uncertainty_reasons=(
+                []
+                if best.verification.passed
+                else ["soft_verifier_acceptance_threshold_not_met"]
+            ),
+            metrics={
+                "baseline_score": trace.baseline_score,
+                "best_score": trace.best_score,
+                "improvement": trace.improvement,
+                "candidate_count": len(trace.candidates),
+                "model_calls": trace.model_calls,
+                "verifier_calls": trace.verifier_calls,
+            },
+        )
+
         return ReasoningResult(
             reasoning_id="",
-            disposition="abstain",
-            conclusion=reason,
-            hypotheses=[],
-            evidence=[],
+            disposition=ReasoningDisposition.COMPLETE.value,
+            conclusion=best.output.text,
+            hypotheses=[hypothesis],
+            evidence=evidence,
             assumptions=[],
             unknowns=[],
             contradictions=[],
-            assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(),
+            assessment=assessment,
             evidence_needs=[],
             suggested_next_actions=[],
-            status=ReasoningStatus.FAILED.value,
-            error_code=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningErrorCode"]).ReasoningErrorCode.STRATEGY_FAILURE.value,
-            diagnostics={"error": reason},
+            status=ReasoningStatus.COMPLETED.value,
+            diagnostics={
+                "strategy": self.strategy_id,
+                "strategy_version": self.version,
+                "research_method": "first_token_embedding_bayesian_exploration",
+                "runtime_engine": trace.runtime_engine,
+                "model_id": trace.model_id,
+                "projection_dimension": trace.projection_dimension,
+                "candidate_count": len(trace.candidates),
+                "model_calls": trace.model_calls,
+                "verifier_calls": trace.verifier_calls,
+                "baseline_score": trace.baseline_score,
+                "best_score": trace.best_score,
+                "improvement": trace.improvement,
+                "seed": trace.seed,
+                "best_candidate_id": best.candidate_id,
+                "verifier_feedback": best.verification.feedback,
+            },
+            memory_candidates=[],
         )
+
+    @staticmethod
+    def _failed(
+        reason: str,
+        error_code: ReasoningErrorCode,
+        *,
+        evidence: List[ReasoningEvidence],
+        status: ReasoningStatus = ReasoningStatus.FAILED,
+    ) -> ReasoningResult:
+        return ReasoningResult(
+            reasoning_id="",
+            disposition=ReasoningDisposition.ABSTAIN.value,
+            conclusion=reason,
+            hypotheses=[],
+            evidence=evidence,
+            assumptions=[],
+            unknowns=[],
+            contradictions=[],
+            assessment=ReasoningAssessment(
+                uncertainty_reasons=[reason],
+            ),
+            evidence_needs=[],
+            suggested_next_actions=[],
+            status=status.value,
+            error_code=error_code.value,
+            diagnostics={
+                "strategy": "soft_exploration",
+                "error": reason,
+            },
+            memory_candidates=[],
+        )
+
+
+__all__ = ["SoftReasoner"]
