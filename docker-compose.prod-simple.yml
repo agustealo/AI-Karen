@@ -1,0 +1,199 @@
+# Production compose file for APP-RUN-1
+# Uses simplified database setup and focuses on core functionality
+
+services:
+  # ──────────────────────────────────────────────────────────────────────
+  # Redis
+  # ──────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ai-karen-redis
+    restart: unless-stopped
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--requirepass", "${REDIS_PASSWORD:-redis_secure_pass_change_me}"]
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    volumes:
+      - redis_data:/data
+      - ./docker/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-redis_secure_pass_change_me} ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - ai-karen-net
+
+  # ──────────────────────────────────────────────────────────────────────
+  # PostgreSQL (Primary Database)
+  # ──────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15
+    container_name: ai-karen-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ai_karen}
+      POSTGRES_USER: ${POSTGRES_USER:-karen_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-karen_secure_pass_change_me}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./supabase/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-karen_user} -d ${POSTGRES_DB:-ai_karen}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ai-karen-net
+
+  # ──────────────────────────────────────────────────────────────────────
+  # DuckDB (Analytics)
+  # ──────────────────────────────────────────────────────────────────────
+  duckdb-manager:
+    image: alpine:latest
+    container_name: ai-karen-duckdb-manager
+    restart: unless-stopped
+    volumes:
+      - duckdb_data:/data/duckdb
+      - ./docker/database/init/duckdb:/init:ro
+    command: /bin/sh -c "while true; do sleep 3600; done"
+    networks:
+      - ai-karen-net
+
+  # ──────────────────────────────────────────────────────────────────────
+  # FastAPI Backend
+  # ──────────────────────────────────────────────────────────────────────
+  api:
+    container_name: ai-karen-api
+    build:
+      context: .
+      target: app
+      args:
+        PROFILE: ${API_BUILD_TARGET:-runtime}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Runtime mode
+      ENVIRONMENT: "production"
+      DEBUG: "false"
+      AUTH_MODE: "production"
+      AUTH_DEV_MODE: "false"
+      AUTH_ALLOW_DEV_LOGIN: "false"
+      KARI_AUTH_BYPASS: "false"
+      KARI_FAST_STARTUP: "true"
+      KARI_SKIP_STARTUP_CHECK: "false"
+      KARI_SKIP_AUTO_INIT: "false"
+      
+      # Database connections
+      DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/ai_karen"
+      POSTGRES_URL: "postgresql+asyncpg://postgres:postgres@postgres:5432/ai_karen"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:-redis_secure_pass_change_me}@redis:6379/0"
+      
+      # CORS
+      CORS_ORIGINS: "http://localhost:8010,http://localhost:3000"
+      
+      # Enable core services
+      KARI_ENABLE_MEMORY_SERVICE: "true"
+      KARI_ENABLE_UNIFIED_MEMORY: "true"
+      KARI_ENABLE_DUCKDB: "true"
+      
+      # Disable unused services
+      KARI_ENABLE_VECTOR_DB: "false"
+      KARI_ENABLE_ELASTICSEARCH: "false"
+      
+      # Model configuration
+      MODEL_ORCHESTRATOR_ENABLED: "true"
+      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+      
+      # Security
+      SECRET_KEY: ${SECRET_KEY:-m6sGgjv2xK+Og41EHE9MgWXeWoVF4qFzBb8KJZuu6Ms=}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-m6sGgjv2xK+Og41EHE9MgWXeWoVF4qFzBb8KJZuu6Ms=}
+      
+      # Disable cloud providers for local testing
+      KARI_ENABLE_MODEL_DEGRADED_FALLBACK: "true"
+      GEMINI_API_KEY: ""
+      OPENAI_API_KEY: ""
+      
+    ports:
+      - "8000:8000"
+    volumes:
+      - "./:/app:rw"
+      - "./models:/app/models:rw"
+      - "./config:/app/config:ro"
+      - logs_data:/app/logs
+      - backup_data:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health/live || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 480s
+    networks:
+      - ai-karen-net
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Web UI
+  # ──────────────────────────────────────────────────────────────────────
+  web:
+    container_name: ai-karen-web
+    image: node:20-bullseye
+    working_dir: /app
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: "1"
+      NODE_OPTIONS: --max-old-space-size=4096 --no-warnings
+      KAREN_BACKEND_URL: http://api:8000
+      KAREN_DOCKER: "true"
+    ports:
+      - "8010:8010"
+    volumes:
+      - ./src/ui_launchers/Karen-AI-Theme:/app
+      - ./.env.local:/app/.env.local:ro
+      - web_node_modules:/app/node_modules
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: >
+      sh -c "
+        npm config set loglevel error &&
+        if [ -f /app/node_modules/.install_complete ]; then
+          echo 'Skipping npm install (already populated)';
+        else
+          npm ci --cache /root/.npm --prefer-offline --no-audit &&
+          touch /app/node_modules/.install_complete;
+        fi &&
+        npm run dev -- --hostname 0.0.0.0 --port 8010
+      "
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ai-karen-net
+
+volumes:
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+  duckdb_data:
+    driver: local
+  logs_data:
+    driver: local
+  backup_data:
+    driver: local
+  web_node_modules:
+    driver: local
+
+networks:
+  ai-karen-net:
+    driver: bridge

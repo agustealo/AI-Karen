@@ -12,8 +12,9 @@ import time
 from functools import wraps
 from typing import Any, Callable, TypeVar
 
-from ai_karen_engine.core.observability.contracts import RuntimeEventType
-from ai_karen_engine.core.observability.emitter import get_observability_emitter
+from src.ai_karen_engine.platform.observability.contracts import EventType as RuntimeEventType
+# TODO: Fix emitter import
+# from ai_karen_engine.core.observability.emitter import get_observability_emitter
 
 logger = logging.getLogger(__name__)
 
@@ -50,22 +51,24 @@ def instrument_repository(operation: str, repository: str):
             finally:
                 latency_ms = (time.perf_counter() - start) * 1000
                 try:
-                    emitter = get_observability_emitter()
-                    emitter.emit(
-                        RuntimeEventType.PERSISTENCE_COMPLETED,
-                        intent=f"repository.{operation}",
-                        provider=repository,
-                        duration_ms=latency_ms,
-                        memory_recall_count=rows_returned,
-                        metadata={
-                            "repository": repository,
-                            "operation": operation,
-                            "status": status,
-                            "error_code": error_code,
-                            "rows_returned": rows_returned,
-                            "storage_backend": "postgres",
-                        },
-                    )
+                    # TODO: Fix emitter
+                    # emitter = get_observability_emitter()
+                    # emitter.emit(
+                    #     RuntimeEventType.PERSISTENCE_COMPLETED,
+                    #     intent=f"repository.{operation}",
+                    #     provider=repository,
+                    #     duration_ms=latency_ms,
+                    #     memory_recall_count=rows_returned,
+                    #     metadata={
+                    #         "repository": repository,
+                    #         "operation": operation,
+                    #         "status": status,
+                    #         "error_code": error_code,
+                    #         "rows_returned": rows_returned,
+                    #         "storage_backend": "postgres",
+                    #     },
+                    # )
+                    pass
                 except Exception as exc:  # pragma: no cover - observability must not break flows
                     logger.debug("Observability emission failed: %s", exc)
 

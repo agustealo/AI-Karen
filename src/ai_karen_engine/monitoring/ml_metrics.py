@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from ai_karen_engine.core.observability.metrics import get_metrics_manager
+from src.ai_karen_engine.platform.observability.metrics import get_metrics_collector as get_metrics_manager
 
 logger = logging.getLogger(__name__)
 

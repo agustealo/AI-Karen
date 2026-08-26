@@ -12,18 +12,6 @@
     "error_message": null
   },
   {
-    "name": "builtin_vllm",
-    "provider_class": "VLLMRuntime",
-    "description": "Execution adapter for vLLM",
-    "supports_streaming": true,
-    "supports_embeddings": false,
-    "requires_api_key": false,
-    "default_model": "auto",
-    "health_status": "unknown",
-    "last_health_check": null,
-    "error_message": null
-  },
-  {
     "name": "openai",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for OpenAI",
@@ -120,18 +108,6 @@
     "error_message": null
   },
   {
-    "name": "amazon-nova",
-    "provider_class": "OpenAICompatibleProvider",
-    "description": "Execution adapter for Amazon Nova",
-    "supports_streaming": true,
-    "supports_embeddings": false,
-    "requires_api_key": true,
-    "default_model": "amazon.nova-lite-v1:0",
-    "health_status": "unknown",
-    "last_health_check": null,
-    "error_message": null
-  },
-  {
     "name": "qwen",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Qwen",
@@ -139,6 +115,18 @@
     "supports_embeddings": false,
     "requires_api_key": true,
     "default_model": "qwen-plus-latest",
+    "health_status": "unknown",
+    "last_health_check": null,
+    "error_message": null
+  },
+  {
+    "name": "amazon-nova",
+    "provider_class": "OpenAICompatibleProvider",
+    "description": "Execution adapter for Amazon Nova",
+    "supports_streaming": true,
+    "supports_embeddings": false,
+    "requires_api_key": true,
+    "default_model": "amazon.nova-lite-v1:0",
     "health_status": "unknown",
     "last_health_check": null,
     "error_message": null

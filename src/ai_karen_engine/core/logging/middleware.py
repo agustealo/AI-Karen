@@ -7,12 +7,13 @@ from collections.abc import Callable
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from ai_karen_engine.core.observability.context import (
-    ObservabilityContext,
-    clear_observability_context,
-    set_observability_context,
+from src.ai_karen_engine.platform.observability.context import (
+    CorrelationContext,
+    clear_correlation_context,
+    set_correlation_context,
 )
-from ai_karen_engine.core.observability.emitter import get_observability_emitter
+# TODO: Fix emitter import
+# from ai_karen_engine.core.observability.emitter import get_observability_emitter
 
 from .context import RuntimeLogContext, clear_log_context, set_log_context
 from .events import RuntimeEvents
@@ -42,19 +43,20 @@ class RuntimeLoggingMiddleware(BaseHTTPMiddleware):
             runtime_stage="ingress",
         )
 
-        obs_ctx = ObservabilityContext(
+        obs_ctx = CorrelationContext(
             correlation_id=correlation_id,
             request_id=request_id,
         )
 
         log_token = set_log_context(log_ctx)
-        obs_token = set_observability_context(obs_ctx)
-        emitter = get_observability_emitter()
-        emitter.emit(
-            RuntimeEvents.REQUEST_STARTED,
-            route=request.url.path,
-            method=request.method,
-        )
+        obs_token = set_correlation_context(obs_ctx)
+        # TODO: Fix emitter
+        # emitter = get_observability_emitter()
+        # emitter.emit(
+        #     RuntimeEvents.REQUEST_STARTED,
+        #     route=request.url.path,
+        #     method=request.method,
+        # )
 
         # Also attach to request state for downstream convenience
         request.state.correlation_id = correlation_id
@@ -73,11 +75,12 @@ class RuntimeLoggingMiddleware(BaseHTTPMiddleware):
             log_ctx.latency_ms = duration_ms
 
             logger.event(RuntimeEvents.REQUEST_COMPLETED)
-            emitter.emit(
-                RuntimeEvents.REQUEST_COMPLETED,
-                status=str(response.status_code),
-                duration_ms=duration_ms,
-            )
+            # TODO: Fix emitter
+            # emitter.emit(
+            #     RuntimeEvents.REQUEST_COMPLETED,
+            #     status=str(response.status_code),
+            #     duration_ms=duration_ms,
+            # )
 
             # Add correlation header to response
             response.headers["X-Correlation-ID"] = correlation_id
@@ -91,15 +94,16 @@ class RuntimeLoggingMiddleware(BaseHTTPMiddleware):
             log_ctx.error_type = exc.__class__.__name__
 
             logger.exception(RuntimeEvents.REQUEST_FAILED)
-            emitter.emit(
-                RuntimeEvents.REQUEST_FAILED,
-                status="500",
-                duration_ms=duration_ms,
-                error_type=exc.__class__.__name__,
-            )
+            # TODO: Fix emitter
+            # emitter.emit(
+            #     RuntimeEvents.REQUEST_FAILED,
+            #     status="500",
+            #     duration_ms=duration_ms,
+            #     error_type=exc.__class__.__name__,
+            # )
             raise
 
         finally:
             # 4. Cleanup
             clear_log_context()
-            clear_observability_context()
+            clear_correlation_context()
