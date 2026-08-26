@@ -36,31 +36,36 @@ class MemoryFetchNode:
             tenant_id = state.get("tenant_id")
             if not tenant_id:
                 warnings.append("Memory disabled for this turn: missing tenant_id")
-            
+
             conversation_history = [
                 message_to_history_entry(message) for message in messages
             ]
-
             state["conversation_history"] = conversation_history
 
-            # 1. Synthesize User Profile from durable facts (Phase 7)
             if user_id:
                 try:
-                    profile_summary = await self.profile_service.get_profile_summary(user_id, tenant_id)
+                    profile_summary = await self.profile_service.get_profile_summary(
+                        user_id,
+                        tenant_id,
+                    )
                     state["user_profile_summary"] = profile_summary.dict()
-                    
-                    # Map to legacy user_profile for backward compatibility with prompt builders
                     legacy_profile = state.get("user_profile") or {}
-                    legacy_profile.update({
-                        "id": str(profile_summary.user_id),
-                        "preferences": profile_summary.top_preferences,
-                        "style": profile_summary.communication_style.dict(),
-                        "roles": profile_summary.roles
-                    })
+                    legacy_profile.update(
+                        {
+                            "id": str(profile_summary.user_id),
+                            "preferences": profile_summary.top_preferences,
+                            "style": profile_summary.communication_style.dict(),
+                            "roles": profile_summary.roles,
+                        }
+                    )
                     state["user_profile"] = legacy_profile
-                    logger.debug(f"Synthesized profile for {user_id} with {profile_summary.stable_facts_count} facts.")
+                    logger.debug(
+                        "Synthesized profile for %s with %s facts.",
+                        user_id,
+                        profile_summary.stable_facts_count,
+                    )
                 except Exception as prof_err:
-                    logger.warning(f"Profile synthesis failed for {user_id}: {prof_err}")
+                    logger.warning("Profile synthesis failed for %s: %s", user_id, prof_err)
 
             if not messages:
                 state["memory_context"] = {
@@ -71,15 +76,16 @@ class MemoryFetchNode:
                 return state
 
             context_manager = await ensure_context_manager(self)
-
             user_profile = state.get("user_profile") or {}
             user_settings = user_profile.get("preferences", {})
             prompt = conversation_history[-1]["content"]
 
             import time
+
             memory_start = time.time()
             context = await context_manager.build_context(
                 user_id=user_id,
+                tenant_id=tenant_id,
                 session_id=state.get("session_id"),
                 prompt=prompt,
                 conversation_history=conversation_history,
@@ -92,7 +98,6 @@ class MemoryFetchNode:
             if isinstance(context, dict):
                 context.setdefault("context_metadata", {})["latency_ms"] = memory_latency
 
-            # Salvaged: Retrieve session state for continuity
             session_state_manager = await ensure_session_state_manager(self)
             session_id = state.get("session_id")
             if session_state_manager and session_id:
@@ -105,7 +110,6 @@ class MemoryFetchNode:
                         f"Retrieved salvaged session state for {session_id}"
                     )
 
-            # Salvaged: Build structured context sections for system prompt
             if isinstance(context, dict):
                 structured_sections = build_structured_context_sections(
                     request_context=state.get("request_config", {}),
@@ -113,7 +117,6 @@ class MemoryFetchNode:
                 )
                 state["memory_context"]["structured_sections"] = structured_sections
 
-                # Identify if long-form article is requested
                 if conversation_history:
                     is_long_form = wants_long_form_markdown_article(
                         current_user_message=conversation_history[-1]["content"],
@@ -127,7 +130,7 @@ class MemoryFetchNode:
                 )
 
         except Exception as e:
-            logger.error(f"Memory fetch error: {e}")
+            logger.error("Memory fetch error: %s", e)
             errors = state.setdefault("errors", [])
             errors.append(f"Memory fetch error: {str(e)}")
 
