@@ -1,8 +1,12 @@
-"""Adaptive decision intelligence layer.
+"""Transitional compatibility package for historical adaptive intelligence.
 
-The package root is a compatibility facade. Importing a pure adaptive contract
-must not initialize runtime, observability, provider, persistence, or platform
-infrastructure as a side effect.
+AdaptiveRuntime is retained only while existing callers are audited and
+migrated. New learning, evaluation, performance-profile, calibration, shadow,
+and promotion functionality belongs in ``core.intelligence.ml``. Routing and
+authorization decisions belong to CORTEX/RuntimePolicy, and execution remains
+owned by the canonical runtime.
+
+Do not add new execution or learning authority under this package.
 """
 
 from __future__ import annotations
