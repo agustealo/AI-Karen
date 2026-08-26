@@ -16,7 +16,6 @@ from ai_karen_engine.core.reasoning.soft_reasoning.engine import (
 )
 from ai_karen_engine.core.reasoning.graph.capsule import CapsuleGraph
 from ai_karen_engine.core.model_runtime.llm_adapter import LLMUtils
-from ai_karen_engine.core.model_runtime.runtime_registry_adapter import get_registry
 
 logger = logging.getLogger("ai_karen.reasoning.graph")
 
@@ -27,16 +26,24 @@ def _stable_node_id(prefix: str, value: str) -> str:
 
 
 class ReasoningGraph:
-    """ICE façade with optional CapsuleGraph mirroring for explainability."""
+    """ICE facade with optional CapsuleGraph mirroring for explainability.
+
+    Provider/model selection is a runtime responsibility. Callers must inject
+    the already-authorized generation client instead of allowing Core reasoning
+    to discover or select an active model.
+    """
 
     def __init__(
         self,
         *,
+        llm: LLMUtils,
         engine: Optional[SoftReasoningEngine] = None,
-        llm: Optional[LLMUtils] = None,
         policy: Optional[ICEWritebackPolicy] = None,
         enable_graph_mirroring: bool = True,
     ) -> None:
+        if llm is None:
+            raise ValueError("ReasoningGraph requires a runtime-injected generation client")
+
         self.engine = engine or SoftReasoningEngine(
             ttl_seconds=3600,
             recall=RecallConfig(
@@ -54,7 +61,7 @@ class ReasoningGraph:
                 max_len_chars=5000,
             ),
         )
-        self.llm = llm or (get_registry().get_active() or LLMUtils())  # type: ignore[attr-defined]
+        self.llm = llm
         self.policy = policy or ICEWritebackPolicy()
         self._ice = PremiumICEWrapper(sr=None, subengine=None, llm=self.llm, policy=self.policy)
         self._capsule_graph = CapsuleGraph() if enable_graph_mirroring else None
