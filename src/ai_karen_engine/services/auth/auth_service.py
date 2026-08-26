@@ -19,13 +19,14 @@ from enum import Enum
 from contextvars import ContextVar
 import jwt
 import bcrypt
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_karen_engine.core.services.base import BaseService
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.database.client import MultiTenantPostgresClient
 from ai_karen_engine.database.models import AuthUser, AuthSession, Tenant
+from ai_karen_engine.database.models.session_security import AuthRefreshTokenHistory
 from ai_karen_engine.services.auth.config import AuthConfig, load_auth_config
 
 logger = get_logger(__name__)
@@ -34,6 +35,9 @@ logger = get_logger(__name__)
 _db_session_ctx: ContextVar[Optional[AsyncSession]] = ContextVar(
     "auth_db_session", default=None
 )
+
+# Stable PostgreSQL advisory-lock key for the one-time first-admin bootstrap.
+_FIRST_ADMIN_BOOTSTRAP_LOCK_KEY = 1262571077
 
 
 class UserRole(str, Enum):
@@ -601,33 +605,90 @@ class AuthService(BaseService):
             logger.error(f"Error validating token: {e}")
             return None
 
+    @staticmethod
+    def _hash_refresh_token(refresh_token: str) -> str:
+        """Hash a refresh token for durable replay detection."""
+        return hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
+
+    async def _mark_refresh_replay(
+        self,
+        db_session: AsyncSession,
+        history: AuthRefreshTokenHistory,
+    ) -> None:
+        """Revoke the replayed session family and mark the history record."""
+        now = datetime.utcnow()
+        history.replayed_at = now
+        result = await db_session.execute(
+            select(AuthSession).where(AuthSession.session_token == history.session_id)
+        )
+        replayed_session = result.scalar_one_or_none()
+        if replayed_session and replayed_session.is_active:
+            replayed_session.is_active = False
+            replayed_session.invalidated_at = now
+            replayed_session.invalidation_reason = "refresh_token_replay"
+        await db_session.flush()
+
+        await self._emit_audit_event(
+            action="auth.session.refresh_replay",
+            actor_user_id=str(history.user_id),
+            target_user_id=str(history.user_id),
+            status="denied",
+            reason_code="refresh_token_replay",
+            session_id=str(history.session_id),
+        )
+
     async def refresh_access_token(
         self, refresh_token: str
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Refresh an access token using a refresh token.
+    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """Rotate a refresh token and issue a new access/refresh token pair.
 
-        Args:
-            refresh_token: Refresh token
+        Refresh is database-authoritative and fail-closed. The consumed refresh
+        token is hashed into durable history before the live session row is
+        updated. Reuse of a consumed token revokes that session family.
 
         Returns:
-            Tuple of (new_access_token, error) or (None, error_message) if refresh fails
+            Tuple of (new_access_token, new_refresh_token, error).
         """
         if not self._initialized:
             await self.initialize()
 
-        db_failed = False
+        presented_hash = self._hash_refresh_token(refresh_token)
+
         try:
             async with self._session_scope() as db_session:
+                prior_result = await db_session.execute(
+                    select(AuthRefreshTokenHistory).where(
+                        AuthRefreshTokenHistory.token_hash == presented_hash
+                    )
+                )
+                prior_history = prior_result.scalar_one_or_none()
+                if prior_history:
+                    await self._mark_refresh_replay(db_session, prior_history)
+                    return None, None, "Refresh token replay detected"
+
                 result = await db_session.execute(
-                    select(AuthSession).where(
+                    select(AuthSession)
+                    .where(
                         AuthSession.refresh_token == refresh_token,
                         AuthSession.is_active,
                     )
+                    .with_for_update()
                 )
                 db_auth_session = result.scalar_one_or_none()
+
+                # A concurrent rotation may have consumed the token while this
+                # transaction was waiting for the session-row lock.
                 if not db_auth_session:
-                    return None, "Invalid refresh token"
+                    replay_result = await db_session.execute(
+                        select(AuthRefreshTokenHistory).where(
+                            AuthRefreshTokenHistory.token_hash == presented_hash
+                        )
+                    )
+                    replay_history = replay_result.scalar_one_or_none()
+                    if replay_history:
+                        await self._mark_refresh_replay(db_session, replay_history)
+                        return None, None, "Refresh token replay detected"
+                    return None, None, "Invalid refresh token"
 
                 if db_auth_session.expires_in:
                     expires_at = db_auth_session.created_at + timedelta(
@@ -638,64 +699,59 @@ class AuthService(BaseService):
                         db_auth_session.invalidated_at = datetime.utcnow()
                         db_auth_session.invalidation_reason = "refresh_token_expired"
                         await db_session.flush()
-                        return None, "Session expired"
+                        return None, None, "Session expired"
 
                 user_result = await db_session.execute(
                     select(AuthUser).where(AuthUser.user_id == db_auth_session.user_id)
                 )
                 auth_user = user_result.scalar_one_or_none()
                 if not auth_user or not auth_user.is_active:
-                    return None, "User not found or inactive"
+                    db_auth_session.is_active = False
+                    db_auth_session.invalidated_at = datetime.utcnow()
+                    db_auth_session.invalidation_reason = "user_inactive"
+                    await db_session.flush()
+                    return None, None, "User not found or inactive"
 
                 new_access_token = self._generate_access_token_by_id(
                     str(auth_user.user_id)
                 )
+                new_refresh_token = self._generate_refresh_token()
+
+                db_session.add(
+                    AuthRefreshTokenHistory(
+                        session_id=db_auth_session.session_token,
+                        user_id=db_auth_session.user_id,
+                        token_hash=presented_hash,
+                    )
+                )
                 db_auth_session.access_token = new_access_token
+                db_auth_session.refresh_token = new_refresh_token
                 db_auth_session.last_accessed = datetime.utcnow()
                 await db_session.flush()
 
-                logger.info(
-                    "Access token refreshed successfully for user %s", auth_user.user_id
+                for cached_session in self._active_sessions.values():
+                    if cached_session.refresh_token == refresh_token and cached_session.is_active:
+                        cached_session.access_token = new_access_token
+                        cached_session.refresh_token = new_refresh_token
+                        cached_session.last_used = datetime.utcnow()
+                        break
+
+                await self._emit_audit_event(
+                    action="auth.session.refresh_rotated",
+                    actor_user_id=str(auth_user.user_id),
+                    target_user_id=str(auth_user.user_id),
+                    status="success",
+                    session_id=str(db_auth_session.session_token),
                 )
-                return new_access_token, None
+
+                logger.info(
+                    "Refresh token rotated successfully for user %s", auth_user.user_id
+                )
+                return new_access_token, new_refresh_token, None
 
         except Exception as e:
-            logger.warning(
-                "Database refresh token failed, falling back to memory: %s", e
-            )
-            db_failed = True
-
-        # Fallback to in-memory sessions
-        try:
-            session = None
-            for s in self._active_sessions.values():
-                if s.refresh_token == refresh_token and s.is_active:
-                    session = s
-                    break
-
-            if not session:
-                if db_failed:
-                    return None, "Database unavailable, session not found in memory"
-                return None, "Invalid refresh token"
-
-            if session.expires_at < datetime.utcnow():
-                session.is_active = False
-                return None, "Session expired"
-
-            user = await self.get_user_by_id(session.user_id)
-            if not user or user.status != UserStatus.ACTIVE:
-                return None, "User not found or inactive"
-
-            new_access_token = self._generate_access_token(user)
-            session.access_token = new_access_token
-            session.last_used = datetime.utcnow()
-
-            logger.info("Access token refreshed successfully for user %s", user.id)
-            return new_access_token, None
-
-        except Exception as e:
-            logger.error("Error refreshing access token: %s", e)
-            return None, str(e)
+            logger.error("Database refresh token rotation failed: %s", e)
+            return None, None, "Database unavailable"
 
     async def logout(self, refresh_token: str) -> None:
         """
@@ -723,6 +779,10 @@ class AuthService(BaseService):
                     logger.info(
                         "User logged out successfully: %s", db_auth_session.user_id
                     )
+                    for cached_session in self._active_sessions.values():
+                        if cached_session.refresh_token == refresh_token:
+                            cached_session.is_active = False
+                            break
                     return
         except Exception as e:
             logger.error("Database logout failed: %s", e)
@@ -798,7 +858,7 @@ class AuthService(BaseService):
         Get a user by email.
 
         Args:
-            email: User email
+            email: Email address to validate
 
         Returns:
             User account if found, None otherwise
@@ -1207,6 +1267,9 @@ class AuthService(BaseService):
                     db_session.invalidation_reason = reason
                     count += 1
                 await session.flush()
+                for cached_session in self._active_sessions.values():
+                    if cached_session.user_id == user_id:
+                        cached_session.is_active = False
                 return count
         except Exception as e:
             logger.error("Error revoking all sessions: %s", e)
@@ -1789,6 +1852,11 @@ class AuthService(BaseService):
             user_id,
             is_active=is_active,
         )
+        if not is_active:
+            await self.revoke_all_sessions(
+                user_id,
+                reason=reason or "account_disabled",
+            )
         await self._emit_audit_event(
             action="auth.account.status_changed",
             actor_user_id=None,
@@ -1963,7 +2031,9 @@ class AuthService(BaseService):
 
             # Get active user count
             result = await self._db_session.execute(
-                select(func.count()).select_from(AuthUser).where(AuthUser.is_active)
+                select(func.count())
+                .select_from(AuthUser)
+                .where(AuthUser.is_active)
             )
             active_users = result.scalar() or 0
 
@@ -2003,80 +2073,70 @@ class AuthService(BaseService):
             }
 
     async def is_first_run(self) -> bool:
-        """
-        Check if this is the first run (no users exist).
+        """Check if this is the first run (no users exist).
 
-        Returns:
-            True if no users exist, False otherwise
+        Database uncertainty is not interpreted as first-run. Callers must
+        surface the failure instead of opening the bootstrap path.
         """
         try:
-            from sqlalchemy import select, func
-            from ai_karen_engine.database.models import AuthUser
-            from ai_karen_engine.database.client import MultiTenantPostgresClient
-
-            # Use existing session or create temporary client
             if not self._db_session:
-                try:
-                    temp_client = MultiTenantPostgresClient()
-                    async with temp_client.get_async_session() as session:
-                        result = await session.execute(
-                            select(func.count()).select_from(AuthUser)
-                        )
-                        user_count = result.scalar() or 0
-                        return user_count == 0
-                except Exception as temp_error:
-                    logger.warning(
-                        f"Could not use temporary database client: {temp_error}"
+                temp_client = MultiTenantPostgresClient()
+                async with temp_client.get_async_session() as session:
+                    result = await session.execute(
+                        select(func.count()).select_from(AuthUser)
                     )
-                    return True  # Assume first run if database not available
-
-            from sqlalchemy import select, func
-            from ai_karen_engine.database.models import AuthUser
+                    return (result.scalar() or 0) == 0
 
             result = await self._db_session.execute(
                 select(func.count()).select_from(AuthUser)
             )
-            user_count = result.scalar() or 0
-
-            return user_count == 0
-        except Exception as e:
-            logger.error(f"Failed to check first run status: {e}")
-            return False
+            return (result.scalar() or 0) == 0
+        except Exception as exc:
+            logger.error("Failed to determine first-run status: %s", exc)
+            raise RuntimeError("First-run state unavailable") from exc
 
     async def create_first_admin(
         self, email: str, password: str, full_name: str
     ) -> UserAccount:
+        """Atomically create the first admin user.
+
+        A PostgreSQL transaction-scoped advisory lock serializes bootstrap
+        across processes and workers. The lock and user-count check occur in
+        the same database transaction used by ``create_user``.
         """
-        Create the first admin user (only works if no users exist).
+        async with self._session_scope() as session:
+            context_token = _db_session_ctx.set(session)
+            try:
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                    {"lock_key": _FIRST_ADMIN_BOOTSTRAP_LOCK_KEY},
+                )
+                result = await session.execute(
+                    select(func.count()).select_from(AuthUser)
+                )
+                if (result.scalar() or 0) != 0:
+                    raise ValueError("First-run setup has already been completed")
 
-        Args:
-            email: Admin email address
-            password: Admin password
-            full_name: Admin full name
+                user, error = await self.create_user(
+                    email=email,
+                    password=password,
+                    full_name=full_name,
+                    roles=[UserRole.ADMIN, UserRole.USER],
+                    is_verified=True,
+                )
+                if not user:
+                    raise ValueError(f"Failed to create first admin user: {error}")
 
-        Returns:
-            Created UserAccount
-
-        Raises:
-            ValueError: If users already exist or creation fails
-        """
-        if not await self.is_first_run():
-            raise ValueError("First-run setup has already been completed")
-
-        # Create admin user with super_admin role
-        user, error = await self.create_user(
-            email=email,
-            password=password,
-            full_name=full_name,
-            roles=[UserRole.ADMIN, UserRole.USER],
-            is_verified=True,
-        )
-
-        if not user:
-            raise ValueError(f"Failed to create first admin user: {error}")
-
-        logger.info(f"First admin user created: {email}")
-        return user
+                await self._emit_audit_event(
+                    action="auth.first_admin.created",
+                    actor_user_id=user.id,
+                    target_user_id=user.id,
+                    status="success",
+                )
+                logger.info("First admin user created: %s", email)
+                return user
+            finally:
+                _db_session_ctx.reset(context_token)
 
     async def start(self) -> None:
         """Start the Authentication Service."""
