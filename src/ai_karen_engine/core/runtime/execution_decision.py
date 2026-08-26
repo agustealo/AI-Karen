@@ -32,13 +32,11 @@ def _topology_from_execution_mode(mode: RuntimeExecutionMode, graph_required: bo
 
 @dataclass
 class ExecutionDecision:
-    """CORTEX-produced, runtime-consumed execution decision.
+    """CORTEX-produced, runtime-consumed cognitive execution recommendation.
 
-    CORTEX decides *what kind* of execution is required. It never executes.
-    The runtime consumes this to route to ExpressionGateway (simple) or the
-    WorkflowRuntime/LangGraph adapter (graph-required).
-
-    This is the single decision contract between CORTEX and ChatRuntime.
+    CORTEX decides what kind of execution a request needs. RuntimePolicy decides
+    what is authorized, and Runtime executes the resulting plan. Capability and
+    reasoning-mode domains are intentionally distinct.
     """
 
     execution_mode: RuntimeExecutionMode = RuntimeExecutionMode.DIRECT
@@ -50,8 +48,10 @@ class ExecutionDecision:
     risk_level: RiskLevel = RiskLevel.LOW
 
     reasoning_depth: str = "standard"
+    reasoning_modes: List[str] = field(default_factory=list)
     memory_recall_required: bool = False
-    memory_write_allowed: bool = True
+    # Fail closed. This becomes true only after RuntimePolicy grants memory.write.
+    memory_write_allowed: bool = False
     memory_scope: str = "session"
     memory_top_k: int = 10
     memory_classes: List[str] = field(default_factory=list)
