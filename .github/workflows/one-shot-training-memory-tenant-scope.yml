@@ -1,0 +1,48 @@
+name: One-shot Training Memory Tenant Scope
+
+on:
+  push:
+    branches:
+      - memory/migrate-remaining-consumers
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[training-tenant-closed]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: memory/migrate-remaining-consumers
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply training tenant closure
+        run: python scripts/dev/apply_training_memory_tenant_scope.py
+      - name: Compile training route
+        run: python -m py_compile src/ai_karen_engine/api_routes/training/data.py
+      - name: Prove server-derived tenant scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -q 'tenant_id: Optional\[str\].*Tenant scope for curated memory' src/ai_karen_engine/api_routes/training/data.py
+          grep -q 'tenant_id = current_user.tenant_id' src/ai_karen_engine/api_routes/training/data.py
+          ! grep -q 'request.tenant_id' src/ai_karen_engine/api_routes/training/data.py
+          ! grep -q 'current_user.user_id' src/ai_karen_engine/api_routes/training/data.py
+          grep -q 'Explicit tenant scope is required for curated memory datasets' src/ai_karen_engine/api_routes/training/data.py
+      - name: Remove one-shot scaffold and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -f \
+            .github/workflows/one-shot-training-memory-tenant-scope.yml \
+            scripts/dev/apply_training_memory_tenant_scope.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/ai_karen_engine/api_routes/training/data.py
+          git diff --cached --quiet && exit 0
+          git commit -m 'security(memory): derive training tenant from principal [training-tenant-closed]'
+          git push origin HEAD:memory/migrate-remaining-consumers
