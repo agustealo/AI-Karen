@@ -15,8 +15,13 @@ text = replace_once(
     ''' + '"""' + '''        diagnostics_engine = DiagnosticsEngine(\n            decision_engine=self._decision_engine,\n            llm_router=self._llm_router,\n            profile_manager=self._profile_manager,\n        )\n''' + '"""' + ''',
     'orchestrator diagnostics ContextManager wiring',
 )
-if "ContextManager" in text or "_context_manager" in text or "context_manager=" in text:
-    raise RuntimeError("orchestrator still contains ContextManager authority")
+_remaining = [
+    f"{index}: {line}"
+    for index, line in enumerate(text.splitlines(), start=1)
+    if "ContextManager" in line or "_context_manager" in line or "context_manager=" in line
+]
+if _remaining:
+    raise RuntimeError("orchestrator still contains ContextManager authority: " + " | ".join(_remaining))
 '''
 if text.count(needle) != 1:
     raise RuntimeError("converge-2 driver could not locate orchestrator guard")
