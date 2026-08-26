@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS = ROOT / "supabase" / "migrations"
 EXPECTED_BASELINE = [
+    "20260827005000_00_required_extensions.sql",
     "20260827010000_01_core_persona_runtime.sql",
     "20260827020000_02_auth_profile_finalization.sql",
     "20260827030000_03_memory.sql",
@@ -23,6 +24,17 @@ def _read(path: str) -> str:
 def test_canonical_baseline_is_small_ordered_and_domain_named() -> None:
     names = [path.name for path in sorted(MIGRATIONS.glob("*.sql"))]
     assert names == EXPECTED_BASELINE
+
+
+def test_fresh_install_declares_pgvector_before_vector_columns() -> None:
+    extensions = _read("supabase/migrations/20260827005000_00_required_extensions.sql")
+    core = _read("supabase/migrations/20260827010000_01_core_persona_runtime.sql")
+
+    assert "CREATE EXTENSION IF NOT EXISTS vector;" in extensions
+    assert "VECTOR(" in core
+    assert EXPECTED_BASELINE.index("20260827005000_00_required_extensions.sql") < EXPECTED_BASELINE.index(
+        "20260827010000_01_core_persona_runtime.sql"
+    )
 
 
 def test_competing_primary_postgres_migration_authorities_are_absent() -> None:
