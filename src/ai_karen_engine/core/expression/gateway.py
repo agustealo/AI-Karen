@@ -24,10 +24,11 @@ def _emit_routing_event(event_name: str, **kwargs: Any) -> None:
 class ExpressionGateway:
     """Route expression tasks to configured model engines.
 
-    This gateway may fall back between real model runtimes, but it never
-    manufactures an assistant answer. If every eligible engine is exhausted,
-    the runtime receives ``EngineUnavailableError`` and owns the degraded/error
-    control-plane response.
+    Conversational generation is provider-agnostic. The gateway selects the
+    local or cloud OpenAI-compatible execution surface, while the provider
+    registry owns concrete endpoint selection. It never manufactures an
+    assistant answer. If every eligible model engine is exhausted, the runtime
+    receives ``EngineUnavailableError`` and owns degraded/error handling.
     """
 
     def __init__(self, settings: Any | None = None):
@@ -44,9 +45,12 @@ class ExpressionGateway:
         }
 
     async def generate(self, task: ExpressionTask) -> ExpressionResult:
+        active_engine = (
+            "local" if self.settings.active_engine == "builtin" else self.settings.active_engine
+        )
         emit_expression_event(
             "expression.task.started",
-            self._event_payload(task, engine_id=self.settings.active_engine),
+            self._event_payload(task, engine_id=active_engine),
         )
 
         _emit_routing_event(
@@ -67,22 +71,31 @@ class ExpressionGateway:
                 external_enabled=self.settings.policies.allow_external_engines,
             )
             target_engine: str | None = None
-            if decision.classification == "builtin_engine":
-                target_engine = decision.provider
-            elif decision.classification == "local_openai_endpoint":
+            if decision.classification == "local_openai_endpoint":
                 target_engine = "local"
             elif decision.classification == "cloud_provider":
                 target_engine = "cloud"
+            elif decision.classification == "deprecated_provider_alias" and decision.replacement:
+                replacement = evaluate_provider_policy(
+                    decision.replacement,
+                    local_enabled=True,
+                    external_enabled=self.settings.policies.allow_external_engines,
+                )
+                if decision.replacement == "local" or replacement.classification == "local_openai_endpoint":
+                    target_engine = "local"
+                elif replacement.classification == "cloud_provider":
+                    target_engine = "cloud"
 
             if target_engine:
                 sequence.append(target_engine)
 
-        if self.settings.active_engine not in sequence:
-            sequence.append(self.settings.active_engine)
+        if active_engine not in sequence:
+            sequence.append(active_engine)
 
-        for engine_id in self.settings.engine_fallback_order:
-            if engine_id == "disabled":
+        for configured_engine_id in self.settings.engine_fallback_order:
+            if configured_engine_id == "disabled":
                 continue
+            engine_id = "local" if configured_engine_id == "builtin" else configured_engine_id
             if engine_id not in sequence and len(sequence) < 5:
                 sequence.append(engine_id)
 
@@ -93,7 +106,7 @@ class ExpressionGateway:
             correlation_id=task.correlation_id,
             request_id=task.request_id,
             sequence=sequence,
-            active_engine=self.settings.active_engine,
+            active_engine=active_engine,
             preferred_provider=task.preferred_provider,
         )
         logger.info(
@@ -157,11 +170,12 @@ class ExpressionGateway:
             original_provider = task.preferred_provider
             original_model = task.preferred_model
 
-            if engine_id not in {"local", "cloud", "builtin"}:
+            if engine_id not in {"local", "cloud"}:
                 decision = evaluate_provider_policy(engine_id)
                 if decision.classification not in {
                     "unknown",
                     "removed_internal_provider",
+                    "deprecated_provider_alias",
                 }:
                     task.preferred_provider = engine_id
 
@@ -196,12 +210,11 @@ class ExpressionGateway:
 
                 if has_text and is_valid and has_model_source:
                     self.circuits.mark_success(f"expression.engine.{engine_id}")
-                    if level > 0:
-                        result.metadata = {
-                            **(result.metadata or {}),
-                            "fallback_level": level,
-                            "skipped_engines": skipped_engines,
-                        }
+                    result.metadata = {
+                        **(result.metadata or {}),
+                        "fallback_level": level,
+                        "skipped_engines": skipped_engines,
+                    }
                     emit_expression_event(
                         "expression.engine.request.completed",
                         self._event_payload(
@@ -278,6 +291,6 @@ class ExpressionGateway:
             ),
         )
         raise EngineUnavailableError(
-            f"No model engine produced a valid response: "
+            "No model engine produced a valid response: "
             f"{last_error or 'all_model_engines_failed'}"
         )
