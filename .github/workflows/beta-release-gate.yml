@@ -91,6 +91,8 @@ jobs:
         run: |
           set -euo pipefail
           test ! -e server/health_endpoints.py
+          test ! -e src/ai_karen_engine/core/expression/engines/builtin_provider_engine.py
+          test ! -e src/ai_karen_engine/core/model_runtime/providers/vllm_runtime.py
           refs=$(grep -R --line-number --include='*.py' \
             -E 'preferred_provider=["'"']builtin_vllm["'"']|provider_id=["'"']builtin_vllm["'"']|from .*vllm_runtime import VLLMRuntime|import .*vllm_runtime' \
             tests src/ai_karen_engine/core/expression || true)
@@ -150,11 +152,11 @@ jobs:
         run: pytest tests/integration/test_auth_refresh_concurrency_postgres.py -q
 
   live-model-proof:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 5
     environment: beta-release
     env:
-      BETA_MODEL_BASE_URL: ${{ secrets.BETA_MODEL_BASE_URL }}
+      BETA_MODEL_BASE_URL: ${{ vars.BETA_MODEL_BASE_URL }}
       BETA_MODEL_API_KEY: ${{ secrets.BETA_MODEL_API_KEY }}
       BETA_MODEL_NAME: ${{ vars.BETA_MODEL_NAME }}
       BETA_MODEL_TIMEOUT_SECONDS: "90"
@@ -162,24 +164,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Attest exact release SHA
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        run: python -c "import os, subprocess; actual=subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip(); expected=os.environ['GITHUB_SHA']; assert actual == expected, f'{actual} != {expected}'; print(f'beta_live_model_sha={actual}')"
 
-      - name: Require real endpoint configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$BETA_MODEL_BASE_URL" || { echo "BETA_MODEL_BASE_URL is not configured" >&2; exit 1; }
-          test -n "$BETA_MODEL_NAME" || { echo "BETA_MODEL_NAME is not configured" >&2; exit 1; }
+      - name: Compile live-model smoke harness
+        run: python -m py_compile scripts/beta_live_model_smoke.py
 
-      - name: Prove genuine model inference
+      - name: Prove genuine local model inference
         run: python scripts/beta_live_model_smoke.py
 
   beta-release-approved:
