@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from ai_karen_engine.core.contracts.values import JsonMap, JsonValue
+
 
 class ClaimStatus(str, Enum):
     OBSERVED = "observed"
@@ -39,7 +41,7 @@ def _utc(value: datetime) -> datetime:
 class MemoryClaim:
     subject: str
     predicate: str
-    object: Any
+    object: JsonValue
     tenant_id: str
     user_id: str | None = None
     confidence: float = 0.5
@@ -125,7 +127,7 @@ MemorySalience = SalienceScore
 
 @dataclass
 class SelfModel:
-    identity: dict[str, Any] = field(default_factory=dict)
+    identity: JsonMap = field(default_factory=dict)
     stable_principles: list[str] = field(default_factory=list)
     capabilities: list[str] = field(default_factory=list)
     capability_limits: dict[str, str] = field(default_factory=dict)
@@ -134,31 +136,31 @@ class SelfModel:
     current_commitments: list[str] = field(default_factory=list)
     active_goals: list[str] = field(default_factory=list)
     confidence: float = 1.0
-    significant_decisions: list[dict[str, Any]] = field(default_factory=list)
+    significant_decisions: list[JsonMap] = field(default_factory=list)
 
 
 @dataclass
 class UserModel:
-    explicit_preferences: dict[str, Any] = field(default_factory=dict)
+    explicit_preferences: JsonMap = field(default_factory=dict)
     inferred_preferences: dict[str, float] = field(default_factory=dict)
-    communication_patterns: dict[str, Any] = field(default_factory=dict)
+    communication_patterns: JsonMap = field(default_factory=dict)
     projects: list[str] = field(default_factory=list)
     goals: list[str] = field(default_factory=list)
-    relationships: dict[str, Any] = field(default_factory=dict)
+    relationships: JsonMap = field(default_factory=dict)
     routines: list[str] = field(default_factory=list)
     skills: list[str] = field(default_factory=list)
-    decisions: list[dict[str, Any]] = field(default_factory=list)
+    decisions: list[JsonMap] = field(default_factory=list)
     evolving_beliefs: list[MemoryClaim] = field(default_factory=list)
 
 
 @dataclass
 class RelationshipModel:
     shared_projects: list[str] = field(default_factory=list)
-    past_decisions: list[dict[str, Any]] = field(default_factory=list)
-    interaction_style: dict[str, Any] = field(default_factory=dict)
+    past_decisions: list[JsonMap] = field(default_factory=list)
+    interaction_style: JsonMap = field(default_factory=dict)
     trust_relevant_facts: list[str] = field(default_factory=list)
     unresolved_threads: list[str] = field(default_factory=list)
-    interaction_history: list[dict[str, Any]] = field(default_factory=list)
+    interaction_history: list[JsonMap] = field(default_factory=list)
 
 
 @dataclass
@@ -166,7 +168,7 @@ class ProspectiveMemory:
     intention: str
     tenant_id: str
     user_id: str | None = None
-    trigger: dict[str, Any] = field(default_factory=dict)
+    trigger: JsonMap = field(default_factory=dict)
     status: str = "open"
     priority: str = "medium"
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
