@@ -33,10 +33,20 @@ def test_memory_fetch_does_not_own_prompt_token_budget() -> None:
     node = _text(
         "src/ai_karen_engine/core/langgraph_orchestrator/nodes/memory_fetch.py"
     )
+    config = _text(
+        "src/ai_karen_engine/core/langgraph_orchestrator/contracts/orchestration_config.py"
+    )
+    orchestrator = _text(
+        "src/ai_karen_engine/core/langgraph_orchestrator/langgraph_orchestrator.py"
+    )
+
     assert "max_context_tokens" not in node
     assert "total_tokens" not in node
     assert "// 4" not in node
-    assert "top_k=10" in node
+    assert "top_k=self._memory_recall_top_k" in node
+    assert "memory_recall_top_k: int = 10" in config
+    assert "memory_recall_top_k must be between 1 and 50" in config
+    assert "memory_recall_top_k=self.config.memory_recall_top_k" in orchestrator
 
 
 def test_session_continuity_remains_composition_edge_injected() -> None:
@@ -51,7 +61,8 @@ def test_session_continuity_remains_composition_edge_injected() -> None:
     assert "SessionStateManager = SessionStatePort" in compat
     assert "SessionStateManager(" not in orchestrator
     assert "Return only a composition-edge injected session-state implementation" in orchestrator
-    assert "must inject a SessionStatePort" in adapter
+    assert "Core deliberately does not discover" in adapter
+    assert "SessionStatePort when constructing the orchestrator" in adapter
 
 
 def test_web_ui_memory_facade_is_retained_only_as_migration_debt() -> None:
