@@ -18,26 +18,25 @@ PROVIDER_CONFIG = (
 COMPOSE = REPO_ROOT / "docker-compose.yml"
 
 
-def test_ollama_is_an_optional_integration_not_core_runtime() -> None:
+def test_ollama_is_a_third_party_adapter_not_runtime_authority() -> None:
     source = OLLAMA_PROVIDER.read_text(encoding="utf-8")
 
-    assert 'self.enabled = _env_flag("KARI_OLLAMA_ENABLED", False)' in source
-    assert "Ollama is an integration, not a core runtime dependency" in source
-    assert "_require_enabled" in source
-    assert '"status": "disabled"' in source
+    assert "Ollama is a third-party provider integration" in source
+    assert "KARI_OLLAMA_ENABLED" not in source
+    assert "DEFAULT_OLLAMA_BASE_URL" not in source
+    assert "host.docker.internal" not in source
+    assert "localhost:11434" not in source
+    assert 'self.provider_name = "ollama"' in source
 
 
-def test_disabled_ollama_cannot_reach_network() -> None:
+def test_ollama_requires_provider_configuration_instead_of_inventing_it() -> None:
     source = OLLAMA_PROVIDER.read_text(encoding="utf-8")
 
-    request_body = source.split("def _request", 1)[1].split("def _record_usage", 1)[0]
-    assert "self._require_enabled()" in request_body
-
-    model_body = source.split("def get_models", 1)[1].split("def get_provider_info", 1)[0]
-    assert "self._require_enabled()" in model_body
+    assert 'base_url or os.getenv("OLLAMA_BASE_URL") or ""' in source
+    assert "Ollama provider has no configured base URL" in source
 
 
-def test_ollama_does_not_own_runtime_authorities() -> None:
+def test_ollama_does_not_own_system_authorities() -> None:
     source = OLLAMA_PROVIDER.read_text(encoding="utf-8").lower()
 
     forbidden = (
@@ -48,30 +47,20 @@ def test_ollama_does_not_own_runtime_authorities() -> None:
         "actionexecutiongate",
         "providerregistry(",
         "fallback_order",
+        "reasoningdepth",
+        "cortex",
     )
     for token in forbidden:
         assert token not in source
 
 
-def test_compose_ollama_service_remains_profile_gated() -> None:
-    source = COMPOSE.read_text(encoding="utf-8")
-    ollama_block = source.split("\n  ollama:\n", 1)[1].split("\n  # ─", 1)[0]
-
-    assert "profiles:" in ollama_block
-    assert "- ollama" in ollama_block
-
-
-def test_known_legacy_defaults_are_explicitly_bounded_for_followup() -> None:
-    """Pin the two remaining configuration leaks until config convergence removes them.
-
-    Runtime safety does not rely on these defaults because the adapter now fails
-    closed unless KARI_OLLAMA_ENABLED=true. This test makes the debt visible so
-    a future provider-config rewrite cannot accidentally treat it as canonical.
-    """
+def test_remaining_legacy_special_cases_are_visible_until_provider_convergence() -> None:
+    """Pin stale system-level Ollama treatment so it cannot be mistaken as canonical."""
 
     config = PROVIDER_CONFIG.read_text(encoding="utf-8")
     compose = COMPOSE.read_text(encoding="utf-8")
 
-    assert 'name="ollama"' in config
     assert "DEFAULT_OLLAMA_BASE_URL" in config
+    assert 'provider_type=ProviderType.LOCAL' in config
+    assert 'default_model="deepseek-r1:1.5b"' in config
     assert 'OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"' in compose
