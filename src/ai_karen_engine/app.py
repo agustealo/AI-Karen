@@ -5,8 +5,10 @@ application factory from this module. The root ``server`` package remains a
 transitional composition implementation while its helpers and endpoint groups
 are migrated by ownership.
 
-Health and readiness are now fully owned by canonical monitoring/probe routers;
-no root-server health registration or runtime pruning remains.
+Health and readiness are fully owned by canonical monitoring/probe routers.
+Canonical lifespan owns database cleanup; transitional duplicate shutdown
+callbacks from ``server.app`` are removed here until that composition source is
+physically retired.
 """
 
 from __future__ import annotations
@@ -16,6 +18,39 @@ from fastapi import FastAPI
 from ai_karen_engine.api_routes.monitoring.probes import router as probe_router
 
 _PROBES_REGISTERED_STATE_KEY = "_canonical_probe_routes_registered"
+_LEGACY_SHUTDOWN_PRUNED_STATE_KEY = "_legacy_shutdown_handlers_pruned"
+_LEGACY_SHUTDOWN_HANDLER_NAMES = frozenset(
+    {
+        "_shutdown_database",
+        "shutdown_extension_health_monitoring",
+    }
+)
+
+
+def _prune_legacy_shutdown_handlers(app: FastAPI) -> None:
+    """Remove duplicate shutdown callbacks still defined by ``server.app``.
+
+    The canonical lifespan owns database cleanup, while ``server.startup``
+    already owns extension-monitor shutdown. Matching both the exact callback
+    name and legacy module keeps canonical lifecycle handlers intact.
+    """
+
+    if getattr(app.state, _LEGACY_SHUTDOWN_PRUNED_STATE_KEY, False):
+        return
+
+    retained_handlers = []
+    for handler in app.router.on_shutdown:
+        handler_module = getattr(handler, "__module__", None)
+        handler_name = getattr(handler, "__name__", None)
+        is_legacy_duplicate = (
+            handler_module == "server.app"
+            and handler_name in _LEGACY_SHUTDOWN_HANDLER_NAMES
+        )
+        if not is_legacy_duplicate:
+            retained_handlers.append(handler)
+
+    app.router.on_shutdown[:] = retained_handlers
+    setattr(app.state, _LEGACY_SHUTDOWN_PRUNED_STATE_KEY, True)
 
 
 def create_app() -> FastAPI:
@@ -27,13 +62,15 @@ def create_app() -> FastAPI:
     New launchers must target this factory, never ``server.app`` directly.
 
     Canonical connectivity, liveness, and readiness probes are attached here.
-    Registration is idempotent because the compatibility app remains a
-    module-level singleton during this migration phase.
+    Probe registration and lifecycle pruning are idempotent because the
+    compatibility app remains a module-level singleton during this migration.
     """
 
     from server import app as legacy_app
 
     app = legacy_app.app
+    _prune_legacy_shutdown_handlers(app)
+
     if not getattr(app.state, _PROBES_REGISTERED_STATE_KEY, False):
         app.include_router(probe_router)
         setattr(app.state, _PROBES_REGISTERED_STATE_KEY, True)
