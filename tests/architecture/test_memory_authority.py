@@ -14,6 +14,11 @@ def test_legacy_core_recall_authority_is_retired() -> None:
     assert (MEMORY_ROOT / "retrieval").is_dir()
 
 
+def test_legacy_neuro_vault_monolith_is_retired() -> None:
+    """NeuroVault is a governance capability, not a second Core memory system."""
+    assert not (CORE_ROOT / "neuro_vault").exists()
+
+
 def test_neuro_memory_architecture_declares_single_owners() -> None:
     architecture = (MEMORY_ROOT / "NEURO_MEMORY_ARCHITECTURE.md").read_text(
         encoding="utf-8"
