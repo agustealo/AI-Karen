@@ -49,6 +49,13 @@ from ai_karen_engine.core.intelligence.ml.online_learning import (
     MLOutcomeCollector,
     MLOutcomeRecord,
 )
+from ai_karen_engine.core.intelligence.ml.performance_profiles import (
+    AgentPerformanceProfile,
+    CapabilityPerformanceProfile,
+    EvidenceAggregator,
+    OutcomeObservation,
+    PerformanceProfileAggregator,
+)
 from ai_karen_engine.core.intelligence.ml.predictors.topology import (
     ExecutionTopologyPredictor,
 )
@@ -71,6 +78,7 @@ from ai_karen_engine.core.intelligence.ml.training import (
 __all__ = [
     "AdaptiveLayer",
     "AdaptiveThresholds",
+    "AgentPerformanceProfile",
     "AuditEvent",
     "AuditLogger",
     "BenchmarkConfig",
@@ -81,8 +89,10 @@ __all__ = [
     "CalibrationContext",
     "CalibrationService",
     "CanonicalEvaluationCorpus",
+    "CapabilityPerformanceProfile",
     "ContinualRetrainingPipeline",
     "EvaluationCase",
+    "EvidenceAggregator",
     "EvidenceProfile",
     "EXECUTION_TOPOLOGY_LABELS",
     "IdentityCalibrator",
@@ -94,6 +104,8 @@ __all__ = [
     "MLOutcomeRecord",
     "MLRuntime",
     "ModelStatus",
+    "OutcomeObservation",
+    "PerformanceProfileAggregator",
     "PlattCalibrator",
     "Prediction",
     "PredictionOutcome",
