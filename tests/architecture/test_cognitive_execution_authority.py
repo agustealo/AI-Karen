@@ -17,9 +17,12 @@ CORE = SRC / "core"
 LANGGRAPH = CORE / "langgraph_orchestrator"
 REASONING = CORE / "reasoning"
 REASONING_NODE = LANGGRAPH / "nodes" / "reasoning.py"
+ROUTER_SELECT_NODE = LANGGRAPH / "nodes" / "router_select.py"
+RESPONSE_SYNTH_NODE = LANGGRAPH / "nodes" / "response_synth.py"
 LANGGRAPH_POLICY = LANGGRAPH / "runtime_policy.py"
 WORKFLOW_STATE = LANGGRAPH / "contracts" / "orchestration_state.py"
 WORKFLOW_RUNTIME = CORE / "runtime" / "workflow_runtime.py"
+WORKFLOW_GENERATION = CORE / "runtime" / "workflow_generation.py"
 MEDUSA_NODE = SRC / "agent_medusa" / "agent_medusa_node.py"
 MEDUSA_COORDINATOR = SRC / "agent_medusa" / "coordinator" / "medusa_coordinator.py"
 
@@ -99,6 +102,55 @@ def test_medusa_branch_selection_uses_authorized_topology_only() -> None:
     assert "agent_complex_reasoning" not in branch_source
     assert "admin_panel" not in branch_source
     assert "extension.action" not in branch_source
+
+
+def test_langgraph_router_checkpoint_has_no_provider_selection_authority() -> None:
+    source = _source(ROUTER_SELECT_NODE)
+    calls = _calls(ROUTER_SELECT_NODE)
+
+    assert "select_provider" not in calls
+    assert "ChatRequest" not in source
+    assert "ProfileManager" not in source
+    assert "kari-fallback-v1" not in source
+    assert 'state["selected_provider"] = None' in source
+    assert 'state["selected_model"] = None' in source
+    assert "Provider selection delegated to Runtime" in source
+
+
+def test_langgraph_response_synthesis_consumes_runtime_generation_port() -> None:
+    source = _source(RESPONSE_SYNTH_NODE)
+    calls = _calls(RESPONSE_SYNTH_NODE)
+
+    assert "ProviderRuntime" not in source
+    assert "get_prompt_runtime_service" not in source
+    assert "select_provider" not in calls
+    assert "execute_chat" not in calls
+    assert "WorkflowGenerationRequest" in source
+    assert "get_workflow_generation_runtime" in source
+    assert "self._workflow_generation_runtime.execute" in source
+
+
+def test_runtime_owns_workflow_prompt_routing_and_provider_execution() -> None:
+    source = _source(WORKFLOW_GENERATION)
+    calls = _calls(WORKFLOW_GENERATION)
+
+    assert "get_prompt_runtime_service" in source
+    assert "ProviderRuntime" in source
+    assert "select_provider" in calls
+    assert "execute_chat" in calls
+    assert "provider_constraints" in source
+    assert "model_unavailable" in source
+    assert "emergency_static" in source
+    assert "text=\"\"" in source
+
+
+def test_workflow_generation_preserves_runtime_policy_identity() -> None:
+    source = _source(WORKFLOW_GENERATION)
+    assert "policy_decision_id" in source
+    assert "plan_policy_id != request.policy_decision_id" in source
+    assert "provider_not_authorized_by_runtime_policy" in source
+    assert "provider_forbidden_by_runtime_policy" in source
+    assert "model_not_authorized_by_runtime_policy" in source
 
 
 def test_workflow_runtime_preserves_trusted_identity_and_authorization() -> None:
