@@ -5,13 +5,14 @@ The algorithm follows the architectural shape of Zhu et al. (ICML 2025):
 2. explore a low-dimensional latent space projected into hidden space;
 3. generate candidate solutions under controlled embedding perturbations;
 4. score candidates with an injected verifier objective;
-5. use surrogate-guided Bayesian-style optimisation to refine the latent perturbation.
+5. use Gaussian-process Bayesian optimisation to refine the latent perturbation.
 
 Research fidelity boundary:
-The default KAREN profile currently uses the lightweight kernel-regression
-surrogate in ``optimization.py``. A paper-faithful profile must use a true
-Gaussian-process posterior, Expected Improvement, and a reward that includes a
-typed generation-coherence/log-probability term in addition to verifier reward.
+The optimizer now uses a real Gaussian Process posterior. The default KAREN
+profile still differs from the paper in acquisition/search defaults and reward
+composition: KAREN defaults to UCB and its structured verifier score, while a
+paper-faithful profile must select Expected Improvement and combine verifier
+reward with typed generation-coherence/log-probability data.
 
 The engine is intentionally unaware of providers, memory stores, plugins,
 tools, HTTP, UI, and prompt assembly. Runtime must inject the model capability,
