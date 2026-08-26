@@ -356,7 +356,7 @@ async def check_first_run() -> Dict[str, Any]:
 async def first_run_setup(
     request: FirstRunSetupRequest, http_request: Request
 ) -> JSONResponse:
-    """Set up the first admin user."""
+    """Set up the first admin user through the canonical auth authority."""
     try:
         auth_svc = await get_auth_service()
     except Exception:
@@ -373,20 +373,11 @@ async def first_run_setup(
         )
 
     try:
-        # Create first admin user directly (bypass is_first_run check for setup)
-        user, error = await auth_svc.create_user(
+        user = await auth_svc.create_first_admin(
             email=request.email,
-            username=request.email.split("@")[0],  # Use email prefix as username
             password=request.password,
             full_name=request.full_name,
-            roles=[UserRole.ADMIN, UserRole.USER],
-            is_verified=True,
         )
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to create admin user: {error}",
-            )
 
         # Authenticate the new admin user
         ip_address = get_client_ip(http_request)
@@ -448,10 +439,13 @@ async def first_run_setup(
 
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as e:
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to create first admin user")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create admin user: {str(e)}",
+            detail="Failed to create admin user",
         )
 
 
