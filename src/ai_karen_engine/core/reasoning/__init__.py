@@ -1,8 +1,8 @@
 """Reasoning Module - specialist cognition exports.
 
 Keep this package import-light. Concrete submodules are loaded lazily so that
-importing reasoning helpers does not bootstrap the full orchestration stack or
-trigger unrelated model/provider initialization.
+importing reasoning helpers does not bootstrap orchestration, provider, tool,
+UI, or persistence authority.
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ __all__ = [
     "ReasoningStrategyEngine",
     "ReasoningExecutor",
     "get_reasoning_executor",
-    # Core Soft Reasoning
     "SoftReasoningEngine",
     "RecallConfig",
     "WritebackConfig",
@@ -50,12 +49,10 @@ __all__ = [
     "VerifierConfig",
     "VerificationResult",
     "VerificationCriterion",
-    # Graph reasoning
     "ReasoningGraph",
     "CapsuleGraph",
     "Node",
     "Edge",
-    # Synthesis & ICE
     "PremiumICEWrapper",
     "KariICEWrapper",
     "ICEWritebackPolicy",
@@ -78,7 +75,6 @@ __all__ = [
     "MetacognitiveConfig",
     "CognitiveState",
     "PerformanceMetrics",
-    # Retrieval
     "SRRetriever",
     "SRCompositeRetriever",
     "VectorStore",
@@ -86,7 +82,6 @@ __all__ = [
     "LlamaIndexVectorAdapter",
     "ReasoningEvidenceAdapter",
     "EvidenceBundle",
-    # Causal reasoning
     "CausalReasoningEngine",
     "CausalGraph",
     "CausalEdge",
@@ -103,11 +98,6 @@ __all__ = [
     "EnhancedCausalExplanation",
     "CounterfactualComparison",
     "create_cognitive_causal_reasoner",
-    # KRO orchestrator
-    "KROOrchestrator",
-    "get_kro_orchestrator",
-    # Strategies
-    "KROReasoningStrategy",
     "CausalReasoner",
     "SoftReasoner",
     "Verifier",
@@ -119,7 +109,6 @@ __all__ = [
 ]
 
 _EXPORTS = {
-    # Canonical contracts
     "ReasoningRequest": ("ai_karen_engine.core.reasoning.contracts", "ReasoningRequest"),
     "ReasoningResult": ("ai_karen_engine.core.reasoning.contracts", "ReasoningResult"),
     "ReasoningEvidence": ("ai_karen_engine.core.reasoning.contracts", "ReasoningEvidence"),
@@ -144,7 +133,6 @@ _EXPORTS = {
     "ReasoningExecutor": ("ai_karen_engine.core.reasoning.executor", "ReasoningExecutor"),
     "get_reasoning_executor": ("ai_karen_engine.core.reasoning.executor", "get_reasoning_executor"),
     "get_reasoning_strategy_registry": ("ai_karen_engine.core.reasoning.strategy", "get_reasoning_strategy_registry"),
-    # Soft reasoning
     "SoftReasoningEngine": ("ai_karen_engine.core.reasoning.soft_reasoning.engine", "SoftReasoningEngine"),
     "RecallConfig": ("ai_karen_engine.core.reasoning.soft_reasoning.engine", "RecallConfig"),
     "WritebackConfig": ("ai_karen_engine.core.reasoning.soft_reasoning.engine", "WritebackConfig"),
@@ -160,12 +148,10 @@ _EXPORTS = {
     "VerifierConfig": ("ai_karen_engine.core.reasoning.soft_reasoning.verifier", "VerifierConfig"),
     "VerificationResult": ("ai_karen_engine.core.reasoning.soft_reasoning.verifier", "VerificationResult"),
     "VerificationCriterion": ("ai_karen_engine.core.reasoning.soft_reasoning.verifier", "VerificationCriterion"),
-    # Graph reasoning
     "ReasoningGraph": ("ai_karen_engine.core.reasoning.graph.reasoning", "ReasoningGraph"),
     "CapsuleGraph": ("ai_karen_engine.core.reasoning.graph.capsule", "CapsuleGraph"),
     "Node": ("ai_karen_engine.core.reasoning.graph.capsule", "Node"),
     "Edge": ("ai_karen_engine.core.reasoning.graph.capsule", "Edge"),
-    # Synthesis
     "PremiumICEWrapper": ("ai_karen_engine.core.reasoning.synthesis.ice_wrapper", "PremiumICEWrapper"),
     "ICEWritebackPolicy": ("ai_karen_engine.core.reasoning.synthesis.ice_wrapper", "ICEWritebackPolicy"),
     "ReasoningTrace": ("ai_karen_engine.core.reasoning.synthesis.ice_wrapper", "ReasoningTrace"),
@@ -187,7 +173,6 @@ _EXPORTS = {
     "MetacognitiveConfig": ("ai_karen_engine.core.reasoning.synthesis.metacognition", "MetacognitiveConfig"),
     "CognitiveState": ("ai_karen_engine.core.reasoning.synthesis.metacognition", "CognitiveState"),
     "PerformanceMetrics": ("ai_karen_engine.core.reasoning.synthesis.metacognition", "PerformanceMetrics"),
-    # Retrieval
     "SRRetriever": ("ai_karen_engine.core.reasoning.retrieval.adapters", "SRRetriever"),
     "SRCompositeRetriever": ("ai_karen_engine.core.reasoning.retrieval.adapters", "SRCompositeRetriever"),
     "VectorStore": ("ai_karen_engine.core.reasoning.retrieval.vector_stores", "VectorStore"),
@@ -195,7 +180,6 @@ _EXPORTS = {
     "LlamaIndexVectorAdapter": ("ai_karen_engine.core.reasoning.retrieval.vector_stores", "LlamaIndexVectorAdapter"),
     "ReasoningEvidenceAdapter": ("ai_karen_engine.core.reasoning.retrieval.adapters", "ReasoningEvidenceAdapter"),
     "EvidenceBundle": ("ai_karen_engine.core.reasoning.retrieval.adapters", "EvidenceBundle"),
-    # Causal
     "CausalReasoningEngine": ("ai_karen_engine.core.reasoning.causal.engine", "CausalReasoningEngine"),
     "CausalGraph": ("ai_karen_engine.core.reasoning.causal.engine", "CausalGraph"),
     "CausalEdge": ("ai_karen_engine.core.reasoning.causal.engine", "CausalEdge"),
@@ -212,11 +196,6 @@ _EXPORTS = {
     "EnhancedCausalExplanation": ("ai_karen_engine.core.reasoning.causal.cognitive_causal", "EnhancedCausalExplanation"),
     "CounterfactualComparison": ("ai_karen_engine.core.reasoning.causal.cognitive_causal", "CounterfactualComparison"),
     "create_cognitive_causal_reasoner": ("ai_karen_engine.core.reasoning.causal.cognitive_causal", "create_cognitive_causal_reasoner"),
-    # KRO
-    "KROOrchestrator": ("ai_karen_engine.core.reasoning.kro_orchestrator", "KROOrchestrator"),
-    "get_kro_orchestrator": ("ai_karen_engine.core.reasoning.kro_orchestrator", "get_kro_orchestrator"),
-    # Strategy
-    "KROReasoningStrategy": ("ai_karen_engine.core.reasoning.strategies.kro_strategy", "KROReasoningStrategy"),
     "CausalReasoner": ("ai_karen_engine.core.reasoning.strategies.causal_strategy", "CausalReasoner"),
     "SoftReasoner": ("ai_karen_engine.core.reasoning.strategies.soft_strategy", "SoftReasoner"),
     "Verifier": ("ai_karen_engine.core.reasoning.strategies.verifier_strategy", "Verifier"),
