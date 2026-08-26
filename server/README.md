@@ -36,7 +36,8 @@ The root `server/` package may temporarily contain compatibility and composition
 ### Observability / health
 
 - `server/metrics.py`: TRANSITIONAL. Target owner: `platform/observability/`. Preserve current callers while migrating; do not recreate a Core metrics authority.
-- `server/health_endpoints.py`: TRANSITIONAL. Target owner: canonical health/readiness API surface.
+- `server/health_endpoints.py`: RETIRED AUTHORITY / COMPATIBILITY SHIM. It registers no routes and contains no health logic. Connectivity aliases now live in `src/ai_karen_engine/api_routes/monitoring/probes.py`; detailed health lives in `src/ai_karen_engine/api_routes/monitoring/health.py`. Delete this shim together with the remaining import/call in `server/app.py` during the isolated app-factory extraction.
+- `server/app.py` still contains bounded inline health migration debt: `/health`, `/api/health/database`, `/api/health/database/test`, `/api/health/database/monitor`, and `/api/health/degraded-mode`. No new health routes may be added there. These must converge into canonical monitoring or operator/admin owners before `server.app` is reduced to a shim.
 - `server/enhanced_database_health_monitor.py`: REVIEW/MERGE. Database-health implementation belongs with the canonical database/platform owner.
 - `server/extension_health_monitor.py`: REVIEW/MERGE. Extension health belongs with governed extension/platform observability seams.
 
