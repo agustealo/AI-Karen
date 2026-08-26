@@ -1,0 +1,41 @@
+name: One-shot Context Convergence Patch
+
+on:
+  push:
+    branches:
+      - context/converge-0-authority-closure
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: "!contains(github.event.head_commit.message, '[context-patch-applied]')"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: context/converge-0-authority-closure
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply exact ChatRuntime patch
+        run: python scripts/patch_context_convergence.py
+      - name: Compile touched runtime files
+        run: |
+          python -m py_compile \
+            src/ai_karen_engine/core/runtime/chat_runtime.py \
+            src/ai_karen_engine/core/runtime/prompt/prompt_service.py \
+            src/ai_karen_engine/core/runtime/prompt/prompt_assembler.py \
+            src/ai_karen_engine/core/runtime/prompt/truncation_policy.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/context/context_manager.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/nodes/memory_fetch.py
+      - name: Commit patch and remove one-shot patch scaffolding
+        run: |
+          rm scripts/patch_context_convergence.py
+          rm .github/workflows/one-shot-context-convergence-patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor(context): wire ChatRuntime through PromptRuntime [context-patch-applied]"
+          git push origin HEAD:context/converge-0-authority-closure
