@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 from ai_karen_engine.core.model_runtime.provider_contracts import (
     GenerationFailed,
     LLMProviderBase,
+    ModelRuntimeCapabilities,
     ProviderNotAvailable,
 )
 
@@ -31,6 +32,8 @@ class TransformersRuntime(LLMProviderBase):
 
     The runtime does not manufacture assistant text when the model is unavailable.
     Callers receive a typed provider failure and decide whether fallback is allowed.
+    Specialized runtime adapters may borrow the warmed model/tokenizer through
+    ``generation_components`` while sharing the same generation lock.
     """
 
     _instance: Optional["TransformersRuntime"] = None
@@ -55,6 +58,7 @@ class TransformersRuntime(LLMProviderBase):
         self._model_name = self._resolve_model_name(model_path)
         self._pipeline = None
         self._lock = threading.Lock()
+        self._generation_lock = threading.RLock()
 
         if not self._transformers_available:
             logger.info("Transformers not installed; runtime unavailable")
@@ -102,7 +106,11 @@ class TransformersRuntime(LLMProviderBase):
                 except (ValueError, IndexError):
                     device_idx = 0
 
-            dtype = torch.float16 if torch.cuda.is_available() and self.torch_dtype == "auto" else "auto"
+            dtype = (
+                torch.float16
+                if torch.cuda.is_available() and self.torch_dtype == "auto"
+                else "auto"
+            )
             offline_mode = os.getenv("TRANSFORMERS_OFFLINE", "false").lower() == "true"
             candidate_paths: List[str] = []
 
@@ -155,6 +163,22 @@ class TransformersRuntime(LLMProviderBase):
     def load_model_by_path(self, model_path: str) -> bool:
         return self.load_model(model_path)
 
+    def generation_components(self) -> tuple[Any, Any, threading.RLock]:
+        """Return warmed model, tokenizer, and the shared generation lock.
+
+        This does not select a model or provider. It exposes an already-resolved
+        local runtime to specialized execution adapters that must coordinate
+        model-forward hooks with ordinary generation.
+        """
+
+        if not self._pipeline and self._transformers_available:
+            self.warm(self.model_path)
+        if not self._pipeline:
+            if not self._transformers_available:
+                raise ProviderNotAvailable("Transformers runtime is not available")
+            raise ProviderNotAvailable("Transformers model is not warmed")
+        return self._pipeline.model, self._pipeline.tokenizer, self._generation_lock
+
     def generate(self, prompt: str, **kwargs: Any) -> str:
         if not self._pipeline and self._transformers_available:
             self.warm(self.model_path)
@@ -163,13 +187,14 @@ class TransformersRuntime(LLMProviderBase):
             try:
                 max_new_tokens = kwargs.get("max_new_tokens") or kwargs.get("max_tokens") or 128
                 temperature = float(kwargs.get("temperature", 0.7))
-                result = self._pipeline(
-                    prompt,
-                    max_new_tokens=max_new_tokens,
-                    temperature=temperature,
-                    do_sample=temperature > 0,
-                    pad_token_id=self._pipeline.tokenizer.eos_token_id,
-                )
+                with self._generation_lock:
+                    result = self._pipeline(
+                        prompt,
+                        max_new_tokens=max_new_tokens,
+                        temperature=temperature,
+                        do_sample=temperature > 0,
+                        pad_token_id=self._pipeline.tokenizer.eos_token_id,
+                    )
                 if result and isinstance(result, list) and "generated_text" in result[0]:
                     generated = str(result[0]["generated_text"])
                     if generated.startswith(prompt):
@@ -208,6 +233,23 @@ class TransformersRuntime(LLMProviderBase):
             results.append([float(int(digest[i % 64], 16)) / 15.0 for i in range(384)])
         return results[0] if is_single else results
 
+    def runtime_capabilities(self) -> ModelRuntimeCapabilities:
+        """Report base Transformers capabilities.
+
+        First-token embedding control intentionally remains false here. Only a
+        validated specialized adapter may advertise that capability.
+        """
+
+        return ModelRuntimeCapabilities(
+            runtime_engine="transformers",
+            model_id=self._model_name or "unknown",
+            supports_streaming=True,
+            supports_seed=False,
+            supports_embeddings=False,
+            supports_logprobs=False,
+            supports_first_token_embedding_control=False,
+        )
+
     @classmethod
     def get_instance(cls, **kwargs: Any) -> "TransformersRuntime":
         if cls._instance is None:
@@ -229,6 +271,7 @@ class TransformersRuntime(LLMProviderBase):
             "quantization": self.quantization,
             "transformers_available": self._transformers_available,
             "supports_streaming": True,
+            "supports_first_token_embedding_control": False,
         }
 
     def shutdown(self) -> None:
