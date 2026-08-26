@@ -70,20 +70,16 @@ def test_prompt_hash_is_deterministic_for_identical_content() -> None:
     assert first == second
 
 
-def test_langgraph_context_adapter_preserves_tenant_identity() -> None:
-    manager_source = (
-        CORE
-        / "langgraph_orchestrator"
-        / "context"
-        / "context_manager.py"
-    ).read_text(encoding="utf-8")
+def test_langgraph_memory_boundary_preserves_tenant_identity() -> None:
     node_source = (
         CORE / "langgraph_orchestrator" / "nodes" / "memory_fetch.py"
     ).read_text(encoding="utf-8")
 
-    assert "tenant_id=user_id" not in manager_source
-    assert "tenant_id=tenant_id" in manager_source
+    assert 'tenant_id = state.get("tenant_id")' in node_source
     assert "tenant_id=tenant_id" in node_source
+    assert "tenant_id=user_id" not in node_source
+    assert "tenant_id or conversation_id" not in node_source
+    assert "Memory disabled for this turn: missing tenant_id" in node_source
 
 
 def test_deleted_core_context_does_not_return_as_second_authority() -> None:

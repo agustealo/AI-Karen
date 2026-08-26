@@ -75,13 +75,10 @@ def test_langgraph_hands_canonical_prompt_to_provider_runtime() -> None:
 
 
 def test_file_context_is_separate_from_conversation_context() -> None:
-    manager = _text("src/ai_karen_engine/core/langgraph_orchestrator/context/context_manager.py")
+    manager_path = ROOT / "src/ai_karen_engine/core/langgraph_orchestrator/context/context_manager.py"
     file_store = _text("src/ai_karen_engine/core/langgraph_orchestrator/context/file_context_store.py")
     uploader = _text("src/ai_karen_engine/core/langgraph_orchestrator/context/file_upload_service.py")
-    assert "class ContextFile" not in manager
-    assert "_context_store" not in manager
-    assert "async def get_context" not in manager
-    assert "async def update_context" not in manager
+    assert not manager_path.exists()
     assert "class FileContextStore" in file_store
     assert "class ContextFile" in file_store
     assert "FileContextUpdateRequest" in uploader

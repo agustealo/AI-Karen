@@ -5,9 +5,6 @@ import logging
 from datetime import datetime, timezone
 
 from ai_karen_engine.core.runtime.session_state_port import SessionStatePort
-from .context_manager import (
-    ContextManager,
-)
 from ..utils.message_serialization import (
     message_to_history_entry,
     history_entry_to_message,
@@ -15,33 +12,6 @@ from ..utils.message_serialization import (
 
 logger = logging.getLogger(__name__)
 
-
-async def resolve_memory_service(orchestrator_instance: Any) -> Optional[Any]:
-    """Resolve shared memory service via the canonical Core service registry."""
-    if getattr(orchestrator_instance, "_memory_service", None) is not None or getattr(
-        orchestrator_instance, "_memory_resolution_failed", False
-    ):
-        return orchestrator_instance._memory_service
-
-    try:
-        from ai_karen_engine.core.services.service_registry import get_memory_service
-
-        orchestrator_instance._memory_service = await get_memory_service()
-    except Exception as exc:
-        if not getattr(orchestrator_instance, "_memory_resolution_failed", False):
-            logger.warning("Memory service unavailable: %s", exc)
-        orchestrator_instance._memory_resolution_failed = True
-        orchestrator_instance._memory_service = None
-
-    return orchestrator_instance._memory_service
-
-
-async def ensure_context_manager(orchestrator_instance: Any) -> ContextManager:
-    if getattr(orchestrator_instance, "_context_manager", None) is not None:
-        return orchestrator_instance._context_manager
-    memory_service = await resolve_memory_service(orchestrator_instance)
-    orchestrator_instance._context_manager = ContextManager(memory_service)
-    return orchestrator_instance._context_manager
 
 
 async def ensure_session_state_manager(
