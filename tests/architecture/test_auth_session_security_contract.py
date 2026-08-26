@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 AUTH_SERVICE = ROOT / "src/ai_karen_engine/services/auth/auth_service.py"
 AUTH_ROUTE = ROOT / "src/ai_karen_engine/api_routes/auth/auth.py"
 SESSION_MODEL = ROOT / "src/ai_karen_engine/database/models/session_security.py"
-MIGRATION = ROOT / "supabase/migrations/20260826010000_auth_refresh_token_history.sql"
+MIGRATIONS = ROOT / "supabase/migrations"
 
 
 def _function_source(path: Path, function_name: str) -> str:
@@ -20,6 +20,20 @@ def _function_source(path: Path, function_name: str) -> str:
             assert segment is not None
             return segment
     raise AssertionError(f"Function {function_name} not found in {path}")
+
+
+def _refresh_history_migration_source() -> str:
+    matches: list[tuple[Path, str]] = []
+    for migration in sorted(MIGRATIONS.glob("*.sql")):
+        source = migration.read_text(encoding="utf-8")
+        if "CREATE TABLE IF NOT EXISTS public.auth_refresh_token_history" in source:
+            matches.append((migration, source))
+
+    assert len(matches) == 1, (
+        "auth_refresh_token_history must have exactly one canonical schema owner; "
+        f"found {[path.name for path, _ in matches]}"
+    )
+    return matches[0][1]
 
 
 def test_refresh_rotation_is_database_authoritative_and_serialized() -> None:
@@ -46,7 +60,7 @@ def test_consumed_refresh_tokens_are_hashed_before_history_storage() -> None:
     hash_source = _function_source(AUTH_SERVICE, "_hash_refresh_token")
     refresh_source = _function_source(AUTH_SERVICE, "refresh_access_token")
     model_source = SESSION_MODEL.read_text(encoding="utf-8")
-    migration_source = MIGRATION.read_text(encoding="utf-8")
+    migration_source = _refresh_history_migration_source()
 
     assert "hashlib.sha256" in hash_source
     assert "presented_hash = self._hash_refresh_token(refresh_token)" in refresh_source
