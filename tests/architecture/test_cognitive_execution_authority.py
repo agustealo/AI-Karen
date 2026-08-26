@@ -16,11 +16,16 @@ SRC = ROOT / "src" / "ai_karen_engine"
 CORE = SRC / "core"
 LANGGRAPH = CORE / "langgraph_orchestrator"
 REASONING = CORE / "reasoning"
+LANGGRAPH_ORCHESTRATOR = LANGGRAPH / "langgraph_orchestrator.py"
+DECISION_ENGINE = LANGGRAPH / "decision_engine.py"
+INTENT_NODE = LANGGRAPH / "nodes" / "intent_detect.py"
+PLANNER_NODE = LANGGRAPH / "nodes" / "planner.py"
 REASONING_NODE = LANGGRAPH / "nodes" / "reasoning.py"
 ROUTER_SELECT_NODE = LANGGRAPH / "nodes" / "router_select.py"
 RESPONSE_SYNTH_NODE = LANGGRAPH / "nodes" / "response_synth.py"
 LANGGRAPH_POLICY = LANGGRAPH / "runtime_policy.py"
 WORKFLOW_STATE = LANGGRAPH / "contracts" / "orchestration_state.py"
+WORKFLOW_PLAN = LANGGRAPH / "contracts" / "workflow_plan.py"
 WORKFLOW_RUNTIME = CORE / "runtime" / "workflow_runtime.py"
 WORKFLOW_GENERATION = CORE / "runtime" / "workflow_generation.py"
 MEDUSA_NODE = SRC / "agent_medusa" / "agent_medusa_node.py"
@@ -163,13 +168,17 @@ def test_workflow_runtime_preserves_trusted_identity_and_authorization() -> None
     assert 'request_config["policy_decision_id"] = serialized_plan["policy_decision_id"]' in source
 
 
-def test_workflow_runtime_serializes_slot_dataclass_budget_not_dunder_dict() -> None:
+def test_workflow_runtime_propagates_cortex_decision_after_untrusted_metadata() -> None:
     source = _source(WORKFLOW_RUNTIME)
-    serialize_source = source.split("def _serialize_plan", 1)[1]
-    assert '"budget": _dataclass_dict(plan.budget)' in serialize_source
-    assert "plan.budget.__dict__" not in serialize_source
-    assert "is_dataclass" in source
-    assert "asdict(value)" in source
+    assert '"intent": decision.intent' in source
+    assert '"intent_confidence": decision.intent_confidence' in source
+    assert '"tool_requirements": list(decision.tool_requirements)' in source
+    metadata_index = source.index("request_config.update(request.metadata or {})")
+    trusted_intent_index = source.index(
+        'request_config["intent"] = execution_requirements["intent"]',
+        metadata_index,
+    )
+    assert trusted_intent_index > metadata_index
 
 
 def test_workflow_state_carries_runtime_authorization_from_runtime_config() -> None:
@@ -179,6 +188,67 @@ def test_workflow_state_carries_runtime_authorization_from_runtime_config() -> N
     assert '"execution_requirements": cast(' in source
     assert '"correlation_id": correlation_id' in source
     assert '"request_id": request_id' in source
+
+
+def test_langgraph_intent_node_consumes_runtime_cortex_decision_only() -> None:
+    source = _source(INTENT_NODE)
+    calls = _calls(INTENT_NODE)
+    assert "DecisionEngine" not in source
+    assert "analyze_intent" not in calls
+    assert 'state.get("execution_requirements")' in source
+    assert 'state.get("runtime_policy")' in source
+    assert 'requirements.get("intent")' in source
+    assert 'requirements.get("intent_confidence")' in source
+    assert "Runtime requested tools outside AuthorizedExecutionPlan" in source
+    assert '"source": "runtime_cortex_decision"' in source
+
+
+def test_retired_cortex_analysis_shim_no_longer_imports_cortex_analysis() -> None:
+    source = _source(DECISION_ENGINE)
+    assert "ai_karen_engine.core.cortex.analysis" not in source
+    assert "ai_karen_engine.core.intelligence.intelligence_runtime" in source
+    assert "class DecisionEngine" in source
+    assert "self._intelligence.analyze" in source
+
+
+def test_retired_kro_compatibility_execution_is_fail_closed() -> None:
+    source = _source(LANGGRAPH_ORCHESTRATOR)
+    assert "ai_karen_engine.core.reasoning.kro_orchestrator" not in source
+    assert "get_kro_orchestrator" not in source
+    helper = source.split("async def complex_reasoning_task", 1)[1].split(
+        "async def consensus_negotiation", 1
+    )[0]
+    assert "runtime_authorization_required" in helper
+    assert "RuntimePolicy" in helper
+    assert "ReasoningRequest(" not in helper
+
+
+def test_workflow_plan_is_explicit_subset_of_authorized_execution_plan() -> None:
+    source = _source(WORKFLOW_PLAN)
+    planner_source = _source(PLANNER_NODE)
+    assert "class WorkflowPlan" in source
+    assert "validate_workflow_plan_subset" in source
+    for authority in (
+        "allowed_capabilities",
+        "allowed_tools",
+        "allowed_plugins",
+        "allowed_agents",
+        "reasoning_modes",
+    ):
+        assert authority in source
+    assert "WorkflowPlan exceeds AuthorizedExecutionPlan" in source
+    assert "validate_workflow_plan_subset(" in planner_source
+    assert 'state.get("runtime_policy")' in planner_source
+    assert 'state.get("execution_requirements")' in planner_source
+
+
+def test_workflow_runtime_serializes_slot_dataclass_budget_not_dunder_dict() -> None:
+    source = _source(WORKFLOW_RUNTIME)
+    serialize_source = source.split("def _serialize_plan", 1)[1]
+    assert '"budget": _dataclass_dict(plan.budget)' in serialize_source
+    assert "plan.budget.__dict__" not in serialize_source
+    assert "is_dataclass" in source
+    assert "asdict(value)" in source
 
 
 def test_reasoning_strategy_adapters_import_strategy_authority_from_strategy_module() -> None:
