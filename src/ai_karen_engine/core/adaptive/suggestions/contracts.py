@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from ai_karen_engine.core.contracts.values import JsonMap
+
 
 class SuggestionFeedbackType(str, Enum):
     ACCEPTED = "accepted"
@@ -30,11 +32,10 @@ class SuggestionCandidate:
     confidence: float = 0.0
     interruption_cost: float = 0.0
     urgency: str = "normal"
-    evidence: dict[str, Any] = field(default_factory=dict)
+    evidence: JsonMap = field(default_factory=dict)
     expires_at: str | None = None
     dedupe_key: str = ""
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
