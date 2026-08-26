@@ -15,14 +15,23 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from ai_karen_engine.api_routes.models.unavailable_capabilities import (
+    router as unavailable_model_capabilities_router,
+)
 from ai_karen_engine.api_routes.monitoring.metrics import router as metrics_router
 from ai_karen_engine.api_routes.monitoring.probes import router as probe_router
 
 _PROBES_REGISTERED_STATE_KEY = "_canonical_probe_routes_registered"
 _METRICS_REGISTERED_STATE_KEY = "_canonical_metrics_routes_registered"
+_UNAVAILABLE_MODEL_CAPABILITIES_REGISTERED_STATE_KEY = (
+    "_unavailable_model_capabilities_registered"
+)
 _LEGACY_SHUTDOWN_PRUNED_STATE_KEY = "_legacy_shutdown_handlers_pruned"
 _LEGACY_PROVIDER_ROUTES_PRUNED_STATE_KEY = "_legacy_provider_routes_pruned"
 _LEGACY_MODEL_DUPLICATES_PRUNED_STATE_KEY = "_legacy_model_duplicates_pruned"
+_LEGACY_REMOVED_CAPABILITIES_PRUNED_STATE_KEY = (
+    "_legacy_removed_capabilities_pruned"
+)
 _LEGACY_SHUTDOWN_HANDLER_NAMES = frozenset(
     {
         "_shutdown_database",
@@ -36,6 +45,15 @@ _LEGACY_PROVIDER_ROUTE_PATHS = frozenset(
         "/api/providers/profiles",
         "/api/providers/profiles/active",
         "/api/providers/stats",
+    }
+)
+_LEGACY_REMOVED_CAPABILITY_ROUTE_PATHS = frozenset(
+    {
+        "/api/models/local/convert-to-gguf",
+        "/api/models/local/convert-to-gguf/validate",
+        "/api/models/local/quantize",
+        "/api/models/local/quantize/validate",
+        "/api/models/local/formats",
     }
 )
 
@@ -139,6 +157,28 @@ def _prune_duplicate_legacy_model_routes(app: FastAPI) -> None:
     setattr(app.state, _LEGACY_MODEL_DUPLICATES_PRUNED_STATE_KEY, True)
 
 
+def _prune_removed_legacy_model_capabilities(app: FastAPI) -> None:
+    """Remove broken routes that still reference the deleted local GGUF toolchain."""
+
+    if getattr(app.state, _LEGACY_REMOVED_CAPABILITIES_PRUNED_STATE_KEY, False):
+        return
+
+    retained_routes = []
+    for route in app.router.routes:
+        endpoint = getattr(route, "endpoint", None)
+        endpoint_module = getattr(endpoint, "__module__", None)
+        path = getattr(route, "path", None)
+        is_removed_capability = (
+            endpoint_module == _LEGACY_PROVIDER_ENDPOINT_MODULE
+            and path in _LEGACY_REMOVED_CAPABILITY_ROUTE_PATHS
+        )
+        if not is_removed_capability:
+            retained_routes.append(route)
+
+    app.router.routes[:] = retained_routes
+    setattr(app.state, _LEGACY_REMOVED_CAPABILITIES_PRUNED_STATE_KEY, True)
+
+
 def create_app() -> FastAPI:
     """Return the current canonical AI KAREN ASGI application.
 
@@ -158,6 +198,19 @@ def create_app() -> FastAPI:
     _prune_legacy_shutdown_handlers(app)
     _prune_legacy_provider_routes(app)
     _prune_duplicate_legacy_model_routes(app)
+    _prune_removed_legacy_model_capabilities(app)
+
+    if not getattr(
+        app.state,
+        _UNAVAILABLE_MODEL_CAPABILITIES_REGISTERED_STATE_KEY,
+        False,
+    ):
+        app.include_router(unavailable_model_capabilities_router)
+        setattr(
+            app.state,
+            _UNAVAILABLE_MODEL_CAPABILITIES_REGISTERED_STATE_KEY,
+            True,
+        )
 
     if not getattr(app.state, _PROBES_REGISTERED_STATE_KEY, False):
         app.include_router(probe_router)

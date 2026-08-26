@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from ai_karen_engine.app import (
     _prune_duplicate_legacy_model_routes,
     _prune_legacy_provider_routes,
+    _prune_removed_legacy_model_capabilities,
 )
 
 
@@ -134,3 +135,41 @@ def test_duplicate_legacy_model_route_pruning_is_idempotent() -> None:
 
     assert app.router.routes == first_routes
     assert getattr(app.state, "_legacy_model_duplicates_pruned", False) is True
+
+
+def test_removed_legacy_model_capabilities_are_pruned_selectively() -> None:
+    app = FastAPI()
+
+    removed_paths = (
+        "/api/models/local/convert-to-gguf",
+        "/api/models/local/convert-to-gguf/validate",
+        "/api/models/local/quantize",
+        "/api/models/local/quantize/validate",
+        "/api/models/local/formats",
+    )
+    for path in removed_paths:
+        app.add_api_route(path, _endpoint(LEGACY_MODULE), methods=["POST"])
+
+    app.add_api_route(
+        "/api/models/local",
+        _endpoint(LEGACY_MODULE, "local_models"),
+        methods=["GET"],
+    )
+    app.add_api_route(
+        "/api/models/local/formats",
+        _endpoint(CANONICAL_MODULE, "canonical_formats"),
+        methods=["GET"],
+    )
+
+    _prune_removed_legacy_model_capabilities(app)
+
+    remaining = [
+        (getattr(route, "path", None), getattr(route.endpoint, "__module__", None))
+        for route in app.router.routes
+        if hasattr(route, "endpoint")
+    ]
+
+    for path in removed_paths:
+        assert (path, LEGACY_MODULE) not in remaining
+    assert ("/api/models/local", LEGACY_MODULE) in remaining
+    assert ("/api/models/local/formats", CANONICAL_MODULE) in remaining
