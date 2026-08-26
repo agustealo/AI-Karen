@@ -36,7 +36,10 @@ except ImportError:
     # Note: croniter not available - cron scheduling will be disabled
 
 from ai_karen_engine.learning.autonomous_learner import AutonomousLearner, LearningCycleResult
-from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
+from ai_karen_engine.core.memory.unified_memory_service import (
+    MemoryCommitRequest,
+    UnifiedMemoryService,
+)
 from ai_karen_engine.core.runtime.resilience import get_feature_flags
 
 logger = logging.getLogger(__name__)
@@ -226,7 +229,7 @@ class ScheduleInfo:
 class NotificationManager:
     """Manages notifications for training events."""
     
-    def __init__(self, memory_service: Optional[WebUIMemoryService] = None):
+    def __init__(self, memory_service: Optional[UnifiedMemoryService] = None):
         self.memory_service = memory_service
         
     async def send_notification(
@@ -369,26 +372,27 @@ class NotificationManager:
             return
         
         try:
-            from ai_karen_engine.core.memory.memory_service import MemoryType, UISource
-            
             content = f"Training Notification: {title}\n\n{message}"
-            
-            await self.memory_service.store_web_ui_memory(
+
+            await self.memory_service.commit(
                 tenant_id=config.memory_tenant_id,
-                content=content,
-                user_id="system",
-                ui_source=UISource.API,
-                memory_type=MemoryType.INSIGHT,
-                tags=["autonomous_training", "notification", event_type],
-                importance_score=config.memory_importance_score,
-                ai_generated=True,
-                metadata={
-                    "event_type": event_type,
-                    "title": title,
-                    "notification_data": data or {}
-                }
+                request=MemoryCommitRequest(
+                    user_id="system",
+                    text=content,
+                    tags=["autonomous_training", "notification", event_type],
+                    importance=config.memory_importance_score,
+                    decay="long",
+                    metadata={
+                        "source": "scheduler",
+                        "memory_class": "semantic_long_term",
+                        "ai_generated": True,
+                        "event_type": event_type,
+                        "title": title,
+                        "notification_data": data or {},
+                    },
+                ),
             )
-            
+
             logger.info("Memory notification stored successfully")
             
         except Exception as e:
@@ -407,7 +411,7 @@ class SchedulerManager:
     def __init__(
         self,
         autonomous_learner: AutonomousLearner,
-        memory_service: Optional[WebUIMemoryService] = None,
+        memory_service: Optional[UnifiedMemoryService] = None,
         storage_path: Optional[Path] = None
     ):
         self.autonomous_learner = autonomous_learner

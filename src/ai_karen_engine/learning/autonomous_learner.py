@@ -21,7 +21,7 @@ import shutil
 
 from ai_karen_engine.core.cortex.analysis import SpacyAnalyzer
 from ai_karen_engine.core.memory.signals.spacy_service import SpacyService, ParsedMessage
-from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
+from ai_karen_engine.core.memory.unified_memory_service import UnifiedMemoryService
 from ai_karen_engine.core.memory.unified_memory_service import MemoryCommitRequest, MemoryQueryRequest
 from ai_karen_engine.core.runtime.resilience import get_feature_flags
 
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 async def _commit_learning_memory(
     *,
-    memory_service: WebUIMemoryService,
+    memory_service: UnifiedMemoryService,
     tenant_id: Union[str, uuid.UUID],
     user_id: str,
     org_id: Optional[str],
@@ -58,7 +58,7 @@ async def _commit_learning_memory(
 
 async def _query_learning_memories(
     *,
-    memory_service: WebUIMemoryService,
+    memory_service: UnifiedMemoryService,
     tenant_id: Union[str, uuid.UUID],
     user_id: str,
     org_id: Optional[str],
@@ -232,7 +232,7 @@ class LearningCycleResult:
 class ConversationMetadataCollector:
     """Collects and curates conversation metadata for training."""
     
-    def __init__(self, memory_service: WebUIMemoryService, spacy_analyzer: SpacyAnalyzer):
+    def __init__(self, memory_service: UnifiedMemoryService, spacy_analyzer: SpacyAnalyzer):
         self.memory_service = memory_service
         self.spacy_analyzer = spacy_analyzer
         self.collected_metadata: List[ConversationMetadata] = []
@@ -727,7 +727,7 @@ class AutonomousLearner:
     def __init__(
         self,
         spacy_analyzer: SpacyAnalyzer,
-        memory_service: WebUIMemoryService,
+        memory_service: UnifiedMemoryService,
         spacy_service: Optional[SpacyService] = None,
         model_backup_dir: Optional[Path] = None
     ):
@@ -953,7 +953,7 @@ class AutonomousLearner:
 
 def create_autonomous_learner(
     spacy_analyzer: SpacyAnalyzer,
-    memory_service: WebUIMemoryService,
+    memory_service: UnifiedMemoryService,
     spacy_service: Optional[SpacyService] = None,
     model_backup_dir: Optional[Path] = None
 ) -> AutonomousLearner:
@@ -962,7 +962,7 @@ def create_autonomous_learner(
     
     Args:
         spacy_analyzer: SpacyAnalyzer instance for integration
-        memory_service: WebUIMemoryService for data storage and retrieval
+        memory_service: UnifiedMemoryService for data storage and retrieval
         spacy_service: Optional SpacyService instance
         model_backup_dir: Optional directory for model backups
         

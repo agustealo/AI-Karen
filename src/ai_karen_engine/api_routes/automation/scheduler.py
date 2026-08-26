@@ -29,10 +29,9 @@ from ai_karen_engine.services.scheduling.scheduler_manager import (
 from ai_karen_engine.learning.autonomous_learner import AutonomousLearner
 from ai_karen_engine.core.cortex.analysis import SpacyAnalyzer
 from ai_karen_engine.core.memory.signals.spacy_service import SpacyService
-from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
 
 # Simple auth imports
-from ai_karen_engine.core.services.dependencies import bypass_user_context_func
+from ai_karen_engine.core.services.dependencies import bypass_user_context_func, get_memory_service
 from ai_karen_engine.services.audit.training_audit_logger import get_training_audit_logger
 
 logger = logging.getLogger(__name__)
@@ -44,13 +43,13 @@ training_audit_logger = get_training_audit_logger()
 _global_scheduler_manager: Optional[SchedulerManager] = None
 
 
-def get_scheduler_manager() -> SchedulerManager:
+async def get_scheduler_manager() -> SchedulerManager:
     """Get the global scheduler manager instance."""
     global _global_scheduler_manager
 
     if _global_scheduler_manager is None:
         try:
-            memory_service = WebUIMemoryService()
+            memory_service = await get_memory_service()
             learner = AutonomousLearner(
                 spacy_analyzer=SpacyAnalyzer(spacy_service=SpacyService()),
                 memory_service=memory_service,
@@ -155,7 +154,7 @@ async def list_schedules(
         raise HTTPException(status_code=403, detail="User privileges required")
 
     try:
-        manager = get_scheduler_manager()
+        manager = await get_scheduler_manager()
         schedules = await manager.list_schedules(user_id=current_user.get("user_id"))
 
         return {
@@ -174,7 +173,7 @@ async def create_schedule(
 ) -> Dict[str, Any]:
     """Create a new training schedule (requires admin privileges)."""
     try:
-        manager = get_scheduler_manager()
+        manager = await get_scheduler_manager()
 
         # Convert to internal config format
         autonomous_config = AutonomousConfig(
@@ -217,7 +216,7 @@ async def update_schedule(
 ) -> Dict[str, str]:
     """Update a training schedule (requires admin privileges)."""
     try:
-        manager = get_scheduler_manager()
+        manager = await get_scheduler_manager()
 
         # Convert to internal config format
         autonomous_config = AutonomousConfig(
@@ -262,7 +261,7 @@ async def delete_schedule(
 ) -> Dict[str, str]:
     """Delete a training schedule (requires admin privileges)."""
     try:
-        manager = get_scheduler_manager()
+        manager = await get_scheduler_manager()
         success = await manager.delete_schedule(
             schedule_id=schedule_id, deleted_by=current_user.get("user_id")
         )
@@ -292,7 +291,7 @@ async def execute_schedule(
 ) -> Dict[str, str]:
     """Manually execute a training schedule (requires admin privileges)."""
     try:
-        manager = get_scheduler_manager()
+        manager = await get_scheduler_manager()
         execution_id = await manager.execute_schedule(
             schedule_id=schedule_id, executed_by=current_user.get("user_id")
         )

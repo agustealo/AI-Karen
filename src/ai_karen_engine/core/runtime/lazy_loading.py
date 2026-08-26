@@ -698,9 +698,11 @@ def create_langgraph_orchestrator_factory():
 
 def create_memory_service_factory():
     def factory():
-        from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
+        from ai_karen_engine.core.memory.service_factory import (
+            create_unified_memory_service,
+        )
 
-        return WebUIMemoryService()
+        return create_unified_memory_service()
 
     return factory
 
