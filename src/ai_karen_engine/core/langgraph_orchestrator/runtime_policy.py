@@ -1,16 +1,15 @@
-"""
-Runtime policy for LangGraph orchestration.
+"""Runtime authorization adapter for LangGraph workflows.
 
-Global policy enforcement (``RuntimePolicyEnforcer``, ``RuntimeLevel``, etc.)
-lives in ``core.runtime.policy``. This module re-exports those primitives for
-backward compatibility and adds LangGraph-specific node functions that apply
-the global policy inside graph workflows.
+Global authorization is owned by ``core.runtime.policy`` and Runtime. LangGraph
+receives an already-authorized plan and may only validate/consume it. This module
+keeps legacy policy exports for import compatibility but graph nodes must not run a
+second policy decision path.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from ai_karen_engine.core.runtime.policy.runtime_policy import (
     PolicyCheckResult,
@@ -21,86 +20,69 @@ from ai_karen_engine.core.runtime.policy.runtime_policy import (
 
 logger = logging.getLogger(__name__)
 
+_ALLOWED_GRAPH_TOPOLOGIES = {"workflow", "multi_agent"}
+
+
+def _runtime_plan(state: Dict[str, Any]) -> Dict[str, Any]:
+    plan = state.get("runtime_policy")
+    if not isinstance(plan, dict):
+        raise PermissionError(
+            "LangGraph execution requires AuthorizedExecutionPlan from RuntimePolicy"
+        )
+    if not str(plan.get("policy_decision_id") or "").strip():
+        raise PermissionError(
+            "LangGraph authorization requires a policy_decision_id"
+        )
+    topology = str(plan.get("topology") or "").strip().lower()
+    if topology not in _ALLOWED_GRAPH_TOPOLOGIES:
+        raise PermissionError(
+            f"LangGraph execution is not authorized for topology '{topology or 'missing'}'"
+        )
+    return plan
+
 
 async def runtime_policy_enforcer_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Runtime policy enforcement node for LangGraph orchestration."""
-    logger.info("Runtime policy enforcement processing")
+    """Validate the Runtime-provided authorization and fail closed if invalid.
 
-    try:
-        policy_enforcer = RuntimePolicyEnforcer()
-        state = policy_enforcer.apply_runtime_constraints(state)
+    The historical implementation instantiated ``RuntimePolicyEnforcer`` inside the
+    graph and re-evaluated routing/execution. That made LangGraph a second policy
+    authority. Runtime now performs policy evaluation before entering WorkflowRuntime;
+    this node only verifies that the downstream workflow still carries that decision.
+    """
+    plan = _runtime_plan(state)
+    request_config = state.get("request_config") or {}
+    expected_policy_id = (
+        str(request_config.get("policy_decision_id") or "")
+        if isinstance(request_config, dict)
+        else ""
+    )
+    if expected_policy_id and expected_policy_id != str(plan["policy_decision_id"]):
+        raise PermissionError(
+            "LangGraph policy_decision_id does not match Runtime authorization"
+        )
 
-        if "provider_selection" in state:
-            routing_check = await policy_enforcer.check_routing_policy(
-                state, state["provider_selection"]
-            )
-            if not routing_check.allowed:
-                state.setdefault("errors", []).append(
-                    f"Routing blocked: {routing_check.reason}"
-                )
-                state["routing_blocked"] = True
-
-        if "execution_plan" in state:
-            execution_check = await policy_enforcer.check_execution_policy(
-                state, state["execution_plan"]
-            )
-            if not execution_check.allowed:
-                state.setdefault("errors", []).append(
-                    f"Execution blocked: {execution_check.reason}"
-                )
-                state["execution_blocked"] = True
-
-        if "llm_response" in state:
-            response_check = await policy_enforcer.check_response_policy(
-                state, state["llm_response"]
-            )
-            if not response_check.allowed:
-                state.setdefault("errors", []).append(
-                    f"Response blocked: {response_check.reason}"
-                )
-                state["response_blocked"] = True
-
-        logger.info("Runtime policy enforcement completed")
-
-    except Exception as e:
-        logger.error(f"Runtime policy enforcement error: {e}")
-        state.setdefault("errors", []).append(f"Runtime policy error: {str(e)}")
-
+    state["policy_decision_id"] = str(plan["policy_decision_id"])
+    state["execution_topology"] = str(plan["topology"])
+    logger.info(
+        "langgraph.runtime_authorization_validated",
+        extra={
+            "correlation_id": state.get("correlation_id"),
+            "policy_decision_id": state["policy_decision_id"],
+            "execution_topology": state["execution_topology"],
+        },
+    )
     return state
 
 
 def select_execution_branch(state: Dict[str, Any]) -> str:
-    """Select the execution branch for the LangGraph chat turn."""
-    intent = str(state.get("detected_intent") or "").strip()
-    request_config = state.get("request_config") or {}
-
-    if isinstance(request_config, dict) and request_config.get("use_medusa"):
-        return "medusa"
-
-    if intent in (
-        "admin_panel",
-        "extension.action",
-        "agent_complex_reasoning",
-    ):
-        return "medusa"
-
-    return "normal"
+    """Select an execution branch from Runtime's authorized topology only."""
+    plan = _runtime_plan(state)
+    return "medusa" if str(plan["topology"]).lower() == "multi_agent" else "normal"
 
 
 def should_use_medusa(state: Dict[str, Any]) -> str:
-    """Determine if AgentMedusa should handle the request."""
-    intent = state.get("detected_intent", "")
-    if intent in (
-        "admin_panel",
-        "extension.action",
-        "agent_complex_reasoning",
-    ):
-        return "medusa"
-
-    if state.get("request_config", {}).get("use_medusa"):
-        return "medusa"
-
-    return "normal"
+    """Compatibility alias for topology-authorized AgentMedusa selection."""
+    return select_execution_branch(state)
 
 
 def should_continue_after_auth(state: Dict[str, Any]) -> str:
@@ -112,10 +94,9 @@ def should_continue_after_safety(state: Dict[str, Any]) -> str:
     safety_status = state.get("safety_status")
     if safety_status == "safe":
         return "continue"
-    elif safety_status == "review_required":
+    if safety_status == "review_required":
         return "review"
-    else:
-        return "reject"
+    return "reject"
 
 
 def should_require_approval(state: Dict[str, Any]) -> str:
@@ -125,8 +106,7 @@ def should_require_approval(state: Dict[str, Any]) -> str:
     if safety_flags or any("sensitive" in str(result) for result in tool_results):
         state["requires_approval"] = True
         return "review"
-    else:
-        return "approve"
+    return "approve"
 
 
 def check_approval_status(state: Dict[str, Any]) -> str:
