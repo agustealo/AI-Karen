@@ -24,7 +24,12 @@ def _auth_config() -> AuthConfig:
 
 
 async def test_first_admin_bootstrap_allows_exactly_one_concurrent_winner() -> None:
-    """The real PostgreSQL bootstrap lock must permit exactly one first admin."""
+    """The real PostgreSQL bootstrap lock must permit exactly one first admin.
+
+    The winning bootstrap must also create/resolve exactly one durable tenant and
+    bind the first admin to that tenant in the same transaction. A beta release
+    must never manufacture a synthetic ``default`` tenant after authentication.
+    """
 
     database_url = os.environ["AUTH_TEST_DATABASE_URL"]
     engine = create_async_engine(database_url, pool_pre_ping=True)
@@ -85,10 +90,22 @@ async def test_first_admin_bootstrap_allows_exactly_one_concurrent_winner() -> N
         for role in winner.roles
     }
     assert {"admin", "user"}.issubset(winner_roles)
+    assert winner.tenant_id
+    assert winner.tenant_id not in {"default", "dev-tenant"}
 
     async with session_factory() as db_session:
-        count_result = await db_session.execute(select(func.count()).select_from(AuthUser))
-        assert count_result.scalar_one() == 1
+        user_count_result = await db_session.execute(
+            select(func.count()).select_from(AuthUser)
+        )
+        assert user_count_result.scalar_one() == 1
+
+        tenant_count_result = await db_session.execute(
+            select(func.count()).select_from(Tenant)
+        )
+        assert tenant_count_result.scalar_one() == 1
+
+        tenant_result = await db_session.execute(select(Tenant))
+        durable_tenant = tenant_result.scalar_one()
 
         user_result = await db_session.execute(select(AuthUser))
         durable_user = user_result.scalar_one()
@@ -96,6 +113,8 @@ async def test_first_admin_bootstrap_allows_exactly_one_concurrent_winner() -> N
         assert "user" in set(durable_user.roles or [])
         assert durable_user.is_active is True
         assert durable_user.is_verified is True
+        assert durable_user.tenant_id == durable_tenant.id
+        assert winner.tenant_id == str(durable_tenant.id)
 
     async with engine.begin() as connection:
         await connection.run_sync(
