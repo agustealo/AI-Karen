@@ -1,3 +1,12 @@
+-- AI KAREN production baseline migration
+-- Consolidated pre-production history. Future production changes are forward-only.
+-- Source history is preserved in Git and docs/database/BASELINE_2026_08.md.
+
+
+-- ============================================================================
+-- BASELINE SOURCE: 20260826010000_auth_refresh_token_history.sql
+-- ============================================================================
+
 -- PROD-READY-1E: durable refresh-token rotation and replay detection.
 --
 -- auth_sessions remains the canonical live-session authority. This table only

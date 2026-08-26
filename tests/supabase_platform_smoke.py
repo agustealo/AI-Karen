@@ -30,10 +30,11 @@ def test_id_types() -> None:
 
 
 def test_migrations() -> None:
-    from ai_karen_engine.database.migration_manager import SCHEMA_MIGRATIONS
-    assert "012_embedding_provenance.sql" in SCHEMA_MIGRATIONS
-    assert "013_rls_expansion.sql" in SCHEMA_MIGRATIONS
-    assert len(SCHEMA_MIGRATIONS) == 12
+    from pathlib import Path
+    migrations = sorted((Path("supabase") / "migrations").glob("*.sql"))
+    assert len(migrations) == 7
+    assert migrations[0].name.endswith("01_core_persona_runtime.sql")
+    assert migrations[-1].name.endswith("07_identity_vault.sql")
     print("[OK] Migrations")
 
 

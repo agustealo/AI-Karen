@@ -216,29 +216,37 @@ class AuthService(BaseService):
             )
 
     async def _ensure_database_tables(self) -> None:
-        """Validate database connectivity and schema compatibility.
-
-        In production, runtime must not mutate schema. Tables are expected
-        to be created by migration/bootstrap tooling.
-        """
+        """Verify migration-owned auth tables exist; never create schema at runtime."""
         if self._tables_ensured:
             return
 
+        required = {
+            "tenants",
+            "auth_users",
+            "auth_sessions",
+            "auth_refresh_token_history",
+        }
         try:
             client = self._get_db_client()
-            if self._config.auto_create_tables:
-                await client.create_tables_async()
-                self._tables_ensured = True
-                logger.info("Database tables verified/created successfully")
-            else:
-                await client.get_async_session().__aenter__()
-                self._tables_ensured = True
-                logger.info("Database connectivity validated")
+            async with client.get_async_session() as session:
+                result = await session.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public' AND table_name = ANY(:tables)"
+                    ),
+                    {"tables": list(required)},
+                )
+                present = {str(row[0]) for row in result.fetchall()}
+            missing = required - present
+            if missing:
+                raise RuntimeError(
+                    "Missing migration-owned auth tables: " + ", ".join(sorted(missing))
+                )
+            self._tables_ensured = True
+            logger.info("Migration-owned auth tables verified")
         except Exception as e:
-            logger.error(f"Failed to validate database connectivity: {e}")
-            raise RuntimeError(
-                "AuthService database preflight failed"
-            ) from e
+            logger.error("Auth schema preflight failed: %s", e)
+            raise RuntimeError("AuthService database preflight failed") from e
 
     def set_db_session(self, session: AsyncSession) -> None:
         """Set the database session for the current execution context."""

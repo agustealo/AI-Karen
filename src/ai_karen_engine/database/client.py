@@ -107,17 +107,9 @@ class DatabaseClient:
         self._engine_holder.close()
 
     def drop_tables(self):
-        """Drop all database tables. For development/testing only.
-
-        NOTE: destructive administrative tooling. Prefer migration-based schema
-        management in production.
-        """
-        try:
-            Base.metadata.drop_all(bind=self.engine)
-            logger.warning("All database tables dropped")
-        except Exception as e:
-            logger.error("Failed to drop database tables: %s", e)
-            raise
+        """Compatibility no-op. Destructive schema operations are deployment-owned."""
+        logger.warning("DatabaseClient.drop_tables() is disabled; use controlled recovery tooling.")
+        return None
 
     def get_session(self) -> Session:
         """Get a new database session"""
@@ -197,14 +189,9 @@ class DatabaseClient:
         return f"tenant_{tenant_id}"
 
     async def create_tables_async(self):
-        """Create all database tables asynchronously"""
-        try:
-            async with self.async_engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-            logger.info("Database tables created successfully (async)")
-        except Exception as e:
-            logger.error("Failed to create database tables (async): %s", e)
-            raise
+        """Compatibility no-op. Schema creation is owned by Supabase migrations."""
+        logger.warning("DatabaseClient.create_tables_async() is disabled; apply Supabase migrations before startup.")
+        return None
 
 
 # Multi-tenant database client class
@@ -231,132 +218,9 @@ class MultiTenantPostgresClient(DatabaseClient):
         )
 
     def create_persona_tables(self) -> None:
-        """Create persona-related persistence tables used by the chat personalization flow."""
-        statements = [
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS custom_personas (
-                    id VARCHAR(64) PRIMARY KEY,
-                    tenant_id VARCHAR(255) NOT NULL,
-                    user_id VARCHAR(255) NOT NULL,
-                    name VARCHAR(100) NOT NULL,
-                    description TEXT,
-                    system_prompt TEXT NOT NULL,
-                    default_tone VARCHAR(32) NOT NULL,
-                    default_verbosity VARCHAR(32) NOT NULL,
-                    default_language VARCHAR(32) NOT NULL,
-                    memory_weight VARCHAR(32) NOT NULL DEFAULT 'medium',
-                    context_window_size INTEGER NOT NULL DEFAULT 10,
-                    domain_knowledge TEXT NOT NULL DEFAULT '[]',
-                    specialized_instructions TEXT,
-                    use_emoji BOOLEAN NOT NULL DEFAULT FALSE,
-                    formality_level FLOAT NOT NULL DEFAULT 0.5,
-                    creativity_level FLOAT NOT NULL DEFAULT 0.5,
-                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            ),
-            text(
-                """
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_personas_user_name
-                ON custom_personas (tenant_id, user_id, lower(name))
-                """
-            ),
-            text(
-                """
-                CREATE INDEX IF NOT EXISTS idx_custom_personas_user_lookup
-                ON custom_personas (tenant_id, user_id, is_active)
-                """
-            ),
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS user_persona_preferences (
-                    tenant_id VARCHAR(255) NOT NULL,
-                    user_id VARCHAR(255) NOT NULL,
-                    active_persona_id VARCHAR(64),
-                    default_tone VARCHAR(32) NOT NULL DEFAULT 'friendly',
-                    default_verbosity VARCHAR(32) NOT NULL DEFAULT 'balanced',
-                    default_language VARCHAR(32) NOT NULL DEFAULT 'en-US',
-                    enable_style_adaptation BOOLEAN NOT NULL DEFAULT TRUE,
-                    adaptation_sensitivity FLOAT NOT NULL DEFAULT 0.7,
-                    enable_persona_memory_filtering BOOLEAN NOT NULL DEFAULT TRUE,
-                    cross_persona_memory_sharing BOOLEAN NOT NULL DEFAULT FALSE,
-                    show_persona_selector BOOLEAN NOT NULL DEFAULT TRUE,
-                    show_style_controls BOOLEAN NOT NULL DEFAULT TRUE,
-                    enable_quick_style_adjustments BOOLEAN NOT NULL DEFAULT TRUE,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (tenant_id, user_id)
-                )
-                """
-            ),
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS persona_memory_entries (
-                    id VARCHAR(64) PRIMARY KEY,
-                    tenant_id VARCHAR(255) NOT NULL,
-                    user_id VARCHAR(255) NOT NULL,
-                    conversation_id VARCHAR(255),
-                    persona_id VARCHAR(64),
-                    persona_name VARCHAR(100),
-                    tone_used VARCHAR(32),
-                    verbosity_used VARCHAR(32),
-                    content TEXT NOT NULL,
-                    memory_type VARCHAR(64) NOT NULL DEFAULT 'chat_interaction',
-                    importance_score FLOAT NOT NULL DEFAULT 0.5,
-                    embedding_id VARCHAR(64),
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    accessed_at TIMESTAMP
-                )
-                """
-            ),
-            text(
-                """
-                CREATE INDEX IF NOT EXISTS idx_persona_memory_entries_user_lookup
-                ON persona_memory_entries (tenant_id, user_id, created_at DESC)
-                """
-            ),
-            text(
-                """
-                CREATE INDEX IF NOT EXISTS idx_persona_memory_entries_persona_lookup
-                ON persona_memory_entries (tenant_id, persona_id, created_at DESC)
-                """
-            ),
-            text(
-                """
-                CREATE INDEX IF NOT EXISTS idx_user_persona_preferences_active_persona
-                ON user_persona_preferences (active_persona_id)
-                """
-            ),
-        ]
-
-        with self.engine.begin() as conn:
-            for statement in statements:
-                conn.execute(statement)
-            conn.execute(
-                text(
-                    """
-                    DO $$
-                    BEGIN
-                        IF NOT EXISTS (
-                            SELECT 1
-                            FROM pg_constraint
-                            WHERE conname = 'fk_user_persona_preferences_active_persona'
-                        ) THEN
-                            ALTER TABLE user_persona_preferences
-                            ADD CONSTRAINT fk_user_persona_preferences_active_persona
-                            FOREIGN KEY (active_persona_id)
-                            REFERENCES custom_personas (id)
-                            ON DELETE SET NULL;
-                        END IF;
-                    END
-                    $$;
-                    """
-                )
-            )
-        logger.info("Shared persona tables created successfully")
+        """Compatibility no-op. Persona tables are part of the Supabase baseline."""
+        logger.warning("create_persona_tables() is disabled; persona schema is migration-owned.")
+        return None
 
     def create_tenant_schema(self, tenant_id: Any) -> bool:
         """Compatibility no-op for deployments using shared-table tenant scoping."""

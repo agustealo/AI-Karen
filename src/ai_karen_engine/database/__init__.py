@@ -4,7 +4,7 @@ Database package for AI-Karen multi-tenant architecture.
 
 Provides production-ready database services:
 - Multi-tenant database client with connection pooling
-- Migration management
+- Read-only schema/migration health inspection
 - Conversation, memory, and tenant managers
 - Factory for centralized initialization
 
@@ -16,7 +16,6 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
 
 from ai_karen_engine.database.client import MultiTenantPostgresClient
-from ai_karen_engine.database.migrations import MigrationManager
 from ai_karen_engine.database.models import (
     AuditLog,
     AuthUser,
@@ -96,7 +95,6 @@ __all__ = [
     "AuditLog",
     # Clients
     "MultiTenantPostgresClient",
-    "MigrationManager",
     "get_postgres_session",
     # Factory
     "DatabaseServiceConfig",

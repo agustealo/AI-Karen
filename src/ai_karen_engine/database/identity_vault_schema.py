@@ -410,166 +410,32 @@ class CredentialAuditEvent(Base):
 
 
 class IdentityVaultSchema:
-    """
-    Identity vault schema manager.
-    
-    Handles creation, validation, and management of PostgreSQL identity vault
-    tables with proper indexes and foreign key relationships.
-    """
-    
+    """Read-only validator for migration-owned Identity Vault tables."""
+
+    REQUIRED_TABLES = (
+        "identity_providers", "credentials", "credential_secrets",
+        "external_accounts", "credential_bindings", "account_sessions",
+        "auth_grants", "token_leases", "login_attempts",
+        "credential_audit_events",
+    )
+
     def __init__(self, database_url: str):
-        """
-        Initialize schema manager.
-        
-        Args:
-            database_url: PostgreSQL connection URL
-        """
         self.database_url = database_url
         self.logger = logging.getLogger(__name__)
-    
-    def create_schema(self, drop_existing: bool = False) -> bool:
-        """
-        Create identity vault schema.
-        
-        Args:
-            drop_existing: Whether to drop existing tables first
-            
-        Returns:
-            True if schema created successfully
-            
-        Raises:
-            Exception: If schema creation fails
-        """
-        try:
-            from sqlalchemy import create_engine
-            from sqlalchemy.orm import sessionmaker
-            
-            engine = create_engine(self.database_url)
-            SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-            
-            if drop_existing:
-                self.logger.warning("Dropping existing identity vault tables")
-                Base.metadata.drop_all(bind=engine)
-            
-            self.logger.info("Creating identity vault schema")
-            Base.metadata.create_all(bind=engine)
-            
-            # Verify schema creation
-            if self.validate_schema(engine):
-                self.logger.info("Identity vault schema created successfully")
-                return True
-            else:
-                raise Exception("Schema validation failed after creation")
-                
-        except Exception as e:
-            self.logger.error(f"Failed to create identity vault schema: {e}")
-            raise
-    
+
     def validate_schema(self, engine) -> bool:
-        """
-        Validate that all required tables and indexes exist.
-        
-        Args:
-            engine: SQLAlchemy engine
-            
-        Returns:
-            True if schema is valid
-        """
+        """Return whether all migration-owned Identity Vault tables exist."""
+        from sqlalchemy import inspect
         try:
-            from sqlalchemy import inspect
-            
-            required_tables = [
-                'identity_providers',
-                'credentials',
-                'credential_secrets',
-                'external_accounts',
-                'credential_bindings',
-                'account_sessions',
-                'auth_grants',
-                'token_leases',
-                'login_attempts',
-                'credential_audit_events'
-            ]
-            
-            inspector = inspect(engine)
-            existing_tables = inspector.get_table_names()
-            
-            for table in required_tables:
-                if table not in existing_tables:
-                    self.logger.error(f"Required table {table} not found")
-                    return False
-            
-            # Check foreign key constraints
-            fk_checks = {
-                'credential_secrets': [('credential_id', 'credentials')],
-                'credentials': [('provider_id', 'identity_providers')],
-                'external_accounts': [('provider_id', 'identity_providers')],
-                'credential_bindings': [
-                    ('credential_id', 'credentials'),
-                    ('external_account_id', 'external_accounts')
-                ],
-                'account_sessions': [
-                    ('credential_id', 'credentials'),
-                    ('external_account_id', 'external_accounts')
-                ],
-                'auth_grants': [
-                    ('credential_id', 'credentials'),
-                    ('provider_id', 'identity_providers')
-                ],
-                'token_leases': [('credential_id', 'credentials')],
-                'login_attempts': [
-                    ('credential_id', 'credentials'),
-                    ('external_account_id', 'external_accounts')
-                ],
-                'credential_audit_events': [
-                    ('credential_id', 'credentials'),
-                    ('account_id', 'external_accounts'),
-                    ('provider_id', 'identity_providers')
-                ]
-            }
-            
-            for table, expected_fks in fk_checks.items():
-                if table in inspector.get_table_names():
-                    actual_fks = inspector.get_foreign_keys(table)
-                    for fk_columns, referred_table in expected_fks:
-                        if not any(
-                            fk['referred_table'] == referred_table and 
-                            fk['constrained_columns'] == [fk_columns]
-                            for fk in actual_fks
-                        ):
-                            self.logger.error(f"Missing foreign key constraint from {table} to {referred_table}")
-                            return False
-            
-            self.logger.info("Identity vault schema validation passed")
+            existing = set(inspect(engine).get_table_names())
+            missing = set(self.REQUIRED_TABLES) - existing
+            if missing:
+                self.logger.error("Missing Identity Vault tables: %s", sorted(missing))
+                return False
             return True
-            
-        except Exception as e:
-            self.logger.error(f"Schema validation failed: {e}")
+        except Exception as exc:
+            self.logger.error("Identity Vault schema validation failed: %s", exc)
             return False
-    
-    def get_schema_ddl(self) -> str:
-        """
-        Generate DDL statements for the identity vault schema.
-        
-        Returns:
-            DDL statements as string
-        """
-        try:
-            from sqlalchemy.schema import CreateTable
-            
-            ddl_statements = []
-            
-            # Generate CREATE TABLE statements
-            for table in Base.metadata.tables.values():
-                create_table = CreateTable(table)
-                ddl_statements.append(str(create_table.compile(self.engine)))
-            
-            return "\n\n".join(ddl_statements)
-            
-        except Exception as e:
-            self.logger.error(f"Failed to generate schema DDL: {e}")
-            return ""
 
 
-# Import Base at the end to avoid circular imports
-from ai_karen_engine.database.models import Base
+# Schema creation is intentionally absent. Supabase migrations own DDL.

@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from sqlalchemy import select, and_, or_, func
+from sqlalchemy import select, and_, or_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -190,18 +190,32 @@ class CredentialVaultService(BaseService):
         logger.info("Credential Vault Service initialized successfully")
     
     async def _ensure_database_tables(self) -> None:
-        """Ensure database tables exist."""
+        """Verify migration-owned Identity Vault tables exist; never create schema."""
         if self._tables_ensured:
             return
-        
-        try:
-            client = self._get_db_client()
-            await client.create_tables_async()
-            self._tables_ensured = True
-            logger.info("Database tables verified/created successfully")
-        except Exception as e:
-            logger.error(f"Failed to ensure database tables: {e}")
-            # Don't re-raise here to allow service to start even if DB is not ready
+        client = self._get_db_client()
+        required = {
+            "identity_providers", "credentials", "credential_secrets",
+            "external_accounts", "credential_bindings", "account_sessions",
+            "auth_grants", "token_leases", "login_attempts",
+            "credential_audit_events",
+        }
+        async with client.get_async_session() as session:
+            result = await session.execute(
+                select(func.count()).select_from(
+                    text("information_schema.tables")
+                ).where(
+                    text("table_schema = 'public' AND table_name = ANY(:tables)")
+                ),
+                {"tables": list(required)},
+            )
+            present_count = int(result.scalar() or 0)
+        if present_count != len(required):
+            raise RuntimeError(
+                "Identity Vault schema is incomplete. Apply canonical Supabase migrations before startup."
+            )
+        self._tables_ensured = True
+        logger.info("Identity Vault migration-owned tables verified")
     
     def _get_db_client(self) -> MultiTenantPostgresClient:
         """Return a cached database client for fallback sessions."""

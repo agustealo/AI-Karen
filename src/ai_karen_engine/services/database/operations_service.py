@@ -15,7 +15,7 @@ from ai_karen_engine.services.database.health_contracts import (
 
 # Existing services
 from ai_karen_engine.services.database.health.checker import DatabaseHealthChecker
-from ai_karen_engine.database.migration_manager import MigrationManager
+from ai_karen_engine.services.database.migration_validator import get_migration_validator
 # MemoryWritebackSystem doesn't have a global instance getter - we'll initialize when needed
 from ai_karen_engine.core.memory.memory_writeback import MemoryWritebackSystem
 from ai_karen_engine.core.memory.projections.manager import get_projection_manager
@@ -28,7 +28,7 @@ class DatabaseOperationsService:
 
     def __init__(self):
         self.health_checker = DatabaseHealthChecker()
-        self.migration_manager = MigrationManager()
+        self.migration_validator = get_migration_validator()
         self.circuit_breaker_registry = get_breaker_registry()
         self._writeback_system: Optional[MemoryWritebackSystem] = None
 
@@ -167,7 +167,7 @@ class DatabaseOperationsService:
     async def _get_migrations_health(self) -> MigrationHealth:
         """Get migration state and consistency status."""
         try:
-            state = await self.migration_manager.get_state()
+            state = await self.migration_validator.get_state()
             
             status: HealthStatus = "healthy"
             if state.get("pending_count", 0) > 0:
