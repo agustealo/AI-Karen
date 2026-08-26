@@ -42,7 +42,7 @@ def test_conflicting_evidence_produces_conflict_signal():
         ],
     )
     result = assessor.assess(req)
-    assert MetaReasonCode.CONFLICTING_EVIDENCE in result.assessment.reason_codes
+    assert MetaReasonCode.EVIDENCE_INCONSISTENT in result.assessment.reason_codes
     assert result.assessment.status == MetaStatus.CONFLICTED
 
 
