@@ -5,6 +5,7 @@ urwid
 prompt_toolkit
 pydantic
 pydantic-settings
+python-dotenv
 pytest
 pytest-timeout
 wheel
@@ -33,6 +34,7 @@ psutil
 matplotlib
 neo4j
 PyJWT
+PyYAML
 markdown
 pytesseract
 pymupdf

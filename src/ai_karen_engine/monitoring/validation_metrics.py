@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
-from ai_karen_engine.core.observability.metrics import get_metrics_manager
+from ai_karen_engine.monitoring.prometheus_registry import get_metrics_manager
 
 logger = logging.getLogger(__name__)
 

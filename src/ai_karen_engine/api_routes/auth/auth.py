@@ -731,7 +731,13 @@ async def change_password(
             status_code = status.HTTP_404_NOT_FOUND
         raise HTTPException(status_code=status_code, detail=error)
 
-    return {"detail": "Password updated successfully"}
+    response = JSONResponse(
+        content={"detail": "Password updated successfully; sign in again"}
+    )
+    response.delete_cookie("kari_session", path="/")
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("refresh_token", path="/")
+    return response
 
 
 @router.post("/create-user", response_model=UserResponse)
