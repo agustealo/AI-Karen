@@ -63,6 +63,40 @@ def test_adaptive_drift_is_quarantined_as_legacy_compatibility() -> None:
     assert "def _compress" not in detector_source
 
 
+def test_intelligence_ml_owns_off_policy_evaluation() -> None:
+    policy_root = CORE_ROOT / "intelligence" / "ml" / "policy_evaluation"
+    contracts = (policy_root / "contracts.py").read_text(encoding="utf-8")
+    estimators = (policy_root / "estimators.py").read_text(encoding="utf-8")
+    promotion = (policy_root / "promotion.py").read_text(encoding="utf-8")
+    assert "class PolicyObservation" in contracts
+    assert "class IPSEstimator" in estimators
+    assert "class SNIPSEstimator" in estimators
+    assert "class DoublyRobustEstimator" in estimators
+    assert "estimate.lower_bound < config.min_gain" in promotion
+    assert "core.adaptive" not in contracts
+    assert "core.adaptive" not in estimators
+    assert "core.adaptive" not in promotion
+
+
+def test_adaptive_policy_evaluation_modules_are_facades_only() -> None:
+    policy_contracts = (
+        CORE_ROOT / "adaptive" / "learning" / "policy_contracts.py"
+    ).read_text(encoding="utf-8")
+    estimators = (CORE_ROOT / "adaptive" / "learning" / "estimators.py").read_text(
+        encoding="utf-8"
+    )
+    promotion = (CORE_ROOT / "adaptive" / "learning" / "promotion.py").read_text(
+        encoding="utf-8"
+    )
+    canonical_import = "core.intelligence.ml.policy_evaluation"
+    assert canonical_import in policy_contracts
+    assert canonical_import in estimators
+    assert canonical_import in promotion
+    assert "class PolicyObservation" not in policy_contracts
+    assert "class IPSEstimator" not in estimators
+    assert "def evaluate_promotion" not in promotion
+
+
 def test_adaptive_package_is_documented_as_transitional() -> None:
     source = (CORE_ROOT / "adaptive" / "__init__.py").read_text(encoding="utf-8")
     assert "Transitional compatibility package" in source
