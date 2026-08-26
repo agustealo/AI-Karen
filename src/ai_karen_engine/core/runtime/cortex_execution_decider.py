@@ -2,52 +2,46 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 
-from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext, ChatExecutionRequest
+from ai_karen_engine.core.intelligence import get_intelligence_runtime
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
+    ChatExecutionContext,
+    ChatExecutionRequest,
+)
 from ai_karen_engine.core.runtime.execution_decision import (
     ExecutionDecision,
     ExecutionTopology,
-    RuntimeExecutionMode,
     RiskLevel,
+    RuntimeExecutionMode,
 )
 from ai_karen_engine.core.runtime.policy import (
     PolicyEvaluationRequest,
     RuntimePolicyEnforcer,
 )
-from ai_karen_engine.core.intelligence import get_intelligence_runtime
 
 logger = logging.getLogger(__name__)
 
-# Safety escape hatch: force every request through the graph workflow path.
 _FORCE_GRAPH_ENV = "KARI_RUNTIME_FORCE_GRAPH"
-
-# Fail-closed: if RBAC infrastructure is unavailable, protected capabilities are denied.
-_RBAC_UNAVAILABLE_ACTION = "deny"
 
 
 class CortexExecutionDecider:
-    """Single CORTEX entry point for runtime execution routing.
+    """Canonical live CORTEX adapter for ChatRuntime.
 
-    CORTEX decides *what kind* of execution a request needs. It inspects
-    trusted authenticated context, analyzes request content through the
-    IntelligenceRuntime analysis pipeline, and returns an :class:`ExecutionDecision`.
+    CORTEX decides what kind of execution a request needs. IntelligenceRuntime
+    supplies cognitive signals. RuntimePolicy is the sole authorization owner.
+    This component never executes providers, tools, plugins, memory, or graphs.
 
-    It does NOT execute anything: no provider call, no graph invocation, no
-    memory recall. The runtime consumes the decision to route execution.
-
-    Security: RBAC/policy failures are fail-closed. Missing capability
-    infrastructure means DENIED, not implicit permission.
-
-    CORTEX delegates authorization to RuntimePolicyEnforcer. CORTEX never
-    authorizes execution itself.
+    ``core.cortex.dispatch`` remains a compatibility surface and must not become
+    a second canonical decision path.
     """
 
     def __init__(self, *, force_graph: Optional[bool] = None):
         self._force_graph = (
             force_graph
             if force_graph is not None
-            else os.environ.get(_FORCE_GRAPH_ENV, "false").lower() in ("1", "true", "yes")
+            else os.environ.get(_FORCE_GRAPH_ENV, "false").lower()
+            in ("1", "true", "yes")
         )
         self._intelligence = get_intelligence_runtime()
         self._policy_enforcer = RuntimePolicyEnforcer()
@@ -57,43 +51,35 @@ class CortexExecutionDecider:
         ctx = request.context
         reason_codes: List[str] = []
 
-        # ------------------------------------------------------------------
-        # 1. Trusted auth context (never from caller metadata)
-        # ------------------------------------------------------------------
         user_id = ctx.user_id
         tenant_id = ctx.tenant_id
         session_id = getattr(ctx, "session_id", None)
         roles = list(ctx.roles or [])
         permissions = list(ctx.permissions or [])
 
-        # ------------------------------------------------------------------
-        # 2. CORTEX content analysis (not caller metadata)
-        # ------------------------------------------------------------------
         user_content = self._extract_user_content(request.messages)
         analysis = await self._analyze_request(user_content, ctx)
 
-        # ------------------------------------------------------------------
-        # 3. Structural signals (explicit, highest precedence)
-        # ------------------------------------------------------------------
         explicit_graph = bool(meta.get("graph_required") or meta.get("force_graph"))
         if explicit_graph:
             reason_codes.append("explicit_graph_request")
 
-        # ------------------------------------------------------------------
-        # 4. Execution-topology triggers from analysis
-        # ------------------------------------------------------------------
         topology_triggers = self._evaluate_topology_triggers(analysis)
         graph_required = explicit_graph or bool(topology_triggers)
         reason_codes.extend(topology_triggers)
 
-        # ------------------------------------------------------------------
-        # 5. Tool / plugin / workflow signals from analysis (primary)
-        #     Caller metadata hints are secondary inputs only.
-        # ------------------------------------------------------------------
-        tool_requirements = analysis.get("tool_requirements", []) or list(meta.get("tool_requirements") or [])
-        plugin_candidates = analysis.get("plugin_candidates", []) or list(meta.get("plugin_candidates") or [])
-        required_capabilities = analysis.get("required_capabilities", []) or list(meta.get("required_capabilities") or [])
-        denied_capabilities = analysis.get("forbidden_capabilities", []) or list(meta.get("forbidden_capabilities") or [])
+        tool_requirements = analysis.get("tool_requirements", []) or list(
+            meta.get("tool_requirements") or []
+        )
+        plugin_candidates = analysis.get("plugin_candidates", []) or list(
+            meta.get("plugin_candidates") or []
+        )
+        required_capabilities = analysis.get("required_capabilities", []) or list(
+            meta.get("required_capabilities") or []
+        )
+        denied_capabilities = analysis.get("forbidden_capabilities", []) or list(
+            meta.get("forbidden_capabilities") or []
+        )
         policy_constraints = dict(meta.get("policy_constraints") or {})
 
         if meta.get("agent_delegation"):
@@ -108,16 +94,15 @@ class CortexExecutionDecider:
             graph_required = True
             reason_codes.append("workflow_capability")
 
-        # ------------------------------------------------------------------
-        # 6. Risk and governance
-        # ------------------------------------------------------------------
         risk_level = self._assess_risk_level(analysis)
         requires_human_gate = bool(analysis.get("requires_human_gate", False)) or risk_level in (
             RiskLevel.HIGH,
             RiskLevel.CRITICAL,
         )
         requires_resumability = bool(analysis.get("requires_resumability", False))
-        requires_parallel_execution = bool(analysis.get("requires_parallel_execution", False))
+        requires_parallel_execution = bool(
+            analysis.get("requires_parallel_execution", False)
+        )
         requires_agent_delegation = bool(analysis.get("agent_delegation", False))
 
         if requires_human_gate:
@@ -127,26 +112,39 @@ class CortexExecutionDecider:
             graph_required = True
             reason_codes.append("agent_delegation_required")
 
-        # ------------------------------------------------------------------
-        # 7. Memory policy (orthogonal to graph)
-        # ------------------------------------------------------------------
-        memory_recall_required = bool(analysis.get("memory_recall_required", False)) or bool(meta.get("memory_recall_required", False))
-        memory_write_allowed = not bool(analysis.get("memory_write_denied", False))
-        memory_scope = str(analysis.get("memory_scope", meta.get("memory_scope", "session")))
-        memory_top_k = int(analysis.get("memory_top_k", meta.get("memory_top_k", 10)))
+        memory_recall_required = bool(
+            analysis.get("memory_recall_required", False)
+        ) or bool(meta.get("memory_recall_required", False))
+        # CORTEX may request a memory write, but only RuntimePolicy may grant it.
+        memory_write_requested = not bool(analysis.get("memory_write_denied", False))
+        memory_scope = str(
+            analysis.get("memory_scope", meta.get("memory_scope", "session"))
+        )
+        memory_top_k = int(
+            analysis.get("memory_top_k", meta.get("memory_top_k", 10))
+        )
         memory_classes = list(analysis.get("memory_classes", []))
 
-        # ------------------------------------------------------------------
-        # 8. Budgets and constraints
-        # ------------------------------------------------------------------
         max_steps = int(meta.get("max_steps", analysis.get("max_steps", 10)))
-        time_budget_ms = int(meta.get("time_budget_ms", analysis.get("time_budget_ms", 30000)))
-        token_budget = int(meta.get("token_budget", analysis.get("token_budget", 4096)))
-        reasoning_depth = str(meta.get("reasoning_depth", analysis.get("reasoning_depth", "standard")))
+        time_budget_ms = int(
+            meta.get("time_budget_ms", analysis.get("time_budget_ms", 30000))
+        )
+        token_budget = int(
+            meta.get("token_budget", analysis.get("token_budget", 4096))
+        )
+        reasoning_depth = str(
+            meta.get("reasoning_depth", analysis.get("reasoning_depth", "standard"))
+        )
+        reasoning_modes = self._normalize_reasoning_modes(
+            analysis.get("reasoning_modes") or meta.get("reasoning_modes") or []
+        )
+        if (reasoning_depth == "deep" or analysis.get("reasoning_required")) and not reasoning_modes:
+            reasoning_modes = ["causal", "verify", "refine", "metacognition"]
 
-        # ------------------------------------------------------------------
-        # 9. RuntimePolicy authorization (not from caller metadata)
-        # ------------------------------------------------------------------
+        requested_capabilities = list(required_capabilities)
+        if memory_write_requested and "memory.write" not in requested_capabilities:
+            requested_capabilities.append("memory.write")
+
         policy_evaluation = PolicyEvaluationRequest(
             user_id=user_id,
             tenant_id=tenant_id,
@@ -155,7 +153,7 @@ class CortexExecutionDecider:
             roles=roles,
             permissions=permissions,
             action="general_assist",
-            requested_capabilities=required_capabilities,
+            requested_capabilities=requested_capabilities,
             forbidden_capabilities=denied_capabilities,
             risk_signals=analysis.get("risk_signals", {}),
             runtime_level=self._risk_level_to_runtime_level(risk_level),
@@ -165,6 +163,7 @@ class CortexExecutionDecider:
                 "tool_requirements": tool_requirements,
                 "plugin_candidates": plugin_candidates,
                 "requires_human_gate": requires_human_gate,
+                "reasoning_modes": reasoning_modes,
             },
         )
         policy_decision = await self._policy_enforcer.evaluate(policy_evaluation)
@@ -177,6 +176,7 @@ class CortexExecutionDecider:
                 intent_confidence=float(analysis.get("intent_confidence", 0.0)),
                 risk_level=RiskLevel.CRITICAL,
                 reasoning_depth=reasoning_depth,
+                reasoning_modes=[],
                 memory_recall_required=False,
                 memory_write_allowed=False,
                 memory_scope=memory_scope,
@@ -194,30 +194,39 @@ class CortexExecutionDecider:
                 workflow_version="v1",
                 policy_decision_id=policy_decision.decision_id,
                 policy_version=policy_decision.policy_version,
-                policy_reason_codes=[code.value for code in policy_decision.reason_codes],
+                policy_reason_codes=[
+                    code.value for code in policy_decision.reason_codes
+                ],
                 reason_codes=["policy_denied", *reason_codes],
-                policy_constraints={"denial_reason": policy_decision.reason_codes[0].value if policy_decision.reason_codes else "policy_denied"},
+                policy_constraints={
+                    "denial_reason": (
+                        policy_decision.reason_codes[0].value
+                        if policy_decision.reason_codes
+                        else "policy_denied"
+                    )
+                },
             )
 
-        # Attach policy provenance
         required_capabilities = list(policy_decision.allowed_capabilities)
-        denied_capabilities = list(set(denied_capabilities) | set(policy_decision.denied_capabilities))
+        denied_capabilities = list(
+            set(denied_capabilities) | set(policy_decision.denied_capabilities)
+        )
+        memory_write_allowed = "memory.write" in required_capabilities
 
-        # ------------------------------------------------------------------
-        # 10. Operational safety override (rollback)
-        # ------------------------------------------------------------------
         if self._force_graph:
             graph_required = True
             reason_codes.append("force_graph_override")
 
         execution_mode = (
-            RuntimeExecutionMode.GRAPH if graph_required else RuntimeExecutionMode.DIRECT
+            RuntimeExecutionMode.GRAPH
+            if graph_required
+            else RuntimeExecutionMode.DIRECT
         )
 
         topology = ExecutionTopology.DIRECT
         if requires_agent_delegation:
             topology = ExecutionTopology.MULTI_AGENT
-        elif reasoning_depth == "deep" or analysis.get("reasoning_required"):
+        elif reasoning_modes or reasoning_depth == "deep" or analysis.get("reasoning_required"):
             topology = ExecutionTopology.REASONING
         elif graph_required:
             topology = ExecutionTopology.WORKFLOW
@@ -230,6 +239,7 @@ class CortexExecutionDecider:
             intent_confidence=float(analysis.get("intent_confidence", 0.0)),
             risk_level=risk_level,
             reasoning_depth=reasoning_depth,
+            reasoning_modes=reasoning_modes,
             memory_recall_required=memory_recall_required,
             memory_write_allowed=memory_write_allowed,
             memory_scope=memory_scope,
@@ -252,11 +262,30 @@ class CortexExecutionDecider:
             policy_version=policy_decision.policy_version,
             policy_reason_codes=[code.value for code in policy_decision.reason_codes],
             reason_codes=reason_codes,
-            policy_constraints=policy_constraints,
+            policy_constraints={
+                **policy_constraints,
+                "memory_write_requested": memory_write_requested,
+                "memory_write_authorized": memory_write_allowed,
+            },
         )
+
+    @staticmethod
+    def _normalize_reasoning_modes(values: Any) -> List[str]:
+        if isinstance(values, str):
+            values = [values]
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for raw in values or []:
+            value = str(raw).strip().lower()
+            if not value or value in seen:
+                continue
+            normalized.append(value)
+            seen.add(value)
+        return normalized
 
     def _risk_level_to_runtime_level(self, risk_level: RiskLevel) -> Any:
         from ai_karen_engine.core.runtime.policy import RuntimeLevel
+
         mapping = {
             RiskLevel.LOW: RuntimeLevel.FULL,
             RiskLevel.MEDIUM: RuntimeLevel.REDUCED,
@@ -266,7 +295,6 @@ class CortexExecutionDecider:
         return mapping.get(risk_level, RuntimeLevel.FULL)
 
     def _extract_user_content(self, messages: List[Dict[str, Any]]) -> str:
-        """Extract the latest user message for analysis."""
         if not messages:
             return ""
         for msg in reversed(messages):
@@ -275,14 +303,17 @@ class CortexExecutionDecider:
                 return str(msg.get("content", ""))
         return str(messages[-1].get("content", ""))
 
-    async def _analyze_request(self, text: str, ctx: ChatExecutionContext) -> Dict[str, Any]:
-        """Run CORTEX analysis pipeline on request content."""
+    async def _analyze_request(
+        self, text: str, ctx: ChatExecutionContext
+    ) -> Dict[str, Any]:
         if not text or not text.strip():
             return self._default_analysis()
 
         try:
-            analysis = await self._intelligence.analyze(text, {"user_id": ctx.user_id, "session_id": ctx.session_id})
-
+            analysis = await self._intelligence.analyze(
+                text,
+                {"user_id": ctx.user_id, "session_id": ctx.session_id},
+            )
             intent_value = analysis.intent or "general_assist"
             confidence = analysis.intent_confidence or 0.0
 
@@ -291,12 +322,21 @@ class CortexExecutionDecider:
             memory_policy = self._infer_memory_policy_from_analysis(analysis)
             workflow = self._infer_workflow_from_analysis(analysis)
             risk_level = self._assess_risk_level(analysis)
+            reasoning_modes = self._normalize_reasoning_modes(
+                getattr(analysis, "reasoning_modes", []) or []
+            )
 
             lower_text = text.lower()
-            heuristic_tools = []
-            if any(k in lower_text for k in ["debug", "error", "traceback", "exception", "bug"]):
+            heuristic_tools: List[str] = []
+            if any(
+                k in lower_text
+                for k in ["debug", "error", "traceback", "exception", "bug"]
+            ):
                 heuristic_tools.append("code_execution")
-            if any(k in lower_text for k in ["repository", "repo", "codebase", "folder", "directory"]):
+            if any(
+                k in lower_text
+                for k in ["repository", "repo", "codebase", "folder", "directory"]
+            ):
                 heuristic_tools.append("filesystem_operation")
             for tool in heuristic_tools:
                 if tool not in topology.get("tool_requirements", []):
@@ -314,14 +354,20 @@ class CortexExecutionDecider:
                 "plugin_candidates": topology.get("plugin_candidates", []),
                 "required_capabilities": capabilities.get("required", []),
                 "forbidden_capabilities": capabilities.get("forbidden", []),
+                "reasoning_modes": reasoning_modes,
+                "reasoning_required": bool(reasoning_modes)
+                or topology.get("reasoning_depth") == "deep",
                 "memory_recall_required": memory_policy.get("recall_required", False),
                 "memory_write_denied": memory_policy.get("write_denied", False),
                 "memory_scope": memory_policy.get("scope", "session"),
                 "memory_top_k": memory_policy.get("top_k", 10),
                 "memory_classes": memory_policy.get("classes", []),
-                "requires_human_gate": topology.get("requires_human_gate", False) or risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL),
+                "requires_human_gate": topology.get("requires_human_gate", False)
+                or risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL),
                 "requires_resumability": topology.get("requires_resumability", False),
-                "requires_parallel_execution": topology.get("requires_parallel_execution", False),
+                "requires_parallel_execution": topology.get(
+                    "requires_parallel_execution", False
+                ),
                 "agent_delegation": topology.get("agent_delegation", False),
                 "max_steps": topology.get("max_steps", 10),
                 "time_budget_ms": topology.get("time_budget_ms", 30000),
@@ -329,9 +375,17 @@ class CortexExecutionDecider:
                 "reasoning_depth": topology.get("reasoning_depth", "standard"),
                 "workflow_required": workflow.get("required", False),
                 "workflow_id": workflow.get("workflow_id"),
-                "risk_level": risk_level.value if isinstance(risk_level, RiskLevel) else str(risk_level),
-                "risk_score": (getattr(analysis, "risk_signals", {}) or {}).get("score", 0.0),
-                "risk_categories": (getattr(analysis, "risk_signals", {}) or {}).get("categories", []),
+                "risk_level": (
+                    risk_level.value
+                    if isinstance(risk_level, RiskLevel)
+                    else str(risk_level)
+                ),
+                "risk_score": (getattr(analysis, "risk_signals", {}) or {}).get(
+                    "score", 0.0
+                ),
+                "risk_categories": (
+                    getattr(analysis, "risk_signals", {}) or {}
+                ).get("categories", []),
             }
         except Exception as exc:
             logger.warning("CORTEX analysis failed, using safe defaults: %s", exc)
@@ -350,6 +404,8 @@ class CortexExecutionDecider:
             "plugin_candidates": [],
             "required_capabilities": [],
             "forbidden_capabilities": [],
+            "reasoning_modes": [],
+            "reasoning_required": False,
             "memory_recall_required": False,
             "memory_write_denied": False,
             "memory_scope": "session",
@@ -370,8 +426,7 @@ class CortexExecutionDecider:
             "risk_categories": [],
         }
 
-    def _infer_topology_from_analysis(self, analysis) -> Dict[str, Any]:
-        """Infer execution topology signals from intelligence analysis result."""
+    def _infer_topology_from_analysis(self, analysis: Any) -> Dict[str, Any]:
         topology: Dict[str, Any] = {
             "tool_requirements": [],
             "plugin_candidates": [],
@@ -402,7 +457,9 @@ class CortexExecutionDecider:
         if capability_hints.get("web_search"):
             topology["tool_requirements"].append("web_search")
 
-        if topology_signals.get("multiple_actions") or topology_signals.get("dependency_chain"):
+        if topology_signals.get("multiple_actions") or topology_signals.get(
+            "dependency_chain"
+        ):
             topology["requires_resumability"] = True
             topology["reasoning_depth"] = "deep"
 
@@ -416,10 +473,8 @@ class CortexExecutionDecider:
 
         return topology
 
-    def _infer_capabilities_from_analysis(self, analysis) -> Dict[str, Any]:
-        """Infer capability requirements from analysis."""
+    def _infer_capabilities_from_analysis(self, analysis: Any) -> Dict[str, Any]:
         capabilities: Dict[str, Any] = {"required": [], "forbidden": []}
-
         capability_hints = getattr(analysis, "capability_hints", {}) or {}
         risk_signals = getattr(analysis, "risk_signals", {}) or {}
 
@@ -441,11 +496,9 @@ class CortexExecutionDecider:
             capabilities["forbidden"].append("admin")
         if "destructive_action" in risk_categories:
             capabilities["forbidden"].append("delete")
-
         return capabilities
 
-    def _infer_memory_policy_from_analysis(self, analysis) -> Dict[str, Any]:
-        """Infer memory recall/write policy from analysis."""
+    def _infer_memory_policy_from_analysis(self, analysis: Any) -> Dict[str, Any]:
         policy: Dict[str, Any] = {
             "recall_required": False,
             "write_denied": False,
@@ -453,42 +506,33 @@ class CortexExecutionDecider:
             "top_k": 10,
             "classes": [],
         }
-
         memory_relevance = getattr(analysis, "memory_relevance", 0.0) or 0.0
         task_complexity = getattr(analysis, "task_complexity", "simple")
-
         if memory_relevance >= 0.5:
             policy["recall_required"] = True
             policy["scope"] = "user"
             policy["top_k"] = 15
-
         if task_complexity == "complex":
             policy["top_k"] = max(policy["top_k"], 20)
-
         return policy
 
-    def _infer_workflow_from_analysis(self, analysis) -> Dict[str, Any]:
-        """Infer workflow requirements from analysis."""
+    def _infer_workflow_from_analysis(self, analysis: Any) -> Dict[str, Any]:
         workflow: Dict[str, Any] = {"required": False, "workflow_id": None}
-
         topology_signals = getattr(analysis, "topology_signals", {}) or {}
         capability_hints = getattr(analysis, "capability_hints", {}) or {}
         task_complexity = getattr(analysis, "task_complexity", "simple")
-
         if topology_signals.get("dependency_chain") or task_complexity == "complex":
             workflow["required"] = True
             workflow["workflow_id"] = "multi_step_pipeline"
-
-        if capability_hints.get("code_execution") and topology_signals.get("external_lookup"):
+        if capability_hints.get("code_execution") and topology_signals.get(
+            "external_lookup"
+        ):
             workflow["required"] = True
             workflow["workflow_id"] = "research_and_code"
-
         return workflow
 
     def _evaluate_topology_triggers(self, analysis: Dict[str, Any]) -> List[str]:
-        """Return reason codes for execution-topology-based graph triggers."""
         triggers: List[str] = []
-
         if analysis.get("requires_human_gate"):
             triggers.append("human_gate_required")
         if analysis.get("requires_resumability"):
@@ -499,16 +543,12 @@ class CortexExecutionDecider:
             triggers.append("agent_delegation")
         if analysis.get("workflow_required"):
             triggers.append("workflow_required")
-
         return triggers
 
-    def _assess_risk_level(self, analysis) -> RiskLevel:
-        """Assess execution risk from analysis signals."""
+    def _assess_risk_level(self, analysis: Any) -> RiskLevel:
         if hasattr(analysis, "get"):
-            explicit_risk = analysis.get("risk_level")
             risk_signals = dict((analysis.get("risk_signals", {}) or {}))
         else:
-            explicit_risk = getattr(analysis, "risk_level", None)
             risk_signals = dict(getattr(analysis, "risk_signals", {}) or {})
         risk_score = float(risk_signals.get("score", 0.0) or 0.0)
         categories = risk_signals.get("categories", []) or []
@@ -539,7 +579,6 @@ class CortexExecutionDecider:
         return RiskLevel.LOW
 
     def cortex_never_executes(self) -> bool:
-        """CORTEX decides but never executes providers, plugins, tools, memory, or LangGraph."""
         return True
 
 
@@ -547,7 +586,6 @@ _decider: Optional[CortexExecutionDecider] = None
 
 
 def get_cortex_execution_decider() -> CortexExecutionDecider:
-    """Return the singleton CORTEX execution decider."""
     global _decider
     if _decider is None:
         _decider = CortexExecutionDecider()
