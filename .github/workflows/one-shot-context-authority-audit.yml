@@ -1,0 +1,20 @@
+name: One-shot Context Authority Audit
+
+on:
+  push:
+    branches:
+      - context/converge-0-authority-closure
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run context authority census
+        run: python scripts/audit_context_authority.py
