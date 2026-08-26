@@ -1,0 +1,45 @@
+name: Beta Live Model Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-model-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: beta-release
+    env:
+      BETA_MODEL_BASE_URL: ${{ secrets.BETA_MODEL_BASE_URL }}
+      BETA_MODEL_API_KEY: ${{ secrets.BETA_MODEL_API_KEY }}
+      BETA_MODEL_NAME: ${{ vars.BETA_MODEL_NAME }}
+      BETA_MODEL_TIMEOUT_SECONDS: "90"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          echo "beta_live_model_sha=$GITHUB_SHA"
+
+      - name: Require live beta endpoint configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BETA_MODEL_BASE_URL" || { echo "BETA_MODEL_BASE_URL is not configured" >&2; exit 1; }
+          test -n "$BETA_MODEL_NAME" || { echo "BETA_MODEL_NAME is not configured" >&2; exit 1; }
+
+      - name: Compile live-model smoke harness
+        run: python -m py_compile scripts/beta_live_model_smoke.py
+
+      - name: Prove real model inference
+        run: python scripts/beta_live_model_smoke.py
