@@ -2,7 +2,7 @@
 
 This strategy is capability-gated and must receive a fully constructed
 ``SoftExplorationEngine`` from Runtime. It never discovers providers, models,
-memory stores, tools, or plugins on its own.
+memory stores, tools, plugins, or prompts on its own.
 """
 
 from __future__ import annotations
@@ -35,7 +35,12 @@ class SoftReasoner(ReasoningStrategyEngine):
     strategy_id = "soft_exploration"
     version = "v2"
     capabilities = ["soft_exploration"]
-    required_inputs = ["objective", "generation_embedding_control", "verifier"]
+    required_inputs = [
+        "objective",
+        "prepared_prompt",
+        "generation_embedding_control",
+        "verifier",
+    ]
     supports_model_calls = True
     supports_tools = False
     expected_cost = "high"
@@ -65,13 +70,29 @@ class SoftReasoner(ReasoningStrategyEngine):
                 evidence=evidence,
             )
 
+        metadata = getattr(request, "metadata", {}) or {}
+        prompt = str(metadata.get("soft_reasoning_prompt", "") or "").strip()
+        prompt_version = str(
+            metadata.get("soft_reasoning_prompt_version", "") or ""
+        ).strip()
+        if not prompt or not prompt_version:
+            return self._failed(
+                "Soft reasoning requires a runtime-prepared, versioned prompt contract",
+                ReasoningErrorCode.STRATEGY_UNAVAILABLE,
+                evidence=evidence,
+                status=ReasoningStatus.ABSTAINED,
+            )
+
         evidence_text = tuple(
-            item.content for item in evidence if isinstance(item.content, str) and item.content
+            item.content
+            for item in evidence
+            if isinstance(item.content, str) and item.content
         )
         try:
             trace = await asyncio.to_thread(
                 self._engine.explore,
-                objective,
+                prompt,
+                objective=objective,
                 evidence=evidence_text,
                 max_model_calls=budget.max_model_calls,
                 max_output_tokens=budget.max_output_tokens,
@@ -105,9 +126,7 @@ class SoftReasoner(ReasoningStrategyEngine):
             confidence=best.verification.score,
             supporting_evidence_refs=[item.evidence_id for item in evidence],
             uncertainty=max(0.0, 1.0 - best.verification.confidence),
-            provenance=(
-                f"soft_reasoning:{trace.runtime_engine}:{trace.model_id}:v2"
-            ),
+            provenance=f"soft_reasoning:{trace.runtime_engine}:{trace.model_id}:v2",
         )
 
         assessment = ReasoningAssessment(
@@ -149,6 +168,7 @@ class SoftReasoner(ReasoningStrategyEngine):
                 "strategy": self.strategy_id,
                 "strategy_version": self.version,
                 "research_method": "first_token_embedding_bayesian_exploration",
+                "prompt_version": prompt_version,
                 "runtime_engine": trace.runtime_engine,
                 "model_id": trace.model_id,
                 "projection_dimension": trace.projection_dimension,
@@ -182,17 +202,12 @@ class SoftReasoner(ReasoningStrategyEngine):
             assumptions=[],
             unknowns=[],
             contradictions=[],
-            assessment=ReasoningAssessment(
-                uncertainty_reasons=[reason],
-            ),
+            assessment=ReasoningAssessment(uncertainty_reasons=[reason]),
             evidence_needs=[],
             suggested_next_actions=[],
             status=status.value,
             error_code=error_code.value,
-            diagnostics={
-                "strategy": "soft_exploration",
-                "error": reason,
-            },
+            diagnostics={"strategy": "soft_exploration", "error": reason},
             memory_candidates=[],
         )
 
