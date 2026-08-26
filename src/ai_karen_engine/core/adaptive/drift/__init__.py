@@ -1,20 +1,19 @@
-"""Drift detection subsystem for adaptive policy evaluation.
+"""Legacy adaptive drift contracts.
 
-Owns policy reward drift, action distribution drift, and policy performance drift.
+This package is transitional and is not a production drift authority. Model
+quality, calibration, outcome aggregation, retraining triggers, and future
+canonical drift detection belong under ``core.intelligence.ml``.
+
+Do not add new drift detectors or promotion gates here. Existing contracts are
+kept only while off-policy adaptive-learning consumers migrate.
 """
 
 from __future__ import annotations
 
-import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
-
-from ai_karen_engine.core.adaptive.learning.policy_contracts import PolicyStatus
-
-logger = logging.getLogger(__name__)
 
 
 class DriftSeverity(str, Enum):
@@ -56,14 +55,16 @@ class DriftSignal:
 class DriftDetectorBackend(ABC):
     @abstractmethod
     def update(self, value: float) -> DriftSignal | None:
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def reset(self) -> None:
-        pass
+        raise NotImplementedError
 
 
 class DriftMonitor:
+    """Compatibility monitor for legacy off-policy evaluation only."""
+
     def __init__(self, backend: DriftDetectorBackend | None = None) -> None:
         self._backend = backend
         self._signals: list[DriftSignal] = []
@@ -83,11 +84,19 @@ class DriftMonitor:
     def status(self) -> DriftStatus:
         if not self._signals:
             return DriftStatus.NONE
-        severities = [s.severity for s in self._signals]
-        if DriftSeverity.CRITICAL in severities:
-            return DriftStatus.CRITICAL
-        if DriftSeverity.HIGH in severities:
+        severities = [signal.severity for signal in self._signals]
+        if DriftSeverity.CRITICAL in severities or DriftSeverity.HIGH in severities:
             return DriftStatus.CRITICAL
         if DriftSeverity.MEDIUM in severities:
             return DriftStatus.WARNING
         return DriftStatus.NONE
+
+
+__all__ = [
+    "DriftDetectorBackend",
+    "DriftMonitor",
+    "DriftSeverity",
+    "DriftSignal",
+    "DriftSignalType",
+    "DriftStatus",
+]
