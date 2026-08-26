@@ -38,3 +38,18 @@ def test_runtime_composes_postgres_behind_neuro_recall() -> None:
     assert "NeuroRecall(" in source
     assert "select(MemoryAssertion)" not in source
     assert ".ilike(" not in source
+
+
+def test_canonical_write_base_contains_no_database_recall_fallback() -> None:
+    source = (MEMORY / "_memory_runtime_base.py").read_text(encoding="utf-8")
+    assert "select(MemoryAssertion)" not in source
+    assert "Recall service failed, falling back" not in source
+    assert "Retrieval adapter failed, falling back" not in source
+    assert "write runtime base cannot recall" in source
+
+
+def test_old_mature_impl_is_explicitly_quarantined() -> None:
+    legacy = MEMORY / "_legacy_memory_runtime_impl.py"
+    assert legacy.exists()
+    canonical = (MEMORY / "memory_runtime_manager.py").read_text(encoding="utf-8")
+    assert "_legacy_memory_runtime_impl" not in canonical

@@ -149,8 +149,6 @@ class NeuroRecall:
             memory_tenant = getattr(metadata, "tenant_id", None) if metadata else None
             memory_user = getattr(metadata, "user_id", None) if metadata else None
 
-            # Defense in depth: retrievers must scope upstream, and NeuroRecall
-            # independently rejects results that cannot prove the same scope.
             if str(memory_tenant or "") != request.tenant_id:
                 continue
             if str(memory_user or "") != request.user_id:
@@ -169,14 +167,7 @@ class NeuroRecall:
                 "correlation_id": request.correlation_id,
             }
 
-        scoped.sort(
-            key=lambda item: (
-                float(getattr(item, "relevance", 0.0) or 0.0),
-                float(getattr(item, "confidence", 0.0) or 0.0),
-                getattr(item, "timestamp", None),
-            ),
-            reverse=True,
-        )
+        scoped.sort(key=self._sort_key, reverse=True)
         selected = scoped[:effective_top_k]
         provenance = tuple(provenance_by_id[str(item.id)] for item in selected)
 
@@ -204,6 +195,19 @@ class NeuroRecall:
             degraded=degraded,
             degradation_reason=degradation_reason,
             provenance=provenance,
+        )
+
+    @staticmethod
+    def _sort_key(item: MemoryEntry) -> tuple[float, float, float]:
+        timestamp = getattr(item, "timestamp", None)
+        try:
+            timestamp_value = float(timestamp.timestamp()) if timestamp is not None else 0.0
+        except (AttributeError, OSError, OverflowError, TypeError, ValueError):
+            timestamp_value = 0.0
+        return (
+            float(getattr(item, "relevance", 0.0) or 0.0),
+            float(getattr(item, "confidence", 0.0) or 0.0),
+            timestamp_value,
         )
 
 

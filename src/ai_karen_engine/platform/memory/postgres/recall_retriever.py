@@ -6,6 +6,7 @@ not recall strategy. NeuroRecall remains the memory-domain recall authority.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -63,21 +64,24 @@ class PostgresRecallRetriever:
         top_k = min(max(int(query.top_k or 10), 1), 100)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-        stmt = (
-            select(MemoryAssertion)
-            .where(
-                MemoryAssertion.tenant_id == tenant_uuid,
-                MemoryAssertion.user_id == user_uuid,
-                MemoryAssertion.consent_state == "granted",
-                or_(MemoryAssertion.valid_to.is_(None), MemoryAssertion.valid_to > now),
-            )
-            .order_by(MemoryAssertion.confidence.desc(), MemoryAssertion.created_at.desc())
-            .limit(top_k)
+        stmt = select(MemoryAssertion).where(
+            MemoryAssertion.tenant_id == tenant_uuid,
+            MemoryAssertion.user_id == user_uuid,
+            MemoryAssertion.consent_state == "granted",
+            or_(MemoryAssertion.valid_to.is_(None), MemoryAssertion.valid_to > now),
         )
 
         text = str(query.text or "").strip()
-        if text:
-            stmt = stmt.where(MemoryAssertion.content.contains(text, autoescape=True))
+        terms = self._query_terms(text)
+        if terms:
+            stmt = stmt.where(
+                or_(*(MemoryAssertion.content.contains(term, autoescape=True) for term in terms))
+            )
+
+        stmt = stmt.order_by(
+            MemoryAssertion.confidence.desc(),
+            MemoryAssertion.created_at.desc(),
+        ).limit(top_k)
 
         session_factory = self._resolve_session_factory()
         async with session_factory() as session:
@@ -85,6 +89,21 @@ class PostgresRecallRetriever:
             rows = result.scalars().all()
 
         return [self._to_entry(row, query, text) for row in rows]
+
+    @staticmethod
+    def _query_terms(text: str) -> tuple[str, ...]:
+        if not text:
+            return ()
+        terms: list[str] = []
+        seen: set[str] = set()
+        for token in re.findall(r"[\w'-]{2,}", text.casefold(), flags=re.UNICODE):
+            if token in seen:
+                continue
+            seen.add(token)
+            terms.append(token)
+            if len(terms) >= 8:
+                break
+        return tuple(terms)
 
     @staticmethod
     def _to_entry(row: MemoryAssertion, query: MemoryQuery, query_text: str) -> MemoryEntry:
@@ -128,10 +147,10 @@ class PostgresRecallRetriever:
 
     @staticmethod
     def _lexical_relevance(query_text: str, content: str) -> float:
-        query_terms = {term for term in query_text.casefold().split() if term}
+        query_terms = set(PostgresRecallRetriever._query_terms(query_text))
         if not query_terms:
             return 0.5
-        content_terms = set(content.casefold().split())
+        content_terms = set(PostgresRecallRetriever._query_terms(content))
         overlap = len(query_terms & content_terms) / len(query_terms)
         return max(0.1, min(1.0, overlap))
 

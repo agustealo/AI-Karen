@@ -1,9 +1,8 @@
 """Canonical memory runtime manager.
 
-The write-side implementation remains in `_memory_runtime_base` while this
+The write-side implementation remains behind `_memory_runtime_base` while this
 module owns the public MemoryRuntimeManager and its single NeuroRecall read path.
-The split preserves the mature write pipeline without keeping a competing
-runtime recall authority.
+No database or legacy retrieval fallback is allowed from this runtime surface.
 """
 
 from __future__ import annotations
@@ -28,16 +27,17 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         consolidation_adapter: Any | None = None,
         recall_service: Any | None = None,
     ) -> None:
-        super().__init__(
-            retrieval_adapter=retrieval_adapter,
-            consolidation_adapter=consolidation_adapter,
-            recall_service=None,
-        )
+        if retrieval_adapter is not None:
+            logger.warning(
+                "memory.retrieval_adapter_ignored",
+                extra={"replacement": "NeuroRecall"},
+            )
+        super().__init__(consolidation_adapter=consolidation_adapter)
         self._neuro_recall = recall_service or self._build_neuro_recall()
 
     @staticmethod
     def _build_neuro_recall() -> NeuroRecall:
-        """Compose production recall sources at the runtime boundary."""
+        """Compose durable and projection recall at the runtime boundary."""
         from ai_karen_engine.platform.memory.postgres import PostgresRecallRetriever
 
         from .retrieval.retrieval_router import get_retrieval_router
@@ -123,9 +123,7 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
 
 
 memory_manager = MemoryRuntimeManager()
-# Compatibility functions in the mature write-side module resolve this same
-# instance, so writes and inspection do not create a second runtime manager.
-_base.memory_manager = memory_manager
+_base.bind_memory_manager(memory_manager)
 
 
 def get_memory_manager() -> MemoryRuntimeManager:
@@ -171,7 +169,6 @@ async def recall_context(
     )
 
 
-# Mature write/governance compatibility API, bound to the canonical instance.
 update_memory = _base.update_memory
 export_promoted_artifacts = _base.export_promoted_artifacts
 get_metrics = _base.get_metrics
