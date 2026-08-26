@@ -61,6 +61,7 @@ jobs:
           pytest tests/architecture/test_auth_production_security_contract.py -q
           pytest tests/architecture/test_auth_session_security_contract.py -q
           pytest tests/architecture/test_auth_session_validation_contract.py -q
+          pytest tests/architecture/test_auth_readiness_contract.py -q
           pytest tests/architecture/test_authenticated_tenant_context_contract.py -q
           pytest tests/architecture/test_account_beta_recovery_contract.py -q
           pytest tests/security/test_tenant_isolation_gauntlet.py -q
