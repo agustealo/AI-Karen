@@ -14,10 +14,17 @@ try:
     M_SR_RESULTS = Histogram("kari_sr_results", "SR results count", buckets=(0, 1, 3, 5, 10, 20))
 except Exception:  # pragma: no cover
     _METRICS = False
+
     class _Noop:
-        def labels(self, *_, **__): return self
-        def inc(self, *_): pass
-        def observe(self, *_): pass
+        def labels(self, *_, **__):
+            return self
+
+        def inc(self, *_):
+            pass
+
+        def observe(self, *_):
+            pass
+
     M_SR_LAT = M_SR_INGEST = M_SR_RESULTS = _Noop()
 
 from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
@@ -27,26 +34,30 @@ from ai_karen_engine.core.reasoning.retrieval.vector_stores import VectorStore, 
 logger = logging.getLogger("ai_karen.reasoning.sr")
 
 
-# ----------------------------
-# Configs
-# ----------------------------
-
 @dataclass
 class RecallConfig:
     """Controls retrieval behavior and scoring."""
-    fast_top_k: int = 24            # pre-filter candidates with fast embeddings
-    final_top_k: int = 5            # final results to return
-    recency_alpha: float = 0.65     # blend(similarity, recency)
-    min_score: float = 0.0          # drop candidates below this after reweight
-    use_dual_embedding: bool = True # fast prefilter + precise rerank
-    recency_horizon_sec: float = 3600.0  # time constant for recency decay
-    enable_hybrid_rerank: bool = True    # allow secondary vector rerank if available
+
+    fast_top_k: int = 24
+    final_top_k: int = 5
+    recency_alpha: float = 0.65
+    min_score: float = 0.0
+    use_dual_embedding: bool = True
+    recency_horizon_sec: float = 3600.0
+    enable_hybrid_rerank: bool = True
 
 
 @dataclass
 class WritebackConfig:
-    """Controls novelty write acceptance (used when SR is asked to ingest)."""
-    novelty_gate: float = 0.18      # require >= this entropy (1-top_sim)
+    """Legacy soft-reasoning writeback thresholds.
+
+    Persistence ownership is being migrated to the canonical memory runtime.
+    Until that migration is complete, this compatibility surface fails closed
+    when novelty cannot be established.
+    """
+
+    novelty_gate: float = 0.18
+    importance_gate: float = 0.30
     default_ttl_seconds: float = 3600.0
     long_ttl_seconds: float = 86400.0
     max_len_chars: int = 5000
@@ -60,20 +71,8 @@ class SRHealth:
     config: Dict[str, Any] = field(default_factory=dict)
 
 
-# ----------------------------
-# SR Engine
-# ----------------------------
-
 class SoftReasoningEngine:
-    """Kari SR: retrieval + novelty heuristics with dual-embedding and recency reweight.
-
-    - VectorStore adapters (injected; Milvus retired)
-    - Dual-embedding: fast prefilter + precise rerank
-    - Recency-aware score: s' = α * sim + (1-α) * recency
-    - TTL and novelty gate for ingestion
-    - Async wrappers
-    - Prometheus telemetry
-    """
+    """Retrieval-focused soft-reasoning engine with legacy writeback support."""
 
     def __init__(
         self,
@@ -82,20 +81,16 @@ class SoftReasoningEngine:
         embeddings: Optional[EmbeddingManager] = None,
         recall: Optional[RecallConfig] = None,
         writeback: Optional[WritebackConfig] = None,
-        ttl_seconds: Optional[float] = None,  # legacy arg support
+        ttl_seconds: Optional[float] = None,
     ) -> None:
         self.embeddings = embeddings or EmbeddingManager()
-        # Vector store is injected by the caller; Milvus is retired and no longer
-        # used as a local-first default.
         self.store: Optional[VectorStore] = store
         self.recall = recall or RecallConfig()
         self.writeback = writeback or WritebackConfig()
+        if ttl_seconds is not None:
+            self.writeback.default_ttl_seconds = float(ttl_seconds)
         self._last_query_ms: float = 0.0
         self._last_ingest_time: float = 0.0
-
-    # -------------
-    # Ingestion
-    # -------------
 
     def ingest(
         self,
@@ -105,10 +100,8 @@ class SoftReasoningEngine:
         ttl_seconds: Optional[float] = None,
         force: bool = False,
     ) -> Optional[int]:
-        """Insert text into the store if novel, else skip.
-        Returns record id if available.
-        """
-        if not text:
+        """Insert text only when novelty is established or explicitly forced."""
+        if not text or self.store is None:
             return None
 
         now = time.time()
@@ -117,26 +110,32 @@ class SoftReasoningEngine:
         if ttl_seconds is not None:
             meta["ttl_override"] = float(ttl_seconds)
 
-        # Enforce max length to protect store
         if len(text) > int(self.writeback.max_len_chars):
             text = text[: int(self.writeback.max_len_chars)]
 
-        # Novelty check (unless forced)
         if not force:
             vec = self._embed_fast(text)
             entropy = self._entropy_from_vector(vec)
             if entropy < float(self.writeback.novelty_gate):
-                if _METRICS: M_SR_INGEST.labels(reason="not_novel").inc()
+                if _METRICS:
+                    M_SR_INGEST.labels(reason="not_novel").inc()
                 return None
 
-        # Proceed with upsert using precise vector for better future recall
         vec_precise = self._embed_precise(text)
-        rid = self.store.upsert(vec_precise, {"text": text, **meta}) if self.store else None
+        try:
+            rid = self.store.upsert(vec_precise, {"text": text, **meta})
+        except Exception as exc:
+            logger.warning("Soft-reasoning writeback failed: %s", exc)
+            if _METRICS:
+                M_SR_INGEST.labels(reason="write_failed").inc()
+            return None
+
         self._last_ingest_time = now
-        if _METRICS: M_SR_INGEST.labels(reason="ingested").inc()
+        if _METRICS:
+            M_SR_INGEST.labels(reason="ingested").inc()
         try:
             return int(rid) if rid is not None else None
-        except Exception:
+        except (TypeError, ValueError):
             return None
 
     def batch_ingest(
@@ -146,15 +145,19 @@ class SoftReasoningEngine:
         ttl_seconds: Optional[float] = None,
         force: bool = False,
     ) -> List[Optional[int]]:
-        """Batch ingest [(text, metadata), ...] with novelty gate."""
+        """Batch ingest while preserving result IDs at original item indexes."""
+        ids: List[Optional[int]] = [None] * len(items)
+        if not items or self.store is None:
+            return ids
+
         vectors: List[List[float]] = []
         payloads: List[Dict[str, Any]] = []
-        ids: List[Optional[int]] = []
+        accepted_indexes: List[int] = []
 
-        for text, metadata in items:
+        for item_index, (text, metadata) in enumerate(items):
             if not text:
-                ids.append(None)
                 continue
+
             now = time.time()
             meta = dict(metadata or {})
             meta.setdefault("timestamp", now)
@@ -167,31 +170,36 @@ class SoftReasoningEngine:
                 vec = self._embed_fast(text)
                 entropy = self._entropy_from_vector(vec)
                 if entropy < float(self.writeback.novelty_gate):
-                    ids.append(None)
                     continue
 
             vectors.append(self._embed_precise(text))
             payloads.append({"text": text, **meta})
-            ids.append(None)  # placeholder; some stores don't return ids
+            accepted_indexes.append(item_index)
 
-        if vectors and self.store:
+        if not vectors:
+            if _METRICS:
+                M_SR_INGEST.labels(reason="batch_empty").inc()
+            return ids
+
+        try:
+            upsert_ids = self.store.batch_upsert(vectors, payloads)
+        except Exception as exc:
+            logger.warning("Soft-reasoning batch writeback failed: %s", exc)
+            if _METRICS:
+                M_SR_INGEST.labels(reason="batch_failed").inc()
+            return ids
+
+        for result_index, uid in enumerate(upsert_ids[: len(accepted_indexes)]):
+            original_index = accepted_indexes[result_index]
             try:
-                upsert_ids = self.store.batch_upsert(vectors, payloads)
-                for i, uid in enumerate(upsert_ids):
-                    try:
-                        ids[i] = int(uid) if uid is not None else None
-                    except Exception:
-                        ids[i] = None
-            except Exception:
-                # best-effort; keep None ids
-                pass
+                ids[original_index] = int(uid) if uid is not None else None
+            except (TypeError, ValueError):
+                ids[original_index] = None
 
-        if _METRICS: M_SR_INGEST.labels(reason="batch").inc()
+        self._last_ingest_time = time.time()
+        if _METRICS:
+            M_SR_INGEST.labels(reason="batch").inc()
         return ids
-
-    # -------------
-    # Query
-    # -------------
 
     def query(
         self,
@@ -200,31 +208,31 @@ class SoftReasoningEngine:
         top_k: int = 3,
         metadata_filter: Optional[Dict[str, Any]] = None,
     ) -> List[Result]:
-        """Dual-embedding recall + recency reweight → top_k results."""
+        """Dual-embedding recall plus recency reweighting."""
         t0 = time.time()
         try:
-            if not text:
+            if not text or self.store is None:
                 return []
 
-            if self.store is None:
-                return []
-
-            # Fast prefilter
             fast_vec = self._embed_fast(text)
             prelim_k = max(top_k, self.recall.fast_top_k)
-            prelim = self.store.search(fast_vec, top_k=prelim_k, metadata_filter=metadata_filter)
+            prelim = self.store.search(
+                fast_vec,
+                top_k=prelim_k,
+                metadata_filter=metadata_filter,
+            )
 
-            # Precise rerank (if enabled)
             if self.recall.use_dual_embedding and prelim:
                 precise_vec = self._embed_precise(text)
                 prelim = self._rerank_by_precise(precise_vec, prelim)
 
-            # Recency-aware reweight
             reweighted = self._apply_recency(prelim)
-
-            # Min-score filter and final top_k
-            out = [r for r in reweighted if float(r.get("score", 0.0)) >= float(self.recall.min_score)]
-            out.sort(key=lambda r: float(r.get("score", 0.0)), reverse=True)
+            out = [
+                result
+                for result in reweighted
+                if float(result.get("score", 0.0)) >= float(self.recall.min_score)
+            ]
+            out.sort(key=lambda result: float(result.get("score", 0.0)), reverse=True)
             out = out[: max(1, min(top_k, self.recall.final_top_k))]
 
             if _METRICS:
@@ -243,42 +251,48 @@ class SoftReasoningEngine:
         metadata_filter: Optional[Dict[str, Any]] = None,
     ) -> List[Result]:
         import asyncio
-        return await asyncio.to_thread(self.query, text, top_k=top_k, metadata_filter=metadata_filter)
 
-    # -------------
-    # Maintenance / Health
-    # -------------
+        return await asyncio.to_thread(
+            self.query,
+            text,
+            top_k=top_k,
+            metadata_filter=metadata_filter,
+        )
 
     def prune(self) -> int:
-        """Best-effort TTL prune if the underlying store is locally accessible.
-        Returns count of removed items.
-        """
+        """Compatibility-only TTL pruning for legacy in-memory stores."""
+        if self.store is None:
+            return 0
+
         removed = 0
         try:
-            if self.store is None:
-                return 0
-            m = getattr(self.store, "_m", None)
-            data = getattr(m, "_data", None)
+            memory = getattr(self.store, "_m", None)
+            data = getattr(memory, "_data", None)
             if isinstance(data, dict):
                 now = time.time()
-                to_del = []
-                for rid, rec in list(data.items()):
-                    ts = rec.payload.get("timestamp", rec.timestamp)
-                    ttl = rec.payload.get("ttl_override", self.writeback.default_ttl_seconds)
-                    if now - ts > ttl:
-                        to_del.append(rid)
-                if to_del:
-                    self.store.delete(to_del)
-                    removed = len(to_del)
-        except Exception:
-            pass
+                to_delete = []
+                for record_id, record in list(data.items()):
+                    timestamp = record.payload.get("timestamp", record.timestamp)
+                    ttl = record.payload.get(
+                        "ttl_override",
+                        self.writeback.default_ttl_seconds,
+                    )
+                    if now - timestamp > ttl:
+                        to_delete.append(record_id)
+                if to_delete:
+                    self.store.delete(to_delete)
+                    removed = len(to_delete)
+        except Exception as exc:
+            logger.warning("Soft-reasoning prune failed: %s", exc)
         return removed
 
     def delete(self, ids: List[Any]) -> None:
+        if self.store is None or not ids:
+            return
         try:
             self.store.delete(ids)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Soft-reasoning delete failed: %s", exc)
 
     def health(self) -> Dict[str, Any]:
         return asdict(
@@ -293,73 +307,65 @@ class SoftReasoningEngine:
             )
         )
 
-    # -------------
-    # Internals
-    # -------------
-
     def _safe_count(self) -> int:
+        if self.store is None:
+            return 0
         try:
             return int(self.store.count())
         except Exception:
             return -1
 
     def _embed_fast(self, text: str) -> List[float]:
-        """Use a fast embedding for prefilter. Fallback to default embed."""
-        try:
-            # If your EmbeddingManager exposes different models, prefer fast here.
-            return self.embeddings.embed(text)  # e.g., self.embeddings.embed(text, model="fast")
-        except Exception:
-            return self.embeddings.embed(text)
+        return self.embeddings.embed(text)
 
     def _embed_precise(self, text: str) -> List[float]:
-        """Use a precise embedding for rerank/upsert. Fallback to default embed."""
-        try:
-            # e.g., self.embeddings.embed(text, model="precise")
-            return self.embeddings.embed(text)
-        except Exception:
-            return self.embeddings.embed(text)
+        return self.embeddings.embed(text)
 
     def _entropy_from_vector(self, vector: List[float]) -> float:
-        """Entropy = 1 - top_similarity from fast search."""
+        """Return novelty entropy, failing closed when it cannot be established."""
+        if self.store is None:
+            return 0.0
         try:
-            res = self.store.search(vector, top_k=1)
-            top = float(res[0]["score"]) if res else 0.0
-            return 1.0 - top
-        except Exception:
-            return 1.0  # assume novel if search fails
+            results = self.store.search(vector, top_k=1)
+            top = float(results[0]["score"]) if results else 0.0
+            return max(0.0, min(1.0, 1.0 - top))
+        except Exception as exc:
+            logger.warning("Novelty lookup failed; rejecting writeback: %s", exc)
+            if _METRICS:
+                M_SR_INGEST.labels(reason="novelty_unknown").inc()
+            return 0.0
 
-    def _rerank_by_precise(self, precise_query: List[float], prelim: List[Result]) -> List[Result]:
-        """Optionally refine scores using a second pass with precise vector.
-
-        This is store-agnostic. We rescore by combining original score and a
-        simulated precise similarity by re-searching neighbors that already
-        exist (fallback: keep original if store can't re-eval individual vecs).
-        """
-        # If store doesn't re-evaluate directly, approximate by boosting higher scores slightly.
-        # For real stores with custom APIs, you can add a method to compute similarity(vec, id).
+    def _rerank_by_precise(
+        self,
+        precise_query: List[float],
+        prelim: List[Result],
+    ) -> List[Result]:
+        del precise_query
         boosted = []
-        for r in prelim:
-            s = float(r.get("score", 0.0))
-            # gentle nudge toward better separation
-            boosted.append({**r, "score": min(1.0, s + (1.0 - s) * 0.05)})
-        boosted.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
+        for result in prelim:
+            score = float(result.get("score", 0.0))
+            boosted.append({
+                **result,
+                "score": min(1.0, score + (1.0 - score) * 0.05),
+            })
+        boosted.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
         return boosted
 
     def _apply_recency(self, results: List[Result]) -> List[Result]:
-        """Blend similarity with recency using an exponential decay."""
         if not results:
             return results
+
         now = time.time()
         horizon = float(self.recall.recency_horizon_sec)
         alpha = float(self.recall.recency_alpha)
         out: List[Result] = []
-        for r in results:
-            payload = r.get("payload", {}) or {}
-            ts = float(payload.get("timestamp", now))
-            rec = math.exp(-(now - ts) / horizon)
-            sim = float(r.get("score", 0.0))
-            r2 = dict(r)
-            r2["score"] = alpha * sim + (1.0 - alpha) * rec
-            out.append(r2)
-        out.sort(key=lambda z: float(z.get("score", 0.0)), reverse=True)
+        for result in results:
+            payload = result.get("payload", {}) or {}
+            timestamp = float(payload.get("timestamp", now))
+            recency = math.exp(-(now - timestamp) / horizon)
+            similarity = float(result.get("score", 0.0))
+            reweighted = dict(result)
+            reweighted["score"] = alpha * similarity + (1.0 - alpha) * recency
+            out.append(reweighted)
+        out.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
         return out
