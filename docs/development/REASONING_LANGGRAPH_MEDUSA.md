@@ -1,50 +1,70 @@
 # Reasoning, LangGraph, and AgentMedusa
 
+> **Authority:** subordinate to `src/ai_karen_engine/core/ARCHITECTURE.md`.
+> If this document and the Core authority matrix ever disagree, the Core matrix wins.
+
 ## 1. Why the distinction matters
 
-Reasoning, graph orchestration, and multi-agent execution solve different problems. They may cooperate, but none may become a shadow ChatRuntime.
+Reasoning, graph orchestration, and multi-agent execution solve different problems.
+They may cooperate, but none may become a shadow ChatRuntime.
 
 ```text
-CORTEX / RuntimePolicy
-        |
-        v
-ChatRuntime
-   +--> canonical reasoning
-   +--> LangGraph when graph semantics are required
-   +--> AgentMedusa when specialist multi-agent topology is required
+Intelligence -> CORTEX -> RuntimePolicy -> ChatRuntime
+                                         +-> DIRECT
+                                         +-> ReasoningExecutor
+                                         +-> WorkflowRuntime -> LangGraph
+                                                              +-> ReasoningExecutor
+                                                              +-> runtime tool ports
+                                                              +-> AgentMedusa
 ```
+
+The boundary rule is:
+
+```text
+ANALYZE != DECIDE != AUTHORIZE != ORCHESTRATE != REASON != EXECUTE
+```
+
+CORTEX recommends execution requirements/topology. RuntimePolicy authorizes.
+ChatRuntime executes. LangGraph sequences an authorized workflow. AgentMedusa
+coordinates an authorized multi-agent stage. ReasoningExecutor performs specialist
+cognition.
 
 ## 2. Canonical reasoning
 
 Reasoning owns structured cognitive work such as:
 
-- decomposition;
 - goal/constraint modeling;
-- hypothesis generation;
-- evidence classification;
-- verification requirements;
-- confidence analysis;
+- cognitive decomposition inside a reasoning operation;
+- hypothesis generation/comparison;
+- evidence classification/synthesis;
+- verification;
+- confidence and uncertainty analysis;
 - contradiction/unknown tracking;
-- reasoning depth/mode;
-- synthesis contracts.
+- causal analysis;
+- refinement and metacognition.
 
-Reasoning should consume runtime-injected model/generation capabilities. It does not select provider infrastructure itself.
+Reasoning consumes Runtime-injected model/generation/evidence capabilities. It does
+not select providers, create execution authorization, own durable memory writeback,
+or decide global execution topology.
 
 ### Reasoning rules
 
 - use canonical cognitive contracts;
 - keep reasoning state typed;
 - separate evidence from assertions;
-- distinguish confidence domains rather than one universal confidence number when semantics differ;
+- distinguish confidence domains when semantics differ;
 - represent unknowns and verification status explicitly;
 - do not depend on hidden chain-of-thought persistence;
-- preserve deterministic identifiers/state where execution reproducibility requires them.
+- preserve deterministic identifiers/state where reproducibility requires them;
+- consume `AuthorizedExecutionPlan` rather than constructing one;
+- emit outcomes, reason codes, evidence refs, and metrics rather than private chain of thought.
 
 ## 3. LangChain
 
 LangChain is a library/toolkit, not an architectural owner.
 
-Use individual LangChain components only when they materially reduce adapter/tool/retrieval integration cost and do not introduce:
+Use individual LangChain components only when they materially reduce adapter/tool/
+retrieval integration cost and do not introduce:
 
 - a second provider router;
 - a second memory store;
@@ -52,68 +72,110 @@ Use individual LangChain components only when they materially reduce adapter/too
 - an alternate agent runtime;
 - hidden fallback behavior.
 
-Wrap library-specific types behind KAREN contracts where they cross subsystem boundaries.
+Wrap library-specific types behind KAREN contracts where they cross subsystem
+boundaries.
 
 ## 4. LangGraph
 
 LangGraph is appropriate when execution actually needs a graph.
 
-Good uses:
+### LangGraph owns
 
-- conditional branching;
+- workflow nodes/edges;
+- conditional branching and loops;
+- parallel workflow stages;
 - checkpoint/resume;
-- persistent graph state;
-- human approval nodes;
-- retries represented as workflow edges;
-- multi-stage tool chains with explicit topology;
-- long-running workflows that benefit from durable state transitions.
+- persistent workflow-local state;
+- human approval waits;
+- retry/compensation edges;
+- cross-stage transitions.
 
-Bad uses:
+### LangGraph does not own
 
-- ordinary request/response chat;
-- simple provider fallback;
-- a generic wrapper around every runtime call;
-- replacing CORTEX policy decisions;
-- replacing AgentMedusa specialist coordination;
-- duplicating prompt/memory/provider services inside graph nodes.
+- global intent classification;
+- global topology selection;
+- RuntimePolicy authorization;
+- provider/model selection;
+- fallback policy;
+- durable memory/persistence truth;
+- permanent prompt assembly;
+- specialist reasoning algorithms;
+- multi-agent team semantics.
 
 ### Graph node rule
 
-Nodes consume canonical ports/services. A node should not invent private versions of provider selection, prompt assembly, memory recall, or authorization.
+Nodes consume canonical ports/services and the Runtime-provided
+`AuthorizedExecutionPlan`. A graph node may narrow behavior inside the authorized
+plan but may never expand capabilities, tools, plugins, agents, memory/resource
+scope, budgets, or approval privileges.
+
+A workflow-local classifier may classify an intermediate artifact/subtask. It must
+not silently reclassify the original user request after CORTEX has made the global
+decision.
 
 ## 5. AgentMedusa
 
-AgentMedusa is the canonical multi-agent execution topology.
+AgentMedusa is KAREN's canonical **multi-agent coordination subsystem**, not the
+global runtime.
+
+The normal multi-agent path is:
+
+```text
+RuntimePolicy
+   -> ChatRuntime
+      -> WorkflowRuntime
+         -> LangGraph multi-agent stage
+            -> AgentMedusa
+               -> specialist A
+               -> specialist B
+               -> arbitration/aggregation
+```
+
+Do not add a second direct Medusa runtime path unless a concrete use case proves
+multi-agent execution needs no workflow semantics and the canonical architecture is
+deliberately revised first.
 
 ### Medusa owns
 
-- task decomposition into specialist work;
-- specialist/agent selection using declared capability;
-- dependency-aware execution planning;
+- task decomposition **inside an already-authorized multi-agent stage**;
+- specialist selection from the authorized agent/capability set;
+- dependency-aware team planning;
 - subagent coordination;
-- bounded parallelism;
-- execution budgets/depth/subagent limits;
-- cancellation-aware lifecycle;
-- selective arbitration/synthesis;
+- bounded parallel execution;
+- cancellation-aware agent lifecycle;
+- selective arbitration/aggregation;
 - trajectory/run assembly;
-- multi-agent degradation metadata.
+- multi-agent degradation reporting.
+
+### Medusa enforces but does not originate
+
+- execution budgets;
+- allowed agents/capabilities;
+- tool/plugin permissions;
+- memory/resource scope;
+- approval requirements.
+
+Those originate in RuntimePolicy/Runtime authorization.
 
 ### Medusa does not own
 
-- provider/model policy;
-- provider fallback order;
+- global execution-topology selection;
+- provider/model policy or fallback order;
 - canonical prompt building;
 - global RBAC/policy;
 - credentials;
 - memory persistence;
 - plugin permission authority;
-- ordinary single-model chat.
+- ordinary single-model chat;
+- a second reasoning framework.
+
+Medusa agents may invoke canonical ReasoningExecutor capabilities. Agent code must
+not grow parallel causal/verifier/metacognition engines.
 
 ## 6. Agent definitions
 
-An agent is an execution specialist, not a free-form persona.
-
-A governed definition should identify, as applicable:
+An agent is an execution specialist, not a free-form persona. A governed definition
+should identify, as applicable:
 
 - stable agent ID/version;
 - implementation ID/hash;
@@ -122,87 +184,133 @@ A governed definition should identify, as applicable:
 - reasoning modes;
 - allowed tools/extensions;
 - output contract;
-- execution budget;
+- execution-budget requirements;
 - subagent/depth/parallelism limits;
 - approval/human-gate requirements;
-- memory scope;
+- memory scope requirements;
 - tenant/role/permission constraints.
 
-Do not store arbitrary raw system prompts inside agent registration if a canonical prompt contract can be referenced.
+Registration declares requirements. RuntimePolicy determines what is authorized for
+a request. Do not store arbitrary raw permanent system prompts in agent registration
+when a canonical prompt contract can be referenced.
 
-## 7. Execution topology examples
+## 7. Plan hierarchy
+
+These objects have different meanings:
+
+```text
+ExecutionRequirements   = what execution requires
+AuthorizedExecutionPlan = what execution may do
+WorkflowPlan            = how an authorized workflow intends to proceed
+DeepExecutionPlan       = how an authorized Medusa team intends to proceed
+```
+
+The invariant is:
+
+```text
+WorkflowPlan       subset-of AuthorizedExecutionPlan
+DeepExecutionPlan  subset-of AuthorizedExecutionPlan
+```
+
+No downstream planner may add authority.
+
+## 8. Execution topology examples
 
 ### Direct response
 
 ```text
-RuntimePolicy -> ChatRuntime -> provider/model -> response
+CORTEX -> RuntimePolicy -> ChatRuntime -> runtime provider/model path -> response
 ```
 
 ### Reasoned response
 
 ```text
-RuntimePolicy -> ChatRuntime -> reasoning contract -> runtime-selected model -> verification -> response
+CORTEX -> RuntimePolicy -> ChatRuntime -> ReasoningExecutor
+                                      -> Runtime-injected generation/evidence
+                                      -> verified reasoning result
 ```
 
 ### Graph workflow
 
 ```text
-RuntimePolicy -> ChatRuntime -> LangGraph -> canonical tools/services -> final graph result -> response
+CORTEX -> RuntimePolicy -> ChatRuntime -> WorkflowRuntime -> LangGraph
+                                                    -> canonical runtime ports
+                                                    -> workflow result
 ```
 
-### Multi-agent
+### Multi-agent workflow
 
 ```text
-RuntimePolicy -> ChatRuntime -> AgentMedusa
-                              -> specialist A
-                              -> specialist B
-                              -> arbitration/synthesis
-                              -> response
+CORTEX -> RuntimePolicy -> ChatRuntime -> WorkflowRuntime -> LangGraph
+                                                    -> AgentMedusa
+                                                       -> specialists
+                                                       -> arbitration
+                                                    -> workflow result
 ```
 
-Medusa specialists still reach model/tools/memory through canonical runtime ports.
+## 9. State boundaries
 
-## 8. Security
+Keep state scopes separate:
 
-Every agent/tool/graph action must preserve:
+```text
+CognitiveState = canonical cognition state
+WorkflowState  = resumable workflow state
+AgentState     = one agent/subteam execution state
+```
+
+WorkflowState and AgentState may carry scoped cognitive snapshots or references but
+must not redefine the whole-system `CognitiveState` contract.
+
+## 10. Security
+
+Every reasoning/agent/tool/graph action must preserve:
 
 - authenticated actor;
 - tenant scope;
 - capability/permission eligibility;
+- policy decision ID;
 - action side-effect rules;
+- memory/resource scope;
 - audit context;
-- correlation/request IDs.
+- correlation/request IDs;
+- execution budget.
 
-Subagent delegation must fail closed when permission or definition validation fails.
+Subagent delegation and graph specialist stages fail closed when authorization or
+contract validation fails.
 
-## 9. Observability
+## 11. Observability
 
 Capture structured metadata such as:
 
-- topology;
+- request/correlation/policy decision IDs;
+- tenant/user/conversation IDs as permitted;
+- execution topology;
 - reasoning mode/depth;
 - workflow/graph ID;
-- agent ID/version;
-- subagent count;
-- dependency step;
+- agent ID/version and parent-child linkage;
+- subagent count and dependency step;
 - tool/extension IDs;
-- execution budget consumption;
-- provider/model actually used;
+- budget consumption;
+- actual provider/model/runtime engine;
 - fallback/degradation;
 - latency/status/error codes.
 
 Do not log secrets or hidden reasoning.
 
-## 10. Tests
+## 12. Proof
 
-Prove:
+Architecture and execution tests should prove:
 
-- no provider authority leaks into reasoning/Medusa;
+- no provider authority leaks into Reasoning/LangGraph/Medusa;
 - LangGraph is not required for simple chat;
-- deterministic graph node IDs/state where promised;
+- LangGraph cannot synthesize or expand authorization;
+- Medusa selection comes from Runtime-authorized topology, not intent-name hacks;
+- Medusa cannot self-authorize or expand the agent allowlist;
+- WorkflowPlan/DeepExecutionPlan remain inside AuthorizedExecutionPlan;
+- deterministic graph state/IDs where promised;
 - runtime-injected generation clients;
 - agent definition validation;
-- RBAC/permission dominance;
+- tenant/RBAC/policy dominance;
 - bounded parallelism/budgets;
 - cancellation and failure semantics;
 - multi-agent trajectory/provenance;
