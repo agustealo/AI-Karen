@@ -4,7 +4,7 @@ on:
   push:
     branches: [db/baseline-1-production-schema]
     paths:
-      - "scripts/dev/fix_db_baseline_review_findings.py"
+      - "scripts/dev/fix_db_baseline_auth_preflight.py"
       - ".github/workflows/one-shot-db-baseline-runtime-closure.yml"
   workflow_dispatch:
 
@@ -21,27 +21,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Apply forensic review fix
-        run: python scripts/dev/fix_db_baseline_review_findings.py
+      - name: Apply auth/vault preflight convergence
+        run: python scripts/dev/fix_db_baseline_auth_preflight.py
       - name: Compile changed boundaries
         run: |
           python -m py_compile \
             src/ai_karen_engine/database/client.py \
             src/ai_karen_engine/database/identity_vault_schema.py \
+            src/ai_karen_engine/services/auth/auth_service.py \
             src/ai_karen_engine/services/identity_vault/credential_vault_service.py \
             tests/supabase_platform_smoke.py
       - name: Prove single primary PostgreSQL schema authority
         run: |
           test "$(find supabase/migrations -maxdepth 1 -name '*.sql' | wc -l)" -eq 7
           grep -q "CREATE TABLE IF NOT EXISTS credentials" supabase/migrations/20260827070000_07_identity_vault.sql
-          ! grep -R "metadata.create_all\|metadata.drop_all" -n src/ai_karen_engine/database src/ai_karen_engine/services/identity_vault --include='*.py'
-          ! grep -n "create_tables_async()" src/ai_karen_engine/services/identity_vault/credential_vault_service.py
-          grep -q "func, text" src/ai_karen_engine/services/identity_vault/credential_vault_service.py
+          ! grep -R "metadata.create_all\|metadata.drop_all" -n src/ai_karen_engine/database src/ai_karen_engine/services/auth src/ai_karen_engine/services/identity_vault --include='*.py'
+          ! grep -R "create_tables_async()" -n src/ai_karen_engine/services/auth src/ai_karen_engine/services/identity_vault --include='*.py'
+          grep -q "information_schema.tables" src/ai_karen_engine/services/auth/auth_service.py
+          grep -q "information_schema.tables" src/ai_karen_engine/services/identity_vault/credential_vault_service.py
       - name: Commit product changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m "fix(db): close baseline review findings"
+          git commit -m "fix(db): make auth schema preflight read-only"
           git push origin HEAD:db/baseline-1-production-schema
