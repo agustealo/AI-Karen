@@ -1,49 +1,22 @@
 """Dependency injection helpers for Core-facing application services.
 
-Concrete UI materialization is intentionally not performed here. Extension/UI
-bootstrap code owns extension discovery side effects; Core only resolves the
-service capability requested by callers.
+Runtime lazy loading is the single Core service-resolution authority. This
+module adapts that authority to FastAPI dependencies and explicit application
+service factories. It must not maintain a second service registry or fabricate
+successful fallback services when a required dependency is unavailable.
 """
 
+from __future__ import annotations
+
 import logging
-from types import SimpleNamespace
-from typing import Any, Dict, Optional, Callable, cast
+from typing import Any, Callable, Dict, Optional, cast
 
 from fastapi import Depends, HTTPException, Request
 
-from ai_karen_engine.config.config_manager import AIKarenConfig, get_config
 from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.config.config_manager import AIKarenConfig, get_config
 
 logger = logging.getLogger(__name__)
-
-
-class _NoopConversationMemoryService:
-    db_client = None
-
-    async def initialize(self) -> None:
-        return None
-
-    async def query(self, *args: Any, **kwargs: Any) -> Any:
-        return SimpleNamespace(hits=[])
-
-    async def query_memories(self, *args: Any, **kwargs: Any) -> list[Any]:
-        return []
-
-    async def commit(self, *args: Any, **kwargs: Any) -> Any:
-        return SimpleNamespace(id=None, success=False)
-
-    async def store_web_ui_memory(self, *args: Any, **kwargs: Any) -> None:
-        return None
-
-    async def build_conversation_context(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
-        return {
-            "memories": [],
-            "total_memories": 0,
-            "memory_types_found": [],
-            "conversation_context": None,
-            "query_analysis": {},
-            "context_metadata": {},
-        }
 
 
 async def get_user_context(request: Request) -> UserData:
@@ -88,41 +61,40 @@ async def get_current_tenant_id(
     return str(getattr(user_ctx, "tenant_id", "dev-tenant"))
 
 
-async def _resolve_service(
-    service_name: str,
-    factory_func: Optional[Callable[..., Any]] = None,
-) -> Any:
-    try:
-        from ai_karen_engine.core.services.service_registry import get_service_registry
-
-        registry = get_service_registry()
-        service = await registry.get_service(service_name)
-        if service:
-            return service
-    except Exception as exc:
-        logger.debug("Registry lookup for %s missed: %s", service_name, exc)
-
+async def _get_runtime_service(service_name: str) -> Any | None:
+    """Resolve one service through the canonical Runtime lazy-loading registry."""
     try:
         from ai_karen_engine.core.runtime.lazy_loading import lazy_registry, setup_lazy_services
 
         if not lazy_registry.list_services():
             await setup_lazy_services()
-        service = await lazy_registry.get_service_instance(service_name)
-        if service:
-            return service
+        return await lazy_registry.get_service_instance(service_name)
     except Exception as exc:
-        logger.debug("Lazy loading fallback for %s missed: %s", service_name, exc)
+        logger.debug("Runtime service lookup for %s missed: %s", service_name, exc)
+        return None
 
-    if factory_func:
+
+async def _resolve_service(
+    service_name: str,
+    factory_func: Optional[Callable[..., Any]] = None,
+) -> Any:
+    service = await _get_runtime_service(service_name)
+    if service is not None:
+        return service
+
+    if factory_func is not None:
         try:
             service = await factory_func()
-            if service:
+            if service is not None:
                 return service
         except Exception as exc:
-            logger.error("Factory fallback for %s failed: %s", service_name, exc)
+            logger.error("Factory resolution for %s failed: %s", service_name, exc)
 
     logger.error("Critical service unavailable: %s", service_name)
-    raise HTTPException(status_code=503, detail=f"Service '{service_name}' is currently unavailable.")
+    raise HTTPException(
+        status_code=503,
+        detail=f"Service '{service_name}' is currently unavailable.",
+    )
 
 
 async def get_langgraph_orchestrator_service() -> Any:
@@ -143,6 +115,7 @@ async def get_persona_service() -> Any:
             get_persona_service as get_persona_service_impl,
             initialize_persona_service,
         )
+
         service = get_persona_service_impl()
         if getattr(service, "db_client", None) is None:
             service = initialize_persona_service()
@@ -153,28 +126,18 @@ async def get_persona_service() -> Any:
 
 async def get_conversation_service() -> Any:
     async def factory() -> Any:
-        from ai_karen_engine.services.memory.conversation_service import ConversationService
         from ai_karen_engine.core.memory.memory_service import WebUIMemoryService
-        from ai_karen_engine.database.conversation_manager import ConversationManager
         from ai_karen_engine.database.client import MultiTenantPostgresClient
+        from ai_karen_engine.database.conversation_manager import ConversationManager
+        from ai_karen_engine.services.memory.conversation_service import ConversationService
 
-        memory_service = None
-        try:
-            from ai_karen_engine.core.services.service_registry import get_memory_service as resolve_memory_service
-            memory_service = await resolve_memory_service()
-        except Exception:
-            try:
-                from ai_karen_engine.core.runtime.lazy_loading import lazy_registry
-                memory_service = await lazy_registry.get_service_instance("memory_service")
-            except Exception:
-                memory_service = None
-
+        memory_service = await _get_runtime_service("memory_service")
         if memory_service is None:
             try:
                 memory_service = WebUIMemoryService()
             except Exception as exc:
-                logger.warning("Falling back to no-op conversation memory service: %s", exc)
-                memory_service = _NoopConversationMemoryService()
+                logger.error("Memory service unavailable for conversation service: %s", exc)
+                raise RuntimeError("memory_service unavailable") from exc
 
         base_manager = ConversationManager(db_client=MultiTenantPostgresClient())
         return ConversationService(
@@ -186,9 +149,11 @@ async def get_conversation_service() -> Any:
 
 
 async def get_plugin_service() -> Any:
-    """Resolve plugin capability without triggering extension/UI side effects."""
+    """Resolve plugin capability without triggering UI materialization."""
+
     async def factory() -> Any:
         from pathlib import Path
+
         from ai_karen_engine.services.plugin_service import (
             get_plugin_service as get_plugin_service_impl,
             initialize_plugin_service,
@@ -216,7 +181,9 @@ async def get_plugin_service() -> Any:
 async def get_tool_service() -> Any:
     async def factory() -> Any:
         from ai_karen_engine.services.tooling.tool_service import ToolService
+
         return ToolService()
+
     return await _resolve_service("tool_service", factory)
 
 
@@ -228,13 +195,7 @@ async def get_current_config() -> AIKarenConfig:
     return get_config()
 
 
-async def get_service_registry_instance() -> Any:
-    from ai_karen_engine.core.services.service_registry import get_service_registry
-    return get_service_registry()
-
-
 Config_Dep = Depends(get_current_config)
-ServiceRegistry_Dep = Depends(get_service_registry_instance)
 LangGraphOrchestrator_Dep = Depends(get_langgraph_orchestrator_service)
 MemoryService_Dep = Depends(get_memory_service)
 ProfileService_Dep = Depends(get_profile_service)
