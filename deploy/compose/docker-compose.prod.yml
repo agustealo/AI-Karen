@@ -29,9 +29,16 @@ services:
       KARI_FAST_STARTUP: "false"
       KARI_SKIP_STARTUP_CHECK: "false"
       KARI_SKIP_AUTO_INIT: "false"
+      KARI_DEFER_ROUTER_WIRING: "false"
+      EXTENSION_DEV_BYPASS_ENABLED: "false"
+      EXTENSION_REQUIRE_HTTPS: "true"
       ALLOW_PUBLIC_COPILOT: "false"
 
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required for production}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:?AUTH_SECRET_KEY is required for production}
       AUTH_JWT_SECRET_KEY: ${AUTH_JWT_SECRET_KEY:?AUTH_JWT_SECRET_KEY is required for production}
+      EXTENSION_SECRET_KEY: ${EXTENSION_SECRET_KEY:?EXTENSION_SECRET_KEY is required for production}
+      EXTENSION_API_KEY: ${EXTENSION_API_KEY:?EXTENSION_API_KEY is required for production}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required for production}
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required for production}@redis:6379/0
 
@@ -45,6 +52,14 @@ services:
       DB_USER: ${DB_USER:?DB_USER is required for production}
       DB_NAME: ${DB_NAME:?DB_NAME is required for production}
 
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://localhost:8000/health/live || exit 1
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
     restart: unless-stopped
     stop_grace_period: 45s
 

@@ -6,14 +6,20 @@ on:
       - "docker-compose.yml"
       - "deploy/compose/docker-compose.prod.yml"
       - ".env.production.example"
+      - "src/ai_karen_engine/core/runtime/operational_health.py"
+      - "src/ai_karen_engine/server/health_endpoints.py"
       - "tests/architecture/test_production_deployment_contract.py"
+      - "tests/architecture/test_operational_health_authority.py"
       - ".github/workflows/production-deployment-contract.yml"
   pull_request:
     paths:
       - "docker-compose.yml"
       - "deploy/compose/docker-compose.prod.yml"
       - ".env.production.example"
+      - "src/ai_karen_engine/core/runtime/operational_health.py"
+      - "src/ai_karen_engine/server/health_endpoints.py"
       - "tests/architecture/test_production_deployment_contract.py"
+      - "tests/architecture/test_operational_health_authority.py"
       - ".github/workflows/production-deployment-contract.yml"
   workflow_dispatch:
 
@@ -30,10 +36,14 @@ jobs:
           python-version: "3.11"
 
       - name: Install proof dependencies
-        run: python -m pip install --upgrade pip pytest
+        run: python -m pip install --upgrade pip pytest pytest-asyncio
 
       - name: Prove production architecture contract
-        run: pytest tests/architecture/test_production_deployment_contract.py -q
+        env:
+          PYTHONPATH: src
+        run: |
+          pytest tests/architecture/test_production_deployment_contract.py -q
+          pytest tests/architecture/test_operational_health_authority.py -q
 
       - name: Prove production compose renders
         run: |
@@ -50,3 +60,8 @@ jobs:
           grep -q 'AUTH_DEV_MODE: "false"' /tmp/ai-karen-production-compose.yml
           grep -q 'KARI_AUTH_BYPASS: "false"' /tmp/ai-karen-production-compose.yml
           grep -q 'AUTH_ALLOW_DEV_LOGIN: "false"' /tmp/ai-karen-production-compose.yml
+          grep -q 'EXTENSION_DEV_BYPASS_ENABLED: "false"' /tmp/ai-karen-production-compose.yml
+          grep -q 'KARI_DEFER_ROUTER_WIRING: "false"' /tmp/ai-karen-production-compose.yml
+
+      - name: Prove production liveness probe is canonical
+        run: grep -q 'http://localhost:8000/health/live' /tmp/ai-karen-production-compose.yml
