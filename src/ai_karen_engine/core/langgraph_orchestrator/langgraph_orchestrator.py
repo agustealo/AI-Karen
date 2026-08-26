@@ -665,90 +665,42 @@ class LangGraphOrchestrator:
     async def complex_reasoning_task(
         self, reasoning_type: str, data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Compatibility reasoning helper."""
+        """Deprecated compatibility helper that cannot self-authorize reasoning.
 
-        reasoning_type = (reasoning_type or "").lower()
-        if reasoning_type not in {"logical", "causal", "probabilistic"}:
+        The former implementation synthesized a legacy CORTEX/KRO reasoning
+        envelope and executed it directly. That bypassed RuntimePolicy and the
+        canonical ReasoningExecutor. Callers must enter through ChatRuntime so
+        CORTEX can decide and RuntimePolicy can authorize the reasoning request.
+        """
+
+        normalized = (reasoning_type or "").lower()
+        if normalized not in {"logical", "causal", "probabilistic"}:
             return {
-                "reasoning": "error",
-                "message": f"Unknown reasoning type: {reasoning_type}",
+                "reasoning": "unavailable",
+                "message": f"Unknown reasoning type: {normalized}",
                 "confidence": 0.0,
+                "error_code": "unsupported_reasoning_type",
             }
 
-        try:
-            from ai_karen_engine.core.cortex.contracts import (
-                IntentSignal,
-                KireSignal,
-                PredictorSignal,
-                ReasoningDepth,
-                ReasoningRequest,
-                UserContext,
-            )
-            from ai_karen_engine.core.reasoning.kro_orchestrator import get_kro_orchestrator
-
-            user_ctx = UserContext(
-                user_id=str(data.get("user_id") or "anonymous"),
-                tenant_id=data.get("tenant_id"),
-                session_id=data.get("session_id"),
-            )
-            request = ReasoningRequest(
-                message=str(data.get("message") or data.get("query") or reasoning_type),
-                user=user_ctx,
-                memory_context=data.get("memory_context") or data,
-                tool_context=data.get("tool_context") or {},
-                intent=IntentSignal(
-                    primary_intent=reasoning_type,
-                    secondary_intents=[],
-                    entities=[],
-                    confidence=0.75,
-                    category="analytical",
-                    requested_modality="text",
-                ),
-                predictors=PredictorSignal(
-                    ambiguity_score=0.2 if reasoning_type == "logical" else 0.35,
-                    complexity_score=0.5,
-                    tool_likelihood=0.1,
-                    memory_relevance=0.4,
-                    multi_step_likelihood=0.3,
-                    degraded_risk=0.0,
-                ),
-                kire=KireSignal(
-                    requires_reasoning=True,
-                    reasoning_depth=ReasoningDepth.STANDARD,
-                    reasoning_modes=[reasoning_type],
-                    should_use_memory=True,
-                    should_use_tools=False,
-                    should_use_retrieval_reasoning=True,
-                    should_use_causal_reasoning=reasoning_type == "causal",
-                    should_use_graph_reasoning=reasoning_type == "logical",
-                    should_self_refine=reasoning_type != "probabilistic",
-                    should_verify=True,
-                ),
-                metadata={
-                    "conversation_history": data.get("conversation_history") or [],
-                    "ui_context": data.get("context") or {},
-                    "system_caps": data.get("system_caps") or {},
-                    "config_ui": data.get("config_ui") or {},
-                },
-            )
-            result = await get_kro_orchestrator().run(request)
-            return {
-                "reasoning": f"{reasoning_type.capitalize()} reasoning applied",
-                "summary": result.summary,
-                "confidence": result.confidence,
-                "evidence": result.evidence,
-                "hypotheses": result.hypotheses,
-                "verification_notes": result.verification_notes,
-                "refined_answer": result.refined_answer,
-                "diagnostics": result.diagnostics,
-            }
-        except Exception as e:
-            logger.error("Compatibility reasoning helper failed: %s", e)
-            return {
-                "reasoning": "error",
-                "message": f"Reasoning helper failed: {e}",
-                "confidence": 0.0,
-            }
+        logger.warning(
+            "Deprecated complex_reasoning_task blocked: reasoning must execute through RuntimePolicy",
+            extra={
+                "reasoning_type": normalized,
+                "session_id": data.get("session_id"),
+                "tenant_id": data.get("tenant_id"),
+            },
+        )
+        return {
+            "reasoning": "unavailable",
+            "message": (
+                "Direct LangGraph reasoning compatibility execution is retired; "
+                "submit the request through ChatRuntime for CORTEX and RuntimePolicy authorization."
+            ),
+            "confidence": 0.0,
+            "error_code": "runtime_authorization_required",
+            "response_source": "unavailable",
+            "degraded_mode": True,
+        }
 
     async def consensus_negotiation(self, flow_input: Any) -> Dict[str, Any]:
         """Compatibility wrapper for consensus negotiation."""
