@@ -84,6 +84,17 @@ def test_production_overlay_does_not_inherit_development_env_files() -> None:
         )
 
 
+def test_production_api_does_not_mask_attested_source_or_config() -> None:
+    text = PROD_COMPOSE.read_text(encoding="utf-8")
+    api_block = _service_block(text, "api")
+
+    assert "volumes: !override" in api_block
+    assert "./:/app" not in api_block
+    assert "./config:/app/config" not in api_block
+    assert "KAREN_BUILTIN_VLLM_ENABLED: \"false\"" in api_block
+    assert "AUTH_ENABLE_SESSION_VALIDATION: \"true\"" in api_block
+
+
 def test_production_web_uses_immutable_production_runtime() -> None:
     text = PROD_COMPOSE.read_text(encoding="utf-8")
     web_block = _service_block(text, "web")
