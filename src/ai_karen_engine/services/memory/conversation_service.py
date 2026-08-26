@@ -29,7 +29,7 @@ from ai_karen_engine.core.memory.unified_memory_service import (
     MemoryQueryRequest,
     UnifiedMemoryService,
 )
-from ai_karen_engine.core.memory.memory_service import (
+from ai_karen_engine.interfaces.ui.memory_models import (
     MemoryType,
     UISource,
 )

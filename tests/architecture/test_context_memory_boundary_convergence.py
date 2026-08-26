@@ -51,12 +51,11 @@ def test_diagnostics_does_not_call_memory_or_context_services() -> None:
     assert '"memories": memories or []' in diagnostics
 
 
-def test_shadow_memory_context_builder_remains_outside_langgraph_authority() -> None:
-    memory_service = _text("src/ai_karen_engine/core/memory/memory_service.py")
+def test_shadow_webui_memory_context_builder_is_deleted() -> None:
+    memory_service_path = ROOT / "src/ai_karen_engine/core/memory/memory_service.py"
     orchestrator = _text("src/ai_karen_engine/core/langgraph_orchestrator/langgraph_orchestrator.py")
     node = _text("src/ai_karen_engine/core/langgraph_orchestrator/nodes/memory_fetch.py")
-    assert memory_service.count("class MemoryContextBuilder:") == 1
-    assert "self.max_context_tokens = 2000" in memory_service
+    assert not memory_service_path.exists()
     assert "WebUIMemoryService" not in orchestrator
     assert "max_context_tokens" not in node
     assert "memory_tokens = len(memory.content) // 4" not in node
@@ -66,4 +65,5 @@ def test_context_doc_records_core_memory_recall_boundary() -> None:
     doc = _text("docs/CONTEXT_RUNTIME_ARCHITECTURE.md")
     assert "`ContextManager` has been retired" in doc
     assert "canonical Core memory recall contract" in doc
-    assert "Retire the remaining Web UI memory compatibility facade" in doc
+    assert "legacy `WebUIMemoryService` facade" in doc
+    assert "have been removed" in doc

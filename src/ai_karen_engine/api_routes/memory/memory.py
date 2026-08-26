@@ -869,44 +869,25 @@ async def memory_update(
         if runtime.available and runtime.service:
             try:
                 tenant_id = tenant_filters.get("org_id") or tenant_filters["user_id"]
-                success = True
+                updates: Dict[str, Any] = {
+                    "updated_by": user_id or tenant_filters["user_id"],
+                    "metadata": dict(tenant_filters),
+                }
+                if request.text is not None:
+                    updates["content"] = request.text
+                if request.tags is not None:
+                    updates["tags"] = request.tags
                 if request.importance is not None:
-                    success = await runtime.service.update_memory_importance(
-                        tenant_id, memory_id, request.importance
-                    )
-                if success and (request.text or request.tags):
-                    await runtime.service.base_manager.delete_memory(
-                        tenant_id, memory_id
-                    )
-                    if request.text:
-                        commit_response = await runtime.service.commit(
-                            tenant_id,
-                            MemoryCommitRequest(
-                                user_id=user_id or tenant_filters["user_id"],
-                                org_id=org_id,
-                                text=request.text,
-                                tags=request.tags or [],
-                                importance=request.importance or 5,
-                                decay=request.decay or "short",
-                                metadata=tenant_filters,
-                            ),
-                        )
-                        success = commit_response.success
-                    else:
-                        new_id = await runtime.service.store_web_ui_memory(
-                            tenant_id=tenant_id,
-                            content="",
-                            user_id=user_id or tenant_filters["user_id"],
-                            ui_source=UISource.AG_UI,
-                            memory_type=MemoryType.GENERAL,
-                            tags=request.tags,
-                            importance_score=request.importance,
-                            metadata={"decay": request.decay}
-                            if request.decay
-                            else None,
-                            tenant_filters=tenant_filters,
-                        )
-                        success = new_id is not None
+                    updates["importance"] = request.importance
+                if request.decay is not None:
+                    updates["metadata"]["decay_tier"] = request.decay
+
+                success = await runtime.service.update(
+                    tenant_id=tenant_id,
+                    memory_id=memory_id,
+                    updates=updates,
+                    correlation_id=correlation_id,
+                )
                 message = f"Memory {memory_id} updated successfully" if success else "Memory update failed"
             except Exception as e:
                 logger.warning(f"Memory update failed: {e}")

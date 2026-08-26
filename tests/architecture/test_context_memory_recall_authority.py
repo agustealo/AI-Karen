@@ -69,11 +69,11 @@ def test_session_continuity_remains_composition_edge_injected() -> None:
     assert "SessionStatePort when constructing the orchestrator" in adapter
 
 
-def test_web_ui_memory_facade_is_retained_only_as_migration_debt() -> None:
-    memory_service = _text("src/ai_karen_engine/core/memory/memory_service.py")
+def test_web_ui_memory_facade_is_deleted() -> None:
+    memory_service_path = ROOT / "src/ai_karen_engine/core/memory/memory_service.py"
     package_root = _text("src/ai_karen_engine/core/memory/__init__.py")
 
-    assert "class WebUIMemoryService" in memory_service
+    assert not memory_service_path.exists()
     assert '"WebUIMemoryService"' not in package_root
     assert '"MemoryRuntimeManager"' in package_root
     assert '"recall_context"' in package_root

@@ -304,7 +304,7 @@ mypy src
 
 ### 1. Retire the remaining Web UI memory compatibility facade
 
-LangGraph no longer consumes `WebUIMemoryService` or its private `MemoryContextBuilder`. The remaining facade is still used by training, scheduling, learning, bootstrap, and older service dependencies. Migrate those consumers by domain before deleting the facade. PromptRuntime remains the final cross-section token authority; memory retrieval uses a validated, config-driven result-count bound rather than a second prompt-token budget.
+The legacy `WebUIMemoryService` facade and its private `MemoryContextBuilder` have been removed. Domain consumers now use canonical Unified memory contracts or the runtime memory manager through composition boundaries. PromptRuntime remains the final cross-section token authority; memory retrieval uses a validated, config-driven result-count bound rather than a second prompt-token budget.
 
 ### 2. Decide the future of `FileContextStore`
 
