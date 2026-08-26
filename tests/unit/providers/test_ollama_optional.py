@@ -6,44 +6,54 @@ from ai_karen_engine.integrations.llm_utils import GenerationFailed
 from ai_karen_engine.integrations.providers.ollama_provider import OllamaProvider
 
 
-def test_ollama_is_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("KARI_OLLAMA_ENABLED", raising=False)
-    monkeypatch.setenv("OLLAMA_BASE_URL", "http://example.invalid:11434")
+def test_ollama_uses_explicit_provider_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
 
-    provider = OllamaProvider(model="example")
+    provider = OllamaProvider(
+        model="example",
+        base_url="https://ollama.example.test",
+    )
 
-    assert provider.enabled is False
-    assert provider.health_check() == {
-        "status": "disabled",
-        "provider": "ollama",
-        "enabled": False,
-    }
-    assert provider._requests is None
-
-    with pytest.raises(GenerationFailed, match="disabled"):
-        provider.get_models()
-
-    with pytest.raises(GenerationFailed, match="disabled"):
-        provider.generate_text("hello")
+    assert provider.provider_name == "ollama"
+    assert provider.base_url == "https://ollama.example.test/api"
 
 
-def test_ollama_enablement_is_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("KARI_OLLAMA_ENABLED", "true")
+def test_ollama_can_take_endpoint_from_provider_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
     provider = OllamaProvider(model="example")
 
-    assert provider.enabled is True
     assert provider.base_url == "http://localhost:11434/api"
 
 
-def test_disabled_ollama_does_not_invent_a_base_url(
+def test_ollama_does_not_invent_endpoint_when_unconfigured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("KARI_OLLAMA_ENABLED", raising=False)
     monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
 
     provider = OllamaProvider(model="example")
 
-    assert provider.enabled is False
     assert provider.base_url == ""
+    assert provider._requests is None
+
+    with pytest.raises(GenerationFailed, match="no configured base URL"):
+        provider.get_models()
+
+    with pytest.raises(GenerationFailed, match="no configured base URL"):
+        provider.generate_text("hello")
+
+
+def test_ollama_has_no_provider_specific_enablement_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KARI_OLLAMA_ENABLED", "false")
+
+    provider = OllamaProvider(
+        model="example",
+        base_url="http://localhost:11434",
+    )
+
+    assert not hasattr(provider, "enabled")
+    assert provider.base_url == "http://localhost:11434/api"
