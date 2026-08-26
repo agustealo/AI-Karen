@@ -4,22 +4,23 @@ Canonical production path:
 - ``SoftExplorationEngine`` performs controlled first-token embedding search.
 - ``SoftGenerationPort`` is supplied by a compatible local model runtime.
 - ``VerifierGuidedObjective`` converts structured verifier judgments into the
-  scalar reward consumed by Bayesian exploration.
-- ``BayesianOptimizer`` now uses a real Gaussian Process posterior with
-  configurable UCB/EI/PI/Thompson acquisition.
+  scalar reward consumed by KAREN's default profile.
+- ``BayesianOptimizer`` uses a real Gaussian Process posterior with configurable
+  UCB/EI/PI/Thompson acquisition.
+- ``PaperRewardComposer`` supplies the explicit Zhu et al. verifier-plus-
+  generation-coherence reward used by ``SoftExplorationConfig.paper_2025()``.
 
 Research fidelity note:
-The exploration architecture follows Zhu et al. (ICML 2025) and the optimizer
-now satisfies the Gaussian-process Bayesian-optimisation requirement. The
-canonical KAREN objective is still richer/different from the paper objective,
-so a full ``paper_2025`` reproduction still requires Runtime to provide typed
-generation-coherence/log-probability reward data and select paper-consistent
-search parameters (including Expected Improvement). Do not describe the default
-KAREN profile as a complete paper-faithful reproduction yet.
+The canonical algorithm now contains the paper-critical GP search, Expected
+Improvement profile, projected 50-dimensional search profile, and typed
+verifier-plus-log-probability reward composition. Runtime must still inject an
+authorized local model adapter that exposes first-token embedding control and
+generation log-probabilities before ``paper_2025`` can execute. The default
+``karen_default`` profile intentionally remains KAREN-specific.
 
 The older retrieval/writeback ``SoftReasoningEngine`` remains available only as
-an on-demand compatibility surface while ICE/retrieval callers are migrated. It
-is deliberately not imported during canonical Soft Reasoning startup.
+an on-demand compatibility surface while legacy callers are migrated. It is
+deliberately not imported during canonical Soft Reasoning startup.
 """
 
 from __future__ import annotations
@@ -53,6 +54,12 @@ from ai_karen_engine.core.reasoning.soft_reasoning.optimization import (
     OptimizationConfig,
     OptimizationResult,
     optimize_embedding_batch,
+)
+from ai_karen_engine.core.reasoning.soft_reasoning.paper_reward import (
+    PaperReward,
+    PaperRewardComposer,
+    PaperRewardConfig,
+    SoftReasoningCoherenceUnavailable,
 )
 from ai_karen_engine.core.reasoning.soft_reasoning.perturbation import (
     EmbeddingPerturber,
@@ -92,6 +99,9 @@ __all__ = [
     "EmbeddingPerturber",
     "OptimizationConfig",
     "OptimizationResult",
+    "PaperReward",
+    "PaperRewardComposer",
+    "PaperRewardConfig",
     "PerturbationConfig",
     "PerturbationStrategy",
     "SoftCandidate",
@@ -102,13 +112,14 @@ __all__ = [
     "SoftGenerationOutput",
     "SoftGenerationPort",
     "SoftReasoningBudgetError",
+    "SoftReasoningCoherenceUnavailable",
     "SoftReasoningUnavailable",
     "SoftVerificationScore",
     "SoftVerifierPort",
     "VerifierGuidedObjective",
     "VerifierObjectiveConfig",
     "optimize_embedding_batch",
-    # Compatibility-only lazy exports. Remove after ICE/retrieval migration.
+    # Compatibility-only lazy exports. Remove after legacy caller migration.
     "RecallConfig",
     "SRHealth",
     "SoftReasoningEngine",
