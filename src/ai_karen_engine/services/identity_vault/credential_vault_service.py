@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from sqlalchemy import select, and_, or_, func
+from sqlalchemy import select, and_, or_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
