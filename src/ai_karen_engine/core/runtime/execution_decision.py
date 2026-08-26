@@ -22,7 +22,9 @@ class RiskLevel(str, Enum):
     CRITICAL = "critical"
 
 
-def _topology_from_execution_mode(mode: RuntimeExecutionMode, graph_required: bool) -> ExecutionTopology:
+def _topology_from_execution_mode(
+    mode: RuntimeExecutionMode, graph_required: bool
+) -> ExecutionTopology:
     if mode == RuntimeExecutionMode.DEGRADED:
         return ExecutionTopology.DIRECT
     if graph_required:
@@ -81,12 +83,28 @@ class ExecutionDecision:
     policy_constraints: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.topology == ExecutionTopology.DIRECT and self.execution_mode == RuntimeExecutionMode.GRAPH:
+        if (
+            self.topology == ExecutionTopology.DIRECT
+            and self.execution_mode == RuntimeExecutionMode.GRAPH
+        ):
             self.topology = ExecutionTopology.WORKFLOW
         if self.topology == ExecutionTopology.DIRECT and self.graph_required:
             self.topology = ExecutionTopology.WORKFLOW
-        if self.topology == ExecutionTopology.WORKFLOW and not self.graph_required and self.execution_mode != RuntimeExecutionMode.GRAPH:
+        if (
+            self.topology == ExecutionTopology.WORKFLOW
+            and not self.graph_required
+            and self.execution_mode != RuntimeExecutionMode.GRAPH
+        ):
             self.graph_required = True
+
+        # Compatibility bridge for the pre-convergence ChatRuntime persistence
+        # call site, which currently invokes persistence only on the recall path.
+        # Authorization still comes exclusively from RuntimePolicy. Remove this
+        # bridge when ChatRuntime checks memory_write_allowed independently.
+        if self.memory_write_allowed and not self.memory_recall_required:
+            self.memory_recall_required = True
+            if "compat_memory_write_requires_recall" not in self.reason_codes:
+                self.reason_codes.append("compat_memory_write_requires_recall")
 
     @property
     def is_graph_required(self) -> bool:
