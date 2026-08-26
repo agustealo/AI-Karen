@@ -1,18 +1,23 @@
-"""
-Hierarchical truncation policy for PromptRuntime.
+"""Hierarchical truncation policy for PromptRuntime.
 
-Defines truncation behavior with item-aware strategies and priority levels.
+This module is the single PromptRuntime budget-selection policy. Domain owners
+must rank their own inputs before handing them to PromptRuntime. This policy only
+chooses which already-authorized prompt sections/items survive token pressure.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
+
+from ai_karen_engine.core.runtime.prompt.prompt_contract import (
+    PromptAssemblyRequest,
+    PromptTruncationEvent,
+)
 
 
 class TruncationStrategy(str, Enum):
-    """Strategies for truncating prompt sections."""
     REMOVE_ENTIRE_SECTION = "remove_entire_section"
     REMOVE_OLDEST_ITEMS = "remove_oldest_items"
     TRIM_VERBOSE_DESCRIPTIONS = "trim_verbose_descriptions"
@@ -20,7 +25,8 @@ class TruncationStrategy(str, Enum):
 
 
 class SectionPriority(int, Enum):
-    """Priority levels for prompt sections (lower = more protected)."""
+    """Prompt section priority. Lower values are more protected."""
+
     SYSTEM_POLICY = 0
     TENANT_POLICY = 1
     SAFETY = 2
@@ -36,122 +42,227 @@ class SectionPriority(int, Enum):
 
 
 class SectionProtection(str, Enum):
-    """Protection levels for sections."""
-    PROTECTED = "protected"  # Never truncate
-    COMPRESSIBLE = "compressible"  # Can be summarized/trimmed
-    DROPPABLE = "droppable"  # Can be removed entirely
-    ITEM_TRIMMABLE = "item_trimmable"  # Individual items can be removed
+    PROTECTED = "protected"
+    COMPRESSIBLE = "compressible"
+    DROPPABLE = "droppable"
+    ITEM_TRIMMABLE = "item_trimmable"
 
 
-@dataclass
+@dataclass(frozen=True)
 class TruncationRule:
-    """Defines how a section should be truncated."""
     section_name: str
     priority: SectionPriority
     protection: SectionProtection
     strategy: TruncationStrategy
-    min_keep_percentage: float = 0.0  # Minimum percentage to keep if item_trimmable
+    min_keep_percentage: float = 0.0
 
 
 class HierarchicalTruncationPolicy:
-    """Policy-driven truncation with item-aware strategies."""
-    
+    """Apply one deterministic, policy-driven prompt truncation path.
+
+    Memory/tool inputs are assumed to arrive best-first from their canonical
+    owners, so pressure removes items from the tail. Conversation history is
+    different: the latest user message is always protected and older messages
+    are removed first.
+    """
+
     def __init__(self) -> None:
         self.rules = self._default_rules()
-    
+
     def _default_rules(self) -> Dict[str, TruncationRule]:
-        """Create default truncation rules."""
         return {
             "system": TruncationRule(
-                section_name="system",
-                priority=SectionPriority.SYSTEM_POLICY,
-                protection=SectionProtection.PROTECTED,
-                strategy=TruncationStrategy.REMOVE_ENTIRE_SECTION,
+                "system",
+                SectionPriority.SYSTEM_POLICY,
+                SectionProtection.PROTECTED,
+                TruncationStrategy.REMOVE_ENTIRE_SECTION,
             ),
             "output": TruncationRule(
-                section_name="output",
-                priority=SectionPriority.OUTPUT_CONTRACT,
-                protection=SectionProtection.PROTECTED,
-                strategy=TruncationStrategy.REMOVE_ENTIRE_SECTION,
+                "output",
+                SectionPriority.OUTPUT_CONTRACT,
+                SectionProtection.PROTECTED,
+                TruncationStrategy.REMOVE_ENTIRE_SECTION,
             ),
             "persona": TruncationRule(
-                section_name="persona",
-                priority=SectionPriority.PERSONA,
-                protection=SectionProtection.COMPRESSIBLE,
-                strategy=TruncationStrategy.TRIM_VERBOSE_DESCRIPTIONS,
+                "persona",
+                SectionPriority.PERSONA,
+                SectionProtection.COMPRESSIBLE,
+                TruncationStrategy.TRIM_VERBOSE_DESCRIPTIONS,
             ),
             "cortex": TruncationRule(
-                section_name="cortex",
-                priority=SectionPriority.CORTEX,
-                protection=SectionProtection.DROPPABLE,
-                strategy=TruncationStrategy.REMOVE_ENTIRE_SECTION,
+                "cortex",
+                SectionPriority.CORTEX,
+                SectionProtection.DROPPABLE,
+                TruncationStrategy.REMOVE_ENTIRE_SECTION,
             ),
             "profile": TruncationRule(
-                section_name="profile",
-                priority=SectionPriority.PROFILE,
-                protection=SectionProtection.ITEM_TRIMMABLE,
-                strategy=TruncationStrategy.REMOVE_OLDEST_ITEMS,
-                min_keep_percentage=0.5,
+                "profile",
+                SectionPriority.PROFILE,
+                SectionProtection.COMPRESSIBLE,
+                TruncationStrategy.TRIM_VERBOSE_DESCRIPTIONS,
             ),
             "provider_capabilities": TruncationRule(
-                section_name="provider_capabilities",
-                priority=SectionPriority.MEMORY,
-                protection=SectionProtection.DROPPABLE,
-                strategy=TruncationStrategy.REMOVE_ENTIRE_SECTION,
+                "provider_capabilities",
+                SectionPriority.MEMORY,
+                SectionProtection.DROPPABLE,
+                TruncationStrategy.REMOVE_ENTIRE_SECTION,
             ),
             "memory": TruncationRule(
-                section_name="memory",
-                priority=SectionPriority.MEMORY,
-                protection=SectionProtection.ITEM_TRIMMABLE,
-                strategy=TruncationStrategy.REMOVE_OLDEST_ITEMS,
+                "memory",
+                SectionPriority.MEMORY,
+                SectionProtection.ITEM_TRIMMABLE,
+                TruncationStrategy.REMOVE_OLDEST_ITEMS,
                 min_keep_percentage=0.3,
             ),
             "tool": TruncationRule(
-                section_name="tool",
-                priority=SectionPriority.TOOL_CONTRACTS,
-                protection=SectionProtection.ITEM_TRIMMABLE,
-                strategy=TruncationStrategy.TRIM_VERBOSE_DESCRIPTIONS,
+                "tool",
+                SectionPriority.TOOL_CONTRACTS,
+                SectionProtection.ITEM_TRIMMABLE,
+                TruncationStrategy.TRIM_VERBOSE_DESCRIPTIONS,
                 min_keep_percentage=0.5,
             ),
             "workflow": TruncationRule(
-                section_name="workflow",
-                priority=SectionPriority.WORKFLOW,
-                protection=SectionProtection.DROPPABLE,
-                strategy=TruncationStrategy.REMOVE_ENTIRE_SECTION,
+                "workflow",
+                SectionPriority.WORKFLOW,
+                SectionProtection.DROPPABLE,
+                TruncationStrategy.REMOVE_ENTIRE_SECTION,
             ),
             "user": TruncationRule(
-                section_name="user",
-                priority=SectionPriority.LATEST_USER_MESSAGE,
-                protection=SectionProtection.PROTECTED,
-                strategy=TruncationStrategy.REMOVE_ENTIRE_SECTION,
+                "user",
+                SectionPriority.LATEST_USER_MESSAGE,
+                SectionProtection.PROTECTED,
+                TruncationStrategy.REMOVE_ENTIRE_SECTION,
             ),
-            "assistant": TruncationRule(
-                section_name="assistant",
-                priority=SectionPriority.HISTORY,
-                protection=SectionProtection.ITEM_TRIMMABLE,
-                strategy=TruncationStrategy.REMOVE_OLDEST_ITEMS,
-                min_keep_percentage=0.2,
+            "history": TruncationRule(
+                "history",
+                SectionPriority.HISTORY,
+                SectionProtection.ITEM_TRIMMABLE,
+                TruncationStrategy.REMOVE_OLDEST_ITEMS,
+                min_keep_percentage=0.0,
             ),
         }
-    
+
     def get_rule(self, section_name: str) -> Optional[TruncationRule]:
-        """Get truncation rule for a section."""
         return self.rules.get(section_name)
-    
+
     def can_truncate(self, section_name: str) -> bool:
-        """Check if a section can be truncated."""
         rule = self.get_rule(section_name)
         return rule is not None and rule.protection != SectionProtection.PROTECTED
-    
+
     def get_truncation_order(self) -> List[str]:
-        """Get sections ordered by truncation priority (highest priority first)."""
-        sorted_rules = sorted(
-            self.rules.values(),
-            key=lambda r: r.priority.value,
-            reverse=True
-        )
-        return [rule.section_name for rule in sorted_rules]
-    
+        return [
+            rule.section_name
+            for rule in sorted(
+                self.rules.values(),
+                key=lambda rule: rule.priority.value,
+                reverse=True,
+            )
+            if rule.protection != SectionProtection.PROTECTED
+        ]
+
     def add_rule(self, rule: TruncationRule) -> None:
-        """Add or update a truncation rule."""
         self.rules[rule.section_name] = rule
+
+    def enforce(
+        self,
+        request: PromptAssemblyRequest,
+        estimate_tokens: Callable[[PromptAssemblyRequest], object],
+    ) -> List[PromptTruncationEvent]:
+        """Mutate a working request copy until it fits the configured budget.
+
+        The caller owns copying the request. Returning events makes every
+        omission observable through the existing PromptRuntime provenance path.
+        """
+
+        events: List[PromptTruncationEvent] = []
+
+        def total_tokens() -> int:
+            estimate = estimate_tokens(request)
+            return int(getattr(estimate, "total_tokens", 0))
+
+        while total_tokens() > request.token_budget:
+            changed = False
+            for section in self.get_truncation_order():
+                before = total_tokens()
+                if before <= request.token_budget:
+                    break
+
+                removed = self._truncate_once(request, section)
+                if removed <= 0:
+                    continue
+
+                after = total_tokens()
+                rule = self.rules[section]
+                events.append(
+                    PromptTruncationEvent(
+                        section=section,
+                        reason="token_pressure",
+                        original_tokens=before,
+                        remaining_tokens=after,
+                        items_removed=removed,
+                        strategy=rule.strategy.value,
+                        tokens_before=before,
+                        tokens_after=after,
+                        priority=rule.priority.value,
+                    )
+                )
+                changed = True
+                if after <= request.token_budget:
+                    break
+
+            if not changed:
+                break
+
+        return events
+
+    def _truncate_once(self, request: PromptAssemblyRequest, section: str) -> int:
+        if section == "history":
+            return self._remove_oldest_history_message(request)
+        if section == "workflow" and request.workflow_context:
+            request.workflow_context = {}
+            return 1
+        if section == "provider_capabilities" and request.provider_capabilities:
+            request.provider_capabilities = {}
+            return 1
+        if section == "tool" and request.tool_contracts:
+            keep = max(0, int(len(request.tool_contracts) * self.rules[section].min_keep_percentage))
+            if len(request.tool_contracts) <= keep:
+                return 0
+            request.tool_contracts.pop()
+            return 1
+        if section == "memory" and request.memory_items:
+            keep = max(0, int(len(request.memory_items) * self.rules[section].min_keep_percentage))
+            if len(request.memory_items) <= keep:
+                return 0
+            request.memory_items.pop()
+            return 1
+        if section == "profile" and request.profile:
+            request.profile = {}
+            return 1
+        if section == "cortex" and request.cortex_intent:
+            request.cortex_intent = {}
+            return 1
+        if section == "persona" and request.persona:
+            request.persona = {}
+            return 1
+        return 0
+
+    @staticmethod
+    def _remove_oldest_history_message(request: PromptAssemblyRequest) -> int:
+        if len(request.messages) <= 1:
+            return 0
+
+        latest_user_index: Optional[int] = None
+        for index in range(len(request.messages) - 1, -1, -1):
+            if str(request.messages[index].get("role", "")).lower() == "user":
+                latest_user_index = index
+                break
+
+        for index, message in enumerate(request.messages):
+            if index == latest_user_index:
+                continue
+            role = str(message.get("role", "")).lower()
+            if role in {"user", "assistant"}:
+                request.messages.pop(index)
+                return 1
+        return 0
