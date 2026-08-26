@@ -1,0 +1,25 @@
+name: One-shot Memory Symbol Locator
+
+on:
+  push:
+    branches:
+      - context/converge-3-memory-budget-classification
+
+permissions:
+  contents: read
+
+jobs:
+  locate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locate canonical definitions
+        shell: bash
+        run: |
+          set -euo pipefail
+          for sym in MultiTenantPostgresClient EmbeddingManager MemoryManager MemoryEntry TenantConversation TenantMemoryEntry; do
+            echo "## $sym"
+            grep -R --line-number --include='*.py' -E "^(class|.*class) ${sym}\b|^${sym}[[:space:]]*=" src/ai_karen_engine | head -20 || true
+          done
+          echo '## curated imports'
+          grep -R --line-number --include='*.py' 'filter_curated_memories' src/ai_karen_engine/core/memory | head -20 || true
