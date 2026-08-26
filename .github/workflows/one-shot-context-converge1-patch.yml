@@ -1,0 +1,47 @@
+name: One-shot Context Converge-1 Patch
+
+on:
+  push:
+    branches:
+      - context/converge-1-langgraph-consumption
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[context-converge1-applied]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: context/converge-1-langgraph-consumption
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply converge-1 patch
+        run: python scripts/apply_context_converge1.py
+      - name: Compile touched Python boundaries
+        run: |
+          python -m py_compile \
+            src/ai_karen_engine/core/runtime/prompt/prompt_service.py \
+            src/ai_karen_engine/core/runtime/prompt/prompt_assembler.py \
+            src/ai_karen_engine/core/runtime/prompt/prompt_registry.py \
+            src/ai_karen_engine/core/runtime/provider_runtime.py \
+            src/ai_karen_engine/core/model_runtime/routing/llm_router_service.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/context/context_manager.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/context/file_context_store.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/context/file_upload_service.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/nodes/memory_fetch.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/nodes/response_synth.py \
+            src/ai_karen_engine/utils/chat_helpers.py
+      - name: Remove one-shot scaffolding and commit
+        run: |
+          rm -f scripts/apply_context_converge1.py scripts/audit_context_converge1.py
+          rm -f .github/workflows/one-shot-context-converge1-audit.yml .github/workflows/one-shot-context-converge1-patch.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor(context): converge LangGraph on PromptRuntime [context-converge1-applied]'
+          git push origin HEAD:context/converge-1-langgraph-consumption
