@@ -17,6 +17,8 @@ from prometheus_client import Counter, Gauge, Histogram
 class PrometheusMetricsManager:
     """Register and reuse process-wide Prometheus collectors safely."""
 
+    _prometheus_available = True
+
     def __init__(self) -> None:
         self._collectors: dict[tuple[str, str], object] = {}
         self._lock = Lock()
@@ -25,6 +27,11 @@ class PrometheusMetricsManager:
     def safe_metrics_context(self) -> Iterator[None]:
         """Compatibility context for collectors that batch registration."""
         yield
+
+    def list_registered_metrics(self) -> list[str]:
+        """Return stable metric names registered through this manager."""
+        with self._lock:
+            return sorted(name for _, name in self._collectors)
 
     def register_counter(
         self,
