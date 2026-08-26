@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from ai_karen_engine.core.contracts.values import JsonMap
+
 
 class MemoryClass(str, Enum):
     STM = "stm"
@@ -102,7 +104,7 @@ class MemoryCandidate:
     confidence: float = 0.0
     importance: float = 0.0
     freshness: float = 1.0
-    provenance: dict[str, Any] = field(default_factory=dict)
+    provenance: JsonMap = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime | None = None
