@@ -91,7 +91,6 @@ class CreateCuratedDatasetRequest(BaseModel):
 
     name: str = Field(..., description="Dataset name")
     description: str = Field(..., description="Dataset description")
-    tenant_id: Optional[str] = Field(None, description="Tenant scope for curated memory")
     min_confidence: float = Field(0.7, ge=0.0, le=1.0)
     max_examples: int = Field(250, ge=1, le=5000)
     tags: Optional[List[str]] = Field(None, description="Dataset tags")
@@ -289,7 +288,12 @@ async def create_dataset_from_curated_memory(
         raise HTTPException(status_code=403, detail="DATA_WRITE permission required")
 
     try:
-        tenant_id = request.tenant_id or current_user.tenant_id or current_user.user_id
+        tenant_id = current_user.tenant_id
+        if not tenant_id or str(tenant_id) == "default":
+            raise HTTPException(
+                status_code=403,
+                detail="Explicit tenant scope is required for curated memory datasets",
+            )
         learner = await _create_autonomous_learner()
         curated_metadata = await learner.metadata_collector.curate_training_data(
             tenant_id=tenant_id,
