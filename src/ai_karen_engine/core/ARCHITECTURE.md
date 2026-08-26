@@ -4,34 +4,59 @@
 > **Last updated**: 2026-08-26
 > **Supersedes**: any document that makes LangGraph, AgentMedusa, Reasoning, Intelligence, or a provider layer the global runtime authority
 
-## The Six-Layer Model
+## Cognitive Authority Model
 
-Karen's core is organized into six layers. Each layer has a single authority for a
-specific responsibility. Every other implementation must become an adapter, a
-subordinate, or disappear.
+Karen's cognitive architecture is authority-first, not pipeline-first. **CORTEX is the
+global cognitive decision authority.** `core/intelligence` is a bounded analysis and ML
+capability consumed by CORTEX. Intelligence produces observations, predictors,
+embeddings, classifications, task signatures, and calibrated signals; it does not sit
+above CORTEX and it does not independently decide what Karen should do.
+
+Directory separation does not imply authority separation. `core/intelligence` remains
+modular because analysis/ML machinery benefits from an isolated contract and lifecycle,
+but that module is subordinate to the CORTEX decision boundary.
 
 ```text
-1. Intelligence       -- senses  --> what is this?
-2. Decision           -- decides --> what should Karen do?
-3. Execution          -- acts    --> execute the authorized decision
-4. Specialist Engines -- serve   --> bounded capabilities used by Runtime
-5. State              -- retains --> memory, recall, governance
-6. Platform Kernel    -- governs --> security, observability, infrastructure
+1. CORTEX / Cognitive Decision -- understands/decides --> what should Karen do?
+   +-- IntelligenceRuntime      -- analyzes/signals  --> what does the evidence suggest?
+   +-- Adaptive                 -- advises           --> what has tended to work?
+   +-- Personalization          -- contextualizes    --> what matters for this user?
+   +-- governed memory evidence -- informs           --> what prior state is relevant?
+
+2. RuntimePolicy               -- authorizes         --> what may Karen do?
+3. Runtime                     -- executes           --> perform the authorized decision
+4. Specialist Engines          -- serve              --> bounded cognition/workflows/agents
+5. State                       -- retains            --> memory, recall, governance
+6. Platform Kernel             -- governs            --> security, observability, infrastructure
 ```
 
 The global authority chain is:
 
 ```text
-Personalization --\
-Adaptive --------+--> Intelligence signals --> CORTEX --> RuntimePolicy --> Runtime
-Memory evidence -/                                                |
-                                                                 +--> DIRECT
-                                                                 +--> ReasoningExecutor
-                                                                 +--> WorkflowRuntime --> LangGraph
-                                                                 |                        +--> ReasoningExecutor
-                                                                 |                        +--> Tool runtime ports
-                                                                 |                        +--> AgentMedusa
-                                                                 +--> provider/model runtime
+                 +------------------------------+
+                 |            CORTEX            |
+                 | GLOBAL COGNITIVE DECISION    |
+                 +------------------------------+
+                   ^       ^        ^        ^
+                   |       |        |        |
+ IntelligenceRuntime   Adaptive  Personalization  governed memory evidence
+ analysis/signals      advice    user context     recalled evidence
+                   \       |        |        /
+                    \------+--------+-------/
+                              |
+                              v
+                       RuntimePolicy
+                              |
+                              v
+                           Runtime
+                              |
+          +-------------------+-------------------+
+          |                   |                   |
+        DIRECT        ReasoningExecutor   WorkflowRuntime --> LangGraph
+                                                |              +--> ReasoningExecutor
+                                                |              +--> Tool runtime ports
+                                                |              +--> AgentMedusa
+                                                +--> provider/model runtime through Runtime
 ```
 
 The verbs are intentionally different:
@@ -47,7 +72,7 @@ do so.
 
 | Domain | Owns | May Consume | Forbidden |
 |---|---|---|---|
-| **Intelligence** | linguistic analysis, embeddings, ML predictors, task signatures, feature/scoring signals | models, training data, safe data contracts | global execution decisions, authorization, provider routing, side effects |
+| **Intelligence** | linguistic analysis, embeddings, ML predictors, task signatures, feature/scoring signals | models, training data, safe data contracts | global cognitive decisions, execution decisions, authorization, provider routing, side effects |
 | **CORTEX** | global intent, execution-topology recommendation, capability requirements, reasoning/verification requirements, risk and policy hints, RBAC-informed eligibility | Intelligence, Adaptive, Personalization, governed memory evidence | provider execution, direct model invocation, tool execution, persistence, graph execution |
 | **RuntimePolicy** | final execution authorization, capability allowlists, budgets, human gates, policy decision identity | CORTEX decision, trusted auth/session/tenant context, security policy | provider execution, workflow planning, specialist reasoning |
 | **Runtime** | chat lifecycle, request normalization, context assembly, memory recall coordination, prompt assembly, authorized execution-plan creation, topology dispatch, provider execution, tools/plugins, streaming, persistence, telemetry | CORTEX, RuntimePolicy, specialist engines | independent replacement of CORTEX intent/risk decisions |
