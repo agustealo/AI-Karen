@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Any
 
 from ai_karen_engine.core.contracts.cognitive import SalienceConfidence
+from ai_karen_engine.core.contracts.values import JsonMap
 
 
 class SalienceDimension(str, Enum):
@@ -59,7 +60,7 @@ class SalienceContext:
     intent: str = "general"
     current_goals: list[str] = field(default_factory=list)
     active_relationships: list[str] = field(default_factory=list)
-    recent_predictions: list[dict[str, Any]] = field(default_factory=list)
+    recent_predictions: list[JsonMap] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -224,5 +225,5 @@ class SalienceAssessmentResult:
     assessment: SalienceAssessment
     memory_signals: list[MemorySalienceSignal] = field(default_factory=list)
     goal_adjustments: list[GoalSalienceAdjustment] = field(default_factory=list)
-    diagnostics: dict[str, Any] = field(default_factory=dict)
+    diagnostics: JsonMap = field(default_factory=dict)
     assessed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
