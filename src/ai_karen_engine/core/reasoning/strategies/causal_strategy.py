@@ -9,21 +9,19 @@ from typing import Any, List
 
 from ai_karen_engine.core.reasoning.contracts import (
     ReasoningBudget,
+    ReasoningContradiction,
     ReasoningEvidence,
     ReasoningHypothesis,
     ReasoningResult,
     ReasoningStatus,
-    ReasoningStrategyEngine,
 )
 from ai_karen_engine.core.reasoning.causal.engine import CausalReasoningEngine
+from ai_karen_engine.core.reasoning.strategy import ReasoningStrategyEngine
 from ai_karen_engine.core.runtime.contracts import ExecutionContext
 
 
 class CausalReasoner(ReasoningStrategyEngine):
-    """Causal reasoning strategy.
-
-    Produces hypotheses about causal relationships from evidence.
-    """
+    """Deterministic causal/counterfactual reasoning strategy."""
 
     strategy_id = "causal"
     version = "v1"
@@ -62,15 +60,16 @@ class CausalReasoner(ReasoningStrategyEngine):
                 interventions=[],
             )
 
-            hypotheses = []
-            for cause, contribution in explanation.actual_causes:
-                hypotheses.append(ReasoningHypothesis(
+            hypotheses = [
+                ReasoningHypothesis(
                     hypothesis_id=f"causal-{cause}",
                     statement=f"{cause} contributes to {objective}",
                     confidence=float(contribution),
                     supporting_evidence_refs=[e.evidence_id for e in evidence[:3]],
                     provenance="causal_engine",
-                ))
+                )
+                for cause, contribution in explanation.actual_causes
+            ]
 
             contradictions = []
             if explanation.alternative_explanations:
@@ -93,7 +92,10 @@ class CausalReasoner(ReasoningStrategyEngine):
                 assumptions=[],
                 unknowns=[],
                 contradictions=contradictions,
-                assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(
+                assessment=__import__(
+                    "ai_karen_engine.core.reasoning.contracts",
+                    fromlist=["ReasoningAssessment"],
+                ).ReasoningAssessment(
                     confidence=float(getattr(explanation, "confidence", 0.5)),
                 ),
                 evidence_needs=[],
@@ -104,11 +106,14 @@ class CausalReasoner(ReasoningStrategyEngine):
                     "counterfactuals": len(counterfactuals),
                 },
             )
-
         except Exception as exc:
             return self._empty_result(f"Causal reasoning failed: {exc}")
 
     def _empty_result(self, reason: str) -> ReasoningResult:
+        contracts = __import__(
+            "ai_karen_engine.core.reasoning.contracts",
+            fromlist=["ReasoningAssessment", "ReasoningErrorCode"],
+        )
         return ReasoningResult(
             reasoning_id="",
             disposition="abstain",
@@ -118,10 +123,10 @@ class CausalReasoner(ReasoningStrategyEngine):
             assumptions=[],
             unknowns=[],
             contradictions=[],
-            assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(),
+            assessment=contracts.ReasoningAssessment(),
             evidence_needs=[],
             suggested_next_actions=[],
             status=ReasoningStatus.FAILED.value,
-            error_code=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningErrorCode"]).ReasoningErrorCode.STRATEGY_FAILURE.value,
+            error_code=contracts.ReasoningErrorCode.STRATEGY_FAILURE.value,
             diagnostics={"error": reason},
         )
