@@ -1,0 +1,20 @@
+name: One-shot DB Migration Audit
+on:
+  push:
+    branches: [audit/db-migration-baseline]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Audit migration history
+        run: python scripts/dev/audit_db_migration_history.py | tee db-migration-audit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: db-migration-audit
+          path: db-migration-audit.txt
