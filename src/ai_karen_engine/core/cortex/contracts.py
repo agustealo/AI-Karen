@@ -70,16 +70,23 @@ class KireSignal:
 
 @dataclass(slots=True)
 class RoutingDecision:
+    """CORTEX recommendation consumed by Runtime.
+
+    This contract is not an authorization grant. RuntimePolicy remains the sole
+    authority for executable capabilities, tools, plugins, and durable writes.
+    """
+
     route_family: RouteFamily
     execution_mode: ExecutionMode
-    target_graph: str = "default_chat_graph"
+    target_graph: str | None = None
     target_service: str | None = None
     target_plugin: str | None = None
     target_agent: str | None = None
     allow_reasoning: bool = False
     allow_tools: bool = False
     allow_memory_read: bool = True
-    allow_memory_write: bool = True
+    # Fail closed. CORTEX may recommend persistence, but RuntimePolicy must grant it.
+    allow_memory_write: bool = False
     require_approval_gate: bool = False
 
 
@@ -218,101 +225,17 @@ class ReasoningResult:
     hypotheses: list[str] = field(default_factory=list)
     confidence: float = 0.0
     verification_notes: list[str] = field(default_factory=list)
-    refined_answer: str | None = None
-    diagnostics: JsonMap = field(default_factory=dict)
-    success: bool = True
-    degraded: bool = False
-    reasoning_type: str = "synthesis"
-    memory_ids: list[str] = field(default_factory=list)
-    graph_paths_used: list[str] = field(default_factory=list)
-    contradictions_found: list[JsonMap] = field(default_factory=list)
-    needs_human_confirmation: bool = False
-    fallback_used: str | None = None
-    evidence_source_mix: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def from_canonical(cls, canonical: CanonicalReasoningResult) -> "ReasoningResult":
         return cls(
             summary=canonical.conclusion,
-            evidence=[
-                {
-                    "id": item.evidence_id,
-                    "type": item.type,
-                    "source": item.source,
-                    "source_ref": item.source_ref,
-                    "content": item.content,
-                    "relevance": item.relevance,
-                    "confidence": item.confidence,
-                    "payload": item.metadata,
-                }
-                for item in canonical.evidence
-            ],
+            evidence=[{"id": item.evidence_id, "content": item.content} for item in canonical.evidence],
             hypotheses=[item.statement for item in canonical.hypotheses],
             confidence=float(canonical.assessment.confidence),
-            diagnostics=dict(canonical.diagnostics),
-            success=canonical.status not in ("failed", "budget_exhausted"),
-            degraded=canonical.status in ("failed", "budget_exhausted"),
-            reasoning_type=str(canonical.diagnostics.get("reasoning_type", "reasoning")),
-            contradictions_found=[
-                {
-                    "claim_a": item.claim_a,
-                    "claim_b": item.claim_b,
-                    "severity": item.severity,
-                    "resolvable": item.resolvable,
-                    "recommended_action": item.recommended_action,
-                }
-                for item in canonical.contradictions
-            ],
-            needs_human_confirmation=canonical.status == "needs_human_confirmation",
+            verification_notes=list(canonical.assessment.uncertainty_reasons),
         )
 
 
-@dataclass(slots=True)
-class OrchestrationResult:
-    final_text: str
-    reasoning_result: ReasoningResult | None = None
-    tool_results: list[JsonMap] = field(default_factory=list)
-    memory_reads: list[JsonMap] = field(default_factory=list)
-    memory_writes: list[JsonMap] = field(default_factory=list)
-    diagnostics: JsonMap = field(default_factory=dict)
-
-
-class IntentEngine(Protocol):
-    def detect(self, request: RuntimeRequest) -> IntentSignal: ...
-
-
-class PredictorEngine(Protocol):
-    def predict(self, request: RuntimeRequest, intent: IntentSignal) -> PredictorSignal: ...
-
-
-class KireEngine(Protocol):
-    def enrich(self, request: RuntimeRequest, intent: IntentSignal, predictors: PredictorSignal) -> KireSignal: ...
-
-
-class RbacValidator(Protocol):
-    def validate(self, user: UserContext, intent: IntentSignal, routing: RoutingDecision) -> None: ...
-
-
-class RoutingEngine(Protocol):
-    def decide(
-        self,
-        request: RuntimeRequest,
-        intent: IntentSignal,
-        predictors: PredictorSignal,
-        kire: KireSignal,
-    ) -> RoutingDecision: ...
-
-
-class KROOrchestrator(Protocol):
-    def run(self, request: ReasoningRequest) -> ReasoningResult: ...
-
-
-class LangGraphRuntime(Protocol):
-    def run(self, orchestration_input: OrchestrationInput) -> OrchestrationResult: ...
-
-
-class CorrelationIdFactory:
-    def create(self, request: RuntimeRequest) -> str:
-        base = request.user.user_id or "anonymous"
-        thread = request.user.thread_id or "no-thread"
-        return f"cx-{base}-{thread}"
+class CorrelationIdFactory(Protocol):
+    def create(self, request: RuntimeRequest) -> str: ...
