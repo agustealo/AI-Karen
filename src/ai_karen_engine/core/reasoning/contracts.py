@@ -37,6 +37,9 @@ _REASONING_MODE_ALIASES = {
     "refine": ReasoningMode.REFINEMENT.value,
     "synthesis": ReasoningMode.EVIDENCE_SYNTHESIS.value,
     "soft": ReasoningMode.SOFT_EXPLORATION.value,
+    # Compatibility shim for the legacy ChatRuntime call site. Remove when
+    # ChatRuntime passes ExecutionDecision.reasoning_modes directly.
+    "reasoning": ReasoningMode.EVIDENCE_SYNTHESIS.value,
 }
 
 
@@ -92,12 +95,7 @@ def _utc(value: datetime) -> datetime:
 
 
 def normalize_reasoning_modes(values: list[str]) -> list[str]:
-    """Normalize aliases and reject non-reasoning capability leakage.
-
-    Reasoning modes are a closed semantic domain. Provider/runtime capability
-    names such as ``reasoning``, ``web`` or ``memory.write`` are not strategy
-    identifiers and must never be silently accepted here.
-    """
+    """Normalize known aliases and reject arbitrary capability leakage."""
     allowed = {mode.value for mode in ReasoningMode}
     normalized: list[str] = []
     seen: set[str] = set()
