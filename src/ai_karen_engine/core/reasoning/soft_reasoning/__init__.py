@@ -5,15 +5,17 @@ Canonical production path:
 - ``SoftGenerationPort`` is supplied by a compatible local model runtime.
 - ``VerifierGuidedObjective`` converts structured verifier judgments into the
   scalar reward consumed by Bayesian exploration.
-- Bayesian search refines a low-dimensional latent perturbation projected into
-  the model hidden space.
+- ``BayesianOptimizer`` now uses a real Gaussian Process posterior with
+  configurable UCB/EI/PI/Thompson acquisition.
 
 Research fidelity note:
-The exploration architecture follows Zhu et al. (ICML 2025), but the default
-optimizer/objective remain KAREN-specific until the ``paper_2025`` profile is
-wired with a true Gaussian-process posterior, Expected Improvement, and a typed
-sequence-coherence/log-probability reward component. Do not describe the
-current default profile as a paper-faithful reproduction.
+The exploration architecture follows Zhu et al. (ICML 2025) and the optimizer
+now satisfies the Gaussian-process Bayesian-optimisation requirement. The
+canonical KAREN objective is still richer/different from the paper objective,
+so a full ``paper_2025`` reproduction still requires Runtime to provide typed
+generation-coherence/log-probability reward data and select paper-consistent
+search parameters (including Expected Improvement). Do not describe the default
+KAREN profile as a complete paper-faithful reproduction yet.
 
 The older retrieval/writeback ``SoftReasoningEngine`` remains available only as
 an on-demand compatibility surface while ICE/retrieval callers are migrated. It
