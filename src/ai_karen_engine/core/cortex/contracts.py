@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Any, Protocol
 
 from ai_karen_engine.core.contracts.cognitive import ReasoningDepth
+from ai_karen_engine.core.contracts.values import JsonMap
 from ai_karen_engine.core.reasoning.contracts import (
     ReasoningBudget,
     ReasoningEvidence,
@@ -213,18 +214,18 @@ class ReasoningResult:
     """Legacy result adapter. Canonical confidence is explicitly converted."""
 
     summary: str
-    evidence: list[dict[str, Any]] = field(default_factory=list)
+    evidence: list[JsonMap] = field(default_factory=list)
     hypotheses: list[str] = field(default_factory=list)
     confidence: float = 0.0
     verification_notes: list[str] = field(default_factory=list)
     refined_answer: str | None = None
-    diagnostics: dict[str, Any] = field(default_factory=dict)
+    diagnostics: JsonMap = field(default_factory=dict)
     success: bool = True
     degraded: bool = False
     reasoning_type: str = "synthesis"
     memory_ids: list[str] = field(default_factory=list)
     graph_paths_used: list[str] = field(default_factory=list)
-    contradictions_found: list[dict[str, Any]] = field(default_factory=list)
+    contradictions_found: list[JsonMap] = field(default_factory=list)
     needs_human_confirmation: bool = False
     fallback_used: str | None = None
     evidence_source_mix: dict[str, int] = field(default_factory=dict)
@@ -251,7 +252,7 @@ class ReasoningResult:
             diagnostics=dict(canonical.diagnostics),
             success=canonical.status not in ("failed", "budget_exhausted"),
             degraded=canonical.status in ("failed", "budget_exhausted"),
-            reasoning_type=canonical.diagnostics.get("reasoning_type", "reasoning"),
+            reasoning_type=str(canonical.diagnostics.get("reasoning_type", "reasoning")),
             contradictions_found=[
                 {
                     "claim_a": item.claim_a,
@@ -270,10 +271,10 @@ class ReasoningResult:
 class OrchestrationResult:
     final_text: str
     reasoning_result: ReasoningResult | None = None
-    tool_results: list[dict[str, Any]] = field(default_factory=list)
-    memory_reads: list[dict[str, Any]] = field(default_factory=list)
-    memory_writes: list[dict[str, Any]] = field(default_factory=list)
-    diagnostics: dict[str, Any] = field(default_factory=dict)
+    tool_results: list[JsonMap] = field(default_factory=list)
+    memory_reads: list[JsonMap] = field(default_factory=list)
+    memory_writes: list[JsonMap] = field(default_factory=list)
+    diagnostics: JsonMap = field(default_factory=dict)
 
 
 class IntentEngine(Protocol):
