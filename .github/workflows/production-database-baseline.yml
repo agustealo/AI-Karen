@@ -1,3 +1,4 @@
+# Canonical production PostgreSQL schema-authority gate.
 name: Production Database Baseline Contract
 
 on:
