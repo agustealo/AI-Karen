@@ -1,14 +1,15 @@
 """Gaussian-process Bayesian optimisation for Soft Reasoning.
 
-This module implements the optimizer used by the canonical Soft Reasoning
-exploration path. The surrogate is a real Gaussian Process posterior backed by
-``sklearn.gaussian_process.GaussianProcessRegressor`` rather than the previous
-kernel-regression approximation.
+This module owns only latent-space search. It does not know about providers,
+prompts, verification, memory, or model execution.
 
-The public ``BayesianOptimizer`` name is retained for compatibility, but its
-``surrogate_kind`` is now ``gaussian_process`` and acquisition values are
-computed from GP posterior mean/std. Expected Improvement remains available for
-a paper-aligned profile while KAREN may select UCB/PI/Thompson through config.
+Two search behaviours are supported deliberately:
+- KAREN profiles may use local Gaussian candidate proposals and best-improvement
+  convergence for low-cost local inference.
+- the ``paper_2025`` profile can reproduce the released Soft Reasoning search
+  mechanics: a true RBF Gaussian Process, Expected Improvement, Gaussian
+  initial samples, a large uniformly sampled acquisition pool, and convergence
+  on consecutive objective values.
 """
 
 from __future__ import annotations
@@ -22,32 +23,36 @@ from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import ConstantKernel, RBF, WhiteKernel
+from sklearn.gaussian_process.kernels import ConstantKernel, RBF
 
 logger = logging.getLogger(__name__)
 
 
 class AcquisitionFunction(Enum):
-    """Acquisition functions supported by Gaussian-process search."""
-
     UCB = "ucb"
     EI = "ei"
     PI = "pi"
     THOMPSON = "thompson"
 
 
+class ConvergenceMode(Enum):
+    BEST_IMPROVEMENT = "best_improvement"
+    CONSECUTIVE_OBJECTIVE = "consecutive_objective"
+
+
 @dataclass
 class OptimizationConfig:
-    """Configuration for Gaussian-process Bayesian optimisation."""
-
     acquisition_fn: AcquisitionFunction = AcquisitionFunction.UCB
     exploration_weight: float = 2.0
     max_iterations: int = 20
     convergence_threshold: float = 0.01
+    convergence_mode: ConvergenceMode = ConvergenceMode.BEST_IMPROVEMENT
     initial_samples: int = 5
     length_scale: float = 1.0
+    signal_variance: float = 1.0
     noise_variance: float = 0.01
-    candidate_pool_size: int = 32
+    normalize_y: bool = True
+    candidate_pool_size: int = 64
     random_seed: int = 17
     improvement_offset: float = 0.0
 
@@ -58,6 +63,8 @@ class OptimizationConfig:
             raise ValueError("initial_samples must be positive")
         if self.length_scale <= 0.0:
             raise ValueError("length_scale must be positive")
+        if self.signal_variance <= 0.0:
+            raise ValueError("signal_variance must be positive")
         if self.noise_variance < 0.0:
             raise ValueError("noise_variance must be non-negative")
         if self.candidate_pool_size <= 0:
@@ -70,8 +77,6 @@ class OptimizationConfig:
 
 @dataclass
 class OptimizationResult:
-    """Result from Gaussian-process embedding optimization."""
-
     best_embedding: List[float]
     best_score: float
     num_iterations: int
@@ -81,12 +86,7 @@ class OptimizationResult:
 
 
 class BayesianOptimizer:
-    """Gaussian-process Bayesian optimizer for latent embedding search.
-
-    Hyperparameters are fixed by ``OptimizationConfig`` instead of being fitted
-    implicitly by scikit-learn. This keeps optimization deterministic and makes
-    the research profile/configuration observable and testable.
-    """
+    """Gaussian-process Bayesian optimizer for latent embedding search."""
 
     surrogate_kind = "gaussian_process"
 
@@ -103,6 +103,7 @@ class BayesianOptimizer:
         score_function: Callable[[List[float]], float],
         *,
         perturb_fn: Optional[Callable[[List[float]], List[float]]] = None,
+        candidate_fn: Optional[Callable[[List[float]], List[float]]] = None,
     ) -> OptimizationResult:
         if not initial_embedding:
             raise ValueError("initial_embedding must not be empty")
@@ -112,6 +113,8 @@ class BayesianOptimizer:
             extra={
                 "surrogate_kind": self.surrogate_kind,
                 "acquisition": self.config.acquisition_fn.value,
+                "candidate_pool_size": self.config.candidate_pool_size,
+                "convergence_mode": self.config.convergence_mode.value,
             },
         )
 
@@ -119,8 +122,12 @@ class BayesianOptimizer:
 
         converged = False
         completed_iterations = 0
+        previous_iteration_score: float | None = None
         for _ in range(self.config.max_iterations):
-            candidate = self._select_next_candidate(initial_embedding, perturb_fn)
+            candidate = self._select_next_candidate(
+                initial_embedding,
+                candidate_fn or perturb_fn,
+            )
             score = float(score_function(candidate))
             self._observations.append((list(candidate), score))
             completed_iterations += 1
@@ -129,12 +136,18 @@ class BayesianOptimizer:
             if score > self._best_score:
                 self._best_score = score
                 self._best_embedding = list(candidate)
+
+            if self.config.convergence_mode == ConvergenceMode.CONSECUTIVE_OBJECTIVE:
+                if (
+                    previous_iteration_score is not None
+                    and abs(score - previous_iteration_score)
+                    < self.config.convergence_threshold
+                ):
+                    converged = True
+                    break
+                previous_iteration_score = score
+            elif score > previous_best:
                 improvement = score - previous_best
-                logger.debug(
-                    "Soft Reasoning GP iteration: score %.4f improvement %.4f",
-                    score,
-                    improvement,
-                )
                 if improvement < self.config.convergence_threshold:
                     converged = True
                     break
@@ -188,11 +201,11 @@ class BayesianOptimizer:
     def _select_next_candidate(
         self,
         initial_embedding: List[float],
-        perturb_fn: Optional[Callable[[List[float]], List[float]]],
+        candidate_fn: Optional[Callable[[List[float]], List[float]]],
     ) -> List[float]:
         base = self._best_embedding or initial_embedding
         candidates = [
-            perturb_fn(base) if perturb_fn else self._default_perturb(base)
+            candidate_fn(base) if candidate_fn else self._default_perturb(base)
             for _ in range(self.config.candidate_pool_size)
         ]
         means, stds = self._gp_predict_batch(candidates)
@@ -204,22 +217,18 @@ class BayesianOptimizer:
         return list(candidates[best_idx])
 
     def _build_gp(self) -> GaussianProcessRegressor:
-        kernel = (
-            ConstantKernel(1.0, constant_value_bounds="fixed")
-            * RBF(
-                length_scale=self.config.length_scale,
-                length_scale_bounds="fixed",
-            )
-            + WhiteKernel(
-                noise_level=max(self.config.noise_variance, 1e-12),
-                noise_level_bounds="fixed",
-            )
+        kernel = ConstantKernel(
+            self.config.signal_variance,
+            constant_value_bounds="fixed",
+        ) * RBF(
+            length_scale=self.config.length_scale,
+            length_scale_bounds="fixed",
         )
         return GaussianProcessRegressor(
             kernel=kernel,
-            alpha=max(self.config.noise_variance, 1e-12),
+            alpha=max(self.config.noise_variance, 1e-16),
             optimizer=None,
-            normalize_y=True,
+            normalize_y=self.config.normalize_y,
             random_state=self.config.random_seed,
         )
 
@@ -254,7 +263,6 @@ class BayesianOptimizer:
         means, stds = self._gp_predict_batch([embedding])
         return (means[0], stds[0])
 
-    # Compatibility alias retained for callers that used the interim API.
     def _surrogate_predict(self, embedding: List[float]) -> Tuple[float, float]:
         return self._gp_predict(embedding)
 
@@ -317,9 +325,10 @@ class BayesianOptimizer:
         return self._rng.gauss(mean, std)
 
     def _rbf_kernel(self, x1: List[float], x2: List[float]) -> float:
-        """Compatibility helper exposing the configured RBF kernel value."""
         squared_dist = sum((a - b) ** 2 for a, b in zip(x1, x2))
-        return math.exp(-squared_dist / (2.0 * self.config.length_scale**2))
+        return self.config.signal_variance * math.exp(
+            -squared_dist / (2.0 * self.config.length_scale**2)
+        )
 
     def _default_perturb(self, embedding: List[float]) -> List[float]:
         return [value + self._rng.gauss(0.0, 0.1) for value in embedding]
@@ -342,3 +351,13 @@ def optimize_embedding_batch(
         results.append(optimizer.optimize(embedding, score_function))
         optimizer.reset()
     return results
+
+
+__all__ = [
+    "AcquisitionFunction",
+    "BayesianOptimizer",
+    "ConvergenceMode",
+    "OptimizationConfig",
+    "OptimizationResult",
+    "optimize_embedding_batch",
+]
