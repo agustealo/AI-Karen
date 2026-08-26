@@ -1,0 +1,40 @@
+name: Production First-Boot Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "Dockerfile"
+      - "requirements.txt"
+      - "src/ai_karen_engine/**"
+      - "supabase/migrations/**"
+      - "scripts/ci/production-first-boot-smoke.sh"
+      - ".github/workflows/production-first-boot-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  first-boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Attest exact worker SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Validate smoke harness
+        run: bash -n scripts/ci/production-first-boot-smoke.sh
+
+      - name: Build production API image
+        run: docker build --target app --build-arg PROFILE=runtime -t ai-karen-api:beta .
+
+      - name: Execute real production first boot
+        env:
+          KAREN_SMOKE_API_IMAGE: ai-karen-api:beta
+        run: bash scripts/ci/production-first-boot-smoke.sh
