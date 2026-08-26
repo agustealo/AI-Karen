@@ -28,6 +28,7 @@ services:
       AUTH_DEV_MODE: "false"
       AUTH_ALLOW_DEV_LOGIN: "false"
       KARI_AUTH_BYPASS: "false"
+      AUTH_ENABLE_SESSION_VALIDATION: "true"
       KARI_FAST_STARTUP: "false"
       KARI_SKIP_STARTUP_CHECK: "false"
       KARI_SKIP_AUTO_INIT: "false"
@@ -35,6 +36,7 @@ services:
       EXTENSION_DEV_BYPASS_ENABLED: "false"
       EXTENSION_REQUIRE_HTTPS: "true"
       ALLOW_PUBLIC_COPILOT: "false"
+      KAREN_BUILTIN_VLLM_ENABLED: "false"
 
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required for production}
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:?AUTH_SECRET_KEY is required for production}
@@ -53,6 +55,17 @@ services:
       DB_PORT: ${DB_PORT:-5432}
       DB_USER: ${DB_USER:?DB_USER is required for production}
       DB_NAME: ${DB_NAME:?DB_NAME is required for production}
+
+    # The production image already contains source and canonical config. Never
+    # inherit the development `./:/app:rw` mount, which would replace the
+    # attested image contents with mutable host source.
+    volumes: !override
+      - ./models:/app/models:rw
+      - ./config:/app/config:ro
+      - logs_data:/app/logs
+      - backup_data:/app/backups
+      - ./models/transformers:/root/.cache/huggingface/hub:rw
+      - ./models/transformers:/app/cache/transformers:rw
 
     healthcheck:
       test:
