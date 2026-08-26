@@ -26,7 +26,7 @@ from ai_karen_engine.core.model_runtime.runtime_engine import (
 REQUIRED_GENERATIVE_CAPABILITIES = {"chat_completion", "text_generation"}
 
 
-def _task() -> ExpressionTask:
+def _task(preferred_provider: str = "auto") -> ExpressionTask:
     return ExpressionTask(
         task_id="beta-proof",
         kind="chat",
@@ -34,7 +34,7 @@ def _task() -> ExpressionTask:
         response_mode="text",
         required_capabilities=["chat_completion"],
         forbidden_capabilities=[],
-        preferred_provider="auto",
+        preferred_provider=preferred_provider,
         preferred_model="beta-model",
         max_tokens=32,
         temperature=0.0,
@@ -82,14 +82,20 @@ def test_local_generative_endpoints_use_canonical_capabilities() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("preferred_provider", ["auto", "beta-vllm-openai-compatible"])
 async def test_openai_compatible_provider_executes_registered_vllm_endpoint_and_preserves_provenance(
     monkeypatch: pytest.MonkeyPatch,
+    preferred_provider: str,
 ) -> None:
     from ai_karen_engine.core.expression.engines import openai_compatible_engine as module
 
     endpoint = _custom_vllm_endpoint()
 
     class FakeRegistry:
+        @staticmethod
+        def canonicalize_provider_id(provider_id: str):
+            return provider_id
+
         def get_provider_endpoint(self, provider_id: str):
             return endpoint if provider_id == endpoint.provider_id else None
 
@@ -117,7 +123,7 @@ async def test_openai_compatible_provider_executes_registered_vllm_endpoint_and_
         assert target.endpoint_type is ProviderEndpointType.OPENAI_COMPATIBLE
         assert target.protocol is EndpointProtocol.OPENAI_COMPATIBLE
         assert target.runtime_engine is RuntimeEngine.VLLM
-        assert kwargs["messages"] == _task().messages
+        assert kwargs["messages"] == _task(preferred_provider).messages
         assert kwargs["model"] == "beta-model"
         assert kwargs["max_tokens"] == 32
         assert kwargs["temperature"] == 0.0
@@ -132,14 +138,21 @@ async def test_openai_compatible_provider_executes_registered_vllm_endpoint_and_
 
     engine = OpenAICompatibleEngine()
     engine.engine_id = "local"
-    result = await engine.generate(_task())
+    result = await engine.generate(_task(preferred_provider))
 
     assert result.text == "BETA_PROVIDER_WIRING_OK"
     assert result.provider == endpoint.provider_id
     assert result.model == "beta-model"
     assert result.runtime_engine == "vllm"
     assert result.engine_mode == "openai_compatible"
+    assert result.response_source == "provider_runtime"
     assert result.degraded is False
+    assert result.metadata["requested_provider"] == preferred_provider
+    assert result.metadata["actual_provider"] == endpoint.provider_id
+    assert result.metadata["actual_model"] == "beta-model"
+    assert result.metadata["runtime_engine"] == "vllm"
+    assert result.metadata["fallback_level"] == 0
+    assert result.metadata["degraded_mode"] is False
     assert result.attempts[-1]["status"] == "success"
 
     # Core executes the endpoint contract directly. It does not need a vLLM
@@ -151,14 +164,19 @@ def test_openai_compatible_failure_is_honest_model_unavailability() -> None:
     engine = OpenAICompatibleEngine()
     engine.engine_id = "local"
     result = engine._failure_result(
-        _task(),
+        _task("beta-vllm-openai-compatible"),
         started=0.0,
         reason="provider_unavailable",
         provider="beta-vllm-openai-compatible",
+        requested_provider="beta-vllm-openai-compatible",
     )
 
     assert result.text == ""
-    assert result.provider == "beta-vllm-openai-compatible"
+    assert result.provider is None
+    assert result.response_source == "model_unavailable"
     assert result.degraded is True
     assert result.degradation_reason == "provider_unavailable"
     assert result.engine_mode == "openai_compatible"
+    assert result.metadata["requested_provider"] == "beta-vllm-openai-compatible"
+    assert result.metadata["actual_provider"] is None
+    assert result.metadata["fallback_level"] == 99
