@@ -26,6 +26,10 @@ def test_langgraph_consumes_core_memory_recall_not_web_ui_facade() -> None:
     assert "self._memory_recall" in node
     assert "await self._memory_recall(" in node
     assert "tenant_id=str(tenant_id)" in node
+    assert "user_id=str(user_id)" in node
+    assert "tenant_id and user_id and self._memory_recall is not None" in node
+    assert "Memory disabled for this turn: missing tenant_id" in node
+    assert "Memory disabled for this turn: missing user_id" in node
     assert 'context["memories"] = results' in node
 
 
