@@ -1,0 +1,62 @@
+name: Production Database Baseline Contract
+
+on:
+  push:
+    paths:
+      - "supabase/migrations/**"
+      - "supabase/README.md"
+      - "docs/database/**"
+      - "src/ai_karen_engine/database/**"
+      - "src/ai_karen_engine/services/database/**"
+      - "src/ai_karen_engine/services/auth/**"
+      - "src/ai_karen_engine/services/identity_vault/**"
+      - "server/deployment/**"
+      - "scripts/deploy/**"
+      - "tests/architecture/test_production_database_baseline_contract.py"
+      - ".github/workflows/production-database-baseline.yml"
+  pull_request:
+    paths:
+      - "supabase/migrations/**"
+      - "supabase/README.md"
+      - "docs/database/**"
+      - "src/ai_karen_engine/database/**"
+      - "src/ai_karen_engine/services/database/**"
+      - "src/ai_karen_engine/services/auth/**"
+      - "src/ai_karen_engine/services/identity_vault/**"
+      - "server/deployment/**"
+      - "scripts/deploy/**"
+      - "tests/architecture/test_production_database_baseline_contract.py"
+      - ".github/workflows/production-database-baseline.yml"
+  workflow_dispatch:
+
+jobs:
+  production-database-baseline-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install proof dependencies
+        run: python -m pip install --upgrade pip pytest
+      - name: Prove production database baseline contract
+        run: pytest tests/architecture/test_production_database_baseline_contract.py -q
+      - name: Prove recovery contract remains intact
+        run: pytest tests/architecture/test_production_data_recovery_contract.py -q
+      - name: Compile database runtime boundaries
+        run: |
+          python -m py_compile \
+            src/ai_karen_engine/database/client.py \
+            src/ai_karen_engine/database/factory.py \
+            src/ai_karen_engine/database/identity_vault_schema.py \
+            src/ai_karen_engine/services/database/migration_validator.py \
+            src/ai_karen_engine/services/database/operations_service.py \
+            src/ai_karen_engine/services/auth/auth_service.py \
+            src/ai_karen_engine/services/identity_vault/credential_vault_service.py \
+            server/deployment/deploy_auth_system.py
+      - name: Parse database operator scripts
+        run: |
+          bash -n scripts/deploy/database-backup.sh
+          bash -n scripts/deploy/database-restore.sh
+          bash -n scripts/deploy/migrate-production-database.sh
