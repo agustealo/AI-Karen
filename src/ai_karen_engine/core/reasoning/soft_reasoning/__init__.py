@@ -1,16 +1,20 @@
 """Soft Reasoning capability.
 
 Canonical production path:
-- ``SoftExplorationEngine`` implements controlled first-token embedding search.
+- ``SoftExplorationEngine`` performs controlled first-token embedding search.
 - ``SoftGenerationPort`` is supplied by a compatible local model runtime.
 - ``SoftVerifierPort`` supplies the verifier-guided objective.
 - Bayesian optimisation refines a low-dimensional latent perturbation projected
   into the model hidden space.
 
-The older ``SoftReasoningEngine`` is a retrieval/writeback compatibility
-implementation and is not the canonical Soft Reasoning algorithm. It remains
-importable temporarily while ICE/retrieval callers are migrated.
+The older retrieval/writeback ``SoftReasoningEngine`` remains available only as
+an on-demand compatibility surface while ICE/retrieval callers are migrated. It
+is deliberately not imported during canonical Soft Reasoning startup.
 """
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from ai_karen_engine.core.reasoning.soft_reasoning.contracts import (
     SoftCandidate,
@@ -40,14 +44,29 @@ from ai_karen_engine.core.reasoning.soft_reasoning.perturbation import (
     PerturbationStrategy,
 )
 
-# Compatibility-only retrieval/writeback surface. Do not use for new Soft
-# Reasoning execution. Removal is gated on the ICE/retrieval migration.
-from ai_karen_engine.core.reasoning.soft_reasoning.engine import (
-    RecallConfig,
-    SRHealth,
-    SoftReasoningEngine,
-    WritebackConfig,
-)
+if TYPE_CHECKING:
+    from ai_karen_engine.core.reasoning.soft_reasoning.engine import (
+        RecallConfig,
+        SRHealth,
+        SoftReasoningEngine,
+        WritebackConfig,
+    )
+
+_LEGACY_EXPORTS = {
+    "RecallConfig",
+    "SRHealth",
+    "SoftReasoningEngine",
+    "WritebackConfig",
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _LEGACY_EXPORTS:
+        raise AttributeError(name)
+    from ai_karen_engine.core.reasoning.soft_reasoning import engine as legacy_engine
+
+    return getattr(legacy_engine, name)
+
 
 __all__ = [
     "AcquisitionFunction",
@@ -69,7 +88,7 @@ __all__ = [
     "SoftVerificationScore",
     "SoftVerifierPort",
     "optimize_embedding_batch",
-    # Compatibility-only exports.
+    # Compatibility-only lazy exports. Remove after ICE/retrieval migration.
     "RecallConfig",
     "SRHealth",
     "SoftReasoningEngine",
