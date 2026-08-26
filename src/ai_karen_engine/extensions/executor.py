@@ -53,6 +53,10 @@ from ai_karen_engine.extensions.errors import (
     ExtensionTimeoutError,
     ExtensionExecutionEngineError,
 )
+from ai_karen_engine.extensions.permission_validator import (
+    get_permission_validator,
+    validate_plugin_permissions,
+)
 
 logger = logging.getLogger("kari.extensions.executor")
 
@@ -223,9 +227,11 @@ class ExtensionExecutionService:
                 data_classification,
             )
 
-        missing_perms = await self._check_permissions(manifest, context, authorized_plan, capability_obj)
-        if missing_perms:
-            error = ExtensionPermissionError(plugin_id, missing_perms)
+        # Validate permissions using comprehensive permission validator
+        permission_summary = validate_plugin_permissions(manifest, capability_obj, context, authorized_plan)
+        if not permission_summary["valid"]:
+            denied_permissions = [check["permission_id"] for check in permission_summary["checks"] if check["result"] == "denied"]
+            error = ExtensionPermissionError(plugin_id, denied_permissions)
             return self._fail_with_provenance(
                 request,
                 start,
@@ -530,6 +536,8 @@ class ExtensionExecutionService:
         return missing
 
     def _check_rbac(self, manifest: ExtensionManifest, context: ExtensionExecutionContext, capability: Optional[ExtensionCapability]) -> bool:
+        # This is now handled by the comprehensive permission validator
+        # Keeping for backward compatibility
         user_roles = context.audit_context.get("user_roles", [])
         required_roles = capability.required_roles if capability else manifest.required_roles
         if not required_roles:
