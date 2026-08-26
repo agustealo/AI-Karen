@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 BUILTIN_EXPRESSION_ENGINES: set[str] = {
-    "builtin",
     "fallback",
 }
 
@@ -16,6 +15,7 @@ LOCAL_OPENAI_ENDPOINTS: set[str] = {
     "ollama",
     "lm_studio",
     "openai_compatible_local",
+    "custom_openai_compatible",
     "llamacpp",
     "llama_cpp",
     "llama.cpp",
@@ -53,6 +53,11 @@ LOCAL_PROVIDER_OPTIONS: set[str] = LOCAL_OPENAI_ENDPOINTS
 EXTERNAL_PROVIDER_OPTIONS: set[str] = CLOUD_PROVIDERS
 
 DEPRECATED_PROVIDER_ALIASES: dict[str, dict[str, str]] = {
+    "builtin": {
+        "replacement": "local",
+        "reason": "Chat execution is provider-agnostic; use the canonical local engine.",
+        "sunset_version": "0.4.0",
+    },
     "builtin_vllm": {
         "replacement": "custom_openai_compatible",
         "reason": "vLLM must be configured as a custom OpenAI-compatible provider.",
@@ -64,7 +69,6 @@ DEPRECATED_PROVIDER_ALIASES: dict[str, dict[str, str]] = {
         "sunset_version": "0.4.0",
     },
 }
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,10 +94,16 @@ def evaluate_provider_policy(
     normalized = normalize_provider_id(provider)
     if not normalized:
         return ProviderPolicyDecision("", False, "unknown", "provider_missing", None)
-    
+
     if normalized in {normalize_provider_id(x) for x in REMOVED_INTERNAL_PROVIDERS}:
-        return ProviderPolicyDecision(normalized, False, "removed_internal_provider", "removed_internal_provider", None)
-    
+        return ProviderPolicyDecision(
+            normalized,
+            False,
+            "removed_internal_provider",
+            "removed_internal_provider",
+            None,
+        )
+
     if normalized in DEPRECATED_PROVIDER_ALIASES:
         alias_info = DEPRECATED_PROVIDER_ALIASES[normalized]
         return ProviderPolicyDecision(
@@ -101,15 +111,27 @@ def evaluate_provider_policy(
             False,
             "deprecated_provider_alias",
             alias_info["reason"],
-            alias_info["replacement"]
+            alias_info["replacement"],
         )
-    
+
     if normalized in BUILTIN_EXPRESSION_ENGINES:
-        return ProviderPolicyDecision(normalized, True, "builtin_engine", None, None)
+        return ProviderPolicyDecision(normalized, True, "control_engine", None, None)
     if normalized in SPECIALIZED_RUNTIMES:
         return ProviderPolicyDecision(normalized, True, "specialized_runtime", None, None)
     if normalized in LOCAL_OPENAI_ENDPOINTS:
-        return ProviderPolicyDecision(normalized, local_enabled, "local_openai_endpoint", None if local_enabled else "local_provider_disabled", None)
+        return ProviderPolicyDecision(
+            normalized,
+            local_enabled,
+            "local_openai_endpoint",
+            None if local_enabled else "local_provider_disabled",
+            None,
+        )
     if normalized in CLOUD_PROVIDERS:
-        return ProviderPolicyDecision(normalized, external_enabled, "cloud_provider", None if external_enabled else "external_provider_disabled", None)
+        return ProviderPolicyDecision(
+            normalized,
+            external_enabled,
+            "cloud_provider",
+            None if external_enabled else "external_provider_disabled",
+            None,
+        )
     return ProviderPolicyDecision(normalized, False, "unknown", "unknown_provider", None)
