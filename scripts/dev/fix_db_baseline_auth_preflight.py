@@ -34,3 +34,4 @@ for service_path in [
         raise SystemExit(f"runtime table-creation caller survived: {service_path.relative_to(ROOT)}")
 
 print("auth/vault migration-owned schema preflight convergence complete")
+# rerun marker: latest-head convergence
