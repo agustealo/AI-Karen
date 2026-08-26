@@ -438,12 +438,6 @@ def validate_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         provider_defaults = llm_cfg.get("provider_defaults")
         if isinstance(provider_defaults, dict):
             legacy_defaults = {
-                "builtin_vllm": {
-                    "gpt2",
-                    "models/transformers/gpt2",
-                    "/models/transformers/gpt2",
-                    "/app/models/transformers/gpt2",
-                },
                 "builtin_transformers": {
                     "gpt2",
                     "models/transformers/gpt2",
@@ -697,7 +691,7 @@ def get_default_model(provider: str = "") -> str:
     """Get the default model for a provider, or the system default.
 
     Args:
-        provider: Optional provider name (e.g. 'builtin_vllm', 'openai').
+        provider: Optional provider name (e.g. 'openai').
                   If None, returns the system-wide default model.
     """
     llm = get_llm_config()

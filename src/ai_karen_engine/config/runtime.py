@@ -40,7 +40,6 @@ class RuntimeEngine(str, Enum):
     """Primary runtime engine selection."""
 
     BUILTIN_TRANSFORMERS = "builtin_transformers"
-    BUILTIN_VLLM = "builtin_vllm"
     OLLAMA = "ollama"
     OPENAI_COMPATIBLE = "openai_compatible"
     FALLBACK = "fallback"
@@ -55,7 +54,6 @@ class LLMSettings:
     fallback_chain: List[str] = field(
         default_factory=lambda: [
             "builtin_transformers",
-            "builtin_vllm",
             "openai",
             "gemini",
             "deepseek",
@@ -66,7 +64,6 @@ class LLMSettings:
         default_factory=lambda: {
             "openai": "gpt-4o-mini",
             "deepseek": "deepseek-chat",
-            "builtin_vllm": "auto",
             "builtin_transformers": "auto",
             "gemini": "gemini-2.5-flash",
             "huggingface": "microsoft/DialoGPT-large",
@@ -94,7 +91,6 @@ class ProviderFlags:
     enabled_providers: List[str] = field(
         default_factory=lambda: [
             "builtin_transformers",
-            "builtin_vllm",
             "openai",
             "gemini",
             "deepseek",

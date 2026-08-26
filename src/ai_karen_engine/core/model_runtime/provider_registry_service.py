@@ -120,10 +120,6 @@ class ProviderRegistryService:
         "hugging_face": "builtin_transformers",
         "huggingface_local": "builtin_transformers",
         "builtin_transformers": "builtin_transformers",
-        "vllm": "builtin_vllm",
-        "nano_vllm": "builtin_vllm",
-        "nano-vllm": "builtin_vllm",
-        "builtin_vllm": "builtin_vllm",
         "lm_studio": "lmstudio-desktop",
         "lmstudio": "lmstudio-desktop",
         "ollama": "ollama-local",
@@ -157,17 +153,17 @@ class ProviderRegistryService:
     def _setup_default_fallback_chains(self):
         """Setup default fallback chains for Karen's local-first runtime."""
 
-        # Text generation fallback chain - builtin vLLM first, then local endpoints
+        # Text generation fallback chain - builtin Transformers first, then local endpoints
         self._fallback_chains["text_generation"] = FallbackChain(
-            primary="builtin_vllm",
+            primary="builtin_transformers",
             fallbacks=["lmstudio-desktop", "llamacpp-server", "ollama-local", "fallback"],
             capability_required=ProviderCapability.TEXT_GENERATION,
             max_fallback_attempts=3,
         )
 
-        # Chat completion fallback chain - builtin vLLM first, then local endpoints
+        # Chat completion fallback chain - builtin Transformers first, then local endpoints
         self._fallback_chains["chat_completion"] = FallbackChain(
-            primary="builtin_vllm",
+            primary="builtin_transformers",
             fallbacks=["lmstudio-desktop", "llamacpp-server", "ollama-local", "fallback"],
             capability_required=ProviderCapability.CHAT_COMPLETION,
             max_fallback_attempts=3,
@@ -176,14 +172,14 @@ class ProviderRegistryService:
         # Local-first fallback chain - prefer local OpenAI-compatible endpoints
         self._fallback_chains["local_first"] = FallbackChain(
             primary="lmstudio-desktop",
-            fallbacks=["llamacpp-server", "ollama-local", "builtin_vllm", "fallback"],
+            fallbacks=["llamacpp-server", "ollama-local", "builtin_transformers", "fallback"],
             capability_required=ProviderCapability.CHAT_COMPLETION,
             max_fallback_attempts=3,
         )
 
         # Degraded runtime fallback chain
         self._fallback_chains["degraded_runtime"] = FallbackChain(
-            primary="builtin_vllm",
+            primary="builtin_transformers",
             fallbacks=["lmstudio-desktop", "llamacpp-server", "fallback"],
             capability_required=ProviderCapability.TEXT_GENERATION,
             max_fallback_attempts=3,

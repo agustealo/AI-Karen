@@ -349,13 +349,11 @@ class ModelDiscoveryService:
             runtime = runtime.lower()
             # Handle aliases for filtering
             target_runtimes = {runtime}
-            if runtime == "builtin_vllm":
-                target_runtimes.add("vllm")
-            elif runtime == "builtin_transformers":
+            if runtime == "builtin_transformers":
                 target_runtimes.add("transformers_direct")
             
             models = [item for item in models if any(rt.lower() in target_runtimes for rt in item.compatible_runtimes)]
-        if runtime in {"vllm", "builtin_vllm", "transformers_direct", "builtin_transformers"}:
+        if runtime in {"vllm", "transformers_direct", "builtin_transformers"}:
             models = [item for item in models if item.runtime_visible and item.weights_present]
         if capability:
             capability = capability.lower()
@@ -377,13 +375,11 @@ class ModelDiscoveryService:
             runtime = runtime.lower()
             # Handle aliases for filtering
             target_runtimes = {runtime}
-            if runtime == "builtin_vllm":
-                target_runtimes.add("vllm")
-            elif runtime == "builtin_transformers":
+            if runtime == "builtin_transformers":
                 target_runtimes.add("transformers_direct")
             
             models = [item for item in models if any(rt.lower() in target_runtimes for rt in item.compatible_runtimes)]
-        if runtime in {"vllm", "builtin_vllm", "transformers_direct", "builtin_transformers"}:
+        if runtime in {"vllm", "transformers_direct", "builtin_transformers"}:
             models = [item for item in models if item.runtime_visible and item.weights_present]
         if capability:
             capability = capability.lower()
@@ -458,8 +454,6 @@ class ModelDiscoveryService:
             if use_case in caps:
                 score += 0.3
             if use_case and use_case in " ".join(model.runtime_notes).lower():
-                score += 0.1
-            if model.preferred_runtime == "builtin_vllm":
                 score += 0.1
             scored.append((model, min(score, 1.0)))
         scored.sort(key=lambda item: item[1], reverse=True)

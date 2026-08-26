@@ -154,7 +154,6 @@ class LLMRegistry:
         self._registrations: Dict[str, ProviderRegistration] = {}
         self._model_entries: Dict[str, ModelEntry] = {}
         self._priorities: List[str] = [
-            "builtin_vllm",
             "builtin_transformers",
             "ollama",
             "openai",
@@ -682,10 +681,6 @@ class LLMRegistry:
         if canonical and canonical in self._registrations:
             return canonical
 
-        normalized = raw.lower().replace("_", "-")
-        if normalized == "local" and "builtin_vllm" in self._registrations:
-            return "builtin_vllm"
-
         return raw
 
     def _get_provider_config_manager(self):
@@ -812,7 +807,7 @@ class LLMRegistry:
                 if cache_key in self._providers:
                     cached = self._providers[cache_key]
                     init_error = getattr(cached, "initialization_error", None)
-                    is_local_fallback = resolved_name in ["builtin_vllm", "builtin_transformers"]
+                    is_local_fallback = resolved_name in ["builtin_transformers"]
 
                     if not init_error or is_local_fallback:
                         return cached
@@ -1049,7 +1044,7 @@ class LLMRegistry:
 
             registry_service = get_provider_registry_service()
             provider_names = registry_service.get_all_provider_names()
-            provider_name = provider_names[0] if provider_names else "builtin_vllm"
+            provider_name = provider_names[0] if provider_names else "builtin_transformers"
 
             provider = self.get_provider(provider_name)
             return {
@@ -1063,7 +1058,7 @@ class LLMRegistry:
             return {
                 "provider_instance": None,
                 "decision": None,
-                "provider_name": "builtin_vllm",
+                "provider_name": "builtin_transformers",
                 "model_name": "auto",
             }
         except Exception as ex:
@@ -1160,7 +1155,7 @@ class LLMRegistry:
         """Ensure all built-in providers are registered, fixing any race conditions."""
         # Thread-safe registration of missing built-in providers
         with _registry_lock:
-            for provider_name in ["builtin_vllm", "builtin_transformers"]:
+            for provider_name in ["builtin_transformers"]:
                 spec = resolve_provider_execution(provider_name)
                 if spec is None:
                     continue
@@ -1235,7 +1230,7 @@ class LLMRegistry:
         self.ensure_builtin_providers_registered()
 
         # Verify critical providers are available
-        critical_providers = ["builtin_vllm", "builtin_transformers", "fallback"]
+        critical_providers = ["builtin_transformers", "fallback"]
         for provider_name in critical_providers:
             if provider_name not in self._registrations:
                 logger.warning(
@@ -1383,7 +1378,7 @@ class LLMRegistry:
 
             # Add model validation for providers with installed models (requirement 2.5)
             # Skip for local fallbacks as they are best-effort and handle their own loading
-            if resolved_name in ["builtin_vllm", "builtin_transformers"]:
+            if resolved_name in ["builtin_transformers"]:
                 provider_models = {}
             else:
                 provider_models = self._get_models_for_provider(resolved_name)
@@ -1472,7 +1467,6 @@ class LLMRegistry:
     def _get_library_for_provider(self, provider_name: str) -> Optional[str]:
         """Get the library type for a provider."""
         provider_library_map = {
-            "builtin_vllm": "vllm",
             "builtin_transformers": "transformers",
             "huggingface": "transformers",
             "openai": None,  # API-based, no local models
@@ -1594,15 +1588,6 @@ class LLMRegistry:
 
     def _entry_matches_provider(self, entry: ModelEntry, provider_name: str) -> bool:
         """Return True when a model entry can be served by the provider."""
-        if provider_name == "builtin_vllm":
-            if entry.library == "vllm":
-                return True
-            compatibility = self._get_runtime_compatibility(entry)
-            return (
-                compatibility["model_type"] == "text_generation"
-                and "vllm" in compatibility["compatible_runtimes"]
-            )
-
         if provider_name in {"builtin_transformers", "huggingface"}:
             if entry.library == "transformers":
                 return True
@@ -1617,12 +1602,6 @@ class LLMRegistry:
 
     def _get_models_for_provider(self, provider_name: str) -> Dict[str, ModelEntry]:
         """Get all registry entries that match a provider."""
-        if provider_name == "builtin_vllm":
-            return self._get_vllm_compatible_models()
-            
-        if provider_name == "builtin_transformers":
-            return self._get_transformers_compatible_models()
-
         if provider_name == "fallback":
             return {
                 "kari-fallback-v1": ModelEntry(
@@ -1642,6 +1621,9 @@ class LLMRegistry:
                     metadata={},
                 )
             }
+
+        if provider_name == "builtin_transformers":
+            return self._get_transformers_compatible_models()
 
         return {
             key: entry
@@ -1692,63 +1674,6 @@ class LLMRegistry:
                 )
         except Exception as exc:
             logger.debug("Failed to augment Transformers compatibility from discovery: %s", exc)
-
-        return compatible
-
-    def _get_vllm_compatible_models(self) -> Dict[str, ModelEntry]:
-        """Return models that can be served by builtin_vllm."""
-        compatible: Dict[str, ModelEntry] = {}
-
-        for key, entry in self._model_entries.items():
-            if entry.library == "vllm":
-                compatible[key] = entry
-                continue
-
-            compatibility = entry.compatibility or {}
-            compatible_runtimes = {
-                str(runtime).lower() for runtime in (compatibility.get("compatible_runtimes") or [])
-            }
-            preferred_runtime = str(compatibility.get("preferred_runtime") or "").lower()
-            model_type = str(compatibility.get("model_type") or "").lower()
-
-            if (
-                model_type == "text_generation"
-                and "vllm" in compatible_runtimes
-                and preferred_runtime in {"vllm", "builtin_vllm"}
-            ):
-                compatible[key] = entry
-
-        try:
-            from ai_karen_engine.core.model_runtime.model_discovery_service import (
-                get_model_discovery_service,
-            )
-
-            discovery = get_model_discovery_service()
-            for model in discovery.get_models(runtime="vllm", model_format="transformers"):
-                if str(model.model_type or "").lower() != "text_generation":
-                    continue
-                model_key = model.model_id.replace("/", "--")
-                if model_key in compatible:
-                    continue
-                compatible[model_key] = ModelEntry(
-                    model_id=model.model_id,
-                    library="vllm",
-                    revision="discovered",
-                    installed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    install_path=model.path,
-                    files=[{"path": rel, "size": 0} for rel in (model.metadata_files or [])],
-                    total_size=model.size_bytes,
-                    pinned=False,
-                    compatibility={
-                        "compatible_runtimes": list(model.compatible_runtimes),
-                        "preferred_runtime": model.preferred_runtime,
-                        "compatibility_confidence": model.compatibility_confidence,
-                        "model_type": model.model_type,
-                    },
-                    metadata=model.to_dict(),
-                )
-        except Exception as exc:
-            logger.debug("Failed to augment vLLM compatibility from discovery: %s", exc)
 
         return compatible
 
@@ -1820,7 +1745,7 @@ class LLMRegistry:
         if not self.llm_settings_path.exists():
             # Return default settings
             return {
-                "provider": "builtin_vllm",
+                "provider": "builtin_transformers",
                 "model": "auto",
                 "api_key": None,
                 "base_url": None,
@@ -1828,7 +1753,7 @@ class LLMRegistry:
                 "max_tokens": 2048,
                 "timeout": 30,
                 "max_retries": 3,
-                "fallback_providers": ["builtin_transformers", "openai", "gemini", "deepseek"],
+                "fallback_providers": ["openai", "gemini", "deepseek"],
                 "provider_configs": {},
             }
 
@@ -1844,29 +1769,6 @@ class LLMRegistry:
     ) -> Dict[str, Any]:
         """Update provider configurations based on installed models."""
         provider_configs = settings.get("provider_configs", {})
-
-        served_vllm_model = os.getenv(
-            "KAREN_BUILTIN_VLLM_SERVED_MODEL_NAME", "auto"
-        )
-        if "builtin_vllm" not in provider_configs:
-            provider_configs["builtin_vllm"] = {}
-        provider_configs["builtin_vllm"].pop("model_path", None)
-        provider_configs["builtin_vllm"].update(
-            {
-                "models": [served_vllm_model],
-                "context_length": int(
-                    os.getenv("KAREN_BUILTIN_VLLM_MAX_MODEL_LEN", "4096")
-                ),
-                "base_url": os.getenv(
-                    "KAREN_BUILTIN_VLLM_BASE_URL", "http://vllm:8000/v1"
-                ),
-                "health_url": os.getenv(
-                    "KAREN_BUILTIN_VLLM_HEALTH_URL", "http://vllm:8000/health"
-                ),
-            }
-        )
-        if settings.get("provider") == "builtin_vllm":
-            settings["model"] = served_vllm_model
 
         # Update built-in Transformers provider with local models.
         transformers_models = self._get_models_for_provider("builtin_transformers")
@@ -1966,9 +1868,7 @@ class LLMRegistry:
 
         try:
             # Get appropriate provider for the model's library
-            if self._entry_matches_provider(entry, "builtin_vllm"):
-                provider_name = "builtin_vllm"
-            elif self._entry_matches_provider(entry, "builtin_transformers"):
+            if self._entry_matches_provider(entry, "builtin_transformers"):
                 provider_name = "builtin_transformers"
             else:
                 provider_name = self._get_provider_for_library(entry.library)
@@ -1996,7 +1896,6 @@ class LLMRegistry:
     def _get_provider_for_library(self, library: str) -> Optional[str]:
         """Get the appropriate provider name for a library."""
         library_provider_map = {
-            "vllm": "builtin_vllm",
             "transformers": "huggingface",
             "spacy": "huggingface",  # spaCy models can be used through HF
             "sklearn": None,  # sklearn models don't use LLM providers
@@ -2021,17 +1920,7 @@ class LLMRegistry:
             load_model_fn = getattr(provider, "load_model", None)
             if callable(load_model_fn) and entry.install_path:
                 model_path = Path(entry.install_path)
-                if self._entry_matches_provider(entry, "builtin_vllm"):
-                    # For GGUF models, load the .gguf file
-                    gguf_files = list(model_path.glob("*.gguf"))
-                    if gguf_files:
-                        success = bool(load_model_fn(str(gguf_files[0])))
-                        if not success:
-                            return {
-                                "status": "unhealthy",
-                                "error": f"Failed to load model from {gguf_files[0]}",
-                            }
-                elif self._entry_matches_provider(entry, "builtin_transformers"):
+                if self._entry_matches_provider(entry, "builtin_transformers"):
                     # For transformers models, load from directory
                     load_model_by_path_fn = getattr(
                         provider, "load_model_by_path", None
@@ -2144,7 +2033,7 @@ class LLMRegistry:
             }
 
             # Add provider-specific validation info
-            if provider_name in {"builtin_vllm", "builtin_transformers"}:
+            if provider_name in {"builtin_transformers"}:
                 local_models = [
                     k
                     for k, e in provider_models.items()
@@ -2224,7 +2113,6 @@ class LLMRegistry:
 
                 if model_name not in provider_models and provider_name in [
                     "builtin_transformers",
-                    "builtin_vllm",
                     "huggingface",
                 ]:
                     return {
@@ -2244,7 +2132,7 @@ class LLMRegistry:
                     }
 
                 # Validate provider-specific config
-                if config_provider in {"builtin_transformers", "builtin_vllm"}:
+                if config_provider in {"builtin_transformers"}:
                     model_path = config.get("model_path")
                     if model_path and not Path(model_path).exists():
                         return {
@@ -2302,9 +2190,7 @@ class LLMRegistry:
             )
 
             # Test 2: Provider availability
-            if self._entry_matches_provider(entry, "builtin_vllm"):
-                provider_name = "builtin_vllm"
-            elif self._entry_matches_provider(entry, "builtin_transformers"):
+            if self._entry_matches_provider(entry, "builtin_transformers"):
                 provider_name = "builtin_transformers"
             else:
                 provider_name = self._get_provider_for_library(entry.library)
@@ -2354,23 +2240,7 @@ class LLMRegistry:
             ):
                 try:
                     model_path = Path(entry.install_path)
-                    if self._entry_matches_provider(entry, "builtin_vllm"):
-                        # Find GGUF file
-                        gguf_files = list(model_path.glob("*.gguf"))
-                        load_model_fn = getattr(provider, "load_model", None)
-                        if gguf_files and callable(load_model_fn):
-                            success = bool(load_model_fn(str(gguf_files[0])))
-                            test_results["tests"]["model_loading"] = {
-                                "status": "success" if success else "failed",
-                                "model_file": str(gguf_files[0]),
-                                "loaded": success,
-                            }
-                        else:
-                            test_results["tests"]["model_loading"] = {
-                                "status": "failed",
-                                "error": "No GGUF files found or provider doesn't support loading",
-                            }
-                    elif self._entry_matches_provider(entry, "builtin_transformers"):
+                    if self._entry_matches_provider(entry, "builtin_transformers"):
                         load_model_by_path_fn = getattr(
                             provider, "load_model_by_path", None
                         )

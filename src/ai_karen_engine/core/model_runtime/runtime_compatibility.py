@@ -98,11 +98,11 @@ def probe_runtime_compatibility(
             else:
                 runtime_notes.append("Transformer model type not suitable for vLLM selection.")
         else:
-            compatible_runtimes = ["builtin_vllm", "builtin_transformers"]
-            preferred_runtime = "builtin_vllm"
-            confidence = "runtime_verified" if vllm_available else "config_inferred"
+            compatible_runtimes = ["builtin_transformers"]
+            preferred_runtime = "builtin_transformers"
+            confidence = "runtime_verified"
             runtime_notes.append(
-                "Transformers model can run in vLLM or direct fallback mode."
+                "Transformers model can run in direct fallback mode."
             )
     elif model_format == "gguf":
         compatible_runtimes = ["openai_compatible"]

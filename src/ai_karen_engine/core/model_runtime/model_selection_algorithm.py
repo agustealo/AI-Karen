@@ -51,7 +51,6 @@ class ModelSelectionAlgorithm:
         
         # Configuration
         self.default_hierarchy = self.config.get("default_hierarchy", [
-            "builtin_vllm",
             "builtin_transformers",
         ])
 
@@ -260,7 +259,7 @@ class ModelSelectionAlgorithm:
     
     def _get_default_model_for_provider(self, provider: str) -> Optional[str]:
         """Get the default model for a given provider."""
-        if provider in {"builtin_vllm", "builtin_transformers"}:
+        if provider == "builtin_transformers":
             return "auto"
         try:
             # Try to get from provider registry first

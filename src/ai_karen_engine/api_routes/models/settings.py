@@ -586,7 +586,7 @@ async def get_provider_models(
                     ollama = OllamaProvider(base_url=target_url, timeout=2, max_retries=0)
                     loop = asyncio.get_running_loop()
                     dynamic_model_names = await loop.run_in_executor(None, ollama.get_models)
-                elif normalized_id == "builtin_vllm" or (provider and provider.provider_type.value in ["remote", "hybrid"]):
+                elif provider and provider.provider_type.value in ["remote", "hybrid"]:
                     # Try generic OpenAI compatible discovery
                     from ai_karen_engine.integrations.providers.openai_compatible_provider import OpenAICompatibleProvider
                     
@@ -815,7 +815,7 @@ async def build_model_settings_payload() -> Dict[str, Any]:
         "default_provider": "builtin_transformers",
         "default_model": "auto",
         "fallback_hierarchy": list(settings.get_setting("llm_providers.fallback_hierarchy") or [
-            "builtin_transformers", "builtin_vllm", "fallback", "openai", "gemini"
+            "builtin_transformers", "fallback", "openai", "gemini"
         ])
     }
 
@@ -874,7 +874,7 @@ def _normalize_ollama_base_url(url: str) -> str:
 
 
 def _supports_base_url_override(provider: ProviderConfig) -> bool:
-    return provider.provider_type in {ProviderType.LOCAL, ProviderType.HYBRID, ProviderType.CUSTOM} or provider.name in {"openai", "azure", "vllm", "builtin_vllm"}
+    return provider.provider_type in {ProviderType.LOCAL, ProviderType.HYBRID, ProviderType.CUSTOM} or provider.name in {"openai", "azure", "vllm"}
 
 
 def _normalize_selected_model_for_provider(provider_name: str, model_id: Any) -> str:

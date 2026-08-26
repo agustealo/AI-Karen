@@ -86,10 +86,8 @@ class ModelManager:
             if not preferred_provider:
                 if runtime_family == "transformers":
                     preferred_provider = "builtin_transformers"
-                elif runtime_family == "vllm":
-                    preferred_provider = "builtin_vllm"
                 elif context.get("local_first"):
-                    preferred_provider = "builtin_vllm"
+                    preferred_provider = "builtin_transformers"
 
         capability_enum = self._normalize_capability(capability)
         provider_id = self.registry.select_provider_with_fallback(
@@ -322,14 +320,6 @@ class ModelManager:
             return CoreHelpersRuntime(
                 text_model=model_path,
                 embedding_model="/app/models/transformers/distilbert-base-uncased",
-            )
-
-        if endpoint.endpoint_type == ProviderEndpointType.BUILTIN_VLLM:
-            from ai_karen_engine.core.model_runtime.providers.vllm_runtime import VLLMRuntime
-            return VLLMRuntime.get_instance(
-                model=endpoint.default_model or "auto",
-                base_url=endpoint.base_url,
-                api_key_env=endpoint.api_key_env,
             )
 
         if not endpoint.base_url:

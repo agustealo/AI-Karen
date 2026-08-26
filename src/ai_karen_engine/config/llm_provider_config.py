@@ -49,8 +49,6 @@ DEFAULT_OLLAMA_BASE_URL = os.getenv(
 
 # Canonical provider identifier aliases (UI/API/runtime should all use these).
 PROVIDER_NAME_ALIASES: Dict[str, str] = {
-    "builtin-vllm": "builtin_vllm",
-    "vllm": "builtin_vllm",
 }
 
 # Canonical provider class names with module ownership.
@@ -74,7 +72,6 @@ PROVIDER_CLASS_ALIASES: Dict[str, str] = {
 # Shared settings UI order, centralized here to avoid route-level drift.
 MODEL_SETTINGS_PROVIDER_ORDER: List[str] = [
     "builtin_transformers",
-    "builtin_vllm",
     "fallback",
     "openai",
     "anthropic",
@@ -557,11 +554,6 @@ class LLMProviderConfigManager:
                 "sentence-transformers/all-mpnet-base-v2": "auto",
                 "models/transformers/gpt2": "auto",
             },
-            "builtin_vllm": {
-                "gpt2": "auto",
-                "local": "auto",
-                "karen-vllm-local": "auto",
-            },
         }
 
         alias = legacy_aliases.get(provider_name, {}).get(normalized.lower())
@@ -597,36 +589,6 @@ class LLMProviderConfigManager:
                     max_context_length=32768,
                     max_output_tokens=4096,
                 ),
-            ),
-            ProviderConfig(
-                name="builtin_vllm",
-                display_name="vLLM",
-                description="Primary built-in runtime for high-throughput text generation and streaming.",
-                provider_type=ProviderType.BUILTIN,
-                priority=95,
-                endpoint=ProviderEndpoint(
-                    base_url=os.getenv("KAREN_BUILTIN_VLLM_BASE_URL", "http://vllm:8000/v1"),
-                    health_endpoint=os.getenv("KAREN_BUILTIN_VLLM_HEALTH_URL", "http://vllm:8000/health"),
-                    timeout=int(os.getenv("KAREN_BUILTIN_VLLM_TIMEOUT_SECONDS", "120")),
-                ),
-                models=[
-                    ProviderModel(
-                        id="auto",
-                        name="Auto",
-                        family="vllm",
-                        capabilities={"chat_completion", "text_generation", "streaming"},
-                        context_length=int(os.getenv("KAREN_BUILTIN_VLLM_MAX_MODEL_LEN", "4096")),
-                        max_tokens=4096,
-                    )
-                ],
-                default_model=os.getenv("KAREN_BUILTIN_VLLM_SERVED_MODEL_NAME", "auto"),
-                capabilities={"streaming", "chat_completion", "text_generation"},
-                limits=ProviderLimits(
-                    concurrent_requests=12,
-                    max_context_length=int(os.getenv("KAREN_BUILTIN_VLLM_MAX_MODEL_LEN", "4096")),
-                    max_output_tokens=4096,
-                ),
-                enabled=os.getenv("KAREN_BUILTIN_VLLM_ENABLED", "true").lower() == "true",
             ),
             ProviderConfig(
                 name="fallback",

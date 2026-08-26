@@ -345,7 +345,7 @@ class RuntimeProviderManager:
         """Check health of local provider"""
         try:
             canonical_name = self.canonicalize_provider_id(config.name)
-            if canonical_name in ("builtin_vllm",):
+            if canonical_name in ("builtin_transformers",):
                 # Check if local model files exist for these specific runtimes
                 try:
                     from ai_karen_engine.core.model_runtime.model_store import ModelStore

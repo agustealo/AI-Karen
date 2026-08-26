@@ -16,7 +16,6 @@ from ai_karen_engine.core.model_runtime.runtime_engine import (
 
 class ProviderEndpointType(str, Enum):
     BUILTIN_TRANSFORMERS = "builtin_transformers"
-    BUILTIN_VLLM = "builtin_vllm"
     OPENAI_COMPATIBLE = "openai_compatible"
     REMOTE_API = "remote_api"
 
@@ -82,22 +81,6 @@ BUILTIN_PROVIDER_ENDPOINTS: tuple[ProviderEndpoint, ...] = (
             "vlm_helper",
             "ocr_helper",
         ),
-        default_model="auto",
-    ),
-    ProviderEndpoint(
-        provider_id="builtin_vllm",
-        display_name="vLLM",
-        endpoint_type=ProviderEndpointType.BUILTIN_VLLM,
-        builtin=True,
-        tenant_scoped=False,
-        supports_streaming=True,
-        supports_models_endpoint=True,
-        fallback_eligible=True,
-        kind=EndpointKind.LOCAL_ENDPOINT,
-        protocol=EndpointProtocol.OPENAI_COMPATIBLE,
-        runtime_engine=RuntimeEngine.VLLM,
-        locality=Locality.LOCAL,
-        capabilities=("text_generation", "chat_completion", "streaming"),
         default_model="auto",
     ),
     ProviderEndpoint(

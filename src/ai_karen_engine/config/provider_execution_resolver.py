@@ -54,12 +54,6 @@ class ProviderExecutionSpec:
 
 
 BUILTIN_RUNTIME_SPECS: Dict[str, Dict[str, str]] = {
-    "builtin_vllm": {
-        "runtime_engine": "vllm",
-        "adapter_class": "VLLMRuntime",
-        "adapter_module": "ai_karen_engine.inference.vllm_runtime",
-        "execution_family": "builtin_runtime",
-    },
 }
 
 SPECIALIZED_RUNTIME_SPECS: Dict[str, Dict[str, str]] = {
