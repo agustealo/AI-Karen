@@ -12,6 +12,7 @@
 
 services:
   redis:
+    env_file: !reset []
     ports: !reset []
     command:
       - redis-server
@@ -20,6 +21,7 @@ services:
       - ${REDIS_PASSWORD:?REDIS_PASSWORD is required for production}
 
   api:
+    env_file: !reset []
     environment:
       ENVIRONMENT: production
       DEBUG: "false"
@@ -62,6 +64,34 @@ services:
       retries: 3
     restart: unless-stopped
     stop_grace_period: 45s
+
+  web:
+    build:
+      context: ./src/ui_launchers/Karen-AI-Theme
+      dockerfile: Dockerfile.production
+    image: ai-karen-web:production
+    env_file: !reset []
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      KAREN_BACKEND_URL: http://api:8000
+      KAREN_DOCKER: "true"
+      NEXT_PUBLIC_API_PROXY_TIMEOUT_MS: "30000"
+      NEXT_PUBLIC_API_PROXY_LONG_TIMEOUT_MS: "120000"
+    volumes: !reset []
+    command: !reset null
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8010/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    restart: unless-stopped
+    stop_grace_period: 30s
 
   prometheus:
     ports: !reset []
