@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any, Dict, Optional
 
@@ -18,6 +19,11 @@ from ai_karen_engine.core.model_runtime.llm_adapter import LLMUtils
 from ai_karen_engine.core.model_runtime.runtime_registry_adapter import get_registry
 
 logger = logging.getLogger("ai_karen.reasoning.graph")
+
+
+def _stable_node_id(prefix: str, value: str) -> str:
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return f"{prefix}::{digest}"
 
 
 class ReasoningGraph:
@@ -51,12 +57,8 @@ class ReasoningGraph:
         self.llm = llm or (get_registry().get_active() or LLMUtils())  # type: ignore[attr-defined]
         self.policy = policy or ICEWritebackPolicy()
         self._ice = PremiumICEWrapper(sr=None, subengine=None, llm=self.llm, policy=self.policy)
-
         self._capsule_graph = CapsuleGraph() if enable_graph_mirroring else None
 
-    # --------------------------
-    # Public API
-    # --------------------------
     def run(
         self,
         text: str,
@@ -76,13 +78,11 @@ class ReasoningGraph:
         policy_overrides: Optional[Dict[str, Any]] = None,
     ) -> ReasoningTrace:
         import asyncio
+
         trace = await asyncio.to_thread(self._run_internal, text, metadata, policy_overrides)
         self._mirror_to_graph(text, trace)
         return trace
 
-    # --------------------------
-    # CapsuleGraph utilities
-    # --------------------------
     @property
     def capsule_graph(self) -> Optional[CapsuleGraph]:
         return self._capsule_graph
@@ -97,9 +97,6 @@ class ReasoningGraph:
             return None
         return self._capsule_graph.to_dot()
 
-    # --------------------------
-    # Internals
-    # --------------------------
     def _run_internal(
         self,
         text: str,
@@ -107,27 +104,33 @@ class ReasoningGraph:
         policy_overrides: Optional[Dict[str, Any]],
     ) -> ReasoningTrace:
         if policy_overrides:
-            p = ICEWritebackPolicy(**{**self.policy.__dict__, **policy_overrides})
-            tmp = KariICEWrapper(engine=self.engine, llm=self.llm, policy=p)
-            return tmp.process(text, metadata=metadata)
+            policy = ICEWritebackPolicy(**{**self.policy.__dict__, **policy_overrides})
+            wrapper = PremiumICEWrapper(sr=None, subengine=None, llm=self.llm, policy=policy)
+            return wrapper.process(text, metadata=metadata)
         return self._ice.process(text, metadata=metadata)
 
     def _mirror_to_graph(self, text: str, trace: ReasoningTrace) -> None:
         if not self._capsule_graph:
             return
-        q = f"query::{hash(text)}"
-        self._capsule_graph.upsert_node(q, type="query", entropy=trace.entropy, top_score=trace.top_score)
-        for idx, m in enumerate(trace.memory_matches):
-            payload = m.get("payload", {})
-            mem_text = payload.get("text", "")
-            if not mem_text:
+
+        query_node = _stable_node_id("query", text)
+        self._capsule_graph.upsert_node(
+            query_node,
+            type="query",
+            entropy=trace.entropy,
+            top_score=trace.top_score,
+        )
+        for idx, match in enumerate(trace.memory_matches):
+            payload = match.get("payload", {})
+            memory_text = payload.get("text", "")
+            if not memory_text:
                 continue
-            node_name = f"mem::{hash(mem_text)}"
+            memory_node = _stable_node_id("mem", memory_text)
             self._capsule_graph.upsert_node(
-                node_name,
+                memory_node,
                 type="memory",
                 ts=payload.get("timestamp"),
-                score=m.get("score", 0.0),
+                score=match.get("score", 0.0),
             )
-            weight = max(0.001, 1.0 - float(m.get("score", 0.0)))
-            self._capsule_graph.upsert_edge(q, node_name, weight=weight, rank=idx)
+            weight = max(0.001, 1.0 - float(match.get("score", 0.0)))
+            self._capsule_graph.upsert_edge(query_node, memory_node, weight=weight, rank=idx)
