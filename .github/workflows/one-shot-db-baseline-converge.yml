@@ -4,7 +4,7 @@ on:
   push:
     branches: [db/baseline-1-production-schema]
     paths:
-      - "scripts/dev/apply_db_baseline_convergence.py"
+      - "scripts/dev/finalize_db_baseline_runtime_authority.py"
       - ".github/workflows/one-shot-db-baseline-converge.yml"
   workflow_dispatch:
 
@@ -21,37 +21,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Apply convergence
-        run: python scripts/dev/apply_db_baseline_convergence.py
+      - name: Apply runtime schema authority closure
+        run: python scripts/dev/finalize_db_baseline_runtime_authority.py
       - name: Compile touched Python boundaries
         run: |
           python -m py_compile \
-            src/ai_karen_engine/database/__init__.py \
-            src/ai_karen_engine/database/factory.py \
-            src/ai_karen_engine/services/database/migration_validator.py \
-            src/ai_karen_engine/services/database/operations_service.py \
-            server/deployment/deploy_auth_system.py \
+            src/ai_karen_engine/database/client.py \
+            src/ai_karen_engine/database/identity_vault_schema.py \
+            src/ai_karen_engine/services/identity_vault/credential_vault_service.py \
             tests/supabase_platform_smoke.py
-      - name: Prove baseline shape and retired authorities
+      - name: Prove single primary PostgreSQL schema authority
         run: |
-          test "$(find supabase/migrations -maxdepth 1 -name '*.sql' | wc -l)" -eq 6
+          test "$(find supabase/migrations -maxdepth 1 -name '*.sql' | wc -l)" -eq 7
+          grep -q "CREATE TABLE IF NOT EXISTS credentials" supabase/migrations/20260827070000_07_identity_vault.sql
+          ! grep -R "metadata.create_all\|metadata.drop_all" -n src/ai_karen_engine/database src/ai_karen_engine/services/identity_vault --include='*.py'
+          ! grep -n "create_tables_async()" src/ai_karen_engine/services/identity_vault/credential_vault_service.py
           test ! -e src/ai_karen_engine/database/migration_manager.py
           test ! -d src/ai_karen_engine/database/migrations
           test ! -d src/ai_karen_engine/database/migration
           test ! -d docker/database/migrations/postgres
           test ! -d server/chat/migrations
           test ! -d server/migrations
-          ! grep -R "database.migration_manager" -n src server tests --include='*.py'
-          ! grep -R "Base.metadata.create_all\|Base.metadata.drop_all" -n src/ai_karen_engine/database --include='*.py'
-          grep -q "migrate-production-database.sh" server/deployment/deploy_auth_system.py
       - name: Commit product changes only
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add supabase docs src server docker tests
-          if git diff --cached --quiet; then
-            echo "No product changes to commit"
-            exit 0
-          fi
-          git commit -m "refactor(db): establish canonical production baseline"
+          git add supabase docs src tests
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "refactor(db): close runtime schema mutation paths"
           git push origin HEAD:db/baseline-1-production-schema
