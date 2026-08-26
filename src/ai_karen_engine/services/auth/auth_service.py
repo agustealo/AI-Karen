@@ -2001,125 +2001,78 @@ class AuthService(BaseService):
             logger.error(f"Authentication Service health check failed: {e}")
             return False
 
-    async def get_auth_stats(self) -> Dict[str, Any]:
-        """
-        Get authentication service statistics.
-
-        Returns:
-            Dictionary containing authentication statistics
-        """
+    async def get_auth_stats(
+        self, tenant_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Get authentication statistics, optionally scoped to one tenant."""
         try:
-            from sqlalchemy import select, func, text
-            from ai_karen_engine.database.models import AuthUser, AuthSession
-            from ai_karen_engine.database.client import MultiTenantPostgresClient
-
-            # Use existing session or create temporary client
-            if not self._db_session:
+            tenant_uuid: Optional[uuid.UUID] = None
+            if tenant_id is not None:
                 try:
-                    temp_client = MultiTenantPostgresClient()
-                    async with temp_client.get_async_session() as session:
-                        # Get user count
-                        result = await session.execute(
-                            select(func.count()).select_from(AuthUser)
-                        )
-                        total_users = result.scalar() or 0
-
-                        # Get active user count
-                        result = await session.execute(
-                            select(func.count())
-                            .select_from(AuthUser)
-                            .where(AuthUser.is_active)
-                        )
-                        active_users = result.scalar() or 0
-
-                        # Get total session count
-                        result = await session.execute(
-                            select(func.count()).select_from(AuthSession)
-                        )
-                        total_sessions = result.scalar() or 0
-
-                        # Get active session count (within last 24 hours)
-                        result = await session.execute(
-                            select(func.count())
-                            .select_from(AuthSession)
-                            .where(
-                                AuthSession.is_active,
-                                AuthSession.last_used
-                                >= text("NOW() - INTERVAL '24 hours'"),
-                            )
-                        )
-                        active_sessions = result.scalar() or 0
-
-                    return {
-                        "total_users": total_users,
-                        "active_users": active_users,
-                        "total_sessions": total_sessions,
-                        "active_sessions": active_sessions,
-                        "service_status": "running" if self._initialized else "stopped",
-                    }
-                except Exception as temp_error:
-                    logger.warning(
-                        f"Could not use temporary database client: {temp_error}"
-                    )
+                    tenant_uuid = uuid.UUID(str(tenant_id))
+                except ValueError:
                     return {
                         "total_users": 0,
                         "active_users": 0,
                         "total_sessions": 0,
                         "active_sessions": 0,
                         "service_status": "error",
-                        "error": "Database session not available",
+                        "error": "Invalid tenant scope",
                     }
 
-            from sqlalchemy import select, func, text
-            from ai_karen_engine.database.models import AuthUser, AuthSession
-
-            # Get user count
-            result = await self._db_session.execute(
-                select(func.count()).select_from(AuthUser)
-            )
-            total_users = result.scalar() or 0
-
-            # Get active user count
-            result = await self._db_session.execute(
-                select(func.count())
-                .select_from(AuthUser)
-                .where(AuthUser.is_active)
-            )
-            active_users = result.scalar() or 0
-
-            # Get total session count
-            result = await self._db_session.execute(
-                select(func.count()).select_from(AuthSession)
-            )
-            total_sessions = result.scalar() or 0
-
-            # Get active session count (within last 24 hours)
-            result = await self._db_session.execute(
-                select(func.count())
-                .select_from(AuthSession)
-                .where(
-                    AuthSession.is_active,
-                    AuthSession.last_used >= text("NOW() - INTERVAL '24 hours'"),
+            async with self._session_scope() as session:
+                user_query = select(func.count()).select_from(AuthUser)
+                active_user_query = (
+                    select(func.count())
+                    .select_from(AuthUser)
+                    .where(AuthUser.is_active)
                 )
-            )
-            active_sessions = result.scalar() or 0
+                session_query = select(func.count()).select_from(AuthSession)
+                active_session_query = (
+                    select(func.count())
+                    .select_from(AuthSession)
+                    .join(AuthUser, AuthUser.user_id == AuthSession.user_id)
+                    .where(AuthSession.is_active)
+                )
 
-            return {
-                "total_users": total_users,
-                "active_users": active_users,
-                "total_sessions": total_sessions,
-                "active_sessions": active_sessions,
-                "service_status": "running" if self._initialized else "stopped",
-            }
-        except Exception as e:
-            logger.error(f"Failed to get auth stats: {e}")
+                if tenant_uuid is not None:
+                    user_query = user_query.where(AuthUser.tenant_id == tenant_uuid)
+                    active_user_query = active_user_query.where(
+                        AuthUser.tenant_id == tenant_uuid
+                    )
+                    session_query = (
+                        session_query
+                        .join(AuthUser, AuthUser.user_id == AuthSession.user_id)
+                        .where(AuthUser.tenant_id == tenant_uuid)
+                    )
+                    active_session_query = active_session_query.where(
+                        AuthUser.tenant_id == tenant_uuid
+                    )
+
+                total_users = (await session.execute(user_query)).scalar() or 0
+                active_users = (await session.execute(active_user_query)).scalar() or 0
+                total_sessions = (await session.execute(session_query)).scalar() or 0
+                active_sessions = (
+                    await session.execute(active_session_query)
+                ).scalar() or 0
+
+                return {
+                    "total_users": total_users,
+                    "active_users": active_users,
+                    "total_sessions": total_sessions,
+                    "active_sessions": active_sessions,
+                    "service_status": "running" if self._initialized else "stopped",
+                    "tenant_id": str(tenant_uuid) if tenant_uuid is not None else None,
+                }
+        except Exception as exc:
+            logger.error("Failed to get auth stats: %s", exc)
             return {
                 "total_users": 0,
                 "active_users": 0,
                 "total_sessions": 0,
                 "active_sessions": 0,
                 "service_status": "error",
-                "error": str(e),
+                "error": "Authentication statistics unavailable",
             }
 
     async def is_first_run(self) -> bool:

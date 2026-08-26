@@ -283,6 +283,17 @@ def _resolve_current_user_id(user: Any) -> str:
     return payload["user_id"]
 
 
+def _require_tenant_scope(user: Any) -> str:
+    """Return an explicit tenant scope for tenant-admin operations."""
+    tenant_id = str(_user_value(user, "tenant_id", "") or "").strip()
+    if not tenant_id or tenant_id == "default":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Explicit tenant scope is required for this operation",
+        )
+    return tenant_id
+
+
 # Startup/shutdown handlers commented out to prevent blocking during app startup
 # The AuthService is already initialized when the module loads
 # @router.on_event("startup")
@@ -752,10 +763,12 @@ async def create_user(
             detail="Insufficient privileges to create users",
         )
 
+    tenant_id = _require_tenant_scope(current_user)
     user, error = await auth_svc.create_user(
         email=request.email,
         password=request.password,
         full_name=request.full_name,
+        tenant_id=tenant_id,
         roles=request.roles,
     )
 
@@ -790,7 +803,10 @@ async def get_auth_stats(
             detail="Insufficient privileges to view authentication statistics",
         )
 
-    stats = await auth_svc.get_auth_stats()
+    tenant_id = None
+    if not _has_role(current_user, "super_admin"):
+        tenant_id = _require_tenant_scope(current_user)
+    stats = await auth_svc.get_auth_stats(tenant_id=tenant_id)
     return stats
 
 
