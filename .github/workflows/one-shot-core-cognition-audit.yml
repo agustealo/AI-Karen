@@ -1,0 +1,26 @@
+name: One-shot Core Cognition Wiring Audit
+
+on:
+  push:
+    branches:
+      - audit/core-cognition-wiring
+    paths:
+      - scripts/audit_core_cognition_wiring.py
+      - .github/workflows/one-shot-core-cognition-audit.yml
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run wiring census
+        run: python scripts/audit_core_cognition_wiring.py | tee /tmp/core-cognition-audit.txt
+      - name: Upload census
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-cognition-audit
+          path: /tmp/core-cognition-audit.txt
