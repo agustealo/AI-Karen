@@ -22,7 +22,7 @@ import weakref
 
 from ai_karen_engine.config.config_manager import get_config_manager
 from ai_karen_engine.core.logging import get_logger
-from ai_karen_engine.core.observability.metrics import get_metrics_manager
+from src.ai_karen_engine.platform.observability.metrics import get_metrics_collector as get_metrics_manager
 from ai_karen_engine.services.formatting.pretty_output_layer import (
     PrettyOutputLayer,
 )

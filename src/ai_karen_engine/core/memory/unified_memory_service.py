@@ -18,8 +18,10 @@ except ImportError:
     from ai_karen_engine.pydantic_stub import Field
 
 from ai_karen_engine.core.logging import PIIRedactor, get_logger
-from ai_karen_engine.core.memory.adapters.postgres_adapter import PostgresMemoryAdapter
+# TODO: Remove when PostgresMemoryAdapter is implemented
+# from ai_karen_engine.core.memory.adapters.postgres_adapter import PostgresMemoryAdapter
 from ai_karen_engine.core.memory.memory_policy import DecayTier, MemoryPolicyManager
+from ai_karen_engine.core.memory.types.base import MemoryEntry
 from ai_karen_engine.core.memory.memory_writeback import (
     InteractionType,
     MemoryWritebackSystem,
@@ -150,7 +152,9 @@ class UnifiedMemoryService:
                     embedding_manager=embedding_manager,
                     redis_client=redis_client,
                 )
-                self._retrieval_adapter = PostgresMemoryAdapter(db_client, base_manager)
+                # TODO: Implement PostgresMemoryAdapter
+# self._retrieval_adapter = PostgresMemoryAdapter(db_client, base_manager)
+                self._retrieval_adapter = None
             except Exception:
                 pass
 

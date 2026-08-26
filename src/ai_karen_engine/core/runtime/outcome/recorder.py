@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from ai_karen_engine.core.observability.context import get_observability_context
+from src.ai_karen_engine.platform.observability.context import get_correlation_context as get_observability_context
 from ai_karen_engine.core.runtime.outcome.contracts import (
     ExecutionOutcome,
     ExecutionStatus,

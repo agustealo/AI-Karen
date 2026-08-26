@@ -40,8 +40,8 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
 )
 from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
 from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
-from ai_karen_engine.core.observability.emitter import get_observability_emitter
-from ai_karen_engine.core.observability.contracts import RuntimeEventType
+from src.ai_karen_engine.platform.observability import get_observability_emitter
+from src.ai_karen_engine.platform.observability.contracts import EventType as RuntimeEventType
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk
 from ai_karen_engine.utils.chat_helpers import normalize_session_id as normalize_chat_session_id
 from ai_karen_engine.core.expression.gateway import ExpressionGateway
