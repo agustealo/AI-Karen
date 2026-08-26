@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Repair exact live transformer seam
+        run: python scripts/dev/repair_memory_migration_transformer.py
       - name: Apply domain migration
         run: python scripts/dev/apply_memory_consumer_domain_migration.py
       - name: Compile migrated boundaries
@@ -54,7 +56,8 @@ jobs:
           git rm -f \
             .github/workflows/one-shot-memory-consumer-census.yml \
             .github/workflows/one-shot-memory-domain-migration.yml \
-            scripts/dev/apply_memory_consumer_domain_migration.py
+            scripts/dev/apply_memory_consumer_domain_migration.py \
+            scripts/dev/repair_memory_migration_transformer.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src
