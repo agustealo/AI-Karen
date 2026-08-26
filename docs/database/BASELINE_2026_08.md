@@ -14,6 +14,7 @@
 | `04_tenant_security` | `conversation_tenant_scoping`, `row_level_security` |
 | `05_schema_security_finalization` | `schema_corrections`, `embedding_provenance`, `rls_expansion` |
 | `06_auth_refresh_history` | `auth_refresh_token_history` |
+| `07_identity_vault` | Existing Identity Vault ORM schema moved under canonical migration authority |
 
 The baseline intentionally preserves prior SQL ordering and semantics. Git history is the archive for the superseded migration files.
 

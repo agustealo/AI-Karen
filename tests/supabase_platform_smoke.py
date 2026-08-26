@@ -32,9 +32,9 @@ def test_id_types() -> None:
 def test_migrations() -> None:
     from pathlib import Path
     migrations = sorted((Path("supabase") / "migrations").glob("*.sql"))
-    assert len(migrations) == 6
+    assert len(migrations) == 7
     assert migrations[0].name.endswith("01_core_persona_runtime.sql")
-    assert migrations[-1].name.endswith("06_auth_refresh_history.sql")
+    assert migrations[-1].name.endswith("07_identity_vault.sql")
     print("[OK] Migrations")
 
 
