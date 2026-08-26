@@ -1,0 +1,153 @@
+name: Main Quality Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: main-quality-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-quality:
+    name: backend-quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTHONPATH: src
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install quality and runtime contract dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            ruff mypy pytest pytest-asyncio sqlalchemy asyncpg psycopg psycopg2-binary \
+            PyJWT bcrypt argon2-cffi structlog cryptography PyYAML \
+            pydantic pydantic-settings python-dotenv prometheus_client \
+            fastapi httpx requests tenacity redis fakeredis
+
+      - name: Compile Python sources
+        run: python -m compileall -q src server scripts
+
+      - name: Ruff
+        run: ruff check src tests
+
+      - name: Mypy runtime authority surfaces
+        run: |
+          mypy \
+            src/ai_karen_engine/core/runtime \
+            src/ai_karen_engine/core/cortex \
+            src/ai_karen_engine/core/model_runtime \
+            src/ai_karen_engine/core/memory
+
+      - name: Architecture authority contracts
+        run: |
+          pytest tests/architecture/test_core_ai_machine_isolation.py -q
+          pytest tests/architecture/test_provider_chat_authority.py -q
+          pytest tests/architecture/test_cortex_intelligence_authority.py -q
+          pytest tests/architecture/test_context_authority_convergence.py -q
+          pytest tests/architecture/test_memory_consumer_domain_migration.py -q
+          pytest tests/architecture/test_beta_conversation_reload_contract.py -q
+          pytest tests/architecture/test_authenticated_tenant_context_contract.py -q
+
+      - name: Reject retired provider authorities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e src/ai_karen_engine/core/expression/engines/builtin_provider_engine.py
+          test ! -e src/ai_karen_engine/core/model_runtime/providers/vllm_runtime.py
+          refs=$(grep -R --line-number --include='*.py' \
+            -E 'preferred_provider=["'"']builtin_vllm["'"']|provider_id=["'"']builtin_vllm["'"']|from .*vllm_runtime import VLLMRuntime|import .*vllm_runtime' \
+            tests src/ai_karen_engine/core/expression || true)
+          test -z "$refs" || { echo "$refs"; exit 1; }
+
+  frontend-quality:
+    name: frontend-quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: src/ui_launchers/Karen-AI-Theme
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
+
+      - name: Install frontend dependencies reproducibly
+        run: npm ci --no-audit --no-fund
+
+      - name: Reject production mocks
+        run: npm run ci:forbid-mocks
+
+      - name: Typecheck frontend
+        run: npm run typecheck
+
+      - name: Run frontend unit tests
+        run: npx vitest run --passWithNoTests
+
+      - name: Build production frontend
+        env:
+          NODE_ENV: production
+          NEXT_TELEMETRY_DISABLED: "1"
+          KAREN_BACKEND_URL: http://127.0.0.1:8000
+        run: npm run build
+
+  deployment-contract:
+    name: deployment-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate production compose contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .env.production.example .env.production
+          docker compose \
+            --env-file .env.production \
+            -f docker-compose.yml \
+            -f deploy/compose/docker-compose.prod.yml \
+            config > /tmp/ai-karen-production-compose.yml
+          test -s /tmp/ai-karen-production-compose.yml
+          grep -q 'AUTH_DEV_MODE: "false"' /tmp/ai-karen-production-compose.yml
+          grep -q 'KARI_AUTH_BYPASS: "false"' /tmp/ai-karen-production-compose.yml
+          grep -q 'AUTH_ALLOW_DEV_LOGIN: "false"' /tmp/ai-karen-production-compose.yml
+          grep -q 'AUTH_ENABLE_SESSION_VALIDATION: "true"' /tmp/ai-karen-production-compose.yml
+          grep -q 'KAREN_BUILTIN_VLLM_ENABLED: "false"' /tmp/ai-karen-production-compose.yml
+          grep -q 'NODE_ENV: production' /tmp/ai-karen-production-compose.yml
+          ! grep -q 'npm run dev' /tmp/ai-karen-production-compose.yml
+
+  main-quality-gate:
+    name: main-quality-gate
+    runs-on: ubuntu-latest
+    needs:
+      - backend-quality
+      - frontend-quality
+      - deployment-contract
+    steps:
+      - name: Publish merge decision
+        run: |
+          echo "MAIN QUALITY GATE PASSED"
+          echo "sha=$GITHUB_SHA"
