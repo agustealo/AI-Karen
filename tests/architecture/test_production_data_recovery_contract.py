@@ -39,6 +39,18 @@ def test_backup_produces_checksum_and_uses_custom_format() -> None:
     assert "DATABASE_URL is required" in script
 
 
+def test_backup_metadata_binds_dump_to_release_and_schema_revision() -> None:
+    script = _read("scripts/deploy/database-backup.sh")
+
+    assert "KAREN_RELEASE_REVISION" in script
+    assert "GITHUB_SHA" in script
+    assert 'git -C "${REPO_ROOT}" rev-parse HEAD' in script
+    assert "supabase/migrations" in script
+    assert "migration_revision=" in script
+    assert "release_revision=${release_revision}" in script
+    assert "migration_revision=${migration_revision}" in script
+
+
 def test_restore_is_explicitly_destructive_and_checksum_guarded() -> None:
     script = _read("scripts/deploy/database-restore.sh")
 
