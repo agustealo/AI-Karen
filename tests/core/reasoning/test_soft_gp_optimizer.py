@@ -7,6 +7,7 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from ai_karen_engine.core.reasoning.soft_reasoning.optimization import (
     AcquisitionFunction,
     BayesianOptimizer,
+    ConvergenceMode,
     OptimizationConfig,
 )
 
@@ -60,6 +61,68 @@ def test_expected_improvement_is_non_negative_under_gp_posterior() -> None:
 
     assert math.isfinite(value)
     assert value >= 0.0
+
+
+def test_adaptive_ei_uses_positive_information_gain_scale() -> None:
+    optimizer = BayesianOptimizer(
+        OptimizationConfig(
+            acquisition_fn=AcquisitionFunction.EI,
+            initial_samples=3,
+            max_iterations=0,
+            candidate_pool_size=8,
+            random_seed=11,
+            adaptive_ei=True,
+            adaptive_delta=0.1,
+            objective_noise_variance=0.05,
+        )
+    )
+    optimizer.optimize([0.0, 0.0], _quadratic_score)
+
+    assert optimizer._information_gain() > 0.0
+    assert optimizer._adaptive_ei_scale() > 1.0
+    assert optimizer._expected_improvement([0.25, 0.25]) >= 0.0
+
+
+def test_optimizer_can_return_top_k_acquisition_candidates() -> None:
+    optimizer = BayesianOptimizer(
+        OptimizationConfig(
+            acquisition_fn=AcquisitionFunction.EI,
+            initial_samples=1,
+            max_iterations=0,
+            candidate_pool_size=20,
+            random_seed=13,
+        )
+    )
+    optimizer.observe([0.0, 0.0], 0.2)
+    optimizer.observe([0.5, 0.5], 0.8)
+
+    suggestions = optimizer.suggest([0.0, 0.0], count=5)
+
+    assert len(suggestions) == 5
+    assert all(len(candidate) == 2 for candidate in suggestions)
+
+
+def test_consecutive_objective_convergence_matches_paper_rule() -> None:
+    values = iter([0.0, 1.0, 1.2, 1.201, 1.202])
+
+    def score(_embedding: list[float]) -> float:
+        return next(values)
+
+    optimizer = BayesianOptimizer(
+        OptimizationConfig(
+            acquisition_fn=AcquisitionFunction.EI,
+            initial_samples=2,
+            max_iterations=3,
+            candidate_pool_size=6,
+            convergence_threshold=0.01,
+            convergence_mode=ConvergenceMode.CONSECUTIVE_OBJECTIVE,
+            random_seed=5,
+        )
+    )
+
+    result = optimizer.optimize([0.0, 0.0], score)
+
+    assert result.converged is True
 
 
 def test_gp_optimizer_is_reproducible_for_fixed_seed() -> None:
