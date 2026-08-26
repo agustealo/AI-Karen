@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _text(relative: str) -> str:
+    return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def test_context_manager_is_retired_without_replacement() -> None:
+    assert not (ROOT / "src/ai_karen_engine/core/langgraph_orchestrator/context/context_manager.py").exists()
+    adapter = _text("src/ai_karen_engine/core/langgraph_orchestrator/context/context_manager_adapter.py")
+    orchestrator = _text("src/ai_karen_engine/core/langgraph_orchestrator/langgraph_orchestrator.py")
+    diagnostics = _text("src/ai_karen_engine/core/langgraph_orchestrator/diagnostics.py")
+    assert "ContextManager" not in adapter + orchestrator + diagnostics
+    assert "ensure_context_manager" not in adapter
+    assert "resolve_memory_service" not in adapter
+
+
+def test_langgraph_injects_memory_service_into_memory_fetch() -> None:
+    orchestrator = _text("src/ai_karen_engine/core/langgraph_orchestrator/langgraph_orchestrator.py")
+    node = _text("src/ai_karen_engine/core/langgraph_orchestrator/nodes/memory_fetch.py")
+    assert "memory_service = await self._resolve_memory_service()" in orchestrator
+    assert "memory_service=memory_service" in orchestrator
+    assert "session_state_manager=self._session_state_manager" in orchestrator
+    assert 'getattr(self._memory_service, "build_context", None)' in node
+    assert "tenant_id and self._memory_service is not None" in node
+    assert "Memory disabled for this turn: missing tenant_id" in node
+
+
+def test_stale_memory_service_registry_lookup_is_removed() -> None:
+    orchestrator = _text("src/ai_karen_engine/core/langgraph_orchestrator/langgraph_orchestrator.py")
+    adapter = _text("src/ai_karen_engine/core/langgraph_orchestrator/context/context_manager_adapter.py")
+    assert "get_memory_service" not in orchestrator
+    assert "service_registry import get_memory_service" not in orchestrator
+    assert "get_memory_service" not in adapter
+
+
+def test_diagnostics_does_not_call_memory_or_context_services() -> None:
+    diagnostics = _text("src/ai_karen_engine/core/langgraph_orchestrator/diagnostics.py")
+    assert "build_context(" not in diagnostics
+    assert '"conversation_history": sanitized_history' in diagnostics
+    assert '"memories": memories or []' in diagnostics
+
+
+def test_shadow_memory_context_builder_is_removed_but_domain_cap_is_unchanged() -> None:
+    memory_service = _text("src/ai_karen_engine/core/memory/memory_service.py")
+    assert memory_service.count("class MemoryContextBuilder:") == 1
+    assert "self.max_context_tokens = 2000" in memory_service
+    assert "memory_tokens = len(memory.content) // 4" in memory_service
+
+
+def test_context_doc_records_direct_memory_boundary() -> None:
+    doc = _text("docs/CONTEXT_RUNTIME_ARCHITECTURE.md")
+    assert "`ContextManager` has been retired" in doc
+    assert "Classify memory-domain retrieval shaping" in doc

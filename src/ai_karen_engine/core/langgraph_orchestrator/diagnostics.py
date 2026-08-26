@@ -15,7 +15,6 @@ from ai_karen_engine.core.memory.profile_synthesis.profile_manager import Profil
 
 from .contracts.orchestration_state import LangGraphOrchestrationState
 from .decision_engine import DecisionEngine
-from .context.context_manager import ContextManager
 from .nodes.planner import _compose_execution_plan
 
 logger = logging.getLogger(__name__)
@@ -27,12 +26,10 @@ class DiagnosticsEngine:
     def __init__(
         self,
         decision_engine: Optional[DecisionEngine] = None,
-        context_manager: Optional[ContextManager] = None,
         llm_router: Optional[Any] = None,
         profile_manager: Optional[ProfileManager] = None,
     ):
         self._decision_engine = decision_engine or DecisionEngine()
-        self._context_manager = context_manager
         self._llm_router = llm_router
         self._profile_manager = profile_manager or ProfileManager()
         self._safety_service = DistilBertService()
@@ -79,17 +76,15 @@ class DiagnosticsEngine:
         if not isinstance(memories, list):
             memories = None
 
-        if self._context_manager:
-            built_context = await self._context_manager.build_context(
-                user_id=user_id,
-                session_id=session_identifier,
-                prompt=message,
-                conversation_history=sanitized_history,
-                user_settings=user_settings,
-                memories=memories,
-            )
-        else:
-            built_context = {}
+        built_context = {
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "session_id": session_identifier,
+            "prompt": message,
+            "conversation_history": sanitized_history,
+            "user_settings": user_settings,
+            "memories": memories or [],
+        }
 
         intent_analysis = await self._decision_engine.analyze_intent(
             message, built_context

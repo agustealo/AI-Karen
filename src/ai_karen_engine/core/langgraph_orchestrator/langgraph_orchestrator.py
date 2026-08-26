@@ -103,7 +103,6 @@ from .formatting.response_formatter_pipeline import response_formatter_node
 from .diagnostics import DiagnosticsEngine
 
 # Import consolidated classes from separate modules
-from .context.context_manager import ContextManager
 from .decision_engine import DecisionEngine
 
 from .contracts.orchestration_state import (
@@ -130,7 +129,6 @@ class LangGraphOrchestrator:
         tool_service: Optional[ToolService] = None,
         llm_router: Optional[Any] = None,
         profile_manager: Optional[ProfileManager] = None,
-        context_manager: Optional[ContextManager] = None,
         session_state_manager: Optional[SessionStateManager] = None,
     ):
         self.config = config or LangGraphOrchestrationConfig()
@@ -154,7 +152,6 @@ class LangGraphOrchestrator:
         self._auth_service_failed = False
         self._safety_service: Optional[DistilBertService] = safety_service
         self._memory_service: Optional[Any] = memory_service
-        self._context_manager: Optional[ContextManager] = context_manager
         self._session_state_manager: Optional[SessionStateManager] = (
             session_state_manager
         )
@@ -307,40 +304,20 @@ class LangGraphOrchestrator:
 
         return self._auth_service
 
-    async def _ensure_context_manager(self) -> ContextManager:
-        """Return a context manager bound to the configured memory service."""
-
-        if self._context_manager is not None:
-            return self._context_manager
-
-        memory_service = await self._resolve_memory_service()
-        self._context_manager = ContextManager(memory_service)
-        return self._context_manager
-
     async def _resolve_memory_service(self) -> Optional[Any]:
-        """Resolve the shared memory service via the service registry if possible."""
+        """Return the injected memory service or lazily create the canonical implementation."""
 
         if self._memory_service is not None or self._memory_resolution_failed:
             return self._memory_service
 
         try:
-            from ai_karen_engine.core.services.service_registry import (
-                get_memory_service,
-            )  # Lazy import
-
-            self._memory_service = await get_memory_service()
-        except Exception as exc:  # pragma: no cover - optional dependency
+            self._memory_service = WebUIMemoryService()
+            logger.info("Initialized canonical WebUIMemoryService for LangGraph runtime")
+        except Exception as exc:  # pragma: no cover - environment-dependent resources
             if not self._memory_resolution_failed:
                 logger.warning("Memory service unavailable: %s", exc)
-            try:
-                self._memory_service = WebUIMemoryService()
-                logger.info("Fell back to direct WebUIMemoryService initialization")
-            except Exception as fallback_exc:  # pragma: no cover - optional dependency
-                logger.warning(
-                    "Direct memory service fallback unavailable: %s", fallback_exc
-                )
-                self._memory_resolution_failed = True
-                self._memory_service = None
+            self._memory_resolution_failed = True
+            self._memory_service = None
 
         return self._memory_service
 
@@ -398,8 +375,13 @@ class LangGraphOrchestrator:
         def _safety_gate_node(state: LangGraphOrchestrationState) -> Any:
             return safety_gate_node(state, profile_manager=self._profile_manager)
 
-        def _memory_fetch_node(state: LangGraphOrchestrationState) -> Any:
-            return memory_fetch_node(state, context_manager=self._context_manager)
+        async def _memory_fetch_node(state: LangGraphOrchestrationState) -> Any:
+            memory_service = await self._resolve_memory_service()
+            return await memory_fetch_node(
+                state,
+                memory_service=memory_service,
+                session_state_manager=self._session_state_manager,
+            )
 
         def _intent_detect_node(state: LangGraphOrchestrationState) -> Any:
             return intent_detect_node(state, decision_engine=self._decision_engine)
@@ -866,7 +848,6 @@ class LangGraphOrchestrator:
 
         diagnostics_engine = DiagnosticsEngine(
             decision_engine=self._decision_engine,
-            context_manager=await self._ensure_context_manager(),
             llm_router=self._llm_router,
             profile_manager=self._profile_manager,
         )
@@ -1083,8 +1064,6 @@ class LangGraphOrchestrator:
         except Exception as exc:  # pragma: no cover - defensive cleanup
             logger.warning("LLM router shutdown encountered an error: %s", exc)
 
-        if self._context_manager:
-            self._context_manager.clear_context_cache()
 
         async with self._stats_lock:
             self._active_sessions.clear()

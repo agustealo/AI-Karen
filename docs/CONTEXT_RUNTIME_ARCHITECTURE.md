@@ -190,19 +190,20 @@ These are separate responsibilities.
 
 ### Conversational context
 
-The remaining `ContextManager` is only a thin LangGraph compatibility adapter for memory enrichment. It does not own a general context database or final prompt composition.
+`ContextManager` has been retired. `MemoryFetchNode` receives the canonical memory service from the LangGraph composition root and writes the retrieved tenant-scoped memory envelope into graph state.
 
 Current path:
 
 ```text
-MemoryFetchNode
-    -> ContextManager.build_context()
-    -> canonical memory service enrichment
+LangGraphOrchestrator
+    -> injected/lazy canonical WebUIMemoryService
+    -> MemoryFetchNode
+    -> tenant-scoped memory context
     -> graph state
     -> PromptRuntime
 ```
 
-`ContextManager` is intentionally transitional and should disappear once LangGraph consumes Runtime-produced memory context directly.
+The node does not own retrieval policy or final prompt assembly.
 
 ### File-upload context
 
@@ -301,9 +302,9 @@ mypy src
 
 ## Remaining Intentional Debt
 
-### 1. Retire `ContextManager`
+### 1. Classify memory-domain retrieval shaping
 
-`ContextManager` is now small enough that its remaining existence is a compatibility seam rather than an architectural owner. The next context cleanup should trace `ensure_context_manager()` and move memory enrichment directly behind the runtime/memory port used by LangGraph.
+`MemoryContextBuilder` still applies a memory-domain retrieval/context cap before PromptRuntime. This must be explicitly classified as retrieval shaping versus duplicate final-prompt budgeting before changing it. PromptRuntime remains the final cross-section token authority.
 
 ### 2. Decide the future of `FileContextStore`
 

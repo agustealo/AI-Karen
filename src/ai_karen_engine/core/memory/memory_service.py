@@ -25,42 +25,6 @@ from ai_karen_engine.interfaces.ui.memory_models import (
 logger = get_logger(__name__)
 
 
-class MemoryContextBuilder:
-    conversation_id: str | None = None
-    ui_source: UISource | None = None
-    memory_types: list[UIMemoryType] = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
-    importance_range: tuple[int, int] | None = None
-    only_user_confirmed: bool = True
-    only_ai_generated: bool = False
-    time_range: tuple[datetime, datetime] | None = None
-    top_k: int = 10
-    similarity_threshold: float = 0.7
-    include_embeddings: bool = False
-    curated_only: bool = False
-    memory_classes: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_CURATED_MEMORY_CLASSES)
-    )
-
-    def to_memory_query(self) -> MemoryQuery:
-        """Convert to base MemoryQuery for compatibility."""
-        metadata_filter: dict[str, Any] = {}
-        if self.curated_only:
-            metadata_filter = build_curated_metadata_filter(metadata_filter)
-        return MemoryQuery(
-            text=self.text,
-            user_id=self.user_id,
-            session_id=self.session_id,
-            conversation_id=self.conversation_id,
-            tags=self.tags,
-            kind=CURATED_MEMORY_KIND if self.curated_only else None,
-            metadata_filter=metadata_filter,
-            time_range=self.time_range,
-            top_k=self.top_k,
-            similarity_threshold=self.similarity_threshold,
-            include_embeddings=self.include_embeddings,
-        )
-
 
 class MemoryContextBuilder:
     """Builds conversation context from relevant memories."""
