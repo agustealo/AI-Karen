@@ -59,7 +59,7 @@ jobs:
       - name: Install proof dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-asyncio sqlalchemy asyncpg PyJWT bcrypt structlog cryptography PyYAML
+          python -m pip install pytest pytest-asyncio sqlalchemy asyncpg PyJWT bcrypt structlog cryptography PyYAML pydantic pydantic-settings python-dotenv
 
       - name: Prove auth files compile
         run: |
