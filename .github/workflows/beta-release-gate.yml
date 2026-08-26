@@ -1,0 +1,195 @@
+name: Beta Release Gate
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "beta-*"
+      - "v*-beta*"
+
+permissions:
+  contents: read
+
+jobs:
+  release-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: src
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Attest exact release SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$GITHUB_SHA"
+          printf 'release_sha=%s\n' "$actual_sha" | tee beta-release-sha.txt
+
+      - name: Install focused release dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            pytest pytest-asyncio sqlalchemy asyncpg psycopg psycopg2-binary \
+            PyJWT bcrypt argon2-cffi structlog cryptography PyYAML \
+            pydantic pydantic-settings python-dotenv prometheus_client \
+            fastapi httpx requests tenacity redis fakeredis
+
+      - name: Compile source tree
+        run: python -m compileall -q src server scripts
+
+      - name: Prove provider and Core authority
+        run: |
+          pytest tests/architecture/test_core_ai_machine_isolation.py -q
+          pytest tests/architecture/test_provider_chat_authority.py -q
+          pytest tests/beta/test_real_model_wiring.py -q
+
+      - name: Prove memory ownership
+        run: pytest tests/architecture/test_memory_consumer_domain_migration.py -q
+
+      - name: Prove production auth and tenant security
+        run: |
+          pytest tests/architecture/test_auth_production_security_contract.py -q
+          pytest tests/architecture/test_auth_session_security_contract.py -q
+          pytest tests/architecture/test_auth_session_validation_contract.py -q
+          pytest tests/security/test_tenant_isolation_gauntlet.py -q
+
+      - name: Prove production database and recovery contracts
+        run: |
+          pytest tests/architecture/test_production_database_baseline_contract.py -q
+          pytest tests/architecture/test_production_data_recovery_contract.py -q
+          bash -n scripts/deploy/database-backup.sh
+          bash -n scripts/deploy/database-restore.sh
+          bash -n scripts/deploy/migrate-production-database.sh
+
+      - name: Prove canonical production deployment contract
+        run: |
+          pytest tests/architecture/test_production_deployment_contract.py -q
+          pytest tests/architecture/test_operational_health_authority.py -q
+          cp .env.production.example .env.production
+          docker compose \
+            --env-file .env.production \
+            -f docker-compose.yml \
+            -f deploy/compose/docker-compose.prod.yml \
+            config > /tmp/ai-karen-production-compose.yml
+          test -s /tmp/ai-karen-production-compose.yml
+          grep -q 'AUTH_DEV_MODE: "false"' /tmp/ai-karen-production-compose.yml
+          grep -q 'KARI_AUTH_BYPASS: "false"' /tmp/ai-karen-production-compose.yml
+          grep -q 'AUTH_ALLOW_DEV_LOGIN: "false"' /tmp/ai-karen-production-compose.yml
+          grep -q 'EXTENSION_DEV_BYPASS_ENABLED: "false"' /tmp/ai-karen-production-compose.yml
+          grep -q 'KARI_DEFER_ROUTER_WIRING: "false"' /tmp/ai-karen-production-compose.yml
+          grep -q 'http://localhost:8000/health/live' /tmp/ai-karen-production-compose.yml
+
+      - name: Reject retired authorities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e server/health_endpoints.py
+          refs=$(grep -R --line-number --include='*.py' \
+            -E 'preferred_provider=["'"']builtin_vllm["'"']|provider_id=["'"']builtin_vllm["'"']|from .*vllm_runtime import VLLMRuntime|import .*vllm_runtime' \
+            tests src/ai_karen_engine/core/expression || true)
+          test -z "$refs" || { echo "$refs"; exit 1; }
+
+      - name: Upload exact-SHA attestation
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-release-sha
+          path: beta-release-sha.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  auth-postgres-concurrency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: karen_auth_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d karen_auth_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Attest exact release SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Install auth integration dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            pytest pytest-asyncio sqlalchemy asyncpg PyJWT bcrypt structlog \
+            cryptography PyYAML pydantic pydantic-settings python-dotenv \
+            prometheus_client
+
+      - name: Prove real PostgreSQL concurrent refresh behavior
+        env:
+          PYTHONPATH: src
+          AUTH_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/karen_auth_test
+        run: pytest tests/integration/test_auth_refresh_concurrency_postgres.py -q
+
+  live-model-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: beta-release
+    env:
+      BETA_MODEL_BASE_URL: ${{ secrets.BETA_MODEL_BASE_URL }}
+      BETA_MODEL_API_KEY: ${{ secrets.BETA_MODEL_API_KEY }}
+      BETA_MODEL_NAME: ${{ vars.BETA_MODEL_NAME }}
+      BETA_MODEL_TIMEOUT_SECONDS: "90"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Attest exact release SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Require real endpoint configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BETA_MODEL_BASE_URL" || { echo "BETA_MODEL_BASE_URL is not configured" >&2; exit 1; }
+          test -n "$BETA_MODEL_NAME" || { echo "BETA_MODEL_NAME is not configured" >&2; exit 1; }
+
+      - name: Prove genuine model inference
+        run: python scripts/beta_live_model_smoke.py
+
+  beta-release-approved:
+    runs-on: ubuntu-latest
+    needs:
+      - release-contracts
+      - auth-postgres-concurrency
+      - live-model-proof
+    steps:
+      - name: Publish release decision
+        run: |
+          echo "BETA RELEASE GATE PASSED"
+          echo "release_sha=$GITHUB_SHA"
