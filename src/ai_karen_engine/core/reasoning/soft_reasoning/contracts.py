@@ -1,13 +1,7 @@
 """Typed contracts for research-grade Soft Reasoning.
 
-This module models the capability boundary required by the ICML 2025 Soft
-Reasoning method: controlled first-token embedding exploration followed by
-verifier-guided Bayesian refinement.
-
-Core owns the algorithm and contracts only. Runtime owns model selection and
-must inject an implementation of ``SoftGenerationPort`` for a model runtime
-that exposes first-token embedding control. No provider lookup, persistence,
-tool execution, or fallback lives here.
+Core owns the exploration algorithm and verifier/generation ports. Runtime owns
+model selection and injects an adapter for an already-resolved model runtime.
 """
 
 from __future__ import annotations
@@ -15,22 +9,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, Sequence, runtime_checkable
 
+from ai_karen_engine.core.model_runtime.provider_contracts import (
+    ModelRuntimeCapabilities,
+)
 
-@dataclass(frozen=True, slots=True)
-class SoftGenerationCapabilities:
-    supports_first_token_embedding_control: bool
-    hidden_size: int
-    runtime_engine: str
-    model_id: str
-    supports_seed: bool = True
-
-    def __post_init__(self) -> None:
-        if self.hidden_size < 0:
-            raise ValueError("hidden_size must be non-negative")
-        if self.supports_first_token_embedding_control and self.hidden_size <= 0:
-            raise ValueError(
-                "embedding-control runtimes must report a positive hidden_size"
-            )
+# Compatibility alias. Canonical capability authority now lives in
+# core.model_runtime.provider_contracts. Remove this alias when Soft Reasoning
+# contract v3 is introduced.
+SoftGenerationCapabilities = ModelRuntimeCapabilities
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,9 +71,9 @@ class SoftExplorationTrace:
 
 @runtime_checkable
 class SoftGenerationPort(Protocol):
-    """Runtime adapter for model-internal first-token embedding control."""
+    """Adapter for model-internal first-token embedding control."""
 
-    def capabilities(self) -> SoftGenerationCapabilities:
+    def capabilities(self) -> ModelRuntimeCapabilities:
         ...
 
     def first_token_embedding(self, prompt: str) -> Sequence[float]:
