@@ -21,12 +21,16 @@ class SmokeConfig:
     @classmethod
     def from_environment(cls) -> "SmokeConfig":
         base_url = (
-            os.getenv("BETA_MODEL_BASE_URL", "").strip().rstrip("/")
-            or "http://127.0.0.1:1234/v1"
+            os.getenv("BETA_MODEL_BASE_URL", "http://127.0.0.1:1234/v1")
+            .strip()
+            .rstrip("/")
         )
         model = os.getenv("BETA_MODEL_NAME", "").strip() or None
         api_key = os.getenv("BETA_MODEL_API_KEY", "").strip() or None
         timeout_raw = os.getenv("BETA_MODEL_TIMEOUT_SECONDS", "90").strip()
+
+        if not base_url:
+            raise RuntimeError("BETA_MODEL_BASE_URL is required for live-model proof")
 
         try:
             timeout_seconds = float(timeout_raw)
@@ -93,25 +97,22 @@ def _chat_url(base_url: str) -> str:
 
 
 def _select_model(configured_model: str | None, models_payload: dict[str, Any]) -> str:
-    available_models = sorted(
-        {
-            str(item.get("id", "")).strip()
-            for item in models_payload.get("data", [])
-            if isinstance(item, dict) and str(item.get("id", "")).strip()
-        }
-    )
+    available_models = [
+        str(item.get("id", "")).strip()
+        for item in models_payload.get("data", [])
+        if isinstance(item, dict) and str(item.get("id", "")).strip()
+    ]
+
+    if not available_models:
+        raise RuntimeError("OpenAI-compatible /models endpoint exposed no loaded models")
 
     if configured_model:
-        if available_models and configured_model not in available_models:
+        if configured_model not in available_models:
             raise RuntimeError(
                 f"Configured beta model {configured_model!r} is not exposed by /models"
             )
         return configured_model
 
-    if not available_models:
-        raise RuntimeError(
-            "No BETA_MODEL_NAME was configured and /models exposed no usable model id"
-        )
     return available_models[0]
 
 
@@ -129,13 +130,14 @@ def run() -> dict[str, Any]:
     if models_status != 200:
         raise RuntimeError(f"Models endpoint returned unexpected status {models_status}")
 
-    requested_model = _select_model(config.model, models_payload)
+    selected_model = _select_model(config.model, models_payload)
+
     prompt = (
         "This is an automated release smoke test. Respond with a short natural "
         f"sentence that contains this nonce exactly once: {nonce}"
     )
     request_body = {
-        "model": requested_model,
+        "model": selected_model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.0,
         "max_tokens": 96,
@@ -169,15 +171,15 @@ def run() -> dict[str, Any]:
     if text.count(nonce) != 1:
         raise RuntimeError("Live model response did not preserve the unique smoke-test nonce")
 
-    actual_model = str(chat_payload.get("model") or requested_model).strip()
+    actual_model = str(chat_payload.get("model") or selected_model).strip()
     if not actual_model:
         raise RuntimeError("Live model response did not expose model provenance")
 
     return {
         "status": "passed",
         "response_source": "live_openai_compatible_endpoint",
-        "base_url": config.base_url,
-        "requested_model": requested_model,
+        "configured_model": config.model,
+        "requested_model": selected_model,
         "actual_model": actual_model,
         "models_latency_ms": round(models_latency_ms, 2),
         "chat_latency_ms": round(chat_latency_ms, 2),
