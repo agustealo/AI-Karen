@@ -48,6 +48,9 @@ jobs:
         run: |
           pytest tests/architecture/test_core_ai_machine_isolation.py -q
           pytest tests/architecture/test_provider_chat_authority.py -q
+          pytest tests/architecture/test_cortex_intelligence_authority.py -q
+          pytest tests/architecture/test_context_authority_convergence.py -q
+          pytest tests/architecture/test_context_langgraph_consumption.py -q
           pytest tests/beta/test_real_model_wiring.py -q
 
       - name: Prove memory ownership
