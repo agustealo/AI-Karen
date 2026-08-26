@@ -28,11 +28,13 @@ def test_first_run_route_delegates_to_canonical_first_admin_authority() -> None:
     assert "bypass is_first_run" not in route_source
 
 
-def test_canonical_first_admin_authority_refuses_completed_setup() -> None:
+def test_canonical_first_admin_authority_refuses_completed_setup_atomically() -> None:
     service_source = _function_source(AUTH_SERVICE, "create_first_admin")
 
-    assert "is_first_run()" in service_source
+    assert "pg_advisory_xact_lock" in service_source
+    assert "select(func.count()).select_from(AuthUser)" in service_source
     assert "First-run setup has already been completed" in service_source
+    assert "is_first_run()" not in service_source
 
 
 def test_first_run_route_does_not_expose_raw_exception_text() -> None:
