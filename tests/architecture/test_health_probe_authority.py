@@ -53,6 +53,25 @@ def test_canonical_application_wires_probes_idempotently() -> None:
     assert "app.include_router(probe_router)" in source
 
 
+def test_canonical_boundary_prunes_legacy_inline_health_routes() -> None:
+    source = APP.read_text(encoding="utf-8")
+
+    expected_paths = (
+        '"/health"',
+        '"/api/health/database"',
+        '"/api/health/database/test"',
+        '"/api/health/database/monitor"',
+        '"/api/health/degraded-mode"',
+    )
+    for token in expected_paths:
+        assert token in source
+
+    assert "_prune_legacy_inline_health_routes" in source
+    assert 'endpoint_module == "server.app"' in source
+    assert "app.router.routes[:] = retained_routes" in source
+    assert "_legacy_inline_health_routes_pruned" in source
+
+
 def test_container_healthcheck_uses_liveness_not_dependency_health() -> None:
     source = DOCKERFILE.read_text(encoding="utf-8")
 
@@ -79,13 +98,8 @@ def test_legacy_server_health_module_registers_no_routes() -> None:
         assert token not in source
 
 
-def test_remaining_inline_health_debt_is_explicit_and_bounded() -> None:
-    """Keep the final server.app extraction surface visible until it is deleted.
-
-    These are migration-debt routes, not accepted health authorities. The test is
-    intentionally removed when the routes move to their canonical monitoring or
-    admin/operator owners.
-    """
+def test_remaining_inline_health_source_debt_is_bounded_until_deleted() -> None:
+    """Keep dead source blocks visible until the isolated server.app rewrite."""
 
     source = LEGACY_SERVER_APP.read_text(encoding="utf-8")
     expected_inline_routes = (
@@ -98,7 +112,6 @@ def test_remaining_inline_health_debt_is_explicit_and_bounded() -> None:
     for token in expected_inline_routes:
         assert token in source
 
-    # No additional health route family may be added to the composition root.
     health_route_decorators = [
         line.strip()
         for line in source.splitlines()
