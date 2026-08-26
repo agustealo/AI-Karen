@@ -10,6 +10,7 @@ on:
       - "src/ai_karen_engine/core/model_runtime/provider_registry_service.py"
       - "tests/beta/**"
       - "tests/architecture/test_core_ai_machine_isolation.py"
+      - "tests/architecture/test_provider_chat_authority.py"
       - ".github/workflows/beta-real-model-proof.yml"
   pull_request:
     paths:
@@ -20,6 +21,7 @@ on:
       - "src/ai_karen_engine/core/model_runtime/provider_registry_service.py"
       - "tests/beta/**"
       - "tests/architecture/test_core_ai_machine_isolation.py"
+      - "tests/architecture/test_provider_chat_authority.py"
       - ".github/workflows/beta-real-model-proof.yml"
   workflow_dispatch:
 
@@ -62,6 +64,11 @@ jobs:
         env:
           PYTHONPATH: src
         run: pytest tests/architecture/test_core_ai_machine_isolation.py -q
+
+      - name: Prove provider-agnostic chat authority
+        env:
+          PYTHONPATH: src
+        run: pytest tests/architecture/test_provider_chat_authority.py -q
 
       - name: Run beta provider wiring contract
         env:
