@@ -360,11 +360,13 @@ async def first_run_setup(
     try:
         auth_svc = await get_auth_service()
     except Exception:
+        # If auth service fails to initialize, return error
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Auth service unavailable for first-run setup",
         )
 
+    # Validate password confirmation
     if request.password != request.confirm_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Passwords do not match"
@@ -377,6 +379,7 @@ async def first_run_setup(
             full_name=request.full_name,
         )
 
+        # Authenticate the new admin user
         ip_address = get_client_ip(http_request)
         user_agent = get_user_agent(http_request)
 
@@ -393,6 +396,7 @@ async def first_run_setup(
                 detail="Failed to authenticate newly created admin user",
             )
 
+        # Return login response
         user_data = {
             "user_id": user.id,
             "email": user.email,
@@ -483,15 +487,18 @@ async def login(
         raise
 
     if not user:
+        # Record failed attempt for rate limiting
         limiter._record_failed_attempt(
             login_identifier, "login_attempts", refresh_token_or_error
         )
+        # refresh_token_or_error contains error message
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=refresh_token_or_error,
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Guard against None access_token (should not happen when user is not None)
     if access_token is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -513,7 +520,7 @@ async def login(
 
     response_data = {
         "access_token": access_token,
-        "refresh_token": refresh_token_or_error,
+        "refresh_token": refresh_token_or_error,  # This is refresh_token on success
         "token_type": "bearer",
         "expires_in": auth_svc.config.access_token_expire_minutes * 60,
         "user": user_data,
@@ -521,15 +528,19 @@ async def login(
     }
     response = JSONResponse(content=response_data)
 
+    # Determine if we should use secure cookies (HTTPS only)
     is_secure = http_request.url.scheme == "https"
+
+    # Set the kari_session cookie with the access token
+    # This allows the auth middleware to authenticate requests via cookie
     response.set_cookie(
         key="kari_session",
         value=access_token,
-        max_age=auth_svc.config.access_token_expire_minutes * 60,
-        httponly=True,
-        secure=is_secure,
-        samesite="lax",
-        path="/",
+        max_age=auth_svc.config.access_token_expire_minutes * 60,  # Convert to seconds
+        httponly=True,  # Prevent JavaScript access (XSS protection)
+        secure=is_secure,  # Only send over HTTPS in production
+        samesite="lax",  # CSRF protection while allowing navigation
+        path="/",  # Available for all routes
     )
 
     return response
@@ -544,11 +555,12 @@ async def refresh_token(
     access_token, error = await auth_svc.refresh_access_token(request.refresh_token)
 
     if not access_token:
+        # Map specific transient errors to 503 to prevent frontend logout loops
         status_code = status.HTTP_401_UNAUTHORIZED
         if "Database unavailable" in str(error) or "Session not found in memory" in str(error):
             status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             logger.warning(f"Refresh token failed due to transient error: {error}")
-
+            
         raise HTTPException(
             status_code=status_code,
             detail=error,
@@ -601,6 +613,7 @@ async def validate_session(
     if canonical_user is not None:
         user_payload = _serialize_user_response(canonical_user)
     else:
+        # Fallback to middleware-provided context if canonical lookup fails.
         user_payload = _ensure_authenticated_user_payload(current_user)
     permissions = _serialize_permissions(user_payload)
     user_payload["permissions"] = permissions
@@ -721,6 +734,7 @@ async def create_user(
     request: CreateUserRequest, current_user=Depends(get_authenticated_user)
 ) -> JSONResponse:
     """Create a new user (admin only)."""
+    # Check if current user has admin privileges
     if not _has_role(current_user, "admin") and not _has_role(current_user, "super_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -758,6 +772,7 @@ async def get_auth_stats(
     current_user=Depends(get_authenticated_user),
 ) -> Dict[str, Any]:
     """Get authentication statistics (admin only)."""
+    # Check if current user has admin privileges
     if not _has_role(current_user, "admin") and not _has_role(current_user, "super_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -774,11 +789,12 @@ async def get_security_context(
     current_user=Depends(get_authenticated_user),
 ) -> Dict[str, Any]:
     """Get security context for authenticated user."""
-    roles = current_user.get("roles", [])
-    role_values = {str(role).strip().lower() for role in roles}
     return {
-        "userRoles": roles,
-        "securityMode": "safe",
-        "canAccessSensitive": bool(role_values.intersection({"admin", "super_admin"})),
-        "redactionLevel": "partial",
+        "userRoles": current_user.get("roles", []),
+        "securityMode": "safe",  # Default to safe mode
+        "canAccessSensitive": current_user.get("roles", []).intersection(
+            ["admin", "super_admin"]
+        )
+        != set(),
+        "redactionLevel": "partial",  # Default to partial redaction
     }
