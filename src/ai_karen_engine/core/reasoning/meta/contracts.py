@@ -11,6 +11,7 @@ from ai_karen_engine.core.contracts.cognitive import (
     RetrievalConfidence,
     VerificationRequirement,
 )
+from ai_karen_engine.core.contracts.values import JsonMap
 
 # Compatibility name: there is one canonical verification contract.
 VerificationNeedAssessment = VerificationRequirement
@@ -56,7 +57,6 @@ class MetaReasonCode(str, Enum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     EVIDENCE_SUFFICIENT = "evidence_sufficient"
     STRATEGY_EXHAUSTED = "strategy_exhausted"
-    # Deprecated compatibility spelling. Prefer EVIDENCE_INCONSISTENT.
     CONFLICTING_EVIDENCE = "conflicting_evidence"
 
 
@@ -205,7 +205,7 @@ class MetaCognitiveRequest:
     evidence_consistency: float = 0.0
     strategy_attempts: list[StrategyAttempt] = field(default_factory=list)
     belief_conflicts: list[BeliefConflictSummary] = field(default_factory=list)
-    budget_remaining: dict[str, Any] = field(default_factory=dict)
+    budget_remaining: JsonMap = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -222,7 +222,7 @@ class MetaCognitiveResult:
     verification_need: VerificationRequirement | None = None
     depth_recommendation: ReasoningDepthRecommendation | None = None
     calibration_observations: list[CalibrationObservation] = field(default_factory=list)
-    diagnostics: dict[str, Any] = field(default_factory=dict)
+    diagnostics: JsonMap = field(default_factory=dict)
     assessed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
