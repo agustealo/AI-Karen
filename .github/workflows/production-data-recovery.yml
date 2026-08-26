@@ -1,0 +1,58 @@
+name: Production Data Recovery Contract
+
+on:
+  push:
+    paths:
+      - "supabase/migrations/**"
+      - "supabase/README.md"
+      - "scripts/deploy/database-backup.sh"
+      - "scripts/deploy/database-restore.sh"
+      - "scripts/deploy/migrate-production-database.sh"
+      - "tests/architecture/test_production_data_recovery_contract.py"
+      - ".github/workflows/production-data-recovery.yml"
+  pull_request:
+    paths:
+      - "supabase/migrations/**"
+      - "supabase/README.md"
+      - "scripts/deploy/database-backup.sh"
+      - "scripts/deploy/database-restore.sh"
+      - "scripts/deploy/migrate-production-database.sh"
+      - "tests/architecture/test_production_data_recovery_contract.py"
+      - ".github/workflows/production-data-recovery.yml"
+  workflow_dispatch:
+
+jobs:
+  production-data-recovery-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install proof dependencies
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Prove recovery architecture contract
+        run: pytest tests/architecture/test_production_data_recovery_contract.py -q
+
+      - name: Prove operator scripts parse
+        run: |
+          bash -n scripts/deploy/database-backup.sh
+          bash -n scripts/deploy/database-restore.sh
+          bash -n scripts/deploy/migrate-production-database.sh
+
+      - name: Prove restore refuses missing destructive confirmation
+        env:
+          RESTORE_DATABASE_URL: postgresql://example.invalid/recovery
+          BACKUP_FILE: /tmp/nonexistent.dump
+        run: |
+          set +e
+          bash scripts/deploy/database-restore.sh >/tmp/restore.out 2>/tmp/restore.err
+          status=$?
+          set -e
+          test "$status" -eq 2
+          grep -q 'I_UNDERSTAND_THIS_IS_DESTRUCTIVE' /tmp/restore.err
