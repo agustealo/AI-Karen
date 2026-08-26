@@ -15,6 +15,7 @@ from ai_karen_engine.core.model_runtime.runtime_engine import EndpointProtocol
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPRESSION_ENGINES = ROOT / "src/ai_karen_engine/core/expression/engines"
+MODEL_PROVIDERS = ROOT / "src/ai_karen_engine/core/model_runtime/providers"
 
 
 def test_expression_defaults_are_provider_agnostic_local_first() -> None:
@@ -75,7 +76,7 @@ def test_local_chat_endpoints_are_openai_compatible() -> None:
         assert endpoint.fallback_eligible is True
 
 
-def test_retired_builtin_provider_engine_is_not_exported() -> None:
+def test_retired_builtin_provider_engine_is_not_exported_or_present() -> None:
     init_source = (EXPRESSION_ENGINES / "__init__.py").read_text(encoding="utf-8")
     registry_source = (
         ROOT / "src/ai_karen_engine/core/expression/registry.py"
@@ -84,3 +85,12 @@ def test_retired_builtin_provider_engine_is_not_exported() -> None:
     assert "BuiltinProviderEngine" not in init_source
     assert "BuiltinProviderEngine" not in registry_source
     assert "builtin_provider_engine" not in registry_source
+    assert not (EXPRESSION_ENGINES / "builtin_provider_engine.py").exists()
+
+
+def test_retired_core_vllm_wrapper_is_not_present() -> None:
+    providers_init = (MODEL_PROVIDERS / "__init__.py").read_text(encoding="utf-8")
+
+    assert "VLLMRuntime" not in providers_init
+    assert "vllm_runtime" not in providers_init
+    assert not (MODEL_PROVIDERS / "vllm_runtime.py").exists()
