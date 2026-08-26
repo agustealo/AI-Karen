@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from ai_karen_engine.core.contracts.values import JsonMap
+
 
 class LearningSignalType(str, Enum):
     POSITIVE_OUTCOME = "positive_outcome"
@@ -83,8 +85,8 @@ class ExperienceObservation:
     goal_refs: list[str] = field(default_factory=list)
     belief_refs: list[str] = field(default_factory=list)
     behavior_decision_ref: str | None = None
-    expected_outcome: dict[str, Any] = field(default_factory=dict)
-    actual_outcome: dict[str, Any] = field(default_factory=dict)
+    expected_outcome: JsonMap = field(default_factory=dict)
+    actual_outcome: JsonMap = field(default_factory=dict)
     user_feedback: str | None = None
     verification_result: str | None = None
     tenant_id: str = "default"
@@ -216,7 +218,7 @@ class ProfileUpdateCandidate:
     candidate_id: str
     profile_type: str
     target_id: str
-    proposed_changes: dict[str, Any] = field(default_factory=dict)
+    proposed_changes: JsonMap = field(default_factory=dict)
     confidence: float = 0.0
     scope: LearningScope = LearningScope.USER
     tenant_id: str = "default"
@@ -244,5 +246,5 @@ class ExperienceToLearningResult:
     eligibility: LearningEligibilityDecision | None = None
     reflection_triggers: list[ReflectionTrigger] = field(default_factory=list)
     profile_updates: list[ProfileUpdateCandidate] = field(default_factory=list)
-    diagnostics: dict[str, Any] = field(default_factory=dict)
+    diagnostics: JsonMap = field(default_factory=dict)
     processed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
