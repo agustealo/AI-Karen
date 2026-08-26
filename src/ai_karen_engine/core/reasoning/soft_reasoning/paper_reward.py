@@ -1,20 +1,17 @@
-"""Paper-aligned reward composition for Soft Reasoning.
+"""Paper/reference-code reward composition for Soft Reasoning.
 
-Zhu et al. combine a verifier reward with a model-generation coherence signal
-when optimizing first-token embedding perturbations. KAREN keeps those signals
-typed and separate: verifier output comes from ``SoftVerificationScore`` and
-coherence comes from generation log-probability fields on
-``SoftGenerationOutput``.
-
-This module does not select models, invoke providers, build prompts, or perform
-verification. It only composes already-authorized signals into the scalar search
-reward used by Bayesian optimisation.
+The ICML paper defines coherence as the sum of token log probabilities:
+    r_coherence(y) = sum_t log P(w_t)
+while the released reference implementation computes the arithmetic mean of
+per-token probabilities. KAREN keeps both semantics explicit so experiments can
+state whether they reproduce the paper equation or the released code.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import Enum
 
 from ai_karen_engine.core.reasoning.soft_reasoning.contracts import (
     SoftGenerationOutput,
@@ -23,13 +20,19 @@ from ai_karen_engine.core.reasoning.soft_reasoning.contracts import (
 
 
 class SoftReasoningCoherenceUnavailable(ValueError):
-    """Raised when paper-aligned reward lacks a generation coherence signal."""
+    pass
+
+
+class CoherenceMode(Enum):
+    PAPER_SEQUENCE_LOG_PROBABILITY = "paper_sequence_log_probability"
+    REFERENCE_MEAN_TOKEN_PROBABILITY = "reference_mean_token_probability"
 
 
 @dataclass(frozen=True, slots=True)
 class PaperRewardConfig:
     verifier_weight: float = 1.0
     coherence_weight: float = 1.0
+    coherence_mode: CoherenceMode = CoherenceMode.PAPER_SEQUENCE_LOG_PROBABILITY
 
     def __post_init__(self) -> None:
         if self.verifier_weight < 0.0:
@@ -45,13 +48,13 @@ class PaperReward:
     score: float
     verifier_reward: float
     coherence_reward: float
-    mean_token_log_probability: float
+    coherence_mode: str
+    sequence_log_probability: float | None = None
+    mean_token_probability: float | None = None
 
 
 class PaperRewardComposer:
-    """Compose verifier success and generation coherence into search reward."""
-
-    reward_kind = "paper_2025_verifier_plus_coherence"
+    reward_kind = "soft_reasoning_verifier_plus_coherence"
 
     def __init__(self, config: PaperRewardConfig | None = None) -> None:
         self._config = config or PaperRewardConfig()
@@ -61,11 +64,20 @@ class PaperRewardComposer:
         verification: SoftVerificationScore,
         output: SoftGenerationOutput,
     ) -> PaperReward:
-        mean_log_probability = self._mean_log_probability(output)
-        # exp(mean log p) is the geometric-mean token probability and remains in
-        # [0, 1] for valid log probabilities. Clamp positive values defensively.
-        coherence_reward = math.exp(min(0.0, mean_log_probability))
         verifier_reward = 1.0 if verification.passed else 0.0
+        sequence_log_probability: float | None = None
+        mean_token_probability: float | None = None
+
+        if (
+            self._config.coherence_mode
+            == CoherenceMode.PAPER_SEQUENCE_LOG_PROBABILITY
+        ):
+            coherence_reward = self._sequence_log_probability(output)
+            sequence_log_probability = coherence_reward
+        else:
+            coherence_reward = self._mean_token_probability(output)
+            mean_token_probability = coherence_reward
+
         score = (
             self._config.verifier_weight * verifier_reward
             + self._config.coherence_weight * coherence_reward
@@ -74,25 +86,39 @@ class PaperRewardComposer:
             score=float(score),
             verifier_reward=verifier_reward,
             coherence_reward=float(coherence_reward),
-            mean_token_log_probability=float(mean_log_probability),
+            coherence_mode=self._config.coherence_mode.value,
+            sequence_log_probability=sequence_log_probability,
+            mean_token_probability=mean_token_probability,
         )
 
     @staticmethod
-    def _mean_log_probability(output: SoftGenerationOutput) -> float:
-        if output.mean_token_log_probability is not None:
-            return float(output.mean_token_log_probability)
-        if (
-            output.sequence_log_probability is not None
-            and output.token_count > 0
-        ):
-            return float(output.sequence_log_probability) / float(output.token_count)
+    def _sequence_log_probability(output: SoftGenerationOutput) -> float:
+        if output.sequence_log_probability is not None:
+            return float(output.sequence_log_probability)
+        if output.token_log_probabilities:
+            return float(sum(output.token_log_probabilities))
+        if output.mean_token_log_probability is not None and output.token_count > 0:
+            return float(output.mean_token_log_probability) * float(output.token_count)
         raise SoftReasoningCoherenceUnavailable(
-            "paper_2025 reward requires mean_token_log_probability or "
-            "sequence_log_probability with token_count"
+            "paper equation requires sequence_log_probability, token log "
+            "probabilities, or mean_token_log_probability with token_count"
+        )
+
+    @staticmethod
+    def _mean_token_probability(output: SoftGenerationOutput) -> float:
+        if output.token_log_probabilities:
+            return float(
+                sum(math.exp(min(0.0, value)) for value in output.token_log_probabilities)
+                / len(output.token_log_probabilities)
+            )
+        raise SoftReasoningCoherenceUnavailable(
+            "reference-code coherence requires token_log_probabilities so the "
+            "arithmetic mean of token probabilities can be reproduced exactly"
         )
 
 
 __all__ = [
+    "CoherenceMode",
     "PaperReward",
     "PaperRewardComposer",
     "PaperRewardConfig",
