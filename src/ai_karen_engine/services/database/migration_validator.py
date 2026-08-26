@@ -48,13 +48,15 @@ class MigrationValidationReport:
 def _canonical_migrations_dir() -> Path:
     override = os.getenv("KAREN_MIGRATIONS_DIR")
     if override:
-        return Path(override)
-    return Path.cwd() / "supabase" / "migrations"
+        return Path(override).expanduser().resolve()
+    repository_root = Path(__file__).resolve().parents[4]
+    return repository_root / "supabase" / "migrations"
 
 
 def _available_migrations() -> List[Path]:
     root = _canonical_migrations_dir()
     if not root.is_dir():
+        logger.warning("Canonical migrations directory not found: %s", root)
         return []
     return sorted(root.glob("*.sql"))
 
@@ -77,9 +79,16 @@ class MigrationValidator:
 
     async def validate_migrations(self) -> MigrationValidationReport:
         files = _available_migrations()
-        available = [p.name.split("_", 1)[0] for p in files]
+        available = [path.name.split("_", 1)[0] for path in files]
         latest = available[-1] if available else None
-        errors: List[str] = []
+        if not available:
+            return MigrationValidationReport(
+                timestamp=datetime.now(timezone.utc),
+                overall_status=MigrationStatus.UNKNOWN,
+                latest_version=None,
+                errors=["Canonical Supabase migrations directory is empty or unavailable"],
+            )
+
         try:
             applied = await self._applied_versions()
         except Exception as exc:
@@ -90,7 +99,9 @@ class MigrationValidator:
                 latest_version=latest,
                 errors=[str(exc)],
             )
-        pending = [version for version in available if version not in set(applied)]
+
+        applied_set = set(applied)
+        pending = [version for version in available if version not in applied_set]
         status = MigrationStatus.PENDING if pending else MigrationStatus.UP_TO_DATE
         return MigrationValidationReport(
             timestamp=datetime.now(timezone.utc),
@@ -98,7 +109,6 @@ class MigrationValidator:
             latest_version=latest,
             applied_versions=applied,
             pending_versions=pending,
-            errors=errors,
         )
 
     async def get_state(self) -> dict:
@@ -107,12 +117,14 @@ class MigrationValidator:
             "current_version": report.applied_versions[-1] if report.applied_versions else None,
             "latest_version": report.latest_version,
             "pending_count": len(report.pending_versions),
-            "failed_count": len(report.errors) if report.overall_status == MigrationStatus.FAILED else 0,
+            "failed_count": len(report.errors),
             "validation_status": report.overall_status.value,
+            "errors": list(report.errors),
         }
 
 
 _validator: Optional[MigrationValidator] = None
+
 
 def get_migration_validator() -> MigrationValidator:
     global _validator
