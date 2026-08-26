@@ -2,6 +2,16 @@ name: Beta Live Model Smoke
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/beta_live_model_smoke.py"
+      - "scripts/setup_beta_actions_runner.ps1"
+      - "src/ai_karen_engine/core/expression/**"
+      - "src/ai_karen_engine/core/model_runtime/**"
+      - ".github/workflows/beta-live-model-smoke.yml"
+      - ".github/workflows/beta-release-gate.yml"
 
 permissions:
   contents: read
