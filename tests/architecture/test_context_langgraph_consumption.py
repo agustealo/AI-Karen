@@ -62,13 +62,19 @@ def test_shadow_structured_sections_are_retired() -> None:
     assert "build_structured_context_sections" not in orchestrator
 
 
-def test_langgraph_hands_canonical_prompt_to_provider_runtime() -> None:
+def test_langgraph_delegates_canonical_prompt_and_provider_execution_to_runtime() -> None:
     synth = _text("src/ai_karen_engine/core/langgraph_orchestrator/nodes/response_synth.py")
+    workflow_runtime = _text("src/ai_karen_engine/core/runtime/workflow_generation.py")
     provider = _text("src/ai_karen_engine/core/runtime/provider_runtime.py")
     router = _text("src/ai_karen_engine/core/model_runtime/routing/llm_router_service.py")
-    assert "build_request_from_runtime_context" in synth
-    assert "assemble_prompt(prompt_request)" in synth
-    assert '"prompt_text": prompt_runtime.render_text_prompt' in synth
+
+    assert "WorkflowGenerationRequest(" in synth
+    assert "self._workflow_generation_runtime.execute(generation_request)" in synth
+    assert "build_request_from_runtime_context" not in synth
+    assert "get_prompt_runtime_service" in workflow_runtime
+    assert "build_request_from_runtime_context" in workflow_runtime
+    assert "assemble_prompt(prompt_request)" in workflow_runtime
+    assert '"prompt_text": prompt_runtime.render_text_prompt' in workflow_runtime
     assert 'context.get("prompt_text")' in provider
     assert 'return prompt_text.strip()' in provider
     assert 'context.get("prompt_text")' in router
@@ -90,6 +96,9 @@ def test_dead_prompt_registry_budget_authority_is_removed() -> None:
     assert "def enforce_token_budget" not in registry
 
 
-def test_orphaned_core_context_contract_test_is_retired() -> None:
+def test_context_contract_surface_is_alias_only() -> None:
     assert not (ROOT / "tests/core/context/test_context_contracts.py").exists()
-    assert not (SRC / "core/context").exists()
+    contracts = _text("src/ai_karen_engine/core/context/contracts.py")
+    assert "ContextScope = CognitiveScope" in contracts
+    assert "class ContextScope" not in contracts
+    assert "class ContextSnapshot" not in contracts
