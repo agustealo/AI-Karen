@@ -1,0 +1,68 @@
+name: One-shot Delete WebUI Memory Facade
+
+on:
+  push:
+    branches:
+      - memory/delete-webui-facade
+
+permissions:
+  contents: write
+
+jobs:
+  delete:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: memory/delete-webui-facade
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Prove AG-UI adapter has no callers
+        shell: bash
+        run: |
+          set -euo pipefail
+          refs=$(grep -R --line-number --exclude='ag_ui_memory_interface.py' --exclude-dir='.git' 'ag_ui_memory_interface\|transform_ag_ui_query\|transform_web_ui_entries' src tests 2>/dev/null || true)
+          test -z "$refs" || { echo "$refs"; exit 1; }
+      - name: Apply final consumer migration
+        run: python scripts/dev/delete_webui_memory_facade.py
+      - name: Delete dead compatibility files
+        run: |
+          rm src/ai_karen_engine/core/memory/memory_service.py
+          rm src/ai_karen_engine/services/ui/ag_ui_memory_interface.py
+      - name: Prove zero facade references in runtime source
+        shell: bash
+        run: |
+          set -euo pipefail
+          refs=$(grep -R --line-number --include='*.py' 'core\.memory\.memory_service\|WebUIMemoryService\|MemoryContextBuilder\|store_web_ui_memory' src/ai_karen_engine || true)
+          test -z "$refs" || { echo "$refs"; exit 1; }
+      - name: Compile migrated boundaries
+        run: |
+          python -m py_compile \
+            src/ai_karen_engine/services/memory/conversation_service.py \
+            src/ai_karen_engine/api_routes/memory/memory.py \
+            src/ai_karen_engine/core/memory/unified_memory_service.py \
+            src/ai_karen_engine/core/memory/runtime_gateway.py \
+            src/ai_karen_engine/core/memory/service_factory.py
+      - name: Run memory architecture proofs
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          pytest \
+            tests/architecture/test_memory_consumer_domain_migration.py \
+            tests/architecture/test_context_memory_boundary_convergence.py \
+            tests/architecture/test_context_memory_recall_authority.py \
+            -q
+      - name: Remove one-shot scaffolding and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/one-shot-memory-facade-census.yml
+          rm -f .github/workflows/one-shot-delete-webui-memory-facade.yml
+          rm -f scripts/dev/delete_webui_memory_facade.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'refactor(memory): delete legacy WebUI memory facade'
+          git push origin HEAD:memory/delete-webui-facade
