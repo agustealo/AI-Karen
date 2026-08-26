@@ -56,12 +56,11 @@ services:
       DB_USER: ${DB_USER:?DB_USER is required for production}
       DB_NAME: ${DB_NAME:?DB_NAME is required for production}
 
-    # The production image already contains source and canonical config. Never
-    # inherit the development `./:/app:rw` mount, which would replace the
-    # attested image contents with mutable host source.
+    # The production image already contains source and canonical application
+    # configuration. Never inherit development source/config bind mounts, which
+    # would replace or mask the attested image with mutable host state.
     volumes: !override
       - ./models:/app/models:rw
-      - ./config:/app/config:ro
       - logs_data:/app/logs
       - backup_data:/app/backups
       - ./models/transformers:/root/.cache/huggingface/hub:rw
