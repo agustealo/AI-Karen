@@ -41,7 +41,6 @@ _FIRST_ADMIN_BOOTSTRAP_LOCK_KEY = 1262571077
 
 
 class UserRole(str, Enum):
-    # ... (rest of the class)
     """User role enumeration."""
 
     USER = "user"
@@ -103,11 +102,11 @@ class Session:
 
 
 class AuthService(BaseService):
-    """
-    Authentication Service for CoPilot Architecture.
+    """Canonical authentication service.
 
-    This service provides comprehensive authentication functionality including
-    user management, session management, and token validation.
+    Database state is authoritative for users and sessions. The service is not
+    considered initialized until configuration validation and the migration-owned
+    auth schema preflight have both succeeded.
     """
 
     def __init__(self, config: Optional[AuthConfig] = None) -> None:
@@ -150,11 +149,11 @@ class AuthService(BaseService):
         return self._lock
 
     def _validate_config(self) -> None:
-        """Validate configuration parameters."""
+        """Validate auth configuration using the canonical AuthConfig contract."""
         self._config.validate()
 
     async def initialize(self) -> None:
-        """Initialize the Authentication Service."""
+        """Initialize auth only after durable schema readiness is established."""
         if self._initialized:
             return
 
@@ -171,49 +170,25 @@ class AuthService(BaseService):
 
             self._initializing_task = current_task
             try:
-                # Validate configuration
                 self._validate_config()
-
-                # Mark as initialized immediately after config validation
-                # but before potentially slow DB operations
-                self._initialized = True
-                logger.info("Authentication Service initialized (config validated)")
-
-                # Initialize database tables if needed - now non-blocking for initialization status
-                logger.info("Ensuring database tables exist...")
+                logger.info("Verifying migration-owned authentication schema")
                 await self._ensure_database_tables()
 
+                self._initialized = True
                 logger.info("Authentication Service fully ready")
-            except Exception as e:
+            except Exception as exc:
+                self._initialized = False
+                self._tables_ensured = False
                 logger.error(
-                    f"Failed to initialize Authentication Service: {e}", exc_info=True
+                    "Failed to initialize Authentication Service: %s",
+                    exc,
+                    exc_info=True,
                 )
-                # Ensure we don't leave it in a partially initialized state that blocks others
                 raise RuntimeError(
-                    f"Authentication Service initialization failed: {e}"
-                ) from e
+                    f"Authentication Service initialization failed: {exc}"
+                ) from exc
             finally:
                 self._initializing_task = None
-
-    def _validate_config(self) -> None:
-        """Validate configuration parameters."""
-        if (
-            not self.config.jwt_secret_key
-            or self.config.jwt_secret_key == "change-me-in-production"
-        ):
-            logger.warning(
-                "JWT secret key is not configured properly. Please set AUTH_JWT_SECRET_KEY environment variable."
-            )
-
-        if self.config.password_min_length < 8:
-            logger.warning(
-                "Password minimum length is less than 8 characters. This is not recommended."
-            )
-
-        if self.config.max_failed_login_attempts < 3:
-            logger.warning(
-                "Maximum failed login attempts is less than 3. This may reduce security."
-            )
 
     async def _ensure_database_tables(self) -> None:
         """Verify migration-owned auth tables exist; never create schema at runtime."""
@@ -362,18 +337,7 @@ class AuthService(BaseService):
         ip_address: str = "unknown",
         user_agent: str = "",
     ) -> Tuple[Optional[UserAccount], Optional[str], Optional[str]]:
-        """
-        Authenticate a user with username/email and password.
-
-        Args:
-            login_identifier: User username or email
-            password: User password
-            ip_address: IP address of the client
-            user_agent: User agent string
-
-        Returns:
-            Tuple of (user, access_token, refresh_token) or (None, None, None) if authentication fails
-        """
+        """Authenticate a user with durable user, session, and tenant authority."""
         if not self._initialized:
             logger.info(
                 "AuthService not initialized, performing lazy initialization..."
@@ -1539,9 +1503,13 @@ class AuthService(BaseService):
         return user
 
     async def health_check(self) -> bool:
-        if not self._initialized:
+        """Require canonical initialization state and a live database connection."""
+        if not self._initialized or not self._tables_ensured:
             return False
         try:
+            async with self._session_scope() as session:
+                await session.execute(text("SELECT 1"))
+
             test_user_id = "test_user"
             token = self._generate_access_token_by_id(test_user_id)
             payload = jwt.decode(
@@ -1552,7 +1520,7 @@ class AuthService(BaseService):
             )
             return payload.get("sub") == test_user_id
         except Exception as e:
-            logger.error(f"Authentication Service health check failed: {e}")
+            logger.error("Authentication Service health check failed: %s", e)
             return False
 
     async def get_auth_stats(self) -> Dict[str, Any]:
@@ -1723,5 +1691,6 @@ class AuthService(BaseService):
             return
         self._active_sessions.clear()
         self._user_cache.clear()
+        self._tables_ensured = False
         self._initialized = False
         logger.info("Authentication Service stopped successfully")
