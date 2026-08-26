@@ -2,15 +2,15 @@ import { defineConfig, devices } from '@playwright/test';
 
 /**
  * Playwright configuration for AI-Karen E2E tests.
-
- * This configuration is used for testing:
- * - Intelligent Search plugin
- * - Crawl4AI integration
- * - Plugin UI components
- * - API endpoints
+ *
+ * Canonical browser tests currently live in both `tests/e2e` and the
+ * transitional top-level `e2e` directory. Keep discovery centralized here so
+ * CI cannot silently omit first-run coverage while that directory migration is
+ * completed.
  */
 export default defineConfig({
-  testDir: './tests/e2e',
+  testDir: '.',
+  testMatch: ['tests/e2e/**/*.spec.ts', 'e2e/**/*.spec.ts'],
   timeout: 300000,
   expect: {
     timeout: 60000,
