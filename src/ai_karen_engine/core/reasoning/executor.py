@@ -21,10 +21,9 @@ Non-responsibilities:
 
 from __future__ import annotations
 
-import logging
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.reasoning.contracts import (
@@ -39,7 +38,11 @@ from ai_karen_engine.core.reasoning.contracts import (
     ReasoningDisposition,
 )
 from ai_karen_engine.core.reasoning.strategy import ReasoningStrategyEngine
-from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionContext
+from ai_karen_engine.core.runtime.contracts import (
+    AuthorizedExecutionPlan,
+    ExecutionContext,
+    ExecutionTopology,
+)
 
 logger = get_logger(__name__)
 
@@ -66,12 +69,12 @@ class EvidenceProvider:
 class ReasoningExecutor:
     """Single execution owner for the core/reasoning package.
 
-    It is called only when CORTEX and RuntimePolicy decide deeper
-    reasoning is warranted. It receives an AuthorizedExecutionPlan and
-    returns a ReasoningResult.
+    It is called only when CORTEX and RuntimePolicy decide deeper reasoning is
+    warranted. The executor consumes Runtime's AuthorizedExecutionPlan; it never
+    creates or expands authorization.
 
-    Strategies are injected; no internal registry is required unless
-    dynamic registration becomes a concrete requirement.
+    Reasoning may be the request's top-level topology or a bounded specialist
+    stage inside an authorized workflow or multi-agent topology.
     """
 
     def __init__(
@@ -91,16 +94,7 @@ class ReasoningExecutor:
         plan: AuthorizedExecutionPlan,
         context: ExecutionContext,
     ) -> ReasoningResult:
-        """Execute reasoning under an authorized plan.
-
-        1. Validate request against plan
-        2. Retrieve evidence
-        3. Execute strategies with budget enforcement
-        4. Aggregate artifacts
-        5. Handle escalation/evidence-need boundaries
-        6. Emit observability
-        7. Return ReasoningResult
-        """
+        """Execute reasoning under RuntimePolicy authorization."""
         started_at = time.perf_counter()
         reasoning_id = f"reasoning-{uuid.uuid4().hex[:12]}"
 
@@ -112,7 +106,9 @@ class ReasoningExecutor:
             evidence = self._filter_evidence(evidence, context)
 
             if not self._strategies:
-                return self._empty_result(reasoning_id, "no_strategies_registered", started_at)
+                return self._empty_result(
+                    reasoning_id, "no_strategies_registered", started_at
+                )
 
             result = await self._run_strategies(
                 request, evidence, budget, context, started_at
@@ -120,32 +116,96 @@ class ReasoningExecutor:
 
             result.reasoning_id = reasoning_id
             result.trajectory_ref = context.correlation_id
-            self._emit_observability(result, started_at)
+            self._emit_observability(result, started_at, plan, context)
             return result
 
         except BudgetExhaustedError:
             return self._budget_exhausted_result(reasoning_id, started_at)
         except ValueError as exc:
-            error_code = ReasoningErrorCode.EVIDENCE_SCOPE_VIOLATION if "tenant_id mismatch" in str(exc) else ReasoningErrorCode.INVALID_REQUEST
+            error_code = (
+                ReasoningErrorCode.EVIDENCE_SCOPE_VIOLATION
+                if "tenant_id mismatch" in str(exc)
+                else ReasoningErrorCode.INVALID_REQUEST
+            )
             logger.error("ReasoningExecutor validation failed: %s", exc)
-            return self._failed_result(reasoning_id, str(exc), error_code, started_at)
+            return self._failed_result(
+                reasoning_id, str(exc), error_code, started_at
+            )
         except Exception as exc:
             logger.error("ReasoningExecutor failed: %s", exc, exc_info=True)
-            return self._failed_result(reasoning_id, str(exc), ReasoningErrorCode.STRATEGY_FAILURE, started_at)
+            return self._failed_result(
+                reasoning_id,
+                str(exc),
+                ReasoningErrorCode.STRATEGY_FAILURE,
+                started_at,
+            )
 
-    def _validate(self, request: ReasoningRequest, plan: AuthorizedExecutionPlan, context: ExecutionContext) -> None:
-        if plan.topology.value != "reasoning":
-            raise ValueError(f"Authorized plan topology must be reasoning, got {plan.topology}")
+    def _validate(
+        self,
+        request: ReasoningRequest,
+        plan: AuthorizedExecutionPlan,
+        context: ExecutionContext,
+    ) -> None:
+        topology = (
+            plan.topology
+            if isinstance(plan.topology, ExecutionTopology)
+            else ExecutionTopology(str(plan.topology))
+        )
+        allowed_topologies = {
+            ExecutionTopology.REASONING,
+            ExecutionTopology.WORKFLOW,
+            ExecutionTopology.MULTI_AGENT,
+        }
+        if topology not in allowed_topologies:
+            raise ValueError(
+                f"Authorized plan topology does not permit reasoning: {topology.value}"
+            )
+
+        if topology is not ExecutionTopology.REASONING:
+            capabilities = {str(cap).strip() for cap in plan.allowed_capabilities}
+            reasoning_authorized = bool(plan.reasoning_modes) or "*" in capabilities or any(
+                cap == "reasoning" or cap.startswith("reasoning.")
+                for cap in capabilities
+            )
+            if not reasoning_authorized:
+                raise ValueError(
+                    "Nested reasoning requires an authorized reasoning capability or mode"
+                )
+
         if not request.tenant_id or not request.user_id:
             raise ValueError("ReasoningRequest must include tenant_id and user_id")
+        if context.tenant_id != request.tenant_id:
+            raise ValueError(
+                f"Reasoning tenant_id mismatch: {context.tenant_id} != {request.tenant_id}"
+            )
+        if (
+            context.policy_decision_id
+            and context.policy_decision_id != plan.policy_decision_id
+        ):
+            raise ValueError(
+                "ExecutionContext policy_decision_id does not match AuthorizedExecutionPlan"
+            )
+
+        valid_sensitivities = {
+            sensitivity.value
+            for sensitivity in __import__(
+                "ai_karen_engine.core.reasoning.contracts",
+                fromlist=["EvidenceSensitivity"],
+            ).EvidenceSensitivity
+        }
         for ev in request.evidence:
             if ev.tenant_id and ev.tenant_id != request.tenant_id:
-                raise ValueError(f"Evidence tenant_id mismatch: {ev.tenant_id} != {request.tenant_id}")
-            valid_sensitivities = {s.value for s in __import__("ai_karen_engine.core.reasoning.contracts", fromlist=["EvidenceSensitivity"]).EvidenceSensitivity}
+                raise ValueError(
+                    f"Evidence tenant_id mismatch: {ev.tenant_id} != {request.tenant_id}"
+                )
             if ev.sensitivity not in valid_sensitivities:
                 raise ValueError(f"Invalid evidence sensitivity: {ev.sensitivity}")
 
-    def _filter_evidence(self, evidence: List[ReasoningEvidence], context: ExecutionContext) -> List[ReasoningEvidence]:
+    def _filter_evidence(
+        self,
+        evidence: List[ReasoningEvidence],
+        context: ExecutionContext,
+    ) -> List[ReasoningEvidence]:
         filtered = []
         for ev in evidence:
             if ev.tenant_id and ev.tenant_id != context.tenant_id:
@@ -168,7 +228,10 @@ class ReasoningExecutor:
         all_unknowns: List[str] = []
         all_actions: List[Any] = []
         all_evidence_needs: List[ReasoningEvidenceNeed] = []
-        assessment = __import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment()
+        assessment = __import__(
+            "ai_karen_engine.core.reasoning.contracts",
+            fromlist=["ReasoningAssessment"],
+        ).ReasoningAssessment()
         steps = 0
         model_calls = 0
         tool_requests = 0
@@ -178,10 +241,14 @@ class ReasoningExecutor:
             if steps >= budget.max_reasoning_steps:
                 break
             if strategy.supports_model_calls and model_calls >= budget.max_model_calls:
-                logger.warning("Model call budget exhausted, skipping %s", strategy.strategy_id)
+                logger.warning(
+                    "Model call budget exhausted, skipping %s", strategy.strategy_id
+                )
                 continue
             if strategy.supports_tools and tool_requests >= budget.max_tool_requests:
-                logger.warning("Tool request budget exhausted, skipping %s", strategy.strategy_id)
+                logger.warning(
+                    "Tool request budget exhausted, skipping %s", strategy.strategy_id
+                )
                 continue
 
             elapsed_ms = (time.perf_counter() - started_at) * 1000
@@ -217,7 +284,11 @@ class ReasoningExecutor:
                 break
 
             if result.escalation:
-                return self._escalation_result(reasoning_id="", escalation=result.escalation, started_at=started_at)
+                return self._escalation_result(
+                    reasoning_id="",
+                    escalation=result.escalation,
+                    started_at=started_at,
+                )
 
             if result.status == ReasoningStatus.ABSTAINED.value:
                 disposition = ReasoningDisposition.ABSTAIN.value
@@ -226,7 +297,9 @@ class ReasoningExecutor:
             if result.status == ReasoningStatus.COMPLETED.value:
                 break
 
-        conclusion = self._build_conclusion(all_hypotheses, all_contradictions, assessment)
+        conclusion = self._build_conclusion(
+            all_hypotheses, all_contradictions, assessment
+        )
 
         return ReasoningResult(
             reasoning_id="",
@@ -240,7 +313,11 @@ class ReasoningExecutor:
             assessment=assessment,
             evidence_needs=all_evidence_needs,
             suggested_next_actions=all_actions,
-            status=ReasoningStatus.COMPLETED.value if disposition == ReasoningDisposition.COMPLETE.value else ReasoningStatus.WAITING_FOR_EVIDENCE.value,
+            status=(
+                ReasoningStatus.COMPLETED.value
+                if disposition == ReasoningDisposition.COMPLETE.value
+                else ReasoningStatus.WAITING_FOR_EVIDENCE.value
+            ),
             diagnostics={
                 "steps": steps,
                 "model_calls": model_calls,
@@ -251,17 +328,29 @@ class ReasoningExecutor:
             memory_candidates=[],
         )
 
-    def _build_conclusion(self, hypotheses: List[Any], contradictions: List[Any], assessment: Any) -> str:
+    def _build_conclusion(
+        self,
+        hypotheses: List[Any],
+        contradictions: List[Any],
+        assessment: Any,
+    ) -> str:
         parts = []
         if hypotheses:
             parts.append(f"{len(hypotheses)} hypothesis generated")
         if contradictions:
             parts.append(f"{len(contradictions)} contradiction detected")
         if assessment and assessment.uncertainty_reasons:
-            parts.append(f"uncertainty: {'; '.join(assessment.uncertainty_reasons[:3])}")
+            parts.append(
+                f"uncertainty: {'; '.join(assessment.uncertainty_reasons[:3])}"
+            )
         return "; ".join(parts) if parts else "No significant reasoning artifacts produced."
 
-    def _empty_result(self, reasoning_id: str, reason: str, started_at: float) -> ReasoningResult:
+    def _empty_result(
+        self,
+        reasoning_id: str,
+        reason: str,
+        started_at: float,
+    ) -> ReasoningResult:
         return ReasoningResult(
             reasoning_id=reasoning_id,
             disposition=ReasoningDisposition.ABSTAIN.value,
@@ -271,15 +360,25 @@ class ReasoningExecutor:
             assumptions=[],
             unknowns=[],
             contradictions=[],
-            assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(),
+            assessment=__import__(
+                "ai_karen_engine.core.reasoning.contracts",
+                fromlist=["ReasoningAssessment"],
+            ).ReasoningAssessment(),
             evidence_needs=[],
             suggested_next_actions=[],
             status=ReasoningStatus.FAILED.value,
             error_code=ReasoningErrorCode.STRATEGY_UNAVAILABLE.value,
-            diagnostics={"reason": reason, "duration_ms": (time.perf_counter() - started_at) * 1000},
+            diagnostics={
+                "reason": reason,
+                "duration_ms": (time.perf_counter() - started_at) * 1000,
+            },
         )
 
-    def _budget_exhausted_result(self, reasoning_id: str, started_at: float) -> ReasoningResult:
+    def _budget_exhausted_result(
+        self,
+        reasoning_id: str,
+        started_at: float,
+    ) -> ReasoningResult:
         return ReasoningResult(
             reasoning_id=reasoning_id,
             disposition=ReasoningDisposition.ABSTAIN.value,
@@ -289,15 +388,26 @@ class ReasoningExecutor:
             assumptions=[],
             unknowns=[],
             contradictions=[],
-            assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(),
+            assessment=__import__(
+                "ai_karen_engine.core.reasoning.contracts",
+                fromlist=["ReasoningAssessment"],
+            ).ReasoningAssessment(),
             evidence_needs=[],
             suggested_next_actions=[],
             status=ReasoningStatus.FAILED.value,
             error_code=ReasoningErrorCode.BUDGET_EXCEEDED.value,
-            diagnostics={"duration_ms": (time.perf_counter() - started_at) * 1000},
+            diagnostics={
+                "duration_ms": (time.perf_counter() - started_at) * 1000
+            },
         )
 
-    def _failed_result(self, reasoning_id: str, error: str, error_code: ReasoningErrorCode, started_at: float) -> ReasoningResult:
+    def _failed_result(
+        self,
+        reasoning_id: str,
+        error: str,
+        error_code: ReasoningErrorCode,
+        started_at: float,
+    ) -> ReasoningResult:
         return ReasoningResult(
             reasoning_id=reasoning_id,
             disposition=ReasoningDisposition.ABSTAIN.value,
@@ -307,15 +417,26 @@ class ReasoningExecutor:
             assumptions=[],
             unknowns=[],
             contradictions=[],
-            assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(),
+            assessment=__import__(
+                "ai_karen_engine.core.reasoning.contracts",
+                fromlist=["ReasoningAssessment"],
+            ).ReasoningAssessment(),
             evidence_needs=[],
             suggested_next_actions=[],
             status=ReasoningStatus.FAILED.value,
             error_code=error_code.value,
-            diagnostics={"error": error, "duration_ms": (time.perf_counter() - started_at) * 1000},
+            diagnostics={
+                "error": error,
+                "duration_ms": (time.perf_counter() - started_at) * 1000,
+            },
         )
 
-    def _escalation_result(self, reasoning_id: str, escalation: ReasoningEscalationRequest, started_at: float) -> ReasoningResult:
+    def _escalation_result(
+        self,
+        reasoning_id: str,
+        escalation: ReasoningEscalationRequest,
+        started_at: float,
+    ) -> ReasoningResult:
         return ReasoningResult(
             reasoning_id=reasoning_id,
             disposition=ReasoningDisposition.ESCALATE.value,
@@ -325,7 +446,10 @@ class ReasoningExecutor:
             assumptions=[],
             unknowns=[],
             contradictions=[],
-            assessment=__import__("ai_karen_engine.core.reasoning.contracts", fromlist=["ReasoningAssessment"]).ReasoningAssessment(),
+            assessment=__import__(
+                "ai_karen_engine.core.reasoning.contracts",
+                fromlist=["ReasoningAssessment"],
+            ).ReasoningAssessment(),
             evidence_needs=escalation.evidence_needs,
             suggested_next_actions=[],
             status=ReasoningStatus.COMPLETED.value,
@@ -338,16 +462,36 @@ class ReasoningExecutor:
             },
         )
 
-    def _emit_observability(self, result: ReasoningResult, started_at: float) -> None:
+    def _emit_observability(
+        self,
+        result: ReasoningResult,
+        started_at: float,
+        plan: AuthorizedExecutionPlan,
+        context: ExecutionContext,
+    ) -> None:
         try:
             logger.info(
                 "reasoning.executed",
                 extra={
                     "reasoning_id": result.reasoning_id,
+                    "request_id": context.request_id,
+                    "correlation_id": context.correlation_id,
+                    "tenant_id": context.tenant_id,
+                    "user_id": context.user_id,
+                    "conversation_id": context.conversation_id,
+                    "policy_decision_id": plan.policy_decision_id,
+                    "execution_topology": (
+                        plan.topology.value
+                        if hasattr(plan.topology, "value")
+                        else str(plan.topology)
+                    ),
+                    "reasoning_modes": list(plan.reasoning_modes),
                     "status": result.status,
                     "disposition": result.disposition,
                     "error_code": result.error_code,
-                    "confidence": result.assessment.confidence if result.assessment else 0.0,
+                    "confidence": (
+                        result.assessment.confidence if result.assessment else 0.0
+                    ),
                     "hypotheses": len(result.hypotheses),
                     "contradictions": len(result.contradictions),
                     "duration_ms": (time.perf_counter() - started_at) * 1000,
@@ -361,4 +505,17 @@ def get_reasoning_executor(
     strategies: Optional[List[ReasoningStrategyEngine]] = None,
     evidence_provider: Optional[EvidenceProvider] = None,
 ) -> ReasoningExecutor:
-    return ReasoningExecutor(strategies=strategies, evidence_provider=evidence_provider)
+    """Return an executor with explicit strategies or canonical Core-safe defaults.
+
+    Provider/model-specific strategies remain Runtime-injected. Importing defaults
+    lazily avoids a module cycle while keeping the public factory executable.
+    """
+    resolved_strategies = strategies
+    if resolved_strategies is None:
+        from ai_karen_engine.core.reasoning.defaults import get_default_strategies
+
+        resolved_strategies = get_default_strategies()
+    return ReasoningExecutor(
+        strategies=resolved_strategies,
+        evidence_provider=evidence_provider,
+    )
