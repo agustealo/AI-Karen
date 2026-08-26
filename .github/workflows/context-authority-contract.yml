@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - 'src/ai_karen_engine/core/runtime/**'
-      - 'src/ai_karen_engine/core/memory/memory_service.py'
+      - 'src/ai_karen_engine/core/memory/**'
       - 'src/ai_karen_engine/core/model_runtime/routing/llm_router_service.py'
       - 'src/ai_karen_engine/core/langgraph_orchestrator/**'
       - 'src/ai_karen_engine/utils/chat_helpers.py'
@@ -12,13 +12,14 @@ on:
       - 'tests/architecture/test_context_authority_convergence.py'
       - 'tests/architecture/test_context_langgraph_consumption.py'
       - 'tests/architecture/test_context_memory_boundary_convergence.py'
+      - 'tests/architecture/test_context_memory_recall_authority.py'
       - '.github/workflows/context-authority-contract.yml'
   push:
     branches:
       - main
     paths:
       - 'src/ai_karen_engine/core/runtime/**'
-      - 'src/ai_karen_engine/core/memory/memory_service.py'
+      - 'src/ai_karen_engine/core/memory/**'
       - 'src/ai_karen_engine/core/model_runtime/routing/llm_router_service.py'
       - 'src/ai_karen_engine/core/langgraph_orchestrator/**'
       - 'src/ai_karen_engine/utils/chat_helpers.py'
@@ -26,6 +27,7 @@ on:
       - 'tests/architecture/test_context_authority_convergence.py'
       - 'tests/architecture/test_context_langgraph_consumption.py'
       - 'tests/architecture/test_context_memory_boundary_convergence.py'
+      - 'tests/architecture/test_context_memory_recall_authority.py'
       - '.github/workflows/context-authority-contract.yml'
 
 permissions:
@@ -51,7 +53,9 @@ jobs:
             src/ai_karen_engine/core/runtime/prompt/prompt_registry.py \
             src/ai_karen_engine/core/runtime/prompt/truncation_policy.py \
             src/ai_karen_engine/core/memory/memory_service.py \
+            src/ai_karen_engine/core/memory/memory_runtime_manager.py \
             src/ai_karen_engine/core/model_runtime/routing/llm_router_service.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/contracts/orchestration_config.py \
             src/ai_karen_engine/core/langgraph_orchestrator/context/context_manager_adapter.py \
             src/ai_karen_engine/core/langgraph_orchestrator/context/file_context_store.py \
             src/ai_karen_engine/core/langgraph_orchestrator/context/file_upload_service.py \
@@ -68,7 +72,11 @@ jobs:
         run: |
           test ! -e src/ai_karen_engine/core/langgraph_orchestrator/context/context_manager.py
           ! grep -R --line-number --include='*.py' 'ContextManager\|ensure_context_manager' src/ai_karen_engine/core/langgraph_orchestrator
+          ! grep -R --line-number --include='*.py' 'WebUIMemoryService\|_resolve_memory_service' src/ai_karen_engine/core/langgraph_orchestrator
           ! grep -R --line-number --include='*.py' 'get_memory_service' src/ai_karen_engine/core/langgraph_orchestrator
+          grep -q 'memory_runtime_manager import recall_context' src/ai_karen_engine/core/langgraph_orchestrator/langgraph_orchestrator.py
+          grep -q 'memory_recall_top_k=self.config.memory_recall_top_k' src/ai_karen_engine/core/langgraph_orchestrator/langgraph_orchestrator.py
+          ! grep -q 'SessionStateManager(' src/ai_karen_engine/core/langgraph_orchestrator/langgraph_orchestrator.py
           test "$(grep -c '^class MemoryContextBuilder:' src/ai_karen_engine/core/memory/memory_service.py)" -eq 1
       - name: Run context authority convergence proof
         env:
@@ -78,4 +86,5 @@ jobs:
             tests/architecture/test_context_authority_convergence.py \
             tests/architecture/test_context_langgraph_consumption.py \
             tests/architecture/test_context_memory_boundary_convergence.py \
+            tests/architecture/test_context_memory_recall_authority.py \
             -q
