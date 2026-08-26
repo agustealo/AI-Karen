@@ -1,4 +1,3 @@
 from .base import BaseExpressionEngine
-from .builtin_provider_engine import BuiltinProviderEngine
 from .openai_compatible_engine import OpenAICompatibleEngine
 from .disabled_engine import DisabledEngine
