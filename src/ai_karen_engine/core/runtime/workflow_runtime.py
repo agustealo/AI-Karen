@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import asdict, is_dataclass
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -9,24 +10,20 @@ from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
-)
-from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
-from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
-from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatStreamChunk as _SharedChatStreamChunk,
 )
+from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 
 logger = get_logger(__name__)
 
 
 class WorkflowRuntime:
-    """Graph-required execution adapter.
+    """Runtime-owned adapter for graph-required execution.
 
-    This is the *only* place LangGraph/LangChain is touched for chat. It is
-    invoked exclusively when CORTEX decides ``graph_required == True``.
-
-    LangChain message conversion lives here so the canonical ``ChatRuntime``
-    stays framework-neutral for simple chat.
+    This is the only chat boundary that touches LangGraph/LangChain. Runtime
+    supplies trusted identity, the CORTEX execution decision, and the immutable
+    RuntimePolicy authorization. LangGraph may consume but not recreate them.
     """
 
     async def run(
@@ -91,10 +88,6 @@ class WorkflowRuntime:
                 metadata={"event": "error"},
             )
 
-    # ------------------------------------------------------------------
-    # LangGraph-bound helpers (kept inside the adapter on purpose)
-    # ------------------------------------------------------------------
-
     async def _get_orchestrator(self):
         from ai_karen_engine.core.langgraph_orchestrator import get_default_orchestrator
 
@@ -108,8 +101,14 @@ class WorkflowRuntime:
         decision: Optional[ExecutionDecision] = None,
         plan: Optional[AuthorizedExecutionPlan] = None,
     ) -> Dict[str, Any]:
-        response_id = ctx.request_id or str(uuid.uuid4())
-        request_config = {
+        request_id = ctx.request_id or str(uuid.uuid4())
+        auth_context = {
+            "user_id": ctx.user_id,
+            "tenant_id": ctx.tenant_id,
+            "roles": list(ctx.roles),
+            "permissions": list(ctx.permissions),
+        }
+        request_config: Dict[str, Any] = {
             "preferred_llm_provider": request.preferred_provider,
             "preferred_model": request.preferred_model,
             "provider": request.preferred_provider,
@@ -117,38 +116,89 @@ class WorkflowRuntime:
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
             "messages": request.messages,
-            "response_id": response_id,
+            "response_id": request_id,
+            "request_id": request_id,
+            "correlation_id": ctx.correlation_id,
+            "conversation_id": conversation_id,
+            "tenant_id": ctx.tenant_id,
+            "auth_context": auth_context,
         }
+
+        execution_requirements: Optional[Dict[str, Any]] = None
         if decision is not None:
-            request_config.update({
-                "workflow_id": decision.workflow_id,
-                "workflow_version": decision.workflow_version,
+            execution_requirements = {
+                "request_id": request_id,
+                "correlation_id": ctx.correlation_id,
                 "required_capabilities": list(decision.required_capabilities),
                 "forbidden_capabilities": list(decision.forbidden_capabilities),
-                "token_budget": decision.token_budget,
-                "time_budget_ms": decision.time_budget_ms,
-                "max_steps": decision.max_steps,
                 "reasoning_depth": decision.reasoning_depth,
                 "requires_human_gate": decision.requires_human_gate,
                 "requires_resumability": decision.requires_resumability,
-                "policy_decision_id": decision.policy_decision_id,
-                "policy_version": decision.policy_version,
-                "policy_reason_codes": list(decision.policy_reason_codes),
-                "execution_topology": (
+                "max_steps": decision.max_steps,
+                "time_budget_ms": decision.time_budget_ms,
+                "token_budget": decision.token_budget,
+                "workflow_id": decision.workflow_id,
+                "workflow_version": decision.workflow_version,
+                "topology": (
                     decision.topology.value
                     if hasattr(decision.topology, "value")
                     else str(decision.topology)
                 ),
-            })
-        if plan is not None:
-            request_config["runtime_policy"] = _serialize_plan(plan)
+            }
+            request_config.update(
+                {
+                    "workflow_id": decision.workflow_id,
+                    "workflow_version": decision.workflow_version,
+                    "required_capabilities": list(decision.required_capabilities),
+                    "forbidden_capabilities": list(decision.forbidden_capabilities),
+                    "token_budget": decision.token_budget,
+                    "time_budget_ms": decision.time_budget_ms,
+                    "max_steps": decision.max_steps,
+                    "reasoning_depth": decision.reasoning_depth,
+                    "requires_human_gate": decision.requires_human_gate,
+                    "requires_resumability": decision.requires_resumability,
+                    "policy_decision_id": decision.policy_decision_id,
+                    "policy_version": decision.policy_version,
+                    "policy_reason_codes": list(decision.policy_reason_codes),
+                    "execution_topology": execution_requirements["topology"],
+                    "execution_requirements": execution_requirements,
+                }
+            )
+
+        serialized_plan = _serialize_plan(plan) if plan is not None else None
+        if serialized_plan is not None:
+            request_config["runtime_policy"] = serialized_plan
+
+        # Metadata is contextual input only. Trusted Runtime identity and policy
+        # values above are re-applied after metadata so callers cannot override them.
         request_config.update(request.metadata or {})
+        request_config.update(
+            {
+                "request_id": request_id,
+                "correlation_id": ctx.correlation_id,
+                "conversation_id": conversation_id,
+                "tenant_id": ctx.tenant_id,
+                "auth_context": auth_context,
+            }
+        )
+        if execution_requirements is not None:
+            request_config["execution_requirements"] = execution_requirements
+        if serialized_plan is not None:
+            request_config["runtime_policy"] = serialized_plan
+            request_config["policy_decision_id"] = serialized_plan["policy_decision_id"]
+
         return {
             "model": request.preferred_model,
             "provider": request.preferred_provider,
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
+            "request_id": request_id,
             "correlation_id": ctx.correlation_id,
+            "conversation_id": conversation_id,
+            "tenant_id": ctx.tenant_id,
+            "auth_context": auth_context,
+            "runtime_policy": serialized_plan,
+            "execution_requirements": execution_requirements,
             "request_config": request_config,
         }
 
@@ -189,7 +239,10 @@ class WorkflowRuntime:
             for state_update in chunk.values():
                 if not isinstance(state_update, dict):
                     continue
-                if "formatted_response" in state_update or "llm_response" in state_update:
+                if (
+                    "formatted_response" in state_update
+                    or "llm_response" in state_update
+                ):
                     return self._extract_payload(state_update)
                 if "error" in state_update:
                     return f"Error: {state_update['error']}", {
@@ -204,6 +257,16 @@ def _normalize(session_id: Optional[str]) -> str:
     from ai_karen_engine.utils.chat_helpers import normalize_session_id
 
     return normalize_session_id(session_id)
+
+
+def _dataclass_dict(value: Any) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
 
 
 def _serialize_plan(plan: AuthorizedExecutionPlan) -> Dict[str, Any]:
@@ -222,16 +285,17 @@ def _serialize_plan(plan: AuthorizedExecutionPlan) -> Dict[str, Any]:
         "provider_constraints": dict(plan.provider_constraints),
         "memory_scope": plan.memory_scope,
         "resource_scope": dict(plan.resource_scope),
-        "budget": plan.budget.__dict__ if hasattr(plan.budget, "__dict__") else {},
+        "budget": _dataclass_dict(plan.budget),
         "approval_requirements": list(plan.approval_requirements),
         "reasoning_modes": list(plan.reasoning_modes),
         "workflow_id": plan.workflow_id,
         "agent_topology": plan.agent_topology,
         "degraded_allowed": plan.degraded_allowed,
         "degradation_state": (
-            plan.degradation_state.__dict__ if plan.degradation_state else None
+            _dataclass_dict(plan.degradation_state) if plan.degradation_state else None
         ),
         "audit_context": dict(plan.audit_context),
+        "provenance": _dataclass_dict(plan.provenance) if plan.provenance else None,
     }
 
 
