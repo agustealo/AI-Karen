@@ -7,10 +7,7 @@ from ..context.context_manager_adapter import (
     save_session_continuity,
 )
 from ..utils.message_serialization import message_to_history_entry
-from ai_karen_engine.utils.chat_helpers import (
-    build_structured_context_sections,
-    wants_long_form_markdown_article,
-)
+from ai_karen_engine.utils.chat_helpers import wants_long_form_markdown_article
 from ai_karen_engine.core.memory.profile_synthesis import get_profile_service
 
 logger = logging.getLogger(__name__)
@@ -110,19 +107,12 @@ class MemoryFetchNode:
                         f"Retrieved salvaged session state for {session_id}"
                     )
 
-            if isinstance(context, dict):
-                structured_sections = build_structured_context_sections(
-                    request_context=state.get("request_config", {}),
-                    integrated_context=context,
+            if isinstance(context, dict) and conversation_history:
+                is_long_form = wants_long_form_markdown_article(
+                    current_user_message=conversation_history[-1]["content"],
+                    recent_messages=conversation_history,
                 )
-                state["memory_context"]["structured_sections"] = structured_sections
-
-                if conversation_history:
-                    is_long_form = wants_long_form_markdown_article(
-                        current_user_message=conversation_history[-1]["content"],
-                        recent_messages=conversation_history,
-                    )
-                    state["memory_context"]["is_long_form_requested"] = is_long_form
+                state["memory_context"]["is_long_form_requested"] = is_long_form
 
             if isinstance(context, dict) and context.get("memories"):
                 state.setdefault("warnings", []).append(

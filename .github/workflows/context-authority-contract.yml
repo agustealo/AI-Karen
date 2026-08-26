@@ -4,18 +4,22 @@ on:
   pull_request:
     paths:
       - 'src/ai_karen_engine/core/runtime/**'
+      - 'src/ai_karen_engine/core/model_runtime/routing/llm_router_service.py'
       - 'src/ai_karen_engine/core/langgraph_orchestrator/**'
       - 'src/ai_karen_engine/utils/chat_helpers.py'
       - 'tests/architecture/test_context_authority_convergence.py'
+      - 'tests/architecture/test_context_langgraph_consumption.py'
       - '.github/workflows/context-authority-contract.yml'
   push:
     branches:
       - main
     paths:
       - 'src/ai_karen_engine/core/runtime/**'
+      - 'src/ai_karen_engine/core/model_runtime/routing/llm_router_service.py'
       - 'src/ai_karen_engine/core/langgraph_orchestrator/**'
       - 'src/ai_karen_engine/utils/chat_helpers.py'
       - 'tests/architecture/test_context_authority_convergence.py'
+      - 'tests/architecture/test_context_langgraph_consumption.py'
       - '.github/workflows/context-authority-contract.yml'
 
 permissions:
@@ -35,12 +39,27 @@ jobs:
         run: |
           python -m py_compile \
             src/ai_karen_engine/core/runtime/chat_runtime.py \
+            src/ai_karen_engine/core/runtime/provider_runtime.py \
             src/ai_karen_engine/core/runtime/prompt/prompt_service.py \
             src/ai_karen_engine/core/runtime/prompt/prompt_assembler.py \
+            src/ai_karen_engine/core/runtime/prompt/prompt_registry.py \
             src/ai_karen_engine/core/runtime/prompt/truncation_policy.py \
+            src/ai_karen_engine/core/model_runtime/routing/llm_router_service.py \
             src/ai_karen_engine/core/langgraph_orchestrator/context/context_manager.py \
-            src/ai_karen_engine/core/langgraph_orchestrator/nodes/memory_fetch.py
+            src/ai_karen_engine/core/langgraph_orchestrator/context/file_context_store.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/context/file_upload_service.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/nodes/memory_fetch.py \
+            src/ai_karen_engine/core/langgraph_orchestrator/nodes/response_synth.py
+      - name: Import file/context boundary
+        env:
+          PYTHONPATH: src
+        run: |
+          python -c "from ai_karen_engine.core.langgraph_orchestrator.context.file_upload_service import FileUploadService; from ai_karen_engine.core.langgraph_orchestrator.context.file_context_store import FileContextStore; print(FileUploadService, FileContextStore)"
       - name: Run context authority convergence proof
         env:
           PYTHONPATH: src
-        run: pytest tests/architecture/test_context_authority_convergence.py -q
+        run: |
+          pytest \
+            tests/architecture/test_context_authority_convergence.py \
+            tests/architecture/test_context_langgraph_consumption.py \
+            -q

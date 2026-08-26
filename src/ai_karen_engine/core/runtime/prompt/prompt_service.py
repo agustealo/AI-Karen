@@ -120,6 +120,124 @@ class PromptRuntimeService:
 
         return assembly_result
 
+    def build_request_from_runtime_context(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        request_context: Optional[Dict[str, Any]] = None,
+        integrated_context: Optional[Dict[str, Any]] = None,
+        profile: Optional[Dict[str, Any]] = None,
+        workflow_context: Optional[Dict[str, Any]] = None,
+        cortex_intent: Optional[Dict[str, Any]] = None,
+        token_budget: Any = 4096,
+        prompt_id: Optional[str] = None,
+        prompt_version: Optional[str] = None,
+    ) -> PromptAssemblyRequest:
+        """Normalize trusted runtime context into the canonical prompt contract.
+
+        Domain owners retain ranking authority. This method does not score or
+        invent context; it preserves supplied order, deduplicates exact repeats,
+        and maps each domain into an existing PromptAssemblyRequest field.
+        """
+
+        request_context = dict(request_context or {})
+        integrated_context = dict(integrated_context or {})
+        profile_payload = dict(profile or {})
+
+        for key in ("user_facts", "project_facts"):
+            items = self._normalize_context_items(request_context.get(key), source=key)
+            if items:
+                profile_payload[key] = items
+
+        memory_items: List[Dict[str, Any]] = []
+        for key in ("episodic_items", "semantic_long_term_items", "recalled_items"):
+            memory_items.extend(
+                self._normalize_context_items(request_context.get(key), source=key)
+            )
+        memory_items.extend(
+            self._normalize_context_items(integrated_context.get("memories"), source="memory")
+        )
+        memory_items.extend(
+            self._normalize_context_items(integrated_context.get("recall"), source="recall")
+        )
+        memory_items = self._dedupe_context_items(memory_items)
+
+        instruction_lines = self._instruction_lines(integrated_context.get("instructions"))
+
+        return PromptAssemblyRequest(
+            system_instructions="\n".join(instruction_lines),
+            profile=profile_payload,
+            memory_items=memory_items,
+            cortex_intent=dict(cortex_intent or {}),
+            workflow_context=dict(workflow_context or {}),
+            token_budget=self._normalize_token_budget(token_budget),
+            messages=[dict(message) for message in messages],
+            prompt_id=prompt_id,
+            prompt_version=prompt_version,
+        )
+
+    def render_text_prompt(self, messages: List[Dict[str, Any]]) -> str:
+        """Render canonical assembled messages for plain-text provider transports."""
+
+        return self.assembler.render_text_prompt(messages)
+
+    @staticmethod
+    def _normalize_context_items(value: Any, *, source: str) -> List[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        normalized: List[Dict[str, Any]] = []
+        for index, item in enumerate(value):
+            if isinstance(item, dict):
+                content = str(item.get("content") or item.get("text") or "").strip()
+                if not content:
+                    continue
+                normalized_item = dict(item)
+                normalized_item.setdefault("id", f"{source}-{index}")
+                normalized_item.setdefault("source", source)
+                normalized_item["content"] = content
+                normalized.append(normalized_item)
+            elif item is not None:
+                content = str(item).strip()
+                if content:
+                    normalized.append(
+                        {"id": f"{source}-{index}", "source": source, "content": content}
+                    )
+        return normalized
+
+    @staticmethod
+    def _dedupe_context_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        seen: set[tuple[str, str]] = set()
+        deduped: List[Dict[str, Any]] = []
+        for item in items:
+            key = (str(item.get("id") or ""), str(item.get("content") or "").strip())
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
+
+    @staticmethod
+    def _normalize_token_budget(value: Any, default: int = 4096) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(1, parsed)
+
+    @staticmethod
+    def _instruction_lines(value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        lines: List[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                content = str(item.get("content") or item.get("text") or "").strip()
+            else:
+                content = str(item or "").strip()
+            if content and content not in lines:
+                lines.append(content)
+        return lines
+
     def get_prompt_definition(
         self,
         prompt_id: str,
