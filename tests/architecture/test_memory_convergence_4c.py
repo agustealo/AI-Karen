@@ -16,6 +16,13 @@ def test_legacy_core_postgres_adapter_is_retired() -> None:
     assert not (MEMORY / "adapters" / "postgres_adapter.py").exists()
 
 
+def test_legacy_recall_adapter_exports_are_retired() -> None:
+    source = (MEMORY / "adapters" / "__init__.py").read_text(encoding="utf-8")
+    assert "LegacyRecallManagerAdapter" not in source
+    assert "LegacyMemoryServiceAdapter" not in source
+    assert "recall_manager" not in source
+
+
 def test_postgres_durable_retriever_lives_in_platform() -> None:
     source = (PLATFORM_POSTGRES / "recall_retriever.py").read_text(encoding="utf-8")
     assert "class PostgresRecallRetriever" in source
