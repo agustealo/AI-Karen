@@ -48,11 +48,7 @@ class ExecutionBudget:
 
 
 class ExecutionBudgetMeter:
-    """Tracks consumption against an ExecutionBudget for one request.
-
-    One meter per request. The runtime owner increments counters as
-    resources are consumed and checks limits before each operation.
-    """
+    """Track consumption against an ExecutionBudget for one request."""
 
     def __init__(self, budget: ExecutionBudget) -> None:
         self._budget = budget
@@ -215,10 +211,7 @@ class DecisionProvenance:
 
 @dataclass(slots=True)
 class DegradationState:
-    """Canonical degraded-mode state.
-
-    RuntimeResilience owns this. Specialists report failure only.
-    """
+    """Canonical degraded-mode state owned by RuntimeResilience."""
 
     degraded: bool = False
     reason_code: Optional[str] = None
@@ -245,10 +238,7 @@ class ResponseProvenance:
 
 @dataclass(slots=True)
 class ExecutionContext:
-    """Base scoped context for any executor.
-
-    No raw giant dict. Specialized contexts extend this.
-    """
+    """Base scoped context for any executor."""
 
     request_id: str
     correlation_id: str
@@ -256,7 +246,6 @@ class ExecutionContext:
     tenant_id: str = "default"
     session_id: Optional[str] = None
     conversation_id: Optional[str] = None
-
     policy_decision_id: Optional[str] = None
     allowed_capabilities: List[str] = field(default_factory=list)
     resource_scope: Dict[str, Any] = field(default_factory=dict)
@@ -275,28 +264,20 @@ class AuthorizedExecutionPlan:
     execution_id: str
     policy_decision_id: str
     topology: ExecutionTopology = ExecutionTopology.DIRECT
-
     allowed_capabilities: List[str] = field(default_factory=list)
     allowed_tools: List[str] = field(default_factory=list)
     allowed_plugins: List[str] = field(default_factory=list)
     allowed_agents: List[str] = field(default_factory=list)
-
     provider_constraints: Dict[str, Any] = field(default_factory=dict)
-
     memory_scope: str = "session"
     resource_scope: Dict[str, Any] = field(default_factory=dict)
-
     budget: ExecutionBudget = field(default_factory=ExecutionBudget)
-
     approval_requirements: List[str] = field(default_factory=list)
     reasoning_modes: List[str] = field(default_factory=list)
-
     workflow_id: Optional[str] = None
     agent_topology: Optional[str] = None
-
     degraded_allowed: bool = True
     degradation_state: Optional[DegradationState] = None
-
     audit_context: Dict[str, Any] = field(default_factory=dict)
     provenance: Optional[DecisionProvenance] = None
 
@@ -323,42 +304,36 @@ class CapabilityDescriptor:
 class ExecutionRequirements:
     """CORTEX-produced requirements before RuntimePolicy evaluation.
 
-    This is the signal contract between IntelligenceRuntime/CORTEX and
-    RuntimePolicy. It carries raw capability and topology signals.
+    This is an advisory signal contract. It must never contain an implicit
+    authorization grant. RuntimePolicy is the only owner that can authorize
+    capabilities or durable writes.
     """
 
     request_id: str
     correlation_id: str
     intent: str = "general_assist"
     intent_confidence: float = 0.0
-
     required_capabilities: List[str] = field(default_factory=list)
     forbidden_capabilities: List[str] = field(default_factory=list)
-
     topology_signals: Dict[str, Any] = field(default_factory=dict)
     reasoning_depth: str = "standard"
-
+    reasoning_modes: List[str] = field(default_factory=list)
     memory_recall_required: bool = False
-    memory_write_allowed: bool = True
+    memory_write_allowed: bool = False
     memory_scope: str = "session"
     memory_top_k: int = 10
     memory_classes: List[str] = field(default_factory=list)
-
     tool_requirements: List[str] = field(default_factory=list)
     plugin_candidates: List[str] = field(default_factory=list)
-
     requires_human_gate: bool = False
     requires_resumability: bool = False
     requires_parallel_execution: bool = False
     requires_agent_delegation: bool = False
-
     max_steps: int = 10
     time_budget_ms: int = 30000
     token_budget: int = 4096
-
     workflow_id: Optional[str] = None
     workflow_version: str = "v1"
-
     risk_signals: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -373,46 +348,31 @@ class RuntimeCapabilitiesSnapshot:
     available_agents: List[str] = field(default_factory=list)
     available_reasoning_modes: List[str] = field(default_factory=list)
     available_plugins: List[str] = field(default_factory=list)
-
     degraded_state: bool = False
     degradation_reason: Optional[str] = None
-
     runtime_mode: str = "normal"
     maintenance_active: bool = False
 
 
 @dataclass(slots=True)
 class GenerationRequest:
-    """Canonical request for any model generation.
-
-    All generation paths (Direct, Reasoning, LangGraph, Medusa, Plugin)
-    must normalize external inputs into this object before invoking
-    PromptRuntime.
-    """
+    """Canonical request for any model generation."""
 
     request_id: str
     correlation_id: str
-
     prompt_contract_id: Optional[str] = None
     prompt_version: Optional[str] = None
-
     messages: List[Dict[str, Any]] = field(default_factory=list)
     context_sections: List[Dict[str, Any]] = field(default_factory=list)
-
     required_capabilities: List[str] = field(default_factory=list)
     forbidden_capabilities: List[str] = field(default_factory=list)
-
     provider_constraints: Dict[str, Any] = field(default_factory=dict)
     model_constraints: Dict[str, Any] = field(default_factory=dict)
-
     temperature: float = 0.7
     max_tokens: Optional[int] = None
-
     response_schema: Dict[str, Any] = field(default_factory=dict)
     streaming: bool = False
-
     policy_decision_id: Optional[str] = None
-
     execution_context: Optional[ExecutionContext] = None
     budget: Optional[ExecutionBudget] = None
 
@@ -420,19 +380,19 @@ class GenerationRequest:
 class ActionExecutionGate:
     """Side-effect enforcement point for all external mutations.
 
-    Any component that mutates the outside world (tool actions, plugin actions,
-    emails, filesystem writes, external APIs, memory writes, admin operations,
-    agent actions) must pass through this gate.
-
-    The gate checks the AuthorizedExecutionPlan. It does not decide policy itself.
+    Any component that mutates the outside world must pass through this gate.
+    The gate checks the AuthorizedExecutionPlan and never decides policy itself.
     """
 
     @staticmethod
     async def authorize(plan: AuthorizedExecutionPlan, action: str) -> bool:
-        """Check whether the authorized plan permits the requested action."""
         if plan is None:
             return False
-        if not plan.degraded_allowed and plan.degradation_state and plan.degradation_state.degraded:
+        if (
+            not plan.degraded_allowed
+            and plan.degradation_state
+            and plan.degradation_state.degraded
+        ):
             return False
         allowed_tools = set(plan.allowed_tools)
         allowed_plugins = set(plan.allowed_plugins)
