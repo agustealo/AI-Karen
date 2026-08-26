@@ -22,11 +22,15 @@ def test_meta_status_values():
 def test_meta_cognitive_state_defaults():
     state = MetaCognitiveState()
     assert state.knowledge_sufficiency == 0.0
-    assert state.confidence == 0.0
+    assert float(state.confidence) == 0.0
 
 
 def test_loop_assessment_creation():
-    fp = StrategyFingerprint(strategy_type="causal", evidence_hash="e1", outcome_class="failure")
+    fp = StrategyFingerprint(
+        strategy_type="causal",
+        evidence_hash="e1",
+        outcome_class="failure",
+    )
     loop = LoopAssessment(is_looping=True, loop_count=3, fingerprint=fp)
     assert loop.is_looping is True
     assert loop.fingerprint.strategy_type == "causal"
@@ -38,7 +42,10 @@ def test_memory_reliability_assessment():
 
 
 def test_verification_need_assessment():
-    vna = VerificationNeedAssessment(required=True, reason=MetaReasonCode.LOW_MEMORY_CONFIDENCE)
+    vna = VerificationNeedAssessment(
+        required=True,
+        reason=MetaReasonCode.LOW_MEMORY_CONFIDENCE,
+    )
     assert vna.required is True
 
 
@@ -48,6 +55,11 @@ def test_reasoning_depth_recommendation():
 
 
 def test_belief_conflict_summary():
-    cs = BeliefConflictSummary(conflict_id="c1", claim_a="a", claim_b="b", severity="high")
+    cs = BeliefConflictSummary(
+        conflict_id="c1",
+        claim_a="a",
+        claim_b="b",
+        severity="high",
+    )
     assert cs.conflict_id == "c1"
     assert cs.severity == "high"
