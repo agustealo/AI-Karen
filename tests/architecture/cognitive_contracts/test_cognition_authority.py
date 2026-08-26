@@ -1,7 +1,8 @@
 """Architecture gates for cognitive authority convergence.
 
-These tests prevent retired orchestration authority from reappearing inside Core
-reasoning and ensure CORTEX has one verification-policy owner.
+These tests prevent retired orchestration authority from reappearing inside Core,
+ensure CORTEX has one verification-policy owner, and keep ML/NLP prediction
+authority under ``core.intelligence``.
 """
 
 from __future__ import annotations
@@ -11,7 +12,9 @@ from pathlib import Path
 
 CORE = Path(__file__).resolve().parents[3] / "src" / "ai_karen_engine" / "core"
 REASONING = CORE / "reasoning"
-SELECTOR = CORE / "cortex" / "behavior" / "selector.py"
+CORTEX = CORE / "cortex"
+INTELLIGENCE = CORE / "intelligence"
+SELECTOR = CORTEX / "behavior" / "selector.py"
 DEFAULTS = REASONING / "defaults.py"
 REASONING_INIT = REASONING / "__init__.py"
 
@@ -77,3 +80,38 @@ def test_behavior_selector_delegates_verification_policy() -> None:
     assert "_evaluate_verification" not in methods
     assert "VerificationDecider" in source
     assert "verification_decider.decide" in source
+
+
+def test_cortex_duplicate_predictor_registry_is_retired() -> None:
+    assert not (CORTEX / "predictors.py").exists()
+    assert (INTELLIGENCE / "intelligence_runtime.py").is_file()
+    assert (INTELLIGENCE / "ml").is_dir()
+
+
+def test_cortex_duplicate_nlp_analyzer_is_retired() -> None:
+    assert not (CORTEX / "analysis" / "spacy_analyzer.py").exists()
+    assert not (CORTEX / "analysis" / "__init__.py").exists()
+    assert (INTELLIGENCE / "linguistic" / "spacy_analyzer.py").is_file()
+
+
+def test_core_does_not_import_retired_cortex_prediction_or_analysis_paths() -> None:
+    retired_modules = {
+        "ai_karen_engine.core.cortex.predictors",
+        "ai_karen_engine.core.cortex.analysis",
+        "ai_karen_engine.core.cortex.analysis.spacy_analyzer",
+    }
+    violations: list[str] = []
+
+    for path, source in _python_sources(CORE):
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if any(module == retired or module.startswith(retired + ".") for retired in retired_modules):
+                    violations.append(f"{path.relative_to(CORE)} imports {module}")
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if any(alias.name == retired or alias.name.startswith(retired + ".") for retired in retired_modules):
+                        violations.append(f"{path.relative_to(CORE)} imports {alias.name}")
+
+    assert not violations, "Retired CORTEX prediction/NLP authority is still referenced: " + "; ".join(violations)
