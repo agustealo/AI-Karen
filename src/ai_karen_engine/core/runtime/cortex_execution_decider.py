@@ -115,7 +115,12 @@ class CortexExecutionDecider:
         memory_recall_required = bool(
             analysis.get("memory_recall_required", False)
         ) or bool(meta.get("memory_recall_required", False))
-        memory_write_requested = not bool(analysis.get("memory_write_denied", False))
+        memory_write_requested = bool(
+            analysis.get("memory_write_requested", False)
+            or meta.get("memory_write_requested", False)
+        )
+        if analysis.get("memory_write_denied", False):
+            memory_write_requested = False
         memory_scope = str(
             analysis.get("memory_scope", meta.get("memory_scope", "session"))
         )
@@ -210,7 +215,9 @@ class CortexExecutionDecider:
         denied_capabilities = list(
             set(denied_capabilities) | set(policy_decision.denied_capabilities)
         )
-        memory_write_allowed = "memory.write" in required_capabilities
+        memory_write_allowed = (
+            memory_write_requested and "memory.write" in required_capabilities
+        )
 
         if self._force_graph:
             graph_required = True
@@ -357,6 +364,7 @@ class CortexExecutionDecider:
                 "reasoning_required": bool(reasoning_modes)
                 or topology.get("reasoning_depth") == "deep",
                 "memory_recall_required": memory_policy.get("recall_required", False),
+                "memory_write_requested": memory_policy.get("write_requested", False),
                 "memory_write_denied": memory_policy.get("write_denied", False),
                 "memory_scope": memory_policy.get("scope", "session"),
                 "memory_top_k": memory_policy.get("top_k", 10),
@@ -406,6 +414,7 @@ class CortexExecutionDecider:
             "reasoning_modes": [],
             "reasoning_required": False,
             "memory_recall_required": False,
+            "memory_write_requested": False,
             "memory_write_denied": False,
             "memory_scope": "session",
             "memory_top_k": 10,
@@ -500,6 +509,7 @@ class CortexExecutionDecider:
     def _infer_memory_policy_from_analysis(self, analysis: Any) -> Dict[str, Any]:
         policy: Dict[str, Any] = {
             "recall_required": False,
+            "write_requested": False,
             "write_denied": False,
             "scope": "session",
             "top_k": 10,
