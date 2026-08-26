@@ -26,17 +26,132 @@ BEGIN
     END LOOP;
 END $$;
 
--- Provider identifiers are tenant-local, not globally unique.
+-- Tenant-local identity and account uniqueness.
 ALTER TABLE identity_providers DROP CONSTRAINT IF EXISTS identity_providers_provider_id_key;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_providers_tenant_provider
     ON identity_providers (tenant_id, provider_id)
     WHERE tenant_id IS NOT NULL;
 
--- External account identifiers are likewise tenant-local.
 ALTER TABLE external_accounts DROP CONSTRAINT IF EXISTS uq_external_accounts_provider_identifier;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_external_accounts_tenant_provider_identifier
     ON external_accounts (tenant_id, provider_id, account_identifier)
     WHERE tenant_id IS NOT NULL;
+
+-- Composite identity keys provide database-level tenant consistency for relationships.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_providers_tenant_id
+    ON identity_providers (tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_credentials_tenant_id
+    ON credentials (tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_external_accounts_tenant_id
+    ON external_accounts (tenant_id, id);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_credentials_tenant_provider') THEN
+        ALTER TABLE credentials
+            ADD CONSTRAINT fk_credentials_tenant_provider
+            FOREIGN KEY (tenant_id, provider_id)
+            REFERENCES identity_providers (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_credential_secrets_tenant_credential') THEN
+        ALTER TABLE credential_secrets
+            ADD CONSTRAINT fk_credential_secrets_tenant_credential
+            FOREIGN KEY (tenant_id, credential_id)
+            REFERENCES credentials (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_external_accounts_tenant_provider') THEN
+        ALTER TABLE external_accounts
+            ADD CONSTRAINT fk_external_accounts_tenant_provider
+            FOREIGN KEY (tenant_id, provider_id)
+            REFERENCES identity_providers (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_credential_bindings_tenant_credential') THEN
+        ALTER TABLE credential_bindings
+            ADD CONSTRAINT fk_credential_bindings_tenant_credential
+            FOREIGN KEY (tenant_id, credential_id)
+            REFERENCES credentials (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_credential_bindings_tenant_account') THEN
+        ALTER TABLE credential_bindings
+            ADD CONSTRAINT fk_credential_bindings_tenant_account
+            FOREIGN KEY (tenant_id, external_account_id)
+            REFERENCES external_accounts (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_account_sessions_tenant_credential') THEN
+        ALTER TABLE account_sessions
+            ADD CONSTRAINT fk_account_sessions_tenant_credential
+            FOREIGN KEY (tenant_id, credential_id)
+            REFERENCES credentials (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_account_sessions_tenant_account') THEN
+        ALTER TABLE account_sessions
+            ADD CONSTRAINT fk_account_sessions_tenant_account
+            FOREIGN KEY (tenant_id, external_account_id)
+            REFERENCES external_accounts (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_auth_grants_tenant_credential') THEN
+        ALTER TABLE auth_grants
+            ADD CONSTRAINT fk_auth_grants_tenant_credential
+            FOREIGN KEY (tenant_id, credential_id)
+            REFERENCES credentials (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_auth_grants_tenant_provider') THEN
+        ALTER TABLE auth_grants
+            ADD CONSTRAINT fk_auth_grants_tenant_provider
+            FOREIGN KEY (tenant_id, provider_id)
+            REFERENCES identity_providers (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_token_leases_tenant_credential') THEN
+        ALTER TABLE token_leases
+            ADD CONSTRAINT fk_token_leases_tenant_credential
+            FOREIGN KEY (tenant_id, credential_id)
+            REFERENCES credentials (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_login_attempts_tenant_credential') THEN
+        ALTER TABLE login_attempts
+            ADD CONSTRAINT fk_login_attempts_tenant_credential
+            FOREIGN KEY (tenant_id, credential_id)
+            REFERENCES credentials (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_login_attempts_tenant_account') THEN
+        ALTER TABLE login_attempts
+            ADD CONSTRAINT fk_login_attempts_tenant_account
+            FOREIGN KEY (tenant_id, external_account_id)
+            REFERENCES external_accounts (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_credential_audit_tenant_credential') THEN
+        ALTER TABLE credential_audit_events
+            ADD CONSTRAINT fk_credential_audit_tenant_credential
+            FOREIGN KEY (tenant_id, credential_id)
+            REFERENCES credentials (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_credential_audit_tenant_account') THEN
+        ALTER TABLE credential_audit_events
+            ADD CONSTRAINT fk_credential_audit_tenant_account
+            FOREIGN KEY (tenant_id, account_id)
+            REFERENCES external_accounts (tenant_id, id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_credential_audit_tenant_provider') THEN
+        ALTER TABLE credential_audit_events
+            ADD CONSTRAINT fk_credential_audit_tenant_provider
+            FOREIGN KEY (tenant_id, provider_id)
+            REFERENCES identity_providers (tenant_id, id);
+    END IF;
+END $$;
 
 -- The old two-column uniqueness rule accidentally allowed only one non-primary binding.
 ALTER TABLE credential_bindings DROP CONSTRAINT IF EXISTS uq_external_account_primary;
