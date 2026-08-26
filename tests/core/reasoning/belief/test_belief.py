@@ -1,207 +1,333 @@
+"""
+Tests for COG-BELIEF-1 belief / uncertainty / contradiction engine.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
 import pytest
 
-from ai_karen_engine.core.reasoning.belief.assessment import BeliefEngine, ConfidenceMetrics
 from ai_karen_engine.core.reasoning.belief.contracts import (
-    BeliefAssessment,
     BeliefClaim,
-    BeliefEvidence,
     BeliefVerdict,
     ClaimStatus,
-    ContradictionSeverity,
-    EpistemicConfidence,
+    ClaimScope,
+    ClaimTemporalValidity,
+    ConfidenceMetrics,
+    ContradictionKind,
+    ContradictionNature,
+    Evidence,
     EvidenceRelation,
     EvidenceStrength,
     EvidenceType,
+    RevisionAction,
+    make_claim_id,
+    make_evidence_id,
 )
+from ai_karen_engine.core.reasoning.belief.assessment import BeliefEngine
 from ai_karen_engine.core.reasoning.belief.contradiction import ContradictionDetector
-from ai_karen_engine.core.reasoning.belief.revision import BeliefRevisionEngine, RevisionAction
-from ai_karen_engine.core.reasoning.belief.temporal import TemporalBeliefManager
+from ai_karen_engine.core.reasoning.belief.revision import BeliefRevisionEngine
+from ai_karen_engine.core.reasoning.belief.temporal import TemporalReasoner
 
 
-def make_claim(**overrides):
-    defaults = dict(
-        claim_id="claim_1",
-        subject="Karen",
-        predicate="uses",
-        object="Ollama",
-        status=ClaimStatus.INFERRED,
-        confidence=0.5,
-        source=EvidenceType.SYSTEM_INFERENCE,
-        tenant_id="t1",
+def make_temporal(
+    asserted_at: datetime | None = None,
+    observed_at: datetime | None = None,
+    last_verified_at: datetime | None = None,
+    valid_until: datetime | None = None,
+) -> ClaimTemporalValidity:
+    return ClaimTemporalValidity(
+        asserted_at=asserted_at,
+        observed_at=observed_at,
+        valid_from=None,
+        valid_until=valid_until,
+        last_verified_at=last_verified_at,
     )
-    defaults.update(overrides)
-    return BeliefClaim(**defaults)
 
 
-def make_evidence(**overrides):
-    defaults = dict(
-        evidence_id="ev_1",
-        claim_id="claim_1",
-        type=EvidenceType.TOOL_RESULT,
-        relation=EvidenceRelation.SUPPORTS,
-        strength=EvidenceStrength.MODERATE,
-        confidence=0.8,
-        source_ref="tool:models",
-        tenant_id="t1",
+def make_claim(
+    claim_id: str = "claim_1",
+    subject: str = "preferred_provider",
+    predicate: str = "is",
+    object: str = "Ollama",
+    status: ClaimStatus = ClaimStatus.OBSERVED,
+    source: EvidenceType = EvidenceType.OBSERVATION,
+    confidence: float = 0.8,
+    tenant_id: str = "t1",
+    user_id: str = "u1",
+    asserted_at: datetime | None = None,
+    observed_at: datetime | None = None,
+    last_verified_at: datetime | None = None,
+    valid_until: datetime | None = None,
+) -> BeliefClaim:
+    now = datetime.utcnow()
+    asserted_at = asserted_at or now
+    observed_at = observed_at or asserted_at
+    last_verified_at = last_verified_at or observed_at
+    temporal = make_temporal(
+        asserted_at=asserted_at,
+        observed_at=observed_at,
+        last_verified_at=last_verified_at,
+        valid_until=valid_until,
     )
-    defaults.update(overrides)
-    return BeliefEvidence(**defaults)
+    return BeliefClaim(
+        claim_id=claim_id,
+        subject=subject,
+        predicate=predicate,
+        object=object,
+        status=status,
+        source=source,
+        source_ref="ref-1",
+        scope=ClaimScope.USER,
+        confidence=confidence,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        claim_format="triple",
+        provenance="test",
+        evidence_ids=[],
+        contradictions=[],
+        superseded_by=None,
+        version=1,
+        temporal=temporal,
+    )
+
+
+def make_evidence(
+    evidence_id: str = "ev1",
+    type: EvidenceType = EvidenceType.OBSERVATION,
+    relation: EvidenceRelation = EvidenceRelation.SUPPORTS,
+    strength: EvidenceStrength = EvidenceStrength.MODERATE,
+    confidence: float = 0.8,
+    observed_at: datetime | None = None,
+    tenant_id: str = "t1",
+    user_id: str = "u1",
+    source: str = "test_source",
+    source_ref: str = "ref",
+    content: str = "evidence content",
+) -> Evidence:
+    observed_at = observed_at or datetime.utcnow()
+    return Evidence(
+        evidence_id=evidence_id,
+        type=type,
+        source=source,
+        source_ref=source_ref,
+        content=content,
+        strength=strength,
+        relation=relation,
+        confidence=confidence,
+        observed_at=observed_at,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
 
 
 class TestClaimAssessment:
-    def test_verified_requires_support(self):
+    def test_inferred_claim_is_not_verified(self):
         engine = BeliefEngine()
-        claim = make_claim(status=ClaimStatus.VERIFIED, confidence=0.9)
-        ev = make_evidence(strength=EvidenceStrength.DEFINITIVE, confidence=0.95)
+        claim = make_claim(
+            status=ClaimStatus.INFERRED,
+            source=EvidenceType.SYSTEM_INFERENCE,
+            confidence=0.6,
+        )
+        ev = make_evidence(type=EvidenceType.SYSTEM_INFERENCE)
         assessment = engine.assess(claim, [ev])
-        assert assessment.verdict in (BeliefVerdict.SUPPORTED, BeliefVerdict.WEAK_SUPPORT)
+        assert assessment.status != ClaimStatus.VERIFIED
+        assert "inferred_not_verified" in assessment.reason_codes
 
-    def test_no_evidence_does_not_fabricate_support(self):
+    def test_user_assertion_and_system_inference_distinguishable(self):
         engine = BeliefEngine()
-        claim = make_claim(status=ClaimStatus.INFERRED, confidence=0.7)
+        user_claim = make_claim(
+            status=ClaimStatus.USER_ASSERTED,
+            source=EvidenceType.USER_STATEMENT,
+        )
+        inferred_claim = make_claim(
+            status=ClaimStatus.INFERRED,
+            source=EvidenceType.SYSTEM_INFERENCE,
+        )
+        user_assessment = engine.assess(user_claim, [])
+        inferred_assessment = engine.assess(inferred_claim, [])
+        assert user_assessment.status == ClaimStatus.USER_ASSERTED
+        assert inferred_assessment.status == ClaimStatus.INFERRED
+        assert "user_asserted_authoritative" in user_assessment.reason_codes
+
+    def test_strong_corroborating_evidence_raises_confidence(self):
+        engine = BeliefEngine()
+        claim = make_claim(
+            status=ClaimStatus.OBSERVED,
+            source=EvidenceType.OBSERVATION,
+            confidence=0.5,
+        )
+        evs = [
+            make_evidence(
+                evidence_id=f"ev{i}",
+                relation=EvidenceRelation.CORROBORATES,
+                strength=EvidenceStrength.STRONG,
+                confidence=0.9,
+            )
+            for i in range(3)
+        ]
+        assessment = engine.assess(claim, evs)
+        assert assessment.overall_confidence > 0.5
+
+    def test_contradictory_evidence_lowers_confidence(self):
+        engine = BeliefEngine()
+        claim = make_claim(
+            status=ClaimStatus.OBSERVED,
+            source=EvidenceType.OBSERVATION,
+            confidence=0.9,
+        )
+        supporting = [
+            make_evidence(
+                evidence_id="sup1",
+                relation=EvidenceRelation.SUPPORTS,
+                strength=EvidenceStrength.STRONG,
+                confidence=0.9,
+            )
+        ]
+        contradicting = [
+            make_evidence(
+                evidence_id="con1",
+                relation=EvidenceRelation.CONTRADICTS,
+                strength=EvidenceStrength.STRONG,
+                confidence=0.9,
+            )
+        ]
+        assessment = engine.assess(claim, supporting + contradicting)
+        assert assessment.overall_confidence < 0.9
+
+    def test_confidence_stays_within_valid_range(self):
+        engine = BeliefEngine()
+        claim = make_claim(confidence=1.0)
         assessment = engine.assess(claim, [])
-        assert assessment.verdict != BeliefVerdict.SUPPORTED
+        assert 0.0 <= assessment.overall_confidence <= 1.0
+        assert 0.0 <= assessment.confidence_metrics.overall <= 1.0
 
-    def test_contradicting_evidence_lowers_confidence(self):
+    def test_conflicting_claims_can_coexist(self):
         engine = BeliefEngine()
-        claim = make_claim(confidence=0.8)
-        ev = make_evidence(relation=EvidenceRelation.CONTRADICTS, confidence=0.9)
-        assessment = engine.assess(claim, [ev])
-        assert float(assessment.confidence) < 0.8
-
-    def test_evidence_refs_are_preserved(self):
-        engine = BeliefEngine()
-        claim = make_claim()
-        ev = make_evidence(evidence_id="evidence-42")
-        assessment = engine.assess(claim, [ev])
-        assert "evidence-42" in assessment.evidence_refs
-
-    def test_assessment_contains_reason_codes(self):
-        engine = BeliefEngine()
-        claim = make_claim()
-        assessment = engine.assess(claim, [])
-        assert assessment.reason_codes
+        claim_a = make_claim(
+            claim_id="a",
+            object="Ollama",
+            asserted_at=datetime.utcnow() - timedelta(days=1),
+        )
+        claim_b = make_claim(
+            claim_id="b",
+            object="LM Studio",
+            asserted_at=datetime.utcnow() - timedelta(days=2),
+        )
+        assessment_a = engine.assess(claim_a, [])
+        assessment_b = engine.assess(claim_b, [])
+        assert assessment_a.claim_id == "a"
+        assert assessment_b.claim_id == "b"
 
 
 class TestTemporalTruth:
-    def test_expired_claim_is_not_current(self):
-        manager = TemporalBeliefManager()
-        claim = make_claim(valid_until=datetime.utcnow() - timedelta(days=1))
-        assert manager.is_current(claim) is False
-
-    def test_future_claim_not_current_yet(self):
-        manager = TemporalBeliefManager()
-        claim = make_claim(valid_from=datetime.utcnow() + timedelta(days=1))
-        assert manager.is_current(claim) is False
-
-    def test_claim_without_window_is_current(self):
-        manager = TemporalBeliefManager()
-        claim = make_claim()
-        assert manager.is_current(claim) is True
-
-    def test_temporal_conflict_detected(self):
-        manager = TemporalBeliefManager()
-        old = make_claim(
+    def test_temporal_change_can_supersede_without_contradiction(self):
+        detector = ContradictionDetector()
+        old_claim = make_claim(
             claim_id="old",
             object="Ollama",
-            valid_until=datetime.utcnow() - timedelta(days=1),
+            asserted_at=datetime.utcnow() - timedelta(days=40),
         )
-        new = make_claim(
+        new_claim = make_claim(
             claim_id="new",
             object="LM Studio",
-            valid_from=datetime.utcnow() - timedelta(hours=12),
+            asserted_at=datetime.utcnow(),
         )
-        conflict = manager.detect_temporal_conflict(old, new)
-        assert conflict is not None
+        nature, superseded = detector.resolve_temporal(old_claim, new_claim)
+        assert nature == ContradictionNature.CHANGE_OVER_TIME
+
+    def test_stale_evidence_reduces_current_applicability(self):
+        engine = BeliefEngine()
+        claim = make_claim(
+            status=ClaimStatus.OBSERVED,
+            source=EvidenceType.MEMORY,
+            observed_at=datetime.utcnow() - timedelta(days=40),
+            last_verified_at=datetime.utcnow() - timedelta(days=40),
+        )
+        ev = make_evidence(
+            observed_at=datetime.utcnow() - timedelta(days=40),
+        )
+        assessment = engine.assess(claim, [ev])
+        assert assessment.verdict in (
+            BeliefVerdict.STALE_EVIDENCE,
+            BeliefVerdict.UNKNOWN,
+            BeliefVerdict.INSUFFICIENT_EVIDENCE,
+        )
+
+    def test_invalid_time_window(self):
+        reasoner = TemporalReasoner()
+        claim = make_claim()
+        claim.temporal.valid_from = datetime.utcnow() + timedelta(days=1)
+        assert not reasoner.is_valid(claim)
+
+    def test_expired_claim_invalid(self):
+        reasoner = TemporalReasoner()
+        claim = make_claim()
+        claim.temporal.valid_until = datetime.utcnow() - timedelta(hours=1)
+        assert not reasoner.is_valid(claim)
+        assert claim.temporal.is_expired()
 
 
 class TestContradictionDetection:
-    def test_direct_contradiction(self):
+    def test_direct_contradiction_detected(self):
         detector = ContradictionDetector()
-        claim = make_claim()
-        ev = make_evidence(relation=EvidenceRelation.CONTRADICTS)
-        contradictions = detector.detect(claim, [ev])
-        assert len(contradictions) == 1
-
-    def test_support_is_not_contradiction(self):
-        detector = ContradictionDetector()
-        claim = make_claim()
-        ev = make_evidence(relation=EvidenceRelation.SUPPORTS)
-        contradictions = detector.detect(claim, [ev])
-        assert contradictions == []
-
-    def test_high_confidence_contradiction_has_severity(self):
-        detector = ContradictionDetector()
-        claim = make_claim(confidence=0.95)
+        claim = make_claim(
+            subject="preferred_provider",
+            object="Ollama",
+            status=ClaimStatus.OBSERVED,
+        )
         ev = make_evidence(
             relation=EvidenceRelation.CONTRADICTS,
+            content="preferred_provider is LM Studio",
             strength=EvidenceStrength.DEFINITIVE,
-            confidence=0.95,
         )
         contradictions = detector.detect(claim, [ev])
-        assert contradictions
-        assert contradictions[0].severity in {
-            ContradictionSeverity.MEDIUM,
-            ContradictionSeverity.HIGH,
-            ContradictionSeverity.CRITICAL,
-        }
+        assert len(contradictions) > 0
+        assert contradictions[0].nature == ContradictionNature.CONTRADICTION
 
-    def test_tenant_mismatch_ignored(self):
+    def test_contradicting_evidence_lowers_confidence(self):
+        engine = BeliefEngine()
+        claim = make_claim(confidence=0.9)
+        supporting = [make_evidence(relation=EvidenceRelation.SUPPORTS)]
+        contradicting = [
+            make_evidence(
+                relation=EvidenceRelation.CONTRADICTS,
+                evidence_id="con1",
+            )
+        ]
+        assessment = engine.assess(claim, supporting + contradicting)
+        assert assessment.overall_confidence < 0.9
+
+    def test_contradiction_between_claims(self):
         detector = ContradictionDetector()
-        claim = make_claim(tenant_id="tenant-a")
-        ev = make_evidence(
-            tenant_id="tenant-b",
-            relation=EvidenceRelation.CONTRADICTS,
+        claim_a = make_claim(
+            claim_id="a",
+            object="Ollama",
+            asserted_at=datetime.utcnow() - timedelta(days=1),
         )
-        assert detector.detect(claim, [ev]) == []
+        claim_b = make_claim(
+            claim_id="b",
+            object="LM Studio",
+            asserted_at=datetime.utcnow(),
+        )
+        result = detector.compare_claims(claim_a, claim_b)
+        assert result is not None
+        assert result.kind == ContradictionKind.DIRECT
 
 
 class TestBeliefRevision:
-    def test_support_can_strengthen(self):
+    def test_strong_evidence_supersedes(self):
         engine = BeliefRevisionEngine()
-        claim = make_claim(confidence=0.4)
-        ev = make_evidence(
-            relation=EvidenceRelation.SUPPORTS,
-            strength=EvidenceStrength.DEFINITIVE,
-            confidence=0.95,
+        claim = make_claim(
+            status=ClaimStatus.OBSERVED,
+            object="cloud-only",
+            confidence=0.8,
+            asserted_at=datetime.utcnow() - timedelta(days=40),
         )
-        action, revision = engine.revise(claim, [ev], [])
-        assert action in (RevisionAction.STRENGTHEN, RevisionAction.KEEP)
-        assert revision is not None
-
-    def test_contradiction_can_weaken(self):
-        engine = BeliefRevisionEngine()
-        claim = make_claim(confidence=0.8)
-        ev = make_evidence(
-            relation=EvidenceRelation.CONTRADICTS,
-            strength=EvidenceStrength.DEFINITIVE,
-            confidence=0.95,
-        )
-        action, revision = engine.revise(claim, [ev], [])
-        assert action in (
-            RevisionAction.WEAKEN,
-            RevisionAction.RETRACT,
-            RevisionAction.KEEP,
-        )
-        assert revision is not None
-
-    def test_supersede_links_claims(self):
-        engine = BeliefRevisionEngine()
-        old_claim = make_claim(claim_id="old", object="Ollama")
-        new_claim = make_claim(claim_id="new", object="LM Studio")
-        revision = engine.supersede(old_claim, new_claim, "provider changed")
-        assert revision.action == RevisionAction.SUPERSEDE
-        assert old_claim.status == ClaimStatus.SUPERSEDED
-        assert old_claim.superseded_by == "new"
-
-    def test_verified_may_strengthen_with_definitive_evidence(self):
-        engine = BeliefRevisionEngine()
-        claim = make_claim(status=ClaimStatus.VERIFIED, confidence=0.8)
         new_ev = make_evidence(
+            evidence_id="new_ev",
+            relation=EvidenceRelation.SUPERSEDES,
             observed_at=datetime.utcnow(),
             strength=EvidenceStrength.DEFINITIVE,
             confidence=0.95,
@@ -328,8 +454,8 @@ class TestConfidenceMetrics:
             source_confidence=2.0,
             evidence_strength=-0.5,
         )
-        assert float(metrics.source_confidence) == 1.0
-        assert float(metrics.evidence_strength) == 0.0
+        assert metrics.source_confidence == 1.0
+        assert metrics.evidence_strength == 0.0
 
 
 __all__ = [
