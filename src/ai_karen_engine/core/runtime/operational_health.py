@@ -27,6 +27,7 @@ _INSECURE_SECRET_MARKERS = {
     "dev-extension-secret-key-change-in-production",
     "dev-extension-api-key-change-in-production",
 }
+_INSECURE_SECRET_FRAGMENTS = ("change_me", "change-me", "changeme", "example")
 
 
 @dataclass(frozen=True)
@@ -127,7 +128,10 @@ class OperationalHealthService:
 
             database_client = get_database_client()
             degraded = bool(database_client.is_degraded())
-            return {"ready": not degraded, "status": "degraded" if degraded else "healthy"}
+            return {
+                "ready": not degraded,
+                "status": "degraded" if degraded else "healthy",
+            }
         except Exception as exc:
             return {
                 "ready": False,
@@ -145,7 +149,10 @@ class OperationalHealthService:
 
             redis_manager = get_redis_manager()
             degraded = bool(redis_manager.is_degraded())
-            return {"ready": not degraded, "status": "degraded" if degraded else "healthy"}
+            return {
+                "ready": not degraded,
+                "status": "degraded" if degraded else "healthy",
+            }
         except Exception as exc:
             return {
                 "ready": False,
@@ -166,6 +173,8 @@ class OperationalHealthService:
             return True
         normalized = value.strip().lower()
         if normalized in _INSECURE_SECRET_MARKERS:
+            return True
+        if any(fragment in normalized for fragment in _INSECURE_SECRET_FRAGMENTS):
             return True
         return len(value.strip()) < 16
 
