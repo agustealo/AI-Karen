@@ -206,6 +206,20 @@ class PromptAssembler:
         }
 
     @staticmethod
+    def render_text_prompt(messages: List[Dict[str, Any]]) -> str:
+        """Render assembled messages for providers that only accept text prompts."""
+
+        rendered: List[str] = []
+        for message in messages:
+            role = str(message.get("role") or "user").strip().lower()
+            content = str(message.get("content") or "").strip()
+            if not content:
+                continue
+            rendered.append(f"<{role}>\n{content}\n</{role}>")
+        rendered.append("<assistant>\n")
+        return "\n\n".join(rendered)
+
+    @staticmethod
     def _calculate_prompt_hash(
         messages: List[Dict[str, Any]],
         metadata: Dict[str, Any],

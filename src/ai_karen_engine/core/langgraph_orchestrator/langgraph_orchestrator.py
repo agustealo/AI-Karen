@@ -66,7 +66,6 @@ from ai_karen_engine.services.formatting.pretty_output_layer import (
 from ai_karen_engine.core.runtime.session_state_manager_compat import SessionStateManager
 from ai_karen_engine.utils.chat_helpers import (
     build_user_identity_line,
-    build_structured_context_sections,
     wants_long_form_markdown_article,
     strip_internal_analysis_leakage,
     is_low_information_content,

@@ -7,7 +7,9 @@ from typing import Any, Dict, List, Optional
 from ai_karen_engine.services.response import ResponseSanitizer
 from ai_karen_engine.core.runtime.provider_runtime import ProviderRuntime
 from ai_karen_engine.core.model_runtime.runtime_contracts import ProviderExecutionResult
+from ai_karen_engine.core.runtime.prompt import get_prompt_runtime_service
 from ..contracts.orchestration_state import LangGraphOrchestrationState
+from ..utils.message_serialization import message_to_history_entry
 
 logger = logging.getLogger(__name__)
 
@@ -105,20 +107,49 @@ class ResponseSynthesisNode:
                         intent = intent_data.get("primary_intent", "general.chat")
                         subtype = intent_data.get("subtype")
 
+                prompt_runtime = get_prompt_runtime_service()
+                prompt_request = prompt_runtime.build_request_from_runtime_context(
+                    messages=[message_to_history_entry(message) for message in messages],
+                    request_context=request_config,
+                    integrated_context=state.get("memory_context") or {},
+                    profile=state.get("user_profile") or {},
+                    workflow_context={
+                        "plan": state.get("execution_plan"),
+                        "tool_results": tool_results,
+                        "reasoning_result": reasoning_result,
+                    },
+                    cortex_intent={
+                        "primary_intent": intent,
+                        "subtype": subtype,
+                    },
+                    token_budget=int(
+                        request_preferences.get("token_budget")
+                        or request_preferences.get("max_input_tokens")
+                        or 4096
+                    ),
+                )
+                assembled_prompt = await prompt_runtime.assemble_prompt(prompt_request)
+
                 request = ChatRequest(
                     message=last_user_message or "",
                     intent=intent,
                     subtype=subtype,
                     context={
-                        "messages": messages,
-                        "tool_results": tool_results,
-                        "reasoning_result": reasoning_result,
-                        "plan": state.get("execution_plan"),
-                        "memory": state.get("memory_context"),
-                        "user_preferences": request_preferences
+                        "messages": assembled_prompt.messages,
+                        "prompt_text": prompt_runtime.render_text_prompt(assembled_prompt.messages),
+                        "prompt_hash": assembled_prompt.prompt_hash,
+                        "prompt_metadata": assembled_prompt.metadata,
+                        "truncation_events": [
+                            {
+                                "section": event.section,
+                                "reason": event.reason,
+                                "items_removed": event.items_removed,
+                            }
+                            for event in assembled_prompt.truncation_events
+                        ],
                     },
                     preferred_model=route_decision.selected_model,
-                    stream=False, 
+                    stream=False,
                     conversation_id=state.get("session_id"),
                 )
 

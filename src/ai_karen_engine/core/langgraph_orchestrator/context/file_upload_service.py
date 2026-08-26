@@ -23,12 +23,13 @@ try:
 except ImportError:
     from ai_karen_engine.pydantic_stub import BaseModel, Field, validator
 
-from .context_manager_adapter import (
-    ContextManager,
-    ContextData,
+from .file_context_store import (
     ContextError,
     ContextErrorType,
-    ContextUpdateRequest,
+    ContextFile,
+    FileContextStore,
+    FileFileContextUpdateRequest,
+    FileUploadStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,7 @@ class FileUploadService:
 
     def __init__(
         self,
-        context_manager: ContextManager,
+        file_context_store: FileContextStore,
         storage_path: str = "./file_uploads",
         max_file_size: int = 100 * 1024 * 1024,  # 100MB
         allowed_file_types: Optional[set] = None,
@@ -152,7 +153,7 @@ class FileUploadService:
             allowed_file_types: Set of allowed file types
             enable_processing: Whether to enable file processing
         """
-        self.context_manager = context_manager
+        self.file_context_store = file_context_store
         self.storage_path = storage_path
         self.max_file_size = max_file_size
         self.allowed_file_types = allowed_file_types or {
@@ -222,7 +223,7 @@ class FileUploadService:
             logger.info("Initializing File Upload Service")
 
             # Initialize context manager if not already initialized
-            if not self.context_manager:
+            if not self.file_context_store:
                 raise ValueError("Context Manager is required")
 
             logger.info("File Upload Service initialized successfully")
@@ -270,7 +271,7 @@ class FileUploadService:
                 )
 
             # Get context
-            context_response = await self.context_manager.get_context(
+            context_response = await self.file_context_store.get_context(
                 request.context_id
             )
             if not context_response.success:
@@ -296,8 +297,6 @@ class FileUploadService:
                 f.write(file_content)
 
             # Create context file
-            from .context_manager_adapter import ContextFile, FileUploadStatus
-
             context_file = ContextFile(
                 file_id=file_id,
                 filename=request.filename,
@@ -315,8 +314,8 @@ class FileUploadService:
             context_data.files.append(context_file)
 
             # Update context
-            update_request = ContextUpdateRequest(files=context_data.files)
-            await self.context_manager.update_context(
+            update_request = FileContextUpdateRequest(files=context_data.files)
+            await self.file_context_store.update_context(
                 context_id=request.context_id, request=update_request
             )
 
@@ -622,7 +621,7 @@ class FileUploadService:
             Step result or None
         """
         # Get context file
-        context_response = await self.context_manager.get_context(job.context_id)
+        context_response = await self.file_context_store.get_context(job.context_id)
         if not context_response.success:
             raise ContextError(
                 message=f"Context {job.context_id} not found",

@@ -784,6 +784,9 @@ class ProviderRuntime:
 
     def _build_provider_prompt(self, request: "ChatRequest") -> str:
         context = request.context if isinstance(request.context, dict) else {}
+        prompt_text = context.get("prompt_text")
+        if isinstance(prompt_text, str) and prompt_text.strip():
+            return prompt_text.strip()
         structured_messages = context.get("messages") if isinstance(context.get("messages"), list) else None
         if structured_messages:
             contract = ResponseContract(latest_user_message=request.message)
