@@ -30,7 +30,13 @@ from ai_karen_engine.core.runtime.contracts import ExecutionContext
 
 
 class SoftReasoner(ReasoningStrategyEngine):
-    """ICML-2025-style verifier-guided first-token embedding exploration."""
+    """Verifier-guided first-token embedding exploration.
+
+    The strategy reports the concrete research profile, acquisition function,
+    and optimizer surrogate used for every run. ``research_aligned`` must not be
+    interpreted as ``paper_faithful`` unless Runtime injects a profile that
+    actually provides the paper's GP/EI/coherence mechanics.
+    """
 
     strategy_id = "soft_exploration"
     version = "v2"
@@ -167,7 +173,17 @@ class SoftReasoner(ReasoningStrategyEngine):
             diagnostics={
                 "strategy": self.strategy_id,
                 "strategy_version": self.version,
-                "research_method": "first_token_embedding_bayesian_exploration",
+                "research_method": "first_token_embedding_bayesian_search",
+                "research_profile": trace.research_profile,
+                "research_fidelity": (
+                    "paper_faithful"
+                    if trace.research_profile == "paper_2025"
+                    and trace.optimizer_surrogate_kind == "gaussian_process"
+                    and trace.acquisition_function == "ei"
+                    else "research_aligned"
+                ),
+                "optimizer_surrogate_kind": trace.optimizer_surrogate_kind,
+                "acquisition_function": trace.acquisition_function,
                 "prompt_version": prompt_version,
                 "runtime_engine": trace.runtime_engine,
                 "model_id": trace.model_id,
@@ -180,6 +196,9 @@ class SoftReasoner(ReasoningStrategyEngine):
                 "improvement": trace.improvement,
                 "seed": trace.seed,
                 "best_candidate_id": best.candidate_id,
+                "sequence_log_probability": best.output.sequence_log_probability,
+                "mean_token_log_probability": best.output.mean_token_log_probability,
+                "first_token_probability": best.output.first_token_probability,
                 "verifier_feedback": best.verification.feedback,
             },
             memory_candidates=[],
