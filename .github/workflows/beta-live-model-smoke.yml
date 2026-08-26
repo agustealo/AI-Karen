@@ -8,7 +8,11 @@ permissions:
 
 jobs:
   live-model-smoke:
-    runs-on: self-hosted
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+      - karen-beta-model
     timeout-minutes: 5
     environment: beta-release
     env:
@@ -21,7 +25,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Verify exact checkout
-        run: python -c "import os, subprocess; actual=subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip(); expected=os.environ['GITHUB_SHA']; assert actual == expected, f'{actual} != {expected}'; print(f'beta_live_model_sha={actual}')"
+        shell: powershell
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:GITHUB_SHA) {
+            throw "Runner checkout $actual does not match expected $env:GITHUB_SHA"
+          }
+          Write-Host "beta_live_model_sha=$actual"
 
       - name: Compile live-model smoke harness
         run: python -m py_compile scripts/beta_live_model_smoke.py
