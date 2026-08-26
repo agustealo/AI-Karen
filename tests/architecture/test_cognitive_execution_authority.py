@@ -39,15 +39,16 @@ def _calls(path: Path) -> list[str]:
     return calls
 
 
-def test_langgraph_reasoning_cannot_mint_authorized_execution_plan() -> None:
-    calls = _calls(REASONING_NODE)
-    assert "AuthorizedExecutionPlan" not in calls, (
-        "LangGraph reasoning may consume AuthorizedExecutionPlan but may not "
-        "construct one. RuntimePolicy/Runtime owns authorization."
-    )
+def test_langgraph_reasoning_decodes_but_does_not_synthesize_authorization() -> None:
     source = _source(REASONING_NODE)
+
     assert "_authorized_plan_from_state" in source
     assert 'state.get("runtime_policy")' in source
+    assert "def _build_plan" not in source
+    assert 'execution_id=f"reasoning-' not in source
+    assert 'allowed_capabilities=["memory.read"' not in source
+    assert "max_reasoning_steps=max_steps" not in source
+    assert "AuthorizedExecutionPlan(**plan_data)" in source
 
 
 def test_langgraph_policy_node_is_validation_only() -> None:
