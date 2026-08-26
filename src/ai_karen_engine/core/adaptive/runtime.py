@@ -22,8 +22,8 @@ from ai_karen_engine.core.adaptive.contracts import (
 )
 from ai_karen_engine.core.adaptive.ranking.baseline import RuleBasedAdaptivePolicy
 from ai_karen_engine.core.adaptive.suggestions.engine import SuggestionEngine
-from ai_karen_engine.core.observability.context import get_observability_context
 from ai_karen_engine.monitoring.adaptive_metrics import get_adaptive_metrics
+from ai_karen_engine.platform.observability.context import get_correlation_context
 
 logger = logging.getLogger(__name__)
 
@@ -64,11 +64,12 @@ class AdaptiveRuntime:
     ) -> AdaptiveRecommendationSet:
         """Produce adaptive recommendations for a request."""
         start = time.time()
-        ctx = get_observability_context()
+        ctx = get_correlation_context()
         request_id = ctx.request_id or str(uuid.uuid4())
         correlation_id = ctx.correlation_id or str(uuid.uuid4())
 
         from ai_karen_engine.core.adaptive.context import AdaptiveContextBuilder
+
         builder = AdaptiveContextBuilder(evidence_provider=self._evidence_provider)
         adaptive_context = builder.build(
             request_id=request_id,
@@ -82,9 +83,7 @@ class AdaptiveRuntime:
             feature_version=feature_version,
         )
 
-        logger.debug(
-            "Adaptive recommend started request_id=%s", request_id
-        )
+        logger.debug("Adaptive recommend started request_id=%s", request_id)
 
         candidates = self._candidate_generator.generate(
             task_signature=task_signature,
@@ -163,7 +162,9 @@ class AdaptiveRuntime:
         try:
             task_type = getattr(task_signature, "task_type", "unknown") or "unknown"
             for suggestion in suggestions:
-                suggestion_type = getattr(suggestion, "suggestion_type", "unknown") or "unknown"
+                suggestion_type = (
+                    getattr(suggestion, "suggestion_type", "unknown") or "unknown"
+                )
                 self._adaptive_metrics.record_suggestion(
                     suggestion_type=suggestion_type,
                     status="emitted",
