@@ -28,9 +28,12 @@ def test_langgraph_injects_core_memory_recall_into_memory_fetch() -> None:
     assert "memory_recall_top_k=self.config.memory_recall_top_k" in orchestrator
     assert "session_state_manager=self._session_state_manager" in orchestrator
     assert "await self._memory_recall(" in node
-    assert "tenant_id and self._memory_recall is not None" in node
+    assert "tenant_id and user_id and self._memory_recall is not None" in node
+    assert "tenant_id=str(tenant_id)" in node
+    assert "user_id=str(user_id)" in node
     assert "top_k=self._memory_recall_top_k" in node
     assert "Memory disabled for this turn: missing tenant_id" in node
+    assert "Memory disabled for this turn: missing user_id" in node
 
 
 def test_stale_memory_service_registry_lookup_is_removed() -> None:
