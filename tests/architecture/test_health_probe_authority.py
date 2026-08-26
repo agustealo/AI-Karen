@@ -13,6 +13,7 @@ PROBES = (
     / "probes.py"
 )
 APP = REPO_ROOT / "src" / "ai_karen_engine" / "app.py"
+LEGACY_SERVER_APP = REPO_ROOT / "server" / "app.py"
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 LEGACY_HEALTH = REPO_ROOT / "server" / "health_endpoints.py"
 
@@ -86,3 +87,31 @@ def test_legacy_server_health_module_is_ping_only() -> None:
     )
     for token in forbidden_authority_tokens:
         assert token not in source
+
+
+def test_remaining_inline_health_debt_is_explicit_and_bounded() -> None:
+    """Keep the final server.app extraction surface visible until it is deleted.
+
+    These are migration-debt routes, not accepted health authorities. The test is
+    intentionally removed when the routes move to their canonical monitoring or
+    admin/operator owners.
+    """
+
+    source = LEGACY_SERVER_APP.read_text(encoding="utf-8")
+    expected_inline_routes = (
+        '@app.get("/health"',
+        '@app.get("/api/health/database"',
+        '@app.get("/api/health/database/test"',
+        '@app.get("/api/health/database/monitor"',
+        '@app.get("/api/health/degraded-mode"',
+    )
+    for token in expected_inline_routes:
+        assert token in source
+
+    # No additional health route family may be added to the composition root.
+    health_route_decorators = [
+        line.strip()
+        for line in source.splitlines()
+        if line.strip().startswith("@app.") and '"/api/health' in line
+    ]
+    assert len(health_route_decorators) == 4
