@@ -12,6 +12,7 @@ from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
     TransformersRuntime,
 )
 from ai_karen_engine.core.runtime.soft_reasoning_runtime import (
+    ReferenceEmbeddingMode,
     TransformersSoftGenerationAdapter,
     TransformersSoftReasoningConfig,
 )
@@ -103,7 +104,16 @@ def test_specialized_adapter_advertises_control_only_after_model_validation() ->
     assert capabilities.supports_first_token_embedding_control is True
     assert capabilities.hidden_size == 8
     assert capabilities.model_id == "local-test-model"
-    assert capabilities.runtime_engine == "transformers:first_token_embedding_hook:v1"
+    assert capabilities.runtime_engine == "transformers:first_token_embedding_hook:v2"
+    assert capabilities.supports_logprobs is False
+
+
+def test_paper_runtime_profile_requires_greedy_reference_last_marker_and_logprobs() -> None:
+    config = TransformersSoftReasoningConfig.paper_2025(25)
+
+    assert config.reference_embedding_mode == ReferenceEmbeddingMode.GREEDY_FIRST_ANSWER_TOKEN
+    assert config.require_last_position is True
+    assert config.collect_logprobs is True
 
 
 def test_prompt_contract_uses_configured_occurrence_from_end() -> None:
@@ -127,6 +137,17 @@ def test_prompt_contract_fails_closed_when_marker_is_missing() -> None:
     )
 
     with pytest.raises(GenerationFailed, match="does not contain"):
+        adapter.validate_prompt_contract("prepared prompt")
+
+
+def test_paper_prompt_contract_requires_marker_at_last_token() -> None:
+    runtime = FakeResolvedRuntime([1, 25, 7])
+    adapter = TransformersSoftGenerationAdapter(
+        runtime,
+        TransformersSoftReasoningConfig.paper_2025(25),
+    )
+
+    with pytest.raises(GenerationFailed, match="last prompt token"):
         adapter.validate_prompt_contract("prepared prompt")
 
 
