@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any, Protocol
 
 from ai_karen_engine.core.contracts.cognitive import ReasoningConfidence, ReasoningDepth
+from ai_karen_engine.core.contracts.values import JsonMap
 
 
 class ReasoningStatus(str, Enum):
@@ -155,7 +156,7 @@ class ReasoningAssessment:
     evidence_sufficiency: float = 0.0
     contradiction_severity: str = ContradictionSeverity.LOW.value
     uncertainty_reasons: list[str] = field(default_factory=list)
-    metrics: dict[str, Any] = field(default_factory=dict)
+    metrics: JsonMap = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.confidence, ReasoningConfidence):
@@ -178,7 +179,7 @@ class ReasoningEscalationRequest:
     requested_topology: str | None = None
     reason: str = ""
     required_capabilities: list[str] = field(default_factory=list)
-    required_budget_delta: dict[str, Any] = field(default_factory=dict)
+    required_budget_delta: JsonMap = field(default_factory=dict)
     evidence_needs: list[ReasoningEvidenceNeed] = field(default_factory=list)
 
 
@@ -186,7 +187,7 @@ class ReasoningEscalationRequest:
 class ReasoningAction:
     action_type: str
     description: str = ""
-    parameters: dict[str, Any] = field(default_factory=dict)
+    parameters: JsonMap = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -210,7 +211,7 @@ class ReasoningRequest:
     objective: str
     reasoning_modes: list[str]
     evidence: list[ReasoningEvidence]
-    constraints: dict[str, Any]
+    constraints: JsonMap
     policy_decision_id: str
     budget: ReasoningBudget
     metadata: dict[str, Any]
@@ -237,9 +238,9 @@ class ReasoningResult:
     status: str
     error_code: str | None = None
     escalation: ReasoningEscalationRequest | None = None
-    memory_candidates: list[dict[str, Any]] = field(default_factory=list)
+    memory_candidates: list[JsonMap] = field(default_factory=list)
     trajectory_ref: str | None = None
-    diagnostics: dict[str, Any] = field(default_factory=dict)
+    diagnostics: JsonMap = field(default_factory=dict)
     schema_version: str = "v1"
 
 
@@ -252,7 +253,7 @@ class ReasoningGenerationClient(Protocol):
 
 
 class ReasoningToolClient(Protocol):
-    async def execute(self, capability: str, query: str, context: Any) -> dict[str, Any]: ...
+    async def execute(self, capability: str, query: str, context: Any) -> JsonMap: ...
 
 
 __all__ = [
