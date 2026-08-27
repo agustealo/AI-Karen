@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.memory.graph.entity_resolution import extract_entity_cues
 from ai_karen_engine.core.memory.graph.service import get_leangraph_service
 from ai_karen_engine.core.runtime.resilience import get_safe_stage_runner
 from ai_karen_engine.platform.memory.postgres.event_source import PostgresEventSource
@@ -120,13 +121,33 @@ class HybridRetrievalRouter:
     async def _query_graph(self, query: MemoryQuery) -> list[MemoryEntry]:
         if not query.text:
             return []
+
+        cues = extract_entity_cues(query.text, max_cues=8)
+        if not cues:
+            return []
+
+        graph_rows_by_event: dict[str, dict[str, Any]] = {}
         try:
-            graph_rows = await self.leangraph.get_entity_context(
-                tenant_id=str(query.tenant_id),
-                user_id=str(query.user_id),
-                entity_text=query.text,
-                limit=min(20, max(2, query.top_k * 2)),
-            )
+            for cue in cues:
+                rows = await self.leangraph.get_entity_context(
+                    tenant_id=str(query.tenant_id),
+                    user_id=str(query.user_id),
+                    entity_text=cue,
+                    limit=min(10, max(2, query.top_k)),
+                )
+                for row in rows or []:
+                    event_id = str(row.get("event_id") or "").strip()
+                    if not event_id:
+                        continue
+                    existing = graph_rows_by_event.get(event_id)
+                    enriched = dict(row)
+                    enriched["matched_entity_cue"] = cue
+                    if existing is None or int(enriched.get("depth") or 999) < int(existing.get("depth") or 999):
+                        graph_rows_by_event[event_id] = enriched
+                    if len(graph_rows_by_event) >= min(40, max(4, query.top_k * 4)):
+                        break
+                if len(graph_rows_by_event) >= min(40, max(4, query.top_k * 4)):
+                    break
         except Exception as exc:
             logger.warning(
                 "memory.graph_source.failed",
@@ -138,15 +159,15 @@ class HybridRetrievalRouter:
             )
             return []
 
-        event_ids = [str(row.get("event_id") or "") for row in graph_rows or []]
+        graph_rows = list(graph_rows_by_event.values())
         event_map = await self.event_source.fetch_many(
             tenant_id=str(query.tenant_id),
             user_id=str(query.user_id),
-            event_ids=event_ids,
+            event_ids=graph_rows_by_event,
         )
 
         entries: list[MemoryEntry] = []
-        for graph_row in graph_rows or []:
+        for graph_row in graph_rows:
             event_id = str(graph_row.get("event_id") or "").strip()
             source = event_map.get(event_id)
             if source is None:
@@ -173,6 +194,7 @@ class HybridRetrievalRouter:
                         "event_id": event_id,
                         "source_type": source.get("source_type"),
                         "source_ref": source.get("source_ref"),
+                        "matched_entity_cue": graph_row.get("matched_entity_cue"),
                         "graph_relationship": graph_row.get("relationship"),
                         "graph_depth": depth,
                         "graph_path": graph_row.get("path") or [],
@@ -182,6 +204,7 @@ class HybridRetrievalRouter:
                         "event_type": source.get("event_type"),
                         "valid_from": self._iso(source.get("valid_from")),
                         "valid_to": self._iso(source.get("valid_to")),
+                        "matched_entity_cue": graph_row.get("matched_entity_cue"),
                         "graph_depth": depth,
                         "graph_relationship": graph_row.get("relationship"),
                         "graph_path": graph_row.get("path") or [],
