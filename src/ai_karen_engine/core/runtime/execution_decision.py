@@ -69,6 +69,7 @@ class ExecutionDecision:
     requires_agent_delegation: bool = False
 
     max_steps: int = 10
+    max_model_calls: int = 10
     time_budget_ms: int = 30000
     token_budget: int = 4096
 
@@ -83,6 +84,15 @@ class ExecutionDecision:
     policy_constraints: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.max_steps < 0:
+            raise ValueError("max_steps must be non-negative")
+        if self.max_model_calls < 0:
+            raise ValueError("max_model_calls must be non-negative")
+        if self.time_budget_ms < 0:
+            raise ValueError("time_budget_ms must be non-negative")
+        if self.token_budget < 0:
+            raise ValueError("token_budget must be non-negative")
+
         if (
             self.topology == ExecutionTopology.DIRECT
             and self.execution_mode == RuntimeExecutionMode.GRAPH
