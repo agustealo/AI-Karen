@@ -21,6 +21,8 @@ on:
       - 'src/ai_karen_engine/core/personalization/**'
       - 'src/ai_karen_engine/core/context/**'
       - 'src/ai_karen_engine/core/memory/**'
+      - 'tests/agent_medusa/test_distributed_run_authority.py'
+      - 'tests/architecture/test_medusa_distributed_run_authority.py'
       - 'tests/core/reasoning/**'
       - 'tests/benchmarks/cognitive/**'
       - 'tests/fixtures/cognitive/**'
@@ -47,6 +49,8 @@ on:
       - 'src/ai_karen_engine/core/personalization/**'
       - 'src/ai_karen_engine/core/context/**'
       - 'src/ai_karen_engine/core/memory/**'
+      - 'tests/agent_medusa/test_distributed_run_authority.py'
+      - 'tests/architecture/test_medusa_distributed_run_authority.py'
       - 'tests/core/reasoning/**'
       - 'tests/benchmarks/cognitive/**'
       - 'tests/fixtures/cognitive/**'
@@ -101,6 +105,13 @@ jobs:
             src/ai_karen_engine/core/adaptive \
             src/ai_karen_engine/core/personalization \
             src/ai_karen_engine/core/memory
+
+      - name: Run Medusa distributed execution authority gates
+        run: |
+          pytest \
+            tests/agent_medusa/test_distributed_run_authority.py \
+            tests/architecture/test_medusa_distributed_run_authority.py \
+            -q --timeout=300 --tb=short
 
       - name: Run cognitive contract architecture gates
         run: |
