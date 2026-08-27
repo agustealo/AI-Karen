@@ -1,8 +1,10 @@
 """Canonical memory formation pipeline.
 
 Transforms runtime observations into coherent episodic context and worthy memory
-candidates, then delegates all durable mutation authority to NeuroVault. Derived
-projections happen only after a successful governed commit.
+candidates, then delegates all durable mutation authority to NeuroVault. Signal
+extraction and admission are delegated to MemoryFormationEvaluator so shadow and
+durable execution share one semantic authority. Derived projections happen only
+after a successful governed commit.
 """
 
 from __future__ import annotations
@@ -20,14 +22,15 @@ from ai_karen_engine.core.memory.episodic import (
     EventSegmenter,
 )
 from ai_karen_engine.core.memory.protocols import VaultContext, VaultPort
-from ai_karen_engine.core.memory.scoring import MemoryWorthinessScorer
-from ai_karen_engine.core.memory.signals import MemorySignal, get_signal_pipeline
+from ai_karen_engine.core.memory.signals import MemorySignal
 from ai_karen_engine.core.memory.types import (
     MemoryEntry,
     MemoryMetadata,
     MemoryNamespace,
     MemoryType,
 )
+
+from .evaluator import MemoryFormationEvaluator
 
 logger = get_logger(__name__)
 
@@ -61,18 +64,18 @@ class EpisodeStateStore(Protocol):
 
 
 class MemoryFormationService:
-    """Form and persist governed durable memory from runtime observations."""
+    """Persist candidates produced by the canonical formation evaluator."""
 
     def __init__(
         self,
         *,
         vault_factory: Callable[[str], VaultPort],
         derived_projector: DerivedProjector,
+        evaluator: MemoryFormationEvaluator,
         episode_state_store: EpisodeStateStore | None = None,
         event_segmenter: EventSegmenter | None = None,
     ) -> None:
-        self.signal_pipeline = get_signal_pipeline()
-        self.worthiness_scorer = MemoryWorthinessScorer()
+        self._evaluator = evaluator
         self._vault_factory = vault_factory
         self._derived_projector = derived_projector
         self._episode_state_store = episode_state_store
@@ -94,26 +97,17 @@ class MemoryFormationService:
         conversation_id: str | None = None,
         policy_context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        normalized_text = str(text or "").strip()
-        tenant_id = str(tenant_id or "").strip()
-        user_id = str(user_id or "").strip()
-        if not normalized_text:
-            return {
-                "status": "noop",
-                "extracted": 0,
-                "admitted": 0,
-                "persisted": 0,
-                "reason": "empty_interaction",
-            }
-        if not tenant_id or not user_id:
-            return {
-                "status": "rejected",
-                "extracted": 0,
-                "admitted": 0,
-                "persisted": 0,
-                "reason": "missing_tenant_or_user_scope",
-            }
+        evaluation = await self._evaluator.evaluate(
+            text=text,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+        if evaluation.reason:
+            return evaluation.summary(persisted=0)
 
+        normalized_text = evaluation.normalized_text
+        tenant_id = evaluation.tenant_id
+        user_id = evaluation.user_id
         request_id = str(request_id or uuid.uuid4())
         correlation_id = str(correlation_id or uuid.uuid4())
         merged_metadata = self._json_safe(dict(metadata or {}))
@@ -132,32 +126,17 @@ class MemoryFormationService:
             metadata=merged_metadata,
         )
 
-        extraction = await self.signal_pipeline.process_text(
-            text=normalized_text,
-            tenant_id=tenant_id,
-            user_id=user_id,
-        )
-
-        admitted: list[tuple[MemorySignal, float]] = []
-        for signal in extraction.signals:
-            worthiness = await self.worthiness_scorer.evaluate(
-                signal.text,
-                signal.signal_type,
+        if not evaluation.admitted:
+            result = evaluation.summary(persisted=0)
+            result.update(
+                {
+                    "episode_group_id": merged_metadata.get("episode_group_id"),
+                    "episode_boundary_reason": merged_metadata.get(
+                        "episode_boundary_reason"
+                    ),
+                }
             )
-            if worthiness.get("is_worthy"):
-                admitted.append((signal, float(worthiness.get("score") or 0.0)))
-
-        if not admitted:
-            return {
-                "status": "degraded" if extraction.status != "success" else "success",
-                "extracted": len(extraction.signals),
-                "admitted": 0,
-                "persisted": 0,
-                "errors": list(extraction.errors),
-                "processing_time_ms": extraction.processing_time_ms,
-                "episode_group_id": merged_metadata.get("episode_group_id"),
-                "episode_boundary_reason": merged_metadata.get("episode_boundary_reason"),
-            }
+            return result
 
         context = VaultContext(
             tenant_id=tenant_id,
@@ -174,11 +153,13 @@ class MemoryFormationService:
         persistence_failures = 0
         projection_failures = 0
         receipts: list[dict[str, Any]] = []
-        errors: list[str] = list(extraction.errors)
+        errors: list[str] = list(evaluation.errors)
         authorization_error: str | None = None
         vault = self._vault_factory(tenant_id)
 
-        for signal, score in admitted:
+        for admitted_signal in evaluation.admitted:
+            signal = admitted_signal.signal
+            score = admitted_signal.score
             entry = self._entry_from_signal(
                 signal=signal,
                 score=score,
@@ -272,8 +253,8 @@ class MemoryFormationService:
         if authorization_error:
             return {
                 "status": "rejected",
-                "extracted": len(extraction.signals),
-                "admitted": len(admitted),
+                "extracted": evaluation.extracted_count,
+                "admitted": evaluation.admitted_count,
                 "persisted": persisted,
                 "persistence_failures": persistence_failures,
                 "projection_failures": projection_failures,
@@ -287,23 +268,23 @@ class MemoryFormationService:
                 "errors": errors,
             }
 
-        status = "success"
-        if projection_failures or persistence_failures or extraction.status != "success":
+        status = evaluation.status
+        if projection_failures or persistence_failures:
             status = "degraded"
         if persisted == 0 and persistence_failures:
             status = "failed"
-        if extraction.status == "failed" and persisted == 0:
+        if evaluation.status == "failed" and persisted == 0:
             status = "failed"
 
         return {
             "status": status,
-            "extracted": len(extraction.signals),
-            "admitted": len(admitted),
+            "extracted": evaluation.extracted_count,
+            "admitted": evaluation.admitted_count,
             "persisted": persisted,
             "persistence_failures": persistence_failures,
             "projection_failures": projection_failures,
             "errors": errors,
-            "processing_time_ms": extraction.processing_time_ms,
+            "processing_time_ms": evaluation.processing_time_ms,
             "request_id": request_id,
             "correlation_id": correlation_id,
             "episode_group_id": merged_metadata.get("episode_group_id"),
