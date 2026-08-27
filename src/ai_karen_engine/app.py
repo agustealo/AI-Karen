@@ -1,10 +1,9 @@
 """Canonical FastAPI application entrypoint for AI KAREN.
 
 All process launchers, containers, and deployment adapters must import the
-application factory from this module. The root ``server`` package remains a
-transitional router compatibility package only; canonical configuration,
-middleware, security, performance, admin registration, lifecycle, and exception
-handling live under ``ai_karen_engine.server``.
+application factory from this module. Canonical configuration, middleware,
+security, performance, router registration, admin registration, lifecycle, and
+exception handling all live under ``ai_karen_engine.server``.
 """
 
 from __future__ import annotations
@@ -30,8 +29,8 @@ from ai_karen_engine.server.config import Settings
 from ai_karen_engine.server.exception_handlers import setup_exception_handlers
 from ai_karen_engine.server.middleware import configure_middleware
 from ai_karen_engine.server.performance import load_performance_settings
+from ai_karen_engine.server.routers import wire_routers
 from ai_karen_engine.server.security import validate_environment_security
-from server.routers import wire_routers
 
 logger = logging.getLogger("kari")
 
