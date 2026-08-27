@@ -40,6 +40,7 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         """Compose scoped source retrievers beneath the one recall authority."""
         from ai_karen_engine.platform.memory.postgres import (
             PostgresProfileRecallRetriever,
+            PostgresProceduralRecallRetriever,
             PostgresRecallRetriever,
         )
 
@@ -49,6 +50,7 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             retrievers=(
                 PostgresRecallRetriever(),
                 PostgresProfileRecallRetriever(),
+                PostgresProceduralRecallRetriever(),
                 get_retrieval_router(),
             )
         )
