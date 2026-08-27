@@ -92,6 +92,12 @@ def test_core_redis_compatibility_shim_is_retired() -> None:
     assert not (CORE_MEMORY / "redis_connection_manager.py").exists()
 
 
+def test_core_legacy_runtime_compatibility_shim_is_retired() -> None:
+    """Concrete legacy persistence must not be re-exported from cognitive Core."""
+
+    assert not (CORE_MEMORY / "_legacy_memory_runtime_impl.py").exists()
+
+
 def test_platform_redis_manager_has_no_memory_semantic_compatibility_api() -> None:
     """The Redis manager is infrastructure, not an alternate memory authority."""
 
