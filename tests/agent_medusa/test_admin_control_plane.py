@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from ai_karen_engine.agent_medusa.control_plane import AgentMedusaControlPlane
+from ai_karen_engine.agent_medusa.execution.run_manager import MedusaRunManager
 from ai_karen_engine.agent_medusa.registry import MedusaRegistry
 
 SENSITIVE_UI_AUTHORITY_FIELDS = {
@@ -18,9 +19,12 @@ SENSITIVE_UI_AUTHORITY_FIELDS = {
 }
 
 
-def test_admin_projection_is_sanitized_and_does_not_fake_runtime_control() -> None:
+def test_admin_projection_is_sanitized_and_does_not_fake_agent_daemon_control() -> None:
     async def scenario() -> None:
-        control = AgentMedusaControlPlane(registry=MedusaRegistry())
+        control = AgentMedusaControlPlane(
+            registry=MedusaRegistry(),
+            run_manager=MedusaRunManager(),
+        )
 
         agent = await control.get_agent("analyst")
         assert not (SENSITIVE_UI_AUTHORITY_FIELDS & agent.keys())
@@ -31,7 +35,12 @@ def test_admin_projection_is_sanitized_and_does_not_fake_runtime_control() -> No
         assert agent["health_status"] in {"healthy", "degraded"}
         assert agent["runtime_control"] == {
             "supported": False,
-            "reason_code": "specialist_lifecycle_is_execution_scoped",
+            "reason_code": "agent_daemon_control_not_applicable",
+        }
+        assert agent["execution_run_control"] == {
+            "supported": True,
+            "scope": "run_id",
+            "actions": ["observe", "cancel"],
         }
 
         collection = await control.list_agents()
