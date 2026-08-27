@@ -34,6 +34,11 @@ from ai_karen_engine.core.cortex.executive import (
     CortexExecutionDecider,
     get_cortex_execution_decider,
 )
+from ai_karen_engine.core.cortex.reasoning_eligibility import (
+    EligibilityDisposition,
+    ReasoningEligibilityDecision,
+    ReasoningModeEligibility,
+)
 
 _COMPAT_EXPORTS = {
     "build_orchestration_input",
@@ -68,6 +73,7 @@ __all__ = [
     "CorrelationIdFactory",
     "CortexExecutionDecider",
     "CortexOutput",
+    "EligibilityDisposition",
     "ExecutionMode",
     "IntentEngine",
     "IntentSignal",
@@ -76,6 +82,8 @@ __all__ = [
     "PredictorEngine",
     "PredictorSignal",
     "ReasoningDepth",
+    "ReasoningEligibilityDecision",
+    "ReasoningModeEligibility",
     "RouteFamily",
     "RoutingDecision",
     "RoutingEngine",
