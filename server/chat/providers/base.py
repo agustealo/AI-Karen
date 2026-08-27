@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class ProviderFeatures:
     """Provider capabilities and features."""
-    
+
     def __init__(
         self,
         streaming: bool = False,
@@ -36,7 +36,7 @@ class ProviderFeatures:
 
 class AIRequest:
     """AI request structure for LLM providers."""
-    
+
     def __init__(
         self,
         messages: List[Dict[str, Any]],
@@ -58,13 +58,13 @@ class AIRequest:
 
 class AIResponse:
     """AI response structure from LLM providers."""
-    
+
     def __init__(
         self,
         content: str,
-        role: str = "assistant",
         provider: str,
         model: str,
+        role: str = "assistant",
         usage: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         response_time: Optional[float] = None
@@ -80,12 +80,12 @@ class AIResponse:
 
 class AIStreamChunk:
     """AI streaming chunk structure."""
-    
+
     def __init__(
         self,
         content: str,
-        role: str = "assistant",
         provider: str,
+        role: str = "assistant",
         is_complete: bool = False,
         metadata: Optional[Dict[str, Any]] = None
     ):
@@ -98,7 +98,7 @@ class AIStreamChunk:
 
 class ProviderStatus:
     """Provider status information."""
-    
+
     def __init__(
         self,
         is_available: bool,
@@ -116,7 +116,7 @@ class ProviderStatus:
 
 class ValidationResult:
     """Validation result for provider configuration."""
-    
+
     def __init__(
         self,
         is_valid: bool,
@@ -130,124 +130,70 @@ class ValidationResult:
 
 class BaseLLMProvider(ABC):
     """Base interface for all LLM providers."""
-    
+
     def __init__(self, provider_id: str, config: Dict[str, Any]):
         self.provider_id = provider_id
         self.config = config
         self._features = None
-    
+
     @property
     def features(self) -> ProviderFeatures:
         """Get provider features and capabilities."""
         if self._features is None:
             self._features = self._get_features()
         return self._features
-    
+
     @abstractmethod
     def _get_features(self) -> ProviderFeatures:
         """Get provider-specific features and capabilities."""
         pass
-    
+
     @abstractmethod
     async def complete(self, request: AIRequest) -> AIResponse:
-        """
-        Complete a chat request non-streaming.
-        
-        Args:
-            request: The AI request to process
-            
-        Returns:
-            AIResponse: The complete response
-            
-        Raises:
-            Exception: If the request fails
-        """
+        """Complete a chat request non-streaming."""
         pass
-    
+
     @abstractmethod
     async def stream(self, request: AIRequest) -> AsyncGenerator[AIStreamChunk, None]:
-        """
-        Stream a chat request.
-        
-        Args:
-            request: The AI request to process
-            
-        Yields:
-            AIStreamChunk: Streaming response chunks
-            
-        Raises:
-            Exception: If the request fails
-        """
+        """Stream a chat request."""
         pass
-    
+
     @abstractmethod
     async def validate_config(self, config: Dict[str, Any]) -> ValidationResult:
-        """
-        Validate provider configuration.
-        
-        Args:
-            config: The configuration to validate
-            
-        Returns:
-            ValidationResult: Validation result with errors/warnings
-        """
+        """Validate provider configuration."""
         pass
-    
+
     @abstractmethod
     async def get_status(self) -> ProviderStatus:
-        """
-        Get the current status of the provider.
-        
-        Returns:
-            ProviderStatus: Current provider status
-        """
+        """Get the current status of the provider."""
         pass
-    
+
     @abstractmethod
     async def configure(self, config: Dict[str, Any]) -> None:
-        """
-        Configure the provider with new settings.
-        
-        Args:
-            config: New configuration settings
-        """
+        """Configure the provider with new settings."""
         pass
-    
+
     @abstractmethod
     async def get_config(self) -> Dict[str, Any]:
-        """
-        Get the current provider configuration.
-        
-        Returns:
-            Dict[str, Any]: Current configuration
-        """
+        """Get the current provider configuration."""
         pass
-    
+
     async def health_check(self) -> ProviderStatus:
-        """
-        Perform a health check on the provider.
-        
-        Returns:
-            ProviderStatus: Health check result
-        """
+        """Perform a health check on the provider."""
         start_time = time.time()
         try:
-            # Try a simple completion request to test connectivity
             test_request = AIRequest(
                 messages=[{"role": "user", "content": "Hello"}],
                 max_tokens=10
             )
             await self.complete(test_request)
-            
             response_time_ms = (time.time() - start_time) * 1000
-            
             return ProviderStatus(
                 is_available=True,
                 is_healthy=True,
                 response_time_ms=response_time_ms,
                 last_checked=datetime.utcnow()
             )
-            
         except Exception as e:
             logger.error(f"Health check failed for provider {self.provider_id}: {e}")
             return ProviderStatus(
@@ -256,47 +202,23 @@ class BaseLLMProvider(ABC):
                 error_message=str(e),
                 last_checked=datetime.utcnow()
             )
-    
+
     def _prepare_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Prepare messages for the specific provider format.
-        
-        Args:
-            messages: Raw message list
-            
-        Returns:
-            List[Dict[str, Any]]: Provider-formatted messages
-        """
+        """Prepare messages for the specific provider format."""
         return messages
-    
+
     def _extract_usage_info(self, response: Any) -> Optional[Dict[str, Any]]:
-        """
-        Extract usage information from provider response.
-        
-        Args:
-            response: Raw provider response
-            
-        Returns:
-            Optional[Dict[str, Any]]: Usage information
-        """
+        """Extract usage information from provider response."""
         return None
-    
+
     def _calculate_response_time(self, start_time: float) -> float:
-        """
-        Calculate response time in milliseconds.
-        
-        Args:
-            start_time: Start time in seconds
-            
-        Returns:
-            float: Response time in milliseconds
-        """
+        """Calculate response time in milliseconds."""
         return (time.time() - start_time) * 1000
-    
+
     async def __aenter__(self):
         """Async context manager entry."""
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
         pass
@@ -304,54 +226,34 @@ class BaseLLMProvider(ABC):
 
 class FallbackManager:
     """Manager for handling provider fallbacks."""
-    
+
     def __init__(self, providers: List[BaseLLMProvider]):
         self.providers = providers
         self.current_index = 0
-    
+
     async def execute_with_fallback(self, request: AIRequest) -> AIResponse:
-        """
-        Execute request with fallback to other providers if primary fails.
-        
-        Args:
-            request: The AI request to execute
-            
-        Returns:
-            AIResponse: Response from successful provider
-            
-        Raises:
-            Exception: If all providers fail
-        """
+        """Execute request with fallback to other providers if primary fails."""
         errors = []
-        
         for i, provider in enumerate(self.providers):
             try:
                 logger.info(f"Attempting request with provider: {provider.provider_id}")
                 response = await provider.complete(request)
-                
-                # Update current index on success
                 self.current_index = i
                 logger.info(f"Request successful with provider: {provider.provider_id}")
-                
                 return response
-                
             except Exception as e:
                 error_msg = f"Provider {provider.provider_id} failed: {str(e)}"
                 logger.warning(error_msg)
                 errors.append(Exception(error_msg))
-                
-                # Try next provider
                 continue
-        
-        # All providers failed
         error_messages = [str(e) for e in errors]
         raise Exception(f"All providers failed: {'; '.join(error_messages)}")
-    
+
     def get_next_provider(self) -> BaseLLMProvider:
         """Get the next provider in the fallback chain."""
         next_index = (self.current_index + 1) % len(self.providers)
         return self.providers[next_index]
-    
+
     def mark_provider_failed(self, provider_id: str) -> None:
         """Mark a provider as failed and move to next."""
         for i, provider in enumerate(self.providers):
