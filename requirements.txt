@@ -1,18 +1,14 @@
 fastapi==0.136.1
 uvicorn
-pyautogui
-urwid
-prompt_toolkit
 pydantic
 pydantic-settings
 python-dotenv
 pytest
 pytest-timeout
+pytest-asyncio
 wheel
 transformers
 sentence-transformers
-hnswlib
-duckdb
 huggingface_hub
 google-generativeai
 openai==2.32.0
@@ -32,7 +28,6 @@ cryptography==47.0.0
 GPUtil
 psutil
 matplotlib
-neo4j
 PyJWT
 PyYAML
 markdown
@@ -41,21 +36,16 @@ pymupdf
 bs4
 plotly
 seaborn
-redis
-fakeredis
 psycopg
 psycopg2-binary
-asyncpg
 aiofiles
 aiohttp
-sqlalchemy
 alembic
 chardet
 httpx==0.28.1
 pyotp
 tenacity
 slowapi
-pytest-asyncio
 bcrypt
 argon2-cffi
 copilotkit==0.1.87
@@ -68,14 +58,11 @@ langgraph==1.1.9
 langgraph-sdk==0.3.13
 langchain-core
 langchain-community
-cryptography==47.0.0
-duckdb
 watchdog
 jsonschema
-opentelemetry-sdk 
+opentelemetry-sdk
 opentelemetry-api
 tiktoken
-# Neuro-recall additional dependencies
 fastmcp
 colorlog
 retry
@@ -90,10 +77,4 @@ xmltodict
 croniter
 mcp
 crawl4ai==0.8.6
-# Optional Playwright
 playwright==1.58.0
-# Optional: zvec is not published on PyPI for all platforms/interpreters.
-# Install manually only when enabling local Zvec features.
-# zvec
-
-kuzu>=0.11.0
