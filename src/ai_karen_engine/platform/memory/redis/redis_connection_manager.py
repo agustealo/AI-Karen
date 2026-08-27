@@ -8,7 +8,6 @@ Provides graceful Redis connection handling with:
 - Proper connection cleanup and resource management
 """
 
-import json
 import os
 import time
 from datetime import datetime, timedelta
@@ -434,12 +433,6 @@ class RedisConnectionManager:
             self._memory_cache.pop(key, None)
             self._cache_ttl.pop(key, None)
 
-    def _k(self, tenant_id: str, user_id: str, kind: str) -> str:
-        return f"kari:{tenant_id}:{user_id}:{kind}"
-
-    def _session_k(self, tenant_id: str, user_id: str, session_id: str, kind: str) -> str:
-        return f"kari:{tenant_id}:{user_id}:session:{session_id}:{kind}"
-
     async def setex(self, key: str, ttl: int, value: str) -> bool:
         return await self.set(key, value, ex=ttl)
 
@@ -501,45 +494,6 @@ class RedisConnectionManager:
     def health(self) -> bool:
         """Sync health check for compatibility."""
         return not self._degraded_mode and self._client is not None
-
-    async def set_short_term(self, tenant_id: str, user_id: str, data: Dict[str, Any]) -> bool:
-        key = self._k(tenant_id, user_id, "short_term")
-        return await self.set(key, json.dumps(data, default=str))
-
-    async def get_short_term(self, tenant_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-        key = self._k(tenant_id, user_id, "short_term")
-        raw = await self.get(key)
-        if raw is None:
-            return None
-        try:
-            return json.loads(raw)
-        except Exception:
-            return None
-
-    async def set_session(self, tenant_id: str, user_id: str, sess_data: Dict[str, Any], session_id: str, ttl_seconds: Optional[int] = None) -> bool:
-        key = self._session_k(tenant_id, user_id, session_id, "session")
-        kwargs: Dict[str, Any] = {}
-        if ttl_seconds is not None:
-            kwargs["ex"] = ttl_seconds
-        return await self.set(key, json.dumps(sess_data, default=str), **kwargs)
-
-    async def get_session(self, tenant_id: str, user_id: str, session_id: str) -> Optional[Dict[str, Any]]:
-        key = self._session_k(tenant_id, user_id, session_id, "session")
-        raw = await self.get(key)
-        if raw is None:
-            return None
-        try:
-            return json.loads(raw)
-        except Exception:
-            return None
-
-    async def flush_short_term(self, tenant_id: str, user_id: str) -> int:
-        key = self._k(tenant_id, user_id, "short_term")
-        return await self.delete(key)
-
-    async def flush_long_term(self, tenant_id: str, user_id: str) -> int:
-        key = self._k(tenant_id, user_id, "long_term")
-        return await self.delete(key)
 
     @property
     def client(self) -> Optional[Redis]:
