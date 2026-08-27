@@ -260,7 +260,9 @@ class RedisDistributedRunStore:
         if record.get("tenant_id") != tenant_id:
             raise DistributedRunTenantMismatch(run_id)
 
-        snapshot = self._snapshot(record)
+        owner = await client.get(self._claim_key(run_id))
+        claim_alive = bool(owner and owner == record.get("owner_worker_id"))
+        snapshot = self._snapshot(record, claim_alive=claim_alive)
         if not snapshot["cancellable"]:
             raise DistributedRunNotCancellable(
                 f"Run {run_id} is {snapshot['status']}, not cancellable"
@@ -281,7 +283,7 @@ class RedisDistributedRunStore:
                 "updated_at": self._iso(now),
             }
         )
-        return self._snapshot(record)
+        return self._snapshot(record, claim_alive=claim_alive)
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
         client = await self._client()
@@ -290,7 +292,9 @@ class RedisDistributedRunStore:
             raise DistributedRunNotFound(run_id)
         if record.get("tenant_id") != tenant_id:
             raise DistributedRunTenantMismatch(run_id)
-        return self._snapshot(record)
+        owner = await client.get(self._claim_key(run_id))
+        claim_alive = bool(owner and owner == record.get("owner_worker_id"))
+        return self._snapshot(record, claim_alive=claim_alive)
 
     async def list_runs(
         self,
@@ -309,7 +313,9 @@ class RedisDistributedRunStore:
             if not record:
                 stale.append(normalized_run_id)
                 continue
-            snapshot = self._snapshot(record)
+            owner = await client.get(self._claim_key(normalized_run_id))
+            claim_alive = bool(owner and owner == record.get("owner_worker_id"))
+            snapshot = self._snapshot(record, claim_alive=claim_alive)
             if include_terminal or snapshot["status"] in {
                 "running",
                 "cancelling",
@@ -320,11 +326,17 @@ class RedisDistributedRunStore:
             await client.srem(index_key, *stale)
         return sorted(snapshots, key=lambda item: item["started_at"] or "", reverse=True)
 
-    def _snapshot(self, record: dict[str, str]) -> dict[str, Any]:
+    def _snapshot(
+        self,
+        record: dict[str, str],
+        *,
+        claim_alive: bool,
+    ) -> dict[str, Any]:
         now = self._now()
         status = record.get("status", "failed")
         lease_expires = self._parse_time(record.get("lease_expires_at"))
-        lease_alive = bool(lease_expires and lease_expires > now)
+        metadata_lease_alive = bool(lease_expires and lease_expires > now)
+        lease_alive = claim_alive and metadata_lease_alive
         if status in self._ACTIVE and not lease_alive:
             status = "orphaned"
         return {
