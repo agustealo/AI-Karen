@@ -5,6 +5,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CORE_MEMORY = ROOT / "src" / "ai_karen_engine" / "core" / "memory"
+MEMORY_CONTROL_ROUTE = (
+    ROOT
+    / "src"
+    / "ai_karen_engine"
+    / "api_routes"
+    / "memory"
+    / "control.py"
+)
 PLATFORM_REDIS = (
     ROOT
     / "src"
@@ -85,6 +93,16 @@ def test_canonical_runtime_blocks_legacy_direct_ledger_writes() -> None:
     assert "MemoryFormationService/NeuroVault" in runtime
     assert "raise RuntimeError(" in runtime
     assert "super()._commit_to_ledger" not in runtime
+
+
+def test_memory_control_route_uses_runtime_feature_flag_authority() -> None:
+    source = MEMORY_CONTROL_ROUTE.read_text(encoding="utf-8")
+    assert "get_feature_flags" in source
+    assert "manager.flags" not in source
+    assert ".set_shadow_mode(" not in source
+    assert "flags.set_tenant_override" in source
+    assert "flags.set_user_override" in source
+    assert "flags.set_global" in source
 
 
 def test_no_default_tenant_in_canonical_memory_factory() -> None:
