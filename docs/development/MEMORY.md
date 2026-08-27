@@ -491,3 +491,25 @@ Memory work should prove:
 - failure reporting rather than fake save success.
 
 Recommended benchmark coverage includes conversational recall, temporal reasoning, multi-hop association, experience reuse, environment/workflow memory, and multi-session action tasks. LoCoMo-style recall alone is insufficient proof of human-like memory behavior.
+
+## 17. Current execution order
+
+Before implementing the richer temporal/associative phases in `MEMORY_GRAPH_DEV_SHEET.md`, complete `MEMORY_WIRING_TRUTH_DEV_SHEET.md`.
+
+This gate exists because the live repository still contains overlapping or stale memory paths: NeuroRecall is canonical, but `HybridRetrievalRouter` currently performs another layer of fusion/ranking; retired Redis/Kuzu-facing imports remain reachable; and associative spreading activation maintains a separate in-memory graph representation.
+
+The required order is:
+
+```text
+MEMORY-WIRING-TRUTH
+  -> collapse recall authority
+  -> remove/rewire retired dependency paths
+  -> establish PostgreSQL/Supabase graph persistence/traversal
+  -> connect existing spreading activation to canonical graph neighborhoods
+  -> prove tenant/provenance/degradation contracts
+  -> MEMORY-GRAPH-2 temporal/associative/experience phases
+```
+
+During MEMORY-WIRING-TRUTH, do not add NetworkX, pgmq, Kuzu, Neo4j, Memgraph, FalkorDB, Graphiti, Mem0, Apache AGE client dependencies, Elasticsearch, Milvus, or another vector/graph database. `pgvector`, `pg_trgm`, `pg_cron`, pgTAP, RLS, and recursive CTE traversal are PostgreSQL/Supabase capabilities rather than reasons to add Python runtime dependencies.
+
+Any external graph-compute or graph-storage dependency requires a benchmark-backed ADR after the existing KAREN implementation has been measured.
