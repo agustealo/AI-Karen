@@ -19,7 +19,6 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 
 from ai_karen_engine.core.logging import get_structured_logger
@@ -40,7 +39,6 @@ from ai_karen_engine.utils.chat_helpers import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
-security = HTTPBearer()
 
 
 def get_chat_runtime_service():
@@ -132,9 +130,8 @@ class ChatRequest(BaseModel):
         if not v:
             raise ValueError("Messages list cannot be empty")
 
-        # Check total content length
         total_length = sum(len(msg.content) for msg in v)
-        if total_length > 50000:  # 50KB total
+        if total_length > 50000:
             raise ValueError("Total message content too long")
 
         return v
@@ -154,9 +151,9 @@ class ChatResponse(BaseModel):
 class ChatStreamRequest(BaseModel):
     """Compact streaming request accepted by the canonical chat SSE route.
 
-    The client may convey *intent* (message, session_id, preferred provider/model)
-    but must never supply authoritative identity. ``user_id``, ``tenant_id``,
-    ``roles`` and ``permissions`` are resolved server-side from the auth layer.
+    The client may convey intent but must never supply authoritative identity.
+    Identity, roles, permissions, and tenant scope are resolved server-side by
+    the canonical authentication middleware and user-context dependency.
     """
 
     message: str = Field(
@@ -186,51 +183,34 @@ class ChatStreamRequest(BaseModel):
         return v.strip()
 
 
-# Rate limiting and security
 class SecurityValidator:
     """Security validation utilities."""
 
     @staticmethod
     def sanitize_session_id(session_id: Optional[str]) -> str:
-        """Generate secure session ID if not provided."""
         if not session_id:
             return f"session_{uuid.uuid4().hex[:16]}"
-
-        # Validate existing session ID
         if not re.match(r"^[a-zA-Z0-9_-]+$", session_id):
             raise ValueError("Invalid session ID format")
-
         return session_id
 
     @staticmethod
     def validate_user_input(user_input: str, max_length: int = 10000) -> str:
-        """Validate and sanitize user input."""
         if not user_input:
             return ""
-
-        # Length check
         if len(user_input) > max_length:
             raise ValueError(f"Input too long: {len(user_input)} > {max_length}")
-
-        # Remove null bytes and control characters
         sanitized = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", user_input)
-
         return sanitized.strip()
 
 
 def _normalize_messages(messages: List[ChatMessage]) -> List[Dict[str, Any]]:
-    """Normalize and sanitize messages into the canonical role/content format.
-
-    The runtime consumes messages with ``role`` and ``content`` keys.
-    ``message_type`` from the transport model is mapped to ``role``.
-    """
     validated: List[Dict[str, Any]] = []
     for msg in messages:
-        sanitized_content = SecurityValidator.validate_user_input(msg.content)
         validated.append(
             {
                 "role": msg.message_type,
-                "content": sanitized_content,
+                "content": SecurityValidator.validate_user_input(msg.content),
             }
         )
     return validated
@@ -243,23 +223,13 @@ def _build_chat_execution_request_from_stream_payload(
     correlation_id: str,
     response_id: str,
 ) -> ChatExecutionRequest:
-    """Construct a canonical ChatExecutionRequest from a compact stream payload.
-
-    Identity (user_id, tenant_id, roles, permissions) is taken **only** from the
-    server-side ``user`` dependency. Client-supplied values for those fields are
-    intentionally ignored.
-    """
-    preferred_provider = request.preferred_llm_provider
-
     conversation_id = normalize_chat_session_id(session_id)
-
     messages = [
         {
             "role": "user",
             "content": SecurityValidator.validate_user_input(request.message),
         }
     ]
-
     return ChatExecutionRequest(
         messages=messages,
         context=ChatExecutionContext(
@@ -272,7 +242,7 @@ def _build_chat_execution_request_from_stream_payload(
             roles=list(user.get("roles") or []),
             permissions=list(user.get("permissions") or []),
         ),
-        preferred_provider=preferred_provider,
+        preferred_provider=request.preferred_llm_provider,
         preferred_model=request.preferred_model,
         temperature=request.temperature,
         max_tokens=request.max_tokens,
@@ -282,48 +252,37 @@ def _build_chat_execution_request_from_stream_payload(
 
 
 def get_stream_processor():
-    """Get stream processor instance (deprecated shim for backward compat)."""
+    """Deprecated compatibility shim."""
     return True
 
 
-# API endpoints
 @router.post("/chat", response_model=ChatResponse)
 async def create_chat_response(
     request: ChatRequest,
     background_tasks: BackgroundTasks,
     http_request: Request,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """
-    Create a chat response with comprehensive validation and security checks.
-    """
+    """Normalize transport input and delegate execution to ChatRuntime."""
+    del background_tasks
     start_time = time.time()
     correlation_id = http_request.headers.get("X-Correlation-Id", str(uuid.uuid4()))
     response_id = str(uuid.uuid4())
     structured_logger = get_structured_logger()
+    session_id = "unknown"
 
     try:
-        # 1. Transport validation & normalization (route-owned responsibilities).
         session_id = SecurityValidator.sanitize_session_id(request.session_id)
         validated_messages = _normalize_messages(request.messages)
+        preferred_provider = request.preferred_llm_provider or request.provider
+        preferred_model = request.preferred_model or request.model
 
-        preferred_provider = (
-            request.preferred_llm_provider
-            or request.provider
-        )
-        preferred_model = (
-            request.preferred_model
-            or request.model
-        )
-
-        # 2. Log request start (transport telemetry only; runtime owns execution events).
         structured_logger.log_event(
             event="chat_request_started",
             user_id=user["user_id"],
             details={
                 "method": "POST",
-                "endpoint": "/api/chat/chat",
+                "endpoint": "/api/chat",
                 "correlation_id": correlation_id,
                 "message_count": len(validated_messages),
                 "preferred_llm_provider": preferred_provider,
@@ -333,7 +292,6 @@ async def create_chat_response(
             },
         )
 
-        # 3. Delegate the entire execution pipeline to the single chat runtime.
         chat_request = ChatExecutionRequest(
             messages=validated_messages,
             context=ChatExecutionContext(
@@ -373,7 +331,6 @@ async def create_chat_response(
 
         result = await get_chat_runtime().execute(chat_request)
 
-        # 4. Control-plane gate short-circuit (maintenance / degraded-minimal).
         if result.status == ChatExecutionStatus.GATE and result.gate_response is not None:
             gate = result.gate_response
             payload = serialize_runtime_response(gate) or {}
@@ -386,15 +343,16 @@ async def create_chat_response(
 
         processing_time = time.time() - start_time
         response_metadata = result.metadata.to_dict()
+        actual_model = response_metadata.get("actual_model") or preferred_model or "unknown"
 
         structured_logger.log_response(
             status_code=200,
-            endpoint="/api/chat/chat",
+            endpoint="/api/chat",
             user_id=user["user_id"],
             correlation_id=correlation_id,
             response_data={
                 "response_id": response_id,
-                "model": response_metadata.get("actual_model") or preferred_model or "unknown",
+                "model": actual_model,
                 "processing_time": processing_time,
             },
         )
@@ -402,8 +360,10 @@ async def create_chat_response(
         return ChatResponse(
             response_id=response_id,
             content=result.answer,
-            model=response_metadata.get("actual_model") or preferred_model or "unknown",
-            usage=(response_metadata.get("llm") or {}).get("usage", {}) if isinstance(response_metadata.get("llm"), dict) else {},
+            model=actual_model,
+            usage=(response_metadata.get("llm") or {}).get("usage", {})
+            if isinstance(response_metadata.get("llm"), dict)
+            else {},
             metadata=response_metadata,
             timestamp=datetime.utcnow(),
         )
@@ -413,7 +373,7 @@ async def create_chat_response(
     except ValueError as e:
         structured_logger.log_error(
             error=str(e),
-            endpoint="/api/chat/chat",
+            endpoint="/api/chat",
             user_id=user.get("user_id") or "unknown",
             correlation_id=correlation_id,
             context="validation_error",
@@ -422,10 +382,11 @@ async def create_chat_response(
     except Exception as e:
         structured_logger.log_error(
             error=str(e),
-            endpoint=f"/api/chat/sessions/{session_id}",
+            endpoint="/api/chat",
             user_id=user.get("user_id") or "unknown",
             correlation_id=correlation_id,
             context="unexpected_error",
+            details={"session_id": session_id},
         )
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -434,15 +395,9 @@ async def create_chat_response(
 async def stream_chat_response(
     request: ChatStreamRequest,
     http_request: Request,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """
-    Canonical SSE streaming chat endpoint backed by ``ChatRuntime.execute_stream``.
-
-    This is the single streaming ingress for the UI. CopilotKit and other
-    transports also normalize into the same ``ChatExecutionRequest``.
-    """
+    """Canonical SSE ingress backed by ChatRuntime.execute_stream."""
     start_time = time.time()
     correlation_id = http_request.headers.get("X-Correlation-Id", str(uuid.uuid4()))
     response_id = str(uuid.uuid4())
@@ -450,7 +405,6 @@ async def stream_chat_response(
 
     try:
         session_id = SecurityValidator.sanitize_session_id(request.session_id)
-
         chat_request = _build_chat_execution_request_from_stream_payload(
             request,
             user,
@@ -458,14 +412,13 @@ async def stream_chat_response(
             correlation_id,
             response_id,
         )
-
         conversation_id = chat_request.context.conversation_id or session_id
 
         structured_logger.log_event(
             event="chat_stream_started",
             user_id=user["user_id"],
             details={
-                "endpoint": "/api/chat/stream",
+                "endpoint": "/api/stream",
                 "correlation_id": correlation_id,
                 "response_id": response_id,
                 "session_id": session_id,
@@ -496,7 +449,7 @@ async def stream_chat_response(
     except ValueError as e:
         structured_logger.log_error(
             error=str(e),
-            endpoint="/api/chat/stream",
+            endpoint="/api/stream",
             user_id=user.get("user_id") or "unknown",
             correlation_id=correlation_id,
             context="validation_error",
@@ -505,7 +458,7 @@ async def stream_chat_response(
     except Exception as e:
         structured_logger.log_error(
             error=str(e),
-            endpoint="/api/chat/stream",
+            endpoint="/api/stream",
             user_id=user.get("user_id") or "unknown",
             correlation_id=correlation_id,
             context="unexpected_error",
@@ -520,41 +473,21 @@ async def get_chat_session(
     http_request: Request,
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """
-    Get chat session history with validation and access control.
-    """
     correlation_id = http_request.headers.get("X-Correlation-Id", str(uuid.uuid4()))
     structured_logger = get_structured_logger()
-
     try:
-        # Validate session ID format
         if not re.match(r"^[a-zA-Z0-9_-]+$", session_id):
             raise HTTPException(status_code=400, detail="Invalid session ID format")
-
-        # Session management is not part of the current production chat orchestrator contract.
         raise HTTPException(
             status_code=501,
             detail="Chat session retrieval is not implemented on the production orchestrator",
         )
-
-        # Log access
-        structured_logger.log_event(
-            event="chat_session_access",
-            user_id=user["user_id"],
-            details={
-                "method": "GET",
-                "endpoint": f"/api/chat/sessions/{session_id}",
-                "correlation_id": correlation_id,
-                "session_id": session_id,
-            },
-        )
-
     except HTTPException:
         raise
     except Exception as e:
         structured_logger.log_error(
             error=str(e),
-            endpoint=f"/api/chat/sessions/{session_id}",
+            endpoint=f"/api/sessions/{session_id}",
             user_id=user.get("user_id") or "unknown",
             correlation_id=correlation_id,
             context="unexpected_error",
@@ -568,42 +501,21 @@ async def delete_chat_session(
     http_request: Request,
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """
-    Delete chat session with validation and access control.
-    """
     correlation_id = http_request.headers.get("X-Correlation-Id", str(uuid.uuid4()))
     structured_logger = get_structured_logger()
-
     try:
-        # Validate session ID format
         if not re.match(r"^[a-zA-Z0-9_-]+$", session_id):
             raise HTTPException(status_code=400, detail="Invalid session ID format")
-
         raise HTTPException(
             status_code=501,
             detail="Chat session deletion is not implemented on the production orchestrator",
         )
-
-        # Log deletion
-        structured_logger.log_event(
-            event="chat_session_deletion_attempted",
-            user_id=user["user_id"],
-            details={
-                "method": "DELETE",
-                "endpoint": f"/api/chat/sessions/{session_id}",
-                "correlation_id": correlation_id,
-                "session_id": session_id,
-            },
-        )
-
-        return {"message": "Session deleted successfully"}
-
     except HTTPException:
         raise
     except Exception as e:
         structured_logger.log_error(
             error=str(e),
-            endpoint=f"/api/chat/sessions/{session_id}",
+            endpoint=f"/api/sessions/{session_id}",
             user_id=user.get("user_id") or "unknown",
             correlation_id=correlation_id,
             context="unexpected_error",
@@ -616,80 +528,29 @@ async def get_available_models(
     http_request: Request,
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """
-    Get available chat models with user-specific filtering.
-    """
+    """Get available chat models with user-specific filtering."""
     correlation_id = http_request.headers.get("X-Correlation-Id", str(uuid.uuid4()))
     structured_logger = get_structured_logger()
-
     try:
-        # Get configuration
-        from ai_karen_engine.config.config_manager import get_config_value
-
-        all_models = get_config_value("available_models", [])
-
-        # Filter models based on user permissions
-        user_permissions = user.get("permissions", [])
-        available_models = []
-
-        for model in all_models:
-            model_permissions = model.get("required_permissions", [])
-            if all(perm in user_permissions for perm in model_permissions):
-                available_models.append(
-                    {
-                        "id": model["id"],
-                        "name": model["name"],
-                        "description": model.get("description", ""),
-                        "max_tokens": model.get("max_tokens", 4096),
-                        "supports_streaming": model.get("supports_streaming", True),
-                    }
-                )
-
-        # Log access
+        runtime = get_chat_runtime()
+        orchestrator = await runtime.get_orchestrator()
+        if not hasattr(orchestrator, "get_available_models"):
+            raise HTTPException(status_code=501, detail="Model listing not supported")
+        models = await orchestrator.get_available_models(user_context=user)
         structured_logger.log_event(
-            event="chat_models_accessed",
+            event="chat_models_listed",
             user_id=user["user_id"],
-            details={
-                "method": "GET",
-                "endpoint": "/api/chat/models",
-                "correlation_id": correlation_id,
-                "model_count": len(available_models),
-            },
+            details={"correlation_id": correlation_id, "count": len(models)},
         )
-
-        return {"models": available_models, "total_count": len(available_models)}
-
-    except Exception as e:
+        return {"models": models, "count": len(models)}
+    except HTTPException:
+        raise
+    except Exception:
         structured_logger.log_error(
-            error=str(e),
-            endpoint="/api/chat/models",
+            error="Unable to list available models",
+            endpoint="/api/models",
             user_id=user.get("user_id") or "unknown",
             correlation_id=correlation_id,
-            context="unexpected_error",
+            context="model_listing_error",
         )
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-@router.get("/health")
-async def health_check():
-    """Health check endpoint for chat service."""
-    try:
-        await get_chat_orchestrator()
-        await get_stream_processor()
-
-        return {
-            "status": "healthy",
-            "services": {"orchestrator": "healthy", "stream_processor": "healthy"},
-            "timestamp": datetime.utcnow().isoformat(),
-        }
-
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return {
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": datetime.utcnow().isoformat(),
-        }
-
-
-__all__ = ["router"]
+        raise HTTPException(status_code=500, detail="Unable to list available models")
