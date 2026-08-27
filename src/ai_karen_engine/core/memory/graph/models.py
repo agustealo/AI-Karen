@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 
@@ -14,6 +15,10 @@ class MemoryEventNode:
     created_at: float | None = None
     importance: float | None = None
     source: str | None = None
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    observed_at: datetime | None = None
+    recorded_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -33,6 +38,12 @@ class AssertionNode:
     confidence: float | None = None
     polarity: str | None = None
     created_at: float | None = None
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    observed_at: datetime | None = None
+    recorded_at: datetime | None = None
+    lifecycle_state: str = "active"
+    supersedes: str | None = None
 
 
 @dataclass(slots=True)
@@ -44,3 +55,14 @@ class GraphEdge:
     user_id: str | None = None
     conversation_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    observed_at: datetime | None = None
+    recorded_at: datetime | None = None
+    confidence: float = 1.0
+    weight: float = 1.0
+    salience: float = 0.5
+    lifecycle_state: str = "active"
+    source_memory_id: str | None = None
+    source_event_id: str | None = None
+    schema_version: int = 1
