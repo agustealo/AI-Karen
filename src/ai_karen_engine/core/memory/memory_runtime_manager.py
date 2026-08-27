@@ -30,6 +30,7 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         consolidation_adapter: Any | None = None,
         recall_service: Any | None = None,
         formation_service: MemoryFormationService | None = None,
+        stm: Any | None = None,
     ) -> None:
         if retrieval_adapter is not None:
             logger.warning(
@@ -37,12 +38,27 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
                 extra={"replacement": "NeuroRecall"},
             )
         super().__init__(consolidation_adapter=consolidation_adapter)
-        self._neuro_recall = recall_service or self._build_neuro_recall()
-        self._formation_service = formation_service or self._build_formation_service()
+
+        needs_default_stm = recall_service is None or formation_service is None
+        self._stm = stm or (self._build_stm() if needs_default_stm else None)
+        self._neuro_recall = recall_service or self._build_neuro_recall(self._stm)
+        self._formation_service = formation_service or self._build_formation_service(
+            self._stm
+        )
 
     @staticmethod
-    def _build_neuro_recall() -> NeuroRecall:
+    def _build_stm() -> Any:
+        """Build the one bounded-memory adapter shared by recall and formation."""
+        from ai_karen_engine.platform.memory.redis import RedisSTMAdapter
+
+        return RedisSTMAdapter()
+
+    @staticmethod
+    def _build_neuro_recall(stm: Any) -> NeuroRecall:
         """Compose concrete candidate sources beneath the one recall authority."""
+        if stm is None:
+            raise RuntimeError("STM adapter is required to compose NeuroRecall")
+
         from ai_karen_engine.platform.memory.postgres import (
             PostgresProfileRecallRetriever,
             PostgresProceduralRecallRetriever,
@@ -52,12 +68,10 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             PostgresEntityResolver,
         )
         from ai_karen_engine.platform.memory.postgres.event_source import PostgresEventSource
-        from ai_karen_engine.platform.memory.redis import RedisSTMAdapter
 
         from .graph.service import get_leangraph_service
         from .retrieval.retrieval_router import HybridRetrievalRouter
 
-        stm = RedisSTMAdapter()
         source_router = HybridRetrievalRouter(
             stm=stm,
             graph=get_leangraph_service(),
@@ -74,18 +88,19 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         )
 
     @staticmethod
-    def _build_formation_service() -> MemoryFormationService:
+    def _build_formation_service(stm: Any) -> MemoryFormationService:
         """Compose governed durable writes, STM, and rebuildable projections."""
+        if stm is None:
+            raise RuntimeError("STM adapter is required to compose memory formation")
+
         from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
         from ai_karen_engine.platform.memory.postgres.derived_projector import (
             PostgresDerivedMemoryProjector,
         )
         from ai_karen_engine.platform.memory.postgres.vault import PostgresNeuroVault
-        from ai_karen_engine.platform.memory.redis import RedisSTMAdapter
 
         from .projections import HotStateWorker, MemoryGraphWorker, ProjectionManager
 
-        stm = RedisSTMAdapter()
         projection_manager = ProjectionManager(
             {
                 "stm": HotStateWorker(stm),
