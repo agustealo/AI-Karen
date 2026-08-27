@@ -55,20 +55,29 @@ class RuntimeReasoningBridge:
         preferred_provider: str | None,
         preferred_model: str | None,
     ) -> ReasoningActivation:
-        requested_modes = tuple(normalize_reasoning_modes(list(decision.reasoning_modes)))
+        requested_modes = tuple(
+            normalize_reasoning_modes(list(decision.reasoning_modes))
+        )
         authorized_modes = tuple(normalize_reasoning_modes(list(plan.reasoning_modes)))
 
         if not requested_modes:
-            requested_modes = ("evidence_synthesis",)
+            raise ReasoningActivationError(
+                "reasoning_mode_not_requested",
+                "CORTEX did not request a reasoning mode; Runtime cannot invent one",
+            )
+        if not authorized_modes:
+            raise ReasoningActivationError(
+                "reasoning_mode_not_authorized",
+                "RuntimePolicy did not authorize any reasoning mode",
+            )
 
-        if authorized_modes:
-            unauthorized = sorted(set(requested_modes) - set(authorized_modes))
-            if unauthorized:
-                raise ReasoningActivationError(
-                    "reasoning_mode_not_authorized",
-                    "RuntimePolicy did not authorize reasoning mode(s): "
-                    + ",".join(unauthorized),
-                )
+        unauthorized = sorted(set(requested_modes) - set(authorized_modes))
+        if unauthorized:
+            raise ReasoningActivationError(
+                "reasoning_mode_not_authorized",
+                "RuntimePolicy did not authorize reasoning mode(s): "
+                + ",".join(unauthorized),
+            )
 
         optional_strategies = []
         request_metadata: dict[str, Any] = {}
