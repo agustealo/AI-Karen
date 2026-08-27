@@ -5,6 +5,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CORE_MEMORY = ROOT / "src" / "ai_karen_engine" / "core" / "memory"
+INTEGRATIONS_MEMORY = (
+    ROOT / "src" / "ai_karen_engine" / "integrations" / "memory"
+)
 MEMORY_CONTROL_ROUTE = (
     ROOT
     / "src"
@@ -12,6 +15,15 @@ MEMORY_CONTROL_ROUTE = (
     / "api_routes"
     / "memory"
     / "control.py"
+)
+POSTGRES_CONTROL = (
+    ROOT
+    / "src"
+    / "ai_karen_engine"
+    / "platform"
+    / "memory"
+    / "postgres"
+    / "control_repository.py"
 )
 PLATFORM_REDIS = (
     ROOT
@@ -80,14 +92,15 @@ def test_runtime_is_the_explicit_platform_composition_boundary() -> None:
     assert "self._stm =" in runtime
     assert "self._build_neuro_recall(self._stm)" in runtime
     assert "self._build_formation_service(" in runtime
-    assert "self._stm" in runtime
+    assert "self._build_control_service()" in runtime
+    assert "PostgresMemoryControlRepository" in runtime
     assert "PostgresEventSource" in runtime
     assert "PostgresEntityResolver" in runtime
     assert "ProjectionManager" in runtime
     assert "HotStateWorker" in runtime
 
 
-def test_canonical_runtime_blocks_legacy_direct_ledger_writes() -> None:
+def test_canonical_runtime_blocks_direct_ledger_writes() -> None:
     runtime = _text("memory_runtime_manager.py")
     assert "async def _commit_to_ledger" in runtime
     assert "MemoryFormationService/NeuroVault" in runtime
@@ -105,6 +118,27 @@ def test_memory_control_route_uses_runtime_feature_flag_authority() -> None:
     assert "flags.set_global" in source
 
 
+def test_memory_control_route_delegates_persistence_to_control_service() -> None:
+    source = MEMORY_CONTROL_ROUTE.read_text(encoding="utf-8")
+    assert "get_memory_control_service" in source
+    assert "_memory_control().inspect_memory_state" in source
+    assert "_memory_control().list_consent_scopes" in source
+    assert "_memory_control().set_consent_scope" in source
+    assert "_memory_control().list_retention_policies" in source
+    assert "_memory_control().set_retention_policy" in source
+    assert "_memory_control().export_promoted_artifacts" in source
+    assert "sqlalchemy" not in source.lower()
+
+
+def test_postgres_control_repository_is_the_sql_control_adapter() -> None:
+    source = POSTGRES_CONTROL.read_text(encoding="utf-8")
+    assert "from sqlalchemy import" in source
+    assert "PostgresMemoryControlRepository" in source
+    assert "MemoryControlPort" in source
+    assert "MemoryFormationService" not in source
+    assert "NeuroRecall" not in source
+
+
 def test_no_default_tenant_in_canonical_memory_factory() -> None:
     source = _text("types/base.py")
     assert 'tenant_id: str = "default"' not in source
@@ -112,41 +146,29 @@ def test_no_default_tenant_in_canonical_memory_factory() -> None:
 
 
 def test_legacy_chat_memory_config_is_retired() -> None:
-    """The mixed Redis/Milvus/auth config has no valid Core ownership."""
-
     assert not (CORE_MEMORY / "chat_memory_config.py").exists()
 
 
 def test_core_redis_compatibility_shim_is_retired() -> None:
-    """Core must not re-export Platform Redis infrastructure."""
-
     assert not (CORE_MEMORY / "redis_connection_manager.py").exists()
 
 
-def test_legacy_runtime_shim_is_quarantined_to_compatibility_base() -> None:
-    """Legacy SQL runtime may only remain behind the explicit extraction boundary."""
+def test_legacy_sql_memory_runtime_is_retired() -> None:
+    assert not (CORE_MEMORY / "_legacy_memory_runtime_impl.py").exists()
+    assert not (INTEGRATIONS_MEMORY / "legacy_memory_runtime_impl.py").exists()
 
-    shim = CORE_MEMORY / "_legacy_memory_runtime_impl.py"
-    assert shim.exists()
-    assert "integrations.memory.legacy_memory_runtime_impl" in shim.read_text(
-        encoding="utf-8"
-    )
-
-    compatibility_base = _text("_memory_runtime_base.py")
-    assert "from . import _legacy_memory_runtime_impl as _legacy" in compatibility_base
+    base = _text("_memory_runtime_base.py")
+    assert "_legacy_memory_runtime_impl" not in base
+    assert "integrations.memory.legacy_memory_runtime_impl" not in base
 
     for path in CORE_MEMORY.rglob("*.py"):
-        if path.name in {"_legacy_memory_runtime_impl.py", "_memory_runtime_base.py"}:
-            continue
         source = path.read_text(encoding="utf-8")
         assert "_legacy_memory_runtime_impl" not in source, (
-            f"legacy runtime escaped compatibility quarantine: {path.relative_to(CORE_MEMORY)}"
+            f"legacy runtime reference returned: {path.relative_to(CORE_MEMORY)}"
         )
 
 
 def test_platform_redis_manager_has_no_memory_semantic_compatibility_api() -> None:
-    """The Redis manager is infrastructure, not an alternate memory authority."""
-
     source = PLATFORM_REDIS.read_text(encoding="utf-8")
     forbidden = (
         "def _k(",
@@ -166,7 +188,7 @@ def test_platform_redis_manager_has_no_memory_semantic_compatibility_api() -> No
 def test_legacy_redis_helpers_are_absent_from_canonical_memory_cognition() -> None:
     canonical_files = (
         "memory_runtime_manager.py",
-        "formation.py",
+        "formation/service.py",
         "retrieval/retrieval_router.py",
         "projections/hot_state_worker.py",
     )
