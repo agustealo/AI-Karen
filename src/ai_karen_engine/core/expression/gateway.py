@@ -35,6 +35,48 @@ class ExpressionGateway:
         self.settings = settings or get_expression_settings()
         self.circuits = ExpressionCircuitBreakers()
 
+    def availability(self) -> tuple[bool, str | None]:
+        """Return operational gateway availability without generating model text.
+
+        Availability here means at least one configured expression engine is
+        enabled and not blocked by its circuit breaker. Concrete provider
+        registration/credentials remain the provider registry probe's concern.
+        """
+        engine_ids: list[str] = []
+        active_engine = (
+            "local"
+            if self.settings.active_engine == "builtin"
+            else self.settings.active_engine
+        )
+        if active_engine != "disabled":
+            engine_ids.append(active_engine)
+
+        for configured_engine_id in self.settings.engine_fallback_order:
+            if configured_engine_id == "disabled":
+                continue
+            engine_id = (
+                "local" if configured_engine_id == "builtin" else configured_engine_id
+            )
+            if engine_id not in engine_ids:
+                engine_ids.append(engine_id)
+
+        if not engine_ids:
+            return False, "No expression engines configured"
+
+        blocked: list[str] = []
+        for engine_id in engine_ids[:5]:
+            cfg = self.settings.engines.get(engine_id)
+            if not cfg or not cfg.enabled:
+                blocked.append(f"{engine_id}:disabled")
+                continue
+            if self.circuits.is_open(f"expression.engine.{engine_id}"):
+                blocked.append(f"{engine_id}:circuit_open")
+                continue
+            return True, None
+
+        reason = ", ".join(blocked) if blocked else "No enabled expression engines"
+        return False, reason
+
     def _event_payload(self, task: ExpressionTask, **extra: Any) -> dict[str, Any]:
         return {
             "correlation_id": task.correlation_id,
