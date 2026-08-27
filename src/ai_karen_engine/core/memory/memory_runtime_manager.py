@@ -13,17 +13,20 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.runtime.resilience import get_feature_flags
 
-from . import _memory_runtime_base as _base
+from .compat import export_promoted_artifacts, get_metrics, update_memory
 from .control import MemoryControlService
 from .episodic import EventSegmenter
 from .formation import MemoryFormationService
 from .retrieval.neuro_recall import NeuroRecall, RecallRequest, RecallScopeError
+from .shadow_evaluator import MemoryShadowEvaluator
+from .telemetry import memory_metrics
 
 logger = get_logger(__name__)
 
 
-class MemoryRuntimeManager(_base.MemoryRuntimeManager):
+class MemoryRuntimeManager:
     """Canonical memory execution and dependency-composition authority."""
 
     def __init__(
@@ -34,14 +37,16 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         formation_service: MemoryFormationService | None = None,
         control_service: MemoryControlService | None = None,
         stm: Any | None = None,
+        shadow_evaluator: MemoryShadowEvaluator | None = None,
     ) -> None:
         if retrieval_adapter is not None:
             logger.warning(
                 "memory.retrieval_adapter_ignored",
                 extra={"replacement": "NeuroRecall"},
             )
-        super().__init__(consolidation_adapter=consolidation_adapter)
 
+        self.flags = get_feature_flags()
+        self._consolidation_adapter = consolidation_adapter
         needs_default_stm = recall_service is None or formation_service is None
         self._stm = stm or (self._build_stm() if needs_default_stm else None)
         self._neuro_recall = recall_service or self._build_neuro_recall(self._stm)
@@ -49,6 +54,7 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             self._stm
         )
         self._control_service = control_service or self._build_control_service()
+        self._shadow_evaluator = shadow_evaluator or MemoryShadowEvaluator()
 
     @property
     def control_service(self) -> MemoryControlService:
@@ -176,7 +182,7 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         policy_context: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Process observations through the one governed durable-write path."""
+        """Process observations through governed formation or shadow evaluation."""
         shadow_mode = self.flags.is_enabled(
             "memory_shadow_mode_enabled", tenant_id, user_id
         )
@@ -190,19 +196,20 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         if conversation_id:
             merged_metadata.setdefault("conversation_id", conversation_id)
 
+        memory_metrics.increment("interactions_processed")
         if shadow_mode or not learning_enabled:
-            result = await super().process_interaction(
+            result = await self._shadow_evaluator.evaluate(
                 text=text,
                 tenant_id=tenant_id,
                 user_id=user_id,
-                source_type=source_type,
-                source_ref=source_ref,
-                metadata=merged_metadata,
             )
+            memory_metrics.increment("signals_extracted", int(result.get("extracted") or 0))
+            memory_metrics.increment("signals_admitted", int(result.get("admitted") or 0))
+            memory_metrics.increment("shadow_mode_runs")
+            result["learning_enabled"] = bool(learning_enabled)
             result["write_authority"] = "disabled_or_shadow"
             return result
 
-        _base._METRICS["interactions_processed"] += 1
         result = await self._formation_service.process_interaction(
             text=text,
             tenant_id=tenant_id,
@@ -217,11 +224,11 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             conversation_id=conversation_id or kwargs.get("conversation_id"),
             policy_context=policy_context or kwargs.get("policy_context"),
         )
-        _base._METRICS["signals_extracted"] += int(result.get("extracted") or 0)
-        _base._METRICS["signals_admitted"] += int(result.get("admitted") or 0)
-        _base._METRICS["ledger_writes"] += int(result.get("persisted") or 0)
-        _base._METRICS["projection_failures"] += int(
-            result.get("projection_failures") or 0
+        memory_metrics.increment("signals_extracted", int(result.get("extracted") or 0))
+        memory_metrics.increment("signals_admitted", int(result.get("admitted") or 0))
+        memory_metrics.increment("ledger_writes", int(result.get("persisted") or 0))
+        memory_metrics.increment(
+            "projection_failures", int(result.get("projection_failures") or 0)
         )
         result["write_authority"] = "neurovault"
         return result
@@ -236,7 +243,7 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         include_embeddings: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        _base._METRICS["recall_requests"] += 1
+        memory_metrics.increment("recall_requests")
 
         resolved_user_id = user_id
         if isinstance(user_id, dict):
@@ -280,7 +287,7 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
                 }
             )
 
-        _base._METRICS["recall_hits"] += len(formatted)
+        memory_metrics.increment("recall_hits", len(formatted))
         return {
             "results": formatted,
             "status": "degraded" if result.degraded else "success",
@@ -307,9 +314,12 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
     async def set_retention_policy(self, **kwargs: Any) -> dict[str, Any]:
         return await self._control_service.set_retention_policy(**kwargs)
 
+    async def close(self) -> None:
+        """Canonical manager currently owns no base-level background tasks."""
+        return None
+
 
 memory_manager = MemoryRuntimeManager()
-_base.bind_memory_manager(memory_manager)
 
 
 def get_memory_manager() -> MemoryRuntimeManager:
@@ -356,11 +366,6 @@ async def recall_context(
         include_embeddings=include_embeddings,
         **kwargs,
     )
-
-
-update_memory = _base.update_memory
-export_promoted_artifacts = _base.export_promoted_artifacts
-get_metrics = _base.get_metrics
 
 
 __all__ = [
