@@ -1,14 +1,9 @@
 """
 Memory Control API Routes.
 
-Exposes the operator/user-facing control surface for the canonical memory
-ledger and runtime manager:
-- memory inspection
-- consent scope control
-- retention policy control
-- shadow-mode launch gating
-- profile correction ingestion
-- promoted artifact export preview
+Thin ingress for operator/user-facing memory controls. RBAC and request
+translation stay here; persistence and governance execute through the canonical
+MemoryControlService composed by Runtime.
 """
 
 from __future__ import annotations
@@ -24,7 +19,7 @@ from pydantic import Field
 from ai_karen_engine.api_routes.shared.schemas import ErrorHandler
 from ai_karen_engine.auth.rbac_middleware import check_scope
 from ai_karen_engine.core.memory.memory_runtime_manager import (
-    export_promoted_artifacts,
+    get_memory_control_service,
     get_memory_manager,
 )
 from ai_karen_engine.core.runtime.resilience import get_feature_flags
@@ -42,6 +37,10 @@ def get_correlation_id(request: Request) -> str:
 
 def _memory_manager():
     return get_memory_manager()
+
+
+def _memory_control():
+    return get_memory_control_service()
 
 
 def _feature_flags():
@@ -153,6 +152,8 @@ class ProfileCorrectionResponse(ISO8601Model):
 
 class ExportPromotedRequest(ISO8601Model):
     limit: int = Field(100, ge=1, le=500)
+    tenant_id: Optional[str] = None
+    user_id: Optional[str] = None
 
 
 class ExportPromotedResponse(ISO8601Model):
@@ -175,7 +176,12 @@ async def _authorize(request: Request, scope: str) -> None:
 
 
 @router.get("/inspector", response_model=MemoryInspectorResponse)
-async def inspect_memory(request: Request, tenant_id: Optional[str] = None, user_id: Optional[str] = None, limit: int = 20):
+async def inspect_memory(
+    request: Request,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    limit: int = 20,
+):
     """Return a structured memory inspection snapshot."""
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:read")
@@ -183,25 +189,43 @@ async def inspect_memory(request: Request, tenant_id: Optional[str] = None, user
     flags = _feature_flags()
     if not flags.is_enabled("memory_inspector_enabled", tenant_id, user_id):
         raise HTTPException(status_code=403, detail="Memory inspector is disabled")
-    snapshot = await _memory_manager().inspect_memory_state(
+    snapshot = await _memory_control().inspect_memory_state(
         tenant_id=tenant_id,
         user_id=user_id,
         limit=limit,
     )
+    snapshot["feature_flags"] = {
+        "memory_inspector_enabled": flags.is_enabled(
+            "memory_inspector_enabled", tenant_id, user_id
+        ),
+        "memory_consent_controls_enabled": flags.is_enabled(
+            "memory_consent_controls_enabled", tenant_id, user_id
+        ),
+        "memory_retention_controls_enabled": flags.is_enabled(
+            "memory_retention_controls_enabled", tenant_id, user_id
+        ),
+        "memory_shadow_mode_enabled": flags.is_enabled(
+            "memory_shadow_mode_enabled", tenant_id, user_id
+        ),
+    }
+    snapshot["metrics"] = _memory_manager().get_metrics() if hasattr(_memory_manager(), "get_metrics") else {}
     snapshot["correlation_id"] = correlation_id
     return MemoryInspectorResponse(**snapshot)
 
 
 @router.get("/consent", response_model=ConsentScopeListResponse)
-async def list_consent_scopes(request: Request, tenant_id: str, user_id: Optional[str] = None):
-    """List consent scopes for a tenant and optional user."""
+async def list_consent_scopes(
+    request: Request,
+    tenant_id: str,
+    user_id: Optional[str] = None,
+):
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:read")
-
-    flags = _feature_flags()
-    if not flags.is_enabled("memory_consent_controls_enabled", tenant_id, user_id):
+    if not _feature_flags().is_enabled(
+        "memory_consent_controls_enabled", tenant_id, user_id
+    ):
         raise HTTPException(status_code=403, detail="Memory consent controls are disabled")
-    result = await _memory_manager().list_consent_scopes(
+    result = await _memory_control().list_consent_scopes(
         tenant_id=tenant_id,
         user_id=user_id,
     )
@@ -214,18 +238,13 @@ async def list_consent_scopes(request: Request, tenant_id: str, user_id: Optiona
 
 @router.post("/consent", response_model=ConsentScopeResponse)
 async def update_consent_scope(request: Request, body: ConsentScopeRequest):
-    """Create or update a consent scope entry."""
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:write")
-
-    flags = _feature_flags()
-    if not flags.is_enabled(
-        "memory_consent_controls_enabled",
-        body.tenant_id,
-        body.user_id,
+    if not _feature_flags().is_enabled(
+        "memory_consent_controls_enabled", body.tenant_id, body.user_id
     ):
         raise HTTPException(status_code=403, detail="Memory consent controls are disabled")
-    result = await _memory_manager().set_consent_scope(
+    result = await _memory_control().set_consent_scope(
         tenant_id=body.tenant_id,
         user_id=body.user_id,
         scope_name=body.scope_name,
@@ -236,14 +255,11 @@ async def update_consent_scope(request: Request, body: ConsentScopeRequest):
 
 @router.get("/retention", response_model=RetentionPolicyListResponse)
 async def list_retention_policies(request: Request, tenant_id: Optional[str] = None):
-    """List retention policies for a tenant or the global defaults."""
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:read")
-
-    flags = _feature_flags()
-    if not flags.is_enabled("memory_retention_controls_enabled", tenant_id):
+    if not _feature_flags().is_enabled("memory_retention_controls_enabled", tenant_id):
         raise HTTPException(status_code=403, detail="Memory retention controls are disabled")
-    result = await _memory_manager().list_retention_policies(tenant_id=tenant_id)
+    result = await _memory_control().list_retention_policies(tenant_id=tenant_id)
     return RetentionPolicyListResponse(
         correlation_id=correlation_id,
         status=result.get("status", "degraded"),
@@ -253,14 +269,13 @@ async def list_retention_policies(request: Request, tenant_id: Optional[str] = N
 
 @router.post("/retention", response_model=RetentionPolicyResponse)
 async def update_retention_policy(request: Request, body: RetentionPolicyRequest):
-    """Create or update a retention policy entry."""
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:write")
-
-    flags = _feature_flags()
-    if not flags.is_enabled("memory_retention_controls_enabled", body.tenant_id):
+    if not _feature_flags().is_enabled(
+        "memory_retention_controls_enabled", body.tenant_id
+    ):
         raise HTTPException(status_code=403, detail="Memory retention controls are disabled")
-    result = await _memory_manager().set_retention_policy(
+    result = await _memory_control().set_retention_policy(
         tenant_id=body.tenant_id,
         memory_class=body.memory_class,
         ttl_days=body.ttl_days,
@@ -269,15 +284,15 @@ async def update_retention_policy(request: Request, body: RetentionPolicyRequest
 
 
 @router.get("/shadow-mode", response_model=ShadowModeResponse)
-async def get_shadow_mode(request: Request, tenant_id: Optional[str] = None, user_id: Optional[str] = None):
-    """Return the effective memory shadow-mode state."""
+async def get_shadow_mode(
+    request: Request,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+):
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:read")
-
     effective = _feature_flags().is_enabled(
-        "memory_shadow_mode_enabled",
-        tenant_id,
-        user_id,
+        "memory_shadow_mode_enabled", tenant_id, user_id
     )
     return ShadowModeResponse(
         correlation_id=correlation_id,
@@ -291,30 +306,19 @@ async def get_shadow_mode(request: Request, tenant_id: Optional[str] = None, use
 
 @router.post("/shadow-mode", response_model=ShadowModeResponse)
 async def set_shadow_mode(request: Request, body: ShadowModeRequest):
-    """Set memory shadow mode globally or for a tenant/user override."""
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:write")
-
     flags = _feature_flags()
     if body.tenant_id:
         flags.set_tenant_override(
-            body.tenant_id,
-            "memory_shadow_mode_enabled",
-            body.enabled,
+            body.tenant_id, "memory_shadow_mode_enabled", body.enabled
         )
     elif body.user_id:
-        flags.set_user_override(
-            body.user_id,
-            "memory_shadow_mode_enabled",
-            body.enabled,
-        )
+        flags.set_user_override(body.user_id, "memory_shadow_mode_enabled", body.enabled)
     else:
         flags.set_global("memory_shadow_mode_enabled", body.enabled)
-
     effective = flags.is_enabled(
-        "memory_shadow_mode_enabled",
-        body.tenant_id,
-        body.user_id,
+        "memory_shadow_mode_enabled", body.tenant_id, body.user_id
     )
     return ShadowModeResponse(
         correlation_id=correlation_id,
@@ -328,27 +332,19 @@ async def set_shadow_mode(request: Request, body: ShadowModeRequest):
 
 @router.post("/profile/correction", response_model=ProfileCorrectionResponse)
 async def submit_profile_correction(request: Request, body: ProfileCorrectionRequest):
-    """Ingest a user profile correction into the canonical memory ledger."""
     correlation_id = get_correlation_id(request)
     await _authorize(request, "memory:write")
-
     if not _feature_flags().is_enabled(
-        "memory_profile_corrections_enabled",
-        body.tenant_id,
-        body.user_id,
+        "memory_profile_corrections_enabled", body.tenant_id, body.user_id
     ):
         return ProfileCorrectionResponse(
             correlation_id=correlation_id,
             status="disabled",
-            result={
-                "status": "skipped",
-                "reason": "Memory profile corrections are disabled",
-            },
+            result={"status": "skipped", "reason": "Memory profile corrections are disabled"},
         )
     source_text = body.correction_text
     if body.profile_area:
         source_text = f"{body.profile_area}: {source_text}"
-
     result = await _memory_manager().process_interaction(
         text=source_text,
         tenant_id=body.tenant_id,
@@ -361,6 +357,7 @@ async def submit_profile_correction(request: Request, body: ProfileCorrectionReq
             "session_id": body.session_id,
             "source_ref": body.source_ref,
         },
+        correlation_id=correlation_id,
     )
     result["profile_area"] = body.profile_area
     result["confidence"] = body.confidence
@@ -373,11 +370,13 @@ async def submit_profile_correction(request: Request, body: ProfileCorrectionReq
 
 @router.post("/export/promoted", response_model=ExportPromotedResponse)
 async def export_promoted(request: Request, body: ExportPromotedRequest):
-    """Preview promoted artifacts for offline consolidation or review."""
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:read")
-
-    result = await export_promoted_artifacts(limit=body.limit)
+    result = await _memory_control().export_promoted_artifacts(
+        tenant_id=body.tenant_id,
+        user_id=body.user_id,
+        limit=body.limit,
+    )
     return ExportPromotedResponse(
         correlation_id=correlation_id,
         status=result.get("status", "noop"),
@@ -389,7 +388,6 @@ async def export_promoted(request: Request, body: ExportPromotedRequest):
 
 @router.get("/health")
 async def health_check():
-    """Health check for the memory control surface."""
     return {
         "status": "healthy",
         "service": "memory_control",
