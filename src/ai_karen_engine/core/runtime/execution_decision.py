@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from ai_karen_engine.core.reasoning.contracts import normalize_reasoning_modes
 from ai_karen_engine.core.runtime.contracts import ExecutionTopology
 
 
@@ -84,6 +85,8 @@ class ExecutionDecision:
     policy_constraints: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        self.reasoning_modes = normalize_reasoning_modes(self.reasoning_modes)
+
         if self.max_steps < 0:
             raise ValueError("max_steps must be non-negative")
         if self.max_model_calls < 0:
