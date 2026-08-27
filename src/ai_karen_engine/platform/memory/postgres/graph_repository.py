@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 
 from ai_karen_engine.core.memory.graph.models import EntityNode, GraphEdge
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
@@ -80,18 +80,30 @@ class PostgresGraphRepository:
         target_uuid = self._uuid(edge.to_id, "target_id")
         conversation_uuid = self._optional_uuid(edge.conversation_id, "conversation_id")
         metadata = dict(edge.metadata or {})
-        source_event_uuid = self._optional_uuid(metadata.pop("source_event_id", None), "source_event_id")
-        source_memory_uuid = self._optional_uuid(metadata.pop("source_memory_id", None), "source_memory_id")
+        source_event_uuid = self._optional_uuid(
+            metadata.pop("source_event_id", None), "source_event_id"
+        )
+        source_memory_uuid = self._optional_uuid(
+            metadata.pop("source_memory_id", None), "source_memory_id"
+        )
 
         async with async_transaction_scope(tenant_id=tenant_id) as session:
-            duplicate_stmt = select(MemoryRelation.relation_id).where(
-                MemoryRelation.tenant_id == tenant_uuid,
-                MemoryRelation.user_id == user_uuid,
-                MemoryRelation.source_id == source_uuid,
-                MemoryRelation.target_id == target_uuid,
-                MemoryRelation.relation_type == edge.relationship,
-                MemoryRelation.lifecycle_state == "active",
-            ).limit(1)
+            duplicate_stmt = (
+                select(MemoryRelation.relation_id)
+                .where(
+                    MemoryRelation.tenant_id == tenant_uuid,
+                    MemoryRelation.user_id == user_uuid,
+                    MemoryRelation.source_id == source_uuid,
+                    MemoryRelation.target_id == target_uuid,
+                    MemoryRelation.relation_type == edge.relationship,
+                    MemoryRelation.lifecycle_state == "active",
+                    or_(
+                        MemoryRelation.valid_to.is_(None),
+                        MemoryRelation.valid_to > text("CURRENT_TIMESTAMP"),
+                    ),
+                )
+                .limit(1)
+            )
             duplicate = (await session.execute(duplicate_stmt)).scalar_one_or_none()
             if duplicate is not None:
                 return
@@ -159,19 +171,26 @@ class PostgresGraphRepository:
             entity_ids = list((await session.execute(stmt)).scalars().all())
 
         results: list[dict] = []
+        seen_event_ids: set[str] = set()
         for entity_id in entity_ids:
             remaining = max(0, limit - len(results))
             if remaining == 0:
                 break
-            results.extend(
-                await self._find_event_neighbors(
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    seed_id=entity_id,
-                    max_depth=max_depth,
-                    limit=remaining,
-                )
+            rows = await self._find_event_neighbors(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                seed_id=entity_id,
+                max_depth=max_depth,
+                limit=remaining,
             )
+            for row in rows:
+                event_id = str(row["event_id"])
+                if event_id in seen_event_ids:
+                    continue
+                seen_event_ids.add(event_id)
+                results.append(row)
+                if len(results) >= limit:
+                    break
         return results[:limit]
 
     async def _find_event_neighbors(
@@ -198,7 +217,7 @@ class PostgresGraphRepository:
                     1,
                     r.relation_type,
                     ARRAY[
-                        :seed_id::uuid,
+                        CAST(:seed_id AS uuid),
                         CASE WHEN r.source_id = :seed_id THEN r.target_id ELSE r.source_id END
                     ]::uuid[]
                 FROM memory_relation r
