@@ -23,6 +23,7 @@ from ai_karen_engine.core.runtime.policy import (
 logger = logging.getLogger(__name__)
 
 _FORCE_GRAPH_ENV = "KARI_RUNTIME_FORCE_GRAPH"
+_SOFT_REASONING_MAX_MODEL_CALLS = 30
 
 
 class CortexExecutionDecider:
@@ -145,6 +146,14 @@ class CortexExecutionDecider:
         if (reasoning_depth == "deep" or analysis.get("reasoning_required")) and not reasoning_modes:
             reasoning_modes = ["causal", "verify", "refine", "metacognition"]
 
+        inferred_model_calls = int(analysis.get("max_model_calls", max_steps))
+        if "soft_exploration" in reasoning_modes:
+            inferred_model_calls = max(
+                inferred_model_calls,
+                _SOFT_REASONING_MAX_MODEL_CALLS,
+            )
+        max_model_calls = int(meta.get("max_model_calls", inferred_model_calls))
+
         requested_capabilities = list(required_capabilities)
         if memory_write_requested and "memory.write" not in requested_capabilities:
             requested_capabilities.append("memory.write")
@@ -168,6 +177,7 @@ class CortexExecutionDecider:
                 "plugin_candidates": plugin_candidates,
                 "requires_human_gate": requires_human_gate,
                 "reasoning_modes": reasoning_modes,
+                "max_model_calls": max_model_calls,
             },
         )
         policy_decision = await self._policy_enforcer.evaluate(policy_evaluation)
@@ -192,6 +202,7 @@ class CortexExecutionDecider:
                 forbidden_capabilities=list(policy_decision.denied_capabilities),
                 requires_human_gate=True,
                 max_steps=0,
+                max_model_calls=0,
                 time_budget_ms=0,
                 token_budget=0,
                 workflow_id=analysis.get("workflow_id"),
@@ -260,6 +271,7 @@ class CortexExecutionDecider:
             requires_parallel_execution=requires_parallel_execution,
             requires_agent_delegation=requires_agent_delegation,
             max_steps=max_steps,
+            max_model_calls=max_model_calls,
             time_budget_ms=time_budget_ms,
             token_budget=token_budget,
             workflow_id=analysis.get("workflow_id"),
@@ -272,6 +284,7 @@ class CortexExecutionDecider:
                 **policy_constraints,
                 "memory_write_requested": memory_write_requested,
                 "memory_write_authorized": memory_write_allowed,
+                "max_model_calls": max_model_calls,
             },
         )
 
@@ -377,6 +390,9 @@ class CortexExecutionDecider:
                 ),
                 "agent_delegation": topology.get("agent_delegation", False),
                 "max_steps": topology.get("max_steps", 10),
+                "max_model_calls": topology.get(
+                    "max_model_calls", topology.get("max_steps", 10)
+                ),
                 "time_budget_ms": topology.get("time_budget_ms", 30000),
                 "token_budget": topology.get("token_budget", 4096),
                 "reasoning_depth": topology.get("reasoning_depth", "standard"),
@@ -424,6 +440,7 @@ class CortexExecutionDecider:
             "requires_parallel_execution": False,
             "agent_delegation": False,
             "max_steps": 10,
+            "max_model_calls": 10,
             "time_budget_ms": 30000,
             "token_budget": 4096,
             "reasoning_depth": "standard",
@@ -443,6 +460,7 @@ class CortexExecutionDecider:
             "requires_parallel_execution": False,
             "agent_delegation": False,
             "max_steps": 10,
+            "max_model_calls": 10,
             "time_budget_ms": 30000,
             "token_budget": 4096,
             "reasoning_depth": "standard",
@@ -478,6 +496,7 @@ class CortexExecutionDecider:
             topology["requires_resumability"] = True
             topology["reasoning_depth"] = "deep"
             topology["max_steps"] = max(topology["max_steps"], 20)
+            topology["max_model_calls"] = max(topology["max_model_calls"], 20)
 
         return topology
 
