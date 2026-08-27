@@ -92,10 +92,25 @@ def test_core_redis_compatibility_shim_is_retired() -> None:
     assert not (CORE_MEMORY / "redis_connection_manager.py").exists()
 
 
-def test_core_legacy_runtime_compatibility_shim_is_retired() -> None:
-    """Concrete legacy persistence must not be re-exported from cognitive Core."""
+def test_legacy_runtime_shim_is_quarantined_to_compatibility_base() -> None:
+    """Legacy SQL runtime may only remain behind the explicit extraction boundary."""
 
-    assert not (CORE_MEMORY / "_legacy_memory_runtime_impl.py").exists()
+    shim = CORE_MEMORY / "_legacy_memory_runtime_impl.py"
+    assert shim.exists()
+    assert "integrations.memory.legacy_memory_runtime_impl" in shim.read_text(
+        encoding="utf-8"
+    )
+
+    compatibility_base = _text("_memory_runtime_base.py")
+    assert "from . import _legacy_memory_runtime_impl as _legacy" in compatibility_base
+
+    for path in CORE_MEMORY.rglob("*.py"):
+        if path.name in {"_legacy_memory_runtime_impl.py", "_memory_runtime_base.py"}:
+            continue
+        source = path.read_text(encoding="utf-8")
+        assert "_legacy_memory_runtime_impl" not in source, (
+            f"legacy runtime escaped compatibility quarantine: {path.relative_to(CORE_MEMORY)}"
+        )
 
 
 def test_platform_redis_manager_has_no_memory_semantic_compatibility_api() -> None:
