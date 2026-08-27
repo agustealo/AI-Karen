@@ -1,12 +1,13 @@
-"""
-Memory Projections Package.
-"""
+"""Backend-neutral memory projection contracts and workers."""
 
 from .base import ProjectionWorker
-from .manager import ProjectionManager, get_projection_manager
+from .hot_state_worker import HotStateWorker
+from .manager import ProjectionManager
+from .memory_graph_worker import MemoryGraphWorker
 
 __all__ = [
+    "HotStateWorker",
+    "MemoryGraphWorker",
     "ProjectionManager",
     "ProjectionWorker",
-    "get_projection_manager"
 ]
