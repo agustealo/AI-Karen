@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""CORTEX cognitive-contract exports.
+"""CORTEX cognitive authority and contract exports.
 
-Canonical live chat execution enters CORTEX through
-``core.runtime.cortex_execution_decider.CortexExecutionDecider``. This package
-owns cognitive signals and advisory contracts only.
+Canonical live chat cognition enters through ``CortexExecutionDecider`` in this
+package. IntelligenceRuntime supplies signals, RuntimePolicy authorizes requested
+capabilities, and Runtime executes the resulting decision.
 
 Legacy dispatch/orchestration names remain available through ``__getattr__`` for
 import compatibility, but they are deliberately excluded from ``__all__`` so
@@ -29,6 +29,10 @@ from ai_karen_engine.core.cortex.contracts import (
     RoutingEngine,
     RuntimeRequest,
     UserContext,
+)
+from ai_karen_engine.core.cortex.executive import (
+    CortexExecutionDecider,
+    get_cortex_execution_decider,
 )
 from ai_karen_engine.core.cortex.reasoning_eligibility import (
     EligibilityDisposition,
@@ -68,6 +72,7 @@ def __getattr__(name: str):
 
 __all__ = [
     "CorrelationIdFactory",
+    "CortexExecutionDecider",
     "CortexOutput",
     "EligibilityDisposition",
     "ExecutionMode",
@@ -86,4 +91,5 @@ __all__ = [
     "RoutingEngine",
     "RuntimeRequest",
     "UserContext",
+    "get_cortex_execution_decider",
 ]
