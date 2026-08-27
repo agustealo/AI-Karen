@@ -1,49 +1,21 @@
-"""
-Platform Memory: Redis Implementation
+"""Canonical Redis platform adapter surface for bounded memory state.
 
-Stub implementation of RetrievalPort for Redis.
-
-Author: AI-Karen Core Team
-Version: 1.0.0 (Cognitive Architecture)
+Redis is infrastructure for STM/session continuity. It is not a durable memory
+source of truth and does not expose a fake general-purpose recall backend.
 """
 
-from __future__ import annotations
+from .redis_connection_manager import (
+    RedisConnectionManager,
+    get_redis_manager,
+    initialize_redis_manager,
+    shutdown_redis_manager,
+)
+from .stm_adapter import RedisSTMAdapter
 
-from typing import Any, List, Optional, Sequence
-
-from ai_karen_engine.core.memory.protocols import RetrievalPort
-from ai_karen_engine.core.memory.types import MemoryEntry
-
-
-class RedisRetrievalPort(RetrievalPort):
-    """Redis implementation of RetrievalPort."""
-
-    def __init__(self, redis_url: str):
-        self.redis_url = redis_url
-        self._connected = False
-
-    async def connect(self) -> None:
-        """Establish Redis connection."""
-        self._connected = True
-
-    async def disconnect(self) -> None:
-        """Close Redis connection."""
-        self._connected = False
-
-    def retrieve(self, query: str, *, top_k: int = 10, **filters) -> List[MemoryEntry]:
-        """Retrieve memories matching a query."""
-        if not self._connected:
-            raise RuntimeError("RedisRetrievalPort not connected")
-        return []
-
-    def retrieve_by_id(self, entry_id: str) -> Optional[MemoryEntry]:
-        """Retrieve a specific memory by ID."""
-        if not self._connected:
-            raise RuntimeError("RedisRetrievalPort not connected")
-        return None
-
-    def retrieve_batch(self, entry_ids: Sequence[str]) -> List[MemoryEntry]:
-        """Retrieve multiple memories by ID."""
-        if not self._connected:
-            raise RuntimeError("RedisRetrievalPort not connected")
-        return []
+__all__ = [
+    "RedisConnectionManager",
+    "RedisSTMAdapter",
+    "get_redis_manager",
+    "initialize_redis_manager",
+    "shutdown_redis_manager",
+]
