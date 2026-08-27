@@ -99,17 +99,20 @@ async def test_update_delegates_without_ui_generated_cognitive_metadata(monkeypa
     monkeypatch.setattr(module, "update_memory", fake_update_memory)
     manager = module.AGUIMemoryManager()
     user_ctx = {"user_id": "user-1", "tenant_id": "tenant-1"}
+    content = {"content": "updated"}
 
     success = await manager.update_memory_with_metadata(
         user_ctx,
         "memory-1",
-        {"content": "updated"},
+        content,
         {"source": "editor"},
     )
 
     assert success is True
     assert captured["memory_id"] == "memory-1"
+    assert captured["updates"]["content"] == content
     assert captured["updates"]["metadata"] == {"source": "editor"}
+    assert "result" not in captured["updates"]
     assert "ag_ui_type" not in captured["updates"]
     assert "confidence" not in captured["updates"]
     assert captured["user_ctx"] == user_ctx
