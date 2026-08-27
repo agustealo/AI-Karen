@@ -130,6 +130,19 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             raise TypeError("formation service must provide async process_interaction(...)")
         self._formation_service = service
 
+    async def _commit_to_ledger(self, *args: Any, **kwargs: Any) -> None:
+        """Reject the retired direct-ledger mutation path inherited for compatibility.
+
+        Durable memory writes must flow through ``MemoryFormationService`` and
+        ``NeuroVault``. This override intentionally blocks the legacy SQL writer
+        while operator/consent/retention surfaces are extracted from the
+        compatibility base.
+        """
+        del args, kwargs
+        raise RuntimeError(
+            "direct memory ledger writes are retired; use MemoryFormationService/NeuroVault"
+        )
+
     async def process_interaction(
         self,
         text: str,
