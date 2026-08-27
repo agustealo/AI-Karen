@@ -36,7 +36,7 @@ class SharedFakeRunStore:
         started_at: datetime,
     ) -> None:
         existing = self.records.get(run_id)
-        if existing and existing["status"] in {"running", "cancelling"}:
+        if existing and self._snapshot(existing)["status"] in {"running", "cancelling"}:
             raise RuntimeError("already active")
         self.records[run_id] = {
             "run_id": run_id,
@@ -56,6 +56,8 @@ class SharedFakeRunStore:
         record = self.records[run_id]
         if record["worker_id"] != worker_id:
             raise RuntimeError("ownership changed")
+        if self._snapshot(record)["status"] == "orphaned":
+            raise RuntimeError("ownership expired")
         record["lease_expires_at"] = datetime.now(timezone.utc) + timedelta(seconds=30)
         return bool(record["cancel_requested"])
 
@@ -81,7 +83,8 @@ class SharedFakeRunStore:
             raise DistributedRunNotFound(run_id)
         if record["tenant_id"] != tenant_id:
             raise DistributedRunTenantMismatch(run_id)
-        if record["status"] != "running":
+        snapshot = self._snapshot(record)
+        if not snapshot["cancellable"]:
             raise DistributedRunNotCancellable(run_id)
         record["status"] = "cancelling"
         record["cancel_requested"] = True
@@ -101,14 +104,16 @@ class SharedFakeRunStore:
         tenant_id: str,
         include_terminal: bool,
     ) -> list[dict[str, Any]]:
-        return [
+        snapshots = [
             self._snapshot(record)
             for record in self.records.values()
             if record["tenant_id"] == tenant_id
-            and (
-                include_terminal
-                or record["status"] in {"running", "cancelling", "orphaned"}
-            )
+        ]
+        return [
+            snapshot
+            for snapshot in snapshots
+            if include_terminal
+            or snapshot["status"] in {"running", "cancelling", "orphaned"}
         ]
 
     def _snapshot(self, record: dict[str, Any]) -> dict[str, Any]:
