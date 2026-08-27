@@ -2,8 +2,8 @@
 
 Runtime owns execution. NeuroRecall owns recall selection. MemoryFormationService
 turns runtime observations into candidates, and NeuroVault is the only durable
-mutation boundary. Legacy write behavior remains reachable only for non-writing
-shadow/disabled compatibility flows while migration completes.
+mutation boundary. Bounded cross-request continuity is supplied through the
+canonical STM contract; Redis is the current platform backing adapter.
 """
 
 from __future__ import annotations
@@ -61,15 +61,13 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
 
     @staticmethod
     def _build_formation_service() -> MemoryFormationService:
-        """Compose governed durable writes + Redis active episodic state."""
+        """Compose governed durable writes with canonical bounded STM."""
         from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
         from ai_karen_engine.platform.memory.postgres.derived_projector import (
             PostgresDerivedMemoryProjector,
         )
         from ai_karen_engine.platform.memory.postgres.vault import PostgresNeuroVault
-        from ai_karen_engine.platform.memory.redis.episode_state import (
-            RedisEpisodeStateStore,
-        )
+        from ai_karen_engine.platform.memory.redis import RedisSTMAdapter
 
         def vault_factory(tenant_id: str) -> PostgresNeuroVault:
             return PostgresNeuroVault(
@@ -79,7 +77,7 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         return MemoryFormationService(
             vault_factory=vault_factory,
             derived_projector=PostgresDerivedMemoryProjector(),
-            episode_state_store=RedisEpisodeStateStore(),
+            episode_state_store=RedisSTMAdapter(),
             event_segmenter=EventSegmenter(),
         )
 
