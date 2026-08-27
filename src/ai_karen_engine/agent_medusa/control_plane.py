@@ -11,6 +11,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from ai_karen_engine.audit_logging import (
+    AuditEvent,
+    AuditEventType,
+    AuditLogger,
+    AuditSeverity,
+    get_audit_logger,
+)
+
 from .contracts.registration import AgentRegistration
 from .execution.run_manager import (
     MedusaRunManager,
@@ -39,9 +47,11 @@ class AgentMedusaControlPlane:
         *,
         registry: MedusaRegistry | None = None,
         run_manager: MedusaRunManager | None = None,
+        audit_logger: AuditLogger | None = None,
     ) -> None:
         self._registry = registry or get_medusa_registry()
         self._run_manager = run_manager or get_medusa_run_manager()
+        self._audit_logger = audit_logger or get_audit_logger()
 
     async def initialize(self) -> None:
         """Initialize the canonical registry without fabricating runtime state."""
@@ -95,10 +105,39 @@ class AgentMedusaControlPlane:
 
         return await self._run_manager.get(run_id=run_id, tenant_id=tenant_id)
 
-    async def cancel_run(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
-        """Request cancellation of the actual coordinator asyncio task."""
+    async def cancel_run(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        actor_user_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Request cancellation and audit the runtime-owned side effect."""
 
-        return await self._run_manager.cancel(run_id=run_id, tenant_id=tenant_id)
+        result = await self._run_manager.cancel(run_id=run_id, tenant_id=tenant_id)
+        distributed = result.get("distributed_control")
+        self._audit_logger.log_audit_event(
+            AuditEvent(
+                event_type=AuditEventType.SYSTEM_EVENT,
+                severity=AuditSeverity.INFO,
+                message="medusa_run_cancel_requested",
+                user_id=actor_user_id,
+                tenant_id=tenant_id,
+                session_id=session_id,
+                correlation_id=str(result.get("correlation_id") or run_id),
+                metadata={
+                    "run_id": run_id,
+                    "resulting_status": result.get("status"),
+                    "distributed_control_supported": (
+                        distributed.get("supported")
+                        if isinstance(distributed, dict)
+                        else False
+                    ),
+                },
+            )
+        )
+        return result
 
     async def _project_registration(
         self,

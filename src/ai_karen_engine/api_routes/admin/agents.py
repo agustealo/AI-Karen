@@ -37,6 +37,16 @@ def _tenant_id(current_user: dict[str, Any]) -> str:
     return str(tenant_id)
 
 
+def _actor_user_id(current_user: dict[str, Any]) -> str | None:
+    user_id = current_user.get("user_id") or current_user.get("id")
+    return str(user_id) if user_id else None
+
+
+def _session_id(current_user: dict[str, Any]) -> str | None:
+    session_id = current_user.get("session_id")
+    return str(session_id) if session_id else None
+
+
 @router.get("")
 async def list_agents(
     _current_user: dict[str, Any] = Depends(
@@ -95,12 +105,14 @@ async def cancel_run(
     ),
     control_plane: AgentMedusaControlPlane = Depends(get_control_plane),
 ):
-    """Cancel the actual coordinator task for one tenant-scoped run."""
+    """Delegate cancellation of one tenant-scoped execution run."""
 
     try:
         return await control_plane.cancel_run(
             run_id=run_id,
             tenant_id=_tenant_id(current_user),
+            actor_user_id=_actor_user_id(current_user),
+            session_id=_session_id(current_user),
         )
     except (RunNotFoundError, RunTenantMismatchError) as exc:
         raise HTTPException(
