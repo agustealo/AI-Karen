@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+
 from ai_karen_engine.core.runtime.policy import (
+    PolicyEvaluationRequest,
+    RuntimeLevel,
+    RuntimePolicyEnforcer,
     SOFT_EXPLORATION_MIN_MODEL_CALLS,
     authorize_reasoning_modes,
 )
@@ -66,3 +71,62 @@ def test_emergency_runtime_allows_only_verification_and_evidence_synthesis() -> 
     )
     assert result.allowed_modes == ("verification", "evidence_synthesis")
     assert result.denied_modes == ("causal", "refinement")
+
+
+def test_runtime_policy_returns_typed_allowed_and_denied_reasoning_modes() -> None:
+    async def run() -> None:
+        policy = RuntimePolicyEnforcer()
+        result = await policy.evaluate(
+            PolicyEvaluationRequest(
+                user_id="user-1",
+                tenant_id="tenant-1",
+                requested_reasoning_modes=["verification", "soft_exploration"],
+                max_model_calls=SOFT_EXPLORATION_MIN_MODEL_CALLS - 1,
+                runtime_level=RuntimeLevel.FULL,
+            )
+        )
+        assert result.allowed is True
+        assert result.allowed_reasoning_modes == ["verification"]
+        assert result.denied_reasoning_modes == ["soft_exploration"]
+        assert result.reasoning_denial_reasons["soft_exploration"] == [
+            "model_call_budget_insufficient"
+        ]
+
+    asyncio.run(run())
+
+
+def test_authorized_plan_uses_policy_reasoning_modes_not_requested_modes() -> None:
+    async def run() -> None:
+        policy = RuntimePolicyEnforcer()
+        result = await policy.evaluate(
+            PolicyEvaluationRequest(
+                user_id="user-1",
+                tenant_id="tenant-1",
+                requested_reasoning_modes=["verification", "soft_exploration"],
+                max_model_calls=10,
+                runtime_level=RuntimeLevel.FULL,
+            )
+        )
+        plan = result.to_authorized_plan()
+        assert plan.reasoning_modes == ["verification"]
+        assert "soft_exploration" not in plan.reasoning_modes
+
+    asyncio.run(run())
+
+
+def test_policy_never_invents_reasoning_mode() -> None:
+    async def run() -> None:
+        policy = RuntimePolicyEnforcer()
+        result = await policy.evaluate(
+            PolicyEvaluationRequest(
+                user_id="user-1",
+                tenant_id="tenant-1",
+                requested_reasoning_modes=[],
+                max_model_calls=100,
+            )
+        )
+        assert result.allowed_reasoning_modes == []
+        assert result.denied_reasoning_modes == []
+        assert result.to_authorized_plan().reasoning_modes == []
+
+    asyncio.run(run())
