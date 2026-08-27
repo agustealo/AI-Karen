@@ -1,3 +1,7 @@
+# AI KAREN runtime dependencies
+# Keep this file aligned to live imports/runtime composition. Do not retain retired backends "just in case".
+# Removed in DEPENDENCY-TRUTH cleanup: neo4j, kuzu, redis/fakeredis, duckdb, sqlalchemy, asyncpg, hnswlib.
+
 fastapi==0.136.1
 uvicorn
 pyautogui
