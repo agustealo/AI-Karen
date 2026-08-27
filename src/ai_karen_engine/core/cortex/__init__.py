@@ -4,7 +4,8 @@ from __future__ import annotations
 
 Canonical live chat cognition enters through ``CortexExecutionDecider`` in this
 package. IntelligenceRuntime supplies signals, RuntimePolicy authorizes requested
-capabilities, and Runtime executes the resulting decision.
+capabilities, and Runtime executes the resulting decision. Process-wide instance
+ownership belongs to runtime composition, not the cognitive package.
 
 Legacy dispatch/orchestration names remain available through ``__getattr__`` for
 import compatibility, but they are deliberately excluded from ``__all__`` so
@@ -30,10 +31,7 @@ from ai_karen_engine.core.cortex.contracts import (
     RuntimeRequest,
     UserContext,
 )
-from ai_karen_engine.core.cortex.executive import (
-    CortexExecutionDecider,
-    get_cortex_execution_decider,
-)
+from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
 from ai_karen_engine.core.cortex.reasoning_eligibility import (
     EligibilityDisposition,
     ReasoningEligibilityContext,
@@ -91,5 +89,4 @@ __all__ = [
     "RoutingEngine",
     "RuntimeRequest",
     "UserContext",
-    "get_cortex_execution_decider",
 ]
