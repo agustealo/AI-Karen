@@ -68,6 +68,10 @@ def test_global_retrieval_router_singleton_is_retired() -> None:
 def test_runtime_is_the_explicit_platform_composition_boundary() -> None:
     runtime = _text("memory_runtime_manager.py")
     assert "RedisSTMAdapter" in runtime
+    assert runtime.count("RedisSTMAdapter()") == 1
+    assert "self._stm =" in runtime
+    assert "self._build_neuro_recall(self._stm)" in runtime
+    assert "self._build_formation_service(\n            self._stm\n        )" in runtime
     assert "PostgresEventSource" in runtime
     assert "PostgresEntityResolver" in runtime
     assert "ProjectionManager" in runtime
