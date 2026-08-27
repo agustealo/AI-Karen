@@ -4,6 +4,17 @@ from .contracts import MemoryCandidate, MemoryClass
 
 
 def classify_memory_candidate(candidate: MemoryCandidate) -> MemoryClass:
+    """Classify a recall candidate without discarding explicit source truth."""
+    declared = str(candidate.metadata.get("memory_class") or "").strip().casefold()
+    if declared:
+        try:
+            return MemoryClass(declared)
+        except ValueError:
+            pass
+
+    if candidate.source == "redis":
+        return MemoryClass.STM
+
     text = candidate.text.lower()
     source_trust = float(candidate.metadata.get("source_trust", 1.0))
     if candidate.metadata.get("explicit_forget") or candidate.metadata.get("user_correction"):
