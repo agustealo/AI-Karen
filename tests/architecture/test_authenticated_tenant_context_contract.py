@@ -46,13 +46,17 @@ def test_session_validation_reconciles_middleware_and_canonical_tenant() -> None
     assert "Authenticated user no longer exists" in source
 
 
-def test_chat_ingress_identity_is_server_resolved_before_runtime() -> None:
+def test_chat_ingress_identity_is_server_resolved_and_fail_closed() -> None:
     source = CHAT_ROUTE.read_text(encoding="utf-8")
 
     assert "Depends(bypass_user_context_func)" in source
+    assert "def _require_execution_identity" in source
+    assert 'detail="Authenticated user identity is incomplete"' in source
+    assert 'detail="Authenticated tenant context is required"' in source
     assert "ChatExecutionContext(" in source
-    assert "tenant_id" in source
-    assert "user_id" in source
+    assert "tenant_id=tenant_id" in source
+    assert 'user.get("tenant_id") or "default"' not in source
+    assert 'tenant_id="default"' not in source
 
 
 def test_missing_tenant_cannot_reach_chat_runtime_through_shared_dependency() -> None:
@@ -61,3 +65,13 @@ def test_missing_tenant_cannot_reach_chat_runtime_through_shared_dependency() ->
 
     assert "return _require_identity_scope(UserData.from_dict(user_dict))" in dependencies
     assert "Depends(bypass_user_context_func)" in chat
+    assert "_require_execution_identity(user)" in chat
+
+
+def test_chat_route_contains_no_dead_session_or_stream_compatibility_shims() -> None:
+    source = CHAT_ROUTE.read_text(encoding="utf-8")
+
+    assert "def get_stream_processor" not in source
+    assert "def get_chat_orchestrator" not in source
+    assert '@router.get("/sessions/{session_id}")' not in source
+    assert '@router.delete("/sessions/{session_id}")' not in source
