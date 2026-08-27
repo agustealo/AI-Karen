@@ -1,22 +1,9 @@
 """
-Runtime Policy — Global execution authority outside LangGraph.
+Runtime Policy — global execution authorization outside LangGraph.
 
-This module owns the global runtime-level provider/tool/response restrictions
-that previously lived under ``langgraph_orchestrator/``. LangGraph is a
-workflow executor; it must not own global degraded-mode transitions, provider
-selection, or intent routing.
-
-Public surface:
-- RuntimeLevel
-- PolicyCheckResult
-- RuntimePolicyConfig
-- RuntimePolicyEnforcer
-- PolicyEvaluationRequest
-- PolicyDecision
-- PolicyReasonCode
-- PolicyResourceScope
-- ProviderConstraints
-- ResourceConstraints
+CORTEX decides what execution and reasoning are cognitively desirable.
+RuntimePolicy decides what is authorized. Runtime executes the resulting plan.
+LangGraph remains a workflow executor and never owns global policy.
 """
 
 from __future__ import annotations
@@ -32,6 +19,10 @@ from ai_karen_engine.core.runtime.contracts import (
     DegradationState,
     ExecutionBudget,
     ExecutionTopology,
+)
+from ai_karen_engine.core.runtime.policy.reasoning_policy import (
+    ReasoningModePolicyResult,
+    authorize_reasoning_modes,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +43,7 @@ class PolicyReasonCode(str, Enum):
     TOOL_RISK_DENIED = "tool_risk_denied"
     RUNTIME_LEVEL_DENIED = "runtime_level_denied"
     RESOURCE_SCOPE_DENIED = "resource_scope_denied"
+    REASONING_MODE_RESTRICTED = "reasoning_mode_restricted"
     POLICY_CHECK_PASSED = "policy_check_passed"
 
 
@@ -93,7 +85,7 @@ class ResourceConstraints:
 
 @dataclass
 class PolicyEvaluationRequest:
-    """Typed request for policy evaluation."""
+    """Typed request for RuntimePolicy evaluation."""
 
     user_id: str
     tenant_id: str
@@ -105,6 +97,8 @@ class PolicyEvaluationRequest:
     resource: Optional[str] = None
     requested_capabilities: List[str] = field(default_factory=list)
     forbidden_capabilities: List[str] = field(default_factory=list)
+    requested_reasoning_modes: List[str] = field(default_factory=list)
+    max_model_calls: int = 0
     risk_signals: Dict[str, Any] = field(default_factory=dict)
     runtime_level: RuntimeLevel = RuntimeLevel.FULL
     extension_id: Optional[str] = None
@@ -118,7 +112,7 @@ class PolicyEvaluationRequest:
 
 @dataclass
 class PolicyDecision:
-    """Typed policy decision."""
+    """Typed RuntimePolicy authorization decision."""
 
     decision_id: str
     policy_version: str
@@ -126,6 +120,9 @@ class PolicyDecision:
     reason_codes: List[PolicyReasonCode] = field(default_factory=list)
     allowed_capabilities: List[str] = field(default_factory=list)
     denied_capabilities: List[str] = field(default_factory=list)
+    allowed_reasoning_modes: List[str] = field(default_factory=list)
+    denied_reasoning_modes: List[str] = field(default_factory=list)
+    reasoning_denial_reasons: Dict[str, List[str]] = field(default_factory=dict)
     requires_human_gate: bool = False
     runtime_constraints: Dict[str, Any] = field(default_factory=dict)
     resource_scope: Optional[PolicyResourceScope] = None
@@ -144,15 +141,18 @@ class PolicyDecision:
         self.denied_capabilities = list(value)
 
     def to_authorized_plan(self) -> AuthorizedExecutionPlan:
-        """Convert to the canonical AuthorizedExecutionPlan consumed by RuntimeExecutor."""
+        """Convert policy truth to the canonical runtime execution plan."""
         topology = ExecutionTopology.DIRECT
         if self.requires_human_gate:
             topology = ExecutionTopology.WORKFLOW
         if self.runtime_constraints.get("agent_delegation"):
             topology = ExecutionTopology.MULTI_AGENT
-        if self.runtime_constraints.get("reasoning_required"):
+        if self.allowed_reasoning_modes:
             topology = ExecutionTopology.REASONING
+        elif self.runtime_constraints.get("workflow_id"):
+            topology = ExecutionTopology.WORKFLOW
 
+        resource = self.resource_constraints
         return AuthorizedExecutionPlan(
             execution_id=self.decision_id,
             policy_decision_id=self.decision_id,
@@ -163,10 +163,10 @@ class PolicyDecision:
             allowed_agents=list(self.runtime_constraints.get("allowed_agents") or []),
             provider_constraints=(
                 {
-                    "eligible_providers": self.provider_constraints.eligible_providers if self.provider_constraints else [],
-                    "forbidden_providers": self.provider_constraints.forbidden_providers if self.provider_constraints else [],
-                    "local_only": self.provider_constraints.local_only if self.provider_constraints else False,
-                    "external_allowed": self.provider_constraints.external_allowed if self.provider_constraints else True,
+                    "eligible_providers": self.provider_constraints.eligible_providers,
+                    "forbidden_providers": self.provider_constraints.forbidden_providers,
+                    "local_only": self.provider_constraints.local_only,
+                    "external_allowed": self.provider_constraints.external_allowed,
                 }
                 if self.provider_constraints
                 else {}
@@ -174,32 +174,41 @@ class PolicyDecision:
             memory_scope=str(self.runtime_constraints.get("memory_scope", "session")),
             resource_scope=(
                 {
-                    "allowed_paths": list(self.resource_scope.allowed_paths) if self.resource_scope else [],
-                    "forbidden_paths": list(self.resource_scope.forbidden_paths) if self.resource_scope else [],
-                    "max_file_size_mb": self.resource_scope.max_file_size_mb if self.resource_scope else 10,
+                    "allowed_paths": list(self.resource_scope.allowed_paths),
+                    "forbidden_paths": list(self.resource_scope.forbidden_paths),
+                    "max_file_size_mb": self.resource_scope.max_file_size_mb,
                 }
                 if self.resource_scope
                 else {}
             ),
             budget=ExecutionBudget(
-                max_duration_ms=self.resource_constraints.max_wall_time_seconds * 1000 if self.resource_constraints else 30000,
-                max_output_tokens=self.resource_constraints.max_output_size_kb * 1024 if self.resource_constraints else 4096,
+                max_duration_ms=(resource.max_wall_time_seconds * 1000 if resource else 30000),
+                max_model_calls=int(self.runtime_constraints.get("max_model_calls", 10)),
+                max_reasoning_steps=int(self.runtime_constraints.get("max_reasoning_steps", 10)),
+                max_output_tokens=(resource.max_output_size_kb * 1024 if resource else 4096),
             ),
             approval_requirements=["human_gate"] if self.requires_human_gate else [],
-            reasoning_modes=list(self.runtime_constraints.get("reasoning_modes") or []),
+            reasoning_modes=list(self.allowed_reasoning_modes),
             workflow_id=self.runtime_constraints.get("workflow_id"),
             agent_topology=self.runtime_constraints.get("agent_topology"),
             degraded_allowed=bool(self.runtime_constraints.get("degraded_allowed", True)),
-            degradation_state=DegradationState(
-                degraded=not self.allowed,
-                reason_code=self.reason_codes[0].value if self.reason_codes else None,
-                level=str(self.risk_level or "none").lower(),
-            ) if not self.allowed else None,
+            degradation_state=(
+                DegradationState(
+                    degraded=True,
+                    reason_code=self.reason_codes[0].value if self.reason_codes else None,
+                    level=str(self.risk_level or "none").lower(),
+                )
+                if not self.allowed
+                else None
+            ),
             audit_context={
                 "decision_id": self.decision_id,
                 "policy_version": self.policy_version,
                 "evaluated_at": self.evaluated_at,
                 "risk_level": self.risk_level,
+                "allowed_reasoning_modes": list(self.allowed_reasoning_modes),
+                "denied_reasoning_modes": list(self.denied_reasoning_modes),
+                "reasoning_denial_reasons": dict(self.reasoning_denial_reasons),
             },
         )
 
@@ -221,7 +230,7 @@ class RuntimePolicyConfig:
 
 
 class RuntimePolicyEnforcer:
-    """Enforces runtime policies across ALL execution paths (direct and graph)."""
+    """Enforce authorization across direct, reasoning, tool and graph paths."""
 
     def __init__(self, config: Optional[RuntimePolicyConfig] = None):
         self.config = config or RuntimePolicyConfig()
@@ -233,9 +242,9 @@ class RuntimePolicyEnforcer:
         }
 
     async def evaluate(self, request: PolicyEvaluationRequest) -> PolicyDecision:
-        """Evaluate a typed policy request and return a typed decision."""
+        """Evaluate capabilities and reasoning modes as distinct policy domains."""
         decision_id = f"policy-{request.tenant_id}-{request.user_id}-{int(time.time() * 1000)}"
-        policy_version = "v1"
+        policy_version = "v2"
         evaluated_at = time.time()
 
         if not request.user_id or not request.tenant_id:
@@ -245,6 +254,7 @@ class RuntimePolicyEnforcer:
                 allowed=False,
                 reason_codes=[PolicyReasonCode.MISSING_IDENTITY],
                 denied_capabilities=["all"],
+                denied_reasoning_modes=list(request.requested_reasoning_modes),
                 evaluated_at=evaluated_at,
             )
 
@@ -257,6 +267,7 @@ class RuntimePolicyEnforcer:
                     allowed=False,
                     reason_codes=[PolicyReasonCode.CAPABILITY_CONFLICT],
                     denied_capabilities=list(forbidden),
+                    denied_reasoning_modes=list(request.requested_reasoning_modes),
                     evaluated_at=evaluated_at,
                 )
 
@@ -275,6 +286,17 @@ class RuntimePolicyEnforcer:
         elif risk_score >= 0.2:
             risk_level = "medium"
 
+        reasoning_policy: ReasoningModePolicyResult = authorize_reasoning_modes(
+            request.requested_reasoning_modes,
+            runtime_level=request.runtime_level,
+            risk_level=risk_level,
+            max_model_calls=request.max_model_calls,
+        )
+        reasoning_denial_reasons = {
+            mode: list(reasons)
+            for mode, reasons in reasoning_policy.denial_reasons.items()
+        }
+
         if risk_score >= 0.8 and "admin" not in request.permissions:
             return PolicyDecision(
                 decision_id=decision_id,
@@ -282,6 +304,9 @@ class RuntimePolicyEnforcer:
                 allowed=False,
                 reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
                 denied_capabilities=["admin", "write", "delete"],
+                allowed_reasoning_modes=[],
+                denied_reasoning_modes=list(reasoning_policy.requested_modes),
+                reasoning_denial_reasons=reasoning_denial_reasons,
                 requires_human_gate=True,
                 risk_level=risk_level,
                 evaluated_at=evaluated_at,
@@ -294,19 +319,43 @@ class RuntimePolicyEnforcer:
                 allowed=False,
                 reason_codes=[PolicyReasonCode.TOOL_RISK_DENIED],
                 denied_capabilities=list(forbidden | {"admin", "write", "delete"}),
+                allowed_reasoning_modes=[],
+                denied_reasoning_modes=list(reasoning_policy.requested_modes),
+                reasoning_denial_reasons=reasoning_denial_reasons,
                 risk_level=risk_level,
                 evaluated_at=evaluated_at,
             )
 
         runtime_constraints = self._build_runtime_constraints(request.runtime_level)
+        runtime_constraints.update(
+            {
+                "reasoning_modes": list(reasoning_policy.allowed_modes),
+                "reasoning_required": bool(reasoning_policy.allowed_modes),
+                "max_model_calls": max(0, int(request.max_model_calls)),
+                "max_reasoning_steps": max(
+                    0, int(request.execution_topology.get("max_steps", 10) or 10)
+                ),
+                "workflow_id": request.execution_topology.get("workflow_id"),
+                "agent_delegation": bool(
+                    request.execution_topology.get("agent_delegation", False)
+                ),
+            }
+        )
+
+        reason_codes = [PolicyReasonCode.POLICY_CHECK_PASSED]
+        if reasoning_policy.denied_modes:
+            reason_codes.append(PolicyReasonCode.REASONING_MODE_RESTRICTED)
 
         return PolicyDecision(
             decision_id=decision_id,
             policy_version=policy_version,
             allowed=True,
-            reason_codes=[PolicyReasonCode.POLICY_CHECK_PASSED],
+            reason_codes=reason_codes,
             allowed_capabilities=list(request.requested_capabilities),
             denied_capabilities=list(forbidden),
+            allowed_reasoning_modes=list(reasoning_policy.allowed_modes),
+            denied_reasoning_modes=list(reasoning_policy.denied_modes),
+            reasoning_denial_reasons=reasoning_denial_reasons,
             runtime_constraints=runtime_constraints,
             resource_scope=request.resource_scope,
             provider_constraints=request.provider_constraints,
@@ -342,8 +391,10 @@ class RuntimePolicyEnforcer:
                     "high",
                 )
         elif current_level == RuntimeLevel.REDUCED:
-            complex_models = provider_constraints.resource_constraints.get("reduced_complex_models", [])
-            if any(m in complex_models for m in [model] if model):
+            complex_models = provider_constraints.resource_constraints.get(
+                "reduced_complex_models", []
+            )
+            if model and model in complex_models:
                 return PolicyCheckResult(
                     False,
                     f"Complex models not allowed in {current_level.value} mode",
@@ -371,7 +422,9 @@ class RuntimePolicyEnforcer:
                     "high",
                 )
 
-        restricted_capabilities = self._resolve_restricted_capabilities(current_level, state)
+        restricted_capabilities = self._resolve_restricted_capabilities(
+            current_level, state
+        )
         for cap in requested_capabilities:
             if cap in restricted_capabilities:
                 return PolicyCheckResult(
@@ -380,9 +433,13 @@ class RuntimePolicyEnforcer:
                     "high",
                 )
 
-        tools_required = execution_plan.get("tool_requirements", []) or execution_plan.get("tools_required", [])
+        tools_required = execution_plan.get("tool_requirements", []) or execution_plan.get(
+            "tools_required", []
+        )
         if tools_required:
-            tool_check = await self._check_tool_availability(tools_required, current_level, state)
+            tool_check = await self._check_tool_availability(
+                tools_required, current_level, state
+            )
             if not tool_check.allowed:
                 return tool_check
 
@@ -395,13 +452,10 @@ class RuntimePolicyEnforcer:
             return PolicyCheckResult(True, "Safety overrides disabled")
 
         current_level = self._get_runtime_level(state)
-
-        if current_level == RuntimeLevel.EMERGENCY:
-            if len(response_content) > 500:
-                return PolicyCheckResult(
-                    False, "Response too long for emergency mode", "critical"
-                )
-
+        if current_level == RuntimeLevel.EMERGENCY and len(response_content) > 500:
+            return PolicyCheckResult(
+                False, "Response too long for emergency mode", "critical"
+            )
         return PolicyCheckResult(True, "Response policy check passed")
 
     async def enforce_runtime_level_transition(
@@ -420,7 +474,7 @@ class RuntimePolicyEnforcer:
         try:
             return RuntimeLevel(level_str)
         except ValueError:
-            logger.warning(f"Invalid runtime level '{level_str}', using default")
+            logger.warning("Invalid runtime level '%s', using default", level_str)
             return self.config.default_level
 
     async def _check_tool_availability(
@@ -440,11 +494,19 @@ class RuntimePolicyEnforcer:
                 "network_access",
             ],
         }
-
-        state_restrictions = state.get("runtime_constraints", {}).get("allowed_tool_types", [])
+        state_restrictions = state.get("runtime_constraints", {}).get(
+            "allowed_tool_types", []
+        )
         if state_restrictions and "all" not in state_restrictions:
             combined_restrictions = set(tool_restrictions.get(runtime_level, [])) | {
-                tool for tool in ["file_access", "system_command", "code_execution", "network_access", "web_search"]
+                tool
+                for tool in [
+                    "file_access",
+                    "system_command",
+                    "code_execution",
+                    "network_access",
+                    "web_search",
+                ]
                 if tool not in state_restrictions
             }
         else:
@@ -459,32 +521,51 @@ class RuntimePolicyEnforcer:
                 )
         return PolicyCheckResult(True, "Tool availability check passed")
 
-    def _resolve_restricted_capabilities(self, runtime_level: RuntimeLevel, state: Dict[str, Any]) -> List[str]:
+    def _resolve_restricted_capabilities(
+        self, runtime_level: RuntimeLevel, state: Dict[str, Any]
+    ) -> List[str]:
         capability_restrictions = {
             RuntimeLevel.FULL: [],
             RuntimeLevel.REDUCED: ["admin", "delete", "write"],
             RuntimeLevel.SAFE: ["admin", "delete", "write", "network_access"],
-            RuntimeLevel.EMERGENCY: ["admin", "delete", "write", "network_access", "code_execution"],
+            RuntimeLevel.EMERGENCY: [
+                "admin",
+                "delete",
+                "write",
+                "network_access",
+                "code_execution",
+            ],
         }
-
-        state_restrictions = state.get("runtime_constraints", {}).get("allowed_capabilities", [])
+        state_restrictions = state.get("runtime_constraints", {}).get(
+            "allowed_capabilities", []
+        )
         if state_restrictions:
-            return [cap for cap in capability_restrictions.get(runtime_level, []) if cap not in state_restrictions]
+            return [
+                cap
+                for cap in capability_restrictions.get(runtime_level, [])
+                if cap not in state_restrictions
+            ]
         return capability_restrictions.get(runtime_level, [])
 
     def _resolve_provider_constraints(self, state: Dict[str, Any]) -> ProviderConstraints:
-        """Resolve typed provider constraints from state."""
         raw = state.get("provider_constraints", {})
         if isinstance(raw, ProviderConstraints):
             return raw
         if not isinstance(raw, dict):
             return ProviderConstraints()
 
-        eligible = raw.get("emergency_allowed_providers") or raw.get("safe_trusted_providers") or raw.get("eligible_providers") or []
+        eligible = (
+            raw.get("emergency_allowed_providers")
+            or raw.get("safe_trusted_providers")
+            or raw.get("eligible_providers")
+            or []
+        )
         forbidden = raw.get("forbidden_providers", [])
         local_only = raw.get("local_only", False)
         external_allowed = raw.get("external_allowed", True)
-        cap_restrictions = raw.get("capability_restrictions") or raw.get("allowed_capabilities") or []
+        cap_restrictions = raw.get("capability_restrictions") or raw.get(
+            "allowed_capabilities"
+        ) or []
         res_constraints = raw.get("resource_constraints", {})
 
         return ProviderConstraints(
@@ -493,7 +574,9 @@ class RuntimePolicyEnforcer:
             local_only=bool(local_only),
             external_allowed=bool(external_allowed),
             capability_restrictions=list(cap_restrictions),
-            resource_constraints=dict(res_constraints) if isinstance(res_constraints, dict) else {},
+            resource_constraints=(
+                dict(res_constraints) if isinstance(res_constraints, dict) else {}
+            ),
         )
 
     def _build_runtime_constraints(self, runtime_level: RuntimeLevel) -> Dict[str, Any]:
@@ -527,7 +610,6 @@ class RuntimePolicyEnforcer:
                 "allowed_tool_types": [],
             },
         }
-
         return constraints.get(runtime_level, constraints[RuntimeLevel.FULL])
 
     def apply_runtime_constraints(self, state: Dict[str, Any]) -> Dict[str, Any]:
