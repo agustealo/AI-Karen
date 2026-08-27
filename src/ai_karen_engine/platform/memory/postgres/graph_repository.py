@@ -1,15 +1,18 @@
 """PostgreSQL implementation of the canonical memory graph repository.
 
 The graph is a rebuildable projection over governed memory records. PostgreSQL
-owns persistence; NeuroRecall owns final retrieval strategy/ranking.
+owns persistence; NeuroRecall owns final retrieval strategy/ranking. Temporal
+edge fields are persisted from the typed GraphEdge contract rather than being
+smuggled through metadata.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import or_, select, text
+from sqlalchemy import and_, or_, select, text
 
 from ai_karen_engine.core.memory.graph.models import EntityNode, GraphEdge
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
@@ -69,6 +72,7 @@ class PostgresGraphRepository:
             existing.entity_type = entity.type
 
     async def create_edge(self, edge: GraphEdge) -> None:
+        """Persist one typed temporal edge without collapsing historical versions."""
         tenant_id = str(edge.tenant_id or "").strip()
         user_id = str(edge.user_id or "").strip()
         if not tenant_id or not user_id:
@@ -79,13 +83,32 @@ class PostgresGraphRepository:
         source_uuid = self._uuid(edge.from_id, "source_id")
         target_uuid = self._uuid(edge.to_id, "target_id")
         conversation_uuid = self._optional_uuid(edge.conversation_id, "conversation_id")
+
         metadata = dict(edge.metadata or {})
         source_event_uuid = self._optional_uuid(
-            metadata.pop("source_event_id", None), "source_event_id"
+            edge.source_event_id or metadata.pop("source_event_id", None),
+            "source_event_id",
         )
         source_memory_uuid = self._optional_uuid(
-            metadata.pop("source_memory_id", None), "source_memory_id"
+            edge.source_memory_id or metadata.pop("source_memory_id", None),
+            "source_memory_id",
         )
+        valid_from = self._datetime(edge.valid_from, "valid_from")
+        valid_to = self._datetime(edge.valid_to, "valid_to")
+        observed_at = self._datetime(edge.observed_at, "observed_at")
+        recorded_at = self._datetime(edge.recorded_at, "recorded_at") or datetime.now(
+            timezone.utc
+        )
+        if valid_from is not None and valid_to is not None and valid_to < valid_from:
+            raise PostgresGraphScopeError("valid_to cannot precede valid_from")
+
+        lifecycle_state = str(edge.lifecycle_state or "active").strip() or "active"
+        confidence = self._unit_float(edge.confidence, "confidence")
+        weight = float(edge.weight)
+        salience = self._unit_float(edge.salience, "salience")
+        schema_version = int(edge.schema_version)
+        if schema_version < 1:
+            raise PostgresGraphScopeError("schema_version must be >= 1")
 
         async with async_transaction_scope(tenant_id=tenant_id) as session:
             duplicate_stmt = (
@@ -96,11 +119,8 @@ class PostgresGraphRepository:
                     MemoryRelation.source_id == source_uuid,
                     MemoryRelation.target_id == target_uuid,
                     MemoryRelation.relation_type == edge.relationship,
-                    MemoryRelation.lifecycle_state == "active",
-                    or_(
-                        MemoryRelation.valid_to.is_(None),
-                        MemoryRelation.valid_to > text("CURRENT_TIMESTAMP"),
-                    ),
+                    MemoryRelation.lifecycle_state == lifecycle_state,
+                    self._intervals_overlap(valid_from, valid_to),
                 )
                 .limit(1)
             )
@@ -117,12 +137,17 @@ class PostgresGraphRepository:
                     target_id=target_uuid,
                     relation_type=edge.relationship,
                     metadata_payload=metadata,
-                    confidence=float(metadata.get("confidence", 1.0) or 1.0),
-                    weight=float(metadata.get("weight", 1.0) or 1.0),
-                    salience=float(metadata.get("salience", 0.5) or 0.5),
-                    lifecycle_state=str(metadata.get("lifecycle_state", "active")),
+                    valid_from=valid_from,
+                    valid_to=valid_to,
+                    observed_at=observed_at,
+                    recorded_at=recorded_at,
+                    confidence=confidence,
+                    weight=weight,
+                    salience=salience,
+                    lifecycle_state=lifecycle_state,
                     source_memory_id=source_memory_uuid,
                     source_event_id=source_event_uuid,
+                    schema_version=schema_version,
                 )
             )
 
@@ -304,6 +329,50 @@ class PostgresGraphRepository:
         if value in (None, ""):
             return None
         return cls._uuid(value, field_name)
+
+    @staticmethod
+    def _datetime(value: Any, field_name: str) -> datetime | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise PostgresGraphScopeError(
+                    f"{field_name} must be an ISO-8601 datetime"
+                ) from exc
+        else:
+            raise PostgresGraphScopeError(f"{field_name} must be a datetime")
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _unit_float(value: Any, field_name: str) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise PostgresGraphScopeError(f"{field_name} must be numeric") from exc
+        if not 0.0 <= parsed <= 1.0:
+            raise PostgresGraphScopeError(f"{field_name} must be between 0 and 1")
+        return parsed
+
+    @staticmethod
+    def _intervals_overlap(valid_from: datetime | None, valid_to: datetime | None) -> Any:
+        """Build half-open interval overlap conditions for an incoming edge."""
+        starts_before_incoming_end = (
+            True
+            if valid_to is None
+            else or_(MemoryRelation.valid_from.is_(None), MemoryRelation.valid_from < valid_to)
+        )
+        ends_after_incoming_start = (
+            True
+            if valid_from is None
+            else or_(MemoryRelation.valid_to.is_(None), MemoryRelation.valid_to > valid_from)
+        )
+        return and_(starts_before_incoming_end, ends_after_incoming_start)
 
 
 __all__ = ["PostgresGraphRepository", "PostgresGraphScopeError"]
