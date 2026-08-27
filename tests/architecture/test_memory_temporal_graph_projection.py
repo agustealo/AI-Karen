@@ -45,3 +45,12 @@ def test_temporal_projection_normalizes_record_and_valid_time() -> None:
     assert 'primary.get("recorded_at")' in source
     assert 'primary.get("created_at")' in source
     assert "datetime.now(timezone.utc)" in source
+
+
+def test_assertion_graph_fallback_is_uuid_compatible_and_deterministic() -> None:
+    source = _source()
+
+    assert "def _assertion_id(" in source
+    assert "uuid.uuid5(uuid.NAMESPACE_URL, material)" in source
+    assert 'f"assert:{event_id}"' not in source
+    assert 'f"ai-karen-memory-assertion:{tenant_id}:{user_id}:{external_key}"' in source
