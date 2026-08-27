@@ -38,7 +38,6 @@ from .types import (
 
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
-    # Runtime authority.
     "MemoryRuntimeManager": (".memory_runtime_manager", "MemoryRuntimeManager"),
     "get_memory_manager": (".memory_runtime_manager", "get_memory_manager"),
     "init_memory": (".memory_runtime_manager", "init_memory"),
@@ -46,7 +45,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "recall_context": (".memory_runtime_manager", "recall_context"),
     "update_memory": (".memory_runtime_manager", "update_memory"),
     "get_metrics": (".memory_runtime_manager", "get_metrics"),
-    # Canonical recall and governed durability contracts.
     "NeuroRecall": (".retrieval", "NeuroRecall"),
     "RecallRequest": (".retrieval", "RecallRequest"),
     "RecallResult": (".retrieval", "RecallResult"),
@@ -54,7 +52,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "VaultContext": (".protocols", "VaultContext"),
     "VaultPort": (".protocols", "VaultPort"),
     "VaultWriteReceipt": (".protocols", "VaultWriteReceipt"),
-    # Ledger compatibility.
     "ConsentScope": (".ledger_models", "ConsentScope"),
     "ContradictionEvent": (".ledger_models", "ContradictionEvent"),
     "MemoryAssertion": (".ledger_models", "MemoryAssertion"),
@@ -65,14 +62,11 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "ProjectionStatus": (".ledger_models", "ProjectionStatus"),
     "ReinforcementEvent": (".ledger_models", "ReinforcementEvent"),
     "RetentionPolicy": (".ledger_models", "RetentionPolicy"),
-    # Profile/retrieval/evaluation services.
     "ProfileService": (".profile_synthesis", "ProfileService"),
     "get_profile_service": (".profile_synthesis", "get_profile_service"),
     "HybridRetrievalRouter": (".retrieval", "HybridRetrievalRouter"),
-    "get_retrieval_router": (".retrieval", "get_retrieval_router"),
     "MemoryEvalHarness": (".evaluation", "MemoryEvalHarness"),
     "get_eval_harness": (".evaluation", "get_eval_harness"),
-    # Neuro-memory contracts/services.
     "ConsolidationDecision": (".neuro", "ConsolidationDecision"),
     "LessonArtifact": (".neuro", "LessonArtifact"),
     "MemoryActivationDecision": (".neuro", "MemoryActivationDecision"),
@@ -80,7 +74,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "MemoryCandidate": (".neuro", "MemoryCandidate"),
     "MemoryClass": (".neuro", "MemoryClass"),
     "ProcedureArtifact": (".neuro", "ProcedureArtifact"),
-    # Cognitive implementations.
     "LifecycleEvent": (".lifecycle", "LifecycleEvent"),
     "LifecycleHook": (".lifecycle", "LifecycleHook"),
     "MemoryLifecycle": (".lifecycle", "MemoryLifecycle"),
@@ -127,7 +120,6 @@ __all__ = [
     "VaultWriteReceipt",
     "get_profile_service",
     "ProfileService",
-    "get_retrieval_router",
     "HybridRetrievalRouter",
     "get_eval_harness",
     "MemoryEvalHarness",
