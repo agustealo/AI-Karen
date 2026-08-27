@@ -37,6 +37,10 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Protocol, Union
 
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.runtime.composition import (
+    RuntimeComposition,
+    get_runtime_composition,
+)
 
 logger = get_logger(__name__)
 
@@ -375,38 +379,26 @@ class RedisProbe:
 
 
 class ProviderRouterProbe:
-    """Probes whether at least one LLM provider is available."""
+    """Probe expression routing availability without generating model output."""
 
     name = "provider_router"
+
+    def __init__(self, gateway: Any):
+        self._gateway = gateway
 
     async def check(self) -> DependencyHealth:
         start = time.time()
         try:
-            from ai_karen_engine.core.expression.gateway import ExpressionGateway
-            from ai_karen_engine.core.expression.contracts import ExpressionTask
-
-            gateway = ExpressionGateway()
-            test_task = ExpressionTask(
-                task_id="health_probe",
-                kind="probe",
-                messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=10,
-                timeout_ms=5000,
-                required_capabilities=[],
-                forbidden_capabilities=[],
-                response_mode="text"
-            )
-            
-            result = await gateway.generate(test_task)
-            
-            elapsed = (time.time() - start) * 1000
-            is_healthy = result.engine_id != "disabled"
-            
+            healthy, reason = self._gateway.availability()
             return DependencyHealth(
                 name=self.name,
-                status=DependencyStatus.HEALTHY if is_healthy else DependencyStatus.UNHEALTHY,
-                reason=None if is_healthy else "No expression engines available",
-                response_time_ms=elapsed,
+                status=(
+                    DependencyStatus.HEALTHY
+                    if healthy
+                    else DependencyStatus.UNHEALTHY
+                ),
+                reason=reason,
+                response_time_ms=(time.time() - start) * 1000,
             )
         except Exception as e:
             return DependencyHealth(
@@ -507,7 +499,9 @@ class ChatRuntimeControlPlane:
         }
     )
 
-    def __init__(self):
+    def __init__(self, *, composition: Optional[RuntimeComposition] = None):
+        self._composition = composition or get_runtime_composition()
+
         # Runtime state
         self._current_mode: RuntimeMode = RuntimeMode.EMERGENCY_FALLBACK  # Safe default
         self._dependency_health: Dict[str, DependencyHealth] = {}
@@ -550,7 +544,7 @@ class ChatRuntimeControlPlane:
         self._probes: List[DependencyProbe] = [
             PostgreSQLProbe(),
             RedisProbe(),
-            ProviderRouterProbe(),
+            ProviderRouterProbe(self._composition.expression_gateway),
             MemorySubsystemProbe(),
             ProviderRegistryProbe(),
         ]
@@ -1339,38 +1333,13 @@ class ChatRuntimeControlPlane:
         return False
 
     async def _has_live_provider_path(self) -> bool:
-        """Query the canonical provider registry before blocking chat in emergency mode."""
+        """Return composed expression-path availability without provider execution."""
         try:
-            from ai_karen_engine.core.model_runtime.provider_registry_service import (
-                get_provider_registry_service,
-            )
-
-            registry = get_provider_registry_service()
-
-            for provider_name in registry.get_all_provider_names():
-                if provider_name in {"fallback", "copilotkit", "custom_copilotkit"}:
-                    continue
-                status = registry.get_provider_status(provider_name)
-                if status is None or not status.is_available:
-                    continue
-                if provider_name == "builtin_vllm":
-                    endpoint = registry.get_provider_endpoint("builtin_vllm")
-                    if endpoint is not None and endpoint.enabled:
-                        return True
-                    continue
-                if provider_name == "builtin_transformers":
-                    endpoint = registry.get_provider_endpoint("builtin_transformers")
-                    if endpoint is not None and endpoint.enabled:
-                        return True
-                    continue
-                if not status.has_api_key:
-                    continue
-                models = registry.get_registered_models(provider_name)
-                if status.has_api_key and models:
-                    return True
+            healthy, _ = self._composition.expression_gateway.availability()
+            return healthy
         except Exception as exc:
             logger.debug("Live provider path probe failed: %s", exc)
-        return False
+            return False
 
     def _compute_optimal_mode(self) -> RuntimeMode:
         """
@@ -2350,7 +2319,9 @@ async def get_chat_runtime_control_plane() -> ChatRuntimeControlPlane:
     """Get the global control plane instance (lazy-initialized)."""
     global _runtime_control_plane
     if _runtime_control_plane is None:
-        _runtime_control_plane = ChatRuntimeControlPlane()
+        _runtime_control_plane = ChatRuntimeControlPlane(
+            composition=get_runtime_composition()
+        )
         await _runtime_control_plane.initialize()
     return _runtime_control_plane
 
