@@ -4,9 +4,46 @@ import pytest
 
 from ai_karen_engine.core.cortex.reasoning_eligibility import (
     EligibilityDisposition,
+    ReasoningEligibilityContext,
     ReasoningEligibilityDecision,
     ReasoningModeEligibility,
 )
+from ai_karen_engine.core.intelligence.contracts import (
+    TaskAmbiguity,
+    TaskComplexity,
+    TaskRisk,
+    TaskSignature,
+)
+
+
+def test_reasoning_eligibility_context_uses_task_signature() -> None:
+    signature = TaskSignature(
+        intent="analysis",
+        complexity=TaskComplexity.EXPERT,
+        ambiguity=TaskAmbiguity.AMBIGUOUS,
+        novelty=0.7,
+        risk=TaskRisk.LOW,
+        reasoning_requirements=["deep_reasoning"],
+        verification_value=0.9,
+    )
+    context = ReasoningEligibilityContext(
+        task_signature=signature,
+        evidence_available=True,
+        max_model_calls_hint=30,
+        latency_budget_ms_hint=5000,
+    )
+
+    assert context.task_signature is signature
+    assert context.task_signature.complexity == TaskComplexity.EXPERT
+    assert context.task_signature.verification_value == 0.9
+
+
+def test_reasoning_eligibility_context_rejects_negative_budget_hints() -> None:
+    with pytest.raises(ValueError, match="max_model_calls_hint"):
+        ReasoningEligibilityContext(
+            task_signature=TaskSignature(),
+            max_model_calls_hint=-1,
+        )
 
 
 def test_reasoning_mode_eligibility_normalizes_aliases() -> None:
