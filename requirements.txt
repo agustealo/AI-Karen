@@ -1,9 +1,12 @@
 # AI KAREN runtime dependencies
 # Keep this file aligned to live imports/runtime composition. Do not retain retired backends "just in case".
 #
-# Memory / graph dependency policy:
+# Persistence / memory dependency policy:
 # - PostgreSQL/Supabase is the canonical durable memory substrate.
-# - psycopg is the canonical Python PostgreSQL driver already used by the runtime/data layer.
+# - SQLAlchemy is the canonical ORM/session/engine abstraction used by PostgresEngine and durable repositories.
+# - psycopg/psycopg2 are PostgreSQL drivers used by sync/runtime paths where configured.
+# - asyncpg is required by the canonical SQLAlchemy async URL (postgresql+asyncpg://).
+# - redis is an active runtime dependency for bounded STM/session/hot-context storage through platform/memory/redis.
 # - pgvector, pg_trgm, pg_cron, pgTAP, recursive CTE traversal, and RLS are PostgreSQL/Supabase
 #   capabilities/extensions and therefore are NOT Python packages to add here.
 # - Do not add NetworkX, pgmq clients, Neo4j, Memgraph, FalkorDB, Graphiti, Mem0, Apache AGE
@@ -13,9 +16,10 @@
 # - A graph accelerator, if ever approved, is derived compute/projection only; it never becomes
 #   authoritative durable memory.
 #
-# Removed in DEPENDENCY-TRUTH cleanup: neo4j, kuzu, redis/fakeredis, duckdb, sqlalchemy, asyncpg, hnswlib.
-# Active imports that still reference retired dependencies are architecture debt to remove or rewire,
-# not justification to re-add the retired packages here.
+# Retired backends/dependencies include: neo4j, kuzu, duckdb, hnswlib.
+# Redis and SQLAlchemy are NOT retired. Deprecated Redis import shims must converge on
+# ai_karen_engine.platform.memory.redis, while SQLAlchemy consumers must converge on the
+# canonical ai_karen_engine.persistence.postgres.PostgresEngine/session path.
 
 fastapi==0.136.1
 uvicorn
@@ -57,8 +61,11 @@ pymupdf
 bs4
 plotly
 seaborn
+SQLAlchemy
 psycopg
 psycopg2-binary
+asyncpg
+redis
 aiofiles
 aiohttp
 alembic
