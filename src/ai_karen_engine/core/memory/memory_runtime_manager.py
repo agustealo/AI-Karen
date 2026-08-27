@@ -1,10 +1,10 @@
 """Canonical memory runtime manager.
 
 Runtime owns execution and dependency composition. NeuroRecall owns recall
-selection. MemoryFormationService turns runtime observations into candidates,
-NeuroVault is the only durable mutation boundary, and MemoryControlService owns
-operator/governance access. Core services receive backend-neutral contracts;
-platform implementations are wired here.
+selection. MemoryFormationService turns canonical evaluations into durable
+candidates, NeuroVault is the only durable mutation boundary, and
+MemoryControlService owns operator/governance access. Core services receive
+backend-neutral contracts; platform implementations are wired here.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from ai_karen_engine.core.runtime.resilience import get_feature_flags
 from .compat import export_promoted_artifacts, get_metrics, update_memory
 from .control import MemoryControlService
 from .episodic import EventSegmenter
-from .formation import MemoryFormationService
+from .formation import MemoryFormationEvaluator, MemoryFormationService
 from .retrieval.neuro_recall import NeuroRecall, RecallRequest, RecallScopeError
 from .shadow_evaluator import MemoryShadowEvaluator
 from .telemetry import memory_metrics
@@ -37,6 +37,7 @@ class MemoryRuntimeManager:
         formation_service: MemoryFormationService | None = None,
         control_service: MemoryControlService | None = None,
         stm: Any | None = None,
+        formation_evaluator: MemoryFormationEvaluator | None = None,
         shadow_evaluator: MemoryShadowEvaluator | None = None,
     ) -> None:
         if retrieval_adapter is not None:
@@ -49,12 +50,16 @@ class MemoryRuntimeManager:
         self._consolidation_adapter = consolidation_adapter
         needs_default_stm = recall_service is None or formation_service is None
         self._stm = stm or (self._build_stm() if needs_default_stm else None)
+        self._formation_evaluator = formation_evaluator or MemoryFormationEvaluator()
         self._neuro_recall = recall_service or self._build_neuro_recall(self._stm)
         self._formation_service = formation_service or self._build_formation_service(
-            self._stm
+            self._stm,
+            self._formation_evaluator,
         )
         self._control_service = control_service or self._build_control_service()
-        self._shadow_evaluator = shadow_evaluator or MemoryShadowEvaluator()
+        self._shadow_evaluator = shadow_evaluator or MemoryShadowEvaluator(
+            self._formation_evaluator
+        )
 
     @property
     def control_service(self) -> MemoryControlService:
@@ -102,8 +107,11 @@ class MemoryRuntimeManager:
         )
 
     @staticmethod
-    def _build_formation_service(stm: Any) -> MemoryFormationService:
-        """Compose governed durable writes, STM, and rebuildable projections."""
+    def _build_formation_service(
+        stm: Any,
+        evaluator: MemoryFormationEvaluator,
+    ) -> MemoryFormationService:
+        """Compose governed writes around the one formation evaluator."""
         if stm is None:
             raise RuntimeError("STM adapter is required to compose memory formation")
 
@@ -130,6 +138,7 @@ class MemoryRuntimeManager:
         return MemoryFormationService(
             vault_factory=vault_factory,
             derived_projector=PostgresDerivedMemoryProjector(projection_manager),
+            evaluator=evaluator,
             episode_state_store=stm,
             event_segmenter=EventSegmenter(),
         )
@@ -203,8 +212,12 @@ class MemoryRuntimeManager:
                 tenant_id=tenant_id,
                 user_id=user_id,
             )
-            memory_metrics.increment("signals_extracted", int(result.get("extracted") or 0))
-            memory_metrics.increment("signals_admitted", int(result.get("admitted") or 0))
+            memory_metrics.increment(
+                "signals_extracted", int(result.get("extracted") or 0)
+            )
+            memory_metrics.increment(
+                "signals_admitted", int(result.get("admitted") or 0)
+            )
             memory_metrics.increment("shadow_mode_runs")
             result["learning_enabled"] = bool(learning_enabled)
             result["write_authority"] = "disabled_or_shadow"
