@@ -27,6 +27,7 @@ from ai_karen_engine.core.memory.memory_runtime_manager import (
     export_promoted_artifacts,
     get_memory_manager,
 )
+from ai_karen_engine.core.runtime.resilience import get_feature_flags
 from ai_karen_engine.utils.pydantic_base import ISO8601Model
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,10 @@ def get_correlation_id(request: Request) -> str:
 
 def _memory_manager():
     return get_memory_manager()
+
+
+def _feature_flags():
+    return get_feature_flags()
 
 
 class MemoryInspectorRequest(ISO8601Model):
@@ -175,10 +180,10 @@ async def inspect_memory(request: Request, tenant_id: Optional[str] = None, user
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:read")
 
-    manager = _memory_manager()
-    if not manager.flags.is_enabled("memory_inspector_enabled", tenant_id, user_id):
+    flags = _feature_flags()
+    if not flags.is_enabled("memory_inspector_enabled", tenant_id, user_id):
         raise HTTPException(status_code=403, detail="Memory inspector is disabled")
-    snapshot = await manager.inspect_memory_state(
+    snapshot = await _memory_manager().inspect_memory_state(
         tenant_id=tenant_id,
         user_id=user_id,
         limit=limit,
@@ -193,10 +198,13 @@ async def list_consent_scopes(request: Request, tenant_id: str, user_id: Optiona
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:read")
 
-    manager = _memory_manager()
-    if not manager.flags.is_enabled("memory_consent_controls_enabled", tenant_id, user_id):
+    flags = _feature_flags()
+    if not flags.is_enabled("memory_consent_controls_enabled", tenant_id, user_id):
         raise HTTPException(status_code=403, detail="Memory consent controls are disabled")
-    result = await manager.list_consent_scopes(tenant_id=tenant_id, user_id=user_id)
+    result = await _memory_manager().list_consent_scopes(
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     return ConsentScopeListResponse(
         correlation_id=correlation_id,
         status=result.get("status", "degraded"),
@@ -210,10 +218,14 @@ async def update_consent_scope(request: Request, body: ConsentScopeRequest):
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:write")
 
-    manager = _memory_manager()
-    if not manager.flags.is_enabled("memory_consent_controls_enabled", body.tenant_id, body.user_id):
+    flags = _feature_flags()
+    if not flags.is_enabled(
+        "memory_consent_controls_enabled",
+        body.tenant_id,
+        body.user_id,
+    ):
         raise HTTPException(status_code=403, detail="Memory consent controls are disabled")
-    result = await manager.set_consent_scope(
+    result = await _memory_manager().set_consent_scope(
         tenant_id=body.tenant_id,
         user_id=body.user_id,
         scope_name=body.scope_name,
@@ -228,10 +240,10 @@ async def list_retention_policies(request: Request, tenant_id: Optional[str] = N
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:read")
 
-    manager = _memory_manager()
-    if not manager.flags.is_enabled("memory_retention_controls_enabled", tenant_id):
+    flags = _feature_flags()
+    if not flags.is_enabled("memory_retention_controls_enabled", tenant_id):
         raise HTTPException(status_code=403, detail="Memory retention controls are disabled")
-    result = await manager.list_retention_policies(tenant_id=tenant_id)
+    result = await _memory_manager().list_retention_policies(tenant_id=tenant_id)
     return RetentionPolicyListResponse(
         correlation_id=correlation_id,
         status=result.get("status", "degraded"),
@@ -245,10 +257,10 @@ async def update_retention_policy(request: Request, body: RetentionPolicyRequest
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:write")
 
-    manager = _memory_manager()
-    if not manager.flags.is_enabled("memory_retention_controls_enabled", body.tenant_id):
+    flags = _feature_flags()
+    if not flags.is_enabled("memory_retention_controls_enabled", body.tenant_id):
         raise HTTPException(status_code=403, detail="Memory retention controls are disabled")
-    result = await manager.set_retention_policy(
+    result = await _memory_manager().set_retention_policy(
         tenant_id=body.tenant_id,
         memory_class=body.memory_class,
         ttl_days=body.ttl_days,
@@ -262,8 +274,11 @@ async def get_shadow_mode(request: Request, tenant_id: Optional[str] = None, use
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:read")
 
-    manager = _memory_manager()
-    effective = manager.flags.is_enabled("memory_shadow_mode_enabled", tenant_id, user_id)
+    effective = _feature_flags().is_enabled(
+        "memory_shadow_mode_enabled",
+        tenant_id,
+        user_id,
+    )
     return ShadowModeResponse(
         correlation_id=correlation_id,
         status="success",
@@ -280,19 +295,34 @@ async def set_shadow_mode(request: Request, body: ShadowModeRequest):
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:write")
 
-    manager = _memory_manager()
-    result = manager.set_shadow_mode(
-        enabled=body.enabled,
-        tenant_id=body.tenant_id,
-        user_id=body.user_id,
+    flags = _feature_flags()
+    if body.tenant_id:
+        flags.set_tenant_override(
+            body.tenant_id,
+            "memory_shadow_mode_enabled",
+            body.enabled,
+        )
+    elif body.user_id:
+        flags.set_user_override(
+            body.user_id,
+            "memory_shadow_mode_enabled",
+            body.enabled,
+        )
+    else:
+        flags.set_global("memory_shadow_mode_enabled", body.enabled)
+
+    effective = flags.is_enabled(
+        "memory_shadow_mode_enabled",
+        body.tenant_id,
+        body.user_id,
     )
     return ShadowModeResponse(
         correlation_id=correlation_id,
-        status=result.get("status", "success"),
-        enabled=result["enabled"],
-        tenant_id=result.get("tenant_id"),
-        user_id=result.get("user_id"),
-        effective=result.get("effective", body.enabled),
+        status="success",
+        enabled=body.enabled,
+        tenant_id=body.tenant_id,
+        user_id=body.user_id,
+        effective=effective,
     )
 
 
@@ -302,8 +332,11 @@ async def submit_profile_correction(request: Request, body: ProfileCorrectionReq
     correlation_id = get_correlation_id(request)
     await _authorize(request, "memory:write")
 
-    manager = _memory_manager()
-    if not manager.flags.is_enabled("memory_profile_corrections_enabled", body.tenant_id, body.user_id):
+    if not _feature_flags().is_enabled(
+        "memory_profile_corrections_enabled",
+        body.tenant_id,
+        body.user_id,
+    ):
         return ProfileCorrectionResponse(
             correlation_id=correlation_id,
             status="disabled",
@@ -316,7 +349,7 @@ async def submit_profile_correction(request: Request, body: ProfileCorrectionReq
     if body.profile_area:
         source_text = f"{body.profile_area}: {source_text}"
 
-    result = await manager.process_interaction(
+    result = await _memory_manager().process_interaction(
         text=source_text,
         tenant_id=body.tenant_id,
         user_id=body.user_id,
