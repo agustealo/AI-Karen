@@ -65,6 +65,8 @@ jobs:
           pytest tests/architecture/test_memory_stm_boundaries.py -q
           pytest tests/architecture/test_memory_formation_authority.py -q
           pytest tests/architecture/test_memory_temporal_evolution.py -q
+          pytest tests/architecture/test_memory_temporal_graph_persistence.py -q
+          pytest tests/architecture/test_memory_temporal_graph_projection.py -q
           pytest tests/architecture/test_beta_conversation_reload_contract.py -q
           pytest tests/architecture/test_authenticated_tenant_context_contract.py -q
 
