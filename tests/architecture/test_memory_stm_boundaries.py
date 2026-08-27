@@ -71,20 +71,10 @@ def test_no_default_tenant_in_canonical_memory_factory() -> None:
     assert "explicit non-default tenant_id" in source
 
 
-def test_legacy_chat_memory_config_is_quarantined_from_canonical_runtime() -> None:
-    """Historical Redis/Milvus-era config must never regain canonical authority."""
+def test_legacy_chat_memory_config_is_retired() -> None:
+    """The mixed Redis/Milvus/auth config has no valid Core ownership."""
 
-    canonical_files = (
-        "memory_runtime_manager.py",
-        "formation.py",
-        "retrieval/retrieval_router.py",
-        "stm/contracts.py",
-    )
-    for relative in canonical_files:
-        source = _text(relative)
-        assert "chat_memory_config" not in source, (
-            f"canonical memory surface imported legacy config: {relative}"
-        )
+    assert not (CORE_MEMORY / "chat_memory_config.py").exists()
 
 
 def test_legacy_redis_helpers_are_absent_from_canonical_memory_cognition() -> None:
