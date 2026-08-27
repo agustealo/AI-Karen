@@ -608,13 +608,3 @@ class CortexExecutionDecider:
 
     def cortex_never_executes(self) -> bool:
         return True
-
-
-_decider: Optional[CortexExecutionDecider] = None
-
-
-def get_cortex_execution_decider() -> CortexExecutionDecider:
-    global _decider
-    if _decider is None:
-        _decider = CortexExecutionDecider()
-    return _decider

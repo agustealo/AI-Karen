@@ -69,12 +69,18 @@ def test_cortex_public_surface_does_not_export_process_singleton_accessor() -> N
     assert '"get_cortex_execution_decider"' not in source
 
 
-def test_runtime_compatibility_shim_delegates_instance_ownership_to_composition() -> None:
-    shim = ROOT / "src/ai_karen_engine/core/runtime/cortex_execution_decider.py"
-    source = shim.read_text(encoding="utf-8")
+def test_cortex_executive_has_no_process_singleton() -> None:
+    executive = ROOT / "src/ai_karen_engine/core/cortex/executive.py"
+    source = executive.read_text(encoding="utf-8")
 
-    assert "core.runtime.composition import get_cortex_execution_decider" in source
-    assert "core.cortex.executive import CortexExecutionDecider" in source
+    assert "_decider:" not in source
+    assert "def get_cortex_execution_decider(" not in source
+
+
+def test_runtime_cortex_compatibility_shim_is_retired() -> None:
+    shim = ROOT / "src/ai_karen_engine/core/runtime/cortex_execution_decider.py"
+
+    assert not shim.exists()
 
 
 def test_chat_runtime_consumes_composition_without_shadow_constructors() -> None:
