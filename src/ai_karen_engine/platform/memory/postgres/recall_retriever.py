@@ -1,7 +1,7 @@
 """Canonical PostgreSQL durable-memory recall adapter.
 
-This module is a platform adapter. It owns PostgreSQL-specific query execution,
-not recall strategy. NeuroRecall remains the memory-domain recall authority.
+This module owns PostgreSQL-specific durable candidate retrieval. NeuroRecall
+remains the memory-domain recall authority.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from ai_karen_engine.core.memory.types import (
     MemoryQuery,
     MemoryType,
 )
+from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
 from .ledger_models import MemoryAssertion
 
@@ -32,19 +33,10 @@ class PostgresRecallRetriever:
     """Async, tenant-scoped retrieval from the canonical memory assertion ledger."""
 
     def __init__(self, session_factory: Callable[..., Any] | None = None) -> None:
+        # Injection is retained for unit/integration tests. Production recall uses
+        # async_transaction_scope so the Supabase/Postgres RLS tenant setting is
+        # applied consistently with the canonical persistence contract.
         self._session_factory = session_factory
-
-    def _resolve_session_factory(self) -> Callable[..., Any]:
-        if self._session_factory is not None:
-            return self._session_factory
-
-        from ai_karen_engine.database.client import db_client
-
-        factory = getattr(db_client, "get_async_session", None)
-        if factory is None:
-            raise RuntimeError("PostgreSQL async session factory is unavailable")
-        self._session_factory = factory
-        return factory
 
     async def recall(self, query: MemoryQuery) -> list[MemoryEntry]:
         """Retrieve durable memories for exactly one tenant/user scope."""
@@ -83,10 +75,14 @@ class PostgresRecallRetriever:
             MemoryAssertion.created_at.desc(),
         ).limit(top_k)
 
-        session_factory = self._resolve_session_factory()
-        async with session_factory() as session:
-            result = await session.execute(stmt)
-            rows = result.scalars().all()
+        if self._session_factory is not None:
+            async with self._session_factory() as session:
+                result = await session.execute(stmt)
+                rows = result.scalars().all()
+        else:
+            async with async_transaction_scope(tenant_id=tenant_id) as session:
+                result = await session.execute(stmt)
+                rows = result.scalars().all()
 
         return [self._to_entry(row, query, text) for row in rows]
 
