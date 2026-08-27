@@ -69,3 +69,42 @@ def test_no_default_tenant_in_canonical_memory_factory() -> None:
     source = _text("types/base.py")
     assert 'tenant_id: str = "default"' not in source
     assert "explicit non-default tenant_id" in source
+
+
+def test_legacy_chat_memory_config_is_quarantined_from_canonical_runtime() -> None:
+    """Historical Redis/Milvus-era config must never regain canonical authority."""
+
+    canonical_files = (
+        "memory_runtime_manager.py",
+        "formation.py",
+        "retrieval/retrieval_router.py",
+        "stm/contracts.py",
+    )
+    for relative in canonical_files:
+        source = _text(relative)
+        assert "chat_memory_config" not in source, (
+            f"canonical memory surface imported legacy config: {relative}"
+        )
+
+
+def test_legacy_redis_helpers_are_absent_from_canonical_memory_cognition() -> None:
+    """Compatibility Redis helpers may remain in Platform but not active Core."""
+
+    canonical_files = (
+        "memory_runtime_manager.py",
+        "formation.py",
+        "retrieval/retrieval_router.py",
+        "projections/hot_state_worker.py",
+    )
+    forbidden = (
+        "set_short_term(",
+        "get_short_term(",
+        "set_session(",
+        "get_session(",
+    )
+    for relative in canonical_files:
+        source = _text(relative)
+        for token in forbidden:
+            assert token not in source, (
+                f"canonical memory surface leaked legacy Redis helper {token}: {relative}"
+            )
