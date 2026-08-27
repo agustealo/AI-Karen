@@ -7,6 +7,7 @@ persistence and retrieval access.
 
 from .graph_repository import PostgresGraphRepository, PostgresGraphScopeError
 from .profile_retriever import PostgresProfileRecallRetriever
+from .procedural_retriever import PostgresProceduralRecallRetriever
 from .recall_retriever import PostgresRecallRetriever, PostgresRecallScopeError
 from .vault import (
     NeuroVaultAuthorizationError,
@@ -21,6 +22,7 @@ __all__ = [
     "PostgresGraphScopeError",
     "PostgresNeuroVault",
     "PostgresProfileRecallRetriever",
+    "PostgresProceduralRecallRetriever",
     "PostgresRecallRetriever",
     "PostgresRecallScopeError",
 ]
