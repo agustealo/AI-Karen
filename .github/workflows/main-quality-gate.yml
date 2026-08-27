@@ -62,8 +62,14 @@ jobs:
           pytest tests/architecture/test_cortex_intelligence_authority.py -q
           pytest tests/architecture/test_context_authority_convergence.py -q
           pytest tests/architecture/test_memory_consumer_domain_migration.py -q
+          pytest tests/architecture/test_memory_stm_boundaries.py -q
           pytest tests/architecture/test_beta_conversation_reload_contract.py -q
           pytest tests/architecture/test_authenticated_tenant_context_contract.py -q
+
+      - name: STM closure and tenant security proofs
+        run: |
+          pytest tests/memory/test_stm_closure_1b.py -q
+          pytest tests/auth/test_tenant_scope_fail_closed.py -q
 
       - name: Reject retired provider authorities
         shell: bash
