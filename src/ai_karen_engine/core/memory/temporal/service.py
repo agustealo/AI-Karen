@@ -26,6 +26,13 @@ def _utc(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
+def _required_utc(value: datetime) -> datetime:
+    normalized = _utc(value)
+    if normalized is None:
+        raise ValueError("required datetime cannot be null")
+    return normalized
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -62,7 +69,7 @@ class TemporalVersion:
     event_time: datetime | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "recorded_at", _utc(self.recorded_at) or _now())
+        object.__setattr__(self, "recorded_at", _required_utc(self.recorded_at))
         object.__setattr__(self, "event_time", _utc(self.event_time))
 
 
@@ -190,7 +197,7 @@ class MemoryTemporalEvolutionService:
 
     @staticmethod
     def effective_time(claim: MemoryClaim) -> datetime:
-        return _utc(claim.valid_from or claim.event_time or claim.asserted_at) or _now()
+        return _required_utc(claim.valid_from or claim.event_time or claim.asserted_at)
 
     @staticmethod
     def claim_ref(claim: MemoryClaim) -> str:
@@ -200,7 +207,7 @@ class MemoryTemporalEvolutionService:
             "subject": claim.subject,
             "predicate": claim.predicate,
             "object": claim.object,
-            "asserted_at": _utc(claim.asserted_at).isoformat(),
+            "asserted_at": _required_utc(claim.asserted_at).isoformat(),
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -239,11 +246,11 @@ class MemoryTemporalEvolutionService:
 
     @staticmethod
     def _close_before(existing_end: datetime | None, candidate: datetime) -> datetime:
-        candidate = _utc(candidate) or candidate
+        normalized_candidate = _required_utc(candidate)
         existing = _utc(existing_end)
         if existing is None:
-            return candidate
-        return min(existing, candidate)
+            return normalized_candidate
+        return min(existing, normalized_candidate)
 
     @staticmethod
     def _reinforced_status(previous: ClaimStatus, incoming: ClaimStatus) -> ClaimStatus:
