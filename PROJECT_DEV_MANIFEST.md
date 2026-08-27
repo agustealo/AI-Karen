@@ -1,40 +1,39 @@
 # AI KAREN Project Developer Manifest
 
 > **Status:** Canonical developer contract
-> **Applies to:** backend, runtime, AI/ML, agents, extensions, APIs, UI integration, infrastructure, tests, and documentation
-> **Rule:** When this manifest conflicts with an older implementation note, sprint sheet, or legacy README, verify live code and prefer the current canonical owner documented here.
+> **Applies to:** backend, runtime, AI/ML, agents, memory, extensions, APIs, UI, infrastructure, tests, and documentation
+> **Rule:** Live code must converge toward this authority model. Historical sprint sheets and compatibility layers never override it.
 
-AI KAREN is a **local-first, prompt-first, modular AI runtime** with governed execution, durable memory, provider/model orchestration, cognitive decisioning, multi-agent execution, extensibility, RBAC, audit, and first-class observability.
+AI KAREN is a **local-first, prompt-first, modular AI runtime** with durable memory, provider/model orchestration, governed reasoning, RBAC, audit, extensibility, and first-class observability.
 
-The project is not framework-first. Libraries are implementation tools. **KAREN's own contracts and authority boundaries remain primary.**
+KAREN is not framework-first. Libraries, research systems, and agent harnesses are implementation capabilities. **KAREN-owned contracts remain architectural authority.**
 
 ---
 
 ## 1. Engineering Mission
 
-Build one coherent runtime in which every major responsibility has:
+Every major responsibility must have:
 
 1. one owner;
-2. one canonical interface/contract;
+2. one canonical contract;
 3. one runtime path;
 4. one registry/config source where applicable;
-5. explicit security and tenant boundaries;
+5. explicit tenant/security boundaries;
 6. observable lifecycle events;
 7. tests proving the boundary.
 
-### Core principles
+Core rules:
 
-- **Local-first**: local models and infrastructure are preferred when suitable and healthy.
-- **Prompt-first**: prompts are explicit, versioned, testable execution contracts.
-- **Runtime-authoritative**: routes, UI, agents, providers, and plugins do not become alternate orchestration runtimes.
+- **Local-first**: prefer healthy local capabilities when suitable.
+- **Prompt-first**: prompts are explicit, versioned, testable contracts.
+- **Runtime-authoritative**: routes, UI, providers, agents, and plugins never become alternate runtimes.
 - **CORTEX is KAREN's cognitive head. CORTEX decides; Runtime executes.**
-- **DRY by authority**: one responsibility -> one owner -> one registry/config -> one execution path.
-- **Secure by enforcement**: RBAC, tenancy, credentials, permissions, and audit are backend/runtime responsibilities.
-- **Observable by default**: important decisions and execution stages emit structured events and bounded metrics.
-- **Typed and async-safe**: public cognitive/runtime boundaries are typed; concurrency and cancellation are explicit.
-- **Config-driven**: provider availability, defaults, feature flags, URLs, ports, model choices, and fallbacks are configuration, not scattered constants.
-- **Honest degradation**: never fabricate a model response to hide an unavailable capability.
-- **Test-proven architecture**: architecture rules must be executable as tests where practical.
+- **RuntimePolicy authorizes. CORTEX does not authorize itself.**
+- **DRY by authority**: one responsibility -> one owner -> one execution path.
+- **Typed and async-safe**: public cognitive/runtime boundaries are typed; budgets, cancellation, and concurrency are explicit.
+- **Config-driven**: providers, models, endpoints, fallbacks, feature flags, and security modes are centralized.
+- **Honest degradation**: unavailable capabilities produce explicit degraded/unavailable results, never fabricated model output.
+- **Test-proven architecture**: architecture rules are executable where practical.
 
 ---
 
@@ -42,487 +41,319 @@ Build one coherent runtime in which every major responsibility has:
 
 | Responsibility | Canonical owner | Must not own it |
 |---|---|---|
-| HTTP ingress | `api_routes/` + canonical app composition | providers, prompts, memory recall, orchestration |
-| App entrypoint | `ai_karen_engine.app:create_app` | Docker scripts, legacy root server runners |
-| Chat/request execution lifecycle | `core/runtime/` | routes, UI, CORTEX, agents |
-| Cognitive executive decisions | `core/cortex/` and canonical cognitive contracts | providers, persistence, direct tool execution |
-| Memory-access strategy and learned recall policy | NeuroRecall/canonical recall components | storage, provider execution, prompt synthesis |
-| Semantic retrieval and novelty primitives | canonical Soft Reasoning / retrieval components | cognitive executive policy, persistence, workflow execution |
-| Reasoning/synthesis execution | ICE/canonical reasoning layer under `core/` | provider routing, durable memory writes, route orchestration |
-| Provider/model runtime | `core/model_runtime/` + canonical provider registry/routing | UI, API routes, CORTEX |
-| Prompt assembly | `core/runtime/prompt/` | providers, routes, agents, NeuroRecall |
-| Graph workflows | `core/langgraph_orchestrator/` only when graph semantics are required | simple chat, generic orchestration, cognitive authority |
-| Multi-agent orchestration | `agent_medusa/` | provider routing, prompt authority, RBAC policy |
-| Memory domain | `core/memory/` + canonical data adapters | NeuroRecall, ICE, agents, routes |
-| Persistence governance | NeuroVault/governed persistence components | reasoning engines, recall engines, duplicate memory databases |
-| Extensions/plugins | `extensions/` + governed action execution path | route-level execution, raw imports |
-| Configuration | `src/ai_karen_engine/config/` + env | React fallbacks, launch scripts |
-| Security | canonical auth/security + policy/RBAC enforcement | UI-only checks |
-| Observability | `platform/observability/` | subsystem-specific shadow telemetry |
-| Numeric metrics | canonical `MetricsCollector` and adapters | second Prometheus registries |
-| Operator CLI | `ai_karen_engine.cli` | runtime/provider/prompt policy |
-
-### 2.1 Cognitive Authority Hierarchy
-
-KAREN has one cognitive head: **CORTEX**. Runtime owns execution, but Runtime does not become a second cognitive decision-maker. ICE, NeuroRecall, Soft Reasoning, LangGraph, AgentMedusa, providers, tools, and memory systems are capabilities or execution mechanisms subordinate to the canonical CORTEX + Runtime contract.
-
-```text
-                              CORTEX
-                     cognitive executive authority
-                               |
-          +--------------------+--------------------+
-          |                    |                    |
-          v                    v                    v
-      NeuroRecall             ICE            workflow/topology
- memory-access policy   reasoning/synthesis   decision signals
-          |                    |                    |
-          v                    |                    v
-   Soft Reasoning              |               LangGraph or
- retrieval primitives         |               AgentMedusa
-          |                    |                    |
-          +--------------------+--------------------+
-                               |
-                         CORTEX decision
-                               |
-                               v
-                            Runtime
-                       execution authority
-                               |
-       +-----------------------+------------------------+
-       |                       |                        |
-       v                       v                        v
- provider/model runtime   tools/extensions        memory services
-                                                       |
-                                                       v
-                                                  NeuroVault
-                                            governed persistence
-```
-
-This diagram is an authority map, not an implementation requirement that every request traverse every component.
-
-### 2.2 Head vs. Body Rule
-
-Use this mental model consistently:
-
-- **CORTEX = executive function / cognitive head.** It decides what kind of cognition is needed and what is eligible.
-- **Runtime = request lifecycle and execution authority.** It performs the approved work and coordinates side effects.
-- **ICE = reasoning faculty.** It performs governed reasoning, synthesis, reflection, decomposition, or verification work requested through the runtime plan.
-- **NeuroRecall = memory-access intelligence.** It selects recall strategy, ranks/fuses candidates, estimates transfer utility, and may learn which memories are useful to recall.
-- **Soft Reasoning (SR) = retrieval machinery.** It owns semantic retrieval primitives, novelty/similarity heuristics, lightweight candidate generation, and retrieval-local scoring only.
-- **LangGraph = graph workflow machinery.** It executes explicit graph workflows when CORTEX/Runtime select graph semantics.
-- **AgentMedusa = multi-agent execution topology.** It executes governed specialist-agent plans when selected.
-- **NeuroVault = persistence governance.** It controls durable memory writes, lifecycle, deletion, archive, and recovery.
-
-### 2.3 Dependency Direction Rules
-
-The following are architectural invariants:
-
-```text
-API/routes -> Runtime
-Runtime -> CORTEX
-Runtime -> execution capabilities selected by CORTEX
-CORTEX -> decision contracts only
-NeuroRecall -> SR/memory candidate sources
-ICE -> reasoning inputs/contracts
-Runtime -> provider/tool/workflow execution
-Runtime -> memory candidate submission
-NeuroVault -> durable persistence adapters
-```
-
-Forbidden reverse authority:
-
-- SR must not call or direct CORTEX.
-- NeuroRecall must not execute providers, tools, plugins, or workflows.
-- ICE must not choose providers or persist durable memory directly.
-- LangGraph must not become the global router or cognitive head.
-- AgentMedusa must not become the global router or cognitive head.
-- providers must not assemble canonical prompts or choose memory policy.
-- memory stores must not decide recall strategy.
-- NeuroVault must not decide reasoning strategy.
-
-### 2.4 No Hidden Construction Rule
-
-Canonical cognitive/runtime dependencies must be composed explicitly at the runtime/application composition boundary. Subsystems must not silently instantiate alternate canonical engines when a dependency is omitted.
-
-Forbidden production pattern:
-
-```python
-self.recall_engine = recall_engine or SoftReasoningEngine()
-```
-
-when `SoftReasoningEngine` is the canonical shared retrieval dependency. The same rule applies to provider registries, memory services, ICE, NeuroRecall, and workflow orchestrators.
-
-Why: implicit construction can create split-brain runtime state in which two apparently integrated components recall from, write to, or observe different service instances.
-
-Tests must prove canonical dependency identity where shared state or authority is required.
+| HTTP ingress | `api_routes/` + app composition | provider choice, prompts, recall, orchestration |
+| Request lifecycle | `core/runtime/` | routes, UI, CORTEX, agents |
+| Cognitive decisions | `core/cortex/` | authorization, provider execution, persistence |
+| Runtime authorization | `core/runtime/policy/` | cognitive classification, provider execution |
+| Prompt assembly | `core/runtime/prompt/` | providers, routes, agents, memory retrieval |
+| Reasoning execution | `core/reasoning/` | provider routing, durable writes, global orchestration |
+| Soft Reasoning | `core/reasoning/soft_reasoning/` | memory retrieval authority, provider routing |
+| Memory recall strategy | NeuroRecall under `core/memory/` | durable storage, provider/tool execution |
+| Recall primitives | canonical memory retrievers/scorers | global cognitive policy, durable persistence |
+| Persistence governance | NeuroVault / memory formation path | reasoning engines, recall engines |
+| Provider/model runtime | canonical model runtime + provider registry | UI, routes, CORTEX |
+| Graph workflows | LangGraph only for true graph semantics | ordinary chat, global routing |
+| Multi-agent execution | AgentMedusa | provider routing, global policy |
+| Extensions/actions | governed extension/action runtime | route-level execution, self-authorization |
+| Observability | `platform/observability/` | subsystem shadow telemetry |
+| Configuration | `src/ai_karen_engine/config/` + environment | React fallbacks, launch scripts |
 
 ---
 
-## 3. Primary Runtime Flow
+## 3. Canonical Decision and Execution Chain
 
 ```text
-Client / UI
-   |
-   v
-Thin API route
-   |  validate request, auth/session/tenant context, request/correlation IDs
-   v
+Transport / API
+      |
+      v
 ChatRuntime
-   |  normalize request + assemble safe execution context
-   v
+request lifecycle owner
+      |
+      v
 CORTEX
-   |  intent, policy, capability, recall, reasoning, verification,
-   |  tool/agent/workflow eligibility and topology signals
-   v
+cognitive desirability only
+      |
+      v
+Cortex Decision
+requested topology / reasoning / recall / capabilities / budgets
+      |
+      v
+RuntimePolicy
+authorization authority
+      |
+      v
+Authorized Execution Plan
+      |
+      v
 ChatRuntime
-   |
-   +--> NeuroRecall when memory access is authorized/needed
-   |       +--> Soft Reasoning / canonical memory candidate sources
-   |       +--> ranked/fused/abstaining recall result
-   |
-   +--> canonical prompt assembly
-   |
-   +--> selected execution topology
-   |       +--> direct model execution
-   |       +--> ICE reasoning/synthesis
-   |       +--> LangGraph workflow
-   |       +--> AgentMedusa
-   |       +--> governed tool/extension action
-   |
-   +--> provider/model runtime
-   +--> streaming/response assembly
-   +--> learning/memory candidates
-   +--> NeuroVault-governed persistence
-   +--> audit + telemetry
-   v
-Backend truth -> UI
+      |
+      +--> NeuroRecall
+      +--> PromptRuntime
+      +--> Reasoning
+      +--> Direct model execution
+      +--> LangGraph when graph semantics are required
+      +--> AgentMedusa when multi-agent topology is authorized
+      +--> governed tools/extensions
+      +--> MemoryFormation / NeuroVault
+      +--> audit / telemetry
 ```
 
-Runtime legitimately appears both before and after CORTEX because Runtime owns the request lifecycle. It receives and normalizes the request, asks the cognitive head for decisions, then executes those decisions. This does not make Runtime a second cognitive head.
+Runtime legitimately appears before and after CORTEX because it owns the request lifecycle. CORTEX never executes the capabilities it selects.
 
-The route does not choose providers, build prompts, recall memory, execute plugins, or create fallback model text.
+### 3.1 CORTEX owns
 
----
-
-## 4. CORTEX Contract
-
-CORTEX is KAREN's **cognitive executive authority**, not an executor and not merely a policy gate.
-
-CORTEX may decide or signal:
-
-- intent and domain interpretation;
-- goal/state interpretation;
-- capability requirements;
-- reasoning depth/mode;
-- verification requirements;
-- whether recall is needed;
-- recall class/scope/strategy hints to NeuroRecall;
-- tool/extension eligibility;
-- agent delegation/topology;
-- whether graph workflow semantics are warranted;
-- policy/RBAC action eligibility;
-- confidence-domain and reasoning hints;
-- abstention/escalation/clarification requirements;
-- execution constraints and budgets.
+- intent/domain interpretation;
+- task/goal interpretation;
+- cognitive risk signals;
+- requested capabilities;
+- reasoning depth and requested reasoning modes;
+- recall need, class, scope, and budget hints;
+- tool/agent/workflow desirability;
+- topology recommendations;
+- abstention, clarification, escalation, and verification hints;
+- requested compute budgets.
 
 CORTEX must not:
 
-- call providers directly;
+- instantiate or invoke `RuntimePolicyEnforcer`;
+- call providers/models;
 - construct final prompts;
 - execute tools/plugins;
-- persist or directly mutate memory;
-- perform low-level vector retrieval itself;
-- run ICE, LangGraph, or AgentMedusa work itself;
-- own provider/model fallback execution;
-- become a second ChatRuntime.
+- persist memory;
+- run LangGraph/AgentMedusa work;
+- authorize its own requested capabilities or reasoning modes.
 
-CORTEX returns typed decisions. Runtime executes them through canonical capabilities.
+### 3.2 RuntimePolicy owns
 
-See `docs/development/CORTEX_RUNTIME.md`.
+- capability authorization;
+- reasoning-mode authorization;
+- side-effect authorization;
+- risk/runtime-level restrictions;
+- provider/resource constraints;
+- human-gate requirements;
+- allowed/denied reasoning modes with reason codes;
+- conversion of policy truth into the authorization portion of `AuthorizedExecutionPlan`.
 
----
+Policy may deny an expensive reasoning protocol without denying the entire request. Runtime must prefer an already-authorized cheaper path when one exists rather than inventing a reasoning mode.
 
-## 5. Prompt-First Rules
+### 3.3 Runtime owns
 
-Prompts are versioned execution contracts.
-
-Canonical prompt assembly must account for:
-
-1. system policy;
-2. task/output contract;
-3. explicit turn override;
-4. explicit user preference;
-5. selected assistant-profile defaults;
-6. global defaults;
-7. tenant context;
-8. memory context;
-9. intent/reasoning requirements;
-10. tools/extensions;
-11. provider capabilities;
-12. token budget;
-13. safety/output schema.
-
-Do not scatter prompt construction through route files, providers, agents, NeuroRecall, or plugins.
-
-Do not request hidden chain-of-thought. Prefer explicit evidence, verification, confidence, constraints, and structured result contracts.
-
----
-
-## 6. Provider and Model Runtime
-
-Provider/model availability, selection, execution, and fallback are centralized.
-
-Target fallback behavior is configuration-driven and local-first:
-
-```text
-requested provider/model
- -> local primary
- -> custom OpenAI-compatible local endpoint (including vLLM deployments)
- -> Transformers where enabled
- -> Ollama when enabled/healthy
- -> external provider when explicitly enabled
- -> honest unavailable/degraded result
-```
-
-### Forbidden
-
-- `builtin_vllm` resurrection;
-- route-level provider selection;
-- CORTEX-level provider execution;
-- UI model fallbacks;
-- provider-specific prompt builders outside canonical prompt/runtime contracts;
-- canned text represented as a model answer;
-- scattered provider aliases or fallback orders.
-
-A vLLM deployment is treated as an **OpenAI-compatible provider endpoint**, not a special built-in runtime authority.
-
----
-
-## 7. Memory and Recall Model
-
-Memory is the domain. Recall intelligence and persistence governance are supporting responsibilities with separate owners.
-
-```text
-STM       -> recent/session context
-Episodic  -> meaningful interactions, decisions, outcomes, and reusable experiences
-LTM       -> durable facts/preferences/knowledge
-
-Soft Reasoning -> retrieval primitives, similarity/novelty, lightweight candidate generation
-NeuroRecall    -> memory-access strategy, candidate fusion/ranking, recall policy, transfer utility
-NeuroVault     -> governed persistence, lifecycle, archive, backup/restore, deletion
-```
-
-### 7.1 Recall authority
-
-NeuroRecall is subordinate to CORTEX as a cognitive capability. It may decide **which authorized memories are useful to recall and how strongly they should influence context**, but it may not decide the overall user intent, execute tools, choose providers, synthesize the final answer, or own durable storage.
-
-NeuroRecall may own:
-
-- recall strategy selection within the scope authorized by CORTEX/Runtime;
-- candidate-source coordination;
-- semantic/temporal/case/graph candidate fusion;
-- learned case-selection policy;
-- outcome/transfer-utility scoring;
-- contradiction/redundancy/diversity resolution;
-- scope-aware ranking;
-- budget-aware recall packing;
-- recall abstention/disposition;
-- recall confidence as a distinct confidence domain;
-- feedback on whether recalled cases transferred positively or negatively.
-
-NeuroRecall must not own:
-
-- memory database/storage authority;
+- request lifecycle;
+- context assembly;
+- calling CORTEX then RuntimePolicy as distinct stages;
+- capability composition;
+- prompt assembly coordination;
+- execution selection;
 - provider/model execution;
-- prompt assembly;
-- final synthesis;
-- tool/plugin execution;
-- global RBAC policy;
-- hidden parallel conversation state.
+- streaming/fallback/degradation;
+- persistence coordination;
+- telemetry/audit;
+- budget accounting.
 
-### 7.2 Soft Reasoning authority
+---
 
-Soft Reasoning is intentionally narrower than NeuroRecall. It is a retrieval primitive, not a second cognitive head.
+## 4. Reasoning Architecture
 
-It may own:
+Reasoning modes are typed execution protocols, not generic capability strings.
 
-- embeddings through canonical ML capabilities;
-- semantic similarity search;
-- retrieval-local recency heuristics;
-- novelty scoring;
-- lightweight candidate generation;
-- bounded local reranking tied to retrieval semantics.
-
-It must not own:
-
-- case utility/outcome policy;
-- cross-source recall authority;
-- final recall disposition;
-- durable write policy;
-- reasoning synthesis;
-- provider/model routing;
-- workflow execution.
-
-Do not call `1 - top_similarity` "entropy". Canonical naming is `novelty_score`, `retrieval_gap`, or another explicitly defined retrieval-uncertainty term. Reserve entropy terminology for actual distribution/policy entropy.
-
-### 7.3 Persistence authority
-
-ICE, SR, NeuroRecall, CORTEX, agents, and routes do not persist durable memory directly. They may emit typed memory/learning candidates or observations. Runtime submits eligible candidates to governed memory policy and NeuroVault.
+Canonical modes include:
 
 ```text
-reasoning / execution / recall outcome
+causal
+counterfactual
+evidence_synthesis
+hypothesis_comparison
+verification
+refinement
+soft_exploration
+metacognition
+```
+
+Capabilities such as `memory.read`, `memory.write`, `web`, `code_execution`, or `filesystem_read` must never leak into the reasoning-mode field.
+
+### 4.1 Soft Reasoning
+
+**Soft Reasoning is reserved exclusively for the research-derived reasoning strategy**, not retrieval.
+
+KAREN's strict Soft Reasoning profile implements a test-time inference protocol based on first-token embedding intervention, candidate exploration, verifier feedback, Gaussian-process Bayesian optimization, and explicit compute accounting.
+
+Soft Reasoning:
+
+- is a specialist reasoning strategy under Runtime-authorized execution;
+- requires an already-selected compatible model runtime;
+- does not choose providers;
+- does not build canonical prompts itself;
+- does not own memory retrieval;
+- does not persist memory;
+- must report generation/verifier/model-call cost separately;
+- must fail closed when required embedding/log-probability capabilities are unavailable.
+
+The research profile and KAREN production-tuned profile must remain distinguishable in telemetry and benchmarks.
+
+### 4.2 Adaptive test-time compute
+
+Do not treat all reasoning as one scalar "deep" budget.
+
+KAREN should distinguish inference protocols and allocate compute based on expected value, task difficulty, uncertainty, verification value, risk, and available budget. `soft_exploration` is high-cost and must never become a default for all difficult prompts.
+
+---
+
+## 5. Memory Architecture
+
+Memory follows a governed **write -> manage -> read** lifecycle.
+
+```text
+STM       recent/session state
+Episodic  meaningful interactions, decisions, outcomes, reusable experience
+LTM       durable facts, preferences, knowledge
+```
+
+### NeuroRecall
+
+NeuroRecall owns memory-access strategy:
+
+- candidate-source coordination;
+- semantic/temporal/graph/case fusion;
+- ranking/reranking;
+- contradiction/redundancy/diversity handling;
+- scope-aware selection;
+- recall abstention;
+- recall confidence;
+- future learned case-selection policy behind explicit evaluation gates.
+
+NeuroRecall must not own persistence, provider execution, prompt assembly, tools, or global policy.
+
+### Recall primitives
+
+Use the term **recall primitives** for embeddings, semantic similarity, retrieval-gap/novelty scoring, recency, local reranking, graph candidate generation, and source-specific retrieval.
+
+Do not call `1 - top_similarity` entropy. Use `novelty_score`, `retrieval_gap`, or another explicitly defined term.
+
+### NeuroVault / durable mutation
+
+Durable memory mutation must flow through governed memory formation and NeuroVault-compatible persistence contracts.
+
+```text
+interaction / reasoning / outcome
         |
         v
 MemoryCandidate / LearningObservation
         |
         v
-Runtime + memory policy
+MemoryFormation / policy
         |
         v
 NeuroVault
         |
         v
-canonical durable memory adapters
+canonical durable adapters
 ```
 
-### 7.4 Scope and provenance
-
-Every production recall/persistence contract must carry explicit scope and provenance sufficient to enforce:
-
-- tenant isolation;
-- user/workspace/project scope where applicable;
-- session/conversation scope where applicable;
-- memory namespace/class;
-- source/provenance;
-- creation/update timestamps;
-- policy/schema version;
-- embedding/model provenance where vectorization is used;
-- lifecycle state such as active, stale, superseded, invalid, quarantined, or expired.
+Every production memory contract must preserve tenant, user/workspace/project, session/conversation where applicable, namespace/class, provenance, lifecycle state, policy/schema version, and timestamps.
 
 No implicit production `tenant_id="default"` fallback is permitted.
 
-### 7.5 Current storage architecture
-
-Canonical durable data is PostgreSQL/Supabase-backed where configured. Redis may support bounded/ephemeral state.
-
-**Milvus and Elasticsearch are not part of the current KAREN memory architecture and must not be reintroduced through stale documentation, copied examples, default constructors, or implicit dependencies.** Any future addition requires an explicit architecture decision and manifest update.
-
-See `docs/development/MEMORY.md`.
+Current durable architecture is PostgreSQL/Supabase-backed where configured; Redis is bounded/ephemeral. Milvus and Elasticsearch are not current KAREN memory authorities.
 
 ---
 
-## 8. Reasoning, ICE, LangGraph, and AgentMedusa
+## 6. Prompt-First Rules
 
-These are different capabilities with different authority.
+Canonical prompt assembly accounts for:
 
-### ICE / reasoning
+1. system policy;
+2. task/output contract;
+3. explicit turn override;
+4. user preference / assistant profile;
+5. tenant context;
+6. authorized memory context;
+7. intent/reasoning requirements;
+8. authorized tools/extensions;
+9. provider capability;
+10. token budget;
+11. safety/output schema.
 
-ICE is a reasoning faculty under CORTEX-directed runtime execution. It may perform governed synthesis, decomposition, reflection, evidence integration, verification coordination, and other reasoning modes defined by canonical contracts.
-
-ICE does not:
-
-- choose the canonical provider/model routing path;
-- become a memory store;
-- directly persist durable memory;
-- become the global cognitive router;
-- silently construct an alternate SR/NeuroRecall instance;
-- own route/application lifecycle.
-
-Reasoning augments execution; it does not become a provider router or memory authority.
-
-### LangGraph
-
-Use LangGraph only for true graph semantics:
-
-- branching workflows;
-- checkpoint/resume;
-- graph state;
-- multi-step tool chains;
-- human approval nodes;
-- explicit long-running workflow topology.
-
-CORTEX/Runtime decide when graph semantics are warranted. LangGraph executes the selected graph. Do not use LangGraph for ordinary chat or as a second general orchestrator/cognitive head.
-
-### AgentMedusa
-
-AgentMedusa is KAREN's multi-agent execution topology.
-
-It owns planning/execution inside an authorized multi-agent topology, specialist coordination, dependency execution, arbitration, execution budgets, lifecycle, and trajectory assembly.
-
-It does **not** own provider/model routing, canonical prompt authority, RBAC/global policy, credentials, memory storage, or CORTEX's executive decision authority.
-
-See `docs/development/REASONING_LANGGRAPH_MEDUSA.md`.
+Do not scatter canonical prompt construction through routes, providers, agents, memory retrievers, or reasoning strategies.
 
 ---
 
-## 9. Extensions, Plugins, Tools, and Actions
+## 7. Provider and Model Runtime
 
-Canonical flow:
+Provider/model availability, selection, execution, health, and fallback are centralized.
+
+Target local-first order is config-driven:
 
 ```text
-manifest
- -> schema/manifest validation
- -> registry
- -> capability/permission resolution
- -> CORTEX / RuntimePolicy eligibility
- -> ActionExecutionGate
- -> Runtime execution
- -> output validation
- -> audit + telemetry
+requested provider/model
+ -> local primary
+ -> OpenAI-compatible local endpoint, including vLLM deployments
+ -> Transformers when enabled
+ -> Ollama when enabled/healthy
+ -> explicitly enabled external provider
+ -> honest unavailable/degraded result
 ```
 
-A manifest declares capability. It does not grant authorization.
+Forbidden:
 
-Extensions must define, as applicable:
-
-- stable ID/version;
-- capabilities;
-- permissions;
-- input/output schemas;
-- prompt contract references;
-- credentials required;
-- network/filesystem requirements;
-- side-effect class/idempotency behavior;
-- tenant/RBAC requirements;
-- health/dependency requirements.
-
-See `docs/development/EXTENSIONS_TOOLS.md`.
+- `builtin_vllm` resurrection;
+- route-level provider selection;
+- CORTEX provider execution;
+- UI-maintained model truth;
+- provider-specific prompt authority;
+- canned text represented as model output;
+- duplicated fallback orders.
 
 ---
 
-## 10. Security Rules
+## 8. Workflow and Multi-Agent Rules
 
-Must preserve:
+Complexity does **not** imply workflow semantics.
+
+LangGraph is used only for actual graph requirements such as:
+
+- branching;
+- checkpoint/resume;
+- dependency chains;
+- human approval nodes;
+- explicit long-running stateful workflows.
+
+A difficult conceptual question may need deep reasoning and still remain a non-graph execution.
+
+AgentMedusa is used only for an authorized multi-agent topology requiring specialist coordination, dependencies, concurrency, or arbitration.
+
+Neither LangGraph nor AgentMedusa may become KAREN's global router or cognitive head.
+
+---
+
+## 9. Security and Governance
+
+Preserve:
 
 - authentication/session validation;
 - RBAC;
 - tenant isolation;
 - least privilege;
-- credential/secret redaction;
-- plugin/action permission checks;
+- credential redaction;
+- extension/tool permission checks;
 - audit logs;
 - safe exception translation;
 - request/correlation IDs;
 - production fail-closed behavior.
 
-### Never
+Never:
 
 - rely on UI checks for authorization;
-- use `tenant_id="default"` as a security fallback in production paths;
-- execute plugins/actions without governed permission checks;
-- log secrets/tokens;
-- retain production dev bypasses;
-- introduce policy-bypassing fallback paths;
-- allow recalled or learned memory to bypass current security/policy checks;
-- persist raw untrusted tool/model output as authoritative memory without validation/provenance.
-
-See `docs/development/SECURITY_OBSERVABILITY.md`.
+- execute extensions/actions without governed permission checks;
+- allow memory to bypass current policy;
+- persist raw untrusted output as authoritative memory without provenance/validation;
+- let CORTEX authorize its own requested action;
+- introduce policy-bypassing fallback paths.
 
 ---
 
-## 11. Observability Rules
+## 10. Observability
 
-Canonical structured runtime metadata includes, when applicable:
+Canonical structured metadata includes, when applicable:
 
 ```text
 correlation_id
@@ -533,6 +364,10 @@ session_id
 conversation_id
 intent
 topology
+requested_reasoning_modes
+allowed_reasoning_modes
+denied_reasoning_modes
+reasoning_policy_reason
 provider
 model
 runtime_engine
@@ -543,141 +378,64 @@ response_source
 memory_recall_count
 recall_strategy
 recall_disposition
-reasoning_mode
-plugin_id
-agent_id
+model_calls
+reasoning_steps
 latency_ms
 status
 error_type
 error_code
 ```
 
-Emit structured lifecycle events for request, CORTEX decisions/policy, recall, prompt, provider selection/execution, reasoning, fallback/degradation, tools/extensions, persistence, and completion.
-
-Use bounded metric labels. High-cardinality IDs belong in structured events/traces, not Prometheus labels.
-
-Canonical numeric metrics live under `platform/observability/`. Prometheus exposition is an adapter, not a second metrics authority.
-
-Do not describe a retrieval/evidence graph as hidden "thought" or chain-of-thought. Observable graphs represent decision, evidence, recall, workflow, or influence relationships only.
+Use one observability authority under `platform/observability/`. High-cardinality IDs belong in structured events/traces, not Prometheus labels.
 
 ---
 
-## 12. Languages, Frameworks, and Infrastructure
+## 11. Composition and No-Hidden-Construction Rule
 
-### Backend
+Stateful canonical services are composed at the application/runtime boundary.
 
-- **Python**: primary AI/runtime/backend language.
-- **FastAPI / ASGI**: HTTP application/API layer.
-- **Uvicorn**: ASGI process server.
-- **Pydantic/typed contracts**: request/config/runtime validation where used.
-- **asyncio**: asynchronous runtime and I/O coordination.
+The runtime composition must make the cognitive-policy sequence explicit:
 
-### AI / orchestration
+```text
+CortexExecutionDecider
+       +
+RuntimePolicyEnforcer
+       |
+       v
+RuntimeDecisionPipeline
+       |
+       v
+ChatRuntime
+```
 
-- local and remote model providers behind KAREN provider contracts;
-- OpenAI-compatible APIs for compatible endpoints including vLLM deployments;
-- LangGraph only for graph workflows;
-- LangChain/LlamaIndex/DSPy/Haystack components only where they satisfy a specific adapter, retrieval, evaluation, or workflow need and do not become architecture authority;
-- AgentMedusa for governed multi-agent execution;
-- imported research systems such as AgentFly/Memento are experimental/reference implementations until their useful capabilities are extracted behind KAREN contracts.
+Subsystems must not silently instantiate alternate provider registries, memory managers, NeuroRecall instances, reasoning engines, prompt runtimes, policy engines, or workflow orchestrators.
 
-### Data
-
-- **PostgreSQL / Supabase**: durable application/data platform where configured;
-- **Redis**: bounded cache/session/ephemeral runtime use where configured;
-- object storage where needed for artifacts/media;
-- no Milvus/Elasticsearch memory dependency in the current architecture.
-
-### Frontend
-
-The UI displays backend truth. It must not invent provider/model availability, persistence success, routing, or degraded state.
-
-### Infrastructure
-
-- Docker/OCI images;
-- Docker Compose as a deployment/development adapter, not architecture authority;
-- GitHub Actions/CI for proof/build/deployment workflows;
-- canonical app target: `ai_karen_engine.app:create_app`.
+Compatibility accessors may remain temporarily only when they resolve to the canonical composed instance and have an explicit removal condition.
 
 ---
 
-## 13. API Design Rules
+## 12. Repository and Cleanup Rules
 
-API routes are thin ingress.
+Before creating or changing a service:
 
-They may:
+1. identify the current owner;
+2. search imports/references;
+3. determine whether a stronger implementation exists;
+4. classify touched code as active, misplaced, compatibility, experimental, dead, or dangerous;
+5. merge into the canonical owner;
+6. migrate consumers;
+7. delete dead authority after reference audit;
+8. add architecture tests preventing resurrection.
 
-- parse/validate transport data;
-- resolve authenticated user/session/tenant context;
-- establish request/correlation IDs;
-- call canonical runtime/application services;
-- translate known domain/runtime exceptions to HTTP responses.
+Never keep dead code "just in case."
 
-They may not:
-
-- choose providers/models;
-- build prompts;
-- run memory recall;
-- execute plugins/tools directly;
-- implement fallback orchestration;
-- return fake success/persistence states.
-
-Admin APIs belong in the dedicated admin surface and preserve RBAC/audit.
+Imported research/demo harnesses that own their own providers, planners, tools, memory, or runtimes remain experimental until useful capabilities are extracted behind KAREN contracts.
 
 ---
 
-## 14. Repository Rules
+## 13. Required Proof
 
-Canonical application code belongs under `src/ai_karen_engine/`.
-
-Before creating a file/module/service:
-
-1. search for an existing owner;
-2. determine whether the new behavior extends that owner;
-3. identify duplicate/legacy implementations;
-4. centralize rather than fork authority;
-5. add tests proving ownership.
-
-### Legacy classification
-
-Every suspicious implementation is one of:
-
-- active/correct: keep;
-- misplaced: move/merge;
-- useful/incomplete: complete/extract;
-- compatibility shim: centralize, document, give a removal condition;
-- experimental: feature flag;
-- replaced/dead: delete after reference audit;
-- dangerous: disable/replace immediately while preserving required security behavior.
-
-Imported research/demo harnesses that own their own providers, planners, tool execution, memory stores, or benchmark loops must remain outside canonical runtime authority until decomposed into KAREN-owned capabilities.
-
-Never keep dead code "just in case".
-
-See `docs/development/REPOSITORY_ENGINEERING.md`.
-
----
-
-## 15. Coding Standards
-
-- Prefer clear modules/classes/typed contracts over giant procedural files.
-- Extend existing canonical modules before adding new folders/services.
-- Keep functions focused and side effects explicit.
-- Avoid globals for request/user/tenant state.
-- Use dependency injection or explicit context for runtime dependencies.
-- Canonical shared services must not be silently reconstructed inside subordinate components.
-- Use structured logging; no `print()` in runtime paths.
-- Do not catch broad exceptions merely to fabricate success.
-- Async code must define ownership of tasks, cancellation, timeouts, and concurrency limits.
-- Public contracts require types and stable semantics.
-- Compatibility shims require an identified canonical replacement and deletion condition.
-- Comments explain architectural intent or non-obvious constraints, not line-by-line narration.
-
----
-
-## 16. Required Proof
-
-Choose the relevant subset, but architecture changes need real proof.
+Relevant changes must run the applicable subset:
 
 ```bash
 python -m compileall src
@@ -686,7 +444,7 @@ ruff check src tests
 mypy src
 ```
 
-Frontend changes additionally use the repository's configured equivalents of:
+Frontend:
 
 ```bash
 npm run lint
@@ -695,374 +453,118 @@ npm test
 npm run build
 ```
 
-Infrastructure changes:
+Infrastructure:
 
 ```bash
 docker compose config
 ```
 
-Cognitive/memory authority changes must additionally prove, where applicable:
+Architecture/cognitive changes additionally prove:
 
 ```text
-[ ] CORTEX remains the sole cognitive executive authority
-[ ] Runtime remains the sole request/execution authority
-[ ] ICE has no direct durable-memory write path
-[ ] NeuroRecall has no provider/tool/workflow execution path
-[ ] SR has no learned case-policy or durable-persistence authority
-[ ] shared canonical dependencies are explicitly injected
-[ ] tenant/scope is explicit for production recall
-[ ] recall confidence is not conflated with answer/evidence confidence
-[ ] novelty_score is not mislabeled as entropy
-[ ] current memory-storage architecture is respected
+[ ] CORTEX has no RuntimePolicy construction/execution
+[ ] Runtime invokes CORTEX then RuntimePolicy in that order
+[ ] RuntimePolicy owns allowed/denied reasoning modes
+[ ] RuntimePolicy never invents a reasoning mode
+[ ] Runtime remains the request/execution authority
+[ ] capability and reasoning-mode domains remain distinct
+[ ] Soft Reasoning does not choose providers or own memory retrieval
+[ ] NeuroRecall has no provider/tool/workflow execution
+[ ] durable writes remain governed by memory formation / NeuroVault
+[ ] tenant/scope is explicit for production memory
+[ ] novelty/retrieval gap is not mislabeled entropy
+[ ] shared stateful dependencies are explicitly composed
 ```
-
-When deleting code, also prove no stale imports/references remain.
 
 Never report CI/tests green unless actually observed.
 
 ---
 
-## 17. Documentation Authority and Maintenance
+## 14. Research-Guided Development Rules
 
-Read in this order:
+Research informs implementation; it does not gain architecture authority.
 
-1. **`PROJECT_DEV_MANIFEST.md`**: project-wide contract and authority map.
-2. **`docs/development/ARCHITECTURE_AUTHORITY.md`**: detailed boundaries and runtime topology.
-3. Subsystem document matching the code being changed.
-4. Current ADRs for accepted design decisions.
-5. Live implementation and architecture tests.
-6. Historical sprint sheets only as history, never as current authority without verification.
+Current research guidance relevant to KAREN:
 
-Documentation must distinguish:
+- test-time scaling protocols must be identified and budgeted by protocol, not hidden behind a generic reasoning-depth flag;
+- adaptive compute allocation should learn or estimate when extra reasoning is worth its cost instead of uniformly scaling every request;
+- verification and candidate-selection quality matter as much as raw generation count;
+- memory should be treated as a governed write/manage/read lifecycle with explicit temporal scope, contradiction handling, privacy, retention, and recall policy;
+- future learned memory selection should be evaluated against deterministic NeuroRecall baselines before becoming production authority.
 
-- **Canonical**: current supported owner/path.
-- **Transitional**: still live but scheduled for convergence/removal.
-- **Historical**: describes a completed/retired phase.
-- **Forbidden**: architecture that must not be reintroduced.
+Every research-derived capability must document:
 
-Any architecture-changing PR/commit should update this manifest or the relevant subsystem doc when it changes ownership, contracts, supported libraries, data stores, provider behavior, security behavior, or runtime topology.
+1. source paper/repository;
+2. mechanism implemented;
+3. deviations from the paper;
+4. compute/resource assumptions;
+5. benchmark protocol;
+6. production activation policy;
+7. fallback/abstention behavior.
 
 ---
 
-## 18. Developer Documentation Map
+## 15. Documentation Authority
+
+Read in this order:
+
+1. `PROJECT_DEV_MANIFEST.md`
+2. `docs/development/ARCHITECTURE_AUTHORITY.md`
+3. accepted ADR/current dev sheet for the subsystem
+4. subsystem documentation
+5. live code and architecture tests
+6. historical sprint sheets only as history
+
+Current supporting docs include:
 
 - `docs/development/ARCHITECTURE_AUTHORITY.md`
+- `docs/development/ARCH_AUTH_02.md`
 - `docs/development/CORTEX_RUNTIME.md`
 - `docs/development/MEMORY.md`
 - `docs/development/REASONING_LANGGRAPH_MEDUSA.md`
 - `docs/development/EXTENSIONS_TOOLS.md`
 - `docs/development/SECURITY_OBSERVABILITY.md`
 - `docs/development/REPOSITORY_ENGINEERING.md`
-- `docs/development/TESTING_RELEASE.md`
 
 ---
 
-## 19. Final Architecture Test
+## 16. Final Architecture Test
 
-Before merging a change, answer:
+Before merging, answer:
 
 1. Who owns this responsibility now?
 2. Is it duplicated elsewhere?
 3. Does a stronger implementation already exist?
-4. Is touched code active, misplaced, legacy, compatibility, experimental, dead, or dangerous?
-5. Can central config/registry/contracts replace hardcoding?
-6. Does the change preserve prompt-first and local-first behavior?
-7. Does it preserve RBAC, audit, tenant isolation, credentials, and telemetry?
-8. Does it preserve the CORTEX-head / Runtime-execution hierarchy?
-9. Does any subordinate capability silently construct or mutate an alternate authority?
-10. What executable proof demonstrates the behavior and the architecture boundary?
+4. Does the change preserve local-first and prompt-first behavior?
+5. Does it preserve RBAC, tenant isolation, audit, credentials, and telemetry?
+6. Does CORTEX remain cognitive-only?
+7. Does RuntimePolicy remain authorization-only?
+8. Does Runtime remain the sole lifecycle/execution authority?
+9. Does any subsystem silently construct or mutate an alternate authority?
+10. What executable proof demonstrates the boundary?
 
 If those answers are unclear, the design is not finished.
 
 ---
 
-## 20. Canonical Coded Architecture Reference
-
-This coded map is a normative developer reference for KAREN's current architecture. It visualizes the ownership and execution rules defined throughout this manifest. It does not require every request to traverse every component. Any implementation that materially changes these authority boundaries must update this manifest in the same change.
+## 17. Canonical Mental Model
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                                  AI KAREN                                    │
-│                    LOCAL-FIRST INTELLIGENT RUNTIME                           │
-│                                                                              │
-│          CORTEX DECIDES                     RUNTIME EXECUTES                  │
-└──────────────────────────────────────────────────────────────────────────────┘
-
- USER / EXTERNAL WORLD
-          │
-          ├── Web UI
-          ├── Desktop
-          ├── CLI
-          └── API / SDK
-          │
-          ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ INGRESS                                                                      │
-│ api_routes/ + canonical app composition                                      │
-│                                                                              │
-│ auth | validation | tenant/session context | request/correlation IDs         │
-│                                                                              │
-│ MUST NOT: choose models, recall memory, build prompts, execute plugins,      │
-│ or become an orchestration runtime                                           │
-└──────────────────────────────────┬───────────────────────────────────────────┘
-                                   │
-                                   ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ CORE REQUEST RUNTIME                                                         │
-│ core/runtime/                                                                │
-│                                                                              │
-│ ChatRuntime                                                                  │
-│   ├── request normalization                                                  │
-│   ├── safe execution context                                                 │
-│   ├── budgets / cancellation                                                 │
-│   ├── lifecycle ownership                                                    │
-│   └── audit context                                                          │
-└──────────────────────────────────┬───────────────────────────────────────────┘
-                                   │ ask for typed decision
-                                   ▼
-                         ╔══════════════════════╗
-                         ║       CORTEX         ║
-                         ║ core/cortex/         ║
-                         ║ cognitive executive  ║
-                         ╚══════════╤═══════════╝
-                                    │
-          ┌─────────────────────────┼─────────────────────────┐
-          │                         │                         │
-          ▼                         ▼                         ▼
-  intent / goal / state      policy / eligibility      topology decision
-  capability requirements    RBAC / tenant policy      direct model
-  recall requirements        tool eligibility          ICE
-  verification depth         budgets                   LangGraph
-  clarification/abstain      security constraints      AgentMedusa
-                                                        tools/extensions
-                                    │
-                                    ▼
-                         typed CORTEX Decision
-                                    │
-                                    ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ COGNITIVE CAPABILITY PLANE                                                   │
-│                                                                              │
-│ NeuroRecall                         ICE                                      │
-│ memory-access intelligence          reasoning/synthesis faculty              │
-│   │                                   │                                      │
-│   ▼                                   ├── decomposition                       │
-│ Soft Reasoning                        ├── synthesis                           │
-│ retrieval primitives                 ├── reflection                          │
-│   ├── embeddings                      ├── evidence integration                │
-│   ├── semantic similarity             └── verification                        │
-│   ├── novelty                                                                │
-│   └── candidate generation                                                   │
-│                                                                              │
-│ These capabilities support CORTEX. They do not replace CORTEX.               │
-└──────────────────────────────────┬───────────────────────────────────────────┘
-                                   │
-                                   ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ EXECUTION TOPOLOGY PLANE                                                     │
-│ Runtime executes only approved topology                                      │
-│                                                                              │
-│       ┌──────────────┐     ┌──────────────┐     ┌──────────────────┐          │
-│       │ Direct Model │     │  LangGraph   │     │   AgentMedusa    │          │
-│       │ Execution    │     │ graph-only   │     │ multi-agent      │          │
-│       └──────┬───────┘     └──────┬───────┘     └────────┬─────────┘          │
-│              │                    │                      │                    │
-│              └────────────────────┼──────────────────────┘                    │
-│                                   │                                           │
-│                                   ▼                                           │
-│                         governed action execution                             │
-└──────────────────────────────────┬───────────────────────────────────────────┘
-                                   │
-                  ┌────────────────┼─────────────────┐
-                  │                │                 │
-                  ▼                ▼                 ▼
-       provider/model runtime   tools/actions   extensions/plugins
-                  │                │                 │
-                  └────────────────┴─────────────────┘
-                                   │
-                                   ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ MODEL RUNTIME                                                                │
-│ core/model_runtime/                                                          │
-│                                                                              │
-│ Provider Registry -> Model/Capability Registry -> Health -> Config Routing   │
-│                                                                              │
-│ requested provider/model                                                    │
-│      │                                                                       │
-│      ├── local primary                                                       │
-│      ├── custom OpenAI-compatible endpoint, including vLLM                   │
-│      ├── Transformers when enabled                                           │
-│      ├── Ollama when enabled/healthy                                         │
-│      ├── explicitly enabled external provider                                │
-│      └── honest degraded/unavailable result                                  │
-│                                                                              │
-│ No builtin_vllm. No route-level routing. No CORTEX provider execution.       │
-└──────────────────────────────────────────────────────────────────────────────┘
-
- MEMORY / LEARNING
-
- core/memory/
-      │
-      ├── STM       recent/session context
-      ├── Episodic  interactions, decisions, outcomes, reusable experience
-      └── LTM       durable facts, preferences, knowledge
-      │
-      ▼
- NeuroRecall
-      │
-      ▼
- Soft Reasoning / canonical candidate sources
-
- durable write path:
-
- reasoning / execution / recall outcome
-      │
-      ▼
- MemoryCandidate / LearningObservation
-      │
-      ▼
- Runtime + memory policy
-      │
-      ▼
- NeuroVault
-      │
-      ▼
- canonical durable adapters
-      │
-      ├── PostgreSQL / Supabase
-      └── Redis only for bounded/ephemeral state where configured
-
- PROMPT CONSTRUCTION
-
- core/runtime/prompt/
-      │
-      ▼
- Canonical Prompt Assembly
-      │
-      ├── system policy
-      ├── task/output contract
-      ├── explicit turn override
-      ├── user preference / assistant profile
-      ├── tenant context
-      ├── authorized memory context
-      ├── intent/reasoning requirements
-      ├── tools/extensions
-      ├── provider capability
-      ├── token budget
-      └── safety/output schema
-      │
-      ▼
- final prompt -> model runtime
-
- SECURITY / GOVERNANCE
-
- Authentication
-      │
-      ▼
- Tenant Resolution
-      │
-      ▼
- RBAC / Policy
-      │
-      ▼
- Capability Eligibility
-      │
-      ▼
- Tool / Extension Permission
-      │
-      ▼
- Execution
-      │
-      ▼
- Audit Trail
-
- No production tenant_id="default" security fallback.
- No UI-only authorization authority.
- No plugin self-authorization.
- No cognitive subsystem bypassing Runtime.
-
- OBSERVABILITY
-
- platform/observability/
-      │
-      ├── events
-      ├── metrics
-      └── traces
-      │
-      ▼
- request/correlation identity -> audit + diagnostics
-
- CONFIGURATION / COMPOSITION
-
- src/ai_karen_engine/config/ + environment
-      │
-      ├── providers/models/endpoints
-      ├── feature flags
-      ├── ports
-      ├── capabilities
-      ├── fallbacks
-      ├── security
-      └── runtime policy
-      │
-      ▼
- ai_karen_engine.app:create_app
-
- CANONICAL AUTHORITY STACK
-
- USER
-   │
-   ▼
- API
-   │
-   ▼
- Runtime
-   │
-   ▼
- CORTEX
-   │ typed decision
-   ▼
- Runtime
-   │ execute
-   ├───────────┬──────────────┬───────────────┬────────────────┐
-   ▼           ▼              ▼               ▼                ▼
- Model        ICE          LangGraph      AgentMedusa     Tools/Extensions
-   │           │              │               │                │
-   └───────────┴──────────────┴───────────────┴────────────────┘
-                                   │
-                                   ▼
-                                Result
-                          ┌────────┼────────┐
-                          ▼        ▼        ▼
-                      Response   Memory   Telemetry
-                                  │
-                                  ▼
-                              NeuroVault
-                                  │
-                                  ▼
-                          Durable Persistence
-```
-
-### 20.1 Developer Mental Model
-
-Use these meanings consistently in code review, implementation, tests, and architecture discussions:
-
-```text
-CORTEX         = What should KAREN do?
-Runtime        = Execute the approved work safely.
-NeuroRecall    = What authorized past information is useful now?
-Soft Reasoning = Retrieve and locally rank relevant candidates.
-ICE            = Perform governed reasoning/synthesis/verification.
-LangGraph      = Execute explicit graph semantics when selected.
+CORTEX         = What does KAREN think should happen?
+RuntimePolicy  = What is KAREN allowed to do now?
+Runtime        = Execute the authorized work safely.
+NeuroRecall    = Which authorized past information is useful now?
+RecallPrimitives = Retrieve and locally score memory candidates.
+SoftReasoning  = Explore solution space with a governed test-time reasoning protocol.
+Reasoning      = Execute typed reasoning strategies.
+LangGraph      = Execute explicit graph semantics.
 AgentMedusa    = Execute governed specialist-agent topology.
-ModelRuntime   = Resolve and execute a healthy eligible model/provider.
-Extensions     = Supply governed optional capabilities.
-NeuroVault     = Govern what becomes durable memory and its lifecycle.
+ModelRuntime   = Resolve and execute an eligible healthy provider/model.
+NeuroVault     = Govern durable memory mutation and lifecycle.
 Observability  = Record what actually happened.
 ```
 
-### 20.2 Architecture Conservation Law
-
-All new development should converge toward:
+### Architecture conservation law
 
 ```text
 ONE RESPONSIBILITY
@@ -1077,15 +579,3 @@ ONE EXECUTION PATH
        ↓
 EXECUTABLE BOUNDARY PROOF
 ```
-
-A new library, framework, agent harness, provider, model runtime, retrieval engine, plugin system, or workflow engine is an implementation capability only. It does not gain architectural authority merely because it exposes its own router, planner, memory layer, prompt system, or runtime.
-
-### 20.3 Change Gate
-
-A change that alters any node, ownership boundary, dependency direction, persistence path, provider fallback path, security gate, or execution topology shown above is an **architecture change**. The same PR/commit must:
-
-1. update this manifest;
-2. update the relevant subsystem documentation;
-3. update or add architecture-boundary tests;
-4. identify and remove or classify any superseded path;
-5. preserve CORTEX cognitive authority and Runtime execution authority unless an explicit accepted architecture decision replaces this contract.
