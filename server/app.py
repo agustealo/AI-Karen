@@ -26,8 +26,8 @@ from ai_karen_engine.platform.observability.http_metrics import (
     REQUEST_COUNT,
     REQUEST_LATENCY,
 )
+from ai_karen_engine.server.application_runtime import create_application_lifespan
 from ai_karen_engine.server.exception_handlers import setup_exception_handlers
-from ai_karen_engine.server.startup import create_lifespan
 
 logger = logging.getLogger("kari")
 
@@ -57,7 +57,7 @@ def create_app() -> FastAPI:
     load_performance_settings(settings)
     initialize_validation_framework(settings)
 
-    lifespan = create_lifespan(settings)
+    lifespan = create_application_lifespan(settings)
 
     app = FastAPI(
         title="Kari AI Assistant API",
