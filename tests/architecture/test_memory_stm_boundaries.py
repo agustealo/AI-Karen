@@ -5,6 +5,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CORE_MEMORY = ROOT / "src" / "ai_karen_engine" / "core" / "memory"
+PLATFORM_REDIS = (
+    ROOT
+    / "src"
+    / "ai_karen_engine"
+    / "platform"
+    / "memory"
+    / "redis"
+    / "redis_connection_manager.py"
+)
 
 
 def _text(relative: str) -> str:
@@ -77,9 +86,32 @@ def test_legacy_chat_memory_config_is_retired() -> None:
     assert not (CORE_MEMORY / "chat_memory_config.py").exists()
 
 
-def test_legacy_redis_helpers_are_absent_from_canonical_memory_cognition() -> None:
-    """Compatibility Redis helpers may remain in Platform but not active Core."""
+def test_core_redis_compatibility_shim_is_retired() -> None:
+    """Core must not re-export Platform Redis infrastructure."""
 
+    assert not (CORE_MEMORY / "redis_connection_manager.py").exists()
+
+
+def test_platform_redis_manager_has_no_memory_semantic_compatibility_api() -> None:
+    """The Redis manager is infrastructure, not an alternate memory authority."""
+
+    source = PLATFORM_REDIS.read_text(encoding="utf-8")
+    forbidden = (
+        "def _k(",
+        "def _session_k(",
+        "def set_short_term(",
+        "def get_short_term(",
+        "def set_session(",
+        "def get_session(",
+        "def flush_short_term(",
+        "def flush_long_term(",
+        '"long_term"',
+    )
+    for token in forbidden:
+        assert token not in source, f"Redis manager regained memory authority: {token}"
+
+
+def test_legacy_redis_helpers_are_absent_from_canonical_memory_cognition() -> None:
     canonical_files = (
         "memory_runtime_manager.py",
         "formation.py",
