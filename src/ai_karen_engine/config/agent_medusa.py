@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import os
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 class AgentMedusaConfigError(ValueError):
     """Raised when Medusa runtime coordination configuration is invalid."""
+
+
+def _default_worker_id() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}"
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -42,7 +46,7 @@ class AgentMedusaRuntimeSettings:
     run_heartbeat_interval_seconds: int = 10
     run_terminal_retention_seconds: int = 3600
     run_key_prefix: str = "kari:medusa:runs"
-    worker_id: str = ""
+    worker_id: str = field(default_factory=_default_worker_id)
 
     def __post_init__(self) -> None:
         if self.run_lease_ttl_seconds < 3:
@@ -73,7 +77,6 @@ def get_agent_medusa_runtime_settings() -> AgentMedusaRuntimeSettings:
 
     global _SETTINGS
     if _SETTINGS is None:
-        default_worker = f"{socket.gethostname()}:{os.getpid()}"
         _SETTINGS = AgentMedusaRuntimeSettings(
             distributed_run_control_enabled=_env_bool(
                 "KAREN_MEDUSA_DISTRIBUTED_RUN_CONTROL_ENABLED", True
@@ -86,7 +89,7 @@ def get_agent_medusa_runtime_settings() -> AgentMedusaRuntimeSettings:
                 "KAREN_MEDUSA_RUN_TERMINAL_RETENTION_SECONDS", 3600
             ),
             run_key_prefix=os.getenv("KAREN_MEDUSA_RUN_KEY_PREFIX", "kari:medusa:runs"),
-            worker_id=os.getenv("KAREN_WORKER_ID", default_worker),
+            worker_id=os.getenv("KAREN_WORKER_ID", _default_worker_id()),
         )
     return _SETTINGS
 
