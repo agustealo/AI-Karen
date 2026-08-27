@@ -1,7 +1,8 @@
 """Canonical memory retrieval package.
 
 NeuroRecall is the production recall authority. Retrieval helpers in this
-package are strategy components, not independent public recall runtimes.
+package are strategy components and dependency-injected candidate sources, not
+independent public recall runtimes.
 """
 
 from .curated_recall import (
@@ -18,7 +19,7 @@ from .neuro_recall import (
     RecallRetriever,
     RecallScopeError,
 )
-from .retrieval_router import HybridRetrievalRouter, get_retrieval_router
+from .retrieval_router import HybridRetrievalRouter
 
 __all__ = [
     "CURATED_MEMORY_KIND",
@@ -31,6 +32,5 @@ __all__ = [
     "RecallScopeError",
     "build_curated_metadata_filter",
     "filter_curated_memories",
-    "get_retrieval_router",
     "is_curated_memory_metadata",
 ]
