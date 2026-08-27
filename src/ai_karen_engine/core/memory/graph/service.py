@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import time
 import uuid
+from datetime import datetime, timezone
+from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
 
@@ -113,6 +115,7 @@ class LeanGraphService:
         try:
             # Event/assertion records are canonical PostgreSQL ledger records. The
             # graph references them; it does not duplicate them as graph-owned rows.
+            event_temporal = self._temporal_fields(event_data)
             event_node = MemoryEventNode(
                 event_id=event_id,
                 tenant_id=tenant_id,
@@ -122,12 +125,17 @@ class LeanGraphService:
                 created_at=event_data.get("created_at"),
                 importance=event_data.get("importance"),
                 source=event_data.get("source"),
+                valid_from=event_temporal["valid_from"],
+                valid_to=event_temporal["valid_to"],
+                observed_at=event_temporal["observed_at"],
+                recorded_at=event_temporal["recorded_at"],
             )
             del event_node
 
             edge_count = 0
-            entities = (event_data.get("payload") or {}).get("entities", [
-            ])[: self.config.graph_max_entities_per_event]
+            entities = (event_data.get("payload") or {}).get("entities", [])[
+                : self.config.graph_max_entities_per_event
+            ]
             if self.config.graph_enable_entity_mentions:
                 for ent in entities:
                     if edge_count >= self.config.graph_max_edges_per_event:
@@ -161,7 +169,11 @@ class LeanGraphService:
                             tenant_id,
                             user_id,
                             str(conversation_id) if conversation_id else None,
-                            metadata={"source_event_id": event_id},
+                            valid_from=event_temporal["valid_from"],
+                            valid_to=event_temporal["valid_to"],
+                            observed_at=event_temporal["observed_at"],
+                            recorded_at=event_temporal["recorded_at"],
+                            source_event_id=event_id,
                         )
                     )
                     edge_count += 1
@@ -179,7 +191,11 @@ class LeanGraphService:
                         "SUPERSEDES",
                         tenant_id,
                         user_id,
-                        metadata={"source_event_id": event_id},
+                        valid_from=event_temporal["valid_from"],
+                        valid_to=event_temporal["valid_to"],
+                        observed_at=event_temporal["observed_at"],
+                        recorded_at=event_temporal["recorded_at"],
+                        source_event_id=event_id,
                     )
                 )
                 edge_count += 1
@@ -188,6 +204,7 @@ class LeanGraphService:
                 assertion_id = str(
                     assertion_data.get("assertion_id") or f"assert:{event_id}"
                 )
+                assertion_temporal = self._temporal_fields(assertion_data, event_data)
                 assertion_node = AssertionNode(
                     assertion_id=assertion_id,
                     user_id=user_id,
@@ -196,8 +213,23 @@ class LeanGraphService:
                     confidence=assertion_data.get("confidence"),
                     polarity=assertion_data.get("polarity"),
                     created_at=assertion_data.get("created_at"),
+                    valid_from=assertion_temporal["valid_from"],
+                    valid_to=assertion_temporal["valid_to"],
+                    observed_at=assertion_temporal["observed_at"],
+                    recorded_at=assertion_temporal["recorded_at"],
+                    lifecycle_state=str(
+                        assertion_data.get("lifecycle_state") or "active"
+                    ),
+                    supersedes=(
+                        str(assertion_data.get("supersedes"))
+                        if assertion_data.get("supersedes")
+                        else None
+                    ),
                 )
                 del assertion_node
+                assertion_confidence = self._unit_float(
+                    assertion_data.get("confidence"), default=1.0
+                )
                 await self.adapter.create_edge(
                     GraphEdge(
                         event_id,
@@ -205,7 +237,15 @@ class LeanGraphService:
                         "ASSERTS",
                         tenant_id,
                         user_id,
-                        metadata={"source_event_id": event_id},
+                        valid_from=assertion_temporal["valid_from"],
+                        valid_to=assertion_temporal["valid_to"],
+                        observed_at=assertion_temporal["observed_at"],
+                        recorded_at=assertion_temporal["recorded_at"],
+                        confidence=assertion_confidence,
+                        lifecycle_state=str(
+                            assertion_data.get("lifecycle_state") or "active"
+                        ),
+                        source_event_id=event_id,
                     )
                 )
                 edge_count += 1
@@ -221,7 +261,12 @@ class LeanGraphService:
                                 "CONTRADICTS",
                                 tenant_id,
                                 user_id,
-                                metadata={"source_event_id": event_id},
+                                valid_from=assertion_temporal["valid_from"],
+                                valid_to=assertion_temporal["valid_to"],
+                                observed_at=assertion_temporal["observed_at"],
+                                recorded_at=assertion_temporal["recorded_at"],
+                                confidence=assertion_confidence,
+                                source_event_id=event_id,
                             )
                         )
                         edge_count += 1
@@ -237,7 +282,12 @@ class LeanGraphService:
                                 "REINFORCES",
                                 tenant_id,
                                 user_id,
-                                metadata={"source_event_id": event_id},
+                                valid_from=assertion_temporal["valid_from"],
+                                valid_to=assertion_temporal["valid_to"],
+                                observed_at=assertion_temporal["observed_at"],
+                                recorded_at=assertion_temporal["recorded_at"],
+                                confidence=assertion_confidence,
+                                source_event_id=event_id,
                             )
                         )
                         edge_count += 1
@@ -334,6 +384,66 @@ class LeanGraphService:
             f"{entity_type or 'unknown'}:{external_key}:{normalized}"
         )
         return str(uuid.uuid5(uuid.NAMESPACE_URL, material))
+
+    @classmethod
+    def _temporal_fields(
+        cls,
+        primary: dict[str, Any],
+        fallback: dict[str, Any] | None = None,
+    ) -> dict[str, datetime | None]:
+        fallback = fallback or {}
+        valid_from = cls._datetime(
+            primary.get("valid_from")
+            or primary.get("event_time")
+            or fallback.get("valid_from")
+            or fallback.get("event_time")
+        )
+        valid_to = cls._datetime(primary.get("valid_to") or fallback.get("valid_to"))
+        observed_at = cls._datetime(
+            primary.get("observed_at")
+            or primary.get("event_time")
+            or fallback.get("observed_at")
+            or fallback.get("event_time")
+        )
+        recorded_at = cls._datetime(
+            primary.get("recorded_at")
+            or primary.get("created_at")
+            or fallback.get("recorded_at")
+            or fallback.get("created_at")
+        ) or datetime.now(timezone.utc)
+        return {
+            "valid_from": valid_from,
+            "valid_to": valid_to,
+            "observed_at": observed_at,
+            "recorded_at": recorded_at,
+        }
+
+    @staticmethod
+    def _datetime(value: Any) -> datetime | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, (int, float)):
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        elif isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        else:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _unit_float(value: Any, *, default: float) -> float:
+        try:
+            parsed = default if value is None else float(value)
+        except (TypeError, ValueError):
+            return default
+        return max(0.0, min(1.0, parsed))
 
 
 _SERVICE: LeanGraphService | None = None
