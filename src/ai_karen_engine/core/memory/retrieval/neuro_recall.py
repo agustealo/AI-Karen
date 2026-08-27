@@ -1,7 +1,9 @@
 """Canonical async NeuroRecall service.
 
-NeuroRecall owns memory-retrieval strategy and selection. It does not persist
-memory and it does not select providers/models, build prompts, or execute tools.
+NeuroRecall owns memory-retrieval strategy, candidate governance, fusion,
+deduplication, final ranking, and selection. Source retrievers only produce
+scoped candidates. NeuroRecall does not persist memory, select providers/models,
+build prompts, or execute tools.
 """
 
 from __future__ import annotations
@@ -12,6 +14,13 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, Sequence, runtime_checkable
 
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.memory.neuro import (
+    MemoryCandidate,
+    MemoryClass,
+    classify_memory_candidate,
+    evaluate_guardrails,
+)
+from ai_karen_engine.core.memory.neuro.scoring import blended_score
 from ai_karen_engine.core.memory.types import MemoryEntry, MemoryQuery
 
 logger = get_logger(__name__)
@@ -63,7 +72,7 @@ class RecallRetriever(Protocol):
 
 
 class NeuroRecall:
-    """Single production recall strategy service for the memory domain."""
+    """Single production recall strategy and selection authority."""
 
     def __init__(
         self,
@@ -102,6 +111,12 @@ class NeuroRecall:
             conversation_id=request.conversation_id,
             top_k=effective_top_k,
         )
+        # MemoryQuery predates explicit session scope and is intentionally not
+        # rewritten here during recall-authority closure. It is a non-slotted
+        # dataclass, so propagate session scope without losing it at the Runtime
+        # -> NeuroRecall -> Redis boundary. A typed field is a follow-up contract
+        # cleanup, not a reason to fork the query type.
+        setattr(query, "session_id", request.session_id)
 
         raw_results = await asyncio.gather(
             *(retriever.recall(query) for retriever in self._retrievers),
@@ -109,7 +124,7 @@ class NeuroRecall:
         )
 
         failures: list[BaseException] = []
-        memories: list[MemoryEntry] = []
+        raw_candidates: list[MemoryEntry] = []
         for index, value in enumerate(raw_results):
             if isinstance(value, BaseException):
                 if isinstance(value, RecallScopeError):
@@ -128,9 +143,9 @@ class NeuroRecall:
                     },
                 )
                 continue
-            memories.extend(value)
+            raw_candidates.extend(value)
 
-        if failures and not memories:
+        if failures and not raw_candidates:
             return RecallResult(
                 memories=(),
                 tenant_id=request.tenant_id,
@@ -142,33 +157,53 @@ class NeuroRecall:
                 provenance=(),
             )
 
-        scoped: list[MemoryEntry] = []
+        selected_by_id: dict[str, MemoryEntry] = {}
         provenance_by_id: dict[str, dict[str, Any]] = {}
-        for memory in memories:
+        rejected_count = 0
+
+        for memory in raw_candidates:
             metadata = getattr(memory, "metadata", None)
             memory_tenant = getattr(metadata, "tenant_id", None) if metadata else None
             memory_user = getattr(metadata, "user_id", None) if metadata else None
-
             if str(memory_tenant or "") != request.tenant_id:
+                rejected_count += 1
                 continue
             if str(memory_user or "") != request.user_id:
+                rejected_count += 1
                 continue
+
+            candidate = self._to_candidate(memory, request)
+            guard = evaluate_guardrails(candidate)
+            if guard.outcome.value in {"reject", "quarantine"}:
+                rejected_count += 1
+                continue
+
+            memory.relevance = blended_score(candidate)
+            custom = getattr(metadata, "custom", {}) if metadata else {}
+            if isinstance(custom, dict):
+                custom["memory_class"] = candidate.memory_class.value
+                custom["reason_selected"] = "neuro_recall_rank"
+                custom["used_in_prompt"] = False
+                custom["guard_outcome"] = guard.outcome.value
+                if guard.reasons:
+                    custom["guard_reasons"] = list(guard.reasons)
 
             memory_id = str(memory.id)
-            if memory_id in provenance_by_id:
-                continue
+            previous = selected_by_id.get(memory_id)
+            if previous is None or self._sort_key(memory) > self._sort_key(previous):
+                selected_by_id[memory_id] = memory
+                provenance = custom.get("provenance", {}) if isinstance(custom, dict) else {}
+                provenance_by_id[memory_id] = {
+                    "memory_id": memory_id,
+                    "source": getattr(metadata, "source", None) if metadata else None,
+                    "source_store": custom.get("source_store") if isinstance(custom, dict) else None,
+                    "memory_class": candidate.memory_class.value,
+                    "provenance": provenance if isinstance(provenance, dict) else {},
+                    "correlation_id": request.correlation_id,
+                }
 
-            scoped.append(memory)
-            custom = getattr(metadata, "custom", {}) if metadata else {}
-            provenance_by_id[memory_id] = {
-                "memory_id": memory_id,
-                "source": getattr(metadata, "source", None) if metadata else None,
-                "source_store": custom.get("source_store") if isinstance(custom, dict) else None,
-                "correlation_id": request.correlation_id,
-            }
-
-        scoped.sort(key=self._sort_key, reverse=True)
-        selected = scoped[:effective_top_k]
+        ranked = sorted(selected_by_id.values(), key=self._sort_key, reverse=True)
+        selected = ranked[:effective_top_k]
         provenance = tuple(provenance_by_id[str(item.id)] for item in selected)
 
         degraded = bool(failures)
@@ -182,6 +217,9 @@ class NeuroRecall:
                 "request_id": request.request_id,
                 "retriever_count": len(self._retrievers),
                 "failed_retriever_count": len(failures),
+                "raw_candidate_count": len(raw_candidates),
+                "rejected_candidate_count": rejected_count,
+                "deduped_candidate_count": len(ranked),
                 "result_count": len(selected),
                 "degraded": degraded,
             },
@@ -196,6 +234,39 @@ class NeuroRecall:
             degradation_reason=degradation_reason,
             provenance=provenance,
         )
+
+    @staticmethod
+    def _to_candidate(memory: MemoryEntry, request: RecallRequest) -> MemoryCandidate:
+        metadata = memory.metadata
+        custom = metadata.custom if metadata and isinstance(metadata.custom, dict) else {}
+        source = str(custom.get("source_store") or (metadata.source if metadata else "unknown"))
+        candidate = MemoryCandidate(
+            id=str(memory.id),
+            text=str(memory.content or ""),
+            memory_class=MemoryClass.EPISODIC,
+            source=source,
+            tenant_id=request.tenant_id,
+            user_id=request.user_id,
+            confidence=float(memory.confidence or 0.0),
+            importance=float(memory.importance or 0.0) / 10.0,
+            freshness=float(custom.get("freshness", 1.0) or 1.0),
+            provenance=custom.get("provenance", {}) if isinstance(custom.get("provenance", {}), dict) else {},
+            created_at=memory.created_at,
+            updated_at=memory.updated_at,
+            expires_at=memory.expires_at,
+            metadata=custom,
+        )
+        candidate.memory_class = classify_memory_candidate(candidate)
+        candidate.metadata["memory_class"] = candidate.memory_class.value
+        candidate.metadata["memory_class_weight"] = {
+            "stm": 1.0,
+            "episodic": 0.95,
+            "semantic": 1.0,
+            "procedural": 0.9,
+            "lesson": 0.8,
+            "quarantine": 0.2,
+        }.get(candidate.memory_class.value, 1.0)
+        return candidate
 
     @staticmethod
     def _sort_key(item: MemoryEntry) -> tuple[float, float, float]:
