@@ -30,6 +30,11 @@ from ai_karen_engine.core.cortex.contracts import (
     RuntimeRequest,
     UserContext,
 )
+from ai_karen_engine.core.cortex.reasoning_eligibility import (
+    EligibilityDisposition,
+    ReasoningEligibilityDecision,
+    ReasoningModeEligibility,
+)
 
 _COMPAT_EXPORTS = {
     "build_orchestration_input",
@@ -63,6 +68,7 @@ def __getattr__(name: str):
 __all__ = [
     "CorrelationIdFactory",
     "CortexOutput",
+    "EligibilityDisposition",
     "ExecutionMode",
     "IntentEngine",
     "IntentSignal",
@@ -71,6 +77,8 @@ __all__ = [
     "PredictorEngine",
     "PredictorSignal",
     "ReasoningDepth",
+    "ReasoningEligibilityDecision",
+    "ReasoningModeEligibility",
     "RouteFamily",
     "RoutingDecision",
     "RoutingEngine",
