@@ -9,6 +9,7 @@ from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.memory.graph.entity_resolution import extract_entity_cues
 from ai_karen_engine.core.memory.graph.service import get_leangraph_service
 from ai_karen_engine.core.runtime.resilience import get_safe_stage_runner
+from ai_karen_engine.platform.memory.postgres.entity_resolver import PostgresEntityResolver
 from ai_karen_engine.platform.memory.postgres.event_source import PostgresEventSource
 from ai_karen_engine.platform.memory.redis.redis_connection_manager import get_redis_manager
 
@@ -30,6 +31,7 @@ class HybridRetrievalRouter:
         self.redis = get_redis_manager()
         self.leangraph = get_leangraph_service()
         self.event_source = PostgresEventSource()
+        self.entity_resolver = PostgresEntityResolver()
 
     async def recall(self, query: MemoryQuery) -> list[MemoryEntry]:
         started = time.time()
@@ -122,13 +124,53 @@ class HybridRetrievalRouter:
         if not query.text:
             return []
 
-        cues = extract_entity_cues(query.text, max_cues=8)
-        if not cues:
+        raw_cues = extract_entity_cues(query.text, max_cues=8)
+        if not raw_cues:
             return []
+
+        resolution_by_canonical: dict[str, dict[str, Any]] = {}
+        try:
+            resolved = await self.entity_resolver.resolve_cues(
+                tenant_id=str(query.tenant_id),
+                user_id=str(query.user_id),
+                cues=raw_cues,
+                limit=8,
+            )
+        except Exception as exc:
+            logger.warning(
+                "memory.entity_resolution.degraded",
+                extra={
+                    "tenant_id": query.tenant_id,
+                    "user_id": query.user_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            resolved = []
+
+        graph_cues: list[str] = []
+        for item in resolved:
+            canonical = item.canonical_text.strip()
+            if not canonical or canonical.casefold() in {cue.casefold() for cue in graph_cues}:
+                continue
+            graph_cues.append(canonical)
+            resolution_by_canonical[canonical.casefold()] = {
+                "entity_id": item.entity_id,
+                "matched_text": item.matched_text,
+                "match_type": item.match_type,
+                "score": item.score,
+            }
+
+        # Exact raw cues remain a safe fallback for local/dev databases where the
+        # forward pg_trgm migration has not been applied yet.
+        for cue in raw_cues:
+            if cue.casefold() not in {value.casefold() for value in graph_cues}:
+                graph_cues.append(cue)
+            if len(graph_cues) >= 8:
+                break
 
         graph_rows_by_event: dict[str, dict[str, Any]] = {}
         try:
-            for cue in cues:
+            for cue in graph_cues[:8]:
                 rows = await self.leangraph.get_entity_context(
                     tenant_id=str(query.tenant_id),
                     user_id=str(query.user_id),
@@ -142,6 +184,7 @@ class HybridRetrievalRouter:
                     existing = graph_rows_by_event.get(event_id)
                     enriched = dict(row)
                     enriched["matched_entity_cue"] = cue
+                    enriched["entity_resolution"] = resolution_by_canonical.get(cue.casefold())
                     if existing is None or int(enriched.get("depth") or 999) < int(existing.get("depth") or 999):
                         graph_rows_by_event[event_id] = enriched
                     if len(graph_rows_by_event) >= min(40, max(4, query.top_k * 4)):
@@ -195,6 +238,7 @@ class HybridRetrievalRouter:
                         "source_type": source.get("source_type"),
                         "source_ref": source.get("source_ref"),
                         "matched_entity_cue": graph_row.get("matched_entity_cue"),
+                        "entity_resolution": graph_row.get("entity_resolution"),
                         "graph_relationship": graph_row.get("relationship"),
                         "graph_depth": depth,
                         "graph_path": graph_row.get("path") or [],
@@ -205,6 +249,7 @@ class HybridRetrievalRouter:
                         "valid_from": self._iso(source.get("valid_from")),
                         "valid_to": self._iso(source.get("valid_to")),
                         "matched_entity_cue": graph_row.get("matched_entity_cue"),
+                        "entity_resolution": graph_row.get("entity_resolution"),
                         "graph_depth": depth,
                         "graph_relationship": graph_row.get("relationship"),
                         "graph_path": graph_row.get("path") or [],
