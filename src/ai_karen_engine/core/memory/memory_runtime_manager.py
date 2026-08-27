@@ -37,14 +37,18 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
 
     @staticmethod
     def _build_neuro_recall() -> NeuroRecall:
-        """Compose durable and projection recall at the runtime boundary."""
-        from ai_karen_engine.platform.memory.postgres import PostgresRecallRetriever
+        """Compose scoped source retrievers beneath the one recall authority."""
+        from ai_karen_engine.platform.memory.postgres import (
+            PostgresProfileRecallRetriever,
+            PostgresRecallRetriever,
+        )
 
         from .retrieval.retrieval_router import get_retrieval_router
 
         return NeuroRecall(
             retrievers=(
                 PostgresRecallRetriever(),
+                PostgresProfileRecallRetriever(),
                 get_retrieval_router(),
             )
         )
