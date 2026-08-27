@@ -106,21 +106,50 @@ class SetupService {
     });
 
     if (!response.ok) {
-      let message = "Unable to create the first administrator.";
-      try {
-        const payload = await response.json();
-        if (typeof payload?.detail === "string" && payload.detail.trim()) {
-          message = payload.detail;
-        }
-      } catch {
-        // Preserve the safe generic message for non-JSON failures.
-      }
-      throw new Error(message);
+      throw new Error(await this.readErrorMessage(response));
     }
 
     const payload: FirstAdminResponse = await response.json();
     this.adoptAuthenticatedSetup(payload);
+
+    const confirmedStatus = await this.getFirstRunStatus();
+    if (confirmedStatus.first_run_required) {
+      throw new Error(
+        "The owner was created, but the backend has not confirmed setup completion. Check the installation state and try again.",
+      );
+    }
+
     return payload;
+  }
+
+  private async readErrorMessage(response: Response): Promise<string> {
+    const fallback = `Unable to create the first administrator (${response.status}).`;
+
+    try {
+      const payload = await response.json();
+      if (typeof payload?.detail === "string" && payload.detail.trim()) {
+        return payload.detail;
+      }
+      if (typeof payload?.message === "string" && payload.message.trim()) {
+        return payload.message;
+      }
+      if (Array.isArray(payload?.detail)) {
+        const details = payload.detail
+          .map((item: unknown) =>
+            typeof item === "object" && item !== null && "msg" in item
+              ? String((item as { msg: unknown }).msg)
+              : "",
+          )
+          .filter(Boolean);
+        if (details.length > 0) {
+          return details.join(" ");
+        }
+      }
+    } catch {
+      // Keep the safe fallback for non-JSON failures.
+    }
+
+    return fallback;
   }
 
   private adoptAuthenticatedSetup(payload: FirstAdminResponse): void {
