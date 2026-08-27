@@ -201,8 +201,11 @@ class LeanGraphService:
                 edge_count += 1
 
             if assertion_data and edge_count < self.config.graph_max_edges_per_event:
-                assertion_id = str(
-                    assertion_data.get("assertion_id") or f"assert:{event_id}"
+                assertion_id = self._assertion_id(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    event_id=event_id,
+                    supplied_id=assertion_data.get("assertion_id"),
                 )
                 assertion_temporal = self._temporal_fields(assertion_data, event_data)
                 assertion_node = AssertionNode(
@@ -382,6 +385,26 @@ class LeanGraphService:
         material = (
             f"ai-karen-memory-entity:{tenant_id}:{user_id}:"
             f"{entity_type or 'unknown'}:{external_key}:{normalized}"
+        )
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, material))
+
+    @staticmethod
+    def _assertion_id(
+        *,
+        tenant_id: str,
+        user_id: str,
+        event_id: str,
+        supplied_id: object | None,
+    ) -> str:
+        if supplied_id:
+            try:
+                return str(uuid.UUID(str(supplied_id)))
+            except ValueError:
+                external_key = str(supplied_id)
+        else:
+            external_key = event_id
+        material = (
+            f"ai-karen-memory-assertion:{tenant_id}:{user_id}:{external_key}"
         )
         return str(uuid.uuid5(uuid.NAMESPACE_URL, material))
 
