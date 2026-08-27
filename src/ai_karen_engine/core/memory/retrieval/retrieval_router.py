@@ -6,8 +6,8 @@ from datetime import datetime
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.memory.graph.service import get_leangraph_service
-from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
 from ai_karen_engine.core.runtime.resilience import get_safe_stage_runner
+from ai_karen_engine.platform.memory.redis.redis_connection_manager import get_redis_manager
 
 from ..neuro import (
     MemoryCandidate,
@@ -50,7 +50,6 @@ class HybridRetrievalRouter:
         activation = decide_activation_mode(query=query.text or "", latency_budget_ms=300)
         emit_memory_event("memory.activation.completed", {"correlation_id": correlation_id, "tenant_id": query.tenant_id, "user_id": query.user_id, "memory_activation_mode": activation.mode.value, "token_budget": activation.top_k})
 
-        should_query_lexical = activation.mode.value in {"fast", "deep", "procedural", "profile"}
         hot: list[MemoryEntry] = []
         lexical: list[MemoryEntry] = []
         if activation.mode.value != "none":
