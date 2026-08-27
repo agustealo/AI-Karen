@@ -2,252 +2,159 @@
 
 > **Status:** READY FOR EXECUTION
 > **Priority:** P0 memory architecture closure before additional graph technology
-> **Scope:** memory formation, episodic segmentation, state transitions, contextual intent, provenance reconstruction, temporal consolidation, belief revision, recall evidence packing, behavioral proof
+> **Scope:** memory formation, episodic segmentation, Redis STM integration, Supabase/PostgreSQL durable persistence, temporal state, provenance reconstruction, belief revision, recall evidence packing, behavioral proof
 > **Authority:** `docs/development/MEMORY.md`, `docs/development/MEMORY_GRAPH_DEV_SHEET.md`, `PROJECT_DEV_MANIFEST.md`
-> **Core rule:** The graph is not the memory formation engine. Raw interaction streams are first converted into governed events/state transitions; the graph is a relational projection of those canonical memories. NeuroRecall remains recall-policy authority and NeuroVault remains durable-persistence governance.
+> **Core rule:** Redis is KAREN's bounded STM/runtime-memory substrate. Supabase-hosted PostgreSQL is the durable episodic/LTM source of truth. Memory formation converts live interaction into governed events before graph projection. NeuroRecall remains recall-policy authority and NeuroVault remains durable-persistence governance.
 
 ---
 
-## 1. Why this sprint exists
+## 1. Objective
 
-The live repository already contains memory types, NeuroRecall, graph projection, associative spreading activation, consolidation rules, and PostgreSQL recall. The missing production bridge is the protocol that turns ongoing interaction into coherent, evolving experience.
-
-Current graph work is insufficient if it performs:
+Build the missing protocol that converts live interaction, action, tool output, and environment changes into coherent, governed memory while preserving KAREN's actual two-tier storage architecture:
 
 ```text
-raw message -> entities/assertion -> graph edges
+live interaction
+   -> Redis STM / session continuity
+   -> event boundary detection
+   -> contextual state + intent cues
+   -> structured episode/event
+   -> memory policy
+   -> NeuroVault
+   -> Supabase/PostgreSQL durable commit
+   -> pgvector / lexical / temporal indexes
+   -> PostgreSQL graph projection
+   -> consolidation / revision
+   -> NeuroRecall reconstruction
+   -> future behavior
 ```
 
-Target memory formation is:
-
-```text
-interaction / observation / action
-        -> event boundary detection
-        -> state + contextual intent
-        -> structured episodic event
-        -> canonical memory write
-        -> temporal/epistemic updates
-        -> graph projection
-        -> consolidation / abstraction
-        -> NeuroRecall evidence reconstruction
-        -> future behavior
-```
-
-This sprint must be completed before adding NetworkX, a dedicated graph database, Mem0, Graphiti, Hindsight runtime, or another memory framework.
+Do not add another memory store, graph database, queue, or graph-compute library during this sprint.
 
 ---
 
-## 2. Research-backed design inputs
+## 2. Actual stack contract
 
-### 2.1 CompassMem / Event Graphs (ACL 2026)
+### Redis
 
-Adopt the principle that experience should be incrementally segmented into events and linked through explicit logical relations. Retrieval should navigate the resulting event graph as a logic map rather than rely only on shallow semantic similarity.
+Canonical owner:
 
-KAREN adaptation:
+`src/ai_karen_engine/platform/memory/redis/`
 
-- event segmentation belongs to canonical memory formation;
-- event graph projection belongs to `core/memory/graph`;
-- goal-directed graph navigation produces candidates for NeuroRecall;
-- graph traversal never becomes final recall authority.
+Use Redis for:
 
-### 2.2 SEEM / Structured Episodic Event Memory (ACL 2026)
+- bounded recent-turn/session state;
+- working-memory summaries;
+- hot context required to decide whether an event continues or closes;
+- short-lived runtime coordination data explicitly owned by memory/runtime;
+- low-latency STM candidate retrieval.
 
-Adopt:
+Do not use Redis as:
 
-- structured episodic event frames;
-- precise provenance pointers;
-- hierarchical relation between episodic narrative and graph facts;
-- reverse provenance expansion to reconstruct coherent context from fragmented evidence.
+- canonical episodic persistence;
+- canonical semantic/LTM persistence;
+- graph truth;
+- durable user preference/fact authority;
+- proof that memory was permanently saved.
 
-KAREN adaptation:
+The legacy `core.memory.redis_connection_manager` import is a compatibility shim only. New work imports the canonical platform adapter.
 
-A graph hit should normally return source IDs/path evidence, not synthetic pseudo-memory text. NeuroRecall may expand selected source memories/episode frames through provenance before prompt packing.
+### Supabase/PostgreSQL
 
-### 2.3 STITCH / Contextual Intent (ACL 2026)
-
-Adopt compact intent/state indexing to reduce interference between semantically similar experiences.
-
-Each memory event should be able to carry:
-
-- goal/intent segment;
-- action type;
-- salient entity types/IDs;
-- task/project/workspace context;
-- relevant constraints;
-- state fingerprint/features.
-
-These are retrieval cues, not a second global intent authority. CORTEX remains executive authority.
-
-### 2.4 Hindsight (ACL 2026)
-
-Adopt the separation of epistemic classes and explicit memory operations.
-
-KAREN mapping:
+Canonical durable path:
 
 ```text
-world       -> semantic facts / assertions
-experience  -> episodic + action/outcome memory
-observation -> observations/evidence
-opinion     -> beliefs/preferences/hypotheses with confidence
+Memory domain
+ -> platform/memory/postgres adapters
+ -> database.client compatibility facade where still required
+ -> persistence.postgres.PostgresEngine
+ -> Supabase-hosted PostgreSQL
 ```
 
-Use the conceptual operations:
+Reuse existing async SQLAlchemy sessions and migration ownership.
 
-```text
-RETAIN  -> governed memory formation/write
-RECALL  -> NeuroRecall
-REFLECT -> consolidation/revision/lesson formation through canonical runtime
-```
+Do not create:
 
-Do not introduce Hindsight as a parallel runtime.
+- a second Supabase client repository;
+- runtime table creation;
+- a duplicate memory schema;
+- a graph-specific durable DB connection layer.
 
-### 2.5 Temporal Semantic Memory (ACL 2026)
+Use native Postgres/Supabase capabilities first:
 
-Adopt semantic/world time instead of only conversation timestamp. Support durative memories formed by consolidating temporally continuous, semantically compatible states.
-
-Examples:
-
-- `user lived in Detroit from X to Y` is a duration, not thousands of repeated point memories;
-- `project used provider X during release cycle Y` can become a durative state;
-- state changes close prior validity intervals rather than erase history.
-
-### 2.6 EVU / Belief intervention (ACL 2026)
-
-Adopt an Estimate/Verify/Update pattern for beliefs and learned expectations:
-
-```text
-prior belief / expectation
-      -> predicted outcome
-      -> observed outcome
-      -> verification evidence
-      -> strengthen | weaken | revise | supersede
-```
-
-Never allow old learned beliefs to persist merely because they were recalled frequently.
-
-### 2.7 MCMA / Meta-cognitive memory abstraction (ACL 2026)
-
-Adopt abstraction levels, but do not add a learned memory copilot yet.
-
-KAREN target levels:
-
-```text
-L0 raw source/reference
-L1 observation/action
-L2 event/episode
-L3 fact/state/preference
-L4 procedure/lesson
-L5 generalized strategy/pattern
-```
-
-Promotion must be evidence-backed and reversible to provenance. Learned abstraction policy is a later benchmark-gated capability.
-
-### 2.8 MemoryArena + LongMemEval-V2
-
-Evaluation must prove that memory changes future behavior, including:
-
-- dynamic state tracking;
-- workflow knowledge;
-- recurring gotchas;
-- premise awareness;
-- multi-session interdependence;
-- preference/constraint retention;
-- use of prior action feedback in later action selection.
+- pgvector;
+- FTS;
+- pg_trgm where approved;
+- recursive CTEs;
+- RLS + explicit tenant predicates;
+- pgTAP where useful.
 
 ---
 
-## 3. Live repo findings addressed by this sprint
+## 3. Why this sprint exists
 
-### MF-F01 — episodic domain is effectively empty
+The live repository already contains NeuroRecall, Postgres durable recall, Redis STM retrieval, graph projection, associative spreading activation, and consolidation rules.
 
-The live `core/memory/episodic/` directory currently exposes only `__init__.py`. There is no active first-class event/episode builder in that domain.
-
-**Consequence:** the graph currently has no canonical episodic segmentation authority feeding it.
-
-**Priority:** CRITICAL.
-
-### MF-F02 — consolidation is a shallow promotion ruleset
-
-Current consolidation primarily checks reuse count, explicit save, repeated tool success, correction, and low confidence.
-
-Useful as policy gates, but insufficient for:
-
-- event grouping;
-- durative state formation;
-- contradiction resolution;
-- temporal interval closure;
-- abstraction/generalization;
-- belief revision;
-- provenance-preserving semanticization.
-
-**Priority:** HIGH.
-
-### MF-F03 — graph recall loses narrative evidence
-
-Current graph retrieval can produce graph result dictionaries which are wrapped into new `MemoryEntry` objects. This weakens provenance and can turn relationships into pseudo-memory content.
-
-Target behavior: graph retrieval returns canonical source IDs + paths; selected sources are expanded from canonical memory and packed with explicit evidence provenance.
-
-**Priority:** CRITICAL.
-
-### MF-F04 — contextual intent/state is not first-class on memory events
-
-Current memory retrieval is mainly query/text scoped. Similar entities across different tasks/projects/goals can interfere.
-
-**Priority:** HIGH.
-
----
-
-## 4. Canonical Memory Formation Pipeline
+The missing production bridge is:
 
 ```text
-Runtime observation
-(messages, user changes, tool results, actions, environment state)
-        |
-        v
-MemoryFormationService
-        |
-        +--> EventSegmenter
-        |       determines boundary / continuation
-        |
-        +--> ContextualStateEncoder
-        |       goal, action type, project, entities, constraints, state cues
-        |
-        +--> EpistemicClassifier
-        |       fact | observation | belief | preference | experience
-        |
-        +--> TemporalNormalizer
-        |       event time, valid interval, observed/recorded time
-        |
-        +--> ProvenanceBinder
-        |       exact source messages/actions/tool outputs
-        |
-        v
-StructuredMemoryEvent / EpisodeFrame
-        |
-        v
-Runtime memory policy
-        |
-        v
-NeuroVault
-        |
-        v
-Canonical PostgreSQL/Supabase memory
-        |
-        +--> pgvector representation
-        +--> graph projection
-        +--> lifecycle/consolidation candidates
+raw interaction
+   != coherent event
+   != durable episode
+   != semantic state
+   != graph relation
 ```
 
-`MemoryFormationService` owns formation mechanics only. It must not become CORTEX, NeuroRecall, or NeuroVault.
+Today `core/memory/episodic/` is effectively empty as a first-class episodic authority. Consolidation is still primarily a shallow promotion rule set. Graph recall can lose source narrative by wrapping relationship dictionaries as new memory objects.
+
+This sprint fixes formation before adding more graph sophistication.
 
 ---
 
-## 5. Structured Episodic Event Contract
+## 4. Canonical formation pipeline
 
-Create one canonical typed event/episode contract, reusing existing memory/cognitive/time/confidence authorities.
+### Stage A — live STM context
 
-Required concept set:
+Runtime writes/updates bounded session state through the canonical Redis platform adapter.
+
+Redis context may include:
+
+- recent messages;
+- current task/goal cues;
+- active project/workspace;
+- recent actions/tool results;
+- current episode candidate ID;
+- bounded session summary;
+- unresolved state transitions.
+
+Requirements:
+
+- tenant + user + session scope mandatory;
+- TTL explicit;
+- bounded payload size;
+- no secrets persisted beyond policy;
+- degraded fallback is explicit and non-durable.
+
+### Stage B — event segmentation
+
+`core/memory/episodic/` becomes canonical owner of event/episode segmentation contracts.
+
+Boundary signals may include:
+
+- task/goal change;
+- project/workspace change;
+- meaningful time gap;
+- action/tool sequence completion;
+- success/failure outcome;
+- decision/commitment;
+- user correction;
+- environment state transition;
+- session boundary.
+
+Start deterministic-first. Model-assisted segmentation must be prompt-contract + budget gated.
+
+### Stage C — structured event formation
+
+Create/reuse canonical typed event contracts carrying:
 
 ```text
 event_id / episode_id
@@ -256,74 +163,53 @@ user_id
 conversation_id
 session_id
 project/workspace scope
-
 started_at
 ended_at
 observed_at
 recorded_at
 valid_from
 valid_to
-
-goal_id / contextual_intent
-action_type
-state_before_ref
-state_after_ref
-
+goal/action/state cues
 entities
 constraints
 actions
 observations
 outcomes
 feedback
-
 source_refs
 causal_parent_ids
-temporal_neighbor_ids
 confidence
-importance/salience
+salience
 lifecycle_state
 schema_version
 ```
 
-Do not duplicate full raw message/tool payloads inside the event when a canonical source reference exists.
+Do not duplicate raw message/tool payloads when canonical source references exist.
+
+### Stage D — governed durable commit
+
+Runtime submits eligible candidates to memory policy + NeuroVault.
+
+NeuroVault commits through the canonical Postgres path into Supabase-hosted PostgreSQL.
+
+A Redis write must never be interpreted as successful durable commit.
+
+### Stage E — derived indexes/projections
+
+After durable commit:
+
+- create/update pgvector representation where enabled;
+- update lexical/entity indexes;
+- project graph relationships into PostgreSQL-native graph tables;
+- enqueue in-process/normal async consolidation candidates through existing runtime mechanisms where sufficient.
+
+Do not add pgmq until throughput/reliability benchmarks demonstrate an actual queue requirement.
 
 ---
 
-## 6. Event Segmentation
+## 5. Contextual state and intent cues
 
-Implement bounded deterministic-first segmentation.
-
-Boundary signals may include:
-
-- explicit topic/task change;
-- goal change;
-- project/workspace change;
-- meaningful time gap;
-- tool/action sequence completion;
-- success/failure outcome;
-- user correction;
-- commitment/decision;
-- environment state transition;
-- conversation/session boundary.
-
-Start with rules + canonical intent/state signals. Do not add an LLM call for every message by default.
-
-Optional model-assisted segmentation is permitted only behind a prompt contract and budget/config gate.
-
-Proof:
-
-- same task over multiple turns becomes one coherent episode;
-- task switch creates new event/episode;
-- correction can attach to prior event without merging unrelated context;
-- identical entity mention under another goal does not force episode merge.
-
----
-
-## 7. State-aware / intent-aware indexing
-
-Store compact retrieval cues, not hidden reasoning.
-
-Suggested typed cues:
+Store compact retrieval cues, not hidden reasoning:
 
 ```text
 goal_class
@@ -336,43 +222,41 @@ outcome_class
 state_fingerprint
 ```
 
-NeuroRecall may use compatibility between current authorized CORTEX/runtime context and stored cues as one ranking/filtering signal.
+CORTEX may provide current goal/intent signals. MemoryFormation stores bounded historical cues. NeuroRecall uses compatibility as one retrieval signal.
 
-Intent compatibility score is separate from semantic similarity and truth confidence.
+MemoryFormation must not become a second intent classifier/cognitive head.
 
 ---
 
-## 8. Temporal state and durative memory
+## 6. Temporal and durative state
 
-Support point events and intervals.
-
-Formation flow:
+Support both point events and intervals.
 
 ```text
 new observation
- -> find compatible active state
+ -> find compatible active durable state in Postgres
  -> same state? extend/reinforce interval
  -> changed state? close old interval + create new state
- -> uncertain? retain separate observation without forced transition
+ -> uncertain? retain observation without forced transition
 ```
 
-No destructive rewrite of historical state.
+Redis may hold the unresolved live state while an episode is still open. Once durable truth is committed, PostgreSQL is authoritative.
 
-Examples to test:
+Examples:
 
-- preference changed and later reverted;
-- project provider changed twice;
-- user location changed;
-- recurring workflow remained stable for months;
-- uncertain state update remained unconfirmed.
+- user preference changes and later reverts;
+- project provider changes;
+- active development branch changes;
+- repeated workflow remains stable over time;
+- uncertain update remains unconfirmed.
 
 ---
 
-## 9. Provenance-first retrieval and reconstruction
+## 7. Provenance-first graph and recall
 
-Introduce source-preserving graph candidate retrieval.
+Graph projection stores references to canonical durable events/memories.
 
-Graph candidate result must contain at minimum:
+Graph candidates must return:
 
 ```text
 source_memory_ids
@@ -385,29 +269,36 @@ temporal_match
 scope_match
 ```
 
-It must not invent a new UUID-backed pseudo memory to stand in for canonical source content.
-
-### Reverse provenance expansion
-
-After NeuroRecall selects graph/event candidates:
+NeuroRecall then performs reverse provenance expansion:
 
 ```text
-candidate/path
- -> canonical source IDs
- -> source memory/episode fetch
- -> bounded neighboring episode expansion when needed
- -> dedupe
+graph/event candidate
+ -> canonical Postgres IDs
+ -> fetch canonical durable event/memory
+ -> bounded neighboring episode expansion
  -> temporal ordering
+ -> dedupe
  -> evidence packing
 ```
 
-This reconstructs coherent episodes without stuffing entire history into context.
+Do not turn graph dictionaries into pseudo-memory content.
+
+Redis STM can be fused separately when current-session context is relevant.
 
 ---
 
-## 10. Belief revision / reconsolidation
+## 8. Epistemic classes and belief revision
 
-Create a typed revision decision:
+At minimum distinguish:
+
+- world fact;
+- observation;
+- user preference/belief;
+- KAREN hypothesis/opinion;
+- experience/outcome;
+- procedure/lesson.
+
+Revision decisions:
 
 ```text
 UNCHANGED
@@ -419,39 +310,29 @@ SPLIT
 QUARANTINE
 ```
 
-Inputs:
+Inputs include prior durable assertion, new observation, provenance strength, contradiction/support, temporal compatibility, user correction, and outcome verification.
 
-- prior assertion/belief;
-- new observation/evidence;
-- provenance strength;
-- contradiction/support relation;
-- temporal compatibility;
-- user confirmation/correction;
-- outcome verification.
-
-Durable revisions pass through runtime policy + NeuroVault.
-
-Never overwrite history without preserving supersession/provenance.
+Durable revisions pass through NeuroVault and Postgres. Redis may cache current state after commit but does not own revision history.
 
 ---
 
-## 11. Hierarchical consolidation
+## 9. Hierarchical consolidation
 
-Target transformations:
+Target abstraction ladder:
 
 ```text
-raw references
- -> observations/actions
- -> episode
- -> semantic fact/state
- -> procedure/lesson
- -> generalized strategy
+L0 source reference
+L1 observation/action
+L2 event/episode
+L3 semantic state/fact/preference
+L4 procedure/lesson
+L5 generalized strategy/pattern
 ```
 
-Promotion criteria should combine evidence such as:
+Promotion requires evidence such as:
 
-- repetition across independent episodes;
-- confirmed successful outcomes;
+- repetition across independent durable episodes;
+- successful outcomes;
 - user confirmation;
 - correction history;
 - temporal stability;
@@ -459,134 +340,148 @@ Promotion criteria should combine evidence such as:
 - source confidence;
 - contradiction count.
 
-Do not promote merely because a memory was recalled frequently.
+Recall frequency alone is not sufficient.
+
+Redis TTL expiration is not consolidation or forgetting.
 
 ---
 
-## 12. Lean Supabase/Postgres implementation
+## 10. Implementation tasks
 
-Do not introduce a second database for MEMORY-FORMATION-1.
-
-Use existing PostgreSQL/Supabase authority plus available native capabilities:
-
-- canonical relational memory tables;
-- pgvector for semantic candidates;
-- PostgreSQL FTS/`pg_trgm` where approved for lexical/entity candidates;
-- canonical edge relation tables for graph projection;
-- recursive CTEs for bounded graph traversal;
-- RLS/tenant predicates for isolation.
-
-Graph projection should reference canonical memory/event IDs rather than duplicate source memory text.
-
-External graph compute remains benchmark-gated.
-
----
-
-## 13. Implementation tasks
-
-### Task 1 — Episodic authority
+### Task 1 — Redis STM truth
 
 Do:
 
-- establish `core/memory/episodic` as the owner of event/episode contracts + segmentation;
-- implement canonical event frame types;
-- implement deterministic-first event segmentation;
-- bind exact provenance/source references.
+- move new imports to `platform.memory.redis` canonical path;
+- document key schema + TTL ownership;
+- prove tenant/user/session isolation;
+- prove Redis unavailable -> explicit bounded degraded mode;
+- ensure no Redis-only write produces durable-save metadata/UI truth.
 
 Avoid:
 
-- new memory manager/orchestrator;
-- graph-specific episode builder;
-- provider-specific event extraction.
+- deleting Redis because the legacy shim is deprecated;
+- expanding Redis into durable LTM.
 
-### Task 2 — Formation service
-
-Do:
-
-- implement one `MemoryFormationService` or equivalently named subordinate service under `core/memory`;
-- accept runtime observations and return typed candidates/events;
-- integrate contextual state, epistemic classification, temporal normalization and provenance.
-
-Authority:
-
-- Runtime invokes it;
-- CORTEX may supply intent/goal signals but does not perform writes;
-- NeuroVault governs durable commits.
-
-### Task 3 — Postgres event persistence
+### Task 2 — Episodic authority
 
 Do:
 
-- persist event/episode structures in the canonical data layer;
-- preserve tenant/user scope;
-- add relevant temporal, provenance and cue indexes;
-- use migrations, not runtime schema creation.
+- build canonical event/episode contracts under `core/memory/episodic`;
+- implement deterministic-first segmentation;
+- use bounded Redis context as formation input;
+- bind exact source provenance.
 
-### Task 4 — Graph projection rewrite
-
-Do:
-
-- project canonical event/fact/entity references;
-- eliminate pseudo-durable Kuzu behavior;
-- make graph projection rebuildable from canonical Postgres memory;
-- graph hits return source refs/path evidence.
-
-### Task 5 — NeuroRecall reconstruction
+### Task 3 — MemoryFormationService
 
 Do:
 
-- add event/graph candidate source(s) through existing NeuroRecall retriever contracts;
-- implement provenance expansion;
-- add contextual-intent/state compatibility as bounded ranking signals;
-- preserve temporal ordering and source evidence.
+- create one subordinate formation service;
+- accept runtime observations + bounded STM context;
+- emit typed candidates/events;
+- incorporate temporal, epistemic, state, and provenance contracts.
 
-### Task 6 — Temporal/durative consolidation
+Do not create another memory manager/orchestrator.
 
-Do:
-
-- close/extend state intervals;
-- build durative memories from repeated continuous evidence;
-- preserve point observations behind consolidated state;
-- add contradiction/supersession handling.
-
-### Task 7 — belief revision
+### Task 4 — Supabase/Postgres durable persistence
 
 Do:
 
-- implement evidence-backed reconsolidation decisions;
-- distinguish belief/preferences from world facts;
-- feed user corrections and observed outcomes into revision;
-- prevent frequency-only belief reinforcement.
+- reuse `PostgresEngine` / canonical async session path;
+- use migrations for new event/relationship structures;
+- preserve tenant/user scopes;
+- add temporal/provenance/cue indexes;
+- reuse existing ledger concepts where they already own the data.
 
-### Task 8 — behavioral benchmark
+Avoid direct Supabase SDK persistence beside the canonical DB layer.
 
-Build KAREN-specific longitudinal fixtures in addition to external benchmark adapters.
+### Task 5 — Semantic + lexical retrieval closure
 
-Minimum scenarios:
+Do:
 
-1. preference change over time;
-2. repeated entity under different goals/projects;
-3. tool failure learned and avoided later;
-4. successful procedure reused later;
-5. incorrect prior belief corrected by evidence;
-6. multi-turn episode reconstructed from fragmentary query;
-7. tenant isolation during multi-hop expansion;
-8. stale state excluded from current answer but available historically;
-9. current action changes because of prior outcome;
-10. irrelevant semantically similar memory suppressed by contextual intent.
+- connect pgvector through canonical storage where enabled;
+- close real lexical retrieval rather than empty router branches;
+- use pg_trgm/FTS only where demonstrated useful;
+- keep NeuroRecall as fusion/ranking authority.
+
+### Task 6 — PostgreSQL graph projection
+
+Do:
+
+- replace pseudo-Kuzu durability with Postgres-native relation persistence;
+- reference canonical durable IDs;
+- implement bounded recursive CTE traversal;
+- preserve temporal validity + provenance;
+- make projection rebuildable from durable memory.
+
+### Task 7 — associative integration
+
+Do:
+
+- fix/harden existing KAREN spreading activation;
+- feed it canonical Postgres graph neighborhoods;
+- remove its role as an independent graph truth store;
+- benchmark before adding NetworkX/PPR dependency.
+
+### Task 8 — temporal consolidation + belief revision
+
+Do:
+
+- extend/close validity intervals;
+- form durative state;
+- implement contradiction/supersession;
+- produce evidence-backed higher-level candidates.
+
+### Task 9 — behavioral proof
+
+Minimum longitudinal scenarios:
+
+1. STM continuity across turns via Redis;
+2. Redis outage with durable Postgres recall still working;
+3. preference change over time;
+4. repeated entity under different goals/projects;
+5. tool failure learned and avoided later;
+6. successful procedure reused later;
+7. incorrect prior belief revised by evidence;
+8. multi-turn episode reconstructed from graph/provenance;
+9. tenant isolation across Redis + Postgres + multi-hop traversal;
+10. stale state excluded from current answer but historically recallable;
+11. process restart preserves durable memory even when Redis is empty;
+12. Redis cache success never masquerades as durable save success.
 
 ---
 
-## 14. Required telemetry
+## 11. Security and observability
 
-Structured events should include applicable:
+Required dimensions:
 
 ```text
+correlation_id
+request_id
+tenant_id
+user_id
+session_id
+conversation_id
+memory_source
+redis_degraded
+postgres_degraded
+formation_stage
+source_event_id
+source_memory_id
+graph_depth
+candidate_count
+persistence_status
+latency_ms
+```
+
+Required event families include:
+
+```text
+memory.stm.read/write/degraded
 memory.formation.started/completed
 memory.event.boundary_detected
 memory.episode.created/extended
-memory.state.transitioned
-memory.provenance.bound
+memory.persistence.started/completed/failed
 memory.graph.projected
 memory.recall.provenance_expanded
 memory.consolidation.decided
@@ -594,85 +489,73 @@ memory.revision.decided
 memory.behavior_transfer.recorded
 ```
 
-Carry correlation/request/user/tenant/session/conversation IDs according to canonical observability contracts. Do not log secrets or raw sensitive content unnecessarily.
+Never log secrets or raw sensitive payloads unnecessarily.
 
 ---
 
-## 15. Security / RBAC proof
+## 12. Dependency policy
 
-Prove:
+During MEMORY-FORMATION-1 do not add:
 
-- every source reference remains tenant scoped;
-- recursive graph/provenance expansion cannot cross tenant boundaries;
-- deletion propagates to projections and derived memories according to governance policy;
-- quarantined/invalid source evidence cannot silently re-enter through graph paths;
-- user corrections are provenance-preserving and auditable;
-- no hidden chain-of-thought is persisted as memory.
+- NetworkX;
+- pgmq;
+- Kuzu;
+- Neo4j;
+- Memgraph;
+- FalkorDB;
+- Graphiti;
+- Mem0;
+- Apache AGE clients;
+- Elasticsearch;
+- Milvus;
+- another vector store.
+
+Redis and the canonical PostgreSQL/SQLAlchemy stack are existing architecture and must be represented truthfully in dependency manifests/deployment images.
+
+If `redis.asyncio` or SQLAlchemy are imported by active production paths but absent from the canonical dependency manifest, fix the manifest rather than pretending the capability is retired.
 
 ---
 
-## 16. Exit criteria
+## 13. Exit criteria
 
 MEMORY-FORMATION-1 is complete only when:
 
-- raw interaction streams form coherent typed episodes;
-- event segmentation is test-proven;
-- contextual intent/state is available as a retrieval cue;
-- graph projection is sourced from canonical memories/events;
-- graph hits expand back to canonical evidence;
+- Redis is formally proven as bounded STM/runtime memory;
+- deprecated Redis compatibility imports are no longer used by new code;
+- raw interaction forms coherent typed episodes;
+- episode formation uses bounded live STM context where needed;
+- durable episodes/facts persist through canonical Supabase/Postgres sessions;
+- schema changes are migration-owned;
+- graph projection is Postgres-native/rebuildable and provenance-linked;
+- graph hits reconstruct canonical evidence;
 - current vs historical state is distinguishable;
-- beliefs can strengthen/weaken/revise/supersede from evidence;
-- consolidation produces provenance-backed higher abstractions;
-- a prior successful/failed experience measurably changes a later action/plan;
-- all graph/provenance traversal is tenant-safe;
-- no new graph database or external memory framework is required to pass the baseline.
+- beliefs can strengthen/weaken/revise/supersede;
+- consolidation produces provenance-backed abstractions;
+- prior experience measurably changes later behavior;
+- tenant isolation holds across Redis, Postgres, vector retrieval, and graph traversal;
+- no second durable memory authority exists;
+- no new external memory/graph dependency was added without benchmark evidence.
 
 ---
 
-## 17. Proof commands
+## 14. Proof commands
 
-```bash
+```text
 python -m compileall src
 pytest tests/ -q
 ruff check src tests
 mypy src
 ```
 
-Add focused suites for:
+Add targeted proof for:
 
-```text
-tests/memory/test_event_segmentation.py
-tests/memory/test_episode_formation.py
-tests/memory/test_contextual_intent_recall.py
-tests/memory/test_temporal_state_transition.py
-tests/memory/test_provenance_expansion.py
-tests/memory/test_belief_revision.py
-tests/memory/test_memory_behavior_transfer.py
-tests/memory/test_memory_graph_tenant_isolation.py
-```
-
-Use existing test organization if equivalent files already exist; do not create duplicates solely to match these suggested names.
-
----
-
-## 18. Architectural north star
-
-```text
-Experience is not a message.
-Memory is not an embedding.
-The graph is not the source of truth.
-Similarity is not relevance.
-Activation is not confidence.
-Recall is not learning.
-Frequency is not truth.
-
-KAREN memory becomes human-like when it can:
-segment experience,
-place it in context,
-preserve where it came from,
-track what changed,
-connect cause to outcome,
-revise beliefs,
-abstract lessons,
-and use those lessons differently the next time.
-```
+- Redis STM/TTL/degraded-mode behavior;
+- Postgres restart durability;
+- Supabase migration contract;
+- tenant isolation;
+- pgvector/lexical retrieval where enabled;
+- event segmentation;
+- temporal state transitions;
+- graph recursive traversal;
+- provenance reconstruction;
+- behavioral transfer.
