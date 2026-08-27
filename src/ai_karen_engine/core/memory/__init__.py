@@ -22,6 +22,7 @@ from .contracts import (
     SelfModel,
     UserModel,
 )
+from .control import MemoryControlPort, MemoryControlService
 from .policy import (
     ConsolidationPolicy,
     ForgettingPolicy,
@@ -40,6 +41,10 @@ from .types import (
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "MemoryRuntimeManager": (".memory_runtime_manager", "MemoryRuntimeManager"),
     "get_memory_manager": (".memory_runtime_manager", "get_memory_manager"),
+    "get_memory_control_service": (
+        ".memory_runtime_manager",
+        "get_memory_control_service",
+    ),
     "init_memory": (".memory_runtime_manager", "init_memory"),
     "close": (".memory_runtime_manager", "close"),
     "recall_context": (".memory_runtime_manager", "recall_context"),
@@ -105,7 +110,10 @@ def __dir__() -> list[str]:
 
 __all__ = [
     "get_memory_manager",
+    "get_memory_control_service",
     "MemoryRuntimeManager",
+    "MemoryControlPort",
+    "MemoryControlService",
     "init_memory",
     "close",
     "recall_context",
