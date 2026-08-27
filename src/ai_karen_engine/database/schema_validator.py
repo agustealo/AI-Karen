@@ -18,8 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
 
-# Expected migration version (update when adding migrations)
-# This should match the latest migration file in /data/migrations/postgres/
 EXPECTED_MIGRATION_VERSION = "022_enhanced_auth_validation_system.sql"
 EXPECTED_MIGRATION_SERVICE = "postgres"
 
@@ -30,21 +28,9 @@ class SchemaVersionError(Exception):
 
 
 def validate_schema_version_sync(db_engine: Engine) -> Dict[str, Any]:
-    """
-    Validate that database schema matches expected version (synchronous).
-
-    Args:
-        db_engine: SQLAlchemy Engine instance
-
-    Returns:
-        Dict with validation status and details
-
-    Raises:
-        SchemaVersionError: If version mismatch or no migrations applied
-    """
+    """Validate that database schema matches expected version synchronously."""
     try:
         with db_engine.connect() as conn:
-            # Check if migration_history table exists
             check_table = text("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.tables
@@ -62,7 +48,6 @@ def validate_schema_version_sync(db_engine: Engine) -> Dict[str, Any]:
                 logger.error(error_msg)
                 raise SchemaVersionError(error_msg)
 
-            # Get latest applied migration
             query = text("""
                 SELECT migration_name, applied_at, status
                 FROM migration_history
@@ -81,43 +66,36 @@ def validate_schema_version_sync(db_engine: Engine) -> Dict[str, Any]:
                 logger.error(error_msg)
                 raise SchemaVersionError(error_msg)
 
-            current_version = row[0]
-            applied_at = row[1]
-            status = row[2]
-
+            current_version, applied_at, status = row[0], row[1], row[2]
             if status != "applied":
                 error_msg = (
                     f"Latest migration has status '{status}' (not 'applied')!\n"
                     f"Migration: {current_version}\n"
                     f"Applied at: {applied_at}\n"
-                    f"Action: Check migration logs and fix failed migration"
+                    "Action: Check migration logs and fix failed migration"
                 )
                 logger.error(error_msg)
                 raise SchemaVersionError(error_msg)
 
             if current_version != EXPECTED_MIGRATION_VERSION:
                 error_msg = (
-                    f"Schema version mismatch!\n"
+                    "Schema version mismatch!\n"
                     f"Expected: {EXPECTED_MIGRATION_VERSION}\n"
                     f"Current:  {current_version}\n"
                     f"Applied at: {applied_at}\n"
-                    f"Action: Run pending migrations: python scripts/migrations/run_migrations.py"
+                    "Action: Run pending migrations: python scripts/migrations/run_migrations.py"
                 )
                 logger.error(error_msg)
                 raise SchemaVersionError(error_msg)
 
-            logger.info(
-                f"✅ Schema version validated: {current_version} (applied {applied_at})"
-            )
-
+            logger.info("Schema version validated: %s (applied %s)", current_version, applied_at)
             return {
                 "valid": True,
                 "expected_version": EXPECTED_MIGRATION_VERSION,
                 "current_version": current_version,
                 "applied_at": str(applied_at),
-                "status": status
+                "status": status,
             }
-
     except SchemaVersionError:
         raise
     except Exception as ex:
@@ -127,21 +105,9 @@ def validate_schema_version_sync(db_engine: Engine) -> Dict[str, Any]:
 
 
 async def validate_schema_version_async(db_engine: AsyncEngine) -> Dict[str, Any]:
-    """
-    Validate that database schema matches expected version (async).
-
-    Args:
-        db_engine: SQLAlchemy AsyncEngine instance
-
-    Returns:
-        Dict with validation status and details
-
-    Raises:
-        SchemaVersionError: If version mismatch or no migrations applied
-    """
+    """Validate that database schema matches expected version asynchronously."""
     try:
         async with db_engine.connect() as conn:
-            # Check if migration_history table exists
             check_table = text("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.tables
@@ -160,7 +126,6 @@ async def validate_schema_version_async(db_engine: AsyncEngine) -> Dict[str, Any
                 logger.error(error_msg)
                 raise SchemaVersionError(error_msg)
 
-            # Get latest applied migration
             query = text("""
                 SELECT migration_name, applied_at, status
                 FROM migration_history
@@ -179,43 +144,36 @@ async def validate_schema_version_async(db_engine: AsyncEngine) -> Dict[str, Any
                 logger.error(error_msg)
                 raise SchemaVersionError(error_msg)
 
-            current_version = row[0]
-            applied_at = row[1]
-            status = row[2]
-
+            current_version, applied_at, status = row[0], row[1], row[2]
             if status != "applied":
                 error_msg = (
                     f"Latest migration has status '{status}' (not 'applied')!\n"
                     f"Migration: {current_version}\n"
                     f"Applied at: {applied_at}\n"
-                    f"Action: Check migration logs and fix failed migration"
+                    "Action: Check migration logs and fix failed migration"
                 )
                 logger.error(error_msg)
                 raise SchemaVersionError(error_msg)
 
             if current_version != EXPECTED_MIGRATION_VERSION:
                 error_msg = (
-                    f"Schema version mismatch!\n"
+                    "Schema version mismatch!\n"
                     f"Expected: {EXPECTED_MIGRATION_VERSION}\n"
                     f"Current:  {current_version}\n"
                     f"Applied at: {applied_at}\n"
-                    f"Action: Run pending migrations: python scripts/migrations/run_migrations.py"
+                    "Action: Run pending migrations: python scripts/migrations/run_migrations.py"
                 )
                 logger.error(error_msg)
                 raise SchemaVersionError(error_msg)
 
-            logger.info(
-                f"✅ Schema version validated: {current_version} (applied {applied_at})"
-            )
-
+            logger.info("Schema version validated: %s (applied %s)", current_version, applied_at)
             return {
                 "valid": True,
                 "expected_version": EXPECTED_MIGRATION_VERSION,
                 "current_version": current_version,
                 "applied_at": str(applied_at),
-                "status": status
+                "status": status,
             }
-
     except SchemaVersionError:
         raise
     except Exception as ex:
@@ -225,81 +183,63 @@ async def validate_schema_version_async(db_engine: AsyncEngine) -> Dict[str, Any
 
 
 async def validate_and_migrate_schema(session: Any) -> Optional[Any]:
-    """
-    Validate schema and return error response if validation fails.
-
-    This is a compatibility wrapper for web API routes that expect
-    error response objects instead of exceptions.
-
-    Args:
-        session: Database session (AsyncSession or similar)
-
-    Returns:
-        None if validation succeeds, error response object if fails
-    """
+    """Validate schema and return a compatibility error response on failure."""
     try:
-        # Get the engine from the session
         from sqlalchemy.ext.asyncio import AsyncSession
 
         if isinstance(session, AsyncSession):
             engine = session.get_bind()
         else:
-            # Fallback - try to get bind attribute
-            engine = getattr(session, 'bind', None) or getattr(session, 'get_bind', lambda: None)()
+            engine = getattr(session, "bind", None) or getattr(
+                session, "get_bind", lambda: None
+            )()
 
         if engine is None:
-            # If we can't get engine, just return None (skip validation)
             logger.warning("Could not get database engine from session, skipping validation")
             return None
 
-        # Run validation
         await validate_schema_version_async(engine)
-        return None  # Success
-
-    except SchemaVersionError as e:
-        # Import error response creator
+        return None
+    except SchemaVersionError as exc:
         try:
-             from ai_karen_engine.services.error_response_schemas import create_database_error_response
+            from ai_karen_engine.services.error_response_schemas import (
+                create_database_error_response,
+            )
 
             return create_database_error_response(
-                error=e,
+                error=exc,
                 operation="schema_validation",
-                user_message=str(e),
-                request_id=None
+                user_message=str(exc),
+                request_id=None,
             )
         except ImportError:
-            # If error response module not available, create simple error object
-            class SimpleError:
-                def __init__(self, message: str):
-                    self.message = message
-                    self.type = "DATABASE_ERROR"
-
-                def dict(self):
-                    return {"message": self.message, "type": self.type}
-
-            return SimpleError(str(e))
-    except Exception as e:
-        # Unexpected error
-        logger.error(f"Unexpected error during schema validation: {e}")
+            return _SimpleDatabaseError(str(exc))
+    except Exception as exc:
+        logger.error("Unexpected error during schema validation: %s", exc)
         try:
-             from ai_karen_engine.services.error_response_schemas import create_database_error_response
+            from ai_karen_engine.services.error_response_schemas import (
+                create_database_error_response,
+            )
 
             return create_database_error_response(
-                error=e,
+                error=exc,
                 operation="schema_validation",
                 user_message="Schema validation failed unexpectedly",
-                request_id=None
+                request_id=None,
             )
         except ImportError:
-            class SimpleError:
-                def __init__(self, message: str):
-                    self.message = message
-                    self.type = "DATABASE_ERROR"
+            return _SimpleDatabaseError(str(exc))
 
-                def dict(self):
-                    return {"message": self.message, "type": self.type}
 
-            return SimpleError(str(e))
+class _SimpleDatabaseError:
+    """Compatibility response used only when the canonical schema is unavailable."""
+
+    def __init__(self, message: str):
+        self.message = message
+        self.type = "DATABASE_ERROR"
+
+    def dict(self) -> Dict[str, str]:
+        return {"message": self.message, "type": self.type}
 
 
 __all__ = [
@@ -308,5 +248,5 @@ __all__ = [
     "validate_and_migrate_schema",
     "SchemaVersionError",
     "EXPECTED_MIGRATION_VERSION",
-    "EXPECTED_MIGRATION_SERVICE"
+    "EXPECTED_MIGRATION_SERVICE",
 ]
