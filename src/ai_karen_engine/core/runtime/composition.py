@@ -7,9 +7,11 @@ must define decision behavior, not hide process-wide instances. Runtime callers
 that still depend on compatibility accessors resolve through this composition
 boundary until application startup owns the container directly.
 
-The composition contract intentionally keeps concrete imports lazy. Importing
-an operational runtime module must not eagerly initialize or import the cognitive
-stack merely to refer to the dependency graph type.
+The decision path is explicit here:
+
+    CORTEX -> RuntimePolicy -> RuntimeDecisionPipeline -> ChatRuntime execution
+
+CORTEX decides. RuntimePolicy authorizes. Runtime executes.
 """
 
 from dataclasses import dataclass
@@ -19,14 +21,31 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
     from ai_karen_engine.core.expression.gateway import ExpressionGateway
+    from ai_karen_engine.core.runtime.decision_pipeline import RuntimeDecisionPipeline
+    from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer
 
 
 @dataclass(frozen=True)
 class RuntimeComposition:
     """Process-wide runtime collaborators assembled in one place."""
 
-    cortex: CortexExecutionDecider
+    cognitive_cortex: CortexExecutionDecider
+    runtime_policy: RuntimePolicyEnforcer
+    decision_pipeline: RuntimeDecisionPipeline
     expression_gateway: ExpressionGateway
+
+    @property
+    def cortex(self) -> RuntimeDecisionPipeline:
+        """Compatibility view used by ChatRuntime.
+
+        ``ChatRuntime._decide`` historically calls ``composition.cortex.decide``.
+        The property now resolves to the Runtime-owned decision pipeline, whose
+        first stage is the pure cognitive CORTEX and whose second stage is
+        RuntimePolicy. Remove this alias when ChatRuntime is decomposed into
+        explicit decision and authorization stages.
+        """
+
+        return self.decision_pipeline
 
 
 _composition: Optional[RuntimeComposition] = None
@@ -37,9 +56,20 @@ def build_runtime_composition() -> RuntimeComposition:
     """Build a fresh runtime dependency graph at the composition edge."""
     from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
     from ai_karen_engine.core.expression.gateway import ExpressionGateway
+    from ai_karen_engine.core.runtime.decision_pipeline import RuntimeDecisionPipeline
+    from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer
+
+    cognitive_cortex = CortexExecutionDecider()
+    runtime_policy = RuntimePolicyEnforcer()
+    decision_pipeline = RuntimeDecisionPipeline(
+        cortex=cognitive_cortex,
+        policy=runtime_policy,
+    )
 
     return RuntimeComposition(
-        cortex=CortexExecutionDecider(),
+        cognitive_cortex=cognitive_cortex,
+        runtime_policy=runtime_policy,
+        decision_pipeline=decision_pipeline,
         expression_gateway=ExpressionGateway(),
     )
 
@@ -54,9 +84,9 @@ def get_runtime_composition() -> RuntimeComposition:
     return _composition
 
 
-def get_cortex_execution_decider() -> CortexExecutionDecider:
-    """Compatibility accessor backed by the runtime-owned composition graph."""
-    return get_runtime_composition().cortex
+def get_cortex_execution_decider() -> RuntimeDecisionPipeline:
+    """Compatibility accessor for the Runtime-owned decision pipeline."""
+    return get_runtime_composition().decision_pipeline
 
 
 def get_expression_gateway() -> ExpressionGateway:
