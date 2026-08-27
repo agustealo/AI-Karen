@@ -26,8 +26,9 @@ from ai_karen_engine.core.runtime.contracts import (
     ResponseProvenance,
     ResponseSource,
 )
-from ai_karen_engine.core.runtime.cortex_execution_decider import (
-    get_cortex_execution_decider,
+from ai_karen_engine.core.runtime.composition import (
+    RuntimeComposition,
+    get_runtime_composition,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.core.runtime.workflow_runtime import get_workflow_runtime
@@ -44,7 +45,6 @@ from src.ai_karen_engine.platform.observability import get_observability_emitter
 from src.ai_karen_engine.platform.observability.contracts import EventType as RuntimeEventType
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk
 from ai_karen_engine.utils.chat_helpers import normalize_session_id as normalize_chat_session_id
-from ai_karen_engine.core.expression.gateway import ExpressionGateway
 from ai_karen_engine.core.expression.contracts import ExpressionTask
 
 logger = get_logger(__name__)
@@ -75,7 +75,8 @@ _CANONICAL_META_KEYS = (
 class ChatRuntime:
     """Single authoritative chat execution runtime."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, composition: Optional[RuntimeComposition] = None) -> None:
+        self._composition = composition or get_runtime_composition()
         self._trajectory_recorder = TrajectoryRecorder()
         self._outcome_recorder = OutcomeRecorder()
         self._emitter = get_observability_emitter()
@@ -578,7 +579,7 @@ class ChatRuntime:
     # ------------------------------------------------------------------
 
     async def _decide(self, request: ChatExecutionRequest) -> ExecutionDecision:
-        return await get_cortex_execution_decider().decide(request)
+        return await self._composition.cortex.decide(request)
 
     def _build_authorized_plan(
         self, request: ChatExecutionRequest, decision: ExecutionDecision
@@ -634,7 +635,7 @@ class ChatRuntime:
             raise RuntimeError("Execution budget exhausted: max_model_calls")
 
         ctx = request.context
-        gateway = ExpressionGateway()
+        gateway = self._composition.expression_gateway
         task = ExpressionTask(
             task_id=f"expr_{ctx.correlation_id}",
             kind="chat",
@@ -937,7 +938,7 @@ class ChatRuntime:
         ctx = request.context
         recall_items = (memory_context or {}).get("recall", []) if memory_context else []
         if not recall_items and decision.memory_recall_required:
-            recall_items = (request.metadata or {}).get("memory_context", {}).get("recall", []) or []
+            recall_items = (request.metadata or {}).get("memory_context", {}).get("recall") or []
 
         assembly_request = PromptAssemblyRequest(
             prompt_id="karen.chat.default",
@@ -1264,5 +1265,5 @@ def get_chat_runtime() -> ChatRuntime:
     """Return the singleton authoritative chat runtime."""
     global _chat_runtime
     if _chat_runtime is None:
-        _chat_runtime = ChatRuntime()
+        _chat_runtime = ChatRuntime(composition=get_runtime_composition())
     return _chat_runtime
