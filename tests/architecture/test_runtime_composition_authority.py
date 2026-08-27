@@ -4,45 +4,43 @@ from pathlib import Path
 
 import pytest
 
-from ai_karen_engine.core.cortex import CortexExecutionDecider
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     DependencyStatus,
     ProviderRouterProbe,
 )
 from ai_karen_engine.core.runtime.composition import (
     RuntimeComposition,
-    build_runtime_composition,
     get_cortex_execution_decider,
     get_expression_gateway,
     get_runtime_composition,
     reset_runtime_composition,
     set_runtime_composition,
 )
-from ai_karen_engine.core.runtime.cortex_execution_decider import (
-    get_cortex_execution_decider as get_compat_cortex,
-)
 
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_runtime_composition_owns_process_cortex_and_expression_gateway() -> None:
-    reset_runtime_composition()
-
-    composition = get_runtime_composition()
-
-    assert composition.cortex is get_cortex_execution_decider()
-    assert composition.cortex is get_compat_cortex()
-    assert composition.expression_gateway is get_expression_gateway()
+class _FakeCortex:
+    pass
 
 
-def test_runtime_composition_can_be_explicitly_injected() -> None:
-    fresh = build_runtime_composition()
+class _AvailabilityOnlyGateway:
+    def __init__(self, healthy: bool = True, reason: str | None = None) -> None:
+        self.healthy = healthy
+        self.reason = reason
+        self.calls = 0
+
+    def availability(self) -> tuple[bool, str | None]:
+        self.calls += 1
+        return self.healthy, self.reason
+
+
+def test_runtime_composition_owns_explicit_cortex_and_expression_gateway() -> None:
     replacement = RuntimeComposition(
-        cortex=fresh.cortex,
-        expression_gateway=fresh.expression_gateway,
+        cortex=_FakeCortex(),
+        expression_gateway=_AvailabilityOnlyGateway(),
     )
-
     set_runtime_composition(replacement)
 
     assert get_runtime_composition() is replacement
@@ -52,11 +50,23 @@ def test_runtime_composition_can_be_explicitly_injected() -> None:
     reset_runtime_composition()
 
 
-def test_cortex_public_surface_does_not_export_process_singleton_accessor() -> None:
-    import ai_karen_engine.core.cortex as cortex
+def test_composition_contract_keeps_concrete_cognitive_imports_lazy() -> None:
+    composition = ROOT / "src/ai_karen_engine/core/runtime/composition.py"
+    source = composition.read_text(encoding="utf-8")
 
-    assert "get_cortex_execution_decider" not in cortex.__all__
-    assert CortexExecutionDecider is cortex.CortexExecutionDecider
+    assert "if TYPE_CHECKING:" in source
+    assert "def build_runtime_composition()" in source
+    build_body = source.split("def build_runtime_composition()", 1)[1]
+    assert "from ai_karen_engine.core.cortex.executive import CortexExecutionDecider" in build_body
+    assert "from ai_karen_engine.core.expression.gateway import ExpressionGateway" in build_body
+
+
+def test_cortex_public_surface_does_not_export_process_singleton_accessor() -> None:
+    cortex_init = ROOT / "src/ai_karen_engine/core/cortex/__init__.py"
+    source = cortex_init.read_text(encoding="utf-8")
+
+    assert '"CortexExecutionDecider"' in source
+    assert '"get_cortex_execution_decider"' not in source
 
 
 def test_runtime_compatibility_shim_delegates_instance_ownership_to_composition() -> None:
@@ -64,7 +74,7 @@ def test_runtime_compatibility_shim_delegates_instance_ownership_to_composition(
     source = shim.read_text(encoding="utf-8")
 
     assert "core.runtime.composition import get_cortex_execution_decider" in source
-    assert "core.cortex.executive import (" not in source
+    assert "core.cortex.executive import CortexExecutionDecider" in source
 
 
 def test_chat_runtime_consumes_composition_without_shadow_constructors() -> None:
@@ -88,17 +98,6 @@ def test_control_plane_uses_composed_gateway_without_synthetic_generation() -> N
     assert "gateway.generate(" not in source
     assert '"builtin_vllm"' not in source
     assert '"builtin_transformers"' not in source
-
-
-class _AvailabilityOnlyGateway:
-    def __init__(self, healthy: bool, reason: str | None = None) -> None:
-        self.healthy = healthy
-        self.reason = reason
-        self.calls = 0
-
-    def availability(self) -> tuple[bool, str | None]:
-        self.calls += 1
-        return self.healthy, self.reason
 
 
 @pytest.mark.asyncio
