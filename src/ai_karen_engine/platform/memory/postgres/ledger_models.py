@@ -84,7 +84,7 @@ class MemoryAssertion(Base):
 
 
 class MemoryEpisode(Base):
-    """Event and task-specific continuity snapshot."""
+    """Event snapshot grouped into a coherent multi-turn episode."""
 
     __tablename__ = "memory_episode"
 
@@ -97,12 +97,31 @@ class MemoryEpisode(Base):
     tenant_id = Column(UUID(as_uuid=True), nullable=False)
     user_id = Column(UUID(as_uuid=True), nullable=False)
     session_id = Column(String(255), nullable=True)
+    episode_group_id = Column(UUID(as_uuid=True), nullable=False)
+    started_at = Column(DateTime, nullable=False)
+    ended_at = Column(DateTime, nullable=True)
+    boundary_reason = Column(String(100), nullable=True)
+    context_payload = Column(JSONB, default=lambda: {}, nullable=False)
     summary = Column(Text, nullable=False)
     snapshot_data = Column(JSONB, nullable=False)
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
     __table_args__ = (
         Index("idx_memory_episode_user_tenant", "user_id", "tenant_id"),
+        Index(
+            "idx_memory_episode_group",
+            "tenant_id",
+            "user_id",
+            "episode_group_id",
+            "created_at",
+        ),
+        Index(
+            "idx_memory_episode_session_group",
+            "tenant_id",
+            "user_id",
+            "session_id",
+            "episode_group_id",
+        ),
     )
 
 

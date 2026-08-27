@@ -36,6 +36,7 @@ from ai_karen_engine.core.cortex.executive import (
 )
 from ai_karen_engine.core.cortex.reasoning_eligibility import (
     EligibilityDisposition,
+    ReasoningEligibilityContext,
     ReasoningEligibilityDecision,
     ReasoningModeEligibility,
 )
@@ -82,6 +83,7 @@ __all__ = [
     "PredictorEngine",
     "PredictorSignal",
     "ReasoningDepth",
+    "ReasoningEligibilityContext",
     "ReasoningEligibilityDecision",
     "ReasoningModeEligibility",
     "RouteFamily",

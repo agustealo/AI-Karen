@@ -73,6 +73,8 @@ class PostgresDerivedMemoryProjector:
                 "entities": list(signal.entities or []),
                 "keywords": list(signal.keywords or []),
                 "signal_type": signal.signal_type,
+                "episode_group_id": merged.get("episode_group_id"),
+                "episode_boundary_reason": merged.get("episode_boundary_reason"),
                 "metadata": merged,
             },
         }
@@ -107,12 +109,35 @@ class PostgresDerivedMemoryProjector:
                 MemoryEpisode.event_id == event_uuid
             ).limit(1)
             if (await session.execute(episode_stmt)).scalar_one_or_none() is None:
+                group_uuid = self._uuid_or_default(
+                    metadata.get("episode_group_id"), event_uuid
+                )
+                started_at = (
+                    self._datetime(metadata.get("episode_started_at"))
+                    or datetime.utcnow()
+                )
+                ended_at = self._datetime(metadata.get("episode_ended_at"))
                 session.add(
                     MemoryEpisode(
                         event_id=event_uuid,
                         tenant_id=tenant_uuid,
                         user_id=user_uuid,
                         session_id=metadata.get("session_id"),
+                        episode_group_id=group_uuid,
+                        started_at=started_at,
+                        ended_at=ended_at,
+                        boundary_reason=str(
+                            metadata.get("episode_boundary_reason") or "continuation"
+                        ),
+                        context_payload={
+                            "goal_key": metadata.get("episode_goal_key"),
+                            "project_key": metadata.get("episode_project_key"),
+                            "turn_count": metadata.get("episode_turn_count"),
+                            "episode_new": metadata.get("episode_new"),
+                            "episode_state_persisted": metadata.get(
+                                "episode_state_persisted"
+                            ),
+                        },
                         summary=str(metadata.get("episode_summary") or signal.text[:240]),
                         snapshot_data={
                             "signal_type": signal.signal_type,
@@ -170,7 +195,8 @@ class PostgresDerivedMemoryProjector:
                             failure_count=max(0, int(metadata.get("failure_count") or 0)),
                             confidence=max(0.0, min(1.0, confidence)),
                             lifecycle_state="active",
-                            valid_from=self._datetime(metadata.get("valid_from")) or datetime.utcnow(),
+                            valid_from=self._datetime(metadata.get("valid_from"))
+                            or datetime.utcnow(),
                             valid_to=self._datetime(metadata.get("valid_to")),
                             metadata_payload=metadata,
                         )
@@ -182,15 +208,7 @@ class PostgresDerivedMemoryProjector:
         event_uuid: uuid.UUID,
         results: dict[str, bool],
     ) -> None:
-        # The event's tenant is already enforced by the manager's projection
-        # calls. Status rows are event-scoped and only record stores that actually
-        # ran; retired stores never receive synthetic "completed" statuses.
         for store, ok in results.items():
-            # Resolve tenant from the canonical event indirectly through the
-            # projection's event scope is unnecessary here; status writes occur
-            # in the same governed write pipeline and are not user-facing truth.
-            # We still use the canonical engine transaction via the event's
-            # existing RLS-aware caller in the next method invocation.
             await self._upsert_projection_status(event_uuid, store, ok)
 
     async def _upsert_projection_status(
@@ -199,9 +217,6 @@ class PostgresDerivedMemoryProjector:
         store: str,
         ok: bool,
     ) -> None:
-        # ProjectionStatus itself has no tenant_id column, so RLS is inherited
-        # through event ownership rather than row-local scope. The canonical
-        # schema's uniqueness constraint prevents duplicate store claims.
         from ai_karen_engine.persistence.postgres import get_postgres_engine
 
         engine = get_postgres_engine()
@@ -212,14 +227,15 @@ class PostgresDerivedMemoryProjector:
             )
             row = (await session.execute(stmt)).scalar_one_or_none()
             if row is None:
-                row = ProjectionStatus(
-                    event_id=event_uuid,
-                    target_store=store,
-                    status="completed" if ok else "failed",
-                    retry_count=0,
-                    last_error=None if ok else "projection_returned_false",
+                session.add(
+                    ProjectionStatus(
+                        event_id=event_uuid,
+                        target_store=store,
+                        status="completed" if ok else "failed",
+                        retry_count=0,
+                        last_error=None if ok else "projection_returned_false",
+                    )
                 )
-                session.add(row)
             else:
                 row.status = "completed" if ok else "failed"
                 row.last_error = None if ok else "projection_returned_false"
@@ -243,13 +259,21 @@ class PostgresDerivedMemoryProjector:
     @staticmethod
     def _datetime(value: Any) -> datetime | None:
         if isinstance(value, datetime):
-            return value
+            return value.replace(tzinfo=None) if value.tzinfo is not None else value
         if isinstance(value, str) and value:
             try:
-                return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                return parsed.replace(tzinfo=None) if parsed.tzinfo is not None else parsed
             except ValueError:
                 return None
         return None
+
+    @staticmethod
+    def _uuid_or_default(value: Any, default: uuid.UUID) -> uuid.UUID:
+        try:
+            return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+        except (TypeError, ValueError, AttributeError):
+            return default
 
 
 __all__ = ["PostgresDerivedMemoryProjector"]

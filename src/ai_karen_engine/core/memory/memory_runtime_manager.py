@@ -14,6 +14,7 @@ from typing import Any
 from ai_karen_engine.core.logging import get_logger
 
 from . import _memory_runtime_base as _base
+from .episodic import EventSegmenter
 from .formation import MemoryFormationService
 from .retrieval.neuro_recall import NeuroRecall, RecallRequest, RecallScopeError
 
@@ -47,7 +48,6 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             PostgresProceduralRecallRetriever,
             PostgresRecallRetriever,
         )
-
         from .retrieval.retrieval_router import get_retrieval_router
 
         return NeuroRecall(
@@ -61,17 +61,17 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
 
     @staticmethod
     def _build_formation_service() -> MemoryFormationService:
-        """Compose the governed durable-write path with tenant-scoped SQLAlchemy."""
+        """Compose governed durable writes + Redis active episodic state."""
         from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
         from ai_karen_engine.platform.memory.postgres.derived_projector import (
             PostgresDerivedMemoryProjector,
         )
         from ai_karen_engine.platform.memory.postgres.vault import PostgresNeuroVault
+        from ai_karen_engine.platform.memory.redis.episode_state import (
+            RedisEpisodeStateStore,
+        )
 
         def vault_factory(tenant_id: str) -> PostgresNeuroVault:
-            # NeuroVault accepts a session factory with no arguments. Capture the
-            # authorized tenant here so every SQLAlchemy session receives the
-            # canonical RLS context before any durable query or mutation.
             return PostgresNeuroVault(
                 session_factory=lambda: async_transaction_scope(tenant_id=tenant_id)
             )
@@ -79,16 +79,16 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         return MemoryFormationService(
             vault_factory=vault_factory,
             derived_projector=PostgresDerivedMemoryProjector(),
+            episode_state_store=RedisEpisodeStateStore(),
+            event_segmenter=EventSegmenter(),
         )
 
     def set_recall_service(self, service: Any) -> None:
-        """Replace the canonical async recall service for tests/adapters."""
         if service is None or not hasattr(service, "recall"):
             raise TypeError("recall service must provide async recall(request)")
         self._neuro_recall = service
 
     def set_formation_service(self, service: MemoryFormationService) -> None:
-        """Replace formation service for tests/composition only."""
         if service is None or not hasattr(service, "process_interaction"):
             raise TypeError("formation service must provide async process_interaction(...)")
         self._formation_service = service
@@ -110,13 +110,7 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         policy_context: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Process observations through the one governed durable-write path.
-
-        Shadow mode and disabled learning still reuse the mature extraction-only
-        compatibility path because it cannot perform a durable commit under those
-        gates. When learning is enabled, legacy direct SQL is never used.
-        """
-        _base._METRICS["interactions_processed"] += 1
+        """Process observations through the one governed durable-write path."""
         shadow_mode = self.flags.is_enabled(
             "memory_shadow_mode_enabled", tenant_id, user_id
         )
@@ -131,8 +125,8 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             merged_metadata.setdefault("conversation_id", conversation_id)
 
         if shadow_mode or not learning_enabled:
-            # The legacy implementation only commits when learning is enabled and
-            # shadow mode is false, so this branch is intentionally non-writing.
+            # Legacy path is retained only where its own gates prohibit durable
+            # commits. It still provides mature extraction/shadow diagnostics.
             result = await super().process_interaction(
                 text=text,
                 tenant_id=tenant_id,
@@ -144,6 +138,7 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             result["write_authority"] = "disabled_or_shadow"
             return result
 
+        _base._METRICS["interactions_processed"] += 1
         result = await self._formation_service.process_interaction(
             text=text,
             tenant_id=tenant_id,
@@ -177,7 +172,6 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         include_embeddings: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Recall memory only through NeuroRecall; no direct database fallback."""
         _base._METRICS["recall_requests"] += 1
 
         resolved_user_id = user_id
@@ -244,8 +238,6 @@ def get_memory_manager() -> MemoryRuntimeManager:
 
 def init_memory() -> MemoryRuntimeManager:
     logger.info("Initializing canonical memory runtime manager")
-    # Compatibility inspectors/retention surfaces still use the legacy session
-    # binding until they are extracted. Durable writes do not use this factory.
     memory_manager._ensure_db_session_factory()
     return memory_manager
 
