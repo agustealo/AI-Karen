@@ -1,14 +1,18 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('first-run setup', () => {
-  test('routes a fresh installation through readiness and owner creation', async ({ page }) => {
+  test('routes a fresh installation through readiness and backend-confirmed owner creation', async ({ page }) => {
+    let firstRunChecks = 0;
+
     await page.route('**/api/auth/first-run', async (route) => {
+      firstRunChecks += 1;
+      const configured = firstRunChecks > 1;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          first_run_required: true,
-          message: 'First-run setup required',
+          first_run_required: !configured,
+          message: configured ? 'System already configured' : 'First-run setup required',
         }),
       });
     });
@@ -81,9 +85,66 @@ test.describe('first-run setup', () => {
 
     await expect(page.getByRole('heading', { name: 'Karen is ready' })).toBeVisible();
     await expect(page.getByText('Installation owner created')).toBeVisible();
+    expect(firstRunChecks).toBeGreaterThanOrEqual(2);
 
     await expect.poll(async () => page.evaluate(() => localStorage.getItem('access_token'))).toBe('test-access-token');
     await expect.poll(async () => page.evaluate(() => localStorage.getItem('kari_session_expected'))).toBe('true');
+  });
+
+  test('does not declare setup complete until the backend confirms it', async ({ page }) => {
+    await page.route('**/api/auth/first-run', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          first_run_required: true,
+          message: 'First-run setup required',
+        }),
+      });
+    });
+
+    await page.route('**/health', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: 'healthy',
+          connections: { database: { status: 'healthy' } },
+        }),
+      });
+    });
+
+    await page.route('**/api/auth/health', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    });
+
+    await page.route('**/api/auth/first-run/setup', async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          access_token: 'test-access-token',
+          refresh_token: 'test-refresh-token',
+          token_type: 'bearer',
+          expires_in: 3600,
+          user: { user_id: 'owner-1' },
+          permissions: ['admin:*'],
+          message: 'Created',
+        }),
+      });
+    });
+
+    await page.goto('/setup');
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByLabel('Full name').fill('Karen Owner');
+    await page.getByLabel('Email').fill('owner@example.com');
+    await page.getByLabel('Password', { exact: true }).fill('StrongOwner!2026');
+    await page.getByLabel('Confirm password').fill('StrongOwner!2026');
+    await page.getByRole('button', { name: 'Create owner' }).click();
+
+    await expect(page.getByRole('heading', { name: 'Create the installation owner' })).toBeVisible();
+    await expect(page.getByText(/backend has not confirmed setup completion/i)).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Karen is ready' })).not.toBeVisible();
   });
 
   test('redirects configured installations away from setup', async ({ page }) => {
