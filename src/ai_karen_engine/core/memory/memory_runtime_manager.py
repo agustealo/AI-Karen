@@ -1,9 +1,9 @@
 """Canonical memory runtime manager.
 
-Runtime owns execution. NeuroRecall owns recall selection. MemoryFormationService
-turns runtime observations into candidates, and NeuroVault is the only durable
-mutation boundary. Bounded cross-request continuity is supplied through the
-canonical STM contract; Redis is the current platform backing adapter.
+Runtime owns execution and dependency composition. NeuroRecall owns recall
+selection. MemoryFormationService turns runtime observations into candidates,
+and NeuroVault is the only durable mutation boundary. Core memory services
+receive backend-neutral contracts; platform implementations are wired here.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 
 class MemoryRuntimeManager(_base.MemoryRuntimeManager):
-    """Canonical memory execution authority."""
+    """Canonical memory execution and composition authority."""
 
     def __init__(
         self,
@@ -42,32 +42,56 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
 
     @staticmethod
     def _build_neuro_recall() -> NeuroRecall:
-        """Compose scoped source retrievers beneath the one recall authority."""
+        """Compose concrete candidate sources beneath the one recall authority."""
         from ai_karen_engine.platform.memory.postgres import (
             PostgresProfileRecallRetriever,
             PostgresProceduralRecallRetriever,
             PostgresRecallRetriever,
         )
-        from .retrieval.retrieval_router import get_retrieval_router
+        from ai_karen_engine.platform.memory.postgres.entity_resolver import (
+            PostgresEntityResolver,
+        )
+        from ai_karen_engine.platform.memory.postgres.event_source import PostgresEventSource
+        from ai_karen_engine.platform.memory.redis import RedisSTMAdapter
 
+        from .graph.service import get_leangraph_service
+        from .retrieval.retrieval_router import HybridRetrievalRouter
+
+        stm = RedisSTMAdapter()
+        source_router = HybridRetrievalRouter(
+            stm=stm,
+            graph=get_leangraph_service(),
+            event_source=PostgresEventSource(),
+            entity_resolver=PostgresEntityResolver(),
+        )
         return NeuroRecall(
             retrievers=(
                 PostgresRecallRetriever(),
                 PostgresProfileRecallRetriever(),
                 PostgresProceduralRecallRetriever(),
-                get_retrieval_router(),
+                source_router,
             )
         )
 
     @staticmethod
     def _build_formation_service() -> MemoryFormationService:
-        """Compose governed durable writes with canonical bounded STM."""
+        """Compose governed durable writes, STM, and rebuildable projections."""
         from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
         from ai_karen_engine.platform.memory.postgres.derived_projector import (
             PostgresDerivedMemoryProjector,
         )
         from ai_karen_engine.platform.memory.postgres.vault import PostgresNeuroVault
         from ai_karen_engine.platform.memory.redis import RedisSTMAdapter
+
+        from .projections import HotStateWorker, MemoryGraphWorker, ProjectionManager
+
+        stm = RedisSTMAdapter()
+        projection_manager = ProjectionManager(
+            {
+                "stm": HotStateWorker(stm),
+                "memory_graph": MemoryGraphWorker(),
+            }
+        )
 
         def vault_factory(tenant_id: str) -> PostgresNeuroVault:
             return PostgresNeuroVault(
@@ -76,8 +100,8 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
 
         return MemoryFormationService(
             vault_factory=vault_factory,
-            derived_projector=PostgresDerivedMemoryProjector(),
-            episode_state_store=RedisSTMAdapter(),
+            derived_projector=PostgresDerivedMemoryProjector(projection_manager),
+            episode_state_store=stm,
             event_segmenter=EventSegmenter(),
         )
 
@@ -123,8 +147,6 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             merged_metadata.setdefault("conversation_id", conversation_id)
 
         if shadow_mode or not learning_enabled:
-            # Legacy path is retained only where its own gates prohibit durable
-            # commits. It still provides mature extraction/shadow diagnostics.
             result = await super().process_interaction(
                 text=text,
                 tenant_id=tenant_id,
@@ -176,14 +198,15 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         if isinstance(user_id, dict):
             resolved_user_id = user_id.get("user_id") or user_id.get("id")
 
-        if not str(tenant_id or "").strip():
-            raise RecallScopeError("tenant_id is required for memory recall")
+        resolved_tenant = str(tenant_id or "").strip()
+        if not resolved_tenant or resolved_tenant == "default":
+            raise RecallScopeError("explicit non-default tenant_id is required for memory recall")
         if not str(resolved_user_id or "").strip():
             raise RecallScopeError("user_id is required for memory recall")
 
         request = RecallRequest(
             query=str(query or ""),
-            tenant_id=str(tenant_id),
+            tenant_id=resolved_tenant,
             user_id=str(resolved_user_id),
             top_k=int(top_k or 10),
             conversation_id=kwargs.get("conversation_id"),
