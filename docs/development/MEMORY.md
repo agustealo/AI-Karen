@@ -2,257 +2,338 @@
 
 ## 1. Core rule
 
-**Memory is the domain. NeuroRecall is how KAREN finds memory. NeuroVault is how KAREN governs durable memory. The Memory Graph is KAREN's relational, temporal, associative projection of governed memory, not a competing memory store or recall authority.**
+**Memory is the domain. NeuroRecall is how KAREN finds memory. NeuroVault is how KAREN governs durable memory. Redis is the bounded STM/runtime-memory substrate. Supabase-hosted PostgreSQL is the durable episodic/LTM/graph source of truth. The Memory Graph is a relational, temporal, associative projection over governed durable memory, not a competing store or recall authority.**
 
-Do not split these concepts into competing stores, graph facades, or alternate retrieval runtimes.
+Do not split these responsibilities into competing stores, graph facades, alternate recall runtimes, or direct provider/plugin persistence paths.
 
 The graph exists to make relationships, time, causality, contradiction, provenance, and experience structure explicit. It must never become the sole durable source of user memory or bypass the canonical memory persistence path.
 
-## 2. Layers
+---
 
-### STM
+## 2. Actual deployed memory stack
 
-Short-term memory holds bounded recent/session context needed for the current conversation/runtime window.
+KAREN's current memory architecture is intentionally hybrid:
 
-Typical backing: process-bounded state and/or Redis when configured.
+```text
+                     CORTEX
+              recall eligibility/scope
+                        |
+                        v
+                     Runtime
+                        |
+                        v
+                   NeuroRecall
+          +-------------+-------------+
+          |                           |
+          v                           v
+   Redis STM/runtime           Durable memory
+   session continuity          Supabase/PostgreSQL
+   bounded hot context         via canonical PostgresEngine
+          |                           |
+          |                    +------+------+
+          |                    |             |
+          |                    v             v
+          |               assertions      episodes/LTM
+          |                    |             |
+          |                    +------+------+
+          |                           |
+          |                           v
+          |                 temporal/graph projection
+          |                           |
+          +-------------+-------------+
+                        |
+                        v
+                 NeuroRecall fusion
+```
+
+### 2.1 Redis ownership
+
+Redis is **active**, not retired.
+
+Canonical implementation lives under:
+
+`src/ai_karen_engine/platform/memory/redis/`
+
+The legacy import path under `core/memory/redis_connection_manager.py` is only a compatibility shim and must be removed at its documented sunset. Removing the shim does **not** mean removing Redis.
+
+Redis owns only bounded/ephemeral state such as:
+
+- session continuity;
+- recent-turn summaries;
+- short-term/working memory;
+- hot recall/cache data;
+- short-lived runtime coordination state where explicitly approved.
+
+Redis must not become the sole durable owner of user facts, episodic history, procedures, beliefs, or long-term graph truth.
+
+Redis degradation may fall back to bounded process memory where the existing platform adapter explicitly supports it, but degraded cache state must never be presented as durable persistence.
+
+### 2.2 Supabase/PostgreSQL ownership
+
+Supabase-hosted PostgreSQL is the durable memory authority.
+
+KAREN does **not** create a second direct Supabase SDK memory runtime. Durable memory accesses reuse the existing canonical database path:
+
+```text
+memory service
+  -> platform memory Postgres adapter
+  -> database.client compatibility facade
+  -> canonical persistence.postgres.PostgresEngine
+  -> Supabase-hosted PostgreSQL
+```
+
+SQLAlchemy async sessions and migrations are part of this existing data path. Schema changes are migration-owned. Runtime table creation is forbidden in production.
+
+Supabase/PostgreSQL owns durable:
+
+- memory assertions/facts;
+- episodic events;
+- semantic/LTM records;
+- preferences/beliefs where governed;
+- procedures/lessons;
+- prospective-memory records where durable;
+- provenance/source references;
+- graph relationships and temporal state;
+- vector representations where pgvector is enabled.
+
+### 2.3 Native PostgreSQL/Supabase capabilities
+
+Prefer native capabilities before introducing another service:
+
+- pgvector for semantic retrieval;
+- PostgreSQL full-text search;
+- pg_trgm where approved for alias/fuzzy entity matching;
+- recursive CTEs for bounded multi-hop graph traversal;
+- relational indexes for graph edges and temporal validity;
+- RLS and explicit tenant/user predicates for isolation;
+- pgTAP where useful for DB invariants;
+- pg_cron only when a real scheduled memory-maintenance workload has been proven.
+
+Do not introduce a second graph/vector database until benchmarks prove the native stack insufficient.
+
+Milvus and Elasticsearch remain retired from the current memory architecture.
+
+---
+
+## 3. Memory layers
+
+### STM / working memory
+
+Backing: **Redis** through the canonical platform adapter, with explicitly bounded degraded in-process fallback.
 
 Properties:
 
 - bounded;
 - session/conversation scoped;
+- TTL/eviction aware;
 - disposable/rebuildable where possible;
+- optimized for hot/recent context;
 - never the sole source of durable user facts.
 
 ### Episodic memory
 
-Meaningful interactions, decisions, outcomes, commitments, and notable events.
+Backing: **Supabase/PostgreSQL**.
+
+Meaningful interactions, decisions, actions, outcomes, commitments, and notable events.
 
 Properties:
 
 - durable;
 - timestamped/provenanced;
 - tenant/user scoped;
-- recallable by semantic/contextual strategy;
+- reconstructable from source references;
+- recallable by semantic/contextual/temporal/graph strategy;
 - governed by deletion/privacy policy;
-- eligible for projection into temporal/associative graph structures.
+- eligible for graph projection and consolidation.
 
 ### Semantic / durable LTM
 
-Durable facts, preferences, stable knowledge, user/project information, and generalized knowledge that remains useful beyond a single session.
+Backing: **Supabase/PostgreSQL**.
+
+Durable facts, preferences, stable knowledge, project information, and generalized knowledge.
 
 Properties:
 
-- durable source of truth through canonical memory persistence;
+- canonical durable source of truth;
 - explicit scope and provenance;
 - deduplication/update semantics;
 - confidence/verification when appropriate;
-- temporal validity where truth can change;
+- temporal validity when truth can change;
 - deletion/export support.
 
 ### Procedural memory
 
-Reusable skills, workflows, successful strategies, failure lessons, and learned execution patterns.
+Backing: **Supabase/PostgreSQL** once promoted from evidence-backed episodes/outcomes.
 
-Properties:
-
-- outcome-linked where possible;
-- versioned when procedures evolve;
-- distinct from declarative facts;
-- recallable when a current task resembles a prior successful or failed execution pattern.
+Reusable workflows, successful strategies, failure lessons, and learned execution patterns.
 
 ### Prospective memory
 
-Future-oriented intentions, commitments, deadlines, conditions, and deferred actions.
+Durable prospective items belong in **Supabase/PostgreSQL**. Short-lived session reminders/state may be mirrored in Redis when useful, but Redis is not the authoritative record for durable commitments.
 
-Properties:
+---
 
-- explicit trigger/condition/time semantics;
-- lifecycle state;
-- tenant/user scope;
-- traceable to the event or decision that created the intention.
+## 4. Memory formation before graph formation
 
-## 3. Current data architecture
+Raw messages are not automatically episodes, and entity extraction is not memory understanding.
 
-Canonical durable memory uses PostgreSQL/Supabase-backed storage through KAREN's data adapters where configured. Redis may support ephemeral/session/cache functions.
+Target formation flow:
 
-**Milvus and Elasticsearch are retired from the current memory architecture.** Do not add them to deployment files, docs, recovery plans, or runtime code unless a future ADR explicitly reintroduces them with a proven requirement.
+```text
+interaction / observation / action
+        -> event boundary detection
+        -> contextual goal/state cues
+        -> epistemic classification
+        -> temporal normalization
+        -> provenance binding
+        -> StructuredMemoryEvent / Episode
+        -> governed durable commit to Supabase/Postgres
+        -> graph projection
+        -> consolidation/revision candidates
+```
 
-Vector/semantic retrieval should use the canonical storage capabilities selected by the current data layer rather than automatically adding a new database.
+Redis participates before durable formation as the hot context source. Formation may use the current bounded session window from Redis to decide whether a new observation continues an episode or starts a new one.
 
-### 3.1 Graph storage rule
+Redis must not independently create durable semantic truth.
 
-The Memory Graph is a projection/index over governed memory and experience, not a second independent source of truth.
+---
 
-A graph backend may be embedded or service-based, but the cognitive contracts must remain backend-neutral. Backend choice belongs behind the canonical graph repository/adapter boundary.
-
-The current `KuzuGraphAdapter` name must not be interpreted as proof of durable Kuzu persistence. Until restart-durability tests prove otherwise, graph persistence is considered **unproven**.
-
-Kuzu is not a strategic default merely because legacy configuration names it. Any production graph backend must be selected by an ADR covering:
-
-- maintenance status;
-- local-first deployment;
-- restart durability;
-- multi-process/concurrency requirements;
-- typed property-graph support;
-- temporal query support;
-- traversal performance;
-- backup/recovery;
-- tenant isolation strategy;
-- operational cost.
-
-Do not couple memory cognition to one database product.
-
-## 4. Memory Graph authority
+## 5. Memory Graph authority
 
 The canonical Memory Graph lives under `core/memory/graph/` and is subordinate to the memory domain.
 
-It owns:
+### 5.1 Physical implementation target
 
-- typed nodes/edges representing memory relationships;
-- temporal validity and observation time;
-- provenance links back to canonical memory/event records;
-- entity resolution/linking contracts;
+For the current architecture, the default target is **PostgreSQL-native graph relationships**, not a second graph database.
+
+Use canonical durable records plus graph relation tables such as:
+
+```text
+memory_edges
+entity_aliases
+source/provenance references
+```
+
+Do not duplicate complete memory text into a second `memory_nodes` authority when the canonical memory row already exists. Graph records should reference canonical IDs wherever possible.
+
+The existing Kuzu-facing implementation is legacy/experimental and must not be treated as the production target. Any in-memory graph adapter is test/dev-only unless explicitly configured as ephemeral.
+
+### 5.2 Graph owns
+
+- typed relationship contracts;
+- graph edge persistence/projection;
+- temporal validity of relationships;
+- provenance links back to canonical durable memory/event records;
+- entity linking/alias contracts;
 - contradiction, reinforcement, supersession, support, and derivation links;
-- episode/entity/assertion/procedure/goal relationship projection;
-- graph traversal primitives;
+- bounded traversal primitives;
 - graph candidate generation for NeuroRecall;
-- associative activation state that is explicitly derived and bounded.
+- derived associative activation inputs.
 
-It does not own:
+### 5.3 Graph does not own
 
-- the canonical durable memory write decision;
+- canonical durable memory write decisions;
 - final recall ranking/disposition;
 - prompt assembly;
 - provider/model execution;
 - global reasoning policy;
+- durable STM/session state;
 - user-intent interpretation;
 - plugin/tool execution;
 - cross-tenant discovery;
-- silent memory mutation without provenance/version history.
+- silent truth mutation.
 
-### 4.1 Required temporal model
+### 5.4 Temporal model
 
-Every mutable fact/assertion/relationship that can change in the world must support a bi-temporal or equivalent explicit time model:
+Mutable facts/assertions/relationships must support explicit world time and observation time:
 
-- `valid_from`: when the fact became true in the represented world;
-- `valid_to`: when it stopped being true, if known;
-- `observed_at`: when KAREN observed/learned it;
-- `recorded_at`: when KAREN persisted/projected it;
+- `valid_from`;
+- `valid_to`;
+- `observed_at`;
+- `recorded_at`;
 - provenance/source reference;
 - lifecycle state.
 
-Superseding a fact must close or invalidate the prior validity interval rather than deleting history.
+Superseding a fact closes or invalidates the previous validity interval rather than deleting history.
 
-Point-in-time recall must be possible without mixing stale and current truth.
+### 5.5 Required relationship semantics
 
-### 4.2 Required graph vocabulary
-
-The graph schema must evolve beyond generic `RELATED_TO` relationships. Canonical relationship families should include typed semantics for at least:
+Canonical families should include typed semantics for:
 
 - identity / alias / same-as;
 - mention / participation;
-- temporal ordering / follows / precedes;
+- temporal ordering;
 - belongs-to / part-of;
-- support / evidence-for / derived-from;
+- support / evidence / derivation;
 - contradiction / supersession / correction;
-- causality / contributed-to / resulted-in;
-- preference / belief / opinion with confidence and ownership;
+- causality / contribution / result;
 - task / goal / decision / outcome;
-- procedure / strategy / failure-mode;
+- preference / belief / opinion ownership;
+- procedure / strategy / failure mode;
 - project / artifact / component relationships.
 
-Relationship types must be registered and schema-validated. Free-form edge labels are not a substitute for a domain vocabulary.
+---
 
-### 4.3 Fact vs belief vs observation
+## 6. Epistemic separation
 
-KAREN must not flatten all remembered statements into the same epistemic class.
+KAREN must not flatten all remembered statements into the same class.
 
-At minimum, memory graph projections must distinguish:
+At minimum distinguish:
 
-- **world facts**: externally grounded statements;
-- **observations**: what KAREN/user/system observed at a time;
-- **user beliefs/preferences**: subjective user-owned state;
-- **KAREN hypotheses/opinions**: model-derived state with confidence and evidence;
-- **experiences/outcomes**: records of what happened after an action;
-- **procedures/lessons**: generalized strategy learned from experiences.
+- **world facts**;
+- **observations**;
+- **user beliefs/preferences**;
+- **KAREN hypotheses/opinions**;
+- **experiences/outcomes**;
+- **procedures/lessons**.
 
-A belief changing is not the same as a world fact changing.
+A belief changing is not the same thing as a world fact changing.
 
-### 4.4 Graph evolution
+---
 
-Graph writes are not append-only decoration. New evidence may:
+## 7. NeuroRecall
 
-- reinforce an assertion;
-- lower confidence;
-- contradict it;
-- supersede it;
-- split one entity into two;
-- merge aliases into one canonical entity;
-- create a generalized observation from repeated episodes;
-- link a task outcome to a reusable procedural lesson.
+NeuroRecall remains the single recall-policy authority.
 
-All evolution must preserve provenance and history.
+Candidate sources may include:
 
-## 5. NeuroRecall
+- Redis STM/hot context;
+- durable PostgreSQL lexical/relational recall;
+- pgvector semantic recall;
+- episodic retrieval;
+- temporal retrieval;
+- graph traversal;
+- procedural/experience retrieval.
 
-NeuroRecall owns retrieval strategy, not persistence authority.
-
-It may own:
-
-- query formulation;
-- scope selection;
-- candidate retrieval coordination;
-- semantic, lexical, temporal, graph, episodic, procedural, and case-based candidate fusion;
-- ranking/scoring;
-- recency/relevance tradeoffs;
-- recall budgets;
-- deduplication/selection;
-- contradiction-aware candidate handling;
-- evidence diversity;
-- recall reason metadata;
-- recall abstention;
-- transfer/outcome utility feedback.
-
-It must not:
-
-- create a duplicate durable memory schema;
-- bypass tenant/user scope;
-- own message persistence;
-- become a second vector database abstraction when canonical data adapters already exist;
-- own graph persistence;
-- mutate graph truth as a side effect of retrieval.
-
-### 5.1 Graph-assisted recall
-
-The graph is one candidate source among several. NeuroRecall decides when graph retrieval is useful and how much weight it receives.
-
-Target retrieval flow:
+Target flow:
 
 ```text
 RecallRequest
-   -> query/entity/temporal planning
+   -> authorized scope + current runtime/CORTEX cues
    -> parallel candidate sources
-      -> semantic/vector
-      -> lexical
+      -> Redis STM
+      -> Postgres lexical/semantic
       -> episodic
       -> temporal
-      -> graph traversal
+      -> graph
       -> procedural/experience
    -> source-local scores
-   -> graph/associative expansion where useful
-   -> contradiction/current-validity filtering
-   -> evidence fusion + diversity
-   -> transfer-utility ranking
+   -> associative expansion where useful
+   -> temporal/contradiction filtering
+   -> provenance reconstruction
+   -> NeuroRecall fusion/ranking
    -> budget-aware packing or abstention
 ```
 
-Graph distance alone is never a final relevance score.
+Redis or Postgres adapters do not independently decide final recall disposition.
 
-## 6. Associative memory and spreading activation
+---
 
-Associative activation is a retrieval mechanism, not durable truth.
+## 8. Associative memory
 
-A production spreading-activation implementation should account for:
+Reuse and harden KAREN's existing spreading-activation capability before adding NetworkX or another graph-compute library.
+
+Production associative activation must eventually account for:
 
 - typed edge weights;
 - temporal validity;
@@ -261,80 +342,67 @@ A production spreading-activation implementation should account for:
 - salience;
 - source reliability;
 - traversal depth penalty;
-- cycle/loop suppression;
+- cycle suppression;
 - tenant/user scope;
 - activation budget;
-- diversity and redundancy;
+- diversity/redundancy;
 - negative/inhibitory evidence where appropriate.
 
-Activation must be bounded and explainable through reason metadata such as path, edge types, depth, and source memory IDs.
+Activation score is not truth confidence.
 
-Pattern completion is allowed only with explicit uncertainty. Partial cues may retrieve likely episodes/entities, but the system must not convert inferred completion into an asserted fact without evidence.
+Pattern completion must remain explicitly uncertain. Pattern separation must protect similar but distinct episodes from accidental merge.
 
-Pattern separation must protect similar but distinct episodes from being merged merely because their embeddings or entities are similar.
+---
 
-## 7. NeuroVault
+## 9. NeuroVault and persistence governance
 
-NeuroVault is the governance layer around durable memory.
+NeuroVault governs durable memory operations against the canonical Postgres data layer.
 
 It may coordinate:
 
 - persistence policy;
 - archive/retention;
-- backup/recovery semantics;
-- deletion/forgetting workflows;
-- data export/governance;
+- backup/recovery;
+- deletion/forgetting;
+- export/governance;
 - integrity/recovery controls;
 - graph projection rebuild triggers;
-- lifecycle transitions such as active, stale, superseded, invalid, quarantined, archived, and expired.
+- lifecycle transitions.
 
-It does not replace the canonical memory domain or invent another storage system.
+Redis writes are not NeuroVault durable writes unless they mirror or cache a durable object that has separately passed the canonical persistence path.
 
-Deleting governed memory must also remove or invalidate graph projections derived solely from that memory unless retention policy requires an auditable tombstone.
+Deleting durable memory must invalidate/remove derived graph projections according to governance policy.
 
-## 8. Consolidation, reconsolidation, and forgetting
+---
 
-Human-like memory behavior requires lifecycle dynamics, not only storage and retrieval.
+## 10. Consolidation, reconsolidation, and forgetting
 
-### Consolidation
-
-Repeated or related episodic experiences may produce generalized semantic/procedural memories when evidence is sufficient.
+Repeated episodic evidence may produce generalized semantic/procedural memory:
 
 ```text
-repeated episodes
-   -> cluster / compare
-   -> identify stable pattern
-   -> create generalized memory candidate
-   -> provenance links to supporting episodes
-   -> governed persistence
-   -> graph projection
+Redis/session context
+   -> formed episodes
+   -> Supabase/Postgres durable evidence
+   -> cluster/compare
+   -> generalized candidate
+   -> provenance links
+   -> NeuroVault-governed commit
+   -> graph update
 ```
 
-### Reconsolidation
+Reconsolidation produces versioned revision rather than silent overwrite.
 
-Recalling a memory does not authorize silent overwrite. New evidence may generate a revised memory version while preserving historical state and source provenance.
+Forgetting is governed. Consider usefulness, recurrence, transfer success, confidence, causal importance, redundancy, age/staleness, policy retention, and explicit user deletion/pinning.
 
-### Forgetting
+Redis TTL eviction is **cache/STM expiry**, not durable forgetting.
 
-Forgetting is a governed lifecycle operation. Low-value, redundant, stale, invalid, or expired memories may be pruned/archived according to policy.
+---
 
-Do not use raw recency alone. Retention policy may consider:
+## 11. Experience memory
 
-- user significance;
-- recurrence;
-- successful transfer to future tasks;
-- confidence;
-- causal importance;
-- uniqueness/redundancy;
-- age/staleness;
-- policy/legal retention;
-- explicit user pinning/deletion.
+KAREN must remember not only facts but what actions were tried, what happened, and what should change next time.
 
-## 9. Experience memory
-
-KAREN must remember not only conversation facts but **what actions were tried, what happened, and what should change next time**.
-
-Experience records should be able to connect:
+Durable experience records should connect:
 
 ```text
 goal
@@ -347,169 +415,158 @@ goal
  -> future transfer evidence
 ```
 
-This supports real-world behavior where previous failures, UI/environment affordances, workflow gotchas, and learned strategies change later actions.
+Redis may hold the live action sequence while an episode is still unfolding. Once the episode is closed/eligible, the durable representation belongs in Supabase/PostgreSQL.
 
-## 10. Runtime memory flow
+---
+
+## 12. Runtime memory flow
 
 ```text
 ChatRuntime
-   -> CORTEX recall eligibility/scope signal
-   -> NeuroRecall strategy
-   -> canonical memory repositories/adapters
-   -> optional temporal/graph/associative candidate sources
-   -> ranked memory evidence
+   -> CORTEX recall eligibility/scope
+   -> NeuroRecall
+       -> Redis STM candidate source
+       -> Supabase/Postgres durable candidate source
+       -> temporal/graph/procedural candidate sources
+   -> ranked evidence
    -> prompt/context assembly
 
 response/action lifecycle
-   -> outcome/evidence collection
-   -> memory-candidate evaluation
-   -> NeuroVault-governed persistence
-   -> graph projection/evolution from committed memory
-   -> consolidation/reconsolidation candidates
+   -> Redis receives bounded current-session state
+   -> MemoryFormation evaluates event/episode boundaries
+   -> memory candidates
+   -> NeuroVault-governed durable commit to Supabase/Postgres
+   -> graph projection/evolution
+   -> consolidation/revision candidates
    -> audit/telemetry
 ```
 
-The graph is updated from committed/governed memory events or explicitly governed projections. Routes, agents, ICE, and providers do not write graph state directly.
+Routes, agents, ICE, providers, and plugins do not write durable memory or graph truth directly.
 
-## 11. Scope and security
+---
 
-Every memory and graph access must explicitly preserve applicable:
+## 13. Scope and security
 
-- user ID;
+Every Redis and Postgres memory access must preserve applicable:
+
 - tenant ID;
+- user ID;
 - workspace/project scope;
 - conversation/session scope;
 - authorization context;
-- deletion/privacy status;
+- deletion/privacy state;
 - provenance visibility;
 - memory namespace/class.
 
 Never use `tenant_id="default"` as a production security fallback.
 
+Redis key construction must remain tenant/user scoped. PostgreSQL queries and recursive graph expansion must enforce the same scope at every traversal step. RLS may add defense in depth but does not replace application/runtime scope contracts.
+
 Cross-tenant recall or graph traversal is a critical defect.
 
-Graph/entity identifiers must not enable cross-tenant collisions or inference leaks.
+---
 
-## 12. What gets remembered
+## 14. Persistence truth and observability
 
-Do not persist every token as LTM or every extracted noun as a graph entity.
+The UI must never report durable save success because a Redis cache write succeeded.
 
-Good durable candidates include:
+Observability should distinguish at least:
 
-- explicit preferences;
-- stable personal/project facts useful later;
-- decisions/commitments;
-- durable configuration choices;
-- important task outcomes;
-- meaningful episodic events;
-- recurring failure modes;
-- procedures/lessons that improve later execution;
-- relationships with temporal or causal value.
+- `memory_source=redis_stm`;
+- `memory_source=postgres_durable`;
+- `memory_source=graph_projection`;
+- `degraded_mode`;
+- `degradation_reason`;
+- candidate counts by source;
+- correlation/request/tenant/user/session/conversation IDs;
+- graph traversal depth/path;
+- persistence status;
+- latency.
 
-Poor candidates include:
+When Redis is unavailable, emit explicit STM degradation. Durable Postgres memory remains independently authoritative.
 
-- transient chit-chat;
-- secrets/passwords/tokens;
-- raw hidden reasoning;
-- duplicate facts with no changed meaning;
-- unverified guesses presented as facts;
-- low-value entity mentions with no future retrieval utility.
+When Postgres/Supabase is unavailable, Redis may maintain bounded continuity, but the system must not claim durable persistence.
 
-## 13. Persistence truth
-
-When persistence is enabled, save operations must be real. The UI must never show a fake "saved" state when the backend write failed.
-
-A graph backend that only stores nodes/edges in process memory must not emit telemetry claiming durable graph persistence.
-
-Persistence metadata should capture provider/model/runtime details where relevant for provenance and diagnostics.
-
-## 14. Observability
-
-Memory graph operations should emit structured events including applicable:
-
-- `correlation_id`;
-- `request_id`;
-- `tenant_id`;
-- `user_id`;
-- `conversation_id`;
-- source memory/event ID;
-- graph operation;
-- node/edge counts;
-- traversal strategy/depth;
-- candidate count;
-- temporal filters;
-- contradiction/supersession actions;
-- backend;
-- latency;
-- degraded state;
-- error type/code.
-
-Required event families include:
-
-- graph projection start/complete/fail;
-- entity resolution start/complete/conflict;
-- graph recall start/complete/abstain;
-- graph evolution/supersession;
-- graph rebuild/recovery;
-- graph backend unavailable/degraded.
+---
 
 ## 15. Recovery
 
-PostgreSQL/Supabase backup covers the durable relational store only. Redis, object storage, graph stores, model artifacts, and external services are separate recovery domains unless explicitly included.
+Supabase/PostgreSQL backup/recovery covers durable memory and PostgreSQL-native graph relations when included in the database schema.
 
-Graph recovery must support one of two proven modes:
+Redis is a separate recovery domain and should be treated as reconstructable/ephemeral unless a deployment explicitly configures Redis persistence for operational continuity. Redis persistence does not promote it to durable memory authority.
 
-1. backup/restore of the selected durable graph backend; or
-2. deterministic rebuild from canonical governed memory/event records.
+Prefer PostgreSQL-native/rebuildable graph projections so graph recovery follows the same durable backup domain.
 
-Prefer rebuildable projections where practical so the graph does not become an irreplaceable second source of truth.
+---
 
-## 16. Tests
+## 16. Current live debt
 
-Memory work should prove:
+The current repository still has several alignment issues to close before adding new memory technology:
 
-- tenant isolation;
-- write/read persistence;
-- restart durability;
-- graph backend actually persists when configured as durable;
-- multi-hop traversal respects depth and scope;
-- temporal point-in-time retrieval;
-- stale fact invalidation/supersession;
-- contradiction preservation;
-- provenance back to canonical memory/event IDs;
-- entity alias resolution and collision safety;
-- pattern separation for similar episodes;
-- bounded associative activation;
-- graph candidate contribution to NeuroRecall;
-- final recall remains NeuroRecall-owned;
-- experience memory changes later task behavior where expected;
-- deletion/forget propagation into graph projections;
-- graph rebuild from canonical memory;
-- no legacy Milvus/Elasticsearch authority;
-- no duplicate memory facade/store;
-- runtime recall integration;
-- failure reporting rather than fake save success.
+1. `HybridRetrievalRouter` imports Redis through the deprecated core shim instead of the canonical `platform/memory/redis/` path.
+2. Redis itself is active, but some dependency/documentation comments incorrectly describe Redis as retired.
+3. `PostgresRecallRetriever` already uses SQLAlchemy against the canonical database session path; dependency manifests must match this live import truth.
+4. Graph retrieval remains shallow and Kuzu-named storage is not durable graph truth.
+5. Existing spreading activation maintains an independent in-memory association graph and is not yet driven from canonical PostgreSQL graph neighborhoods.
+6. Lexical/profile/procedural branches in hybrid retrieval are incomplete/stubbed.
 
-Recommended benchmark coverage includes conversational recall, temporal reasoning, multi-hop association, experience reuse, environment/workflow memory, and multi-session action tasks. LoCoMo-style recall alone is insufficient proof of human-like memory behavior.
+These are wiring/ownership problems, not reasons to add another database.
 
-## 17. Current execution order
+---
 
-Before implementing the richer temporal/associative phases in `MEMORY_GRAPH_DEV_SHEET.md`, complete `MEMORY_WIRING_TRUTH_DEV_SHEET.md`.
-
-This gate exists because the live repository still contains overlapping or stale memory paths: NeuroRecall is canonical, but `HybridRetrievalRouter` currently performs another layer of fusion/ranking; retired Redis/Kuzu-facing imports remain reachable; and associative spreading activation maintains a separate in-memory graph representation.
-
-The required order is:
+## 17. Required execution order
 
 ```text
 MEMORY-WIRING-TRUTH
-  -> collapse recall authority
-  -> remove/rewire retired dependency paths
-  -> establish PostgreSQL/Supabase graph persistence/traversal
+  -> affirm Redis as canonical STM platform adapter
+  -> remove deprecated core Redis imports/shims at sunset
+  -> prove Redis tenant/session/TTL/degradation behavior
+  -> affirm Supabase/Postgres as durable authority
+  -> align dependency manifests with live SQLAlchemy/Redis imports
+  -> close PostgreSQL durable recall path
+  -> build MEMORY-FORMATION-1 on Redis context + Postgres durability
+  -> establish PostgreSQL-native temporal graph persistence/traversal
   -> connect existing spreading activation to canonical graph neighborhoods
-  -> prove tenant/provenance/degradation contracts
-  -> MEMORY-GRAPH-2 temporal/associative/experience phases
+  -> prove provenance/tenant/degradation contracts
+  -> MEMORY-GRAPH-2 associative/experience phases
 ```
 
-During MEMORY-WIRING-TRUTH, do not add NetworkX, pgmq, Kuzu, Neo4j, Memgraph, FalkorDB, Graphiti, Mem0, Apache AGE client dependencies, Elasticsearch, Milvus, or another vector/graph database. `pgvector`, `pg_trgm`, `pg_cron`, pgTAP, RLS, and recursive CTE traversal are PostgreSQL/Supabase capabilities rather than reasons to add Python runtime dependencies.
+Do **not** add NetworkX, pgmq, Kuzu, Neo4j, Memgraph, FalkorDB, Graphiti, Mem0, Apache AGE clients, Elasticsearch, Milvus, or another graph/vector database during this closure work.
 
-Any external graph-compute or graph-storage dependency requires a benchmark-backed ADR after the existing KAREN implementation has been measured.
+Any external graph-compute or storage dependency requires a benchmark-backed ADR after the Redis + Supabase/PostgreSQL architecture has been proven under real KAREN workloads.
+
+---
+
+## 18. Proof
+
+Memory work must prove:
+
+- Redis session/STM read/write/TTL behavior;
+- Redis unavailable -> explicit bounded degradation;
+- Redis cache success != durable save success;
+- Supabase/Postgres durable write/read persistence;
+- process restart durability for durable memory;
+- tenant isolation across Redis and Postgres;
+- canonical async Postgres session path only;
+- migrations own schema changes;
+- pgvector/lexical recall integration where enabled;
+- temporal current-vs-historical retrieval;
+- true bounded multi-hop graph traversal;
+- graph provenance to canonical durable IDs;
+- contradiction/supersession behavior;
+- associative activation consumes canonical graph neighborhoods;
+- experience memory changes later behavior;
+- deletion/forgetting propagates correctly;
+- no duplicate durable memory authority;
+- failure reporting rather than fake save success.
+
+Recommended baseline commands:
+
+```text
+python -m compileall src
+pytest tests/ -q
+ruff check src tests
+mypy src
+```
+
+Plus targeted Redis, Postgres/Supabase, memory contract, tenant isolation, recall, and graph tests.
