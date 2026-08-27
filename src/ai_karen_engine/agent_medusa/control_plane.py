@@ -1,13 +1,9 @@
 """Backend-authoritative administrative projection for Agent Medusa.
 
-Agent Medusa specialists are execution-scoped, not daemon processes. The
-coordinator currently owns per-execution lifecycle objects, so an unrelated
-admin lifecycle object would create false start/stop/restart state. This module
-therefore exposes only registry and health truth until lifecycle observation
-and cancellation are centralized in the runtime.
-
-Prompt contracts, provider selection, tools/plugins, runtime config, approval
-rules, and executable objects are intentionally excluded from the UI contract.
+Agent definitions remain registry-owned and execution-scoped. Per-agent daemon
+start/stop controls are intentionally absent. Actual coordinator request tasks
+are governed by the process-wide MedusaRunManager and can be observed or
+cancelled by concrete run id with tenant isolation.
 """
 
 from __future__ import annotations
@@ -16,6 +12,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .contracts.registration import AgentRegistration
+from .execution.run_manager import (
+    MedusaRunManager,
+    get_medusa_run_manager,
+)
 from .registry import MedusaRegistry, get_medusa_registry
 
 
@@ -32,10 +32,16 @@ class AgentNotFoundError(AgentControlError):
 
 
 class AgentMedusaControlPlane:
-    """Canonical sanitized administrative read model for Agent Medusa."""
+    """Canonical sanitized administrative read/control model for Agent Medusa."""
 
-    def __init__(self, *, registry: MedusaRegistry | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        registry: MedusaRegistry | None = None,
+        run_manager: MedusaRunManager | None = None,
+    ) -> None:
         self._registry = registry or get_medusa_registry()
+        self._run_manager = run_manager or get_medusa_run_manager()
 
     async def initialize(self) -> None:
         """Initialize the canonical registry without fabricating runtime state."""
@@ -66,6 +72,34 @@ class AgentMedusaControlPlane:
             raise AgentNotFoundError(f"Unknown agent: {agent_id}")
         return await self._project_registration(registration)
 
+    async def list_runs(
+        self,
+        *,
+        tenant_id: str,
+        include_terminal: bool = True,
+    ) -> dict[str, Any]:
+        """Return tenant-scoped execution run snapshots."""
+
+        runs = await self._run_manager.list_runs(
+            tenant_id=tenant_id,
+            include_terminal=include_terminal,
+        )
+        return {
+            "runs": runs,
+            "total": len(runs),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def get_run(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
+        """Return one tenant-scoped execution run snapshot."""
+
+        return await self._run_manager.get(run_id=run_id, tenant_id=tenant_id)
+
+    async def cancel_run(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
+        """Request cancellation of the actual coordinator asyncio task."""
+
+        return await self._run_manager.cancel(run_id=run_id, tenant_id=tenant_id)
+
     async def _project_registration(
         self,
         registration: AgentRegistration,
@@ -93,7 +127,12 @@ class AgentMedusaControlPlane:
             "capabilities": capabilities,
             "runtime_control": {
                 "supported": False,
-                "reason_code": "specialist_lifecycle_is_execution_scoped",
+                "reason_code": "agent_daemon_control_not_applicable",
+            },
+            "execution_run_control": {
+                "supported": True,
+                "scope": "run_id",
+                "actions": ["observe", "cancel"],
             },
             "registered_at": registration.registered_at.isoformat(),
         }
