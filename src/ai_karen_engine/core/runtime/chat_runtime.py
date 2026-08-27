@@ -122,6 +122,8 @@ class ChatRuntime:
                 "topology": decision.topology.value,
                 "execution_mode": decision.execution_mode.value,
                 "reason_codes": decision.reason_codes,
+                "reasoning_modes": list(decision.reasoning_modes),
+                "max_model_calls": decision.max_model_calls,
             },
         )
 
@@ -589,7 +591,7 @@ class ChatRuntime:
         ctx = request.context
         budget = ExecutionBudget(
             max_duration_ms=decision.time_budget_ms,
-            max_model_calls=decision.max_steps,
+            max_model_calls=decision.max_model_calls,
             max_tool_calls=len(decision.tool_requirements) + 5,
             max_reasoning_steps=decision.max_steps,
             max_output_tokens=request.max_tokens or 4096,
@@ -611,7 +613,7 @@ class ChatRuntime:
             allowed_plugins=list(decision.plugin_candidates),
             budget=budget,
             memory_scope=decision.memory_scope,
-            reasoning_modes=[decision.reasoning_depth] if decision.reasoning_depth != "standard" else [],
+            reasoning_modes=list(decision.reasoning_modes),
             workflow_id=decision.workflow_id,
             degraded_allowed=True,
             degradation_state=degradation,
@@ -619,6 +621,8 @@ class ChatRuntime:
                 "intent": decision.intent,
                 "risk_level": decision.risk_level.value if hasattr(decision.risk_level, "value") else str(decision.risk_level),
                 "reason_codes": decision.reason_codes,
+                "reasoning_modes": list(decision.reasoning_modes),
+                "max_model_calls": decision.max_model_calls,
             },
         )
 
@@ -768,13 +772,15 @@ class ChatRuntime:
     async def _run_reasoning(
         self, request: ChatExecutionRequest, decision: ExecutionDecision, plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter
     ) -> Tuple[str, Dict[str, Any]]:
-        """Reasoning topology path: routed through ReasoningExecutor."""
+        """Reasoning topology path through Runtime activation and ReasoningExecutor."""
         from ai_karen_engine.core.reasoning.contracts import (
             ReasoningBudget,
             ReasoningEvidence,
             ReasoningRequest,
         )
-        from ai_karen_engine.core.reasoning.executor import get_reasoning_executor
+        from ai_karen_engine.core.runtime.reasoning_bridge import (
+            get_runtime_reasoning_bridge,
+        )
 
         ctx = request.context
         memory_items = []
@@ -796,14 +802,24 @@ class ChatRuntime:
             for idx, item in enumerate(recall_items[: decision.memory_top_k])
         ]
 
+        objective = self._extract_user_message(request.messages)
+        activation = get_runtime_reasoning_bridge().activate(
+            objective=objective,
+            evidence=[item.content for item in evidence if item.content],
+            decision=decision,
+            plan=plan,
+            preferred_provider=request.preferred_provider,
+            preferred_model=request.preferred_model,
+        )
+
         canonical_request = ReasoningRequest(
             request_id=ctx.request_id,
             correlation_id=ctx.correlation_id,
             tenant_id=ctx.tenant_id,
             user_id=ctx.user_id,
             conversation_id=ctx.conversation_id,
-            objective=self._extract_user_message(request.messages),
-            reasoning_modes=list(decision.required_capabilities) or ["synthesis"],
+            objective=objective,
+            reasoning_modes=list(activation.reasoning_modes),
             evidence=evidence,
             constraints={
                 "reasoning_depth": decision.reasoning_depth,
@@ -813,11 +829,14 @@ class ChatRuntime:
             policy_decision_id=decision.policy_decision_id or "",
             budget=ReasoningBudget(
                 max_reasoning_steps=decision.max_steps,
+                max_model_calls=plan.budget.max_model_calls,
                 max_duration_ms=decision.time_budget_ms,
+                max_output_tokens=plan.budget.max_output_tokens,
             ),
             metadata={
                 "correlation_id": ctx.correlation_id,
                 "request_id": ctx.request_id,
+                **activation.request_metadata,
             },
         )
 
@@ -832,25 +851,48 @@ class ChatRuntime:
             budget=plan.budget,
         )
 
-        executor = get_reasoning_executor()
-        result = await executor.execute(canonical_request, plan, context)
+        result = await activation.executor.execute(canonical_request, plan, context)
+
+        consumed_model_calls = int(result.diagnostics.get("model_calls", 0) or 0)
+        for _ in range(consumed_model_calls):
+            if not await meter.consume_model_call():
+                raise RuntimeError("Execution budget exhausted: max_model_calls")
+        consumed_steps = int(result.diagnostics.get("steps", 0) or 0)
+        for _ in range(consumed_steps):
+            if not await meter.consume_reasoning_step():
+                raise RuntimeError("Execution budget exhausted: max_reasoning_steps")
+        if not await meter.check_duration():
+            raise RuntimeError("Execution budget exhausted: max_duration_ms")
 
         text = result.summary or ""
         if not text and result.hypotheses:
             text = "; ".join(h.statement for h in result.hypotheses[:3])
 
+        activation_meta = dict(activation.runtime_metadata)
         provider_meta = {
             "requested_provider": request.preferred_provider,
             "requested_model": request.preferred_model,
-            "actual_provider": "reasoning_executor",
-            "actual_model": "canonical",
-            "runtime_engine": "reasoning",
+            "actual_provider": activation_meta.get(
+                "soft_reasoning_provider", "reasoning_executor"
+            ),
+            "actual_model": activation_meta.get(
+                "soft_reasoning_model", "canonical"
+            ),
+            "runtime_engine": activation_meta.get(
+                "soft_reasoning_runtime_engine", "reasoning"
+            ),
             "response_source": "reasoning",
             "fallback_level": 0,
-            "degraded_mode": result.status in ("failed", "budget_exhausted"),
-            "degradation_reason": result.diagnostics.get("error") if result.status == "failed" else None,
+            "degraded_mode": result.status in ("failed", "budget_exhausted", "abstained"),
+            "degradation_reason": result.diagnostics.get("error")
+            if result.status == "failed"
+            else None,
             "reasoning_id": result.reasoning_id,
             "reasoning_status": result.status,
+            "reasoning_modes": list(activation.reasoning_modes),
+            "reasoning_model_calls": consumed_model_calls,
+            "reasoning_steps": consumed_steps,
+            **activation_meta,
         }
         return text, provider_meta
 
@@ -874,6 +916,7 @@ class ChatRuntime:
                 "actual_provider": normalized.get("actual_provider"),
                 "actual_model": normalized.get("actual_model"),
                 "response_source": normalized.get("response_source"),
+                "reasoning_modes": normalized.get("reasoning_modes", []),
                 "topology": plan.topology.value,
             },
         )
@@ -1157,6 +1200,8 @@ class ChatRuntime:
             "execution_mode": decision.execution_mode.value,
             "risk_level": decision.risk_level.value if hasattr(decision.risk_level, "value") else str(decision.risk_level),
             "reason_codes": decision.reason_codes,
+            "reasoning_modes": list(decision.reasoning_modes),
+            "max_model_calls": decision.max_model_calls,
         }
         trajectory.policy_decision_id = decision.policy_decision_id
         trajectory.policy_allowed_capabilities = list(decision.required_capabilities)
