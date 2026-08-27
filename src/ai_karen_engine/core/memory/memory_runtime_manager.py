@@ -2,8 +2,9 @@
 
 Runtime owns execution and dependency composition. NeuroRecall owns recall
 selection. MemoryFormationService turns runtime observations into candidates,
-and NeuroVault is the only durable mutation boundary. Core memory services
-receive backend-neutral contracts; platform implementations are wired here.
+NeuroVault is the only durable mutation boundary, and MemoryControlService owns
+operator/governance access. Core services receive backend-neutral contracts;
+platform implementations are wired here.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import Any
 from ai_karen_engine.core.logging import get_logger
 
 from . import _memory_runtime_base as _base
+from .control import MemoryControlService
 from .episodic import EventSegmenter
 from .formation import MemoryFormationService
 from .retrieval.neuro_recall import NeuroRecall, RecallRequest, RecallScopeError
@@ -22,7 +24,7 @@ logger = get_logger(__name__)
 
 
 class MemoryRuntimeManager(_base.MemoryRuntimeManager):
-    """Canonical memory execution and composition authority."""
+    """Canonical memory execution and dependency-composition authority."""
 
     def __init__(
         self,
@@ -30,6 +32,7 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         consolidation_adapter: Any | None = None,
         recall_service: Any | None = None,
         formation_service: MemoryFormationService | None = None,
+        control_service: MemoryControlService | None = None,
         stm: Any | None = None,
     ) -> None:
         if retrieval_adapter is not None:
@@ -45,6 +48,11 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
         self._formation_service = formation_service or self._build_formation_service(
             self._stm
         )
+        self._control_service = control_service or self._build_control_service()
+
+    @property
+    def control_service(self) -> MemoryControlService:
+        return self._control_service
 
     @staticmethod
     def _build_stm() -> Any:
@@ -120,6 +128,15 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             event_segmenter=EventSegmenter(),
         )
 
+    @staticmethod
+    def _build_control_service() -> MemoryControlService:
+        """Compose governed operator/control access over canonical PostgreSQL."""
+        from ai_karen_engine.platform.memory.postgres import (
+            PostgresMemoryControlRepository,
+        )
+
+        return MemoryControlService(PostgresMemoryControlRepository())
+
     def set_recall_service(self, service: Any) -> None:
         if service is None or not hasattr(service, "recall"):
             raise TypeError("recall service must provide async recall(request)")
@@ -130,14 +147,13 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             raise TypeError("formation service must provide async process_interaction(...)")
         self._formation_service = service
 
-    async def _commit_to_ledger(self, *args: Any, **kwargs: Any) -> None:
-        """Reject the retired direct-ledger mutation path inherited for compatibility.
+    def set_control_service(self, service: MemoryControlService) -> None:
+        if service is None or not hasattr(service, "inspect_memory_state"):
+            raise TypeError("control service must provide memory control operations")
+        self._control_service = service
 
-        Durable memory writes must flow through ``MemoryFormationService`` and
-        ``NeuroVault``. This override intentionally blocks the legacy SQL writer
-        while operator/consent/retention surfaces are extracted from the
-        compatibility base.
-        """
+    async def _commit_to_ledger(self, *args: Any, **kwargs: Any) -> None:
+        """Reject the retired direct-ledger mutation path."""
         del args, kwargs
         raise RuntimeError(
             "direct memory ledger writes are retired; use MemoryFormationService/NeuroVault"
@@ -276,6 +292,21 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             "latency_ms": result.latency_ms,
         }
 
+    async def inspect_memory_state(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._control_service.inspect_memory_state(**kwargs)
+
+    async def list_consent_scopes(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._control_service.list_consent_scopes(**kwargs)
+
+    async def set_consent_scope(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._control_service.set_consent_scope(**kwargs)
+
+    async def list_retention_policies(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._control_service.list_retention_policies(**kwargs)
+
+    async def set_retention_policy(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._control_service.set_retention_policy(**kwargs)
+
 
 memory_manager = MemoryRuntimeManager()
 _base.bind_memory_manager(memory_manager)
@@ -285,9 +316,12 @@ def get_memory_manager() -> MemoryRuntimeManager:
     return memory_manager
 
 
+def get_memory_control_service() -> MemoryControlService:
+    return memory_manager.control_service
+
+
 def init_memory() -> MemoryRuntimeManager:
     logger.info("Initializing canonical memory runtime manager")
-    memory_manager._ensure_db_session_factory()
     return memory_manager
 
 
@@ -333,6 +367,7 @@ __all__ = [
     "MemoryRuntimeManager",
     "close",
     "export_promoted_artifacts",
+    "get_memory_control_service",
     "get_memory_manager",
     "get_metrics",
     "init_memory",
