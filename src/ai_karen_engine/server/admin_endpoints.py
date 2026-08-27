@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from ai_karen_engine.api_routes.admin.admin import router as admin_router
+from ai_karen_engine.api_routes.admin.agents import router as admin_agents_router
 from ai_karen_engine.api_routes.admin.diagnostics import router as admin_diagnostics_router
 from ai_karen_engine.api_routes.admin.users import router as admin_users_router
 from ai_karen_engine.api_routes.admin.tenants import router as admin_tenants_router
@@ -25,6 +26,7 @@ def register_admin_endpoints(app: FastAPI, settings=None) -> None:
     app.include_router(admin_audit_router, prefix="/api", tags=["admin-audit"])
     app.include_router(admin_health_router, prefix="/api", tags=["admin-health"])
     app.include_router(admin_runtime_router, prefix="/api", tags=["admin-runtime"])
+    app.include_router(admin_agents_router, prefix="/api", tags=["admin-agents"])
     app.include_router(admin_diagnostics_router, prefix="/api", tags=["admin-diagnostics"])
     app.include_router(admin_features_router, prefix="/api", tags=["admin-features"])
     app.include_router(admin_memory_router, prefix="/api", tags=["admin-memory"])
