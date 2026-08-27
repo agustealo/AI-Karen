@@ -71,11 +71,11 @@ class MemoryFormationService:
         *,
         vault_factory: Callable[[str], VaultPort],
         derived_projector: DerivedProjector,
-        evaluator: MemoryFormationEvaluator,
+        evaluator: MemoryFormationEvaluator | None = None,
         episode_state_store: EpisodeStateStore | None = None,
         event_segmenter: EventSegmenter | None = None,
     ) -> None:
-        self._evaluator = evaluator
+        self._evaluator = evaluator or MemoryFormationEvaluator()
         self._vault_factory = vault_factory
         self._derived_projector = derived_projector
         self._episode_state_store = episode_state_store
