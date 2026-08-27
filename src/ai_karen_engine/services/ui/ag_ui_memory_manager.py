@@ -420,7 +420,7 @@ class AGUIMemoryManager:
         try:
             user_id, tenant_id = self._scope(user_ctx)
             updates = {
-                "result": result,
+                "content": result,
                 "metadata": dict(metadata or {}),
                 "tenant_id": tenant_id,
                 "user_id": user_id,
