@@ -1,8 +1,7 @@
 """Row-Level Security proof tests.
 
-These tests verify tenant isolation invariants. They use mocking so they
-can run without a live database connection, while still proving the
-architectural contracts.
+These tests verify tenant isolation invariants. They use mocking so they can run
+without a live database connection while proving the persistence contracts.
 """
 
 from __future__ import annotations
@@ -14,9 +13,7 @@ import pytest
 
 from ai_karen_engine.config.database import DatabaseSettings, get_database_settings
 from ai_karen_engine.persistence.postgres import get_postgres_engine
-from ai_karen_engine.persistence.postgres.transactions import (
-    async_transaction_scope,
-)
+from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
 
 def test_rls_enforced_defaults_to_true():
@@ -34,8 +31,8 @@ def test_database_settings_rls_flag_can_be_overridden():
     assert db.rls_enforced is False
 
 
-def test_transaction_scope_sets_tenant_context():
-    """async_transaction_scope should set app.tenant_id for RLS."""
+def test_transaction_scope_sets_canonical_tenant_context():
+    """Tenant transactions must set the exact key consumed by Supabase RLS."""
     mock_session = AsyncMock()
     mock_session.execute = AsyncMock()
 
@@ -51,14 +48,18 @@ def test_transaction_scope_sets_tenant_context():
         return_value=mock_engine,
     ):
         async def run():
-            async with async_transaction_scope("tenant-123") as session:
+            async with async_transaction_scope("tenant-123"):
                 pass
 
         asyncio.run(run(), debug=False)
 
-    assert mock_session.execute.called
-    call_args = mock_session.execute.call_args
-    assert call_args is not None
+    assert mock_session.execute.call_count == 2
+    parameter_sets = [call.args[1] for call in mock_session.execute.call_args_list]
+    assert {params["setting"] for params in parameter_sets} == {
+        "app.current_tenant_id",
+        "app.tenant_id",
+    }
+    assert all(params["tid"] == "tenant-123" for params in parameter_sets)
 
 
 def test_transaction_scope_no_tenant_no_context():
@@ -77,7 +78,7 @@ def test_transaction_scope_no_tenant_no_context():
         return_value=mock_engine,
     ):
         async def run():
-            async with async_transaction_scope() as session:
+            async with async_transaction_scope():
                 pass
 
         asyncio.run(run(), debug=False)
@@ -102,32 +103,28 @@ def test_tenant_a_cannot_see_tenant_b_cross_tenant_isolation():
 
 
 def test_postgres_engine_singleton():
-    """PostgresEngine is a singleton — all clients share one engine."""
+    """PostgresEngine is a singleton; all clients share one engine."""
     a = get_postgres_engine()
     b = get_postgres_engine()
     assert a is b
 
 
 def test_supabase_auth_disabled_by_default():
-    """Supabase Auth should remain disabled until explicit decision."""
     s = get_database_settings()
     assert s.supabase_auth_enabled is False
 
 
 def test_supabase_realtime_enabled():
-    """Realtime is enabled for presence/notifications/live UI."""
     s = get_database_settings()
     assert s.supabase_realtime_enabled is True
 
 
 def test_supabase_storage_enabled():
-    """Storage is enabled for blob/object storage."""
     s = get_database_settings()
     assert s.supabase_storage_enabled is True
 
 
 def test_migrations_authority_local_by_default():
-    """Until cutover is complete, migration authority stays local."""
     s = get_database_settings()
     assert s.migrations_authority == "local"
 
@@ -138,15 +135,12 @@ def test_migrations_authority_rejects_invalid():
 
 
 def test_repository_protocol_compliance():
-    """Sql*Repositories should satisfy their protocols."""
+    """Sql*Repositories should satisfy their public contracts."""
     from ai_karen_engine.persistence.repositories import (
         SqlAuditRepository,
         SqlConversationRepository,
         SqlMemoryRepository,
         SqlTenantRepository,
-    )
-    from ai_karen_engine.persistence.repositories.sql_repositories import (
-        SqlConversationRepository as ConvProto,
     )
 
     conv = SqlConversationRepository()
