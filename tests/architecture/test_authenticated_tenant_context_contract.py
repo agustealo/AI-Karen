@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 USER_MODELS = ROOT / "src/ai_karen_engine/auth/models.py"
 DEPENDENCIES = ROOT / "src/ai_karen_engine/core/services/dependencies.py"
 CHAT_ROUTE = ROOT / "src/ai_karen_engine/api_routes/chat/runtime.py"
+CONVERSATION_ROUTE = ROOT / "src/ai_karen_engine/api_routes/chat/conversation.py"
 AUTH_ROUTE = ROOT / "src/ai_karen_engine/api_routes/auth/auth.py"
 
 
@@ -75,3 +76,38 @@ def test_chat_route_contains_no_dead_session_or_stream_compatibility_shims() -> 
     assert "def get_chat_orchestrator" not in source
     assert '@router.get("/sessions/{session_id}")' not in source
     assert '@router.delete("/sessions/{session_id}")' not in source
+
+
+def test_conversation_ingress_never_fabricates_backend_truth() -> None:
+    source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
+
+    assert 'id="new-session"' not in source
+    assert 'user_id=user_ctx.get("user_id", "anonymous")' not in source
+    assert 'return {"success": False, "error": str(e)}' not in source
+    assert '"User context: %s"' not in source
+    assert "_raise_not_found(" in source
+
+
+def test_session_activity_is_authenticated_and_tenant_scoped_before_mutation() -> None:
+    source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
+    start = source.index("async def update_session_activity(")
+    end = source.index('\n\n@router.get("/{conversation_id}"', start)
+    route_source = source[start:end]
+
+    assert "tenant_id: str = Depends(get_current_tenant_id)" in route_source
+    assert "user_ctx: Dict[str, Any] = Depends(bypass_user_context_func)" in route_source
+    assert "user_id = _require_user_id(user_ctx)" in route_source
+    assert "get_web_ui_conversation_by_session(" in route_source
+    assert "tenant_id=tenant_id" in route_source
+    assert "user_id=user_id" in route_source
+    assert "update_session_activity(" in route_source
+
+
+def test_static_conversation_get_routes_precede_dynamic_conversation_id_route() -> None:
+    source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
+
+    dynamic_index = source.index('@router.get("/{conversation_id}"')
+    assert source.index('@router.get("/health")') < dynamic_index
+    assert source.index('@router.get("/analytics"') < dynamic_index
+    assert source.index('@router.get("/stats")') < dynamic_index
+    assert source.index('@router.get("/by-session/{session_id}"') < dynamic_index
