@@ -21,6 +21,7 @@ from ai_karen_engine.auth.rbac_middleware import check_scope
 from ai_karen_engine.core.memory.memory_runtime_manager import (
     get_memory_control_service,
     get_memory_manager,
+    get_metrics,
 )
 from ai_karen_engine.core.runtime.resilience import get_feature_flags
 from ai_karen_engine.utils.pydantic_base import ISO8601Model
@@ -31,7 +32,6 @@ router = APIRouter(prefix="/memory/control", tags=["memory-control"])
 
 
 def get_correlation_id(request: Request) -> str:
-    """Extract or generate correlation ID for request tracking."""
     return request.headers.get("X-Correlation-Id", str(uuid.uuid4()))
 
 
@@ -175,6 +175,24 @@ async def _authorize(request: Request, scope: str) -> None:
         raise HTTPException(status_code=403, detail=error_response.model_dump(mode="json"))
 
 
+def _audit_control(
+    *,
+    correlation_id: str,
+    action: str,
+    tenant_id: str | None = None,
+    user_id: str | None = None,
+) -> None:
+    logger.info(
+        "memory.control.action",
+        extra={
+            "correlation_id": correlation_id,
+            "action": action,
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+        },
+    )
+
+
 @router.get("/inspector", response_model=MemoryInspectorResponse)
 async def inspect_memory(
     request: Request,
@@ -182,10 +200,8 @@ async def inspect_memory(
     user_id: Optional[str] = None,
     limit: int = 20,
 ):
-    """Return a structured memory inspection snapshot."""
     correlation_id = get_correlation_id(request)
     await _authorize(request, "admin:read")
-
     flags = _feature_flags()
     if not flags.is_enabled("memory_inspector_enabled", tenant_id, user_id):
         raise HTTPException(status_code=403, detail="Memory inspector is disabled")
@@ -208,7 +224,7 @@ async def inspect_memory(
             "memory_shadow_mode_enabled", tenant_id, user_id
         ),
     }
-    snapshot["metrics"] = _memory_manager().get_metrics() if hasattr(_memory_manager(), "get_metrics") else {}
+    snapshot["metrics"] = get_metrics().get("memory_runtime", {})
     snapshot["correlation_id"] = correlation_id
     return MemoryInspectorResponse(**snapshot)
 
@@ -250,6 +266,12 @@ async def update_consent_scope(request: Request, body: ConsentScopeRequest):
         scope_name=body.scope_name,
         granted=body.granted,
     )
+    _audit_control(
+        correlation_id=correlation_id,
+        action="consent.update",
+        tenant_id=body.tenant_id,
+        user_id=body.user_id,
+    )
     return ConsentScopeResponse(correlation_id=correlation_id, **result)
 
 
@@ -279,6 +301,11 @@ async def update_retention_policy(request: Request, body: RetentionPolicyRequest
         tenant_id=body.tenant_id,
         memory_class=body.memory_class,
         ttl_days=body.ttl_days,
+    )
+    _audit_control(
+        correlation_id=correlation_id,
+        action="retention.update",
+        tenant_id=body.tenant_id,
     )
     return RetentionPolicyResponse(correlation_id=correlation_id, **result)
 
@@ -320,6 +347,12 @@ async def set_shadow_mode(request: Request, body: ShadowModeRequest):
     effective = flags.is_enabled(
         "memory_shadow_mode_enabled", body.tenant_id, body.user_id
     )
+    _audit_control(
+        correlation_id=correlation_id,
+        action="shadow_mode.update",
+        tenant_id=body.tenant_id,
+        user_id=body.user_id,
+    )
     return ShadowModeResponse(
         correlation_id=correlation_id,
         status="success",
@@ -358,6 +391,16 @@ async def submit_profile_correction(request: Request, body: ProfileCorrectionReq
             "source_ref": body.source_ref,
         },
         correlation_id=correlation_id,
+        policy_context={
+            "memory_write_authorized": True,
+            "allowed_capabilities": ["memory.write"],
+        },
+    )
+    _audit_control(
+        correlation_id=correlation_id,
+        action="profile_correction.submit",
+        tenant_id=body.tenant_id,
+        user_id=body.user_id,
     )
     result["profile_area"] = body.profile_area
     result["confidence"] = body.confidence
