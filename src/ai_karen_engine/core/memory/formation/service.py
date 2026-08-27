@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
+from datetime import date, datetime
+from enum import Enum
 from typing import Any, Callable, Protocol
 
 from ai_karen_engine.core.logging import get_logger
@@ -93,7 +95,7 @@ class MemoryFormationService:
 
         request_id = str(request_id or uuid.uuid4())
         correlation_id = str(correlation_id or uuid.uuid4())
-        merged_metadata = dict(metadata or {})
+        merged_metadata = self._json_safe(dict(metadata or {}))
         if session_id:
             merged_metadata.setdefault("session_id", session_id)
         if conversation_id:
@@ -136,8 +138,10 @@ class MemoryFormationService:
         )
 
         persisted = 0
+        persistence_failures = 0
         projection_failures = 0
         receipts: list[dict[str, Any]] = []
+        errors: list[str] = list(extraction.errors)
         authorization_error: str | None = None
         vault = self._vault_factory(tenant_id)
 
@@ -168,25 +172,60 @@ class MemoryFormationService:
                     },
                 )
                 break
+            except Exception as exc:
+                persistence_failures += 1
+                errors.append(f"persist:{type(exc).__name__}")
+                logger.exception(
+                    "memory.formation.persist_failed",
+                    extra={
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                        "request_id": request_id,
+                        "correlation_id": correlation_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                continue
 
             if not receipt.persisted:
+                persistence_failures += 1
+                errors.append("persist:not_persisted")
                 continue
+
             persisted += 1
             event_id = str(receipt.metadata.get("event_id") or "")
             projection_results: dict[str, bool] = {}
             if event_id:
-                projection_results = await self._derived_projector.project(
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    event_id=event_id,
-                    memory_id=receipt.memory_id,
-                    signal=signal,
-                    confidence=score,
-                    source_type=source_type,
-                    source_ref=source_ref,
-                    metadata=merged_metadata,
-                )
-                projection_failures += sum(1 for ok in projection_results.values() if not ok)
+                try:
+                    projection_results = await self._derived_projector.project(
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        event_id=event_id,
+                        memory_id=receipt.memory_id,
+                        signal=signal,
+                        confidence=score,
+                        source_type=source_type,
+                        source_ref=source_ref,
+                        metadata=merged_metadata,
+                    )
+                except Exception as exc:
+                    projection_failures += 1
+                    errors.append(f"projection:{type(exc).__name__}")
+                    logger.exception(
+                        "memory.formation.projection_failed",
+                        extra={
+                            "tenant_id": tenant_id,
+                            "user_id": user_id,
+                            "event_id": event_id,
+                            "memory_id": receipt.memory_id,
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+                    projection_results = {"projection_pipeline": False}
+                else:
+                    projection_failures += sum(
+                        1 for ok in projection_results.values() if not ok
+                    )
 
             receipts.append(
                 {
@@ -203,26 +242,32 @@ class MemoryFormationService:
                 "extracted": len(extraction.signals),
                 "admitted": len(admitted),
                 "persisted": persisted,
+                "persistence_failures": persistence_failures,
+                "projection_failures": projection_failures,
                 "reason": "memory_write_not_authorized",
                 "authorization_error": authorization_error,
                 "request_id": request_id,
                 "correlation_id": correlation_id,
                 "receipts": receipts,
+                "errors": errors,
             }
 
         status = "success"
-        if projection_failures:
+        if projection_failures or persistence_failures or extraction.status != "success":
             status = "degraded"
-        if extraction.status == "failed":
-            status = "degraded" if persisted else "failed"
+        if persisted == 0 and persistence_failures:
+            status = "failed"
+        if extraction.status == "failed" and persisted == 0:
+            status = "failed"
 
         return {
             "status": status,
             "extracted": len(extraction.signals),
             "admitted": len(admitted),
             "persisted": persisted,
+            "persistence_failures": persistence_failures,
             "projection_failures": projection_failures,
-            "errors": list(extraction.errors),
+            "errors": errors,
             "processing_time_ms": extraction.processing_time_ms,
             "request_id": request_id,
             "correlation_id": correlation_id,
@@ -243,16 +288,16 @@ class MemoryFormationService:
         conversation_id: str | None,
     ) -> MemoryEntry:
         memory_type = MemoryFormationService._memory_type(signal.signal_type)
-        custom = dict(signal.metadata or {})
-        custom.update(metadata)
+        custom = MemoryFormationService._json_safe(dict(signal.metadata or {}))
+        custom.update(MemoryFormationService._json_safe(metadata))
         custom.update(
             {
                 "source_type": source_type,
                 "source_ref": source_ref,
                 "scope": signal.scope,
                 "signal_type": signal.signal_type,
-                "entities": list(signal.entities or []),
-                "keywords": list(signal.keywords or []),
+                "entities": MemoryFormationService._json_safe(list(signal.entities or [])),
+                "keywords": MemoryFormationService._json_safe(list(signal.keywords or [])),
             }
         )
         return MemoryEntry(
@@ -262,7 +307,7 @@ class MemoryFormationService:
             namespace=MemoryNamespace.LONG_TERM,
             confidence=max(0.0, min(1.0, score)),
             importance=max(1.0, min(10.0, 1.0 + score * 9.0)),
-            keywords=list(signal.keywords or []),
+            keywords=[str(keyword) for keyword in signal.keywords or []],
             entities=[
                 str(entity.get("text") or entity.get("name") or "")
                 for entity in signal.entities or []
@@ -286,6 +331,20 @@ class MemoryFormationService:
         if kind in {"preference", "fact", "entity"}:
             return MemoryType.SEMANTIC
         return MemoryType.EPISODIC
+
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {str(key): MemoryFormationService._json_safe(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [MemoryFormationService._json_safe(item) for item in value]
+        if isinstance(value, (datetime, date, uuid.UUID)):
+            return value.isoformat() if hasattr(value, "isoformat") else str(value)
+        if isinstance(value, Enum):
+            return MemoryFormationService._json_safe(value.value)
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        return str(value)
 
 
 __all__ = ["MemoryFormationService"]
