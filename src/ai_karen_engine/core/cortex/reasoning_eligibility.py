@@ -3,15 +3,17 @@ from __future__ import annotations
 """Typed CORTEX contracts for reasoning-strategy eligibility.
 
 CORTEX owns the cognitive decision about which reasoning modes are desirable.
-This module does not resolve providers/models, execute strategies, authorize
-capabilities, or mutate Runtime budgets. RuntimePolicy remains the sole
-authorization owner and Runtime remains the execution owner.
+TaskSignature is the canonical cognitive input. This module does not resolve
+providers/models, execute strategies, authorize capabilities, or mutate Runtime
+budgets. RuntimePolicy remains the sole authorization owner and Runtime remains
+the execution owner.
 """
 
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from ai_karen_engine.core.intelligence.contracts import TaskSignature
 from ai_karen_engine.core.reasoning.contracts import normalize_reasoning_modes
 
 
@@ -21,6 +23,29 @@ class EligibilityDisposition(str, Enum):
     ELIGIBLE = "eligible"
     INELIGIBLE = "ineligible"
     DEFER = "defer"
+
+
+@dataclass(frozen=True, slots=True)
+class ReasoningEligibilityContext:
+    """Canonical CORTEX input for reasoning eligibility.
+
+    Runtime capability availability is intentionally absent. CORTEX evaluates
+    cognitive desirability from the TaskSignature and request-level budget/evidence
+    hints; Runtime later validates actual model/runtime executability.
+    """
+
+    task_signature: TaskSignature
+    evidence_available: bool = False
+    external_evidence_required: bool = False
+    max_model_calls_hint: int = 0
+    latency_budget_ms_hint: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.max_model_calls_hint < 0:
+            raise ValueError("max_model_calls_hint must be non-negative")
+        if self.latency_budget_ms_hint < 0:
+            raise ValueError("latency_budget_ms_hint must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +104,9 @@ class ReasoningEligibilityDecision:
     provenance_version: str = "reasoning-eligibility-v1"
 
     def __post_init__(self) -> None:
-        normalized_selected = tuple(normalize_reasoning_modes(list(self.selected_modes)))
+        normalized_selected = tuple(
+            normalize_reasoning_modes(list(self.selected_modes))
+        )
         object.__setattr__(self, "selected_modes", normalized_selected)
 
         if not 0.0 <= float(self.decision_confidence) <= 1.0:
@@ -132,6 +159,7 @@ class ReasoningEligibilityDecision:
 
 __all__ = [
     "EligibilityDisposition",
+    "ReasoningEligibilityContext",
     "ReasoningEligibilityDecision",
     "ReasoningModeEligibility",
 ]
