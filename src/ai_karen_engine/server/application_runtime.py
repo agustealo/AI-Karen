@@ -26,7 +26,9 @@ _RUNTIME_SHUTDOWN_STATE_KEY = "_canonical_runtime_shutdown"
 
 async def initialize_application_runtime(app: FastAPI) -> None:
     """Attach canonical Runtime services to the application lifecycle."""
-    if getattr(app.state, _RUNTIME_ATTACHED_STATE_KEY, False):
+    if getattr(app.state, _RUNTIME_ATTACHED_STATE_KEY, False) and not getattr(
+        app.state, _RUNTIME_SHUTDOWN_STATE_KEY, False
+    ):
         return
 
     from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
@@ -37,6 +39,8 @@ async def initialize_application_runtime(app: FastAPI) -> None:
 
     composition = get_runtime_composition()
     control_plane = await get_chat_runtime_control_plane()
+    if not getattr(control_plane, "_initialized", False):
+        await control_plane.initialize()
     chat_runtime = get_chat_runtime()
 
     app.state.runtime_composition = composition
