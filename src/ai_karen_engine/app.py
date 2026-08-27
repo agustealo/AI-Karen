@@ -45,7 +45,13 @@ _LEGACY_MODEL_DUPLICATES_PRUNED_STATE_KEY = "_legacy_model_duplicates_pruned"
 _LEGACY_REMOVED_CAPABILITIES_PRUNED_STATE_KEY = (
     "_legacy_removed_capabilities_pruned"
 )
+_LEGACY_USER_MODEL_PREFERENCES_PRUNED_STATE_KEY = (
+    "_legacy_user_model_preferences_pruned"
+)
 _LEGACY_PROVIDER_ENDPOINT_MODULE = "ai_karen_engine.api_routes.models.management"
+_LEGACY_USER_MODEL_PREFERENCES_ENDPOINT_MODULE = (
+    "ai_karen_engine.api_routes.users.preferences"
+)
 _LEGACY_PROVIDER_ROUTE_PATHS = frozenset(
     {
         "/api/providers",
@@ -160,6 +166,35 @@ def _prune_removed_legacy_model_capabilities(app: FastAPI) -> None:
     setattr(app.state, _LEGACY_REMOVED_CAPABILITIES_PRUNED_STATE_KEY, True)
 
 
+def _prune_legacy_user_model_preferences(app: FastAPI) -> None:
+    """Quarantine the deprecated filesystem-backed model preference API.
+
+    Provider/model availability and selection belong to the canonical provider
+    registry and runtime. The legacy user preference router persisted model IDs
+    through local filesystem settings, hardcoded a model default, and could
+    acknowledge writes that were not persisted. Keep its import compatibility
+    temporarily, but never expose those endpoints from the canonical app.
+    """
+    if getattr(
+        app.state,
+        _LEGACY_USER_MODEL_PREFERENCES_PRUNED_STATE_KEY,
+        False,
+    ):
+        return
+
+    app.router.routes[:] = [
+        route
+        for route in app.router.routes
+        if getattr(getattr(route, "endpoint", None), "__module__", None)
+        != _LEGACY_USER_MODEL_PREFERENCES_ENDPOINT_MODULE
+    ]
+    setattr(
+        app.state,
+        _LEGACY_USER_MODEL_PREFERENCES_PRUNED_STATE_KEY,
+        True,
+    )
+
+
 def _register_canonical_routes(app: FastAPI) -> None:
     if not getattr(
         app.state,
@@ -180,6 +215,14 @@ def _register_canonical_routes(app: FastAPI) -> None:
     if not getattr(app.state, _METRICS_REGISTERED_STATE_KEY, False):
         app.include_router(metrics_router)
         setattr(app.state, _METRICS_REGISTERED_STATE_KEY, True)
+
+
+def _prune_legacy_routes(app: FastAPI) -> None:
+    """Apply all canonical-app legacy route quarantines in one place."""
+    _prune_legacy_provider_routes(app)
+    _prune_duplicate_legacy_model_routes(app)
+    _prune_removed_legacy_model_capabilities(app)
+    _prune_legacy_user_model_preferences(app)
 
 
 def create_app() -> FastAPI:
@@ -234,16 +277,12 @@ def create_app() -> FastAPI:
 
                 await asyncio.sleep(0.1)
                 wire_routers(app, settings)
-                _prune_legacy_provider_routes(app)
-                _prune_duplicate_legacy_model_routes(app)
-                _prune_removed_legacy_model_capabilities(app)
+                _prune_legacy_routes(app)
                 logger.info("Routers wired in background")
             except Exception as exc:
                 logger.warning("Deferred router wiring failed: %s", exc)
 
-    _prune_legacy_provider_routes(app)
-    _prune_duplicate_legacy_model_routes(app)
-    _prune_removed_legacy_model_capabilities(app)
+    _prune_legacy_routes(app)
     _register_canonical_routes(app)
 
     logger.info("Canonical FastAPI application created successfully")
