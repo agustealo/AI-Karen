@@ -156,3 +156,16 @@ def test_execution_decision_keeps_reasoning_and_model_call_budgets_distinct() ->
 
     assert decision.max_steps == 4
     assert decision.max_model_calls == 30
+
+
+def test_execution_decision_canonicalizes_reasoning_mode_aliases_once() -> None:
+    decision = ExecutionDecision(
+        topology=ExecutionTopology.REASONING,
+        reasoning_modes=["verify", "refine", "synthesis"],
+    )
+
+    assert decision.reasoning_modes == [
+        "verification",
+        "refinement",
+        "evidence_synthesis",
+    ]
