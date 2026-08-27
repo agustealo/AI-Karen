@@ -1,11 +1,13 @@
 fastapi==0.136.1
 uvicorn
+pyautogui
+urwid
+prompt_toolkit
 pydantic
 pydantic-settings
 python-dotenv
 pytest
 pytest-timeout
-pytest-asyncio
 wheel
 transformers
 sentence-transformers
@@ -46,6 +48,7 @@ httpx==0.28.1
 pyotp
 tenacity
 slowapi
+pytest-asyncio
 bcrypt
 argon2-cffi
 copilotkit==0.1.87
