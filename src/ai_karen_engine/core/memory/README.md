@@ -5,23 +5,23 @@
 
 ## Purpose
 
-`ai_karen_engine.core.memory` is the single Core authority for memory semantics, contracts, subsystem orchestration, recall coordination, and memory writeback policy.
+`ai_karen_engine.core.memory` is the single Core authority for memory semantics, contracts, subsystem orchestration, recall coordination, STM semantics, episodic formation, and memory writeback policy.
 
-The memory system is intentionally backend-neutral at the Core boundary. Storage technology is accessed through adapters and configuration rather than embedded into memory-domain contracts.
+Storage technology stays outside the Core boundary. Core describes capabilities and scope; platform adapters implement PostgreSQL and Redis mechanics.
 
 For the detailed ownership model for NeuroRecall and NeuroVault, see [NEURO_MEMORY_ARCHITECTURE.md](./NEURO_MEMORY_ARCHITECTURE.md).
 
 ## Current Backend Truth
 
-The live canonical adapter surface currently includes:
+The live canonical platform adapter surface is:
 
-- **PostgreSQL** for durable, ledger-backed memory state.
-- **Redis** for bounded/session-oriented memory where enabled.
-- runtime-manager adapters for integration with the memory subsystem.
+- **PostgreSQL** for durable, ledger-backed memory state through `platform/memory/postgres/`.
+- **Redis** for bounded/session-oriented STM through `platform/memory/redis/`.
+- **SQLAlchemy/PostgresEngine** for canonical Postgres engine/session ownership.
 
-**Milvus and Elasticsearch are not part of the current memory architecture.** Core code and documentation must not assume them.
+Milvus and Elasticsearch are not part of the current memory architecture. Core code and documentation must not assume them.
 
-Backend choices must remain config-driven and replaceable behind memory ports/adapters.
+Backend choices remain config-driven and replaceable behind memory ports/adapters.
 
 ## Authority Model
 
@@ -31,16 +31,19 @@ ChatRuntime
     v
 MemoryRuntimeManager
     |-------------------------------|
-    v                               v
-NeuroRecall                     writeback policy
-retrieval intelligence              |
-    |                               v
-    v                           NeuroVault
-memory retrieval ports        governed durability
     |                               |
-    +---------- PostgreSQL ---------+
+    v                               v
+STM / formation                 NeuroRecall
+    |                       retrieval intelligence
+    v                               |
+NeuroVault                          v
+governed durability          scoped source adapters
+    |                               |
+    +---------- PostgreSQL <--------+
 
-STM/session continuity may use Redis through its canonical adapter.
+STM/session continuity
+    -> core/memory/stm semantics
+    -> platform/memory/redis backing
 ```
 
 ### ChatRuntime
@@ -49,9 +52,25 @@ Owns overall chat execution. Memory is one subsystem used by ChatRuntime and mus
 
 ### MemoryRuntimeManager
 
-Owns memory-subsystem orchestration, including recall coordination, memory candidate/writeback coordination, promotion flows, lifecycle integration, and explicit degraded behavior.
+Owns memory-subsystem orchestration, including recall coordination, formation/writeback coordination, lifecycle integration, and explicit degraded behavior.
 
 It must not own provider/model routing, prompt construction, plugin execution, or physical database implementation.
+
+### STM
+
+`core/memory/stm/` owns bounded cross-request continuity semantics.
+
+The live STM contract is slot-based. Independent slots include active episode, active goal, active project, recent context, working state, and tool state. Each slot has explicit tenant/user/session scope.
+
+Redis is the current physical backing through `RedisSTMAdapter`. Redis does not own STM semantics.
+
+The slot model is intentional: one writer updating active episode state must not overwrite unrelated tool or working state.
+
+### Episodic memory
+
+`core/memory/episodic/` owns event and episode semantics, including deterministic episode-boundary decisions.
+
+An active episode may be cached through the STM contract. Completed/durable episodic history belongs to governed PostgreSQL memory, not Redis.
 
 ### NeuroRecall
 
@@ -71,11 +90,11 @@ Memory classes describe semantics, not databases.
 
 ### STM
 
-Short-horizon continuity such as recent context, active goals, session state, and bounded working memory.
+Short-horizon continuity such as recent context, active goals, active episode state, session state, tool state, and bounded working memory.
 
 ### Episodic
 
-Meaningful events and interactions: what happened, when it happened, decisions, outcomes, and event provenance.
+Meaningful events and interactions: what happened, when it happened, decisions, outcomes, boundaries, and event provenance.
 
 ### Semantic / LTM
 
@@ -87,53 +106,70 @@ Learned procedures, reusable workflows, execution lessons, and tool-use knowledg
 
 ## Current Package Responsibilities
 
-The existing package contains canonical and transitional modules. New work should extend the strongest existing owner before creating new files or folders.
+Important active Core surfaces include:
 
-Important active surfaces include:
-
-- `memory_runtime_manager.py` - memory subsystem runtime authority and compatibility surface during convergence.
-- `contracts.py`, `protocols.py`, `types.py` - shared memory contracts.
-- `adapters/postgres_adapter.py` - PostgreSQL adapter.
-- `adapters/redis_adapter.py` - Redis/session adapter.
-- `adapters/runtime_manager_adapter.py` - runtime integration adapter.
-- `stm/` - short-term/session memory.
-- `episodic/` - episodic/event-oriented memory.
-- `retrieval/` - canonical destination for production recall intelligence.
+- `memory_runtime_manager.py` - memory subsystem execution authority.
+- `contracts.py`, `protocols.py`, `types/` - shared memory contracts.
+- `stm/` - bounded short-term/session semantics.
+- `episodic/` - episodic/event contracts and deterministic segmentation.
+- `formation/` - governed memory candidate formation before NeuroVault.
+- `retrieval/` - production recall intelligence and NeuroRecall.
+- `graph/` - backend-neutral relationship projection/traversal semantics.
+- `associative/` - bounded associative activation primitives.
 - `evaluation/` - memory evaluation support.
-- `guards.py` - memory safety/governance guards.
-- ledger/writeback/scoring modules - durable memory candidate and write-path support.
+- `guards.py`, scoring and claim modules - policy/scoring/lifecycle support.
 
-Some legacy files remain and must be converged through reference audits rather than duplicated or deleted blindly.
+Concrete storage belongs outside Core:
+
+- `platform/memory/redis/` - Redis connection management and `RedisSTMAdapter`.
+- `platform/memory/postgres/` - durable memory repositories, projections, recall sources and NeuroVault adapter.
+- `persistence/postgres/` - canonical engine/session/transaction authority.
+
+Do not reintroduce concrete Redis or PostgreSQL adapters under `core/memory/adapters/`.
+
+## STM Rules
+
+1. STM scope always includes explicit tenant, user, and session identity.
+2. STM state is bounded and TTL-governed.
+3. STM slots are physically independent so unrelated updates do not clobber each other.
+4. Redis outage may use the connection manager's bounded in-process fallback, but this is process-local degraded continuity, not distributed durability.
+5. Redis expiration is not durable forgetting.
+6. STM success never means durable memory was saved.
+7. Episode formation may consume STM, but episodic semantics do not belong to Redis.
+8. `CognitiveState` is a current-request cognitive envelope, not the STM persistence model.
+
+Canonical STM configuration is owned by `ai_karen_engine.config.memory`:
+
+```text
+MEMORY_STM_SESSION_TTL_SECONDS
+MEMORY_STM_MAX_SLOT_BYTES
+```
 
 ## Read Path
-
-The intended production read path is:
 
 ```text
 ChatRuntime
     -> MemoryRuntimeManager
     -> NeuroRecall
-    -> authorized/scoped memory ports
-    -> PostgreSQL and/or bounded cache adapters
+    -> authorized/scoped memory sources
+         -> Redis-backed STM candidate source where applicable
+         -> PostgreSQL durable sources
     -> RecallResult
     -> prompt/context assembly
 ```
-
-Direct database fallback logic inside the runtime is transitional and should shrink as the canonical NeuroRecall path becomes complete.
 
 Recall must be tenant-scoped and fail closed when required authorization/scope context is missing.
 
 ## Write Path
 
-The intended durable write path is:
-
 ```text
 interaction
-    -> memory signal/candidate extraction
-    -> worthiness / eligibility
+    -> memory formation
+         -> bounded STM continuity
+         -> deterministic episode segmentation
+         -> signal extraction / worthiness
     -> policy + tenant + consent gates
-    -> canonical ledger/write
-    -> NeuroVault governance
+    -> NeuroVault
     -> PostgreSQL durable state
     -> optional rebuildable projections/cache
 ```
@@ -143,11 +179,12 @@ No UI, agent, plugin, route, or retrieval helper may claim a memory was saved if
 ## Storage Rules
 
 1. PostgreSQL is the current durable memory source of truth through adapters.
-2. Redis is bounded/session infrastructure and is not the durable long-term source of truth.
+2. Redis is bounded/session infrastructure and is not durable long-term memory.
 3. Core contracts remain vendor-neutral.
 4. Optional indexes or projections must be rebuildable and must not become a second memory authority.
 5. Storage failures must be observable and truthfully reported.
 6. No cross-tenant fallback is permitted.
+7. Core must not import concrete platform storage implementations.
 
 ## Temporal Memory
 
@@ -182,8 +219,10 @@ Convergence rules:
 
 - production recall behavior belongs behind `core/memory/retrieval/` and NeuroRecall;
 - governed durable persistence belongs behind NeuroVault contracts/platform adapters;
+- Redis-specific memory behavior belongs under `platform/memory/redis/`, not Core;
+- the temporary `platform/memory/redis/episode_state.py` compatibility alias must disappear after consumers migrate to `RedisSTMAdapter`;
 - `core/recall/` must not remain a competing recall authority after useful behavior is migrated;
-- the existing `core/neuro_recall/` labs harness remains research/evaluation-only and should eventually move under an explicit labs owner;
+- the existing `core/neuro_recall/` labs harness remains research/evaluation-only;
 - the existing `core/neuro_vault/` monolith must not remain a second complete memory system;
 - fake or compatibility ML implementations must not be presented as real embedding/reranking capabilities;
 - deletion happens only after reference audit, import migration, security review, and tests.
@@ -192,8 +231,12 @@ Convergence rules:
 
 - One memory domain: `core/memory/`.
 - One memory subsystem coordinator: `MemoryRuntimeManager`.
+- One STM semantic authority: `core/memory/stm/`.
+- One current STM platform adapter: `platform/memory/redis/RedisSTMAdapter`.
 - One retrieval-intelligence concept: NeuroRecall.
 - One governed-durability concept: NeuroVault.
+- PostgreSQL remains durable truth.
+- Redis remains bounded/session infrastructure.
 - No provider/model authority in memory.
 - No direct plugin execution from memory.
 - No vendor-specific Core contracts.
@@ -210,9 +253,12 @@ python -m compileall src
 pytest tests/ -q
 ruff check src tests
 mypy src
+
+pytest tests/memory/test_stm_contracts.py -q
+pytest tests/memory/test_redis_stm_adapter.py -q
 ```
 
-Tests should cover tenant isolation, recall scope, degraded behavior, durable persistence, retention/deletion, provenance, and architecture invariants when those surfaces change.
+Tests should cover tenant isolation, slot isolation, TTL/size bounds, degraded behavior, recall scope, durable persistence, retention/deletion, provenance, and architecture invariants when those surfaces change.
 
 ## Further Reading
 
@@ -224,7 +270,10 @@ Tests should cover tenant isolation, recall scope, degraded behavior, durable pe
 
 ```text
 MemoryRuntimeManager orchestrates memory.
-NeuroRecall decides what memory to retrieve.
+STM owns bounded continuity semantics.
+Redis backs STM through a platform adapter.
+Episodic memory owns experience boundaries.
+NeuroRecall decides what durable/temporary memory to retrieve.
 NeuroVault governs how approved memory becomes and remains durable.
-PostgreSQL and Redis are adapters, not architectural authorities.
+PostgreSQL is durable truth.
 ```
