@@ -151,6 +151,60 @@ def test_reasoning_activation_rejects_mode_not_authorized_by_plan() -> None:
     assert exc_info.value.code == "reasoning_mode_not_authorized"
 
 
+def test_reasoning_activation_rejects_empty_cortex_mode_set() -> None:
+    decision = ExecutionDecision(
+        topology=ExecutionTopology.REASONING,
+        reasoning_modes=[],
+        policy_decision_id="policy-1",
+    )
+    plan = AuthorizedExecutionPlan(
+        execution_id="exec-1",
+        policy_decision_id="policy-1",
+        topology=ExecutionTopology.REASONING,
+        reasoning_modes=["evidence_synthesis"],
+        budget=ExecutionBudget(max_model_calls=10),
+    )
+
+    with pytest.raises(ReasoningActivationError) as exc_info:
+        RuntimeReasoningBridge().activate(
+            objective="Solve",
+            evidence=[],
+            decision=decision,
+            plan=plan,
+            preferred_provider=None,
+            preferred_model=None,
+        )
+
+    assert exc_info.value.code == "reasoning_mode_not_requested"
+
+
+def test_reasoning_activation_rejects_empty_policy_mode_set() -> None:
+    decision = ExecutionDecision(
+        topology=ExecutionTopology.REASONING,
+        reasoning_modes=["causal"],
+        policy_decision_id="policy-1",
+    )
+    plan = AuthorizedExecutionPlan(
+        execution_id="exec-1",
+        policy_decision_id="policy-1",
+        topology=ExecutionTopology.REASONING,
+        reasoning_modes=[],
+        budget=ExecutionBudget(max_model_calls=10),
+    )
+
+    with pytest.raises(ReasoningActivationError) as exc_info:
+        RuntimeReasoningBridge().activate(
+            objective="Solve",
+            evidence=[],
+            decision=decision,
+            plan=plan,
+            preferred_provider=None,
+            preferred_model=None,
+        )
+
+    assert exc_info.value.code == "reasoning_mode_not_authorized"
+
+
 def test_execution_decision_keeps_reasoning_and_model_call_budgets_distinct() -> None:
     decision = _decision(model_calls=30)
 

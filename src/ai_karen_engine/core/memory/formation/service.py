@@ -1,19 +1,24 @@
 """Canonical memory formation pipeline.
 
-Transforms runtime observations into worthy memory candidates, then delegates
-all durable mutation authority to NeuroVault. Derived projections happen only
-after a successful governed commit.
+Transforms runtime observations into coherent episodic context and worthy memory
+candidates, then delegates all durable mutation authority to NeuroVault. Derived
+projections happen only after a successful governed commit.
 """
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Protocol
 
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.memory.episodic import (
+    EpisodeFrame,
+    EpisodeObservation,
+    EventSegmenter,
+)
 from ai_karen_engine.core.memory.protocols import VaultContext, VaultPort
 from ai_karen_engine.core.memory.scoring import MemoryWorthinessScorer
 from ai_karen_engine.core.memory.signals import MemorySignal, get_signal_pipeline
@@ -43,6 +48,18 @@ class DerivedProjector(Protocol):
     ) -> dict[str, bool]: ...
 
 
+class EpisodeStateStore(Protocol):
+    async def load(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        session_id: str,
+    ) -> EpisodeFrame | None: ...
+
+    async def save(self, frame: EpisodeFrame) -> bool: ...
+
+
 class MemoryFormationService:
     """Form and persist governed durable memory from runtime observations."""
 
@@ -51,11 +68,15 @@ class MemoryFormationService:
         *,
         vault_factory: Callable[[str], VaultPort],
         derived_projector: DerivedProjector,
+        episode_state_store: EpisodeStateStore | None = None,
+        event_segmenter: EventSegmenter | None = None,
     ) -> None:
         self.signal_pipeline = get_signal_pipeline()
         self.worthiness_scorer = MemoryWorthinessScorer()
         self._vault_factory = vault_factory
         self._derived_projector = derived_projector
+        self._episode_state_store = episode_state_store
+        self._event_segmenter = event_segmenter or EventSegmenter()
 
     async def process_interaction(
         self,
@@ -101,6 +122,16 @@ class MemoryFormationService:
         if conversation_id:
             merged_metadata.setdefault("conversation_id", conversation_id)
 
+        merged_metadata = await self._apply_episode_segmentation(
+            text=normalized_text,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            request_id=request_id,
+            metadata=merged_metadata,
+        )
+
         extraction = await self.signal_pipeline.process_text(
             text=normalized_text,
             tenant_id=tenant_id,
@@ -124,6 +155,8 @@ class MemoryFormationService:
                 "persisted": 0,
                 "errors": list(extraction.errors),
                 "processing_time_ms": extraction.processing_time_ms,
+                "episode_group_id": merged_metadata.get("episode_group_id"),
+                "episode_boundary_reason": merged_metadata.get("episode_boundary_reason"),
             }
 
         context = VaultContext(
@@ -248,6 +281,8 @@ class MemoryFormationService:
                 "authorization_error": authorization_error,
                 "request_id": request_id,
                 "correlation_id": correlation_id,
+                "episode_group_id": merged_metadata.get("episode_group_id"),
+                "episode_boundary_reason": merged_metadata.get("episode_boundary_reason"),
                 "receipts": receipts,
                 "errors": errors,
             }
@@ -271,8 +306,108 @@ class MemoryFormationService:
             "processing_time_ms": extraction.processing_time_ms,
             "request_id": request_id,
             "correlation_id": correlation_id,
+            "episode_group_id": merged_metadata.get("episode_group_id"),
+            "episode_boundary_reason": merged_metadata.get("episode_boundary_reason"),
             "receipts": receipts,
         }
+
+    async def _apply_episode_segmentation(
+        self,
+        *,
+        text: str,
+        tenant_id: str,
+        user_id: str,
+        session_id: str | None,
+        conversation_id: str | None,
+        request_id: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        result = dict(metadata)
+        effective_session_id = str(session_id or "").strip()
+        observed_at = self._datetime(metadata.get("observed_at")) or datetime.now(timezone.utc)
+        goal_key = self._first_text(
+            metadata.get("goal_id"),
+            metadata.get("goal_class"),
+            metadata.get("contextual_intent"),
+        )
+        project_key = self._first_text(
+            metadata.get("project_id"),
+            metadata.get("workspace_id"),
+            metadata.get("project"),
+        )
+        outcome_class = self._first_text(
+            metadata.get("outcome_class"),
+            metadata.get("outcome"),
+        )
+        explicit_completion = bool(metadata.get("explicit_completion"))
+        if explicit_completion and not outcome_class:
+            outcome_class = "completed"
+
+        observation = EpisodeObservation(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            session_id=effective_session_id or f"interaction:{request_id}",
+            observed_at=observed_at,
+            text=text,
+            goal_key=goal_key,
+            project_key=project_key,
+            outcome_class=outcome_class,
+            correction=bool(metadata.get("user_correction") or metadata.get("correction")),
+            explicit_completion=explicit_completion,
+        )
+
+        previous: EpisodeFrame | None = None
+        if effective_session_id and self._episode_state_store is not None:
+            try:
+                previous = await self._episode_state_store.load(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    session_id=effective_session_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "memory.episode_state.load_degraded",
+                    extra={
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                        "session_id": effective_session_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+
+        decision = self._event_segmenter.decide(previous, observation)
+        state_persisted: bool | None = None
+        if effective_session_id and self._episode_state_store is not None:
+            try:
+                state_persisted = await self._episode_state_store.save(decision.frame)
+            except Exception as exc:
+                state_persisted = False
+                logger.warning(
+                    "memory.episode_state.save_degraded",
+                    extra={
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                        "session_id": effective_session_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+
+        result.update(
+            {
+                "episode_group_id": decision.frame.episode_group_id,
+                "episode_boundary_reason": decision.reason.value,
+                "episode_new": decision.new_episode,
+                "episode_started_at": decision.frame.started_at.isoformat(),
+                "episode_updated_at": decision.frame.updated_at.isoformat(),
+                "episode_turn_count": decision.frame.turn_count,
+                "episode_goal_key": decision.frame.goal_key,
+                "episode_project_key": decision.frame.project_key,
+                "episode_state_persisted": state_persisted,
+                "session_id": effective_session_id or None,
+                "conversation_id": conversation_id,
+            }
+        )
+        return self._json_safe(result)
 
     @staticmethod
     def _entry_from_signal(
@@ -345,6 +480,29 @@ class MemoryFormationService:
         if value is None or isinstance(value, (str, int, float, bool)):
             return value
         return str(value)
+
+    @staticmethod
+    def _datetime(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str) and value:
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        else:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _first_text(*values: Any) -> str | None:
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return None
 
 
 __all__ = ["MemoryFormationService"]
