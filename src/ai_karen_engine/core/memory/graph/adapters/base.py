@@ -1,17 +1,48 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
-from ..models import AssertionNode, EntityNode, GraphEdge, MemoryEventNode
+from ..models import EntityNode, GraphEdge
 
 
-class GraphAdapter(Protocol):
-    def initialize(self) -> None: ...
-    def upsert_memory_event(self, event: MemoryEventNode) -> None: ...
-    def upsert_entity(self, entity: EntityNode) -> None: ...
-    def upsert_assertion(self, assertion: AssertionNode) -> None: ...
-    def upsert_principal(self, node_type: str, principal_id: str) -> None: ...
-    def create_edge(self, edge: GraphEdge) -> None: ...
-    def find_related_events(self, tenant_id: str, user_id: str, event_id: str, max_depth: int = 2, limit: int = 20) -> list[dict]: ...
-    def find_entity_context(self, tenant_id: str, user_id: str, entity_text: str, limit: int = 20) -> list[dict]: ...
-    def close(self) -> None: ...
+@runtime_checkable
+class GraphRepository(Protocol):
+    """Backend-neutral, async-safe memory graph projection/query contract."""
+
+    async def initialize(self) -> None: ...
+
+    async def upsert_entity(
+        self,
+        entity: EntityNode,
+        *,
+        tenant_id: str,
+        user_id: str,
+    ) -> None: ...
+
+    async def create_edge(self, edge: GraphEdge) -> None: ...
+
+    async def find_related_events(
+        self,
+        tenant_id: str,
+        user_id: str,
+        event_id: str,
+        max_depth: int = 2,
+        limit: int = 20,
+    ) -> list[dict]: ...
+
+    async def find_entity_context(
+        self,
+        tenant_id: str,
+        user_id: str,
+        entity_text: str,
+        max_depth: int = 2,
+        limit: int = 20,
+    ) -> list[dict]: ...
+
+    async def close(self) -> None: ...
+
+
+# Compatibility alias while consumers migrate to the canonical repository name.
+GraphAdapter = GraphRepository
+
+__all__ = ["GraphAdapter", "GraphRepository"]
