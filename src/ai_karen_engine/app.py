@@ -2,16 +2,14 @@
 
 All process launchers, containers, and deployment adapters must import the
 application factory from this module. The root ``server`` package remains a
-transitional composition implementation while its helpers and endpoint groups
-are migrated by ownership.
-
-Health, readiness, and metrics exposition are owned by canonical monitoring
-routers. Canonical lifespan owns database cleanup; transitional duplicate
-shutdown callbacks from ``server.app`` are removed here until that composition
-source is physically retired.
+transitional helper/compatibility package, but it no longer owns the FastAPI
+application instance or lifespan authority.
 """
 
 from __future__ import annotations
+
+import logging
+import os
 
 from fastapi import FastAPI
 
@@ -20,23 +18,32 @@ from ai_karen_engine.api_routes.models.unavailable_capabilities import (
 )
 from ai_karen_engine.api_routes.monitoring.metrics import router as metrics_router
 from ai_karen_engine.api_routes.monitoring.probes import router as probe_router
+from ai_karen_engine.platform.observability.http_metrics import (
+    ERROR_COUNT,
+    REQUEST_COUNT,
+    REQUEST_LATENCY,
+)
+from ai_karen_engine.server.application_runtime import create_application_lifespan
+from ai_karen_engine.server.exception_handlers import setup_exception_handlers
+from server.admin_endpoints import register_admin_endpoints
+from server.config import Settings
+from server.middleware import configure_middleware
+from server.performance import load_performance_settings
+from server.routers import wire_routers
+from server.security import validate_environment_security
+from server.validation import initialize_validation_framework
+
+logger = logging.getLogger("kari")
 
 _PROBES_REGISTERED_STATE_KEY = "_canonical_probe_routes_registered"
 _METRICS_REGISTERED_STATE_KEY = "_canonical_metrics_routes_registered"
 _UNAVAILABLE_MODEL_CAPABILITIES_REGISTERED_STATE_KEY = (
     "_unavailable_model_capabilities_registered"
 )
-_LEGACY_SHUTDOWN_PRUNED_STATE_KEY = "_legacy_shutdown_handlers_pruned"
 _LEGACY_PROVIDER_ROUTES_PRUNED_STATE_KEY = "_legacy_provider_routes_pruned"
 _LEGACY_MODEL_DUPLICATES_PRUNED_STATE_KEY = "_legacy_model_duplicates_pruned"
 _LEGACY_REMOVED_CAPABILITIES_PRUNED_STATE_KEY = (
     "_legacy_removed_capabilities_pruned"
-)
-_LEGACY_SHUTDOWN_HANDLER_NAMES = frozenset(
-    {
-        "_shutdown_database",
-        "shutdown_extension_health_monitoring",
-    }
 )
 _LEGACY_PROVIDER_ENDPOINT_MODULE = "ai_karen_engine.api_routes.models.management"
 _LEGACY_PROVIDER_ROUTE_PATHS = frozenset(
@@ -58,44 +65,28 @@ _LEGACY_REMOVED_CAPABILITY_ROUTE_PATHS = frozenset(
 )
 
 
-def _prune_legacy_shutdown_handlers(app: FastAPI) -> None:
-    """Remove duplicate shutdown callbacks still defined by ``server.app``.
-
-    The canonical lifespan owns database cleanup. Matching both the exact
-    callback name and legacy module keeps canonical lifecycle handlers intact.
-    """
-
-    if getattr(app.state, _LEGACY_SHUTDOWN_PRUNED_STATE_KEY, False):
+def _validate_environment() -> None:
+    validation = validate_environment_security()
+    if validation["overall_status"] == "secure":
         return
 
-    retained_handlers = []
-    for handler in app.router.on_shutdown:
-        handler_module = getattr(handler, "__module__", None)
-        handler_name = getattr(handler, "__name__", None)
-        is_legacy_duplicate = (
-            handler_module == "server.app"
-            and handler_name in _LEGACY_SHUTDOWN_HANDLER_NAMES
-        )
-        if not is_legacy_duplicate:
-            retained_handlers.append(handler)
-
-    app.router.on_shutdown[:] = retained_handlers
-    setattr(app.state, _LEGACY_SHUTDOWN_PRUNED_STATE_KEY, True)
+    invalid_secrets = [
+        key
+        for key, result in validation["secrets_validation"].items()
+        if not result["valid"]
+    ]
+    logger.critical(
+        "Environment security validation failed: %s. Invalid secrets: %s",
+        validation["overall_status"],
+        invalid_secrets or "None (check policy constraints)",
+    )
+    raise RuntimeError(
+        "Environment security validation failed; check server logs for details."
+    )
 
 
 def _prune_legacy_provider_routes(app: FastAPI) -> None:
-    """Quarantine provider-shadow routes owned by legacy model management.
-
-    ``api_routes.models.providers`` is the canonical provider ingress and is
-    already wired by ``server.routers`` before the transitional model-management
-    router. The legacy management module still defines mock/fallback provider
-    endpoints that can expose fabricated provider health, profiles, and stats.
-    Remove only those shadow routes here while the mega-router is being split.
-
-    Matching both module and path prevents accidental removal of canonical or
-    third-party routes that happen to use similar URLs.
-    """
-
+    """Quarantine provider-shadow routes owned by legacy model management."""
     if getattr(app.state, _LEGACY_PROVIDER_ROUTES_PRUNED_STATE_KEY, False):
         return
 
@@ -116,16 +107,7 @@ def _prune_legacy_provider_routes(app: FastAPI) -> None:
 
 
 def _prune_duplicate_legacy_model_routes(app: FastAPI) -> None:
-    """Remove unreachable duplicate route registrations from the legacy model API.
-
-    FastAPI/Starlette resolves matching routes in registration order, so when
-    ``api_routes.models.management`` registers the same path and HTTP method
-    more than once, every later duplicate is unreachable at runtime while still
-    polluting route metadata/OpenAPI generation. Preserve the first registered
-    route to keep current runtime behavior unchanged and remove only later
-    duplicates from the same legacy module.
-    """
-
+    """Remove unreachable duplicate route registrations from legacy model API."""
     if getattr(app.state, _LEGACY_MODEL_DUPLICATES_PRUNED_STATE_KEY, False):
         return
 
@@ -158,8 +140,7 @@ def _prune_duplicate_legacy_model_routes(app: FastAPI) -> None:
 
 
 def _prune_removed_legacy_model_capabilities(app: FastAPI) -> None:
-    """Remove broken routes that still reference the deleted local GGUF toolchain."""
-
+    """Remove routes that still reference the deleted local GGUF toolchain."""
     if getattr(app.state, _LEGACY_REMOVED_CAPABILITIES_PRUNED_STATE_KEY, False):
         return
 
@@ -179,27 +160,7 @@ def _prune_removed_legacy_model_capabilities(app: FastAPI) -> None:
     setattr(app.state, _LEGACY_REMOVED_CAPABILITIES_PRUNED_STATE_KEY, True)
 
 
-def create_app() -> FastAPI:
-    """Return the current canonical AI KAREN ASGI application.
-
-    ``server.app`` currently constructs a compatibility module-level app during
-    import. Returning that existing instance avoids invoking its factory a
-    second time while the legacy composition package is being retired.
-    New launchers must target this factory, never ``server.app`` directly.
-
-    Canonical connectivity, liveness, readiness, and metrics routes are
-    attached here. Registration and lifecycle pruning are idempotent because
-    the compatibility app remains a module-level singleton during migration.
-    """
-
-    from server import app as legacy_app
-
-    app = legacy_app.app
-    _prune_legacy_shutdown_handlers(app)
-    _prune_legacy_provider_routes(app)
-    _prune_duplicate_legacy_model_routes(app)
-    _prune_removed_legacy_model_capabilities(app)
-
+def _register_canonical_routes(app: FastAPI) -> None:
     if not getattr(
         app.state,
         _UNAVAILABLE_MODEL_CAPABILITIES_REGISTERED_STATE_KEY,
@@ -220,4 +181,73 @@ def create_app() -> FastAPI:
         app.include_router(metrics_router)
         setattr(app.state, _METRICS_REGISTERED_STATE_KEY, True)
 
+
+def create_app() -> FastAPI:
+    """Construct the canonical AI KAREN ASGI application directly."""
+    _validate_environment()
+
+    settings = Settings()
+    load_performance_settings(settings)
+    initialize_validation_framework(settings)
+
+    app = FastAPI(
+        title="Kari AI Assistant API",
+        description="Advanced AI assistant with multi-modal capabilities",
+        version="1.0.0",
+        docs_url="/docs" if settings.environment != "production" else None,
+        redoc_url="/redoc" if settings.environment != "production" else None,
+        lifespan=create_application_lifespan(settings),
+    )
+    app.state.settings = settings
+
+    configure_middleware(app, settings, REQUEST_COUNT, REQUEST_LATENCY, ERROR_COUNT)
+    setup_exception_handlers(app)
+
+    defer_wiring = os.getenv("KARI_DEFER_ROUTER_WIRING", "false").lower() in (
+        "true",
+        "yes",
+    )
+    if defer_wiring and settings.environment != "production":
+        logger.info("Deferring router wiring to background for faster readiness")
+    else:
+        logger.info("Wiring routers immediately")
+        wire_routers(app, settings)
+        logger.info("Routers wired successfully")
+
+    register_admin_endpoints(app, settings)
+
+    try:
+        from ai_karen_engine.integrations.copilotkit.routing_actions import (
+            ensure_kire_actions_registered,
+        )
+
+        ensure_kire_actions_registered()
+    except Exception:
+        logger.debug("CopilotKit routing actions unavailable", exc_info=True)
+
+    if defer_wiring and settings.environment != "production":
+
+        @app.on_event("startup")
+        async def _wire_routers_bg() -> None:
+            try:
+                import asyncio
+
+                await asyncio.sleep(0.1)
+                wire_routers(app, settings)
+                _prune_legacy_provider_routes(app)
+                _prune_duplicate_legacy_model_routes(app)
+                _prune_removed_legacy_model_capabilities(app)
+                logger.info("Routers wired in background")
+            except Exception as exc:
+                logger.warning("Deferred router wiring failed: %s", exc)
+
+    _prune_legacy_provider_routes(app)
+    _prune_duplicate_legacy_model_routes(app)
+    _prune_removed_legacy_model_capabilities(app)
+    _register_canonical_routes(app)
+
+    logger.info("Canonical FastAPI application created successfully")
     return app
+
+
+__all__ = ["create_app"]

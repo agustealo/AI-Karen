@@ -5,17 +5,32 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 APP_ENTRYPOINT = REPO_ROOT / "src" / "ai_karen_engine" / "app.py"
+LEGACY_SERVER_APP = REPO_ROOT / "server" / "app.py"
 CLI_ENTRYPOINT = REPO_ROOT / "src" / "ai_karen_engine" / "cli.py"
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 
 
-def test_canonical_application_entrypoint_exists() -> None:
+def test_canonical_application_entrypoint_constructs_fastapi_directly() -> None:
     source = APP_ENTRYPOINT.read_text(encoding="utf-8")
 
     assert "def create_app()" in source
-    assert "from server import app as legacy_app" in source
-    assert "return legacy_app.app" in source
+    assert "app = FastAPI(" in source
+    assert "create_application_lifespan(settings)" in source
+    assert "wire_routers(app, settings)" in source
+    assert "from server import app as legacy_app" not in source
+    assert "legacy_app.app" not in source
     assert "sys.path" not in source
+
+
+def test_legacy_server_app_is_compatibility_only() -> None:
+    source = LEGACY_SERVER_APP.read_text(encoding="utf-8")
+
+    assert "from ai_karen_engine.app import create_app" in source
+    assert "app = create_app()" in source
+    assert "FastAPI(" not in source
+    assert "wire_routers(" not in source
+    assert "create_application_lifespan" not in source
+    assert "@app.on_event" not in source
 
 
 def test_operator_cli_targets_canonical_application() -> None:

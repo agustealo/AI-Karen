@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'server/app.py'
+      - 'src/ai_karen_engine/app.py'
       - 'src/ai_karen_engine/server/application_runtime.py'
       - 'src/ai_karen_engine/core/runtime/**'
       - 'src/ai_karen_engine/core/expression/gateway.py'
@@ -12,6 +13,8 @@ on:
       - 'src/ai_karen_engine/core/langgraph_orchestrator/**'
       - 'src/ai_karen_engine/utils/chat_helpers.py'
       - 'docs/CONTEXT_RUNTIME_ARCHITECTURE.md'
+      - 'tests/architecture/test_application_entrypoint.py'
+      - 'tests/architecture/test_application_lifecycle_authority.py'
       - 'tests/architecture/test_application_runtime_composition.py'
       - 'tests/architecture/test_runtime_composition_authority.py'
       - 'tests/architecture/test_context_authority_convergence.py'
@@ -25,6 +28,7 @@ on:
       - main
     paths:
       - 'server/app.py'
+      - 'src/ai_karen_engine/app.py'
       - 'src/ai_karen_engine/server/application_runtime.py'
       - 'src/ai_karen_engine/core/runtime/**'
       - 'src/ai_karen_engine/core/expression/gateway.py'
@@ -33,6 +37,8 @@ on:
       - 'src/ai_karen_engine/core/langgraph_orchestrator/**'
       - 'src/ai_karen_engine/utils/chat_helpers.py'
       - 'docs/CONTEXT_RUNTIME_ARCHITECTURE.md'
+      - 'tests/architecture/test_application_entrypoint.py'
+      - 'tests/architecture/test_application_lifecycle_authority.py'
       - 'tests/architecture/test_application_runtime_composition.py'
       - 'tests/architecture/test_runtime_composition_authority.py'
       - 'tests/architecture/test_context_authority_convergence.py'
@@ -55,9 +61,10 @@ jobs:
           python-version: '3.11'
       - name: Install focused test dependencies
         run: python -m pip install --disable-pip-version-check pytest pytest-asyncio pydantic pydantic-settings
-      - name: Compile context runtime boundary
+      - name: Compile application and context runtime boundary
         run: |
           python -m py_compile \
+            src/ai_karen_engine/app.py \
             src/ai_karen_engine/server/application_runtime.py \
             src/ai_karen_engine/core/runtime/composition.py \
             src/ai_karen_engine/core/runtime/chat_runtime.py \
@@ -94,10 +101,15 @@ jobs:
           grep -q 'memory_runtime_manager import recall_context' src/ai_karen_engine/core/langgraph_orchestrator/langgraph_orchestrator.py
           grep -q 'memory_recall_top_k=self.config.memory_recall_top_k' src/ai_karen_engine/core/langgraph_orchestrator/langgraph_orchestrator.py
           ! grep -q 'SessionStateManager(' src/ai_karen_engine/core/langgraph_orchestrator/langgraph_orchestrator.py
-      - name: Run application runtime lifecycle proof
+      - name: Run application composition authority proof
         env:
           PYTHONPATH: src
-        run: pytest tests/architecture/test_application_runtime_composition.py -q
+        run: |
+          pytest \
+            tests/architecture/test_application_entrypoint.py \
+            tests/architecture/test_application_lifecycle_authority.py \
+            tests/architecture/test_application_runtime_composition.py \
+            -q
       - name: Run runtime composition authority proof
         env:
           PYTHONPATH: src
