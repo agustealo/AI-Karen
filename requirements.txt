@@ -1,6 +1,21 @@
 # AI KAREN runtime dependencies
 # Keep this file aligned to live imports/runtime composition. Do not retain retired backends "just in case".
+#
+# Memory / graph dependency policy:
+# - PostgreSQL/Supabase is the canonical durable memory substrate.
+# - psycopg is the canonical Python PostgreSQL driver already used by the runtime/data layer.
+# - pgvector, pg_trgm, pg_cron, pgTAP, recursive CTE traversal, and RLS are PostgreSQL/Supabase
+#   capabilities/extensions and therefore are NOT Python packages to add here.
+# - Do not add NetworkX, pgmq clients, Neo4j, Memgraph, FalkorDB, Graphiti, Mem0, Apache AGE
+#   clients, or another graph/vector database dependency without a benchmark-backed ADR.
+# - Existing KAREN spreading activation must be integrated and benchmarked before considering
+#   an external graph-compute library.
+# - A graph accelerator, if ever approved, is derived compute/projection only; it never becomes
+#   authoritative durable memory.
+#
 # Removed in DEPENDENCY-TRUTH cleanup: neo4j, kuzu, redis/fakeredis, duckdb, sqlalchemy, asyncpg, hnswlib.
+# Active imports that still reference retired dependencies are architecture debt to remove or rewire,
+# not justification to re-add the retired packages here.
 
 fastapi==0.136.1
 uvicorn
