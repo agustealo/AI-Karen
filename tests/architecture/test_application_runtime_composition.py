@@ -4,9 +4,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-APPLICATION_RUNTIME = (
-    ROOT / "src/ai_karen_engine/server/application_runtime.py"
-)
+CANONICAL_APP = ROOT / "src/ai_karen_engine/app.py"
+APPLICATION_RUNTIME = ROOT / "src/ai_karen_engine/server/application_runtime.py"
 LEGACY_SERVER_APP = ROOT / "server/app.py"
 
 
@@ -34,7 +33,7 @@ def test_application_runtime_owns_control_plane_background_shutdown() -> None:
     source = APPLICATION_RUNTIME.read_text(encoding="utf-8")
 
     assert "await control_plane.shutdown()" in source
-    assert '_RUNTIME_SHUTDOWN_STATE_KEY' in source
+    assert "_RUNTIME_SHUTDOWN_STATE_KEY" in source
 
 
 def test_application_runtime_is_restart_safe_after_control_plane_shutdown() -> None:
@@ -46,9 +45,19 @@ def test_application_runtime_is_restart_safe_after_control_plane_shutdown() -> N
     assert "_RUNTIME_SHUTDOWN_STATE_KEY" in source
 
 
-def test_transitional_server_app_uses_canonical_application_lifespan() -> None:
-    source = LEGACY_SERVER_APP.read_text(encoding="utf-8")
+def test_canonical_app_selects_application_runtime_lifespan() -> None:
+    source = CANONICAL_APP.read_text(encoding="utf-8")
 
     assert "ai_karen_engine.server.application_runtime import create_application_lifespan" in source
-    assert "lifespan = create_application_lifespan(settings)" in source
-    assert "from ai_karen_engine.server.startup import create_lifespan" not in source
+    assert "lifespan=create_application_lifespan(settings)" in source
+    assert "from server import app as legacy_app" not in source
+
+
+def test_legacy_server_app_only_reexports_canonical_factory() -> None:
+    source = LEGACY_SERVER_APP.read_text(encoding="utf-8")
+
+    assert "from ai_karen_engine.app import create_app" in source
+    assert "app = create_app()" in source
+    assert "FastAPI(" not in source
+    assert "create_application_lifespan" not in source
+    assert "wire_routers(" not in source
