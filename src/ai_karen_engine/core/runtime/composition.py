@@ -6,14 +6,19 @@ This module owns construction of stateful runtime collaborators. Cognitive code
 must define decision behavior, not hide process-wide instances. Runtime callers
 that still depend on compatibility accessors resolve through this composition
 boundary until application startup owns the container directly.
+
+The composition contract intentionally keeps concrete imports lazy. Importing
+an operational runtime module must not eagerly initialize or import the cognitive
+stack merely to refer to the dependency graph type.
 """
 
 from dataclasses import dataclass
 from threading import Lock
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
-from ai_karen_engine.core.expression.gateway import ExpressionGateway
+if TYPE_CHECKING:
+    from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+    from ai_karen_engine.core.expression.gateway import ExpressionGateway
 
 
 @dataclass(frozen=True)
@@ -29,7 +34,10 @@ _composition_lock = Lock()
 
 
 def build_runtime_composition() -> RuntimeComposition:
-    """Build a fresh runtime dependency graph for tests or explicit startup."""
+    """Build a fresh runtime dependency graph at the composition edge."""
+    from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+    from ai_karen_engine.core.expression.gateway import ExpressionGateway
+
     return RuntimeComposition(
         cortex=CortexExecutionDecider(),
         expression_gateway=ExpressionGateway(),
