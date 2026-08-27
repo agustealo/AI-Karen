@@ -1,307 +1,182 @@
-"""
-Custom exception handlers for FastAPI.
+"""Canonical FastAPI exception translation for AI KAREN.
 
-This module provides custom exception handlers that properly handle
-JSON serialization of datetime objects and other non-serializable types.
+Exception handlers return transport error envelopes only. They must never
+fabricate assistant answers, providers, models, or successful status codes for
+failed runtime execution.
 """
 
-import logging
+from __future__ import annotations
+
 import json
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from ai_karen_engine.auth.auth_middleware import AuthenticationError
 from ai_karen_engine.server.json_encoder import custom_json_dumps
-
-try:
-    from ai_karen_engine.auth.auth_middleware import AuthenticationError
-except ImportError:
-    # Fallback for environments where auth is not available
-    class AuthenticationError(Exception):
-        def __init__(self, message, status_code=401):
-            self.message = message
-            self.status_code = status_code
 
 logger = logging.getLogger(__name__)
 
 
-def _build_copilot_degraded_response(request: Request, exc: Exception) -> Dict[str, Any]:
-    correlation_id = request.headers.get("x-correlation-id") or f"copilot_{int(datetime.utcnow().timestamp())}"
-    error_message = str(exc).strip() or type(exc).__name__
+def _timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-    return {
-        "answer": (
-            "Karen is operating in degraded mode.\n\n"
-            "Cause: An unexpected server error interrupted the full response pipeline.\n\n"
-            "I'm unable to generate a full AI response right now, but I've logged your request. "
-            "Please try again shortly."
-        ),
-        "structured_content": {},
-        "actions": [],
-        "metadata": {
-            "degraded_mode": True,
-            "failure_category": "server_error",
-            "error": {
-                "message": error_message[:300],
-                "type": type(exc).__name__,
-                "path": str(request.url.path),
-                "method": request.method,
+
+def _json_response(
+    *,
+    status_code: int,
+    content: Dict[str, Any],
+    headers: Dict[str, str] | None = None,
+) -> JSONResponse:
+    """Serialize through the canonical encoder and fail safely if needed."""
+    try:
+        serialized = custom_json_dumps(content)
+        return JSONResponse(
+            status_code=status_code,
+            content=json.loads(serialized),
+            headers=headers,
+        )
+    except Exception:
+        logger.exception("Failed to serialize exception response")
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "detail": "Unable to serialize error response",
+                "error_code": "ERROR_RESPONSE_SERIALIZATION_FAILED",
+                "timestamp": _timestamp(),
             },
-            "llm": {
-                "provider": "fallback",
-                "model_id": "exception-handler-fallback",
-                "model_name": "Exception Handler Fallback",
-                "source": "exception_handler",
-                "is_degraded": True,
-                "failure_reason": error_message[:300],
-            },
-        },
-        "correlation_id": correlation_id,
-    }
+            headers=headers,
+        )
 
 
 async def custom_http_exception_handler(
-    request: Request, exc: HTTPException
+    request: Request,
+    exc: HTTPException,
 ) -> JSONResponse:
-    """
-    Custom HTTP exception handler that properly serializes datetime objects.
-
-    Args:
-        request: The FastAPI request object
-        exc: The HTTPException that was raised
-
-    Returns:
-        JSONResponse with properly serialized content
-    """
-    # Extract exception details
-    status_code = exc.status_code
-    detail = exc.detail
-
-    # Create response content
-    content: Dict[str, Any] = {"detail": detail}
-
-    # Add additional context if available
-    if hasattr(exc, "headers") and exc.headers:
-        # Don't include headers in response content, but log them
-        logger.debug(f"HTTP exception headers: {exc.headers}")
-
-    # Add timestamp and request info for debugging
+    content: Dict[str, Any] = {"detail": exc.detail}
     if logger.isEnabledFor(logging.DEBUG):
         content.update(
             {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": _timestamp(),
                 "path": str(request.url.path),
                 "method": request.method,
             }
         )
-
-    try:
-        # Use custom JSON encoder to handle datetime objects
-        json_content = custom_json_dumps(content)
-
-        return JSONResponse(
-            status_code=status_code,
-            content=json.loads(json_content),  # Parse back to dict for JSONResponse
-            headers=getattr(exc, "headers", None),
-        )
-    except Exception as json_error:
-        # Fallback if JSON serialization still fails
-        logger.error(f"Failed to serialize exception response: {json_error}")
-
-        # Create a minimal safe response
-        safe_content = {
-            "detail": str(detail) if detail else "Internal server error",
-            "timestamp": datetime.utcnow().isoformat(),
-            "error": "serialization_error",
-        }
-
-        return JSONResponse(
-            status_code=status_code,
-            content=safe_content,
-            headers=getattr(exc, "headers", None),
-        )
+    return _json_response(
+        status_code=exc.status_code,
+        content=content,
+        headers=dict(exc.headers or {}),
+    )
 
 
 async def custom_starlette_http_exception_handler(
-    request: Request, exc: StarletteHTTPException
+    request: Request,
+    exc: StarletteHTTPException,
 ) -> JSONResponse:
-    """
-    Custom Starlette HTTP exception handler.
-
-    Args:
-        request: The request object
-        exc: The Starlette HTTPException
-
-    Returns:
-        JSONResponse with properly serialized content
-    """
-    # Convert Starlette exception to FastAPI format
-    fastapi_exc = HTTPException(
-        status_code=exc.status_code,
-        detail=exc.detail,
-        headers=getattr(exc, "headers", None),
+    return await custom_http_exception_handler(
+        request,
+        HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            headers=getattr(exc, "headers", None),
+        ),
     )
-
-    return await custom_http_exception_handler(request, fastapi_exc)
 
 
 async def custom_validation_exception_handler(
-    request: Request, exc: Exception
+    request: Request,
+    exc: Exception,
 ) -> JSONResponse:
-    """
-    Custom validation exception handler.
-
-    Args:
-        request: The request object
-        exc: The validation exception
-
-    Returns:
-        JSONResponse with validation error details
-    """
-    logger.warning(f"Validation error on {request.method} {request.url.path}: {exc}")
-
-    content = {
-        "detail": "Validation error",
-        "message": str(exc),
-        "timestamp": datetime.utcnow().isoformat(),
-        "path": str(request.url.path),
-        "method": request.method,
-    }
-
-    try:
-        json_content = custom_json_dumps(content)
-        return JSONResponse(status_code=422, content=json.loads(json_content))
-    except Exception as json_error:
-        logger.error(f"Failed to serialize validation error response: {json_error}")
-
-        return JSONResponse(
-            status_code=422,
-            content={
-                "detail": "Validation error",
-                "message": "Unable to serialize error details",
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-        )
+    logger.warning(
+        "Request validation failed",
+        extra={"method": request.method, "path": str(request.url.path)},
+    )
+    return _json_response(
+        status_code=422,
+        content={
+            "detail": "Validation error",
+            "message": str(exc),
+            "timestamp": _timestamp(),
+            "path": str(request.url.path),
+            "method": request.method,
+        },
+    )
 
 
 async def custom_general_exception_handler(
-    request: Request, exc: Exception
+    request: Request,
+    exc: Exception,
 ) -> JSONResponse:
-    """
-    Custom general exception handler for unhandled exceptions.
-
-    Args:
-        request: The request object
-        exc: The unhandled exception
-
-    Returns:
-        JSONResponse with error details
-    """
     logger.exception(
-        f"Unhandled exception on {request.method} {request.url.path}: {exc}"
+        "Unhandled request exception",
+        extra={"method": request.method, "path": str(request.url.path)},
     )
 
-    if request.url.path.startswith("/api/copilot/assist"):
-        return JSONResponse(
-            status_code=200,
-            content=_build_copilot_degraded_response(request, exc),
-        )
-
-    content = {
+    content: Dict[str, Any] = {
         "detail": "Internal server error",
         "message": "An unexpected error occurred",
-        "timestamp": datetime.utcnow().isoformat(),
+        "error_code": "INTERNAL_SERVER_ERROR",
+        "timestamp": _timestamp(),
         "path": str(request.url.path),
         "method": request.method,
     }
-
-    # Add exception details in debug mode
     if logger.isEnabledFor(logging.DEBUG):
         content.update(
-            {"exception_type": type(exc).__name__, "exception_message": str(exc)}
+            {
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            }
         )
 
-    try:
-        json_content = custom_json_dumps(content)
-        return JSONResponse(status_code=500, content=json.loads(json_content))
-    except Exception as json_error:
-        logger.error(f"Failed to serialize general error response: {json_error}")
-
-        return JSONResponse(
-            status_code=500,
-            content={
-                "detail": "Internal server error",
-                "message": "Unable to serialize error details",
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-        )
+    return _json_response(status_code=500, content=content)
 
 
 async def custom_authentication_exception_handler(
-    request: Request, exc: AuthenticationError
+    request: Request,
+    exc: AuthenticationError,
 ) -> JSONResponse:
-    """
-    Custom authentication exception handler.
-
-    Args:
-        request: The request object
-        exc: The AuthenticationError
-
-    Returns:
-        JSONResponse with authentication error details
-    """
+    status_code = int(getattr(exc, "status_code", 401))
+    message = str(getattr(exc, "message", str(exc)))
     logger.warning(
-        f"Authentication error on {request.method} {request.url.path}: {exc.message}"
+        "Authentication request rejected",
+        extra={
+            "method": request.method,
+            "path": str(request.url.path),
+            "status_code": status_code,
+        },
     )
-
-    content = {
-        "detail": exc.message,
-        "timestamp": datetime.utcnow().isoformat(),
-        "path": str(request.url.path),
-        "method": request.method,
-    }
-
-    try:
-        json_content = custom_json_dumps(content)
-        return JSONResponse(
-            status_code=getattr(exc, "status_code", 401),
-            content=json.loads(json_content)
-        )
-    except Exception as json_error:
-        logger.error(f"Failed to serialize authentication error response: {json_error}")
-
-        return JSONResponse(
-            status_code=getattr(exc, "status_code", 401),
-            content={
-                "detail": exc.message,
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-        )
+    return _json_response(
+        status_code=status_code,
+        content={
+            "detail": message,
+            "timestamp": _timestamp(),
+            "path": str(request.url.path),
+            "method": request.method,
+        },
+    )
 
 
 def setup_exception_handlers(app) -> None:
-    """
-    Setup custom exception handlers for the FastAPI app.
-
-    Args:
-        app: The FastAPI application instance
-    """
-    # Import here to avoid circular imports
+    """Register canonical exception handlers."""
     from fastapi.exceptions import RequestValidationError
-    from starlette.exceptions import HTTPException as StarletteHTTPException
 
-    # Add custom exception handlers
     app.add_exception_handler(HTTPException, custom_http_exception_handler)
     app.add_exception_handler(
-        StarletteHTTPException, custom_starlette_http_exception_handler
+        StarletteHTTPException,
+        custom_starlette_http_exception_handler,
     )
     app.add_exception_handler(
-        RequestValidationError, custom_validation_exception_handler
+        RequestValidationError,
+        custom_validation_exception_handler,
     )
-    app.add_exception_handler(AuthenticationError, custom_authentication_exception_handler)
+    app.add_exception_handler(
+        AuthenticationError,
+        custom_authentication_exception_handler,
+    )
     app.add_exception_handler(Exception, custom_general_exception_handler)
 
-    logger.info("Custom exception handlers registered")
+    logger.info("Canonical exception handlers registered")
