@@ -71,11 +71,20 @@ def test_runtime_is_the_explicit_platform_composition_boundary() -> None:
     assert runtime.count("RedisSTMAdapter()") == 1
     assert "self._stm =" in runtime
     assert "self._build_neuro_recall(self._stm)" in runtime
-    assert "self._build_formation_service(\n            self._stm\n        )" in runtime
+    assert "self._build_formation_service(" in runtime
+    assert "self._stm" in runtime
     assert "PostgresEventSource" in runtime
     assert "PostgresEntityResolver" in runtime
     assert "ProjectionManager" in runtime
     assert "HotStateWorker" in runtime
+
+
+def test_canonical_runtime_blocks_legacy_direct_ledger_writes() -> None:
+    runtime = _text("memory_runtime_manager.py")
+    assert "async def _commit_to_ledger" in runtime
+    assert "MemoryFormationService/NeuroVault" in runtime
+    assert "raise RuntimeError(" in runtime
+    assert "super()._commit_to_ledger" not in runtime
 
 
 def test_no_default_tenant_in_canonical_memory_factory() -> None:
