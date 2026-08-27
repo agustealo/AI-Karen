@@ -1,0 +1,98 @@
+"""Configuration for Agent Medusa distributed execution coordination."""
+
+from __future__ import annotations
+
+import os
+import socket
+from dataclasses import dataclass
+
+
+class AgentMedusaConfigError(ValueError):
+    """Raised when Medusa runtime coordination configuration is invalid."""
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise AgentMedusaConfigError(f"{name} must be a boolean value")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise AgentMedusaConfigError(f"{name} must be an integer") from exc
+
+
+@dataclass(frozen=True)
+class AgentMedusaRuntimeSettings:
+    """Validated distributed-run coordination settings."""
+
+    distributed_run_control_enabled: bool = True
+    run_lease_ttl_seconds: int = 30
+    run_heartbeat_interval_seconds: int = 10
+    run_terminal_retention_seconds: int = 3600
+    run_key_prefix: str = "kari:medusa:runs"
+    worker_id: str = ""
+
+    def __post_init__(self) -> None:
+        if self.run_lease_ttl_seconds < 3:
+            raise AgentMedusaConfigError("run_lease_ttl_seconds must be at least 3")
+        if self.run_heartbeat_interval_seconds < 1:
+            raise AgentMedusaConfigError(
+                "run_heartbeat_interval_seconds must be at least 1"
+            )
+        if self.run_heartbeat_interval_seconds >= self.run_lease_ttl_seconds:
+            raise AgentMedusaConfigError(
+                "run_heartbeat_interval_seconds must be less than run_lease_ttl_seconds"
+            )
+        if self.run_terminal_retention_seconds < self.run_lease_ttl_seconds:
+            raise AgentMedusaConfigError(
+                "run_terminal_retention_seconds must be at least run_lease_ttl_seconds"
+            )
+        if not self.run_key_prefix.strip():
+            raise AgentMedusaConfigError("run_key_prefix must not be empty")
+        if not self.worker_id.strip():
+            raise AgentMedusaConfigError("worker_id must not be empty")
+
+
+_SETTINGS: AgentMedusaRuntimeSettings | None = None
+
+
+def get_agent_medusa_runtime_settings() -> AgentMedusaRuntimeSettings:
+    """Return the process-wide validated Medusa runtime settings."""
+
+    global _SETTINGS
+    if _SETTINGS is None:
+        default_worker = f"{socket.gethostname()}:{os.getpid()}"
+        _SETTINGS = AgentMedusaRuntimeSettings(
+            distributed_run_control_enabled=_env_bool(
+                "KAREN_MEDUSA_DISTRIBUTED_RUN_CONTROL_ENABLED", True
+            ),
+            run_lease_ttl_seconds=_env_int("KAREN_MEDUSA_RUN_LEASE_TTL_SECONDS", 30),
+            run_heartbeat_interval_seconds=_env_int(
+                "KAREN_MEDUSA_RUN_HEARTBEAT_INTERVAL_SECONDS", 10
+            ),
+            run_terminal_retention_seconds=_env_int(
+                "KAREN_MEDUSA_RUN_TERMINAL_RETENTION_SECONDS", 3600
+            ),
+            run_key_prefix=os.getenv("KAREN_MEDUSA_RUN_KEY_PREFIX", "kari:medusa:runs"),
+            worker_id=os.getenv("KAREN_WORKER_ID", default_worker),
+        )
+    return _SETTINGS
+
+
+__all__ = [
+    "AgentMedusaConfigError",
+    "AgentMedusaRuntimeSettings",
+    "get_agent_medusa_runtime_settings",
+]
