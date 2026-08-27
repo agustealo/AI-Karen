@@ -1,31 +1,34 @@
 """Canonical memory runtime manager.
 
-The write-side implementation remains behind `_memory_runtime_base` while this
-module owns the public MemoryRuntimeManager and its single NeuroRecall read path.
-No database or legacy retrieval fallback is allowed from this runtime surface.
+Runtime owns execution. NeuroRecall owns recall selection. MemoryFormationService
+turns runtime observations into candidates, and NeuroVault is the only durable
+mutation boundary. Legacy write behavior remains reachable only for non-writing
+shadow/disabled compatibility flows while migration completes.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ai_karen_engine.core.logging import get_logger
 
 from . import _memory_runtime_base as _base
+from .formation import MemoryFormationService
 from .retrieval.neuro_recall import NeuroRecall, RecallRequest, RecallScopeError
 
 logger = get_logger(__name__)
 
 
 class MemoryRuntimeManager(_base.MemoryRuntimeManager):
-    """Memory subsystem authority with one async NeuroRecall read path."""
+    """Canonical memory execution authority."""
 
     def __init__(
         self,
         retrieval_adapter: Any | None = None,
         consolidation_adapter: Any | None = None,
         recall_service: Any | None = None,
+        formation_service: MemoryFormationService | None = None,
     ) -> None:
         if retrieval_adapter is not None:
             logger.warning(
@@ -34,6 +37,7 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             )
         super().__init__(consolidation_adapter=consolidation_adapter)
         self._neuro_recall = recall_service or self._build_neuro_recall()
+        self._formation_service = formation_service or self._build_formation_service()
 
     @staticmethod
     def _build_neuro_recall() -> NeuroRecall:
@@ -55,11 +59,113 @@ class MemoryRuntimeManager(_base.MemoryRuntimeManager):
             )
         )
 
+    @staticmethod
+    def _build_formation_service() -> MemoryFormationService:
+        """Compose the governed durable-write path with tenant-scoped SQLAlchemy."""
+        from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
+        from ai_karen_engine.platform.memory.postgres.derived_projector import (
+            PostgresDerivedMemoryProjector,
+        )
+        from ai_karen_engine.platform.memory.postgres.vault import PostgresNeuroVault
+
+        def vault_factory(tenant_id: str) -> PostgresNeuroVault:
+            # NeuroVault accepts a session factory with no arguments. Capture the
+            # authorized tenant here so every SQLAlchemy session receives the
+            # canonical RLS context before any durable query or mutation.
+            return PostgresNeuroVault(
+                session_factory=lambda: async_transaction_scope(tenant_id=tenant_id)
+            )
+
+        return MemoryFormationService(
+            vault_factory=vault_factory,
+            derived_projector=PostgresDerivedMemoryProjector(),
+        )
+
     def set_recall_service(self, service: Any) -> None:
         """Replace the canonical async recall service for tests/adapters."""
         if service is None or not hasattr(service, "recall"):
             raise TypeError("recall service must provide async recall(request)")
         self._neuro_recall = service
+
+    def set_formation_service(self, service: MemoryFormationService) -> None:
+        """Replace formation service for tests/composition only."""
+        if service is None or not hasattr(service, "process_interaction"):
+            raise TypeError("formation service must provide async process_interaction(...)")
+        self._formation_service = service
+
+    async def process_interaction(
+        self,
+        text: str,
+        tenant_id: str,
+        user_id: str,
+        source_type: str = "chat",
+        source_ref: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        *,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        actor_id: str | None = None,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        policy_context: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Process observations through the one governed durable-write path.
+
+        Shadow mode and disabled learning still reuse the mature extraction-only
+        compatibility path because it cannot perform a durable commit under those
+        gates. When learning is enabled, legacy direct SQL is never used.
+        """
+        _base._METRICS["interactions_processed"] += 1
+        shadow_mode = self.flags.is_enabled(
+            "memory_shadow_mode_enabled", tenant_id, user_id
+        )
+        learning_enabled = self.flags.is_enabled(
+            "memory_learning_enabled", tenant_id, user_id
+        )
+
+        merged_metadata = dict(metadata or {})
+        if session_id:
+            merged_metadata.setdefault("session_id", session_id)
+        if conversation_id:
+            merged_metadata.setdefault("conversation_id", conversation_id)
+
+        if shadow_mode or not learning_enabled:
+            # The legacy implementation only commits when learning is enabled and
+            # shadow mode is false, so this branch is intentionally non-writing.
+            result = await super().process_interaction(
+                text=text,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                source_type=source_type,
+                source_ref=source_ref,
+                metadata=merged_metadata,
+            )
+            result["write_authority"] = "disabled_or_shadow"
+            return result
+
+        result = await self._formation_service.process_interaction(
+            text=text,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source_type=source_type,
+            source_ref=source_ref,
+            metadata=merged_metadata,
+            request_id=request_id or kwargs.get("request_id"),
+            correlation_id=correlation_id or kwargs.get("correlation_id"),
+            actor_id=actor_id or kwargs.get("actor_id"),
+            session_id=session_id or kwargs.get("session_id"),
+            conversation_id=conversation_id or kwargs.get("conversation_id"),
+            policy_context=policy_context or kwargs.get("policy_context"),
+        )
+        _base._METRICS["signals_extracted"] += int(result.get("extracted") or 0)
+        _base._METRICS["signals_admitted"] += int(result.get("admitted") or 0)
+        _base._METRICS["ledger_writes"] += int(result.get("persisted") or 0)
+        _base._METRICS["projection_failures"] += int(
+            result.get("projection_failures") or 0
+        )
+        result["write_authority"] = "neurovault"
+        return result
 
     async def recall_context(
         self,
@@ -138,6 +244,8 @@ def get_memory_manager() -> MemoryRuntimeManager:
 
 def init_memory() -> MemoryRuntimeManager:
     logger.info("Initializing canonical memory runtime manager")
+    # Compatibility inspectors/retention surfaces still use the legacy session
+    # binding until they are extracted. Durable writes do not use this factory.
     memory_manager._ensure_db_session_factory()
     return memory_manager
 

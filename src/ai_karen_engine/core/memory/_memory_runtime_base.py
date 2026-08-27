@@ -1,9 +1,9 @@
 """Write-side base for the canonical memory runtime.
 
-The mature write/governance implementation is temporarily quarantined in
-`_legacy_memory_runtime_impl` while its write methods are extracted. This
-module deliberately exposes no usable recall path. Production reads belong to
-NeuroRecall through `memory_runtime_manager.MemoryRuntimeManager`.
+The mature compatibility implementation remains quarantined in
+`_legacy_memory_runtime_impl` while inspection/retention surfaces are extracted.
+Production recall belongs to NeuroRecall and durable writes are dispatched to
+the bound canonical MemoryRuntimeManager.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ _METRICS = _legacy._METRICS
 
 
 class MemoryRuntimeManager(_legacy.MemoryRuntimeManager):
-    """Write/governance runtime base with recall explicitly disabled."""
+    """Compatibility base with recall explicitly disabled."""
 
     def __init__(self, consolidation_adapter: Any | None = None) -> None:
         super().__init__(
@@ -51,12 +51,63 @@ class MemoryRuntimeManager(_legacy.MemoryRuntimeManager):
 
 
 def bind_memory_manager(manager: Any) -> None:
-    """Bind legacy write compatibility functions to the canonical runtime instance."""
+    """Bind compatibility calls to the canonical runtime instance."""
     _legacy.memory_manager = manager
 
 
-async def update_memory(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    return await _legacy.update_memory(*args, **kwargs)
+async def update_memory(
+    memory_id: str,
+    updates: dict[str, Any],
+    user_ctx: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Compatibility update API routed through the canonical write authority."""
+    content = (
+        updates.get("content")
+        or updates.get("text")
+        or updates.get("query")
+        or ""
+    )
+    if not str(content).strip():
+        return {"status": "noop", "memory_id": memory_id, "updated": False}
+
+    context = dict(user_ctx or {})
+    tenant_id = str(context.get("tenant_id") or kwargs.get("tenant_id") or "").strip()
+    user_id = str(context.get("user_id") or kwargs.get("user_id") or "").strip()
+    if not tenant_id or not user_id:
+        return {
+            "status": "rejected",
+            "memory_id": memory_id,
+            "updated": False,
+            "reason": "missing_tenant_or_user_scope",
+        }
+
+    metadata = updates.get("metadata") if isinstance(updates.get("metadata"), dict) else {}
+    policy_context = (
+        kwargs.get("policy_context")
+        or context.get("policy_context")
+        or metadata.get("policy_context")
+    )
+
+    result = await _legacy.memory_manager.process_interaction(
+        text=str(content),
+        tenant_id=tenant_id,
+        user_id=user_id,
+        source_type=str(updates.get("source_type") or "manual_update"),
+        source_ref=str(updates.get("source_ref") or memory_id),
+        metadata=metadata,
+        request_id=kwargs.get("request_id") or context.get("request_id"),
+        correlation_id=kwargs.get("correlation_id") or context.get("correlation_id"),
+        actor_id=kwargs.get("actor_id") or context.get("actor_id"),
+        session_id=kwargs.get("session_id") or context.get("session_id"),
+        conversation_id=(
+            kwargs.get("conversation_id") or context.get("conversation_id")
+        ),
+        policy_context=policy_context,
+    )
+    result["memory_id"] = memory_id
+    result["updated"] = bool(result.get("persisted"))
+    return result
 
 
 async def export_promoted_artifacts(*args: Any, **kwargs: Any) -> dict[str, Any]:
