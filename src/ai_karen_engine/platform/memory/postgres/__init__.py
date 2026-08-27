@@ -5,6 +5,7 @@ semantics, and recall strategy; this package only implements PostgreSQL-specific
 persistence and retrieval access.
 """
 
+from .control_repository import PostgresMemoryControlRepository
 from .graph_repository import PostgresGraphRepository, PostgresGraphScopeError
 from .profile_retriever import PostgresProfileRecallRetriever
 from .procedural_retriever import PostgresProceduralRecallRetriever
@@ -20,6 +21,7 @@ __all__ = [
     "NeuroVaultScopeError",
     "PostgresGraphRepository",
     "PostgresGraphScopeError",
+    "PostgresMemoryControlRepository",
     "PostgresNeuroVault",
     "PostgresProfileRecallRetriever",
     "PostgresProceduralRecallRetriever",
