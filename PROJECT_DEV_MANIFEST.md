@@ -773,3 +773,319 @@ Before merging a change, answer:
 10. What executable proof demonstrates the behavior and the architecture boundary?
 
 If those answers are unclear, the design is not finished.
+
+---
+
+## 20. Canonical Coded Architecture Reference
+
+This coded map is a normative developer reference for KAREN's current architecture. It visualizes the ownership and execution rules defined throughout this manifest. It does not require every request to traverse every component. Any implementation that materially changes these authority boundaries must update this manifest in the same change.
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                                  AI KAREN                                    │
+│                    LOCAL-FIRST INTELLIGENT RUNTIME                           │
+│                                                                              │
+│          CORTEX DECIDES                     RUNTIME EXECUTES                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+ USER / EXTERNAL WORLD
+          │
+          ├── Web UI
+          ├── Desktop
+          ├── CLI
+          └── API / SDK
+          │
+          ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ INGRESS                                                                      │
+│ api_routes/ + canonical app composition                                      │
+│                                                                              │
+│ auth | validation | tenant/session context | request/correlation IDs         │
+│                                                                              │
+│ MUST NOT: choose models, recall memory, build prompts, execute plugins,      │
+│ or become an orchestration runtime                                           │
+└──────────────────────────────────┬───────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ CORE REQUEST RUNTIME                                                         │
+│ core/runtime/                                                                │
+│                                                                              │
+│ ChatRuntime                                                                  │
+│   ├── request normalization                                                  │
+│   ├── safe execution context                                                 │
+│   ├── budgets / cancellation                                                 │
+│   ├── lifecycle ownership                                                    │
+│   └── audit context                                                          │
+└──────────────────────────────────┬───────────────────────────────────────────┘
+                                   │ ask for typed decision
+                                   ▼
+                         ╔══════════════════════╗
+                         ║       CORTEX         ║
+                         ║ core/cortex/         ║
+                         ║ cognitive executive  ║
+                         ╚══════════╤═══════════╝
+                                    │
+          ┌─────────────────────────┼─────────────────────────┐
+          │                         │                         │
+          ▼                         ▼                         ▼
+  intent / goal / state      policy / eligibility      topology decision
+  capability requirements    RBAC / tenant policy      direct model
+  recall requirements        tool eligibility          ICE
+  verification depth         budgets                   LangGraph
+  clarification/abstain      security constraints      AgentMedusa
+                                                        tools/extensions
+                                    │
+                                    ▼
+                         typed CORTEX Decision
+                                    │
+                                    ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ COGNITIVE CAPABILITY PLANE                                                   │
+│                                                                              │
+│ NeuroRecall                         ICE                                      │
+│ memory-access intelligence          reasoning/synthesis faculty              │
+│   │                                   │                                      │
+│   ▼                                   ├── decomposition                       │
+│ Soft Reasoning                        ├── synthesis                           │
+│ retrieval primitives                 ├── reflection                          │
+│   ├── embeddings                      ├── evidence integration                │
+│   ├── semantic similarity             └── verification                        │
+│   ├── novelty                                                                │
+│   └── candidate generation                                                   │
+│                                                                              │
+│ These capabilities support CORTEX. They do not replace CORTEX.               │
+└──────────────────────────────────┬───────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ EXECUTION TOPOLOGY PLANE                                                     │
+│ Runtime executes only approved topology                                      │
+│                                                                              │
+│       ┌──────────────┐     ┌──────────────┐     ┌──────────────────┐          │
+│       │ Direct Model │     │  LangGraph   │     │   AgentMedusa    │          │
+│       │ Execution    │     │ graph-only   │     │ multi-agent      │          │
+│       └──────┬───────┘     └──────┬───────┘     └────────┬─────────┘          │
+│              │                    │                      │                    │
+│              └────────────────────┼──────────────────────┘                    │
+│                                   │                                           │
+│                                   ▼                                           │
+│                         governed action execution                             │
+└──────────────────────────────────┬───────────────────────────────────────────┘
+                                   │
+                  ┌────────────────┼─────────────────┐
+                  │                │                 │
+                  ▼                ▼                 ▼
+       provider/model runtime   tools/actions   extensions/plugins
+                  │                │                 │
+                  └────────────────┴─────────────────┘
+                                   │
+                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ MODEL RUNTIME                                                                │
+│ core/model_runtime/                                                          │
+│                                                                              │
+│ Provider Registry -> Model/Capability Registry -> Health -> Config Routing   │
+│                                                                              │
+│ requested provider/model                                                    │
+│      │                                                                       │
+│      ├── local primary                                                       │
+│      ├── custom OpenAI-compatible endpoint, including vLLM                   │
+│      ├── Transformers when enabled                                           │
+│      ├── Ollama when enabled/healthy                                         │
+│      ├── explicitly enabled external provider                                │
+│      └── honest degraded/unavailable result                                  │
+│                                                                              │
+│ No builtin_vllm. No route-level routing. No CORTEX provider execution.       │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+ MEMORY / LEARNING
+
+ core/memory/
+      │
+      ├── STM       recent/session context
+      ├── Episodic  interactions, decisions, outcomes, reusable experience
+      └── LTM       durable facts, preferences, knowledge
+      │
+      ▼
+ NeuroRecall
+      │
+      ▼
+ Soft Reasoning / canonical candidate sources
+
+ durable write path:
+
+ reasoning / execution / recall outcome
+      │
+      ▼
+ MemoryCandidate / LearningObservation
+      │
+      ▼
+ Runtime + memory policy
+      │
+      ▼
+ NeuroVault
+      │
+      ▼
+ canonical durable adapters
+      │
+      ├── PostgreSQL / Supabase
+      └── Redis only for bounded/ephemeral state where configured
+
+ PROMPT CONSTRUCTION
+
+ core/runtime/prompt/
+      │
+      ▼
+ Canonical Prompt Assembly
+      │
+      ├── system policy
+      ├── task/output contract
+      ├── explicit turn override
+      ├── user preference / assistant profile
+      ├── tenant context
+      ├── authorized memory context
+      ├── intent/reasoning requirements
+      ├── tools/extensions
+      ├── provider capability
+      ├── token budget
+      └── safety/output schema
+      │
+      ▼
+ final prompt -> model runtime
+
+ SECURITY / GOVERNANCE
+
+ Authentication
+      │
+      ▼
+ Tenant Resolution
+      │
+      ▼
+ RBAC / Policy
+      │
+      ▼
+ Capability Eligibility
+      │
+      ▼
+ Tool / Extension Permission
+      │
+      ▼
+ Execution
+      │
+      ▼
+ Audit Trail
+
+ No production tenant_id="default" security fallback.
+ No UI-only authorization authority.
+ No plugin self-authorization.
+ No cognitive subsystem bypassing Runtime.
+
+ OBSERVABILITY
+
+ platform/observability/
+      │
+      ├── events
+      ├── metrics
+      └── traces
+      │
+      ▼
+ request/correlation identity -> audit + diagnostics
+
+ CONFIGURATION / COMPOSITION
+
+ src/ai_karen_engine/config/ + environment
+      │
+      ├── providers/models/endpoints
+      ├── feature flags
+      ├── ports
+      ├── capabilities
+      ├── fallbacks
+      ├── security
+      └── runtime policy
+      │
+      ▼
+ ai_karen_engine.app:create_app
+
+ CANONICAL AUTHORITY STACK
+
+ USER
+   │
+   ▼
+ API
+   │
+   ▼
+ Runtime
+   │
+   ▼
+ CORTEX
+   │ typed decision
+   ▼
+ Runtime
+   │ execute
+   ├───────────┬──────────────┬───────────────┬────────────────┐
+   ▼           ▼              ▼               ▼                ▼
+ Model        ICE          LangGraph      AgentMedusa     Tools/Extensions
+   │           │              │               │                │
+   └───────────┴──────────────┴───────────────┴────────────────┘
+                                   │
+                                   ▼
+                                Result
+                          ┌────────┼────────┐
+                          ▼        ▼        ▼
+                      Response   Memory   Telemetry
+                                  │
+                                  ▼
+                              NeuroVault
+                                  │
+                                  ▼
+                          Durable Persistence
+```
+
+### 20.1 Developer Mental Model
+
+Use these meanings consistently in code review, implementation, tests, and architecture discussions:
+
+```text
+CORTEX         = What should KAREN do?
+Runtime        = Execute the approved work safely.
+NeuroRecall    = What authorized past information is useful now?
+Soft Reasoning = Retrieve and locally rank relevant candidates.
+ICE            = Perform governed reasoning/synthesis/verification.
+LangGraph      = Execute explicit graph semantics when selected.
+AgentMedusa    = Execute governed specialist-agent topology.
+ModelRuntime   = Resolve and execute a healthy eligible model/provider.
+Extensions     = Supply governed optional capabilities.
+NeuroVault     = Govern what becomes durable memory and its lifecycle.
+Observability  = Record what actually happened.
+```
+
+### 20.2 Architecture Conservation Law
+
+All new development should converge toward:
+
+```text
+ONE RESPONSIBILITY
+       ↓
+ONE CANONICAL OWNER
+       ↓
+ONE CONTRACT
+       ↓
+ONE REGISTRY / CONFIG SOURCE where applicable
+       ↓
+ONE EXECUTION PATH
+       ↓
+EXECUTABLE BOUNDARY PROOF
+```
+
+A new library, framework, agent harness, provider, model runtime, retrieval engine, plugin system, or workflow engine is an implementation capability only. It does not gain architectural authority merely because it exposes its own router, planner, memory layer, prompt system, or runtime.
+
+### 20.3 Change Gate
+
+A change that alters any node, ownership boundary, dependency direction, persistence path, provider fallback path, security gate, or execution topology shown above is an **architecture change**. The same PR/commit must:
+
+1. update this manifest;
+2. update the relevant subsystem documentation;
+3. update or add architecture-boundary tests;
+4. identify and remove or classify any superseded path;
+5. preserve CORTEX cognitive authority and Runtime execution authority unless an explicit accepted architecture decision replaces this contract.
