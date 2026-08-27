@@ -1,17 +1,18 @@
-"""
-Intelligent Error Handler Middleware
+"""Global structured error handling middleware.
 
-This middleware provides global error handling with intelligent error responses.
-It catches unhandled exceptions and HTTP errors, then uses the error response
-service to generate user-friendly, actionable error messages.
+The middleware may enrich an error envelope with operational guidance, but it
+must never fabricate assistant output, provider identity, model identity, or a
+successful response status for a failed execution path.
 """
+
+from __future__ import annotations
 
 import logging
 import traceback
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Callable
+from typing import Callable, Dict, Optional
 
-from fastapi import Request, HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -21,121 +22,109 @@ logger = logging.getLogger(__name__)
 
 
 class IntelligentErrorHandlerMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware for intelligent global error handling.
-    
-    This middleware:
-    1. Catches unhandled exceptions and HTTP errors
-    2. Uses the error response service to generate intelligent responses
-    3. Provides consistent error response format across the application
-    4. Logs errors with appropriate detail levels
-    """
-    
-    def __init__(self, app, enable_intelligent_responses: bool = True, debug_mode: bool = False):
+    """Translate transport failures into consistent structured error envelopes."""
+
+    def __init__(
+        self,
+        app,
+        enable_intelligent_responses: bool = True,
+        debug_mode: bool = False,
+    ) -> None:
         super().__init__(app)
         self.enable_intelligent_responses = enable_intelligent_responses
         self.debug_mode = debug_mode
-        
-        # Lazy initialization to avoid circular imports
         self._error_response_service: Optional[ErrorResponseService] = None
-        
-        # Paths that should use simple error responses (e.g., API endpoints that expect specific formats)
         self.simple_error_paths = {
             "/api/health",
             "/docs",
             "/openapi.json",
             "/redoc",
         }
-    
+
     def _get_error_response_service(self) -> Optional[ErrorResponseService]:
-        """Get error response service instance, initializing if necessary."""
         if not self.enable_intelligent_responses:
             return None
-            
         if self._error_response_service is None:
             try:
                 self._error_response_service = ErrorResponseService()
-            except Exception as e:
-                logger.warning(f"Failed to initialize error response service: {e}")
-                self._error_response_service = None
+            except Exception:
+                logger.exception("Failed to initialize error response service")
         return self._error_response_service
-    
+
     def _should_use_simple_error(self, request: Request) -> bool:
-        """Check if request should use simple error responses."""
         path = request.url.path
-        
-        # Use simple errors for specific paths
-        if path in self.simple_error_paths:
-            return True
-            
-        # Use simple errors for paths that start with simple error prefixes
-        for simple_path in self.simple_error_paths:
-            if path.startswith(simple_path):
-                return True
-                
-        return False
-    
-    async def _extract_request_metadata(self, request: Request) -> Dict[str, str]:
-        """Extract request metadata for error analysis."""
-        xff = request.headers.get("x-forwarded-for")
-        ip = (
-            xff.split(",")[0].strip()
-            if xff
+        return any(path == prefix or path.startswith(prefix) for prefix in self.simple_error_paths)
+
+    @staticmethod
+    def _extract_request_metadata(request: Request) -> Dict[str, str]:
+        forwarded_for = request.headers.get("x-forwarded-for")
+        ip_address = (
+            forwarded_for.split(",")[0].strip()
+            if forwarded_for
             else (request.client.host if request.client else "unknown")
         )
         return {
-            "ip_address": ip,
+            "ip_address": ip_address,
             "user_agent": request.headers.get("user-agent", ""),
             "path": request.url.path,
             "method": request.method,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-    
-    def _extract_provider_from_error(self, error_message: str, traceback_str: str) -> Optional[str]:
-        """Extract provider name from error message or traceback."""
-        # Common provider patterns
+
+    @staticmethod
+    def _extract_provider_from_error(
+        error_message: str,
+        traceback_str: str,
+    ) -> Optional[str]:
+        """Classify provider-related errors for diagnostics only."""
         provider_patterns = {
-            "openai": ["openai", "gpt", "chatgpt"],
-            "anthropic": ["anthropic", "claude"],
-            "huggingface": ["huggingface", "transformers"],
-            "groq": ["groq"],
-            "cohere": ["cohere"],
+            "openai": ("openai", "gpt", "chatgpt"),
+            "anthropic": ("anthropic", "claude"),
+            "huggingface": ("huggingface", "transformers"),
+            "groq": ("groq",),
+            "cohere": ("cohere",),
         }
-        
-        text_to_check = f"{error_message} {traceback_str}".lower()
-        
+        haystack = f"{error_message} {traceback_str}".lower()
         for provider, patterns in provider_patterns.items():
-            if any(pattern in text_to_check for pattern in patterns):
+            if any(pattern in haystack for pattern in patterns):
                 return provider
-        
         return None
-    
+
+    async def _create_simple_error_response(
+        self,
+        *,
+        error_message: str,
+        status_code: int,
+        traceback_str: Optional[str] = None,
+    ) -> JSONResponse:
+        response_data: Dict[str, object] = {"detail": error_message}
+        if self.debug_mode and traceback_str:
+            response_data["traceback"] = traceback_str
+        return JSONResponse(content=response_data, status_code=status_code)
+
     async def _create_intelligent_error_response(
         self,
+        *,
         error_message: str,
         error_type: str,
         status_code: int,
         request_meta: Dict[str, str],
-        traceback_str: Optional[str] = None
+        traceback_str: Optional[str] = None,
     ) -> JSONResponse:
-        """Create an intelligent error response using the error response service."""
         error_service = self._get_error_response_service()
-        
-        if not error_service:
-            # Fallback to simple error response
-            response_data = {"detail": error_message}
-            if self.debug_mode and traceback_str:
-                response_data["traceback"] = traceback_str
-            return JSONResponse(response_data, status_code=status_code)
-        
-        try:
-            # Extract provider name from error
-            provider_name = self._extract_provider_from_error(
-                error_message, traceback_str or ""
+        if error_service is None:
+            return await self._create_simple_error_response(
+                error_message=error_message,
+                status_code=status_code,
+                traceback_str=traceback_str,
             )
-            
-            # Generate intelligent error response
-            intelligent_response = error_service.analyze_error(
+
+        try:
+            provider_name = self._extract_provider_from_error(
+                error_message,
+                traceback_str or "",
+            )
+            analysis = error_service.analyze_error(
                 error_message=error_message,
                 error_type=error_type,
                 status_code=status_code,
@@ -143,168 +132,111 @@ class IntelligentErrorHandlerMiddleware(BaseHTTPMiddleware):
                 additional_context={
                     **request_meta,
                     "traceback": traceback_str if self.debug_mode else None,
-                }
+                },
             )
-            
-            # Convert to API response format
-            response_data = {
-                "detail": intelligent_response.summary,
-                "error": {
-                    "title": intelligent_response.title,
-                    "category": intelligent_response.category,
-                    "severity": intelligent_response.severity,
-                    "next_steps": intelligent_response.next_steps,
-                    "contact_admin": intelligent_response.contact_admin,
-                    "retry_after": intelligent_response.retry_after,
-                    "help_url": intelligent_response.help_url,
-                    "timestamp": request_meta["timestamp"],
-                }
+
+            error_payload: Dict[str, object] = {
+                "title": analysis.title,
+                "category": analysis.category,
+                "severity": analysis.severity,
+                "next_steps": analysis.next_steps,
+                "contact_admin": analysis.contact_admin,
+                "retry_after": analysis.retry_after,
+                "help_url": analysis.help_url,
+                "timestamp": request_meta["timestamp"],
             }
-            
-            # Add provider health if available
-            if intelligent_response.provider_health:
-                response_data["error"]["provider_health"] = intelligent_response.provider_health
-            
-            # Add technical details if available and in debug mode
-            if self.debug_mode and intelligent_response.technical_details:
-                response_data["error"]["technical_details"] = intelligent_response.technical_details
-            
-            # Add traceback in debug mode
+            if analysis.provider_health:
+                error_payload["provider_health"] = analysis.provider_health
+            if self.debug_mode and analysis.technical_details:
+                error_payload["technical_details"] = analysis.technical_details
             if self.debug_mode and traceback_str:
-                response_data["error"]["traceback"] = traceback_str
-            
-            headers = {}
-            if intelligent_response.retry_after:
-                headers["Retry-After"] = str(intelligent_response.retry_after)
-            
+                error_payload["traceback"] = traceback_str
+
+            headers: Dict[str, str] = {}
+            if analysis.retry_after:
+                headers["Retry-After"] = str(analysis.retry_after)
+
             return JSONResponse(
-                response_data,
+                content={
+                    "detail": analysis.summary,
+                    "error": error_payload,
+                },
                 status_code=status_code,
-                headers=headers
+                headers=headers,
             )
-            
-        except Exception as e:
-            logger.error(f"Failed to generate intelligent error response: {e}")
-            # Fallback to simple error response
-            response_data = {"detail": error_message}
-            if self.debug_mode and traceback_str:
-                response_data["traceback"] = traceback_str
-            return JSONResponse(response_data, status_code=status_code)
-    
-    async def _create_simple_error_response(
-        self,
-        error_message: str,
-        status_code: int,
-        traceback_str: Optional[str] = None
-    ) -> JSONResponse:
-        """Create a simple error response without intelligent analysis."""
-        response_data = {"detail": error_message}
-        if self.debug_mode and traceback_str:
-            response_data["traceback"] = traceback_str
-        return JSONResponse(response_data, status_code=status_code)
-    
+        except Exception:
+            logger.exception("Failed to generate structured error analysis")
+            return await self._create_simple_error_response(
+                error_message=error_message,
+                status_code=status_code,
+                traceback_str=traceback_str,
+            )
+
     async def dispatch(self, request: Request, call_next: Callable) -> JSONResponse:
-        """Main middleware dispatch method."""
-        # Extract request metadata
-        request_meta = await self._extract_request_metadata(request)
-        
+        request_meta = self._extract_request_metadata(request)
         try:
             response = await call_next(request)
-            if request.url.path.startswith("/api/copilot/assist"):
-                logger.warning(
-                    "intelligent_error_handler received response: %s",
-                    type(response).__name__ if response is not None else "None",
-                    extra={"path": request_meta["path"], "method": request_meta["method"]},
-                )
             if response is None:
-                # If an inner middleware or endpoint returns None, Starlette will crash.
-                # Catch it here and raise to trigger our local error handling.
                 raise RuntimeError("No response returned from inner middleware chain")
             return response
-            
-        except HTTPException as e:
-            # Handle HTTP exceptions
+        except HTTPException as exc:
             logger.info(
-                f"HTTP exception: {e.status_code} - {e.detail}",
+                "HTTP exception",
                 extra={
-                    "status_code": e.status_code,
+                    "status_code": exc.status_code,
                     "path": request_meta["path"],
                     "method": request_meta["method"],
                     "ip_address": request_meta["ip_address"],
-                }
+                },
             )
-            
-            # Use simple error response for certain paths
             if self._should_use_simple_error(request):
                 return await self._create_simple_error_response(
-                    error_message=str(e.detail),
-                    status_code=e.status_code
+                    error_message=str(exc.detail),
+                    status_code=exc.status_code,
                 )
-            
-            # Use intelligent error response
             return await self._create_intelligent_error_response(
-                error_message=str(e.detail),
+                error_message=str(exc.detail),
                 error_type="http_exception",
-                status_code=e.status_code,
-                request_meta=request_meta
+                status_code=exc.status_code,
+                request_meta=request_meta,
             )
-            
-        except Exception as e:
-            # Handle unhandled exceptions
-            error_message = str(e)
-            error_type = type(e).__name__
+        except Exception as exc:
+            error_message = str(exc).strip() or "Internal server error"
+            error_type = type(exc).__name__
             traceback_str = traceback.format_exc()
-            
-            print(f"!!! UNHANDLED EXCEPTION IN MIDDLEWARE: {error_type} - {error_message}")
-            print(traceback_str)
-            print("!!! END OF TRACEBACK")
-            
-            logger.error(
-                f"Unhandled exception: {error_type} - {error_message}",
+            logger.exception(
+                "Unhandled middleware exception",
                 extra={
                     "error_type": error_type,
                     "path": request_meta["path"],
                     "method": request_meta["method"],
                     "ip_address": request_meta["ip_address"],
-                    "traceback": traceback_str,
-                }
+                },
             )
-            
-            # Use simple error response for certain paths
+
             if self._should_use_simple_error(request):
                 return await self._create_simple_error_response(
                     error_message="Internal server error",
                     status_code=500,
-                    traceback_str=traceback_str
+                    traceback_str=traceback_str,
                 )
-            
-            # Use intelligent error response
-            try:
-                return await self._create_intelligent_error_response(
-                    error_message=error_message,
-                    error_type=error_type,
-                    status_code=500,
-                    request_meta=request_meta,
-                    traceback_str=traceback_str
-                )
-            except Exception as final_e:
-                print(f"!!! CRITICAL: Intelligent error handler failed itself: {final_e}")
-                return await self._create_simple_error_response(
-                    error_message=f"Critical server error: {error_message}",
-                    status_code=500,
-                    traceback_str=traceback_str
-                )
+            return await self._create_intelligent_error_response(
+                error_message=error_message,
+                error_type=error_type,
+                status_code=500,
+                request_meta=request_meta,
+                traceback_str=traceback_str,
+            )
 
 
-# Convenience function for adding middleware to FastAPI app
 def add_intelligent_error_handler(
-    app, 
-    enable_intelligent_responses: bool = True, 
-    debug_mode: bool = False
-):
-    """Add intelligent error handler middleware to FastAPI app."""
+    app,
+    enable_intelligent_responses: bool = True,
+    debug_mode: bool = False,
+) -> None:
+    """Register the global structured error handler."""
     app.add_middleware(
         IntelligentErrorHandlerMiddleware,
         enable_intelligent_responses=enable_intelligent_responses,
-        debug_mode=debug_mode
+        debug_mode=debug_mode,
     )
