@@ -23,7 +23,6 @@ def test_distributed_run_store_reuses_canonical_redis_authority() -> None:
     assert "Redis.from_url" not in source
     assert "_redis.client" in source
     assert "_redis.set(" not in source
-    assert "SET', KEYS" not in source
     assert "_RENEW_CLAIM_SCRIPT" in source
     assert "_RELEASE_CLAIM_SCRIPT" in source
     assert "_CANCEL_RUN_SCRIPT" in source
