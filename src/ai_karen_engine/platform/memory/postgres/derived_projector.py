@@ -1,9 +1,9 @@
 """PostgreSQL derived projections from governed NeuroVault commits.
 
 Canonical durable truth is written first by NeuroVault. This projector may then
-materialize profile, episodic, procedural, Redis, and graph views using the
+materialize profile, episodic, procedural, STM, and graph views using the
 committed event ID as provenance. It never decides whether a memory is allowed
-to be durable.
+to be durable and it does not construct backend implementations.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from ai_karen_engine.core.memory.projections import get_projection_manager
+from ai_karen_engine.core.memory.projections import ProjectionManager
 from ai_karen_engine.core.memory.signals import MemorySignal
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
@@ -24,6 +24,9 @@ from .procedural_models import MemoryProcedure
 
 class PostgresDerivedMemoryProjector:
     """Materialize rebuildable views after a successful governed commit."""
+
+    def __init__(self, projection_manager: ProjectionManager) -> None:
+        self._projection_manager = projection_manager
 
     async def project(
         self,
@@ -88,7 +91,7 @@ class PostgresDerivedMemoryProjector:
             "reinforces": self._listify(merged.get("reinforces")),
         }
 
-        results = await get_projection_manager().project_event(event_data, assertion_data)
+        results = await self._projection_manager.project_event(event_data, assertion_data)
         await self._record_projection_statuses(event_uuid=event_uuid, results=results)
         return results
 
