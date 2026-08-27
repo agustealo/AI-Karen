@@ -2,8 +2,9 @@
 
 All process launchers, containers, and deployment adapters must import the
 application factory from this module. The root ``server`` package remains a
-transitional helper/compatibility package, but it no longer owns the FastAPI
-application instance or lifespan authority.
+transitional router compatibility package only; canonical configuration,
+middleware, security, performance, admin registration, lifecycle, and exception
+handling live under ``ai_karen_engine.server``.
 """
 
 from __future__ import annotations
@@ -23,15 +24,14 @@ from ai_karen_engine.platform.observability.http_metrics import (
     REQUEST_COUNT,
     REQUEST_LATENCY,
 )
+from ai_karen_engine.server.admin_endpoints import register_admin_endpoints
 from ai_karen_engine.server.application_runtime import create_application_lifespan
+from ai_karen_engine.server.config import Settings
 from ai_karen_engine.server.exception_handlers import setup_exception_handlers
-from server.admin_endpoints import register_admin_endpoints
-from server.config import Settings
-from server.middleware import configure_middleware
-from server.performance import load_performance_settings
+from ai_karen_engine.server.middleware import configure_middleware
+from ai_karen_engine.server.performance import load_performance_settings
+from ai_karen_engine.server.security import validate_environment_security
 from server.routers import wire_routers
-from server.security import validate_environment_security
-from server.validation import initialize_validation_framework
 
 logger = logging.getLogger("kari")
 
@@ -167,14 +167,7 @@ def _prune_removed_legacy_model_capabilities(app: FastAPI) -> None:
 
 
 def _prune_legacy_user_model_preferences(app: FastAPI) -> None:
-    """Quarantine the deprecated filesystem-backed model preference API.
-
-    Provider/model availability and selection belong to the canonical provider
-    registry and runtime. The legacy user preference router persisted model IDs
-    through local filesystem settings, hardcoded a model default, and could
-    acknowledge writes that were not persisted. Keep its import compatibility
-    temporarily, but never expose those endpoints from the canonical app.
-    """
+    """Quarantine the deprecated filesystem-backed model preference API."""
     if getattr(
         app.state,
         _LEGACY_USER_MODEL_PREFERENCES_PRUNED_STATE_KEY,
@@ -231,7 +224,6 @@ def create_app() -> FastAPI:
 
     settings = Settings()
     load_performance_settings(settings)
-    initialize_validation_framework(settings)
 
     app = FastAPI(
         title="Kari AI Assistant API",
