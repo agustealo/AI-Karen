@@ -82,9 +82,17 @@ class MedusaCoordinator:
 
         tenant_id = str(getattr(request, "tenant_id", None) or "default")
         user_id = str(request.user_id or "anonymous")
+        plan_data = request.authorized_plan if isinstance(request.authorized_plan, dict) else {}
+        policy_decision_id_raw = plan_data.get("policy_decision_id")
+        policy_decision_id = (
+            str(policy_decision_id_raw) if policy_decision_id_raw is not None else None
+        )
         await self.run_manager.register(
             run_id=request.request_id,
             correlation_id=request.request_id,
+            request_id=request.request_id,
+            session_id=request.session_id,
+            policy_decision_id=policy_decision_id,
             tenant_id=tenant_id,
             user_id=user_id,
             task=current_task,
@@ -94,6 +102,9 @@ class MedusaCoordinator:
             extra={
                 "run_id": request.request_id,
                 "correlation_id": request.request_id,
+                "request_id": request.request_id,
+                "session_id": request.session_id,
+                "policy_decision_id": policy_decision_id,
                 "tenant_id": tenant_id,
                 "user_id": user_id,
             },
