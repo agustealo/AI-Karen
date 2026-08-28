@@ -7,6 +7,8 @@ ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "supabase/migrations/20260828100000_12_medusa_execution_ledger.sql"
 RUN_MANAGER = ROOT / "src/ai_karen_engine/agent_medusa/execution/run_manager.py"
 LEDGER = ROOT / "src/ai_karen_engine/agent_medusa/execution/run_ledger.py"
+COORDINATOR = ROOT / "src/ai_karen_engine/agent_medusa/coordinator/medusa_coordinator.py"
+RUNTIME_REQUEST = ROOT / "src/ai_karen_engine/agent_medusa/contracts/runtime_request.py"
 DATABASE_README = ROOT / "src/ai_karen_engine/database/README.md"
 
 
@@ -21,7 +23,18 @@ def test_medusa_ledger_uses_canonical_schema_authority_and_rls() -> None:
     assert "orphaned" in sql
 
     database_contract = DATABASE_README.read_text(encoding="utf-8")
-    assert "`supabase/migrations/` is the only primary PostgreSQL schema-evolution authority" in database_contract
+    assert (
+        "`supabase/migrations/` is the only primary PostgreSQL schema-evolution authority"
+        in database_contract
+    )
+
+
+def test_transition_history_is_append_only_by_database_policy() -> None:
+    sql = MIGRATION.read_text(encoding="utf-8")
+    assert "medusa_execution_events_tenant_select" in sql
+    assert "medusa_execution_events_tenant_insert" in sql
+    assert "medusa_execution_events_tenant_update" not in sql
+    assert "medusa_execution_events_tenant_delete" not in sql
 
 
 def test_runtime_does_not_create_or_mutate_postgres_schema() -> None:
@@ -40,6 +53,24 @@ def test_runtime_does_not_create_or_mutate_postgres_schema() -> None:
     )
     for marker in forbidden:
         assert marker not in runtime_text
+
+
+def test_reconciliation_remains_tenant_scoped() -> None:
+    ledger = LEDGER.read_text(encoding="utf-8")
+    run_manager = RUN_MANAGER.read_text(encoding="utf-8")
+    assert "list_active" not in ledger
+    assert "list_active" not in run_manager
+    assert "async_transaction_scope(tenant_id)" in ledger
+
+
+def test_execution_provenance_reaches_run_authority() -> None:
+    coordinator = COORDINATOR.read_text(encoding="utf-8")
+    request_contract = RUNTIME_REQUEST.read_text(encoding="utf-8")
+    assert "correlation_id: Optional[str]" in request_contract
+    assert "tenant_id: Optional[str]" in request_contract
+    assert "request_id=request.request_id" in coordinator
+    assert "policy_decision_id=policy_decision_id" in coordinator
+    assert "correlation_id=correlation_id" in coordinator
 
 
 def test_authority_split_is_explicit_in_runtime_modules() -> None:
