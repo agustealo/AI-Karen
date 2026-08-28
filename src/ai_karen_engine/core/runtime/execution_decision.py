@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from ai_karen_engine.core.context.contracts import CognitiveContext
 from ai_karen_engine.core.reasoning.contracts import normalize_reasoning_modes
 from ai_karen_engine.core.runtime.contracts import ExecutionTopology
 
@@ -38,8 +39,9 @@ class ExecutionDecision:
     """CORTEX-produced, runtime-consumed cognitive execution recommendation.
 
     CORTEX decides what kind of execution a request needs. RuntimePolicy decides
-    what is authorized, and Runtime executes the resulting plan. Capability and
-    reasoning-mode domains are intentionally distinct.
+    what is authorized, Runtime resolves authorized evidence, and Runtime executes
+    the resulting plan. ``cognitive_context`` carries the already-resolved typed
+    evidence forward so execution never needs to retrieve it a second time.
     """
 
     execution_mode: RuntimeExecutionMode = RuntimeExecutionMode.DIRECT
@@ -53,11 +55,11 @@ class ExecutionDecision:
     reasoning_depth: str = "standard"
     reasoning_modes: List[str] = field(default_factory=list)
     memory_recall_required: bool = False
-    # Fail closed. This becomes true only after RuntimePolicy grants memory.write.
     memory_write_allowed: bool = False
     memory_scope: str = "session"
     memory_top_k: int = 10
     memory_classes: List[str] = field(default_factory=list)
+    cognitive_context: Optional[CognitiveContext] = None
 
     tool_requirements: List[str] = field(default_factory=list)
     plugin_candidates: List[str] = field(default_factory=list)
@@ -111,9 +113,8 @@ class ExecutionDecision:
             self.graph_required = True
 
         # Compatibility bridge for the pre-convergence ChatRuntime persistence
-        # call site, which currently invokes persistence only on the recall path.
-        # Authorization still comes exclusively from RuntimePolicy. Remove this
-        # bridge when ChatRuntime checks memory_write_allowed independently.
+        # call site. EVIDENCE-1 removes this bridge once ChatRuntime persists from
+        # memory_write_allowed independently of recall relevance.
         if self.memory_write_allowed and not self.memory_recall_required:
             self.memory_recall_required = True
             if "compat_memory_write_requires_recall" not in self.reason_codes:
