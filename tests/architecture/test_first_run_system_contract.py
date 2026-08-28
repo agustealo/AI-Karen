@@ -52,6 +52,7 @@ def test_first_run_route_stays_thin_and_delegates_to_auth_authority() -> None:
     assert "auth_service_instance.is_first_run()" in handlers
     assert "auth_svc.create_first_admin(" in handlers
     assert "auth_svc.authenticate_user(" in handlers
+    assert "Depends(get_auth_service)" in handlers
     assert "_serialize_permissions(user_data)" in handlers
     assert 'key="kari_session"' in handlers
     assert "httponly=True" in handlers
@@ -68,6 +69,13 @@ def test_first_run_route_stays_thin_and_delegates_to_auth_authority() -> None:
     )
     leaked = [marker for marker in forbidden_bootstrap_authority if marker in handlers]
     assert not leaked, f"first-run ingress gained forbidden authority: {leaked}"
+
+
+def test_auth_routes_do_not_call_fastapi_dependency_provider_directly() -> None:
+    source = _read(AUTH_ROUTE)
+
+    assert "await get_auth_service()" not in source
+    assert "db_session: AsyncSession = Depends(get_async_db_session_dependency)" in source
 
 
 def test_auth_service_owns_durable_one_time_bootstrap() -> None:
