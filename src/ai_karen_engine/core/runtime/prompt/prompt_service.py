@@ -1,6 +1,7 @@
 """PromptRuntime service.
 
-Coordinates prompt assembly, versioning, token budgeting, and validation.
+Coordinates prompt assembly, versioning, token budgeting, validation, and the
+canonical normalization of trusted runtime context.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ import copy
 import logging
 from typing import Any, Dict, List, Optional
 
+from ai_karen_engine.core.runtime.prompt.persona_contract import PersonaAssemblyPolicy
 from ai_karen_engine.core.runtime.prompt.prompt_assembler import PromptAssembler
 from ai_karen_engine.core.runtime.prompt.prompt_contract import (
     PromptAssemblyRequest,
@@ -33,7 +35,8 @@ class PromptRuntimeService:
     """Canonical service for final prompt preparation.
 
     Domain owners supply already-authorized/ranked inputs. PromptRuntime owns
-    cross-section token pressure, omission provenance, and final serialization.
+    cross-section token pressure, omission provenance, persona presentation
+    boundaries, and final serialization.
     """
 
     def __init__(
@@ -44,6 +47,7 @@ class PromptRuntimeService:
         self.registry = registry or get_prompt_registry()
         self.assembler = PromptAssembler(self.registry)
         self.truncation_policy = truncation_policy or HierarchicalTruncationPolicy()
+        self.persona_policy = PersonaAssemblyPolicy()
 
     async def assemble_prompt(
         self,
@@ -52,7 +56,6 @@ class PromptRuntimeService:
         validate_schema: bool = True,
     ) -> PromptAssemblyResult:
         """Assemble a prompt from trusted runtime inputs."""
-
         working_request = copy.deepcopy(request)
         prompt_definition = None
         if working_request.prompt_id:
@@ -126,6 +129,7 @@ class PromptRuntimeService:
         messages: List[Dict[str, Any]],
         request_context: Optional[Dict[str, Any]] = None,
         integrated_context: Optional[Dict[str, Any]] = None,
+        persona: Optional[Dict[str, Any]] = None,
         profile: Optional[Dict[str, Any]] = None,
         workflow_context: Optional[Dict[str, Any]] = None,
         cortex_intent: Optional[Dict[str, Any]] = None,
@@ -135,14 +139,14 @@ class PromptRuntimeService:
     ) -> PromptAssemblyRequest:
         """Normalize trusted runtime context into the canonical prompt contract.
 
-        Domain owners retain ranking authority. This method does not score or
-        invent context; it preserves supplied order, deduplicates exact repeats,
-        and maps each domain into an existing PromptAssemblyRequest field.
+        Domain owners retain ranking authority. Persona is normalized here as a
+        presentation-only overlay. This method does not score, authorize, route,
+        or invent context.
         """
-
         request_context = dict(request_context or {})
         integrated_context = dict(integrated_context or {})
         profile_payload = dict(profile or {})
+        persona_result = self.persona_policy.sanitize_persona(persona or {})
 
         for key in ("user_facts", "project_facts"):
             items = self._normalize_context_items(request_context.get(key), source=key)
@@ -166,6 +170,7 @@ class PromptRuntimeService:
 
         return PromptAssemblyRequest(
             system_instructions="\n".join(instruction_lines),
+            persona=persona_result.data,
             profile=profile_payload,
             memory_items=memory_items,
             cortex_intent=dict(cortex_intent or {}),
@@ -178,7 +183,6 @@ class PromptRuntimeService:
 
     def render_text_prompt(self, messages: List[Dict[str, Any]]) -> str:
         """Render canonical assembled messages for plain-text provider transports."""
-
         return self.assembler.render_text_prompt(messages)
 
     @staticmethod
@@ -279,7 +283,6 @@ def get_prompt_runtime_service() -> PromptRuntimeService:
     The service is stateless for request execution aside from the canonical
     prompt registry cache. Runtime remains the orchestration authority.
     """
-
     global _prompt_runtime_service
     if _prompt_runtime_service is None:
         _prompt_runtime_service = PromptRuntimeService()
