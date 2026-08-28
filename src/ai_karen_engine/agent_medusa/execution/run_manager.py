@@ -72,7 +72,9 @@ class ExecutionRun:
             "user_id": self.user_id,
             "status": self.status.value,
             "started_at": self.started_at.isoformat(),
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "completed_at": (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
             "error_type": self.error_type,
             "cancellable": self.status is ExecutionRunStatus.RUNNING,
             "durable": self.durable_registered,
