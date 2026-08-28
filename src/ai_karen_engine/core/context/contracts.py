@@ -8,6 +8,7 @@ second request orchestrator.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -30,6 +31,71 @@ class EvidenceSource(str, Enum):
     COMMITMENTS = "commitments"
     LIVE_STATE = "live_state"
     EXTERNAL = "external"
+
+
+class EvidenceContradictionStatus(str, Enum):
+    """Typed contradiction state attached to resolved evidence."""
+
+    UNKNOWN = "unknown"
+    NONE = "none"
+    POSSIBLE = "possible"
+    CONFIRMED = "confirmed"
+    RESOLVED = "resolved"
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceProvenance:
+    """Where resolved evidence came from and which resolver produced it."""
+
+    source_ref: str | None = None
+    source_record_id: str | None = None
+    resolver_id: str = ""
+    resolver_version: str = ""
+    retrieval_method: str = ""
+    retrieved_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    reason_codes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceTemporalContext:
+    """Temporal meaning of evidence, separate from retrieval time."""
+
+    observed_at: datetime | None = None
+    effective_from: datetime | None = None
+    effective_until: datetime | None = None
+    expires_at: datetime | None = None
+    as_of: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceContradiction:
+    """Conflict state without embedding untyped claim payloads in the contract."""
+
+    status: EvidenceContradictionStatus = EvidenceContradictionStatus.UNKNOWN
+    conflicting_evidence_ids: tuple[str, ...] = ()
+    reason_codes: tuple[str, ...] = ()
+    resolution_ref: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceScope:
+    """Identity and conversation scope carried with one evidence item.
+
+    This envelope records the scope actually used by Runtime resolution. It does
+    not authorize that scope. RuntimePolicy remains the authorization authority.
+    The temporary legacy default tenant is preserved here until TENANT-SCOPE-1
+    removes it at ingress/runtime identity authority.
+    """
+
+    tenant_id: str
+    user_id: str | None = None
+    session_id: str | None = None
+    conversation_id: str | None = None
+    project_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.tenant_id:
+            raise ValueError("evidence tenant_id must be present")
 
 
 @dataclass(slots=True)
@@ -126,10 +192,10 @@ class ContextEvidence:
     source_ref: str | None = None
     relevance: float | None = None
     confidence: float | None = None
-    provenance: dict[str, Any] = field(default_factory=dict)
-    temporal: dict[str, Any] = field(default_factory=dict)
-    contradiction: dict[str, Any] = field(default_factory=dict)
-    scope: dict[str, Any] = field(default_factory=dict)
+    provenance: EvidenceProvenance = field(default_factory=EvidenceProvenance)
+    temporal: EvidenceTemporalContext = field(default_factory=EvidenceTemporalContext)
+    contradiction: EvidenceContradiction = field(default_factory=EvidenceContradiction)
+    scope: EvidenceScope | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -176,5 +242,10 @@ __all__ = [
     "ContextRequirements",
     "ContextScope",
     "ContextSnapshot",
+    "EvidenceContradiction",
+    "EvidenceContradictionStatus",
+    "EvidenceProvenance",
+    "EvidenceScope",
     "EvidenceSource",
+    "EvidenceTemporalContext",
 ]
