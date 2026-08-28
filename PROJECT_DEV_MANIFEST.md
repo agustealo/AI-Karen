@@ -1,13 +1,14 @@
 # AI KAREN Project Developer Manifest
 
 > **Status:** Canonical developer contract and live architecture truth map
-> **Applies to:** backend, runtime, AI/ML, agents, memory, extensions, APIs, UI, infrastructure, tests, and documentation
-> **Live audit baseline:** `main` at `5883bc4e25983ce283f0a5a38d42932df87d351d` on 2026-08-27
-> **Rule:** Live code is implementation truth. This manifest separates what is implemented now from the target architecture. Historical sprint sheets, compatibility layers, framework conventions, and research systems never override it.
+> **Applies to:** backend, runtime, AI/ML, agents, memory, extensions, APIs, UI, installation/bootstrap, infrastructure, tests, and documentation
+> **Live audit baseline:** `main` at `f71dd27bc881598d728af2c75fbafc491f20c369` on 2026-08-28
+> **Active first-run hardening slice:** `feature/first-class-first-run-20260828`
+> **Rule:** Live code is implementation truth. This manifest separates implemented behavior from target architecture. Historical sprint sheets, compatibility layers, framework conventions, and research systems never override it.
 
-AI KAREN is a **local-first, prompt-first, modular AI runtime** evolving toward **human-like cognitive continuity** with durable governed memory, evidence-backed self/user/relationship models, provider/model orchestration, governed reasoning, RBAC, audit, extensibility, and first-class observability.
+AI KAREN is a **local-first, prompt-first, modular AI runtime** evolving toward human-like cognitive continuity with durable governed memory, evidence-backed self/user/relationship models, provider/model orchestration, governed reasoning, RBAC, audit, extensibility, first-class installation/bootstrap, and observable system behavior.
 
-KAREN is not framework-first. Libraries, research systems, model runtimes, agent harnesses, and workflow engines are subordinate capabilities behind KAREN-owned contracts.
+KAREN is not framework-first. Libraries, research systems, model runtimes, agent harnesses, workflow engines, setup wizards, and infrastructure helpers are subordinate capabilities behind KAREN-owned contracts.
 
 ---
 
@@ -27,21 +28,23 @@ Core rules:
 
 - **Local-first:** prefer healthy local capabilities when suitable.
 - **Prompt-first:** prompts are explicit, versioned, testable contracts.
-- **Runtime-authoritative:** routes, UI, providers, agents, plugins, and workflow engines never become alternate runtimes.
+- **Runtime-authoritative:** routes, UI, providers, agents, plugins, and workflow engines never become alternate chat runtimes.
 - **CORTEX is KAREN's central cognitive authority. CORTEX decides; Runtime executes.**
 - **RuntimePolicy authorizes. CORTEX does not authorize itself.**
-- **Evidence access is authorization-sensitive.** CORTEX may request evidence, but RuntimePolicy must authorize access before Runtime resolves governed sources.
+- **Evidence access is authorization-sensitive.** CORTEX may request evidence, but RuntimePolicy must authorize governed access before Runtime resolves it.
 - **DRY by authority:** one responsibility -> one owner -> one execution path.
-- **Typed and async-safe:** public cognitive/runtime boundaries are typed; budgets, cancellation, and concurrency are explicit.
-- **Config-driven:** providers, models, endpoints, fallbacks, feature flags, environment, budgets, and security modes come from canonical config, not scattered constants or direct environment reads.
+- **Typed and async-safe:** public cognitive/runtime boundaries are typed; budgets, cancellation, concurrency, and distributed ownership are explicit.
+- **Config-driven:** providers, models, endpoints, fallbacks, feature flags, environment, budgets, security modes, and installation settings belong behind canonical validated configuration.
+- **Migration-owned schema:** production runtime verifies required schema but does not silently create missing migration-owned tables.
 - **Honest degradation:** unavailable capabilities produce explicit degraded/unavailable results, never fabricated model output.
 - **Evidence-preserving cognition:** retrieval evidence must not be flattened into untyped text before reasoning, prompting, or model revision.
 - **Learning is outcome-aware:** durable formation is evaluated after execution from the actual interaction/outcome, not only predicted before generation.
+- **First run is lifecycle, not UI:** a fresh installation must prove durable identity, tenant scope, one-time bootstrap, restart survival, and fail-closed setup behavior.
 - **Test-proven architecture:** architecture rules are executable where practical.
 
 ### 1.1 Cognitive north star
 
-The target is **cognitive continuity**, not merely long-term memory:
+The target is cognitive continuity, not merely long-term memory:
 
 ```text
 experience
@@ -68,7 +71,7 @@ Memory, evidence, claims, beliefs, knowledge, identity, user understanding, rela
 
 | Responsibility | Canonical owner | Must not own it |
 |---|---|---|
-| HTTP ingress | `api_routes/` + app composition | provider choice, prompts, recall, orchestration |
+| HTTP ingress | `api_routes/` + app composition | provider choice, prompts, recall, orchestration, durable bootstrap writes |
 | Request lifecycle | `core/runtime/` | routes, UI, CORTEX, agents |
 | Cognitive decisions | `core/cortex/` | authorization, provider execution, persistence |
 | Signal extraction / ML inference | `core/intelligence/` | final cognitive authority, execution, authorization |
@@ -81,18 +84,23 @@ Memory, evidence, claims, beliefs, knowledge, identity, user understanding, rela
 | Memory recall strategy | NeuroRecall under `core/memory/` | durable storage, provider/tool execution |
 | Memory formation / durable mutation | MemoryFormation + NeuroVault | CORTEX, reasoning, recall |
 | Self/User/Relationship models | `core/personalization/` contracts/services | global execution, policy authorization |
-| Provider/model runtime | canonical model runtime + provider registry | UI, routes, CORTEX |
+| Provider/model runtime | canonical model runtime + provider registry | UI, routes, CORTEX, first-run auth |
 | Graph workflows | LangGraph only for true graph semantics | ordinary chat, global routing |
 | Multi-agent execution | AgentMedusa | provider routing, global policy |
 | Extensions/actions | governed extension/action runtime | route-level execution, self-authorization |
+| Authentication/session/RBAC identity | canonical auth services + backend policy | UI, client storage, setup wizard |
+| Production schema bootstrap | migrations / deployment tooling | runtime routes, AuthService table creation |
+| First-run durable owner/tenant bootstrap | canonical `AuthService` | UI, routes, provider runtime, ad-hoc scripts |
+| First-run HTTP transport | `api_routes/auth/auth.py` | durable tenant/user creation logic |
+| First-run production proof | `scripts/ci/production-first-boot-smoke.sh` + CI workflow | documentation-only/manual claims |
 | Observability | `platform/observability/` | subsystem shadow telemetry |
-| Configuration | `src/ai_karen_engine/config/` + environment adapter | React fallbacks, direct `os.environ` reads in cognition |
+| Configuration | `src/ai_karen_engine/config/` + validated adapters | React fallbacks, scattered direct environment reads |
 
-**CORTEX is the central cognitive authority, not the supreme system authority.** Security/policy, execution, persistence, provider routing, prompt assembly, observability, and configuration remain independent authorities in their own domains.
+**CORTEX is the central cognitive authority, not the supreme system authority.** Security/policy, execution, persistence, provider routing, authentication, installation bootstrap, schema migration, prompt assembly, observability, and configuration remain independent authorities in their own domains.
 
 ---
 
-## 3. Live Implementation Truth: 2026-08-27
+## 3. Live Implementation Truth: 2026-08-28
 
 ### 3.1 Actual canonical chat path
 
@@ -108,10 +116,8 @@ ChatRuntime.execute / execute_stream
 RuntimeDecisionPipeline.decide
       |
       +--> CortexExecutionDecider.decide
-      |      |
-      |      +--> IntelligenceRuntime.analyze(latest raw user text)
-      |      +--> deterministic CORTEX compatibility heuristics
-      |      +--> requested intent/topology/reasoning/recall/write/tools/budgets
+      |      +--> IntelligenceRuntime signals
+      |      +--> requested intent/topology/reasoning/recall/tools/budgets
       |
       +--> RuntimePolicyEnforcer.evaluate
       |      +--> capabilities
@@ -119,302 +125,345 @@ RuntimeDecisionPipeline.decide
       |      +--> side-effect constraints
       |
       v
-ExecutionDecision carrying policy result
+ExecutionDecision
       |
       v
 ChatRuntime builds AuthorizedExecutionPlan
       |
-      +--> memory recall, only if CORTEX requested it
+      +--> memory recall when requested/authorized
       +--> DIRECT -> PromptRuntime -> ExpressionGateway -> model runtime
       +--> REASONING -> RuntimeReasoningBridge -> ReasoningExecutor
       +--> WORKFLOW / MULTI-AGENT -> WorkflowRuntime
-      +--> memory persistence under policy gate, currently coupled to recall
-      +--> trajectory / outcome / telemetry
+      +--> persistence / trajectory / outcome / telemetry
 ```
 
-### 3.2 CORTEX reality
+Routes remain ingress. CORTEX remains decision-only. Runtime executes. Provider/model truth remains backend-owned.
 
-`CortexExecutionDecider` is active and is the cognitive decision head. It does not execute providers, memory, tools, plugins, workflows, or durable persistence. It consumes `IntelligenceRuntime` analysis and produces requested execution intent.
+### 3.2 CORTEX and Intelligence reality
 
-Current limitations:
+`CortexExecutionDecider` is active as the cognitive decision head and consumes subordinate `IntelligenceRuntime` signals. The classifier hardening merged on 2026-08-28 preserves explicit unknown/weak-signal rejection and keeps Intelligence signal-producing rather than execution-authoritative.
 
-- CORTEX is **single-pass**. It decides before memory/model evidence is resolved.
-- `IntelligenceRuntime.analyze()` receives essentially the latest user text plus minimal user/session context, not a resolved cognitive context.
-- CORTEX still contains compatibility keyword heuristics for code/filesystem tool requirements. Signal extraction belongs under Intelligence or another subordinate typed signal service, while CORTEX should interpret signals.
-- CORTEX reads `KARI_RUNTIME_FORCE_GRAPH` directly through `os.environ`; canonical config should own this.
-- CORTEX hardcodes several cognitive/runtime budget defaults, including the Soft Reasoning model-call floor. Defaults must move behind validated runtime/cognitive config where they are policy/configurable.
+Current cognitive limitations remain:
 
-Current KAREN therefore behaves approximately as:
-
-```text
-raw request
- -> Intelligence signals
- -> CORTEX
- -> RuntimePolicy
- -> optional recall
- -> execute
-```
-
-It is not yet an evidence-informed executive loop.
+- the ordinary CORTEX path is still substantially single-pass before resolved evidence;
+- compatibility heuristics still exist in decision/routing surfaces and require convergence;
+- richer typed CognitiveContext is not yet the universal ordinary-chat envelope;
+- direct/hardcoded cognitive/runtime config debt still exists and must migrate behind validated config;
+- two-stage evidence authorization/decision remains target work, not current truth.
 
 ### 3.3 RuntimePolicy reality
 
-`RuntimeDecisionPipeline` correctly keeps CORTEX and RuntimePolicy as separate objects and applies policy after cognition.
+RuntimePolicy remains separate from CORTEX. It is the authorization authority for execution eligibility and must also become the authorization authority for governed evidence access in the target two-stage cognitive loop.
 
-However, the live policy request currently hardcodes:
+No new policy engine should be introduced for evidence access.
 
-```text
-environment="production"
-```
+### 3.4 Memory and formation reality
 
-This violates canonical config ownership and can make development/test/runtime-level behavior semantically dishonest. Environment must come from validated runtime configuration/context.
+KAREN has substantial STM/episodic/LTM, NeuroRecall, formation, and NeuroVault foundations. Tenant-aware recall/persistence paths exist, but evidence-preservation and post-execution formation convergence remain active work.
 
-The current pipeline has only one main authorization point **before execution**. The target two-stage cognitive loop also requires a policy authorization checkpoint **before governed evidence resolution**.
+Rules remain:
 
-This does not create a second policy engine. It is the same RuntimePolicy authority evaluated for two different operations:
+- recall does not persist;
+- reasoning does not persist;
+- CORTEX does not persist;
+- Runtime coordinates authorized formation;
+- MemoryFormation + NeuroVault govern durable mutation;
+- recall/read and write/formation decisions must be independent;
+- formation should evaluate the actual completed interaction/outcome.
 
-```text
-Policy Gate A = may Runtime resolve these evidence sources/scopes?
-Policy Gate B = may Runtime execute this final cognitive plan?
-```
+### 3.5 Provider/model runtime reality
 
-### 3.4 Cognitive state and context reality
+Provider/model availability, health, selection, execution, and fallback are backend runtime responsibilities. UI must display backend truth only.
 
-`core/cognitive/state.py` already defines a substantial typed `CognitiveState` envelope including belief, goals, salience, context, reasoning, metacognition, adaptive state, policy snapshot, confidence domains, tenant, user, session, conversation, project, and temporal metadata.
+Local-first capability may include OpenAI-compatible local endpoints, Transformers, Ollama, and other registered runtimes according to current validated configuration. Legacy `builtin_vllm` must not be resurrected as a duplicate provider authority.
 
-Its tenant contract correctly rejects empty/default tenant scope.
+### 3.6 Distributed Medusa reality
 
-`core/context` remains mostly vocabulary/resolution primitives rather than a competing cognitive executive.
+Medusa execution control now uses distributed ownership/fencing semantics so only the worker owning the concrete task can cancel it, while remote workers coordinate cancellation through durable distributed state. Medusa remains an execution topology, not a second runtime, CORTEX, or provider router.
 
-**Critical gap:** canonical `ChatRuntime` does not carry `CognitiveState` or a richer `CognitiveContext` through ordinary chat execution.
+### 3.7 First-run / installation bootstrap reality
 
-### 3.5 Prompt reality
+KAREN now has a canonical first-run contract centered on durable backend truth.
 
-`ChatRuntime._assemble_prompt()` delegates final assembly to PromptRuntime, preserving the correct owner. But ChatRuntime directly constructs a minimal `PromptAssemblyRequest`.
-
-Today that input contains messages, selected memory items, tool contracts, workflow metadata, and token budget. It does not yet carry resolved:
-
-- SelfModel;
-- UserModel;
-- RelationshipModel;
-- belief/claim state;
-- goals/commitments;
-- metacognitive state;
-- evidence conflicts;
-- typed provenance-preserving CognitiveContext.
-
-A stronger existing PromptRuntime normalization path should be extended rather than creating another prompt-context builder.
-
-### 3.6 Memory reality
-
-Runtime recall correctly passes explicit `user_id`, `tenant_id`, session/conversation, query, top-k, and correlation context to the canonical memory manager.
-
-But recalled results are flattened before downstream use to approximately:
+Active implementation:
 
 ```text
-id
-content
-timestamp
+Deployment/migrations
+  -> apply migration-owned auth schema
+
+AuthService.initialize()
+  -> validate auth configuration
+  -> verify required migration-owned tables exist
+
+GET /api/auth/first-run
+  -> AuthService.is_first_run()
+  -> true only when durable AuthUser count is zero
+
+POST /api/auth/first-run/setup
+  -> AuthService.create_first_admin()
+  -> PostgreSQL transaction advisory lock
+  -> re-check durable user count under lock
+  -> resolve/create installation tenant
+  -> create verified first owner
+  -> roles: admin + user
+  -> enforce durable tenant assignment
+  -> emit auth.first_admin.created audit event
+  -> authenticate through normal auth/session path
 ```
 
-Reasoning then reconstructs every recalled item with:
+**Implemented first-run invariants:**
+
+- production auth initialization validates configuration;
+- required auth tables are migration-owned and preflight-verified;
+- runtime does not create missing production auth schema;
+- first-admin bootstrap is serialized across workers with a transaction-scoped PostgreSQL advisory lock;
+- durable user count is rechecked after lock acquisition;
+- first owner receives durable tenant scope;
+- first owner receives backend `admin` and `user` roles;
+- completed bootstrap rejects later setup attempts;
+- setup emits an auth audit event;
+- token/session issuance uses the normal auth authority;
+- browser session uses the canonical HTTP-only session cookie path.
+
+**Executable production burn:** `scripts/ci/production-first-boot-smoke.sh` now proves against a fresh isolated stack:
+
+1. PostgreSQL/pgvector readiness;
+2. password-protected Redis readiness;
+3. canonical migrations on an empty database;
+4. real production API image liveness;
+5. auth readiness;
+6. `first_run_required=true` before setup;
+7. first owner creation and authentication;
+8. durable `tenant_id`, username, `admin`, and `user` roles;
+9. second setup attempt is denied with HTTP 400;
+10. database contains exactly one bootstrap user;
+11. an active durable tenant exists;
+12. authenticated `/api/auth/me` works;
+13. exact production image restarts;
+14. first-run remains completed after restart;
+15. owner can log in and resolve identity after restart.
+
+Architecture guard: `tests/architecture/test_first_run_system_contract.py` proves the route remains thin, AuthService owns one-time durable bootstrap, schema remains migration-owned, and the production smoke retains its critical invariants.
+
+Canonical documentation: `docs/architecture/FIRST_RUN_SYSTEM.md`.
+
+### 3.8 First-run maturity boundary
+
+**First-class today:** durable auth/bootstrap ownership and production fresh-install proof.
+
+**Not yet a single first-class installation-readiness surface:** provider/model readiness, memory readiness, extension readiness, observability readiness, UI wizard orchestration, and first-real-chat proof are still separate subsystem truths.
+
+That separation is intentional. The next layer should aggregate existing subsystem health/contracts rather than move provider, model, memory, extension, or observability authority into AuthService or a setup route.
+
+Target post-login readiness flow:
 
 ```text
-relevance = 0.5
-confidence = 0.5
+auth bootstrap complete
+ -> aggregate canonical subsystem health/readiness
+ -> provider/model ready or explicitly unavailable
+ -> required memory services ready/degraded
+ -> governed extensions ready/disabled
+ -> observability requirements ready
+ -> first real chat through canonical runtime
+ -> display actual provider/model/degradation truth
 ```
 
-This destroys evidence calibration and can make verified, stale, inferred, contradicted, or low-quality memories indistinguishable.
+### 3.9 First-run configuration debt
 
-**Critical lifecycle defect:** both non-stream and stream persistence are gated by `decision.memory_recall_required`. Therefore a novel interaction can fail to become a learning candidate merely because no prior recall was needed.
+`AuthService.create_first_admin()` still directly interprets `KARI_FIRST_RUN_TENANT_SLUG` and `KARI_FIRST_RUN_TENANT_NAME` from the environment.
 
-There is a second coupling defect: `_persist_memory()` skips writes when recall failed/degraded. Read failure must not automatically suppress an independently authorized learning event.
+This violates the configuration rule even though the values are used only inside the canonical bootstrap owner. The fix must move interpretation behind canonical validated configuration without creating a second bootstrap-config service or leaving duplicate environment readers.
 
-### 3.7 Formation reality
+This debt is **explicitly open**. Do not describe it as completed until service wiring, tests, docs, and reference audit prove the migration.
 
-The current memory-write request is predicted by CORTEX/Intelligence **before generation**. That can be useful as a preliminary write-intent hint, but it is not a sufficient formation decision because the actual assistant response, tool results, user correction, task success/failure, and observed outcome do not exist yet.
+### 3.10 Compatibility and tenant debt
 
-Target formation must therefore have two distinct concepts:
-
-```text
-pre-execution write intent / policy eligibility
-post-execution formation evaluation based on actual outcome
-```
-
-Only the post-execution governed formation stage decides what becomes a durable memory candidate.
-
-### 3.8 Self/User/Relationship reality
-
-Personalization contains useful evidence/provenance-oriented contracts and services, but those models are not yet resolved into the canonical ChatRuntime decision/prompt path before ordinary generation.
-
-KAREN therefore has model foundations, not yet full operational self/user/relationship continuity in normal chat.
-
-### 3.9 Compatibility and naming debt
-
-`RuntimeComposition.cortex` returns the **Runtime-owned `RuntimeDecisionPipeline`**, not `CortexExecutionDecider`.
-
-`get_cortex_execution_decider()` also returns `RuntimeDecisionPipeline` despite its name.
-
-These are compatibility shims whose names now misrepresent authority. No new consumer may depend on either misleading accessor.
-
-The composition module's explanatory chain must also avoid implying that `RuntimeDecisionPipeline` is a stage after CORTEX and RuntimePolicy. The pipeline is the Runtime-owned container that invokes those two stages.
-
-Target call sites should become explicit:
-
-```text
-requirements = cortex.determine_context_requirements(...)
-evidence_auth = runtime_policy.evaluate_evidence_access(...)
-context = runtime.resolve_authorized_evidence(...)
-cognitive_decision = cortex.decide_with_context(...)
-execution_auth = runtime_policy.evaluate_execution(...)
-plan = runtime.build_authorized_plan(...)
-```
-
-### 3.10 Tenant contract risk
-
-`ChatExecutionContext` still defines:
-
-```text
-tenant_id: str = "default"
-```
-
-while newer cognitive contracts reject default tenant scope. Production architecture requires explicit tenant scope. Removal must be preceded by ingress/caller/reference audit so compatibility does not accidentally bypass tenant isolation.
+Compatibility accessors and default tenant fallbacks must continue to be removed only after caller/reference audits. No new production path may invent tenant scope.
 
 ### 3.11 Live maturity classification
 
 | Capability | Live status | Assessment |
 |---|---|---|
 | Runtime lifecycle authority | ACTIVE | strong |
-| CORTEX cognitive decision head | ACTIVE | strong but single-pass |
-| RuntimePolicy separation | ACTIVE | strong, but only one canonical execution authorization stage today |
-| Evidence-access authorization | RED | target requires explicit pre-resolution policy gate |
-| Intelligence signal layer | ACTIVE | useful, but CORTEX still contains compatibility feature heuristics |
-| Typed CognitiveState | CONTRACT/PARTIAL | rich schema, not canonical chat envelope |
-| Context/Evidence resolver | UNWIRED | vocabulary exists, canonical resolver does not |
-| PromptRuntime authority | ACTIVE | final assembly canonical, context normalization thin |
-| Governed memory recall | ACTIVE | final-mile evidence semantics flattened |
-| Governed formation/persistence | ACTIVE/PARTIAL | coupled to recall; formation not outcome-aware enough |
-| SelfModel in ordinary chat | CONTRACT/PARTIAL | not resolved into canonical execution context |
-| UserModel in ordinary chat | PARTIAL | not central to canonical execution context |
-| RelationshipModel in ordinary chat | CONTRACT/PARTIAL | not resolved into canonical execution context |
-| Belief revision | PARTIAL/UNWIRED | vocabulary exists; canonical request-loop authority not proven |
-| Metacognition | CONTRACT/REASONING MODE | not persistent calibrated metamemory |
-| Evidence-preserving recall -> reasoning | RED | fixed synthetic relevance/confidence destroys signal |
-| Two-stage evidence-informed CORTEX | RED | not implemented |
-| Config purity at cognitive/policy boundary | RED/PARTIAL | direct env read, hardcoded environment/budgets remain |
-| Cognitive consolidation loop | PARTIAL | subsystems exist; end-to-end loop not canonical |
-| Human-like cognitive continuity | PARTIAL | strong organs, incomplete nervous system |
+| CORTEX cognitive decision head | ACTIVE | strong but still converging toward evidence-informed two-stage cognition |
+| RuntimePolicy separation | ACTIVE | strong execution-policy authority; evidence-access gate remains target |
+| Intelligence signal layer | ACTIVE | hardened, explicit unknown/weak-signal rejection |
+| PromptRuntime authority | ACTIVE | final assembly canonical; richer resolved context still evolving |
+| Governed memory recall | ACTIVE/PARTIAL | substantial, evidence preservation still converging |
+| Governed formation/persistence | ACTIVE/PARTIAL | outcome-aware convergence remains |
+| Provider/model authority | ACTIVE | backend-owned, local-first/config-driven direction |
+| Distributed Medusa execution control | ACTIVE | fenced ownership/cancellation path landed |
+| First-run auth/bootstrap | ACTIVE | canonical, durable, one-time, tenant-scoped |
+| First-run production burn | ACTIVE | fresh DB/Redis/migrations/image/restart proof |
+| First-run architecture guard | ACTIVE | ownership/invariant test added |
+| Unified installation-readiness aggregator | NOT YET | next layer; must consume subsystem truth |
+| First-run UI end-to-end burn | NOT YET | next layer |
+| First-real-chat fresh-install proof | NOT YET | next layer |
+| First-run tenant config purity | PARTIAL | direct env reads remain explicit debt |
+| Human-like cognitive continuity | PARTIAL | strong subsystems, incomplete nervous system |
 
 ---
 
-## 4. Target Cognitive Continuity Model
+## 4. First-Run System Contract
 
-The target is a two-stage CORTEX with **two RuntimePolicy evaluations owned by the same policy authority**.
+First run is a privileged installation lifecycle. It is not equivalent to “the web server answered” and it is not owned by the UI.
+
+### 4.1 State machine
 
 ```text
-                         NEW REQUEST
-                              |
-                              v
-                       BootstrapContext
-                              |
-                              v
-                    CORTEX STAGE ONE
-                 "what evidence is needed?"
-                              |
-                              v
-                    ContextRequirements
-                              |
-                              v
-                  RUNTIMEPOLICY GATE A
-             evidence source / scope / RBAC /
-             tenant / privacy / budget approval
-                              |
-                              v
-                  Runtime EvidenceResolver
-            +-----------------+-----------------+
-            |                 |                 |
-            v                 v                 v
-         Memory            Models          Live State
-            |                 |                 |
-            +-----------------+-----------------+
-                              v
-                       CognitiveContext
-                              |
-                              v
-                    CORTEX STAGE TWO
-                 "what should happen now?"
-                              |
-                              v
-                     CognitiveDecision
-                              |
-                              v
-                  RUNTIMEPOLICY GATE B
-          capability / side-effect / reasoning /
-            resource / tool / human-gate auth
-                              |
-                              v
-                  AuthorizedExecutionPlan
-                              |
-                              v
-                           Runtime
-            +-----------------+-----------------+
-            |                 |                 |
-            v                 v                 v
-        Reasoning           Tools           Workflow
-            +-----------------+-----------------+
-                              |
-                              v
-                        PromptRuntime
-                              |
-                              v
-                         Expression
-                              |
-                              v
-                        ModelRuntime
-                              |
-                              v
-                            Outcome
-                              |
-                              v
-               Post-Execution Formation Eval
-                              |
-                              v
-                        Consolidation
-                              |
-                              v
-                       Belief Revision
-              +---------------+---------------+
-              |               |               |
-              v               v               v
-           SelfModel       UserModel    RelationshipModel
+UNREADY
+  config/schema/dependency preflight fails
+  -> explicit unavailable/error
+
+BOOTSTRAP_REQUIRED
+  auth schema ready + zero durable users
+  -> GET /api/auth/first-run = required
+
+BOOTSTRAPPING
+  POST /api/auth/first-run/setup
+  -> advisory transaction lock
+  -> durable re-check
+  -> tenant + first owner transaction
+  -> audit
+  -> normal authentication/session issuance
+
+CONFIGURED
+  one or more durable users exist
+  -> first-run=false
+  -> repeat setup denied
+  -> normal login/session flow
 ```
 
-### 4.1 Stage boundaries
+### 4.2 Security rules
 
-**CORTEX Stage 1 owns:** intent hypothesis, uncertainty estimate, evidence/context requirements, temporal horizon, requested memory classes/scopes, requested model facets, retrieval budget hints, and verification need.
+First-run code must preserve:
 
-**RuntimePolicy Gate A owns:** authorization of requested evidence sources, tenant/user/project scope, privacy/RBAC constraints, source-specific permissions, external lookup eligibility, and retrieval budget.
+- fail-closed production/staging config validation;
+- migration-owned schema;
+- durable tenant assignment;
+- backend RBAC role authority;
+- race-safe one-time bootstrap;
+- auditability;
+- canonical password policy;
+- canonical token/session issuance;
+- no development auth bypass in production proof;
+- no client-local fake admin or fake setup completion;
+- no secret leakage in readiness diagnostics.
 
-**Runtime EvidenceResolver owns:** execution of only Gate-A-authorized retrieval/resolution. It does not decide the final action and cannot expand its own authorization scope.
+### 4.3 UI rules
 
-**CORTEX Stage 2 owns:** final intent/goal interpretation, evidence sufficiency/conflicts, cognitive topology, reasoning-mode requests, abstention/clarification/escalation recommendations, tool/workflow desirability, and requested compute budget.
+The active UI may implement a polished first-run wizard, but it may only render/submit backend truth.
 
-**RuntimePolicy Gate B owns:** final capability, side-effect, tool, reasoning-mode, resource, provider constraint, and human-gate authorization.
+It may:
 
-**Runtime owns:** lifecycle, execution, retries/fallbacks, provider/model invocation, streaming, persistence coordination, telemetry, and audit.
+- request `/api/auth/first-run`;
+- collect first-owner identity/password;
+- submit `/api/auth/first-run/setup`;
+- display backend errors;
+- guide authenticated owners through provider/model and deployment readiness.
 
-**MemoryFormation owns:** post-execution evaluation of what experience/outcome is eligible to become memory.
+It must not:
+
+- invent first-run state;
+- assign roles client-side;
+- create synthetic tenant IDs;
+- persist a fake owner locally;
+- mark setup complete after persistence failure;
+- silently fall back to demo/development credentials;
+- own provider/model selection or health truth.
+
+### 4.4 Next first-run tasks
+
+**FIRST-RUN-2: Typed installation readiness**
+
+Objective: add one backend-facing readiness view that aggregates existing subsystem truth without taking ownership from those subsystems.
+
+Do:
+
+- define a typed readiness envelope with component name, required/optional status, ready/degraded/unavailable, reason code, remediation hint, and provenance/source;
+- consume canonical provider/model health/inventory;
+- consume required memory dependency health;
+- consume governed extension readiness;
+- consume observability requirements appropriate to environment;
+- expose overall `ready_for_chat` separately from `auth_bootstrap_complete`;
+- preserve honest degraded/unavailable states;
+- emit structured readiness telemetry.
+
+Avoid:
+
+- provider selection in auth/setup code;
+- new memory/extension health implementations;
+- frontend-only readiness logic;
+- fake defaults that mark a component healthy;
+- making optional components block minimal local chat unless policy/config says required.
+
+**FIRST-RUN-3: UI wizard**
+
+Objective: active frontend automatically routes fresh installations based on backend status and guides setup without owning truth.
+
+Proof:
+
+- fresh install routes to setup;
+- completed install cannot re-enter setup as bootstrap authority;
+- backend failure is displayed honestly;
+- no local fake save;
+- provider/model options come from backend;
+- browser refresh/restart preserves backend-completed state.
+
+**FIRST-RUN-4: First real chat burn**
+
+Objective: after bootstrap, prove one real/local enabled provider can answer through canonical `/api/chat` and response metadata identifies actual provider/model/runtime/degradation source.
+
+This proof belongs in an environment where a real model runtime is part of the release contract. Do not replace it with canned text.
 
 ---
 
-## 5. Cognitive Semantics
+## 5. Target Cognitive Continuity Model
+
+The target remains a two-stage CORTEX with two RuntimePolicy evaluations owned by the same policy authority:
+
+```text
+NEW REQUEST
+    |
+BootstrapContext
+    |
+CORTEX Stage 1: what evidence is needed?
+    |
+ContextRequirements
+    |
+RuntimePolicy Gate A: what evidence may be accessed?
+    |
+Runtime EvidenceResolver
+    |
+CognitiveContext
+    |
+CORTEX Stage 2: what should happen now?
+    |
+CognitiveDecision
+    |
+RuntimePolicy Gate B: what work is allowed?
+    |
+AuthorizedExecutionPlan
+    |
+Runtime execution
+    |
+Outcome
+    |
+Post-execution formation / consolidation / belief revision
+```
+
+CORTEX does not execute. RuntimePolicy does not become cognition. EvidenceResolver cannot expand its own scope. Runtime remains lifecycle owner.
+
+---
+
+## 6. Cognitive and Memory Semantics
 
 Canonical semantic layers:
 
 ```text
-Observation  = an observed event or input
+Observation  = observed event/input
 Evidence     = typed, scoped, provenance-bearing support or contradiction
-Memory       = stored representation of observation/experience/derived artifact
+Memory       = stored representation of experience/observation/derived artifact
 Claim        = proposition attributed to a source
 Belief       = current evidence-weighted proposition held by KAREN
 Knowledge    = sufficiently supported belief within explicit confidence/validity bounds
@@ -423,34 +472,9 @@ Action       = authorized execution performed by Runtime
 Outcome      = observed result of an action
 ```
 
-Historical evidence is immutable except for governed retention/deletion. Belief/model state may be revised. **Model revision must never silently rewrite historical evidence.**
+Historical evidence is immutable except for governed retention/deletion. Belief/model state may be revised. Model revision never silently rewrites historical evidence.
 
-Conflicting evidence follows:
-
-```text
-new evidence
- -> conflict detection
- -> temporal resolution
- -> provenance/source weighting
- -> confidence/calibration update
- -> supersede / dispute / abstain
- -> model revision
-```
-
-Do not overload persona:
-
-```text
-IdentityBaseline = designed identity and immutable product constraints
-SelfBelief       = evidence-backed beliefs about KAREN's capabilities/history
-SelfState        = temporary operational/session capability state
-PersonaProfile   = optional communication/behavior overlay
-```
-
-Natural-language self-assessment may propose evidence but must not directly mutate durable SelfBelief.
-
----
-
-## 6. Memory Architecture
+Memory layers remain:
 
 ```text
 STM       recent/session state
@@ -458,115 +482,61 @@ Episodic  meaningful interactions, decisions, outcomes, reusable experience
 LTM       durable facts, preferences, knowledge
 ```
 
-NeuroRecall owns candidate-source coordination, semantic/temporal/graph/case fusion, ranking/reranking, contradiction/redundancy/diversity handling, scope-aware selection, recall abstention, recall confidence, and learned selection policy only behind evaluation gates.
-
-MemoryFormation + NeuroVault own durable mutation and lifecycle governance.
-
-Rules:
-
-- recall engines do not persist;
-- reasoning engines do not persist;
-- CORTEX does not persist;
-- Runtime coordinates authorized formation;
-- read and write/formation decisions are independent;
-- recall failure does not automatically cancel authorized formation;
-- formation evaluates the **actual completed interaction/outcome**;
-- tenant/user/workspace/project/session/conversation scope and provenance are explicit;
-- no implicit production `tenant_id="default"` fallback.
+NeuroRecall owns retrieval strategy/ranking. MemoryFormation + NeuroVault own durable mutation/lifecycle.
 
 ---
 
-## 7. Prompt-First Rules
+## 7. Prompt, Reasoning, Provider, Workflow Boundaries
 
-PromptRuntime owns final prompt assembly. Runtime owns the resolved authorized context supplied to it. CORTEX does not construct final prompts.
+PromptRuntime owns final prompt assembly. Runtime owns the authorized resolved context supplied to it. CORTEX does not build final prompts.
 
-Canonical prompt assembly may include system policy, task/output contract, explicit turn override, identity/persona/profile, tenant context, authorized evidence, Self/User/Relationship slices, goals/commitments, CORTEX intent/reasoning requirements, authorized tools/extensions, provider capability, token budget, safety, and output schema.
+Reasoning modes are typed execution protocols, not capability strings. Reasoning does not choose providers or persist memory.
 
-Do not create a second prompt-context builder while the existing PromptRuntime normalization path can be extended.
+Provider/model availability, health, selection, execution, and fallback remain centralized in the canonical model runtime/provider registry.
 
----
-
-## 8. Reasoning Architecture
-
-Reasoning modes are typed execution protocols, not capability strings.
-
-```text
-causal
-counterfactual
-evidence_synthesis
-hypothesis_comparison
-verification
-refinement
-soft_exploration
-metacognition
-```
-
-Capabilities such as `memory.read`, `memory.write`, `web`, `code_execution`, and `filesystem_read` do not belong in reasoning-mode fields.
-
-Soft Reasoning remains a specialist research-derived strategy under Runtime-authorized execution. It does not choose providers, build canonical prompts, own memory retrieval, or persist memory.
-
-Reasoning evidence must preserve upstream provenance, relevance, confidence, temporal state, contradiction status, and scope. Synthetic defaults such as fixed `0.5` relevance/confidence are transitional defects only.
+LangGraph is only for true graph semantics. AgentMedusa is only for authorized multi-agent topology. Neither becomes KAREN's cognitive head or global runtime.
 
 ---
 
-## 9. Provider, Workflow, and Agent Boundaries
-
-Provider/model availability, selection, health, execution, and fallback remain centralized under the canonical model runtime/provider registry. CORTEX requests capability/locality constraints but does not bypass that router.
-
-Target local-first fallback order remains config-driven:
-
-```text
-requested provider/model
- -> local primary
- -> OpenAI-compatible local endpoint, including vLLM deployments
- -> Transformers when enabled
- -> Ollama when enabled/healthy
- -> explicitly enabled external provider
- -> honest unavailable/degraded result
-```
-
-`builtin_vllm` must not be resurrected.
-
-LangGraph is only for true graph semantics. Complexity alone does not imply LangGraph.
-
-AgentMedusa is only for authorized multi-agent topology. Neither LangGraph nor AgentMedusa is KAREN's cognitive head.
-
----
-
-## 10. Security and Governance
+## 8. Security and Governance
 
 Preserve authentication/session validation, RBAC, tenant isolation, least privilege, credential redaction, extension/tool permission checks, audit logs, safe exception translation, request/correlation IDs, deletion/retention policy, and fail-closed production behavior.
 
 Never let:
 
 - CORTEX authorize itself;
+- evidence retrieval bypass policy where governed;
 - EvidenceResolver expand its own scope;
-- evidence retrieval happen before policy authorization when the source is governed;
 - memory bypass deletion/retention policy;
-- raw untrusted model output become authoritative belief without provenance;
+- raw model output become authoritative belief without provenance;
 - UI checks substitute for backend authorization;
-- fallback paths bypass policy.
-
-RuntimePolicy remains independently testable from CORTEX and is reused for both evidence-access authorization and final execution authorization.
-
----
-
-## 11. Configuration Authority
-
-All runtime/cognitive configuration belongs under canonical configuration services in `src/ai_karen_engine/config` with environment adapters and validation.
-
-Remove or migrate scattered direct configuration reads, including:
-
-- direct `os.environ` feature-flag reads in CORTEX;
-- hardcoded policy `environment="production"`;
-- hardcoded reasoning/model-call floors that should be runtime-configurable;
-- duplicated provider/model/fallback settings.
-
-Every option needs a safe default where appropriate, environment override, validation, documentation, telemetry exposure when relevant, and fail-safe behavior.
+- fallback paths bypass policy;
+- first-run UI create durable identity outside AuthService;
+- first-run bootstrap create production schema at runtime;
+- a second bootstrap request create a second “first” owner;
+- a user/session proceed without durable tenant scope.
 
 ---
 
-## 12. Observability
+## 9. Configuration Authority
+
+Canonical configuration belongs under `src/ai_karen_engine/config/` and validated subsystem adapters.
+
+Remove/migrate scattered direct reads and hardcodes, including:
+
+- direct CORTEX environment feature flags;
+- hardcoded runtime/policy environment values;
+- hardcoded reasoning/model-call floors that should be configurable;
+- duplicated provider/model/fallback settings;
+- direct first-run tenant slug/name environment interpretation in AuthService.
+
+Every configuration option needs an owner, default where safe, environment override where appropriate, validation, documentation, telemetry exposure when relevant, and safe failure behavior.
+
+Do not “fix” config debt by creating another config service.
+
+---
+
+## 10. Observability
 
 Trace, when applicable:
 
@@ -577,18 +547,8 @@ user_id
 tenant_id
 session_id
 conversation_id
-cortex_stage
 intent
-context_requirements
-requested_evidence_sources
-authorized_evidence_sources
-denied_evidence_sources
-context_item_count
-requested_reasoning_modes
-allowed_reasoning_modes
-denied_reasoning_modes
-policy_gate
-policy_decision_id
+topology
 provider
 model
 runtime_engine
@@ -597,85 +557,74 @@ degraded_mode
 degradation_reason
 response_source
 memory_recall_count
-recall_strategy
-recall_disposition
-formation_disposition
-belief_conflicts
-model_revisions
-model_calls
-reasoning_steps
+plugin_id
+agent_id
 latency_ms
 status
 error_type
 error_code
 ```
 
-Use one observability authority under `platform/observability/`. High-cardinality IDs belong in structured events/traces, not Prometheus labels.
-
----
-
-## 13. Composition and No-Hidden-Construction Rule
-
-Live composition:
+For installation/bootstrap also distinguish:
 
 ```text
-RuntimeDecisionPipeline
-   |- CortexExecutionDecider
-   `- RuntimePolicyEnforcer
-
-ChatRuntime
-   |- RuntimeDecisionPipeline
-   `- ExpressionGateway
+first_run_required
+auth_schema_ready
+bootstrap_attempt
+bootstrap_result
+bootstrap_reason_code
+tenant_created_or_resolved
+first_admin_created
+reentry_denied
+ready_for_chat
+readiness_component
+readiness_status
 ```
 
-This is the accurate containment model. Do not document `RuntimeDecisionPipeline` as though it executes after CORTEX and RuntimePolicy.
-
-Target composition:
-
-```text
-Runtime cognitive lifecycle
-   |- CortexExecutionDecider Stage 1
-   |- RuntimePolicyEnforcer Gate A
-   |- EvidenceResolver
-   |- CortexExecutionDecider Stage 2
-   `- RuntimePolicyEnforcer Gate B
-
-ChatRuntime execution
-```
-
-Do not create a second global orchestrator to implement two-stage cognition. Runtime remains lifecycle owner.
-
-Stateful canonical services must not silently instantiate alternate provider registries, memory managers, NeuroRecall instances, reasoning engines, prompt runtimes, policy engines, workflow orchestrators, or CORTEX instances.
-
-Compatibility accessors may remain only when they resolve to canonical composed instances and have explicit removal conditions.
+Do not log passwords, raw tokens, or secrets. High-cardinality IDs belong in structured events/traces, not Prometheus labels.
 
 ---
 
-## 14. Priority Migration: COGNITIVE-CONTINUITY-1
+## 11. Composition and No-Hidden-Construction Rule
 
-Canonical implementation order:
+Stateful canonical services must not silently instantiate alternate provider registries, memory managers, NeuroRecall instances, reasoning engines, prompt runtimes, policy engines, workflow orchestrators, CORTEX instances, auth authorities, or installation orchestrators.
 
-1. **CORTEX-CONTEXT-1:** introduce typed `ContextRequirements` and `CognitiveContext`; split CORTEX into Stage 1 evidence-needs and Stage 2 evidence-informed decision without duplicating runtime orchestration.
-2. **EVIDENCE-AUTH-1:** reuse RuntimePolicy as Gate A before evidence resolution; authorize source, scope, tenant/privacy/RBAC, and retrieval budget. No new policy engine.
-3. **EVIDENCE-1:** preserve typed memory/model/live-state provenance, temporal state, relevance, confidence, contradictions, scope, and retrieval rationale through Runtime, PromptRuntime, and ReasoningEvidence.
-4. **FORMATION-1:** decouple formation from recall and move durable formation eligibility to a post-execution, outcome-aware stage. Recall failure must not suppress independent authorized formation.
-5. **PROMPT-CONTEXT-1:** route canonical resolved CognitiveContext through existing PromptRuntime normalization instead of direct minimal request construction.
-6. **CONFIG-COGNITIVE-1:** migrate direct CORTEX environment reads, hardcoded policy environment, and cognitive budget constants into validated config.
-7. **SELF-1:** operationalize evidence-backed SelfModel/SelfBelief and temporary SelfState.
-8. **USER-REL-1:** resolve UserModel, RelationshipModel, goals, preferences, and commitments into scoped CognitiveContext.
-9. **BELIEF-1:** establish canonical evidence/claim/belief revision with temporal conflict and supersession semantics.
-10. **METACOGNITION-1:** add calibrated knowledge-gap, memory reliability, evidence sufficiency, retrieval-needed, abstention, and capability-awareness behavior.
-11. **CONSOLIDATION-1:** connect outcomes to consolidation, semantic extraction, model revision, retention/forgetting, and reconsolidation policy.
-12. **COGNITIVE-EVAL-1:** benchmark multi-session recall, temporal reasoning, knowledge updates, contradiction handling, abstention, long-range understanding, selective forgetting, and self-capability calibration.
-13. **COMPAT-CORTEX-1:** remove/rename misleading `composition.cortex` and `get_cortex_execution_decider()` compatibility accessors after all callers migrate.
+Compatibility shims may remain only when they resolve to canonical composed instances and have explicit migration/removal conditions.
 
-Do not add a new persona framework, context orchestrator, memory framework, policy engine, or agent harness before checking whether existing canonical contracts/services can be extended.
+A future installation-readiness aggregator is a view/composition layer. It does not become the owner of the health or configuration it aggregates.
 
 ---
 
-## 15. Repository and Cleanup Rules
+## 12. Priority Migration
 
-Before changing a service:
+### COGNITIVE-CONTINUITY-1
+
+1. **CORTEX-CONTEXT-1:** typed ContextRequirements/CognitiveContext and two-stage CORTEX without duplicate orchestration.
+2. **EVIDENCE-AUTH-1:** RuntimePolicy Gate A before governed evidence resolution.
+3. **EVIDENCE-1:** preserve evidence provenance/confidence/temporal/contradiction/scope semantics end-to-end.
+4. **FORMATION-1:** decouple formation from recall and make it post-execution/outcome-aware.
+5. **PROMPT-CONTEXT-1:** route resolved CognitiveContext through existing PromptRuntime normalization.
+6. **CONFIG-COGNITIVE-1:** migrate direct environment reads and hardcoded cognitive/runtime defaults.
+7. **SELF-1 / USER-REL-1:** operationalize evidence-backed self/user/relationship continuity.
+8. **BELIEF-1 / METACOGNITION-1 / CONSOLIDATION-1:** complete revision/calibration/consolidation loops.
+9. **COGNITIVE-EVAL-1:** benchmark continuity, conflict, temporal updates, abstention, forgetting, and calibration.
+10. **COMPAT-CORTEX-1:** remove misleading compatibility accessors after caller migration.
+
+### FIRST-RUN
+
+1. **FIRST-RUN-1:** durable auth/bootstrap authority + production fresh-install burn. **ACTIVE in this hardening slice.**
+2. **FIRST-RUN-CONFIG-1:** move tenant slug/name interpretation behind canonical validated config. **OPEN.**
+3. **FIRST-RUN-2:** typed post-login installation-readiness aggregator over canonical subsystem truth. **OPEN.**
+4. **FIRST-RUN-3:** active frontend first-run wizard/router consuming backend truth. **OPEN.**
+5. **FIRST-RUN-4:** fresh-install first-real-chat burn with actual provider/model provenance. **OPEN.**
+
+Do not add a new global orchestrator, setup framework, persona framework, memory framework, policy engine, or agent harness before checking whether existing canonical contracts can be extended.
+
+---
+
+## 13. Repository and Cleanup Rules
+
+Before changing or deleting a service/path:
 
 1. identify the current owner;
 2. search imports/references;
@@ -686,21 +635,13 @@ Before changing a service:
 7. delete dead authority after reference audit;
 8. add architecture tests preventing resurrection.
 
-Broad namespaces are not authorities by name:
+Broad namespaces are not authorities by name. Ownership is defined by contract and runtime path.
 
-- `core/cortex` = cognitive decisions;
-- `core/intelligence` = typed signals/features/predictions consumed by CORTEX;
-- `core/cognitive` = typed cognitive state/vocabulary;
-- `core/context` = context vocabulary/resolution primitives, never a competing cognitive executive;
-- `core/reasoning` = authorized reasoning execution;
-- `core/adaptive` = learning/adaptation capability, never global request routing;
-- `core/runtime` = lifecycle/execution authority.
-
-Never keep dead code "just in case."
+Never keep dead code “just in case.”
 
 ---
 
-## 16. Required Proof
+## 14. Required Proof
 
 Relevant backend changes run the applicable subset:
 
@@ -726,44 +667,47 @@ Infrastructure:
 docker compose config
 ```
 
-Cognitive/runtime changes additionally prove:
+First-run architecture proof:
 
-```text
-[ ] CORTEX has no RuntimePolicy construction/execution
-[ ] CORTEX has no provider/tool/memory/persistence execution
-[ ] Stage 1 emits typed ContextRequirements
-[ ] RuntimePolicy Gate A runs before governed evidence resolution
-[ ] EvidenceResolver cannot self-authorize or expand scope
-[ ] Stage 2 receives typed CognitiveContext
-[ ] RuntimePolicy Gate B runs after final CORTEX decision
-[ ] both policy gates use the same canonical policy authority
-[ ] environment/runtime level comes from canonical config, not hardcoded production
-[ ] CORTEX has no direct environment feature-flag authority
-[ ] cognitive budgets are config/policy driven
-[ ] RuntimePolicy owns allowed/denied reasoning modes and capabilities
-[ ] RuntimePolicy never invents a reasoning mode
-[ ] Runtime remains the sole lifecycle/execution authority
-[ ] IntelligenceRuntime remains signal-producing, not final cognitive authority
-[ ] CORTEX compatibility feature heuristics are removed or explicitly sunset
-[ ] capability and reasoning-mode domains remain distinct
-[ ] rich recall evidence survives into reasoning and prompt context
-[ ] no fixed fake confidence/relevance replaces upstream evidence metadata
-[ ] memory formation is not gated by whether recall occurred
-[ ] recall failure does not suppress independent authorized formation
-[ ] post-execution formation evaluates actual outcome/response/tool results
-[ ] Self/User/Relationship model slices are tenant/user scoped
-[ ] durable writes remain governed by MemoryFormation / NeuroVault
-[ ] production tenant scope is explicit
-[ ] shared stateful dependencies are explicitly composed
-[ ] no new consumer uses `composition.cortex`
-[ ] no new consumer uses misleading `get_cortex_execution_decider()` compatibility accessor
+```bash
+pytest tests/architecture/test_first_run_system_contract.py -q
+bash -n scripts/ci/production-first-boot-smoke.sh
 ```
 
-Never report CI/tests green unless actually observed.
+Real production first-run burn:
+
+```bash
+docker build --target app --build-arg PROFILE=runtime -t ai-karen-api:beta .
+KAREN_SMOKE_API_IMAGE=ai-karen-api:beta bash scripts/ci/production-first-boot-smoke.sh
+```
+
+First-run merge checklist:
+
+```text
+[ ] route delegates durable bootstrap to AuthService
+[ ] route does not create Tenant/AuthUser rows directly
+[ ] required auth schema is migration-owned
+[ ] AuthService initialization fails when required schema is absent
+[ ] first-run state comes from durable user count
+[ ] bootstrap is serialized across workers
+[ ] durable user count is rechecked after lock acquisition
+[ ] first owner has durable tenant scope
+[ ] first owner has backend admin + user roles
+[ ] setup emits audit event
+[ ] duplicate/re-entry setup is denied
+[ ] production smoke proves exactly one bootstrap user
+[ ] completed state survives exact-image restart
+[ ] owner can authenticate after restart
+[ ] UI does not invent setup state or roles
+[ ] provider/model/memory/extension readiness remains owned by canonical subsystems
+[ ] direct first-run tenant config environment reads are tracked until migrated
+```
+
+Never report CI/tests green unless actually observed on the exact head.
 
 ---
 
-## 17. Research-Guided Development Rules
+## 15. Research-Guided Development Rules
 
 Research informs implementation; it does not gain architecture authority.
 
@@ -771,50 +715,49 @@ Favor mechanisms that fit KAREN-owned contracts: consolidation, interference/ret
 
 Every research-derived capability documents source paper/repository, implemented mechanism, deviations, compute/resource assumptions, benchmark protocol, production activation policy, and fallback/abstention behavior.
 
-Do not import a research system's whole orchestration model when its useful mechanism can be extracted behind KAREN's Runtime/CORTEX/Memory/Reasoning contracts.
-
 ---
 
-## 18. Documentation Authority
+## 16. Documentation Authority
 
 Read in this order:
 
 1. `PROJECT_DEV_MANIFEST.md`
 2. live code and architecture tests
-3. `docs/development/ARCHITECTURE_AUTHORITY.md`
-4. accepted ADR/current dev sheet
-5. subsystem documentation
-6. historical sprint sheets as history only
+3. `docs/architecture/FIRST_RUN_SYSTEM.md` for first-run/bootstrap work
+4. `docs/development/ARCHITECTURE_AUTHORITY.md`
+5. accepted ADR/current dev sheet
+6. subsystem documentation
+7. historical sprint sheets as history only
 
-If documentation disagrees with tested live behavior, classify it explicitly as **documentation drift** or **implementation debt**.
+If documentation disagrees with tested live behavior, classify it explicitly as documentation drift or implementation debt.
 
 ---
 
-## 19. Final Architecture Test
+## 17. Final Architecture Test
 
 Before merging, answer:
 
 1. Who owns this responsibility now?
 2. Is it duplicated elsewhere?
 3. Does a stronger implementation already exist?
-4. Is this signal production, cognitive decision, evidence authorization, evidence resolution, execution authorization, execution, formation, persistence, or presentation?
+4. Is this signal production, cognitive decision, evidence authorization, evidence resolution, execution authorization, execution, formation, persistence, installation bootstrap, or presentation?
 5. Does the change preserve local-first and prompt-first behavior?
 6. Does it preserve RBAC, tenant isolation, audit, credentials, retention/deletion, and telemetry?
 7. Does CORTEX remain cognitive authority without becoming an executor?
-8. Does RuntimePolicy remain authorization-only while gating both governed evidence access and final execution?
-9. Does Runtime remain the sole lifecycle/execution authority?
-10. Does any subsystem silently construct or mutate an alternate authority?
-11. Does evidence retain provenance, confidence, temporal state, contradiction state, and scope across boundaries?
-12. Can a learning event form independently of whether recall happened or succeeded?
-13. Is formation based on the actual completed interaction/outcome?
-14. Are environment, budgets, flags, providers, and fallbacks sourced from canonical config?
+8. Does RuntimePolicy remain authorization-only?
+9. Does Runtime remain the sole chat lifecycle/execution authority?
+10. Does first-run bootstrap remain inside canonical AuthService + migration/deployment boundaries?
+11. Does any subsystem silently construct or mutate an alternate authority?
+12. Does evidence retain provenance/confidence/temporal/contradiction/scope semantics across boundaries?
+13. Is learning based on actual completed interaction/outcome?
+14. Are environment, budgets, flags, providers, fallbacks, and bootstrap settings sourced from canonical config or explicitly tracked as debt?
 15. What executable proof demonstrates the boundary?
 
 If those answers are unclear, the design is not finished.
 
 ---
 
-## 20. Canonical Mental Model
+## 18. Canonical Mental Model
 
 ```text
 CORTEX Stage 1    = What evidence does KAREN need?
@@ -822,23 +765,21 @@ RuntimePolicy A   = What evidence may KAREN access now?
 EvidenceResolver  = Resolve only authorized evidence/context.
 CORTEX Stage 2    = Given the evidence, what should KAREN do?
 RuntimePolicy B   = What final work is KAREN allowed to perform?
-Runtime           = Execute authorized work and own the request lifecycle.
+Runtime           = Execute authorized chat work and own request lifecycle.
 Intelligence      = Produce typed signals/features/predictions for cognition.
 CognitiveState    = Typed cognitive snapshot vocabulary, not an orchestrator.
 NeuroRecall       = Which authorized past information is useful now?
-MemoryFormation   = Which completed experiences/outcomes are eligible to become memory?
+MemoryFormation   = Which completed experiences/outcomes are eligible for memory?
 NeuroVault        = Govern durable memory mutation and lifecycle.
-SelfModel         = Evidence-backed model of KAREN, not persona text.
-UserModel         = Evidence-backed model of the user within scope.
-RelationshipModel = Evidence-backed shared history/norms/commitments within scope.
-BeliefRevision    = Reconcile evidence with current beliefs without rewriting history.
 Reasoning         = Execute typed, authorized reasoning strategies.
-SoftReasoning     = Governed specialist test-time exploration protocol.
 LangGraph         = Execute explicit graph semantics only.
 AgentMedusa       = Execute governed specialist-agent topology only.
 PromptRuntime     = Serialize authorized resolved context into prompt contracts.
-Expression        = Request generation through canonical runtime boundaries.
 ModelRuntime      = Resolve and execute an eligible healthy provider/model.
+AuthService       = Own durable users/sessions and one-time first-owner bootstrap.
+Migrations        = Own production schema creation/evolution.
+First-run API     = Thin transport over AuthService bootstrap truth.
+First-run UI      = Render backend setup/readiness truth only.
 Observability     = Record what actually happened.
 Configuration     = Supply validated environment, flags, budgets, endpoints, and defaults.
 ```
