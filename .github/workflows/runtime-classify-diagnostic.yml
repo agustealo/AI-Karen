@@ -10,8 +10,41 @@ permissions:
   contents: read
 
 jobs:
-  import-runtime:
+  import-matrix:
+    name: import-${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linguistic_contracts
+            module: ai_karen_engine.core.intelligence.linguistic.contracts
+          - name: ml_runtime
+            module: ai_karen_engine.core.intelligence.ml.ml_runtime
+          - name: predictor_ambiguity
+            module: ai_karen_engine.core.intelligence.ml.predictors.ambiguity
+          - name: predictor_capability
+            module: ai_karen_engine.core.intelligence.ml.predictors.capability
+          - name: predictor_complexity
+            module: ai_karen_engine.core.intelligence.ml.predictors.complexity
+          - name: predictor_domain
+            module: ai_karen_engine.core.intelligence.ml.predictors.domain
+          - name: predictor_intent
+            module: ai_karen_engine.core.intelligence.ml.predictors.intent
+          - name: predictor_memory_relevance
+            module: ai_karen_engine.core.intelligence.ml.predictors.memory_relevance
+          - name: predictor_topology
+            module: ai_karen_engine.core.intelligence.ml.predictors.topology
+          - name: registry
+            module: ai_karen_engine.core.intelligence.ml.registry
+          - name: task_signature_builder
+            module: ai_karen_engine.core.intelligence.task_signature_builder
+          - name: ml_metrics
+            module: ai_karen_engine.monitoring.ml_metrics
+          - name: observability_metrics
+            module: ai_karen_engine.platform.observability.metrics
+          - name: intelligence_runtime
+            module: ai_karen_engine.core.intelligence.intelligence_runtime
     env:
       PYTHONPATH: src
     steps:
@@ -24,20 +57,4 @@ jobs:
             numpy sqlalchemy asyncpg psycopg psycopg2-binary PyJWT bcrypt argon2-cffi \
             structlog cryptography PyYAML pydantic pydantic-settings python-dotenv \
             prometheus_client fastapi httpx requests tenacity redis fakeredis
-      - run: python -c "from ai_karen_engine.core.intelligence.intelligence_runtime import IntelligenceRuntime; assert IntelligenceRuntime"
-
-  instantiate-without-init:
-    runs-on: ubuntu-latest
-    env:
-      PYTHONPATH: src
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: |
-          python -m pip install \
-            numpy sqlalchemy asyncpg psycopg psycopg2-binary PyJWT bcrypt argon2-cffi \
-            structlog cryptography PyYAML pydantic pydantic-settings python-dotenv \
-            prometheus_client fastapi httpx requests tenacity redis fakeredis
-      - run: python -c "from ai_karen_engine.core.intelligence.intelligence_runtime import IntelligenceRuntime; r=object.__new__(IntelligenceRuntime); r._initialized=True; assert r._initialized"
+      - run: python -c "import importlib; module = importlib.import_module('${{ matrix.module }}'); assert module"
