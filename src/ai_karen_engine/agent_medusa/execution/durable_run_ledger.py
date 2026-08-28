@@ -18,7 +18,6 @@ from ai_karen_engine.persistence.postgres import PostgresEngine, get_postgres_en
 
 logger = get_logger(__name__)
 
-_ACTIVE_STATUSES = {"running", "cancelling"}
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled", "orphaned"}
 
 
@@ -81,9 +80,10 @@ class DurableRunLedger(Protocol):
         limit: int = 250,
     ) -> list[dict[str, Any]]: ...
 
-    async def reconcile_stale(
+    async def reconcile_tenant_stale(
         self,
         *,
+        tenant_id: str,
         stale_before: datetime,
         reconciled_at: datetime,
     ) -> int: ...
@@ -157,7 +157,9 @@ class PostgresDurableRunLedger:
         except DurableRunLedgerConflict:
             raise
         except SQLAlchemyError as exc:
-            raise DurableRunLedgerUnavailable("medusa_durable_ledger_unavailable") from exc
+            raise DurableRunLedgerUnavailable(
+                "medusa_durable_ledger_unavailable"
+            ) from exc
 
     async def heartbeat(
         self,
@@ -190,7 +192,9 @@ class PostgresDurableRunLedger:
                     },
                 )
         except SQLAlchemyError as exc:
-            raise DurableRunLedgerUnavailable("medusa_durable_ledger_unavailable") from exc
+            raise DurableRunLedgerUnavailable(
+                "medusa_durable_ledger_unavailable"
+            ) from exc
 
     async def mark_cancelling(
         self,
@@ -207,7 +211,10 @@ class PostgresDurableRunLedger:
                         """
                         UPDATE agent_medusa_runs
                         SET status = 'cancelling',
-                            cancel_requested_at = COALESCE(cancel_requested_at, :requested_at),
+                            cancel_requested_at = COALESCE(
+                                cancel_requested_at,
+                                :requested_at
+                            ),
                             updated_at = :requested_at
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
@@ -221,7 +228,9 @@ class PostgresDurableRunLedger:
                     },
                 )
         except SQLAlchemyError as exc:
-            raise DurableRunLedgerUnavailable("medusa_durable_ledger_unavailable") from exc
+            raise DurableRunLedgerUnavailable(
+                "medusa_durable_ledger_unavailable"
+            ) from exc
 
     async def mark_terminal(
         self,
@@ -260,7 +269,9 @@ class PostgresDurableRunLedger:
                     },
                 )
         except SQLAlchemyError as exc:
-            raise DurableRunLedgerUnavailable("medusa_durable_ledger_unavailable") from exc
+            raise DurableRunLedgerUnavailable(
+                "medusa_durable_ledger_unavailable"
+            ) from exc
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any] | None:
         try:
@@ -289,7 +300,9 @@ class PostgresDurableRunLedger:
                 row = result.mappings().first()
                 return self._snapshot(dict(row)) if row else None
         except SQLAlchemyError as exc:
-            raise DurableRunLedgerUnavailable("medusa_durable_ledger_unavailable") from exc
+            raise DurableRunLedgerUnavailable(
+                "medusa_durable_ledger_unavailable"
+            ) from exc
 
     async def list_runs(
         self,
@@ -299,7 +312,11 @@ class PostgresDurableRunLedger:
         limit: int = 250,
     ) -> list[dict[str, Any]]:
         safe_limit = max(1, min(limit, 1000))
-        terminal_clause = "" if include_terminal else "AND status IN ('running', 'cancelling', 'orphaned')"
+        terminal_clause = (
+            ""
+            if include_terminal
+            else "AND status IN ('running', 'cancelling', 'orphaned')"
+        )
         try:
             async with self._postgres.get_async_session() as session:
                 await self._set_tenant_scope(session, tenant_id)
@@ -325,26 +342,13 @@ class PostgresDurableRunLedger:
                     ),
                     {"tenant_id": tenant_id, "limit": safe_limit},
                 )
-                return [self._snapshot(dict(row)) for row in result.mappings().all()]
+                return [
+                    self._snapshot(dict(row)) for row in result.mappings().all()
+                ]
         except SQLAlchemyError as exc:
-            raise DurableRunLedgerUnavailable("medusa_durable_ledger_unavailable") from exc
-
-    async def reconcile_stale(
-        self,
-        *,
-        stale_before: datetime,
-        reconciled_at: datetime,
-    ) -> int:
-        """Mark stale active rows orphaned without bypassing tenant RLS.
-
-        Cross-tenant maintenance is intentionally not performed here because the
-        runtime is tenant-scoped. Callers reconcile rows they can legitimately
-        address through normal tenant reads instead of introducing a privileged
-        persistence bypass into the Medusa layer.
-        """
-        raise NotImplementedError(
-            "Tenant-scoped reconciliation requires an explicit tenant_id; use reconcile_tenant_stale"
-        )
+            raise DurableRunLedgerUnavailable(
+                "medusa_durable_ledger_unavailable"
+            ) from exc
 
     async def reconcile_tenant_stale(
         self,
@@ -353,6 +357,7 @@ class PostgresDurableRunLedger:
         stale_before: datetime,
         reconciled_at: datetime,
     ) -> int:
+        """Mark stale active rows orphaned within the caller's tenant scope."""
         try:
             async with self._postgres.get_async_session() as session:
                 await self._set_tenant_scope(session, tenant_id)
@@ -363,7 +368,10 @@ class PostgresDurableRunLedger:
                         SET status = 'orphaned',
                             completed_at = :reconciled_at,
                             updated_at = :reconciled_at,
-                            error_type = COALESCE(error_type, 'WorkerLeaseExpired')
+                            error_type = COALESCE(
+                                error_type,
+                                'WorkerLeaseExpired'
+                            )
                         WHERE tenant_id = CAST(:tenant_id AS uuid)
                           AND status IN ('running', 'cancelling')
                           AND heartbeat_at < :stale_before
@@ -377,7 +385,9 @@ class PostgresDurableRunLedger:
                 )
                 return int(result.rowcount or 0)
         except SQLAlchemyError as exc:
-            raise DurableRunLedgerUnavailable("medusa_durable_ledger_unavailable") from exc
+            raise DurableRunLedgerUnavailable(
+                "medusa_durable_ledger_unavailable"
+            ) from exc
 
     def _snapshot(self, row: dict[str, Any]) -> dict[str, Any]:
         status = str(row["status"])
