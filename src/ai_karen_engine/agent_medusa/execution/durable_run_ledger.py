@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Protocol
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -89,17 +90,35 @@ class DurableRunLedger(Protocol):
     ) -> int: ...
 
 
+def _canonical_tenant_id(tenant_id: str) -> str:
+    """Return the canonical UUID representation for a tenant scope.
+
+    Runtime ingress should normally provide a UUID tenant identifier. Legacy
+    callers may still carry stable string scopes such as ``default``. Those are
+    deterministically mapped to UUIDs here so PostgreSQL/RLS remain strongly
+    typed without collapsing distinct tenant scopes or allowing runtime DDL.
+    """
+
+    raw = str(tenant_id or "default").strip() or "default"
+    try:
+        return str(UUID(raw))
+    except ValueError:
+        return str(uuid5(NAMESPACE_URL, f"ai-karen-tenant:{raw}"))
+
+
 class PostgresDurableRunLedger:
     """Tenant-scoped durable run repository backed by canonical PostgreSQL."""
 
     def __init__(self, *, postgres: PostgresEngine | None = None) -> None:
         self._postgres = postgres or get_postgres_engine()
 
-    async def _set_tenant_scope(self, session: Any, tenant_id: str) -> None:
+    async def _set_tenant_scope(self, session: Any, tenant_id: str) -> str:
+        canonical_tenant_id = _canonical_tenant_id(tenant_id)
         await session.execute(
             text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
-            {"tenant_id": tenant_id},
+            {"tenant_id": canonical_tenant_id},
         )
+        return canonical_tenant_id
 
     async def register(
         self,
@@ -113,7 +132,7 @@ class PostgresDurableRunLedger:
     ) -> None:
         try:
             async with self._postgres.get_async_session() as session:
-                await self._set_tenant_scope(session, tenant_id)
+                canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
                     text("""
                         INSERT INTO agent_medusa_runs (
@@ -141,7 +160,7 @@ class PostgresDurableRunLedger:
                         """),
                     {
                         "run_id": run_id,
-                        "tenant_id": tenant_id,
+                        "tenant_id": canonical_tenant_id,
                         "user_id": user_id,
                         "correlation_id": correlation_id,
                         "worker_id": worker_id,
@@ -169,7 +188,7 @@ class PostgresDurableRunLedger:
     ) -> None:
         try:
             async with self._postgres.get_async_session() as session:
-                await self._set_tenant_scope(session, tenant_id)
+                canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
                 await session.execute(
                     text("""
                         UPDATE agent_medusa_runs
@@ -182,7 +201,7 @@ class PostgresDurableRunLedger:
                         """),
                     {
                         "run_id": run_id,
-                        "tenant_id": tenant_id,
+                        "tenant_id": canonical_tenant_id,
                         "worker_id": worker_id,
                         "heartbeat_at": heartbeat_at,
                     },
@@ -201,7 +220,7 @@ class PostgresDurableRunLedger:
     ) -> None:
         try:
             async with self._postgres.get_async_session() as session:
-                await self._set_tenant_scope(session, tenant_id)
+                canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
                 await session.execute(
                     text("""
                         UPDATE agent_medusa_runs
@@ -217,7 +236,7 @@ class PostgresDurableRunLedger:
                         """),
                     {
                         "run_id": run_id,
-                        "tenant_id": tenant_id,
+                        "tenant_id": canonical_tenant_id,
                         "requested_at": requested_at,
                     },
                 )
@@ -239,7 +258,7 @@ class PostgresDurableRunLedger:
             raise ValueError(f"Invalid durable Medusa terminal status: {status}")
         try:
             async with self._postgres.get_async_session() as session:
-                await self._set_tenant_scope(session, tenant_id)
+                canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
                 await session.execute(
                     text("""
                         UPDATE agent_medusa_runs
@@ -254,7 +273,7 @@ class PostgresDurableRunLedger:
                         """),
                     {
                         "run_id": run_id,
-                        "tenant_id": tenant_id,
+                        "tenant_id": canonical_tenant_id,
                         "status": status,
                         "completed_at": completed_at,
                         "error_type": error_type,
@@ -268,7 +287,7 @@ class PostgresDurableRunLedger:
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any] | None:
         try:
             async with self._postgres.get_async_session() as session:
-                await self._set_tenant_scope(session, tenant_id)
+                canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
                     text("""
                         SELECT run_id,
@@ -285,7 +304,7 @@ class PostgresDurableRunLedger:
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
                         """),
-                    {"run_id": run_id, "tenant_id": tenant_id},
+                    {"run_id": run_id, "tenant_id": canonical_tenant_id},
                 )
                 row = result.mappings().first()
                 return self._snapshot(dict(row)) if row else None
@@ -309,7 +328,7 @@ class PostgresDurableRunLedger:
         )
         try:
             async with self._postgres.get_async_session() as session:
-                await self._set_tenant_scope(session, tenant_id)
+                canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
                     text(f"""
                         SELECT run_id,
@@ -328,7 +347,7 @@ class PostgresDurableRunLedger:
                         ORDER BY started_at DESC
                         LIMIT :limit
                         """),
-                    {"tenant_id": tenant_id, "limit": safe_limit},
+                    {"tenant_id": canonical_tenant_id, "limit": safe_limit},
                 )
                 return [self._snapshot(dict(row)) for row in result.mappings().all()]
         except SQLAlchemyError as exc:
@@ -346,7 +365,7 @@ class PostgresDurableRunLedger:
         """Mark stale active rows orphaned within the caller's tenant scope."""
         try:
             async with self._postgres.get_async_session() as session:
-                await self._set_tenant_scope(session, tenant_id)
+                canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
                     text("""
                         UPDATE agent_medusa_runs
@@ -362,7 +381,7 @@ class PostgresDurableRunLedger:
                           AND heartbeat_at < :stale_before
                         """),
                     {
-                        "tenant_id": tenant_id,
+                        "tenant_id": canonical_tenant_id,
                         "stale_before": stale_before,
                         "reconciled_at": reconciled_at,
                     },

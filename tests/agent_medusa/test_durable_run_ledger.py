@@ -6,8 +6,10 @@ from typing import Any
 
 import pytest
 
+import ai_karen_engine.agent_medusa as agent_medusa
 from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
     DurableRunLedgerUnavailable,
+    _canonical_tenant_id,
 )
 from ai_karen_engine.agent_medusa.execution.run_manager import MedusaRunManager
 from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
@@ -251,3 +253,24 @@ def test_required_durable_registration_fails_closed() -> None:
             await task
 
     asyncio.run(scenario())
+
+
+def test_legacy_default_tenant_maps_to_stable_uuid() -> None:
+    first = _canonical_tenant_id("default")
+    second = _canonical_tenant_id("default")
+
+    assert first == second
+    assert first != "default"
+    assert str(__import__("uuid").UUID(first)) == first
+
+
+def test_uuid_tenant_remains_unchanged() -> None:
+    tenant_id = "11111111-1111-1111-1111-111111111111"
+    assert _canonical_tenant_id(tenant_id) == tenant_id
+
+
+def test_retired_persistence_adapter_is_not_public_api() -> None:
+    assert "PersistenceAdapter" not in agent_medusa.__all__
+    assert "PersistenceAdapter" not in dir(agent_medusa)
+    with pytest.raises(AttributeError):
+        getattr(agent_medusa, "PersistenceAdapter")
