@@ -1,19 +1,28 @@
 from __future__ import annotations
 
-"""Runtime-owned cognitive decision and authorization pipeline.
+"""Runtime-owned cognitive decision and authorization lifecycle.
 
-The pipeline deliberately separates cognition from authorization:
+The lifecycle keeps authorities separate:
 
-1. CORTEX produces requested execution intent.
-2. RuntimePolicy evaluates capabilities and reasoning modes.
-3. Runtime returns a policy-authorized ExecutionDecision to ChatRuntime.
+1. CORTEX Stage 1 produces preliminary cognition and typed context needs.
+2. RuntimePolicy authorizes governed evidence access.
+3. CORTEX Stage 2 refines cognition from typed context availability.
+4. RuntimePolicy authorizes the final execution request.
+5. ChatRuntime executes the resulting decision.
 
-No provider, prompt, memory, tool, or workflow execution occurs here.
+This module does not retrieve evidence, execute providers/tools/workflows, build
+prompts, or persist memory. EVIDENCE-1 will insert Runtime-owned evidence
+resolution between the two CORTEX stages behind the authorization produced here.
 """
 
 from dataclasses import replace
 from typing import Optional
 
+from ai_karen_engine.core.context.contracts import CognitiveContext, ContextRequirements
+from ai_karen_engine.core.cortex.context_stages import (
+    build_context_requirements,
+    finalize_decision_with_context,
+)
 from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
 from ai_karen_engine.core.runtime.execution_decision import (
@@ -23,6 +32,7 @@ from ai_karen_engine.core.runtime.execution_decision import (
     RuntimeExecutionMode,
 )
 from ai_karen_engine.core.runtime.policy import (
+    PolicyDecision,
     PolicyEvaluationRequest,
     RuntimeLevel,
     RuntimePolicyEnforcer,
@@ -30,7 +40,7 @@ from ai_karen_engine.core.runtime.policy import (
 
 
 class RuntimeDecisionPipeline:
-    """Apply RuntimePolicy after CORTEX without merging their authorities."""
+    """Coordinate two-stage cognition and independent RuntimePolicy gates."""
 
     def __init__(
         self,
@@ -50,8 +60,35 @@ class RuntimeDecisionPipeline:
         return self._policy
 
     async def decide(self, request: ChatExecutionRequest) -> ExecutionDecision:
-        cognitive = await self._cortex.decide(request)
+        preliminary = await self._cortex.decide(request)
+        requirements = build_context_requirements(request, preliminary)
+        cognitive_context = await self._authorize_context(
+            request,
+            preliminary,
+            requirements,
+        )
+        cognitive = finalize_decision_with_context(preliminary, cognitive_context)
+        policy = await self._evaluate_execution_policy(request, cognitive)
+        return self._apply_execution_policy(cognitive, policy)
+
+    async def _authorize_context(
+        self,
+        request: ChatExecutionRequest,
+        preliminary: ExecutionDecision,
+        requirements: ContextRequirements,
+    ) -> CognitiveContext:
         ctx = request.context
+
+        if not requirements.requirements:
+            return CognitiveContext(
+                context_id=f"context-{ctx.correlation_id}",
+                request_id=ctx.request_id or "",
+                correlation_id=ctx.correlation_id,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                requirements=requirements,
+                metadata={"authorization_status": "not_required"},
+            )
 
         policy_request = PolicyEvaluationRequest(
             user_id=ctx.user_id,
@@ -60,30 +97,108 @@ class RuntimeDecisionPipeline:
             correlation_id=getattr(ctx, "correlation_id", None),
             roles=list(ctx.roles or []),
             permissions=list(ctx.permissions or []),
-            action=cognitive.intent or "general_assist",
-            requested_capabilities=list(cognitive.required_capabilities),
-            forbidden_capabilities=list(cognitive.forbidden_capabilities),
-            requested_reasoning_modes=list(cognitive.reasoning_modes),
-            max_model_calls=cognitive.max_model_calls,
+            action="context.resolve",
+            requested_capabilities=requirements.requested_capabilities,
+            forbidden_capabilities=list(preliminary.forbidden_capabilities),
+            requested_reasoning_modes=[],
+            max_model_calls=0,
             risk_signals=dict(
-                cognitive.policy_constraints.get("risk_signals", {}) or {}
+                preliminary.policy_constraints.get("risk_signals", {}) or {}
             ),
-            runtime_level=self._runtime_level_for(cognitive.risk_level),
-            tool_id=(cognitive.tool_requirements[0] if cognitive.tool_requirements else None),
+            runtime_level=self._runtime_level_for(preliminary.risk_level),
             environment="production",
             execution_topology={
-                "tool_requirements": list(cognitive.tool_requirements),
-                "plugin_candidates": list(cognitive.plugin_candidates),
-                "requires_human_gate": cognitive.requires_human_gate,
-                "reasoning_modes": list(cognitive.reasoning_modes),
-                "max_model_calls": cognitive.max_model_calls,
-                "max_steps": cognitive.max_steps,
-                "workflow_id": cognitive.workflow_id,
-                "agent_delegation": cognitive.requires_agent_delegation,
+                "context_sources": [
+                    requirement.source.value
+                    for requirement in requirements.requirements
+                ],
+                "context_required_sources": [
+                    requirement.source.value
+                    for requirement in requirements.requirements
+                    if requirement.required
+                ],
             },
         )
         policy = await self._policy.evaluate(policy_request)
 
+        allowed_capabilities = set(policy.allowed_capabilities) if policy.allowed else set()
+        authorized_sources: list[str] = []
+        denied_sources: list[str] = []
+
+        for requirement in requirements.requirements:
+            target = (
+                authorized_sources
+                if requirement.capability in allowed_capabilities
+                else denied_sources
+            )
+            if requirement.source.value not in target:
+                target.append(requirement.source.value)
+
+        return CognitiveContext(
+            context_id=f"context-{ctx.correlation_id}",
+            request_id=ctx.request_id or "",
+            correlation_id=ctx.correlation_id,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            requirements=requirements,
+            authorized_sources=authorized_sources,
+            denied_sources=denied_sources,
+            unresolved_sources=list(authorized_sources),
+            policy_decision_id=policy.decision_id,
+            policy_version=policy.policy_version,
+            metadata={
+                "authorization_status": "allowed" if policy.allowed else "denied",
+                "policy_reason_codes": [code.value for code in policy.reason_codes],
+            },
+        )
+
+    async def _evaluate_execution_policy(
+        self,
+        request: ChatExecutionRequest,
+        cognitive: ExecutionDecision,
+    ) -> PolicyDecision:
+        ctx = request.context
+        return await self._policy.evaluate(
+            PolicyEvaluationRequest(
+                user_id=ctx.user_id,
+                tenant_id=ctx.tenant_id,
+                session_id=getattr(ctx, "session_id", None),
+                correlation_id=getattr(ctx, "correlation_id", None),
+                roles=list(ctx.roles or []),
+                permissions=list(ctx.permissions or []),
+                action=cognitive.intent or "general_assist",
+                requested_capabilities=list(cognitive.required_capabilities),
+                forbidden_capabilities=list(cognitive.forbidden_capabilities),
+                requested_reasoning_modes=list(cognitive.reasoning_modes),
+                max_model_calls=cognitive.max_model_calls,
+                risk_signals=dict(
+                    cognitive.policy_constraints.get("risk_signals", {}) or {}
+                ),
+                runtime_level=self._runtime_level_for(cognitive.risk_level),
+                tool_id=(
+                    cognitive.tool_requirements[0]
+                    if cognitive.tool_requirements
+                    else None
+                ),
+                environment="production",
+                execution_topology={
+                    "tool_requirements": list(cognitive.tool_requirements),
+                    "plugin_candidates": list(cognitive.plugin_candidates),
+                    "requires_human_gate": cognitive.requires_human_gate,
+                    "reasoning_modes": list(cognitive.reasoning_modes),
+                    "max_model_calls": cognitive.max_model_calls,
+                    "max_steps": cognitive.max_steps,
+                    "workflow_id": cognitive.workflow_id,
+                    "agent_delegation": cognitive.requires_agent_delegation,
+                },
+            )
+        )
+
+    def _apply_execution_policy(
+        self,
+        cognitive: ExecutionDecision,
+        policy: PolicyDecision,
+    ) -> ExecutionDecision:
         if not policy.allowed:
             return replace(
                 cognitive,
@@ -131,7 +246,11 @@ class RuntimeDecisionPipeline:
         # A reasoning protocol may be policy-restricted without denying the whole
         # request. If no reasoning mode survives, fall back only to an already
         # requested non-reasoning topology; RuntimePolicy never invents a mode.
-        if requested_modes and not allowed_modes and topology == ExecutionTopology.REASONING:
+        if (
+            requested_modes
+            and not allowed_modes
+            and topology == ExecutionTopology.REASONING
+        ):
             topology = (
                 ExecutionTopology.WORKFLOW
                 if cognitive.workflow_id or cognitive.requires_agent_delegation
@@ -142,7 +261,9 @@ class RuntimeDecisionPipeline:
                 ExecutionTopology.MULTI_AGENT,
             }
             execution_mode = (
-                RuntimeExecutionMode.GRAPH if graph_required else RuntimeExecutionMode.DIRECT
+                RuntimeExecutionMode.GRAPH
+                if graph_required
+                else RuntimeExecutionMode.DIRECT
             )
 
         return replace(
@@ -155,7 +276,10 @@ class RuntimeDecisionPipeline:
             required_capabilities=allowed_capabilities,
             forbidden_capabilities=list(
                 dict.fromkeys(
-                    [*cognitive.forbidden_capabilities, *policy.denied_capabilities]
+                    [
+                        *cognitive.forbidden_capabilities,
+                        *policy.denied_capabilities,
+                    ]
                 )
             ),
             policy_decision_id=policy.decision_id,
