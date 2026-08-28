@@ -1,26 +1,25 @@
 # AI Karen
 
-**AI Karen is a local-first, prompt-first AI runtime focused on governed execution, durable memory, provider orchestration, multi-agent coordination, extensibility, and observable system behavior.**
+**AI Karen is a local-first, prompt-first AI runtime for governed chat execution, durable memory, provider/model orchestration, reasoning, multi-agent workflows, extensions, RBAC, and observable system behavior.**
 
-The project is currently in an active architecture-convergence phase. The goal is not to accumulate more frameworks. The goal is to make every major responsibility have one clear owner, one runtime path, one registry, one configuration source, and tests that prove the boundaries hold.
+The project is in active architecture convergence. The objective is not to collect more frameworks. Every major responsibility should have one clear owner, one runtime path, one registry/config source where applicable, and executable proof that the boundary holds.
 
-## Project Principles
+## Core Principles
 
-AI Karen is being built around a small set of non-negotiable rules:
+- **Local-first:** prefer healthy local inference and local infrastructure when suitable.
+- **Prompt-first:** prompts are explicit, versioned, testable execution contracts.
+- **Runtime-authoritative:** routes, UI, providers, agents, and extensions do not become alternate chat runtimes.
+- **CORTEX decides, Runtime executes:** cognition and execution remain separate authorities.
+- **RuntimePolicy authorizes:** CORTEX does not authorize itself.
+- **One responsibility, one owner:** duplicate orchestrators, registries, loaders, and fallback paths are collapsed rather than preserved indefinitely.
+- **Secure by enforcement:** RBAC, tenant isolation, session validation, audit, secrets, and action permissions are backend responsibilities.
+- **Observable by default:** provider, model, memory, reasoning, agent, extension, fallback, and degradation paths should be traceable.
+- **Honest degradation:** unavailable capability returns explicit degraded/unavailable state rather than fabricated model output.
+- **Test-proven architecture:** imports, routing, fallbacks, memory, RBAC, first-run, API contracts, UI contracts, and deployment paths should have executable proof.
 
-- **Local-first**: local inference and local infrastructure are preferred when available.
-- **Prompt-first**: prompts are explicit, versioned, testable execution contracts.
-- **Runtime-authoritative**: live chat execution is owned by the canonical runtime, not routes, UI code, providers, or agents.
-- **CORTEX decides, Runtime executes**: intent, topology, policy signals, and eligibility are separated from execution.
-- **One responsibility, one owner**: duplicate orchestrators, registries, loaders, and fallback paths are removed rather than preserved indefinitely.
-- **Security by enforcement**: RBAC, tenant isolation, audit, secrets, and action permissions are backend responsibilities.
-- **Observable by default**: request, provider, model, memory, agent, plugin, fallback, and degradation paths should be traceable.
-- **Honest degradation**: unavailable capabilities return explicit degraded or unavailable state rather than fabricated model output.
-- **Test-proven architecture**: imports, routing, fallbacks, memory, RBAC, API contracts, and UI contracts must be verifiable.
+## Canonical Architecture
 
-## Current Architecture
-
-Karen's canonical core follows a six-layer model:
+Karen's core follows a six-layer model:
 
 ```text
 1. Intelligence         senses   -> What is this request?
@@ -31,7 +30,7 @@ Karen's canonical core follows a six-layer model:
 6. Platform Kernel      governs  -> Security, observability, config, infrastructure
 ```
 
-The high-level authority chain is:
+The authority chain is approximately:
 
 ```text
 Intelligence
@@ -48,192 +47,100 @@ Adaptive -----------+--> CORTEX --> RuntimePolicy --> ChatRuntime
 
 ### CORTEX
 
-CORTEX owns decision-making signals such as:
-
-- intent classification
-- capability requirements
-- execution-topology selection
-- reasoning depth
-- memory-routing signals
-- tool/plugin eligibility signals
-- agent-delegation signals
-- RBAC-aware execution eligibility
-
-CORTEX **does not execute providers, tools, plugins, or agents**.
+`src/ai_karen_engine/core/cortex/` is the cognitive decision authority. It interprets intent, capability requirements, topology, reasoning needs, memory-routing signals, ambiguity, and execution recommendations. It does **not** execute providers, tools, plugins, memory writes, or agents.
 
 ### Chat Runtime
 
-`src/ai_karen_engine/core/runtime/` is the live execution authority.
+`src/ai_karen_engine/core/runtime/` is the live request/execution authority. It owns request normalization, execution context, memory coordination, prompt/context handoff, policy consumption, provider/model execution, streaming, persistence coordination, degradation metadata, telemetry, and audit lifecycle.
 
-It owns:
-
-- request normalization
-- execution context
-- memory recall coordination
-- prompt/context assembly
-- runtime policy consumption
-- provider/model execution
-- tool and extension execution coordination
-- streaming
-- persistence
-- degradation metadata
-- telemetry and audit lifecycle
-
-API routes should remain thin ingress layers.
+API routes stay thin.
 
 ### Model Runtime
 
-`src/ai_karen_engine/core/model_runtime/` owns provider and inference behavior.
+Provider and model availability, health, inventory, selection, execution, and fallback belong to the canonical model-runtime/provider registry. The UI displays backend truth rather than inventing model availability.
 
-The runtime is designed around centralized provider registration, health, discovery, model inventory, and config-driven fallback behavior.
+Local-first fallback remains policy/config driven. No fallback may silently manufacture a model answer.
 
-The intended fallback strategy is local-first and policy-driven:
+### Agent Medusa and LangGraph
 
-```text
-requested provider/model
-    -> local primary
-    -> vLLM
-    -> Transformers
-    -> Ollama when healthy
-    -> external provider when enabled
-    -> explicit unavailable/degraded result
-```
+Agent Medusa is a governed multi-agent execution topology, not a second runtime or policy engine.
 
-No provider fallback should silently manufacture an answer.
-
-### Agent Medusa
-
-`src/ai_karen_engine/agent_medusa/` is the multi-agent execution topology.
-
-Medusa is **not** a second runtime and **not** a policy engine.
-
-Its contract is:
-
-```text
-CORTEX
-  -> RuntimePolicy authorization
-  -> Medusa planning
-  -> validated specialist execution
-  -> response assembly
-```
-
-Current Medusa work focuses on:
-
-- capability-aware specialist selection
-- authorized execution plans
-- deterministic planning
-- dependency-aware execution
-- concurrency-safe execution budgets
-- lifecycle and health handling
-- least-privilege tool/plugin access
-- safe errors and execution provenance
-
-### LangGraph
-
-LangGraph is reserved for real graph workflows:
-
-- multi-step plans
-- branching execution
-- checkpoint/resume
-- human-in-the-loop approval
-- long-running graph state
-- tool chains requiring graph semantics
-
-It is not the default chat runtime and should not duplicate CORTEX or ChatRuntime authority.
+LangGraph is reserved for real graph semantics such as branching plans, checkpoint/resume, long-running workflows, human gates, and stateful tool chains. Ordinary chat does not require LangGraph.
 
 ## Memory
 
-Karen separates memory responsibilities instead of treating memory as one giant service.
+Karen separates memory responsibilities:
 
-- **STM**: recent conversation/session state
-- **Episodic**: meaningful interactions and decisions
-- **LTM**: durable facts and preferences
-- **NeuroRecall**: retrieval strategy, ranking, and recall signals
-- **NeuroVault**: governed persistence, recovery, archive, and deletion semantics
+- **STM:** recent conversation/session state.
+- **Episodic:** meaningful interactions, decisions, and outcomes.
+- **LTM:** durable facts, preferences, and knowledge.
+- **NeuroRecall:** retrieval strategy, ranking, and recall signals.
+- **MemoryFormation + NeuroVault:** governed durable mutation, lifecycle, recovery, and deletion semantics.
 
-The target persistence stack includes PostgreSQL, Redis, Milvus, and Elasticsearch where appropriate. Memory access must remain tenant-aware and auditable.
+Memory access and persistence must remain tenant-aware, policy-governed, and auditable.
 
-## Extensions / Plugins
+## Extensions
 
-The extension subsystem is being consolidated into one canonical governed runtime.
-
-The target execution path is:
+The canonical extension path is governed:
 
 ```text
 manifest
-  -> validation
-  -> registry
-  -> lifecycle
-  -> RuntimePolicy authorization
-  -> ActionExecutionGate
-  -> execution
-  -> output validation
-  -> audit / telemetry
+ -> validation
+ -> registry
+ -> lifecycle
+ -> RuntimePolicy authorization
+ -> ActionExecutionGate
+ -> execution
+ -> output validation
+ -> audit / telemetry
 ```
 
-The legacy root-level plugin loader and placeholder Medusa extension dispatch are transitional code and are being replaced by the canonical extension kernel.
+Manifest declaration is not authorization.
 
-Extensions must declare:
+## First Run Is a Production Contract
 
-- identity and version
-- capabilities
-- permissions
-- input/output contracts
-- prompt contracts when AI-backed
-- side-effect requirements
-- tenant/RBAC requirements
-- dependency and health requirements
+KAREN treats first run as an installation lifecycle, not a welcome screen.
 
-Manifest declaration is **not** authorization. Runtime policy remains the authority.
+A fresh installation is only correctly bootstrapped when the migration-owned auth schema is ready, a durable installation tenant exists, exactly one first owner can be created through the canonical auth authority, bootstrap cannot be re-entered after completion, authenticated identity works, and that state survives process restart.
 
-## Security
-
-Security responsibilities include:
-
-- authentication
-- RBAC
-- tenant isolation
-- session validation
-- secret handling and redaction
-- action authorization
-- audit logs
-- extension permission checks
-- safe error translation
-
-Frontend checks are presentation only. Privileged behavior must be enforced on the backend.
-
-## Observability
-
-The target runtime metadata includes:
+Canonical ownership is:
 
 ```text
-correlation_id
-request_id
-user_id
-tenant_id
-session_id
-conversation_id
-intent
-topology
-provider
-model
-runtime_engine
-fallback_level
-degraded_mode
-response_source
-memory_recall_count
-plugin_id
-agent_id
-latency_ms
-status
-error_code
+migrations/deployment tooling
+  -> create/upgrade schema
+
+AuthService.initialize
+  -> validate auth config
+  -> verify migration-owned auth tables
+
+GET /api/auth/first-run
+  -> AuthService.is_first_run()
+
+POST /api/auth/first-run/setup
+  -> transaction advisory lock
+  -> re-check durable user count
+  -> create/resolve durable installation tenant
+  -> create verified admin + user owner
+  -> audit
+  -> normal authentication/session issuance
 ```
 
-Prometheus is the canonical numeric metrics backend. Grafana is optional through the observability Compose profile.
+The auth route does not create tenant/user records directly. The UI must not infer first-run state from local storage or failed login attempts. Production runtime does not create missing auth tables as a convenience fallback.
+
+The executable production proof is:
+
+```text
+scripts/ci/production-first-boot-smoke.sh
+.github/workflows/production-first-boot-smoke.yml
+```
+
+That smoke starts fresh PostgreSQL/pgvector and password-protected Redis, applies canonical migrations, boots the real production image, creates the first owner, proves duplicate setup is denied, verifies exactly one durable bootstrap user, restarts the exact image, and proves the owner plus completed first-run state survive restart.
+
+See `docs/architecture/FIRST_RUN_SYSTEM.md` for the full authority, security, UI, observability, and proof contract.
 
 ## Repository Layout
 
-The repository is actively being normalized. Canonical application code lives under `src/`.
+Canonical application code lives under `src/`.
 
 ```text
 AI-Karen/
@@ -241,32 +148,32 @@ AI-Karen/
 │   ├── ai_karen_engine/
 │   │   ├── core/
 │   │   │   ├── cortex/
+│   │   │   ├── intelligence/
 │   │   │   ├── runtime/
 │   │   │   ├── model_runtime/
 │   │   │   ├── reasoning/
 │   │   │   ├── memory/
-│   │   │   ├── neuro_recall/
-│   │   │   ├── neuro_vault/
-│   │   │   ├── observability/
-│   │   │   └── security/
+│   │   │   ├── cognitive/
+│   │   │   ├── context/
+│   │   │   └── personalization/
 │   │   ├── agent_medusa/
+│   │   ├── api_routes/
 │   │   ├── config/
-│   │   ├── integrations/
-│   │   └── server/
+│   │   ├── services/
+│   │   └── platform/
 │   └── ui_launchers/
 │       └── Karen-AI-Theme/
 ├── tests/
 ├── docs/
 ├── scripts/
-├── docker/
+├── deploy/
 ├── config_assets/
 ├── supabase/
 ├── Dockerfile
 ├── docker-compose.yml
+├── PROJECT_DEV_MANIFEST.md
 └── README.md
 ```
-
-> The root-level `server/` tree is legacy/transitional and is being audited against `src/ai_karen_engine/server/`. Canonical server ownership belongs under `src/ai_karen_engine/server/`.
 
 ## Quick Start
 
@@ -276,7 +183,7 @@ AI-Karen/
 - Docker with Docker Compose
 - Optional NVIDIA GPU for CUDA/vLLM workflows
 
-### Clone
+### 1. Clone and configure
 
 ```bash
 git clone https://github.com/agustealo/AI-Karen.git
@@ -284,41 +191,14 @@ cd AI-Karen
 cp .env.example .env
 ```
 
-Review the environment file before startup. Do not commit real credentials.
+Review `.env` before startup. Replace production secrets and never commit real credentials.
 
-### Docker
+### 2. Start the stack
 
-Start the core stack:
+Core stack:
 
 ```bash
 docker compose up
-```
-
-Optional observability:
-
-```bash
-docker compose --profile observability up
-```
-
-Optional Ollama service:
-
-```bash
-docker compose --profile ollama up -d ollama
-```
-
-For CUDA-specific local model support, use the CUDA compose overlay instead:
-
-```bash
-docker compose -f docker-compose.yml -f deploy/compose/docker-compose.cuda.yml up
-```
-
-That path keeps the same built-in `vllm` provider identity and also enables the CUDA-local GGUF service
-defined in `deploy/compose/docker-compose.cuda.yml`.
-
-To start the built-in vLLM service itself, add the profile explicitly:
-
-```bash
-docker compose --profile vllm up -d vllm
 ```
 
 CPU overlay:
@@ -327,25 +207,24 @@ CPU overlay:
 docker compose -f docker-compose.yml -f deploy/compose/docker-compose.cpu.yml up
 ```
 
-The `deploy/compose/docker-compose.cpu.yml` override removes all NVIDIA device requirements from services.
-
-After the services are running, complete the initial administrator setup before using protected parts of Karen.
-
-### 1. Confirm the API is running
-
-Open:
-
-```text
-http://localhost:8000/docs
-```
-
-or check the authentication service:
+CUDA overlay:
 
 ```bash
-curl http://localhost:8000/api/auth/status
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.cuda.yml up
 ```
 
-### 2. Check whether first-run setup is required
+Optional services are enabled through their Compose profiles when required by the deployment.
+
+### 3. Verify liveness and auth readiness
+
+```bash
+curl http://localhost:8000/health/live
+curl http://localhost:8000/api/auth/health
+```
+
+If auth readiness fails, fix configuration/database/migration state before trying to bootstrap an owner. First run is fail-closed.
+
+### 4. Check first-run state
 
 ```bash
 curl http://localhost:8000/api/auth/first-run
@@ -360,15 +239,7 @@ A fresh installation should return:
 }
 ```
 
-### 3. Create the first administrator
-
-The canonical setup path is:
-
-```text
-POST /api/auth/first-run/setup
-```
-
-Example:
+### 5. Create the first owner
 
 ```bash
 curl -X POST http://localhost:8000/api/auth/first-run/setup \
@@ -376,105 +247,47 @@ curl -X POST http://localhost:8000/api/auth/first-run/setup \
   -d '{
     "email": "you@example.com",
     "full_name": "Your Name",
-    "password": "choose-a-strong-password",
-    "confirm_password": "choose-a-strong-password"
+    "password": "Choose-A-Strong-Pass9!",
+    "confirm_password": "Choose-A-Strong-Pass9!"
   }'
 ```
 
-This creates the initial user with `admin` and `user` roles and returns an authenticated session. The initial username is derived from the email prefix, so `you@example.com` becomes `you`.
+The canonical auth service creates the installation tenant and verified first owner with `admin` and `user` roles, then authenticates through the normal session path. Bootstrap is transaction-serialized across workers. Once a durable user exists, later first-run setup attempts are rejected.
 
-### Production Deployment
-
-For production deployments:
-
-```bash
-# Production deployment
-docker compose -f docker-compose.yml -f deploy/compose/docker-compose.prod.yml up -d
-
-# With custom environment
-cp .env.example .env
-# Edit .env with production values
-docker compose --env-file .env up -d
-
-# With observability stack
-docker compose --profile observability up -d
-```
-
-### 4. Open the web interface
-
-Visit:
+### 6. Open the UI
 
 ```text
 http://localhost:8010
 ```
 
-Log in with either the email used during first-run setup or the generated username, plus the password you created.
+Log in with the email or generated username plus the password created during first run.
 
-### 5. API login
+### 7. Verify installation readiness after login
 
-The canonical login endpoint is:
+Identity bootstrap does not take ownership of unrelated subsystems. Verify backend truth for the capabilities your deployment requires:
 
-```text
-POST /api/auth/login
-```
+1. **Provider availability:** at least one intended provider is enabled and healthy.
+2. **Model configuration:** the desired local/default model is discoverable and eligible.
+3. **Memory services:** durable memory dependencies are healthy when enabled.
+4. **Extensions:** only governed, validated extensions required for the deployment are enabled.
+5. **Observability:** metrics/logging/tracing required by the environment are reachable.
+6. **Secrets/security:** production JWT, database, Redis, extension, provider, and dashboard secrets are non-example values.
+7. **First real chat:** submit a request through the canonical `/api/chat` runtime and verify the response provenance/degradation metadata reflects the provider/model that actually executed.
 
-Email example:
+A future typed installation-readiness view may aggregate those subsystem health signals, but it must not become a second provider, memory, extension, or observability authority.
+
+## Production Deployment
+
+Example production Compose startup:
 
 ```bash
-curl -X POST http://localhost:8000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "you@example.com",
-    "password": "your-password"
-  }'
+cp .env.example .env
+# Edit .env with production values first.
+
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.prod.yml up -d
 ```
 
-Username login is also supported:
-
-```json
-{
-  "username": "you",
-  "password": "your-password"
-}
-```
-
-Successful login returns an access token, refresh token, user information, and resolved RBAC permissions. The backend also sets the canonical `kari_session` HTTP-only cookie for browser sessions.
-
-### Legacy development admin helper
-
-The repository currently still contains `create_admin.py`, which creates or updates this development account:
-
-```text
-Email:    admin@kari.ai
-Username: admin
-Password: Admin@123!
-```
-
-This is **legacy development/bootstrap tooling**, not the recommended installation flow. It contains a hardcoded development credential and is scheduled for cleanup with the root-normalization work.
-
-Prefer `/api/auth/first-run/setup` for new installations. Never use the legacy password in production.
-
-### Development auth bypass
-
-Development environments also support explicit auth bypass through configuration such as:
-
-```text
-ENVIRONMENT=development
-AUTH_DEV_MODE=true
-```
-
-or the explicit `KARI_AUTH_BYPASS` switch. These are development/testing mechanisms only and must not be enabled in a real deployment.
-
-### What to configure after login
-
-A new installation should normally verify these next:
-
-1. **Provider availability**: confirm at least one local or configured model provider is healthy.
-2. **Model configuration**: configure the desired local/default model path.
-3. **Memory services**: confirm persistence services if durable memory is enabled.
-4. **Extensions**: enable only governed extensions required for the deployment.
-5. **Observability**: optionally start Prometheus/Grafana with the `observability` profile.
-6. **Secrets**: replace example JWT, database, Redis, provider, and Grafana credentials before production use.
+Production/staging auth configuration validates secrets and fails closed. Migration-owned schema must be applied before first-run owner creation.
 
 ## Default Development Endpoints
 
@@ -487,58 +300,46 @@ A new installation should normally verify these next:
 | Prometheus | http://localhost:9090 |
 | Grafana | http://localhost:3001 |
 
-Optional services are available only when their corresponding Compose profile is enabled.
-
-## Local Provider Options
-
-Karen can work with local and external model providers through the canonical model-runtime layer.
-
-Common local options include:
-
-- vLLM
-- Hugging Face Transformers
-- Ollama
-- OpenAI-compatible local endpoints
-- GGUF/local runtimes where enabled by current configuration
-
-Provider availability is determined at runtime from backend configuration and health, not hardcoded in the UI.
+Optional services are available only when their corresponding profiles are enabled.
 
 ## Configuration
 
-Canonical configuration code lives in:
+Canonical configuration code lives under:
 
 ```text
 src/ai_karen_engine/config/
 ```
 
-Static configuration assets currently live in:
+Deployment-specific overrides and secrets come from validated environment/config adapters. Application subsystems should not scatter direct environment reads when a canonical configuration contract exists.
 
-```text
-config_assets/
-```
+Known cleanup debt is tracked in `PROJECT_DEV_MANIFEST.md`, including remaining direct configuration reads that have not yet been migrated.
 
-Configuration should be loaded through the canonical config package. Application code should not directly open config files when a loader or settings contract already exists.
+## Security
 
-Environment variables are used for deployment-specific overrides and secrets.
+KAREN's protected execution paths preserve:
 
-## Development Rules
+- authentication and session validation;
+- RBAC;
+- durable tenant isolation;
+- least privilege;
+- secret redaction;
+- tool/extension permission gates;
+- audit logging;
+- safe error translation;
+- request/correlation identity;
+- fail-closed production behavior.
 
-Before adding a new service, registry, orchestrator, helper, route, provider, or config path:
+Frontend checks are presentation only. Privileged authority is backend-owned.
 
-1. Find the current owner.
-2. Search for an existing implementation.
-3. Prefer extending the canonical implementation.
-4. Remove duplicate or dead paths after migration.
-5. Preserve RBAC, tenant isolation, audit, and telemetry.
-6. Keep routes thin.
-7. Keep provider/model decisions out of the UI.
-8. Keep CORTEX decision-only.
-9. Keep Runtime execution-authoritative.
-10. Prove the change with tests.
+## Observability
+
+Runtime events should make it possible to determine what actually happened, including request/correlation identity, tenant/user/session/conversation scope, intent/topology, provider/model/runtime engine, fallback/degradation, memory/extension/agent participation, latency, status, and error reason.
+
+Prometheus is the canonical numeric metrics backend. Grafana is optional through the observability profile. High-cardinality request/user identifiers belong in structured logs/traces rather than Prometheus labels.
 
 ## Verification
 
-Core verification commands:
+Core gates:
 
 ```bash
 python -m compileall src
@@ -548,7 +349,7 @@ mypy src
 docker compose config
 ```
 
-Frontend verification should additionally run from the active UI package:
+Frontend gates from the active UI package:
 
 ```bash
 npm run lint
@@ -557,338 +358,51 @@ npm test
 npm run build
 ```
 
-## Current Convergence Work
+First-run architecture contract:
 
-The project is actively closing several architectural seams:
+```bash
+pytest tests/architecture/test_first_run_system_contract.py -q
+bash -n scripts/ci/production-first-boot-smoke.sh
+```
 
-- Medusa dependency-aware and least-privilege execution
-- canonical extension/plugin kernel
-- root-directory normalization and legacy server collapse
-- CI exact-head verification
-- provider/model authority consolidation
-- legacy orchestrator removal
-- config and runtime-state normalization
+Real production first-run burn:
 
-These are cleanup and authority-convergence tasks, not parallel replacement frameworks.
+```bash
+docker build --target app --build-arg PROFILE=runtime -t ai-karen-api:beta .
+KAREN_SMOKE_API_IMAGE=ai-karen-api:beta bash scripts/ci/production-first-boot-smoke.sh
+```
+
+Do not report a release path green unless the exact-head CI/proof actually passed.
+
+## Development Rules
+
+Before adding a service, registry, orchestrator, helper, route, provider, config path, setup wizard, or fallback:
+
+1. Identify the current owner.
+2. Search for a stronger existing implementation.
+3. Extend the canonical owner rather than creating a parallel path.
+4. Preserve RBAC, tenant scope, audit, credentials, and telemetry.
+5. Keep API routes thin.
+6. Keep provider/model decisions out of UI.
+7. Keep CORTEX decision-only.
+8. Keep Runtime execution-authoritative.
+9. Keep migrations authoritative for production schema.
+10. Prove the boundary with executable tests/burns.
+11. Delete dead/duplicate code only after reference and replacement audit.
 
 ## Architecture Documentation
 
-See:
-
-- `src/ai_karen_engine/core/ARCHITECTURE.md` for the canonical authority matrix
-- `src/ai_karen_engine/core/README.md` for core-domain ownership
-- `src/ai_karen_engine/config/README.md` for configuration ownership
-- `docs/` for subsystem and migration documentation
-
-**Observability components:**
-- **Prometheus** (`v2.47.0`) — Canonical numeric metrics backend
-- **Grafana** (`9.5.2`) — Optional dashboards and operations UI
-
-**Key URLs (when observability profile is active):**
-- Prometheus: http://localhost:9090
-- Grafana: http://localhost:3001
-
-**Grafana credentials:**
-- Set `GRAFANA_ADMIN_PASSWORD` in `.env` (no default password for security)
-- Provisioned with Prometheus datasource and health dashboards
-
-### Metrics
-
-The system exposes comprehensive Prometheus metrics at `/metrics`:
-
-**Runtime metrics:**
-- `karen_requests_total` — Total HTTP requests by method, endpoint, status
-- `karen_request_duration_seconds` — Request latency histogram
-- `karen_requests_inflight` — Current in-flight requests
-- `karen_degraded_requests_total` — Requests served in degraded mode
-
-**ML/Intelligence metrics:**
-- `karen_ml_inference_seconds` — ML inference latency by task, model, status
-- `karen_ml_predictions_total` — Total ML predictions
-- `karen_ml_fallback_total` — ML fallback events
-- `karen_ml_model_load_failures_total` — Model load failures
-- `karen_ml_shadow_disagreement_total` — Shadow model disagreements
-
-**Personalization metrics:**
-- `karen_personalization_evidence_total` — Personalization evidence events
-- `karen_personalization_updates_total` — Model updates
-- `karen_personalization_contradictions_total` — Contradictions detected
-- `karen_personalization_snapshot_seconds` — Snapshot build latency
-
-**Adaptive intelligence metrics:**
-- `karen_adaptive_recommendations_total` — Adaptive recommendations
-- `karen_adaptive_ranking_seconds` — Ranking latency
-- `karen_adaptive_candidate_count` — Candidates considered
-- `karen_adaptive_shadow_disagreement_total` — Shadow disagreements
-- `karen_suggestions_total` — Suggestions emitted
-
-**Database/Redis metrics:**
-- `karen_postgres_health` — PostgreSQL health status
-- `karen_redis_health` — Redis health status
-- `karen_db_query_seconds` — Database query latency
-- `karen_queue_depth` — Internal queue depth
-
-**Agent/Tool metrics:**
-- `karen_agent_execution_total` — Agent executions by status
-- `karen_agent_execution_seconds` — Agent execution latency
-- `karen_tool_execution_total` — Tool executions by status
-
-**Model orchestrator metrics:**
-- `kari_model_operations_total` — Model operations
-- `kari_model_operation_duration_seconds` — Operation duration
-- `kari_model_download_bytes_total` — Download throughput
-- `kari_model_storage_usage_bytes` — Storage usage
-
-### Health Checks
-
-```bash
-# Verify backend is listening on port 8000
-ss -ltnp | grep :8000 || lsof -iTCP:8000 -sTCP:LISTEN
-
-# System health
-curl http://localhost:8000/health
-
-# API health
-curl http://localhost:8000/api/health
-
-# Detailed health summary
-curl http://localhost:8000/api/health/summary
-
-# Metrics
-curl http://localhost:8000/metrics
-
-# Service-specific health
-curl http://localhost:8000/api/services/postgres/health
-```
-
----
-
-## Troubleshooting
-
-### Quick Fixes
-
-For immediate solutions to common issues:
-- **[Environment Setup Fix](docs/quick-fixes/ENVIRONMENT_SETUP_FIX.md)** - Resolve Docker Compose warnings
-- **[Connection Issues Checklist](docs/quick-fixes/CONNECTION_ISSUES_CHECKLIST.md)** - Fix port 8001 connection errors
-- **[CORS Issues Fix](docs/troubleshooting/CORS_ISSUES_FIX.md)** - Resolve cross-origin request blocked errors
-- **[Port 8001 Connection Issue](docs/troubleshooting/PORT_8001_CONNECTION_ISSUE.md)** - Specific fix for frontend connection problems
-
-### Automated Fix Scripts
-
-Run these scripts to automatically diagnose and fix common issues:
-```bash
-# Fix environment variables and Docker Compose warnings
-./fix-connection-issue.sh
-
-# Fix CORS issues specifically
-./fix-cors-issue.sh
-
-# Comprehensive frontend-backend connection fix
-./fix-frontend-backend-connection.sh
-```
-
-### Common Issues
-
-#### WSL2 NVIDIA GPU Setup
-
-**Problem**: `nvidia-container-cli: initialization error: WSL environment detected but no adapters were found`
-
-**Solution**: Run the automated WSL2 NVIDIA setup script from Windows PowerShell (Administrator):
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/setup_wsl2_nvidia.ps1
-```
-
-Or from inside WSL2 (Ubuntu/Debian):
-
-```bash
-sudo bash scripts/setup_wsl2_nvidia.sh
-```
-
-Then restart WSL2 and Docker Desktop:
-
-```bash
-wsl --shutdown
-```
-
-Verify the setup:
-
-```bash
-nvidia-smi
-docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
-```
-
-### CPU-Only Mode
-
-If you don't have an NVIDIA GPU or want to run without GPU acceleration:
-
-```bash
-# CPU-only mode (no GPU requirements)
-docker compose -f docker-compose.yml -f deploy/compose/docker-compose.cpu.yml up
-```
-
-The `docker-compose.cpu.yml` override removes all NVIDIA device requirements from services.
-
-#### Authentication Issues
-
-**Problem**: Login failures or "Invalid credentials" errors
-
-**Solution**:
-```bash
-# Check authentication service status
-curl http://localhost:8000/api/auth/status
-
-# Verify default credentials work
-curl -X POST "http://localhost:8000/api/auth/login" \
-  -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "<your-password>"}'
-
-# Check authentication statistics
-curl http://localhost:8000/api/auth/status | jq .stats
-
-# If migration issues, check schema version
-docker compose exec postgres psql -U karen_user -d ai_karen -c \
-  "SELECT migration_name, status FROM migration_history ORDER BY applied_at DESC LIMIT 5;"
-```
-
-#### Schema Migration Issues
-
-**Problem**: Schema version mismatch or migration errors
-
-**Solution**:
-```bash
-# Check current migration status
-docker compose exec postgres psql -U karen_user -d ai_karen -c \
-  "SELECT migration_name, applied_at, status FROM migration_history WHERE service = 'postgres' ORDER BY applied_at DESC LIMIT 1;"
-
-# If migration_history table doesn't exist, initialize it
-docker compose exec postgres psql -U karen_user -d ai_karen -c \
-  "CREATE TABLE IF NOT EXISTS migration_history (
-    id SERIAL PRIMARY KEY,
-    migration_name VARCHAR(255) NOT NULL,
-    service VARCHAR(50) NOT NULL DEFAULT 'postgres',
-    applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    status VARCHAR(20) NOT NULL DEFAULT 'applied'
-  );"
-
-# Record current migration as applied
-docker compose exec postgres psql -U karen_user -d ai_karen -c \
-  "INSERT INTO migration_history (migration_name, service, status) 
-   VALUES ('022_enhanced_auth_validation_system.sql', 'postgres', 'applied')
-   ON CONFLICT DO NOTHING;"
-```
-
-#### Plugin Loading Failures
-
-**Problem**: Plugins not loading or executing
-
-**Solution**:
-```bash
-# Validate plugin manifest
-python -c "import json; print(json.load(open('src/ai_karen_engine/plugins/my_plugin/plugin_manifest.json')))"
-
-# Reload plugins
-curl -X POST http://localhost:8000/plugins/reload
-
-# Check plugin logs
-docker compose logs api | grep plugin
-```
-
-#### Memory Issues
-
-**Problem**: High memory usage or OOM errors
-
-**Solution**:
-```bash
-# Check memory usage
-docker stats
-
-# Adjust memory limits in docker-compose.yml
-# Restart with memory limits
-docker compose up -d --force-recreate
-```
-
-#### Frontend Build Issues
-
-**Problem**: UI build failures
-
-**Solution**:
-```bash
-# Clear node modules
-cd ui_launchers/web_ui
-rm -rf node_modules package-lock.json
-npm install
-
-# Check Node.js version
-node --version  # Should be 18+
-```
-
-### Performance Optimization
-
-1. **Database Tuning**:
-   - Adjust PostgreSQL `shared_buffers` and `work_mem`
-   - Configure Redis `maxmemory` policy
-   - Optimize Elasticsearch heap size
-
-2. **API Performance**:
-   - Enable FastAPI response caching
-   - Configure connection pooling
-   - Use async endpoints where possible
-
-3. **Frontend Optimization**:
-   - Enable Next.js production build optimizations
-   - Configure CDN for static assets
-   - Implement proper caching headers
-
-### Getting Help
-
-1. **Check Documentation**: Review component-specific README files
-2. **System Analysis**: Run `python scripts/doc_analysis.py` for system overview
-3. **Health Checks**: Use `/api/health/summary` endpoint
-4. **Logs**: Check application and service logs
-5. **Community**: Submit issues with system analysis output
-
----
-
-## Contributing
-
-### Development Workflow
-
-1. Fork the repository
-2. Create a feature branch
-3. Make changes with tests
-4. Run the full test suite
-5. Submit a pull request
-
-### Code Standards
-
-* **Python**: Black formatting, type hints, docstrings
-* **JavaScript/TypeScript**: ESLint, Prettier formatting
-* **Rust**: Standard rustfmt formatting
-* **Documentation**: Update README files for any architectural changes
-
-### Testing
-
-Install project dependencies before running tests:
-
-```bash
-pip install -r requirements.txt
-```
-
-```bash
-# Run all tests
-pytest
-
-# Run specific test categories
-pytest tests/services/
-pytest tests/ui/
-
-# Run with coverage
-pytest --cov=src/ai_karen_engine
-```
-
----
+Read these first:
+
+- `PROJECT_DEV_MANIFEST.md` for the canonical developer contract and live truth map.
+- `docs/architecture/FIRST_RUN_SYSTEM.md` for installation/bootstrap authority and proof.
+- `docs/development/ARCHITECTURE_AUTHORITY.md` for architectural ownership rules.
+- `src/ai_karen_engine/core/ARCHITECTURE.md` for core authority boundaries.
+- `src/ai_karen_engine/core/README.md` for core-domain ownership.
+- `src/ai_karen_engine/config/README.md` for configuration ownership.
+
+Historical sprint sheets are implementation history, not architecture authority.
 
 ## License
 
-See `LICENSE`, `LICENSE.md`, and `LICENSE-commercial.txt` for the repository's licensing terms.
+See the repository license files for licensing terms.
