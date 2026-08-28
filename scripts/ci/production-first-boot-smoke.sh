@@ -27,12 +27,14 @@ EXTENSION_SECRET="beta-smoke-ext-9f3c1ad483204d30a4fa6ef531b6f42d"
 ADMIN_EMAIL="beta-smoke-admin@example.invalid"
 ADMIN_PASSWORD="BetaSmoke!Pass9Z"
 ADMIN_NAME="Beta Smoke Owner"
+REPLAY_EMAIL="beta-smoke-replay@example.invalid"
 BASE_URL="http://127.0.0.1:${HOST_PORT}"
 COOKIE_JAR="$(mktemp)"
 API_LOG="$(mktemp)"
+REPLAY_BODY="$(mktemp)"
 
 cleanup() {
-  rm -f "${COOKIE_JAR}" "${API_LOG}"
+  rm -f "${COOKIE_JAR}" "${API_LOG}" "${REPLAY_BODY}"
   docker rm -f "${API_CONTAINER}" >/dev/null 2>&1 || true
   docker rm -f "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
   docker rm -f "${POSTGRES_CONTAINER}" >/dev/null 2>&1 || true
@@ -195,6 +197,18 @@ payload = json.loads(sys.argv[1])
 assert payload.get("first_run_required") is False, payload
 PY
 
+replay_status="$(curl -sS \
+  -o "${REPLAY_BODY}" \
+  -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  -d "{\"email\":\"${REPLAY_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\",\"confirm_password\":\"${ADMIN_PASSWORD}\",\"full_name\":\"Replay Owner\"}" \
+  "${BASE_URL}/api/auth/first-run/setup")"
+if [[ "${replay_status}" == "200" || "${replay_status}" == "201" ]]; then
+  echo "first-run bootstrap replay unexpectedly succeeded" >&2
+  cat "${REPLAY_BODY}" >&2
+  fail_with_api_logs
+fi
+
 me_json="$(curl -fsS -b "${COOKIE_JAR}" "${BASE_URL}/api/auth/me")"
 python3 - "${me_json}" <<'PY'
 import json
@@ -210,6 +224,14 @@ docker rm -f "${API_CONTAINER}" >/dev/null
 start_api
 
 echo "[smoke] proving durable owner survives process restart"
+post_restart_first_run="$(curl -fsS "${BASE_URL}/api/auth/first-run")"
+python3 - "${post_restart_first_run}" <<'PY'
+import json
+import sys
+payload = json.loads(sys.argv[1])
+assert payload.get("first_run_required") is False, payload
+PY
+
 login_json="$(curl -fsS \
   -c "${COOKIE_JAR}" \
   -H 'Content-Type: application/json' \
