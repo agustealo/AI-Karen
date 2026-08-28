@@ -69,14 +69,24 @@ ALTER TABLE medusa_execution_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE medusa_execution_runs FORCE ROW LEVEL SECURITY;
 ALTER TABLE medusa_execution_events FORCE ROW LEVEL SECURITY;
 
-CREATE POLICY medusa_execution_runs_tenant_isolation ON medusa_execution_runs
-    FOR ALL
+CREATE POLICY medusa_execution_runs_tenant_select ON medusa_execution_runs
+    FOR SELECT
+    USING (tenant_id = current_setting('app.current_tenant_id')::uuid);
+CREATE POLICY medusa_execution_runs_tenant_insert ON medusa_execution_runs
+    FOR INSERT
+    WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::uuid);
+CREATE POLICY medusa_execution_runs_tenant_update ON medusa_execution_runs
+    FOR UPDATE
     USING (tenant_id = current_setting('app.current_tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::uuid);
 
-CREATE POLICY medusa_execution_events_tenant_isolation ON medusa_execution_events
-    FOR ALL
-    USING (tenant_id = current_setting('app.current_tenant_id')::uuid)
+-- Transition history is append-only by policy: tenants may SELECT and INSERT,
+-- but there is intentionally no UPDATE or DELETE policy for event rows.
+CREATE POLICY medusa_execution_events_tenant_select ON medusa_execution_events
+    FOR SELECT
+    USING (tenant_id = current_setting('app.current_tenant_id')::uuid);
+CREATE POLICY medusa_execution_events_tenant_insert ON medusa_execution_events
+    FOR INSERT
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::uuid);
 
 COMMENT ON TABLE medusa_execution_runs IS
