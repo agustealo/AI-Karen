@@ -45,6 +45,7 @@ jobs:
             pydantic \
             pydantic-settings \
             python-dotenv \
+            PyYAML \
             structlog \
             prometheus-client
 
