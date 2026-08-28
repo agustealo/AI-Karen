@@ -1,0 +1,65 @@
+name: Chat System Burn
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chat-system-burn-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chat-system-burn:
+    name: chat-system-burn
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: src
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install chat burn dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            pytest pytest-asyncio numpy sqlalchemy asyncpg psycopg psycopg2-binary \
+            PyJWT bcrypt argon2-cffi structlog cryptography PyYAML \
+            pydantic pydantic-settings python-dotenv prometheus_client \
+            fastapi httpx requests tenacity redis fakeredis
+
+      - name: Compile chat authority surfaces
+        run: |
+          python -m compileall -q \
+            src/ai_karen_engine/core/runtime \
+            src/ai_karen_engine/core/cortex \
+            src/ai_karen_engine/core/expression \
+            src/ai_karen_engine/api_routes/chat
+
+      - name: Run chat architecture contract
+        run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
+
+      - name: Run chat runtime adversarial burn
+        run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_burn_contract.py -q
+
+      - name: Run chat concurrency burn
+        run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_concurrency_burn.py -q
+
+      - name: Run provider authority contract
+        run: pytest tests/architecture/test_provider_chat_authority.py -q
+
+      - name: Run CORTEX authority contract
+        run: pytest tests/architecture/test_cortex_intelligence_authority.py -q
+
+      - name: Run authenticated tenant contract
+        run: pytest tests/architecture/test_authenticated_tenant_context_contract.py -q
