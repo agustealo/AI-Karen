@@ -115,8 +115,7 @@ class PostgresDurableRunLedger:
             async with self._postgres.get_async_session() as session:
                 await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
-                    text(
-                        """
+                    text("""
                         INSERT INTO agent_medusa_runs (
                             run_id,
                             tenant_id,
@@ -139,8 +138,7 @@ class PostgresDurableRunLedger:
                             :started_at
                         )
                         ON CONFLICT (run_id) DO NOTHING
-                        """
-                    ),
+                        """),
                     {
                         "run_id": run_id,
                         "tenant_id": tenant_id,
@@ -173,8 +171,7 @@ class PostgresDurableRunLedger:
             async with self._postgres.get_async_session() as session:
                 await self._set_tenant_scope(session, tenant_id)
                 await session.execute(
-                    text(
-                        """
+                    text("""
                         UPDATE agent_medusa_runs
                         SET heartbeat_at = :heartbeat_at,
                             updated_at = :heartbeat_at
@@ -182,8 +179,7 @@ class PostgresDurableRunLedger:
                           AND tenant_id = CAST(:tenant_id AS uuid)
                           AND owner_worker_id = :worker_id
                           AND status IN ('running', 'cancelling')
-                        """
-                    ),
+                        """),
                     {
                         "run_id": run_id,
                         "tenant_id": tenant_id,
@@ -207,8 +203,7 @@ class PostgresDurableRunLedger:
             async with self._postgres.get_async_session() as session:
                 await self._set_tenant_scope(session, tenant_id)
                 await session.execute(
-                    text(
-                        """
+                    text("""
                         UPDATE agent_medusa_runs
                         SET status = 'cancelling',
                             cancel_requested_at = COALESCE(
@@ -219,8 +214,7 @@ class PostgresDurableRunLedger:
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
                           AND status = 'running'
-                        """
-                    ),
+                        """),
                     {
                         "run_id": run_id,
                         "tenant_id": tenant_id,
@@ -247,8 +241,7 @@ class PostgresDurableRunLedger:
             async with self._postgres.get_async_session() as session:
                 await self._set_tenant_scope(session, tenant_id)
                 await session.execute(
-                    text(
-                        """
+                    text("""
                         UPDATE agent_medusa_runs
                         SET status = :status,
                             completed_at = :completed_at,
@@ -258,8 +251,7 @@ class PostgresDurableRunLedger:
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
                           AND status IN ('running', 'cancelling')
-                        """
-                    ),
+                        """),
                     {
                         "run_id": run_id,
                         "tenant_id": tenant_id,
@@ -278,8 +270,7 @@ class PostgresDurableRunLedger:
             async with self._postgres.get_async_session() as session:
                 await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
-                    text(
-                        """
+                    text("""
                         SELECT run_id,
                                correlation_id,
                                tenant_id::text AS tenant_id,
@@ -293,8 +284,7 @@ class PostgresDurableRunLedger:
                         FROM agent_medusa_runs
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
-                        """
-                    ),
+                        """),
                     {"run_id": run_id, "tenant_id": tenant_id},
                 )
                 row = result.mappings().first()
@@ -321,8 +311,7 @@ class PostgresDurableRunLedger:
             async with self._postgres.get_async_session() as session:
                 await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
-                    text(
-                        f"""
+                    text(f"""
                         SELECT run_id,
                                correlation_id,
                                tenant_id::text AS tenant_id,
@@ -338,13 +327,10 @@ class PostgresDurableRunLedger:
                         {terminal_clause}
                         ORDER BY started_at DESC
                         LIMIT :limit
-                        """
-                    ),
+                        """),
                     {"tenant_id": tenant_id, "limit": safe_limit},
                 )
-                return [
-                    self._snapshot(dict(row)) for row in result.mappings().all()
-                ]
+                return [self._snapshot(dict(row)) for row in result.mappings().all()]
         except SQLAlchemyError as exc:
             raise DurableRunLedgerUnavailable(
                 "medusa_durable_ledger_unavailable"
@@ -362,8 +348,7 @@ class PostgresDurableRunLedger:
             async with self._postgres.get_async_session() as session:
                 await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
-                    text(
-                        """
+                    text("""
                         UPDATE agent_medusa_runs
                         SET status = 'orphaned',
                             completed_at = :reconciled_at,
@@ -375,8 +360,7 @@ class PostgresDurableRunLedger:
                         WHERE tenant_id = CAST(:tenant_id AS uuid)
                           AND status IN ('running', 'cancelling')
                           AND heartbeat_at < :stale_before
-                        """
-                    ),
+                        """),
                     {
                         "tenant_id": tenant_id,
                         "stale_before": stale_before,
