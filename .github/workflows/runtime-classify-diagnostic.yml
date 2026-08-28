@@ -1,0 +1,43 @@
+name: Runtime Classify Diagnostic
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  import-runtime:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python -m pip install \
+            numpy sqlalchemy asyncpg psycopg psycopg2-binary PyJWT bcrypt argon2-cffi \
+            structlog cryptography PyYAML pydantic pydantic-settings python-dotenv \
+            prometheus_client fastapi httpx requests tenacity redis fakeredis
+      - run: python -c "from ai_karen_engine.core.intelligence.intelligence_runtime import IntelligenceRuntime; assert IntelligenceRuntime"
+
+  instantiate-without-init:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python -m pip install \
+            numpy sqlalchemy asyncpg psycopg psycopg2-binary PyJWT bcrypt argon2-cffi \
+            structlog cryptography PyYAML pydantic pydantic-settings python-dotenv \
+            prometheus_client fastapi httpx requests tenacity redis fakeredis
+      - run: python -c "from ai_karen_engine.core.intelligence.intelligence_runtime import IntelligenceRuntime; r=object.__new__(IntelligenceRuntime); r._initialized=True; assert r._initialized"
