@@ -50,7 +50,17 @@ jobs:
         run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
 
       - name: Run chat runtime adversarial burn
-        run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_burn_contract.py -q
+        run: |
+          set -o pipefail
+          pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_burn_contract.py -vv 2>&1 | tee chat-runtime-adversarial-burn.log
+
+      - name: Upload adversarial burn diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-runtime-adversarial-burn
+          path: chat-runtime-adversarial-burn.log
+          if-no-files-found: ignore
 
       - name: Run chat concurrency burn
         run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_concurrency_burn.py -q
