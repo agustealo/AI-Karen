@@ -29,6 +29,9 @@ class EventType(str, Enum):
     INTELLIGENCE_COMPLETED = "intelligence.completed"
     CORTEX_STARTED = "cortex.started"
     CORTEX_COMPLETED = "cortex.completed"
+    # Compatibility alias for legacy ChatRuntime emitters. New code should use
+    # CORTEX_COMPLETED; remove after the runtime caller is migrated.
+    CORTEX_DECISION = "cortex.completed"
     POLICY_STARTED = "policy.started"
     POLICY_COMPLETED = "policy.completed"
     POLICY_DENIED = "policy.denied"
