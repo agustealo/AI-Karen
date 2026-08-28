@@ -2,15 +2,15 @@
 
 Concrete asyncio tasks remain owned by the worker process that executes them.
 Redis provides live cluster coordination and cancellation. PostgreSQL provides
-long-lived run history and restart/orphan reconciliation. Neither storage layer
-is allowed to become a second orchestration authority.
+long-lived run history. Reconciliation flows from Redis live truth into durable
+history, never the reverse, and neither storage layer becomes task authority.
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -30,6 +30,7 @@ from .distributed_run_store import (
 )
 from .durable_run_ledger import (
     DurableRunLedger,
+    DurableRunLedgerConflict,
     DurableRunLedgerUnavailable,
     PostgresDurableRunLedger,
 )
@@ -38,7 +39,7 @@ logger = get_logger(__name__)
 
 
 class ExecutionRunStatus(str, Enum):
-    """Canonical lifecycle states for one local Medusa execution run."""
+    """Canonical lifecycle states for one worker-local Medusa execution run."""
 
     RUNNING = "running"
     CANCELLING = "cancelling"
@@ -53,6 +54,9 @@ class ExecutionRun:
 
     run_id: str
     correlation_id: str
+    request_id: str
+    session_id: str | None
+    policy_decision_id: str | None
     tenant_id: str
     user_id: str
     task: asyncio.Task[Any]
@@ -68,6 +72,9 @@ class ExecutionRun:
         return {
             "run_id": self.run_id,
             "correlation_id": self.correlation_id,
+            "request_id": self.request_id,
+            "session_id": self.session_id,
+            "policy_decision_id": self.policy_decision_id,
             "tenant_id": self.tenant_id,
             "user_id": self.user_id,
             "status": self.status.value,
@@ -78,6 +85,7 @@ class ExecutionRun:
             "error_type": self.error_type,
             "cancellable": self.status is ExecutionRunStatus.RUNNING,
             "durable": self.durable_registered,
+            "response_source": "worker_local_execution",
         }
 
 
@@ -122,7 +130,12 @@ class MedusaRunManager:
         tenant_id: str,
         user_id: str,
         task: asyncio.Task[Any],
+        request_id: str | None = None,
+        session_id: str | None = None,
+        policy_decision_id: str | None = None,
     ) -> ExecutionRun:
+        request_id = request_id or run_id
+        started_at = datetime.now(timezone.utc)
         async with self._lock:
             existing = self._runs.get(run_id)
             if existing is not None and existing.status in {
@@ -133,9 +146,13 @@ class MedusaRunManager:
             run = ExecutionRun(
                 run_id=run_id,
                 correlation_id=correlation_id,
+                request_id=request_id,
+                session_id=session_id,
+                policy_decision_id=policy_decision_id,
                 tenant_id=tenant_id,
                 user_id=user_id,
                 task=task,
+                started_at=started_at,
             )
             self._runs[run_id] = run
 
@@ -144,10 +161,13 @@ class MedusaRunManager:
                 await self._durable_ledger.register(
                     run_id=run_id,
                     correlation_id=correlation_id,
+                    request_id=request_id,
+                    session_id=session_id,
+                    policy_decision_id=policy_decision_id,
                     tenant_id=tenant_id,
                     user_id=user_id,
                     worker_id=self._settings.worker_id,
-                    started_at=run.started_at,
+                    created_at=started_at,
                 )
                 run.durable_registered = True
         except Exception:
@@ -169,7 +189,7 @@ class MedusaRunManager:
                     tenant_id=tenant_id,
                     user_id=user_id,
                     worker_id=self._settings.worker_id,
-                    started_at=run.started_at,
+                    started_at=started_at,
                 )
             except DistributedRunStoreUnavailable:
                 logger.warning(
@@ -191,7 +211,41 @@ class MedusaRunManager:
             else:
                 run.shared_registered = True
 
-        if run.shared_registered or run.durable_registered:
+        if run.durable_registered:
+            try:
+                await self._durable_ledger.mark_running(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    worker_id=self._settings.worker_id,
+                    started_at=started_at,
+                )
+            except (DurableRunLedgerConflict, DurableRunLedgerUnavailable):
+                logger.exception(
+                    "Medusa durable running transition failed",
+                    extra={"run_id": run_id},
+                )
+                if run.shared_registered:
+                    try:
+                        await self._distributed_store.mark_terminal(
+                            run_id=run_id,
+                            worker_id=self._settings.worker_id,
+                            status="failed",
+                            completed_at=datetime.now(timezone.utc),
+                            error_type="DurableRunningTransitionFailed",
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Medusa shared compensation after durable failure failed",
+                            extra={"run_id": run_id},
+                        )
+                async with self._lock:
+                    if self._runs.get(run_id) is run:
+                        self._runs.pop(run_id, None)
+                if self._settings.durable_run_ledger_required:
+                    raise
+                run.durable_registered = False
+
+        if run.shared_registered:
             run.heartbeat_task = asyncio.create_task(
                 self._heartbeat_loop(run),
                 name=f"medusa-run-heartbeat:{run_id}",
@@ -219,8 +273,6 @@ class MedusaRunManager:
         error_type: str | None = None,
     ) -> None:
         heartbeat_task: asyncio.Task[None] | None = None
-        shared_registered = False
-        durable_registered = False
         completed_at = datetime.now(timezone.utc)
         async with self._lock:
             run = self._runs.get(run_id)
@@ -231,8 +283,6 @@ class MedusaRunManager:
             run.error_type = error_type
             heartbeat_task = run.heartbeat_task
             run.heartbeat_task = None
-            shared_registered = run.shared_registered
-            durable_registered = run.durable_registered
             if run_id not in self._terminal_order:
                 self._terminal_order.append(run_id)
             self._prune_locked()
@@ -244,7 +294,7 @@ class MedusaRunManager:
             except asyncio.CancelledError:
                 pass
 
-        if durable_registered:
+        if run.durable_registered:
             await self._safe_mark_durable_terminal(
                 run=run,
                 status=status,
@@ -252,7 +302,7 @@ class MedusaRunManager:
                 error_type=error_type,
             )
 
-        if shared_registered:
+        if run.shared_registered:
             try:
                 await self._distributed_store.mark_terminal(
                     run_id=run_id,
@@ -267,10 +317,15 @@ class MedusaRunManager:
                     extra={"run_id": run_id, "status": status.value},
                 )
 
-    async def cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
+    async def cancel(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        audit_event_ref: str | None = None,
+    ) -> dict[str, Any]:
         local_task: asyncio.Task[Any] | None = None
-        local_shared = False
-        local_durable = False
+        local_run: ExecutionRun | None = None
         async with self._lock:
             run = self._runs.get(run_id)
             if run is not None:
@@ -282,17 +337,31 @@ class MedusaRunManager:
                     )
                 run.status = ExecutionRunStatus.CANCELLING
                 local_task = run.task
-                local_shared = run.shared_registered
-                local_durable = run.durable_registered
+                local_run = run
 
-        if local_task is not None:
+        if local_task is not None and local_run is not None:
             requested_at = datetime.now(timezone.utc)
-            if local_durable:
+            if local_run.shared_registered:
+                try:
+                    await self._distributed_store.request_cancel(
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                    )
+                except DistributedRunStoreUnavailable:
+                    logger.warning(
+                        "Shared cancel state unavailable; cancelling local owner task directly",
+                        extra={"run_id": run_id},
+                    )
+                except DistributedRunNotCancellable:
+                    pass
+            if local_run.durable_registered:
                 try:
                     await self._durable_ledger.mark_cancelling(
                         run_id=run_id,
                         tenant_id=tenant_id,
                         requested_at=requested_at,
+                        audit_event_ref=audit_event_ref,
+                        source="admin_cancel" if audit_event_ref else "runtime",
                     )
                 except DurableRunLedgerUnavailable:
                     logger.exception(
@@ -302,22 +371,9 @@ class MedusaRunManager:
                     if self._settings.durable_run_ledger_required:
                         async with self._lock:
                             current = self._runs.get(run_id)
-                            if current is run:
+                            if current is local_run:
                                 current.status = ExecutionRunStatus.RUNNING
                         raise
-            if local_shared:
-                try:
-                    await self._distributed_store.request_cancel(
-                        run_id=run_id,
-                        tenant_id=tenant_id,
-                    )
-                except DistributedRunStoreUnavailable:
-                    logger.warning(
-                        "Shared cancel state unavailable; cancelling local task directly",
-                        extra={"run_id": run_id},
-                    )
-                except DistributedRunNotCancellable:
-                    pass
             local_task.cancel()
             return await self.get(run_id=run_id, tenant_id=tenant_id)
 
@@ -332,6 +388,8 @@ class MedusaRunManager:
                         run_id=run_id,
                         tenant_id=tenant_id,
                         requested_at=datetime.now(timezone.utc),
+                        audit_event_ref=audit_event_ref,
+                        source="admin_cancel" if audit_event_ref else "runtime",
                     )
                 return snapshot
             except DistributedRunNotFound:
@@ -350,6 +408,29 @@ class MedusaRunManager:
             )
         raise RunNotFoundError(run_id)
 
+    async def link_audit_event(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        audit_event_ref: str,
+    ) -> None:
+        if not self._settings.durable_run_ledger_enabled:
+            return
+        try:
+            await self._durable_ledger.link_audit_event(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                audit_event_ref=audit_event_ref,
+            )
+        except DurableRunLedgerUnavailable:
+            if self._settings.durable_run_ledger_required:
+                raise
+            logger.exception(
+                "Medusa durable audit linkage unavailable",
+                extra={"run_id": run_id, "tenant_id": tenant_id},
+            )
+
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
         async with self._lock:
             run = self._runs.get(run_id)
@@ -357,17 +438,12 @@ class MedusaRunManager:
                 if run.tenant_id != tenant_id:
                     raise RunTenantMismatchError(run_id)
                 snapshot = run.snapshot()
-                shared_registered = run.shared_registered
-            else:
-                snapshot = None
-                shared_registered = False
+                snapshot["distributed_control"] = await self._distributed_capability(
+                    shared_registered=run.shared_registered
+                )
+                return snapshot
 
-        if snapshot is not None:
-            snapshot["distributed_control"] = await self._distributed_capability(
-                shared_registered=shared_registered
-            )
-            return snapshot
-
+        await self._reconcile_tenant_from_redis(tenant_id)
         if await self._distributed_available():
             try:
                 return await self._distributed_store.get(
@@ -392,7 +468,7 @@ class MedusaRunManager:
         tenant_id: str,
         include_terminal: bool = True,
     ) -> list[dict[str, Any]]:
-        await self._reconcile_tenant_stale(tenant_id)
+        await self._reconcile_tenant_from_redis(tenant_id)
         async with self._lock:
             local_pairs = [
                 (run.snapshot(), run.shared_registered)
@@ -449,29 +525,13 @@ class MedusaRunManager:
         )
 
     async def _heartbeat_loop(self, run: ExecutionRun) -> None:
+        """Renew Redis ownership and observe remote cancellation requests."""
+
         try:
             while True:
                 await asyncio.sleep(self._settings.run_heartbeat_interval_seconds)
-                now = datetime.now(timezone.utc)
-                if run.durable_registered:
-                    try:
-                        await self._durable_ledger.heartbeat(
-                            run_id=run.run_id,
-                            tenant_id=run.tenant_id,
-                            worker_id=self._settings.worker_id,
-                            heartbeat_at=now,
-                        )
-                    except DurableRunLedgerUnavailable:
-                        logger.exception(
-                            "Medusa durable run heartbeat failed",
-                            extra={"run_id": run.run_id},
-                        )
-                        if self._settings.durable_run_ledger_required:
-                            run.task.cancel()
-                            return
-
                 if not run.shared_registered:
-                    continue
+                    return
                 try:
                     cancel_requested = await self._distributed_store.heartbeat(
                         run_id=run.run_id,
@@ -484,6 +544,7 @@ class MedusaRunManager:
                     )
                     continue
                 if cancel_requested:
+                    now = datetime.now(timezone.utc)
                     async with self._lock:
                         current = self._runs.get(run.run_id)
                         if current is not run:
@@ -497,6 +558,7 @@ class MedusaRunManager:
                                 run_id=run.run_id,
                                 tenant_id=run.tenant_id,
                                 requested_at=now,
+                                source="runtime",
                             )
                         except DurableRunLedgerUnavailable:
                             logger.exception(
@@ -510,10 +572,7 @@ class MedusaRunManager:
         except Exception as exc:
             logger.error(
                 "Medusa run heartbeat loop failed",
-                extra={
-                    "run_id": run.run_id,
-                    "error_type": type(exc).__name__,
-                },
+                extra={"run_id": run.run_id, "error_type": type(exc).__name__},
             )
 
     async def _safe_mark_durable_terminal(
@@ -528,11 +587,12 @@ class MedusaRunManager:
             await self._durable_ledger.mark_terminal(
                 run_id=run.run_id,
                 tenant_id=run.tenant_id,
+                worker_id=self._settings.worker_id,
                 status=status.value,
                 completed_at=completed_at,
                 error_type=error_type,
             )
-        except DurableRunLedgerUnavailable:
+        except (DurableRunLedgerConflict, DurableRunLedgerUnavailable):
             logger.exception(
                 "Medusa durable terminal transition failed",
                 extra={"run_id": run.run_id, "status": status.value},
@@ -548,7 +608,6 @@ class MedusaRunManager:
     ) -> dict[str, Any] | None:
         if not self._settings.durable_run_ledger_enabled:
             return None
-        await self._reconcile_tenant_stale(tenant_id)
         try:
             return await self._durable_ledger.get(run_id=run_id, tenant_id=tenant_id)
         except DurableRunLedgerUnavailable:
@@ -560,32 +619,102 @@ class MedusaRunManager:
             )
             return None
 
-    async def _reconcile_tenant_stale(self, tenant_id: str) -> None:
+    async def _reconcile_tenant_from_redis(self, tenant_id: str) -> None:
+        """Boundedly repair durable active rows using Redis live authority only."""
+
         if not self._settings.durable_run_ledger_enabled:
             return
-        reconcile = getattr(self._durable_ledger, "reconcile_tenant_stale", None)
-        if reconcile is None:
+        if not await self._distributed_available():
             return
-        now = datetime.now(timezone.utc)
-        stale_before = now - timedelta(seconds=self._settings.run_orphan_grace_seconds)
+        list_reconcilable = getattr(self._durable_ledger, "list_reconcilable", None)
+        reconcile = getattr(self._durable_ledger, "reconcile_from_shared", None)
+        if list_reconcilable is None or reconcile is None:
+            return
         try:
-            count = await reconcile(
+            rows = await list_reconcilable(
                 tenant_id=tenant_id,
-                stale_before=stale_before,
-                reconciled_at=now,
+                limit=self._settings.run_reconciliation_batch_size,
             )
         except DurableRunLedgerUnavailable:
             if self._settings.durable_run_ledger_required:
                 raise
             logger.exception(
-                "Medusa stale-run reconciliation unavailable",
+                "Medusa reconciliation durable read unavailable",
                 extra={"tenant_id": tenant_id},
             )
             return
-        if count:
-            logger.warning(
-                "Medusa reconciled stale durable runs",
-                extra={"tenant_id": tenant_id, "orphaned_run_count": count},
+
+        async with self._lock:
+            local_run_ids = {
+                run_id
+                for run_id, run in self._runs.items()
+                if run.tenant_id == tenant_id
+            }
+
+        reconciled = 0
+        for row in rows:
+            run_id = str(row["run_id"])
+            if run_id in local_run_ids:
+                continue
+            try:
+                shared = await self._distributed_store.get(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                )
+            except DistributedRunStoreUnavailable:
+                return
+            except DistributedRunTenantMismatch:
+                logger.error(
+                    "Medusa reconciliation tenant mismatch",
+                    extra={"run_id": run_id, "tenant_id": tenant_id},
+                )
+                continue
+            except DistributedRunNotFound:
+                shared = {
+                    "status": "orphaned",
+                    "completed_at": None,
+                    "error_type": "WorkerLeaseExpired",
+                }
+
+            shared_status = str(shared.get("status") or "")
+            if shared_status == "running":
+                continue
+            if shared_status not in {
+                "cancelling",
+                "orphaned",
+                "completed",
+                "failed",
+                "cancelled",
+            }:
+                logger.warning(
+                    "Medusa reconciliation ignored unknown shared status",
+                    extra={"run_id": run_id, "status": shared_status},
+                )
+                continue
+            try:
+                changed = await reconcile(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    status=shared_status,
+                    reconciled_at=datetime.now(timezone.utc),
+                    completed_at=self._parse_time(shared.get("completed_at")),
+                    error_type=shared.get("error_type"),
+                )
+            except DurableRunLedgerUnavailable:
+                if self._settings.durable_run_ledger_required:
+                    raise
+                logger.exception(
+                    "Medusa reconciliation durable write unavailable",
+                    extra={"run_id": run_id, "tenant_id": tenant_id},
+                )
+                return
+            if changed:
+                reconciled += 1
+
+        if reconciled:
+            logger.info(
+                "Medusa reconciled durable history from Redis",
+                extra={"tenant_id": tenant_id, "reconciled_run_count": reconciled},
             )
 
     async def _distributed_available(self) -> bool:
@@ -612,11 +741,19 @@ class MedusaRunManager:
                 "reason_code": "run_not_registered_in_shared_coordination",
             }
         if not await self._distributed_available():
-            return {
-                "supported": False,
-                "reason_code": "shared_redis_unavailable",
-            }
+            return {"supported": False, "reason_code": "shared_redis_unavailable"}
         return {"supported": True, "lease_alive": True}
+
+    def _parse_time(self, value: Any) -> datetime | None:
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            parsed = value
+        else:
+            parsed = datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     def _prune_locked(self) -> None:
         excess = len(self._terminal_order) - self._terminal_retention

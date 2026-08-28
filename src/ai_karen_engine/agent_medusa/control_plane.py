@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from ai_karen_engine.audit_logging import (
     AuditEvent,
@@ -115,7 +116,12 @@ class AgentMedusaControlPlane:
     ) -> dict[str, Any]:
         """Request cancellation and audit the runtime-owned side effect."""
 
-        result = await self._run_manager.cancel(run_id=run_id, tenant_id=tenant_id)
+        audit_event_ref = str(uuid4())
+        result = await self._run_manager.cancel(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            audit_event_ref=audit_event_ref,
+        )
         distributed = result.get("distributed_control")
         self._audit_logger.log_audit_event(
             AuditEvent(
@@ -128,6 +134,7 @@ class AgentMedusaControlPlane:
                 correlation_id=str(result.get("correlation_id") or run_id),
                 metadata={
                     "run_id": run_id,
+                    "audit_event_ref": audit_event_ref,
                     "resulting_status": result.get("status"),
                     "distributed_control_supported": (
                         distributed.get("supported")
@@ -136,6 +143,11 @@ class AgentMedusaControlPlane:
                     ),
                 },
             )
+        )
+        await self._run_manager.link_audit_event(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            audit_event_ref=audit_event_ref,
         )
         return result
 

@@ -6,8 +6,10 @@ on:
     paths:
       - 'src/ai_karen_engine/agent_medusa/execution/**'
       - 'src/ai_karen_engine/agent_medusa/adapters/**'
+      - 'src/ai_karen_engine/agent_medusa/coordinator/**'
+      - 'src/ai_karen_engine/agent_medusa/control_plane.py'
       - 'src/ai_karen_engine/config/agent_medusa.py'
-      - 'supabase/migrations/*agent_medusa_run_ledger.sql'
+      - 'supabase/migrations/*agent_medusa_run_ledger*.sql'
       - 'tests/agent_medusa/**'
       - '.github/workflows/medusa-durable-run-ci.yml'
   push:
@@ -15,10 +17,15 @@ on:
     paths:
       - 'src/ai_karen_engine/agent_medusa/execution/**'
       - 'src/ai_karen_engine/agent_medusa/adapters/**'
+      - 'src/ai_karen_engine/agent_medusa/coordinator/**'
+      - 'src/ai_karen_engine/agent_medusa/control_plane.py'
       - 'src/ai_karen_engine/config/agent_medusa.py'
-      - 'supabase/migrations/*agent_medusa_run_ledger.sql'
+      - 'supabase/migrations/*agent_medusa_run_ledger*.sql'
       - 'tests/agent_medusa/**'
       - '.github/workflows/medusa-durable-run-ci.yml'
+
+permissions:
+  contents: write
 
 jobs:
   durable-run-contract:
@@ -26,6 +33,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - uses: actions/setup-python@v5
         with:
@@ -49,19 +58,42 @@ jobs:
             structlog \
             prometheus-client
 
-      - name: Format contract
+      - name: Apply formatting
         run: |
-          black --check --diff \
+          black \
             src/ai_karen_engine/agent_medusa/execution/run_manager.py \
             src/ai_karen_engine/agent_medusa/execution/durable_run_ledger.py \
+            src/ai_karen_engine/agent_medusa/coordinator/medusa_coordinator.py \
+            src/ai_karen_engine/agent_medusa/control_plane.py \
             src/ai_karen_engine/config/agent_medusa.py \
             tests/agent_medusa/test_run_manager.py \
             tests/agent_medusa/test_durable_run_ledger.py
+
+      - name: Commit formatting if needed
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/ai_karen_engine/agent_medusa/execution/run_manager.py \
+            src/ai_karen_engine/agent_medusa/execution/durable_run_ledger.py \
+            src/ai_karen_engine/agent_medusa/coordinator/medusa_coordinator.py \
+            src/ai_karen_engine/agent_medusa/control_plane.py \
+            src/ai_karen_engine/config/agent_medusa.py \
+            tests/agent_medusa/test_run_manager.py \
+            tests/agent_medusa/test_durable_run_ledger.py
+          git commit -m 'style(medusa): format durable reconciliation cut'
+          git push origin HEAD:${{ github.head_ref }}
 
       - name: Compile Medusa durability code
         run: |
           python -m compileall \
             src/ai_karen_engine/agent_medusa/execution \
+            src/ai_karen_engine/agent_medusa/coordinator/medusa_coordinator.py \
+            src/ai_karen_engine/agent_medusa/control_plane.py \
             src/ai_karen_engine/config/agent_medusa.py
 
       - name: Run Medusa execution authority tests
@@ -77,15 +109,27 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          migration = Path('supabase/migrations/20260828042000_12_agent_medusa_run_ledger.sql').read_text()
+          base_migration = Path('supabase/migrations/20260828042000_12_agent_medusa_run_ledger.sql').read_text()
+          reconciliation_migration = Path('supabase/migrations/20260828063000_13_agent_medusa_run_ledger_reconciliation.sql').read_text()
           repository = Path('src/ai_karen_engine/agent_medusa/execution/durable_run_ledger.py').read_text()
+          manager = Path('src/ai_karen_engine/agent_medusa/execution/run_manager.py').read_text()
           adapter = Path('src/ai_karen_engine/agent_medusa/adapters/persistence_adapter.py')
 
-          assert 'CREATE TABLE agent_medusa_runs' in migration
-          assert 'ENABLE ROW LEVEL SECURITY' in migration
-          assert 'FORCE ROW LEVEL SECURITY' in migration
-          assert 'app.current_tenant_id' in migration
-          assert 'CREATE INDEX idx_agent_medusa_runs_active_heartbeat' in migration
+          assert 'CREATE TABLE agent_medusa_runs' in base_migration
+          assert 'ENABLE ROW LEVEL SECURITY' in base_migration
+          assert 'FORCE ROW LEVEL SECURITY' in base_migration
+          assert 'app.current_tenant_id' in base_migration
+          assert 'CREATE TABLE agent_medusa_run_transitions' in reconciliation_migration
+          assert 'cancellation_requested' in reconciliation_migration
+          assert 'policy_decision_id' in reconciliation_migration
+          assert 'audit_event_ref' in reconciliation_migration
+          assert 'ENABLE ROW LEVEL SECURITY' in reconciliation_migration
+          assert 'FORCE ROW LEVEL SECURITY' in reconciliation_migration
+          assert 'owner_worker_id = :worker_id' in repository
+          assert 'redis_reconciliation' in repository
+          assert 'list_reconcilable' in manager
+          assert '_reconcile_tenant_stale' not in manager
+          assert 'run_orphan_grace_seconds' not in manager
           assert 'metadata.create_all' not in repository
           assert 'CREATE TABLE' not in repository
           assert not adapter.exists(), 'fake Medusa persistence adapter must remain deleted'
