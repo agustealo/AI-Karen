@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-"""Runtime-owned cognitive decision and authorization lifecycle.
+"""Runtime-owned cognitive decision, evidence, and authorization lifecycle.
 
 The lifecycle keeps authorities separate:
 
 1. CORTEX Stage 1 produces preliminary cognition and typed context needs.
 2. RuntimePolicy authorizes governed evidence access.
-3. CORTEX Stage 2 refines cognition from typed context availability.
-4. RuntimePolicy authorizes the final execution request.
-5. ChatRuntime executes the resulting decision.
+3. Runtime resolves authorized evidence through canonical domain authorities.
+4. CORTEX Stage 2 refines cognition from the typed resolved context.
+5. RuntimePolicy authorizes the final execution request.
+6. ChatRuntime executes the resulting decision and consumes the same evidence.
 
-This module does not retrieve evidence, execute providers/tools/workflows, build
-prompts, or persist memory. EVIDENCE-1 will insert Runtime-owned evidence
-resolution between the two CORTEX stages behind the authorization produced here.
+CORTEX never performs retrieval. Runtime evidence resolution delegates memory
+selection exclusively to MemoryRuntimeManager -> NeuroRecall.
 """
 
 from dataclasses import replace
@@ -25,6 +25,7 @@ from ai_karen_engine.core.cortex.context_stages import (
 )
 from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
+from ai_karen_engine.core.runtime.evidence_resolver import RuntimeEvidenceResolver
 from ai_karen_engine.core.runtime.execution_decision import (
     ExecutionDecision,
     ExecutionTopology,
@@ -40,16 +41,18 @@ from ai_karen_engine.core.runtime.policy import (
 
 
 class RuntimeDecisionPipeline:
-    """Coordinate two-stage cognition and independent RuntimePolicy gates."""
+    """Coordinate two-stage cognition, governed evidence, and RuntimePolicy."""
 
     def __init__(
         self,
         *,
         cortex: Optional[CortexExecutionDecider] = None,
         policy: Optional[RuntimePolicyEnforcer] = None,
+        evidence_resolver: Optional[RuntimeEvidenceResolver] = None,
     ) -> None:
         self._cortex = cortex or CortexExecutionDecider()
         self._policy = policy or RuntimePolicyEnforcer()
+        self._evidence_resolver = evidence_resolver or RuntimeEvidenceResolver()
 
     @property
     def cortex(self) -> CortexExecutionDecider:
@@ -59,6 +62,10 @@ class RuntimeDecisionPipeline:
     def policy(self) -> RuntimePolicyEnforcer:
         return self._policy
 
+    @property
+    def evidence_resolver(self) -> RuntimeEvidenceResolver:
+        return self._evidence_resolver
+
     async def decide(self, request: ChatExecutionRequest) -> ExecutionDecision:
         preliminary = await self._cortex.decide(request)
         requirements = build_context_requirements(request, preliminary)
@@ -66,6 +73,10 @@ class RuntimeDecisionPipeline:
             request,
             preliminary,
             requirements,
+        )
+        cognitive_context = await self._evidence_resolver.resolve(
+            request,
+            cognitive_context,
         )
         cognitive = finalize_decision_with_context(preliminary, cognitive_context)
         policy = await self._evaluate_execution_policy(request, cognitive)
@@ -243,9 +254,6 @@ class RuntimeDecisionPipeline:
         graph_required = cognitive.graph_required
         execution_mode = cognitive.execution_mode
 
-        # A reasoning protocol may be policy-restricted without denying the whole
-        # request. If no reasoning mode survives, fall back only to an already
-        # requested non-reasoning topology; RuntimePolicy never invents a mode.
         if (
             requested_modes
             and not allowed_modes
@@ -297,9 +305,6 @@ class RuntimeDecisionPipeline:
 
     @staticmethod
     def _runtime_level_for(risk_level: RiskLevel) -> RuntimeLevel:
-        # Risk is a policy input, not a substitute for policy. Mapping to the
-        # runtime operating level preserves current behavior while keeping the
-        # authorization call outside CORTEX.
         mapping = {
             RiskLevel.LOW: RuntimeLevel.FULL,
             RiskLevel.MEDIUM: RuntimeLevel.REDUCED,
