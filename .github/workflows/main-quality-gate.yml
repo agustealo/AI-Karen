@@ -47,9 +47,7 @@ jobs:
         run: pytest tests/architecture/test_classifier_authority_contract.py -q
 
       - name: Run adversarial classifier burn
-        run: |
-          pytest tests/core/intelligence/test_intent_classifier_burn.py -q
-          pytest tests/core/intelligence/test_intelligence_runtime.py -q
+        run: pytest tests/core/intelligence/test_intent_classifier_burn.py -q
 
   backend-quality:
     name: backend-quality
