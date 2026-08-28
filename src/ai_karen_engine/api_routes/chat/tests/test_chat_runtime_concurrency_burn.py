@@ -39,7 +39,7 @@ class _ConcurrentGateway:
         self.calls: Counter[str] = Counter()
 
     async def generate(self, task: Any) -> ExpressionResult:
-        correlation_id = str(task.metadata.get("correlation_id") or "unknown")
+        correlation_id = str(task.correlation_id or "unknown")
         self.calls[correlation_id] += 1
         await asyncio.sleep(self._delay)
         return ExpressionResult(
