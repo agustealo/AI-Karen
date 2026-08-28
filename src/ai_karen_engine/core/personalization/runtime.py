@@ -34,7 +34,6 @@ from .contracts import (
     make_pattern_id,
     make_preference_id,
 )
-from .goals.contracts import GoalStore  # compatibility type only; runtime does not instantiate it
 from .persistence.repository import PersonalizationRepository
 from .preferences.catalog import PreferenceCatalog
 from .preferences.drift import DriftDetector
@@ -79,8 +78,6 @@ class UserModelRuntime:
         state = self._get_current_state(user_id, tenant_id)
         preferences = await self.repository.async_list_preferences(user_id, tenant_id)
         behavior_records = await self.repository.async_list_behaviors(user_id, tenant_id)
-        # Weak one-off observations may be retained for accumulation but are not
-        # promoted into the user model until recurrence is established.
         behaviors = [
             pattern
             for pattern in behavior_records
@@ -173,13 +170,7 @@ class UserModelRuntime:
         return record
 
     async def ingest_outcome(self, outcome: Any) -> List[BehaviorPattern]:
-        """Accumulate behavior across requests and persist recurrence state.
-
-        The previous implementation bucketed only candidates from a single call,
-        which made a once-per-request behavior impossible to learn. We now merge
-        each observation into the canonical repository record and expose only
-        records that cross the promotion threshold.
-        """
+        """Accumulate behavior across requests and persist recurrence state."""
         candidates = self.behavior_aggregator.ingest_outcome(outcome)
         promoted: List[BehaviorPattern] = []
         for candidate in candidates:
@@ -350,19 +341,18 @@ class UserModelRuntime:
     @staticmethod
     def _scope_from_evidence(evidence: PreferenceEvidence) -> PreferenceScope:
         metadata = evidence.metadata
+        # Narrower scopes dominate broader scopes deterministically.
         if metadata.get("session_id"):
             return PreferenceScope.SESSION
         if metadata.get("conversation_id"):
             return PreferenceScope.CONVERSATION
-        if metadata.get("task_id"):
-            return PreferenceScope.TASK
+        if metadata.get("project_id"):
+            return PreferenceScope.PROJECT
+        if metadata.get("task_id") or metadata.get("task_type"):
+            return PreferenceScope.TASK_TYPE
         if metadata.get("domain"):
             return PreferenceScope.DOMAIN
-        # Explicit user statements without a narrower context are the only
-        # evidence eligible to begin at global scope. Other weak observations
-        # remain session-scoped until lifecycle promotion establishes durability.
-        source_name = evidence.source_type.value
-        if "explicit" in source_name:
+        if "explicit" in evidence.source_type.value:
             return PreferenceScope.GLOBAL
         return PreferenceScope.SESSION
 
