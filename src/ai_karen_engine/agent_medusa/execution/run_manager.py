@@ -56,6 +56,8 @@ class ExecutionRun:
     tenant_id: str
     user_id: str
     task: asyncio.Task[Any]
+    request_id: str | None = None
+    policy_decision_id: str | None = None
     status: ExecutionRunStatus = ExecutionRunStatus.RUNNING
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
@@ -68,6 +70,8 @@ class ExecutionRun:
         return {
             "run_id": self.run_id,
             "correlation_id": self.correlation_id,
+            "request_id": self.request_id,
+            "policy_decision_id": self.policy_decision_id,
             "tenant_id": self.tenant_id,
             "user_id": self.user_id,
             "status": self.status.value,
@@ -122,6 +126,8 @@ class MedusaRunManager:
         tenant_id: str,
         user_id: str,
         task: asyncio.Task[Any],
+        request_id: str | None = None,
+        policy_decision_id: str | None = None,
     ) -> ExecutionRun:
         async with self._lock:
             existing = self._runs.get(run_id)
@@ -133,6 +139,8 @@ class MedusaRunManager:
             run = ExecutionRun(
                 run_id=run_id,
                 correlation_id=correlation_id,
+                request_id=request_id or run_id,
+                policy_decision_id=policy_decision_id,
                 tenant_id=tenant_id,
                 user_id=user_id,
                 task=task,
@@ -144,6 +152,8 @@ class MedusaRunManager:
                 await self._durable_ledger.register(
                     run_id=run_id,
                     correlation_id=correlation_id,
+                    request_id=run.request_id,
+                    policy_decision_id=policy_decision_id,
                     tenant_id=tenant_id,
                     user_id=user_id,
                     worker_id=self._settings.worker_id,
@@ -183,6 +193,7 @@ class MedusaRunManager:
                         status=ExecutionRunStatus.FAILED,
                         completed_at=datetime.now(timezone.utc),
                         error_type=type(exc).__name__,
+                        reason_code="distributed_registration_failed",
                     )
                 async with self._lock:
                     if self._runs.get(run_id) is run:
@@ -267,7 +278,13 @@ class MedusaRunManager:
                     extra={"run_id": run_id, "status": status.value},
                 )
 
-    async def cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
+    async def cancel(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        audit_event_id: str | None = None,
+    ) -> dict[str, Any]:
         local_task: asyncio.Task[Any] | None = None
         local_shared = False
         local_durable = False
@@ -293,6 +310,8 @@ class MedusaRunManager:
                         run_id=run_id,
                         tenant_id=tenant_id,
                         requested_at=requested_at,
+                        worker_id=self._settings.worker_id,
+                        audit_event_id=audit_event_id,
                     )
                 except DurableRunLedgerUnavailable:
                     logger.exception(
@@ -332,6 +351,8 @@ class MedusaRunManager:
                         run_id=run_id,
                         tenant_id=tenant_id,
                         requested_at=datetime.now(timezone.utc),
+                        worker_id=self._settings.worker_id,
+                        audit_event_id=audit_event_id,
                     )
                 return snapshot
             except DistributedRunNotFound:
@@ -497,6 +518,7 @@ class MedusaRunManager:
                                 run_id=run.run_id,
                                 tenant_id=run.tenant_id,
                                 requested_at=now,
+                                worker_id=self._settings.worker_id,
                             )
                         except DurableRunLedgerUnavailable:
                             logger.exception(
@@ -523,6 +545,7 @@ class MedusaRunManager:
         status: ExecutionRunStatus,
         completed_at: datetime,
         error_type: str | None,
+        reason_code: str | None = None,
     ) -> None:
         try:
             await self._durable_ledger.mark_terminal(
@@ -531,6 +554,8 @@ class MedusaRunManager:
                 status=status.value,
                 completed_at=completed_at,
                 error_type=error_type,
+                worker_id=self._settings.worker_id,
+                reason_code=reason_code,
             )
         except DurableRunLedgerUnavailable:
             logger.exception(
