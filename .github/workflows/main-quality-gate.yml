@@ -75,6 +75,12 @@ jobs:
           pytest tests/core/runtime/test_context_evidence_contracts.py -q
           pytest tests/core/runtime/test_runtime_evidence_resolution.py -q
 
+      - name: Chat runtime burn contracts
+        run: |
+          pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
+          pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_burn_contract.py -q
+          pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_concurrency_burn.py -q
+
       - name: Personalization authority proofs
         run: pytest tests/core/personalization/test_personalization.py -q
 
