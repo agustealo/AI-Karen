@@ -76,15 +76,34 @@ class MedusaCoordinator:
     async def handle_request(self, request: RuntimeRequest) -> RuntimeResponse:
         """Execute one authorized Medusa request with enforceable cancellation."""
 
+        if request.authorized_plan is None:
+            raise PermissionError(
+                "MedusaCoordinator requires an authorized_plan from RuntimePolicy. "
+                "Medusa must not synthesize its own authorization."
+            )
+
         current_task = asyncio.current_task()
         if current_task is None:  # pragma: no cover - asyncio always supplies one here
             raise RuntimeError("Medusa execution requires an asyncio task")
 
-        tenant_id = str(getattr(request, "tenant_id", None) or "default")
+        authorized_plan_data = dict(request.authorized_plan)
+        policy_decision_id = str(
+            authorized_plan_data.get("policy_decision_id") or ""
+        ) or None
+        requirements_data = request.execution_requirements or {}
+        correlation_id = str(
+            request.correlation_id
+            or requirements_data.get("correlation_id")
+            or request.request_id
+        )
+        tenant_id = str(request.tenant_id or "default")
         user_id = str(request.user_id or "anonymous")
+
         await self.run_manager.register(
             run_id=request.request_id,
-            correlation_id=request.request_id,
+            correlation_id=correlation_id,
+            request_id=request.request_id,
+            policy_decision_id=policy_decision_id,
             tenant_id=tenant_id,
             user_id=user_id,
             task=current_task,
@@ -93,7 +112,9 @@ class MedusaCoordinator:
             "medusa_run_started",
             extra={
                 "run_id": request.request_id,
-                "correlation_id": request.request_id,
+                "request_id": request.request_id,
+                "correlation_id": correlation_id,
+                "policy_decision_id": policy_decision_id,
                 "tenant_id": tenant_id,
                 "user_id": user_id,
             },
@@ -107,7 +128,9 @@ class MedusaCoordinator:
                 "medusa_run_cancelled",
                 extra={
                     "run_id": request.request_id,
-                    "correlation_id": request.request_id,
+                    "request_id": request.request_id,
+                    "correlation_id": correlation_id,
+                    "policy_decision_id": policy_decision_id,
                     "tenant_id": tenant_id,
                     "user_id": user_id,
                 },
@@ -119,20 +142,24 @@ class MedusaCoordinator:
                 "medusa_run_failed",
                 extra={
                     "run_id": request.request_id,
-                    "correlation_id": request.request_id,
+                    "request_id": request.request_id,
+                    "correlation_id": correlation_id,
+                    "policy_decision_id": policy_decision_id,
                     "tenant_id": tenant_id,
                     "user_id": user_id,
                     "error_type": type(exc).__name__,
                 },
             )
-            return to_safe_response(exc, correlation_id=request.request_id)
+            return to_safe_response(exc, correlation_id=correlation_id)
         else:
             await self.run_manager.mark_completed(request.request_id)
             logger.info(
                 "medusa_run_completed",
                 extra={
                     "run_id": request.request_id,
-                    "correlation_id": request.request_id,
+                    "request_id": request.request_id,
+                    "correlation_id": correlation_id,
+                    "policy_decision_id": policy_decision_id,
                     "tenant_id": tenant_id,
                     "user_id": user_id,
                 },
@@ -158,7 +185,7 @@ class MedusaCoordinator:
         else:
             requirements = ExecutionRequirements(
                 request_id=request.request_id,
-                correlation_id=request.request_id,
+                correlation_id=request.correlation_id or request.request_id,
                 intent="agent.multi_agent",
                 requires_agent_delegation=True,
                 topology_signals={"preferred": "multi_agent"},
@@ -289,10 +316,12 @@ class MedusaCoordinator:
         degraded_agents: Optional[List[str]] = None,
         degradation_reasons: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
+        correlation_id = request.correlation_id or request.request_id
         logger.info(
             "medusa_step_started",
             extra={
                 "run_id": request.request_id,
+                "correlation_id": correlation_id,
                 "step_id": step.id,
                 "agent_id": step.agent_specialist,
             },
@@ -336,18 +365,18 @@ class MedusaCoordinator:
                     type=AgentEventType.AGENT_STARTED,
                     agent_id=step.agent_specialist,
                     message=f"step {step.id} started",
-                    correlation_id=request.request_id,
+                    correlation_id=correlation_id,
                     metadata={"step_id": step.id, "degraded": is_degraded},
                 )
             )
 
         execution = SpecialistExecutionContext(
             authorized_plan=authorized_plan,
-            tenant_id=str(getattr(request, "tenant_id", None) or "default"),
+            tenant_id=str(request.tenant_id or "default"),
             user_id=request.user_id or "anonymous",
             policy_decision_id=authorized_plan.policy_decision_id,
             trajectory_id=request.request_id,
-            correlation_id=request.request_id,
+            correlation_id=correlation_id,
             step_id=step.id,
             budget_meter=meter,
             event_emitter=emitter,
@@ -355,6 +384,7 @@ class MedusaCoordinator:
         context = {
             "session_id": request.session_id,
             "request_id": request.request_id,
+            "correlation_id": correlation_id,
             "plan_metadata": plan.metadata,
             "previous_steps": {
                 previous.id: previous.output_data
@@ -375,7 +405,7 @@ class MedusaCoordinator:
                         type=AgentEventType.AGENT_COMPLETED,
                         agent_id=step.agent_specialist,
                         message=f"step {step.id} completed",
-                        correlation_id=request.request_id,
+                        correlation_id=correlation_id,
                         metadata={"step_id": step.id, "degraded": is_degraded},
                     )
                 )
@@ -396,6 +426,7 @@ class MedusaCoordinator:
                 "medusa_step_cancelled",
                 extra={
                     "run_id": request.request_id,
+                    "correlation_id": correlation_id,
                     "step_id": step.id,
                     "agent_id": step.agent_specialist,
                 },
@@ -408,7 +439,7 @@ class MedusaCoordinator:
                         type=AgentEventType.AGENT_FAILED,
                         agent_id=step.agent_specialist,
                         message=f"step {step.id} failed",
-                        correlation_id=request.request_id,
+                        correlation_id=correlation_id,
                         metadata={
                             "step_id": step.id,
                             "error_type": type(exc).__name__,
