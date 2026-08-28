@@ -9,6 +9,10 @@ on:
       - "src/ai_karen_engine/**"
       - "supabase/migrations/**"
       - "scripts/ci/production-first-boot-smoke.sh"
+      - "scripts/ci/validate_first_run_contract.py"
+      - "docs/architecture/FIRST_RUN_SYSTEM.md"
+      - "README.md"
+      - "PROJECT_DEV_MANIFEST.md"
       - ".github/workflows/production-first-boot-smoke.yml"
 
 permissions:
@@ -27,6 +31,9 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Validate first-run architecture contract
+        run: python scripts/ci/validate_first_run_contract.py
 
       - name: Validate smoke harness
         run: bash -n scripts/ci/production-first-boot-smoke.sh
