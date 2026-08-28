@@ -7,7 +7,6 @@ memory persistence, extension execution, authentication, or global policy.
 
 Runtime-heavy exports are resolved lazily so importing a narrow Medusa contract
 or execution utility does not pull API/framework dependencies into the process.
-The public package API remains backward compatible.
 """
 
 from __future__ import annotations
@@ -42,7 +41,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "AuthContextAdapter": (".adapters", "AuthContextAdapter"),
     "ExtensionRuntimeAdapter": (".adapters", "ExtensionRuntimeAdapter"),
     "MemoryRuntimeAdapter": (".adapters", "MemoryRuntimeAdapter"),
-    "PersistenceAdapter": (".adapters", "PersistenceAdapter"),
 }
 
 
@@ -88,5 +86,4 @@ __all__ = [
     "AuthContextAdapter",
     "ExtensionRuntimeAdapter",
     "MemoryRuntimeAdapter",
-    "PersistenceAdapter",
 ]
