@@ -60,7 +60,14 @@ class ContextRequirement:
 
 @dataclass(slots=True)
 class ContextRequirements:
-    """Typed Stage-1 CORTEX output describing evidence needs, not access grants."""
+    """Typed Stage-1 CORTEX output describing evidence needs, not access grants.
+
+    The legacy runtime contract still permits tenant_id="default". This context
+    contract therefore preserves that value during CORTEX-CONTEXT-1 instead of
+    silently turning the cognitive migration into a breaking ingress migration.
+    TENANT-SCOPE-1 must remove the legacy default at the canonical ingress/runtime
+    identity boundary after a caller audit.
+    """
 
     request_id: str
     correlation_id: str
@@ -74,10 +81,14 @@ class ContextRequirements:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.tenant_id or self.tenant_id == "default":
-            raise ValueError("context tenant_id must be explicit and non-default")
+        if not self.tenant_id:
+            raise ValueError("context tenant_id must be present")
         if not self.user_id:
             raise ValueError("context user_id must be explicit")
+
+    @property
+    def uses_legacy_default_tenant(self) -> bool:
+        return self.tenant_id == "default"
 
     @property
     def requested_capabilities(self) -> list[str]:
@@ -100,6 +111,7 @@ class ContextRequirements:
             "requirements": [item.to_dict() for item in self.requirements],
             "verification_required": self.verification_required,
             "temporal_horizon": self.temporal_horizon,
+            "legacy_default_tenant": self.uses_legacy_default_tenant,
             "metadata": dict(self.metadata),
         }
 
@@ -145,12 +157,16 @@ class CognitiveContext:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.tenant_id or self.tenant_id == "default":
-            raise ValueError("cognitive context tenant_id must be explicit and non-default")
+        if not self.tenant_id:
+            raise ValueError("cognitive context tenant_id must be present")
         if self.requirements.tenant_id != self.tenant_id:
             raise ValueError("cognitive context tenant scope must match requirements")
         if self.requirements.user_id != self.user_id:
             raise ValueError("cognitive context user scope must match requirements")
+
+    @property
+    def uses_legacy_default_tenant(self) -> bool:
+        return self.tenant_id == "default"
 
 
 __all__ = [
