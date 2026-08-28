@@ -53,6 +53,7 @@ class AgentMedusaRuntimeSettings:
     run_heartbeat_interval_seconds: int = 10
     run_terminal_retention_seconds: int = 3600
     run_orphan_grace_seconds: int = 60
+    run_reconciliation_batch_size: int = 100
     run_key_prefix: str = "kari:medusa:runs"
     worker_id: str = field(default_factory=_default_worker_id)
 
@@ -74,6 +75,10 @@ class AgentMedusaRuntimeSettings:
         if self.run_orphan_grace_seconds < self.run_lease_ttl_seconds:
             raise AgentMedusaConfigError(
                 "run_orphan_grace_seconds must be at least run_lease_ttl_seconds"
+            )
+        if not 1 <= self.run_reconciliation_batch_size <= 1000:
+            raise AgentMedusaConfigError(
+                "run_reconciliation_batch_size must be between 1 and 1000"
             )
         if self.durable_run_ledger_enabled != self.durable_run_ledger_required:
             raise AgentMedusaConfigError(
@@ -112,6 +117,9 @@ def get_agent_medusa_runtime_settings() -> AgentMedusaRuntimeSettings:
             ),
             run_orphan_grace_seconds=_env_int(
                 "KAREN_MEDUSA_RUN_ORPHAN_GRACE_SECONDS", 60
+            ),
+            run_reconciliation_batch_size=_env_int(
+                "KAREN_MEDUSA_RUN_RECONCILIATION_BATCH_SIZE", 100
             ),
             run_key_prefix=os.getenv("KAREN_MEDUSA_RUN_KEY_PREFIX", "kari:medusa:runs"),
             worker_id=os.getenv("KAREN_WORKER_ID", _default_worker_id()),
