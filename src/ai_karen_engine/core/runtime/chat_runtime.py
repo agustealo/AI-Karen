@@ -136,16 +136,7 @@ class ChatRuntime:
         memory_recall_meta: Dict[str, Any] = {}
         provider_meta: Dict[str, Any] = {}
         if decision.memory_recall_required:
-            self._emitter.emit(
-                RuntimeEventType.MEMORY_RECALL_STARTED,
-                policy_decision_id=decision.policy_decision_id,
-            )
-            memory_recall_meta = await self._recall_memory(request, decision)
-            self._emitter.emit(
-                RuntimeEventType.MEMORY_RECALL_COMPLETED,
-                policy_decision_id=decision.policy_decision_id,
-                memory_recall_count=memory_recall_meta.get("memory_recall_count", 0),
-            )
+            memory_recall_meta = await self._consume_resolved_memory(request, decision)
             trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
             trajectory.memory_recall_refs = [
                 item.get("id", "")
@@ -298,7 +289,7 @@ class ChatRuntime:
 
         memory_recall_meta: Dict[str, Any] = {}
         if decision.memory_recall_required:
-            memory_recall_meta = await self._recall_memory(request, decision)
+            memory_recall_meta = await self._consume_resolved_memory(request, decision)
             trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
             trajectory.memory_recall_refs = [
                 item.get("id", "")
@@ -441,12 +432,16 @@ class ChatRuntime:
     # Memory
     # ------------------------------------------------------------------
 
-    async def _recall_memory(
+    async def _consume_resolved_memory(
         self, request: ChatExecutionRequest, decision: ExecutionDecision
     ) -> Dict[str, Any]:
-        ctx = request.context
-        user_message = self._extract_user_message(request.messages)
+        """Adapt already-resolved typed memory evidence for legacy consumers.
 
+        This method performs no retrieval. RuntimeEvidenceResolver has already
+        called MemoryRuntimeManager -> NeuroRecall before CORTEX Stage 2. The
+        temporary ``request.metadata.memory_context`` view is derived only from
+        ``decision.cognitive_context.evidence`` so there is still one context truth.
+        """
         meta: Dict[str, Any] = {
             "memory_recall_status": "skipped",
             "memory_recall_count": 0,
@@ -455,48 +450,54 @@ class ChatRuntime:
             "memory_degraded": False,
             "memory_degradation_reason": None,
         }
-
-        try:
-            from ai_karen_engine.core.memory import get_memory_manager
-
-            mem = get_memory_manager()
-            recall_start = time.time()
-            result = await mem.recall_context(
-                user_id=ctx.user_id,
-                tenant_id=ctx.tenant_id,
-                query=user_message,
-                top_k=decision.memory_top_k,
-                session_id=ctx.session_id,
-                conversation_id=ctx.conversation_id,
-                correlation_id=ctx.correlation_id,
+        cognitive_context = decision.cognitive_context
+        if cognitive_context is None:
+            meta.update(
+                {
+                    "memory_recall_status": "unavailable",
+                    "memory_degraded": True,
+                    "memory_degradation_reason": "resolved_cognitive_context_missing",
+                }
             )
-            recall_ms = (time.time() - recall_start) * 1000.0
+            return meta
 
-            items = result.get("results") or []
-            meta.update({
-                "memory_recall_status": result.get("status", "success"),
-                "memory_recall_count": len(items),
-                "memory_latency_ms": recall_ms,
-                "memory_degraded": result.get("status") == "degraded",
-                "memory_degradation_reason": result.get("error") or result.get("reason"),
-            })
+        memory_evidence = [
+            item
+            for item in cognitive_context.evidence
+            if getattr(item.source, "value", str(item.source)) == "memory"
+        ]
+        recall_items: List[Dict[str, Any]] = []
+        for item in memory_evidence[: decision.memory_top_k]:
+            observed_at = item.temporal.observed_at
+            timestamp: Any = None
+            if observed_at is not None:
+                timestamp = observed_at.timestamp()
+            recall_items.append(
+                {
+                    "id": item.evidence_id,
+                    "content": item.content,
+                    "timestamp": timestamp,
+                    "relevance": item.relevance,
+                    "confidence": item.confidence,
+                    "source_ref": item.source_ref,
+                }
+            )
 
-            if items:
-                memory_context = (request.metadata or {}).get("memory_context") or {}
-                memory_context["recall"] = [
-                    {"id": i.get("id"), "content": i.get("content"), "timestamp": i.get("timestamp")}
-                    for i in items[:5]
-                ]
-                request.metadata["memory_context"] = memory_context
+        context_meta = cognitive_context.metadata
+        meta.update(
+            {
+                "memory_recall_status": context_meta.get("memory_recall_status", "success"),
+                "memory_recall_count": len(memory_evidence),
+                "memory_latency_ms": float(context_meta.get("memory_latency_ms") or 0.0),
+                "memory_degraded": bool(context_meta.get("memory_degraded", False)),
+                "memory_degradation_reason": context_meta.get("memory_degradation_reason"),
+                "memory_context": {"recall": recall_items},
+            }
+        )
 
-        except Exception as exc:
-            logger.warning("Memory recall failed: %s", exc, extra={"correlation_id": ctx.correlation_id})
-            meta.update({
-                "memory_recall_status": "failed",
-                "memory_degraded": True,
-                "memory_degradation_reason": str(exc),
-            })
-
+        # Compatibility bridge only. This is a deterministic projection of the
+        # typed CognitiveContext, never a separately retrieved evidence store.
+        request.metadata["memory_context"] = {"recall": list(recall_items)}
         return meta
 
     async def _persist_memory(
@@ -796,8 +797,8 @@ class ChatRuntime:
                 source="memory_recall",
                 source_ref=str(item.get("timestamp", "")),
                 content=str(item.get("content", "")),
-                relevance=0.5,
-                confidence=0.5,
+                relevance=float(item.get("relevance") or 0.5),
+                confidence=float(item.get("confidence") or 0.5),
                 tenant_id=ctx.tenant_id,
             )
             for idx, item in enumerate(recall_items[: decision.memory_top_k])
@@ -935,7 +936,6 @@ class ChatRuntime:
             get_prompt_runtime_service,
         )
 
-        ctx = request.context
         recall_items = (memory_context or {}).get("recall", []) if memory_context else []
         if not recall_items and decision.memory_recall_required:
             recall_items = (request.metadata or {}).get("memory_context", {}).get("recall") or []
