@@ -23,6 +23,8 @@ def main() -> None:
     smoke = _read("scripts/ci/production-first-boot-smoke.sh")
     workflow = _read(".github/workflows/production-first-boot-smoke.yml")
     architecture = _read("docs/architecture/FIRST_RUN_SYSTEM.md")
+    readme = _read("README.md")
+    manifest = _read("PROJECT_DEV_MANIFEST.md")
 
     _require(
         auth_route,
@@ -67,7 +69,8 @@ def main() -> None:
         '"${BASE_URL}/api/auth/first-run/setup"',
         '"${BASE_URL}/api/auth/me"',
         '"${BASE_URL}/api/auth/login"',
-        "restart",
+        "first-run bootstrap replay unexpectedly succeeded",
+        "post_restart_first_run",
         "PRODUCTION FIRST-BOOT SMOKE PASSED",
         source="production first-boot smoke",
     )
@@ -75,22 +78,46 @@ def main() -> None:
     _require(
         workflow,
         "Attest exact worker SHA",
+        "Validate first-run architecture contract",
         "Validate smoke harness",
         "Build production API image",
         "Execute real production first boot",
         source="production first-boot workflow",
     )
 
+    for source, text in (
+        ("first-run architecture document", architecture),
+        ("README", readme),
+        ("developer manifest", manifest),
+    ):
+        _require(
+            text,
+            "BOOTSTRAP_BLOCKED",
+            "OWNER_REQUIRED",
+            "OWNER_CREATED",
+            "OPERATIONAL",
+            "RuntimePolicy",
+            "restart",
+            source=source,
+        )
+
     _require(
         architecture,
         "Auth owns initial durable identity",
-        "BOOTSTRAP_BLOCKED",
-        "OWNER_REQUIRED",
-        "OWNER_CREATED",
-        "OPERATIONAL",
-        "RuntimePolicy",
-        "restart",
+        "scripts/ci/production-first-boot-smoke.sh",
         source="first-run architecture document",
+    )
+    _require(
+        readme,
+        "docs/architecture/FIRST_RUN_SYSTEM.md",
+        "python scripts/ci/validate_first_run_contract.py",
+        source="README",
+    )
+    _require(
+        manifest,
+        "First-run system: first-class bootstrap authority",
+        "First-run definition of done",
+        source="developer manifest",
     )
 
     print("FIRST-RUN ARCHITECTURE CONTRACT PASSED")
