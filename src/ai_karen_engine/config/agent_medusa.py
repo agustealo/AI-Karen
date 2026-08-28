@@ -39,11 +39,16 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class AgentMedusaRuntimeSettings:
-    """Validated Medusa runtime coordination and durable-ledger settings."""
+    """Validated Medusa runtime coordination and durable-ledger settings.
+
+    Explicitly constructed settings keep optional external coordination disabled
+    unless requested. The process-wide runtime loader below enables the durable
+    ledger by default for production execution.
+    """
 
     distributed_run_control_enabled: bool = True
-    durable_run_ledger_enabled: bool = True
-    durable_run_ledger_required: bool = True
+    durable_run_ledger_enabled: bool = False
+    durable_run_ledger_required: bool = False
     run_lease_ttl_seconds: int = 30
     run_heartbeat_interval_seconds: int = 10
     run_terminal_retention_seconds: int = 3600
