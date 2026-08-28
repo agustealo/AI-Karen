@@ -29,7 +29,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.12'
           cache: pip
 
       - name: Install dependencies
@@ -40,7 +40,7 @@ jobs:
 
       - name: Format contract
         run: |
-          black --check \
+          black --check --diff \
             src/ai_karen_engine/agent_medusa/execution/run_manager.py \
             src/ai_karen_engine/agent_medusa/execution/durable_run_ledger.py \
             src/ai_karen_engine/config/agent_medusa.py \
