@@ -275,9 +275,10 @@ def _resolve_current_user_id(user: Any) -> str:
 
 
 @router.get("/status")
-async def auth_status() -> Dict[str, Any]:
+async def auth_status(
+    auth_service_instance: CoreAuthService = Depends(get_auth_service),
+) -> Dict[str, Any]:
     """Get authentication service status."""
-    auth_service_instance = await get_auth_service()
     stats = await auth_service_instance.get_auth_stats()
     service_status = str(stats.get("service_status") or "error")
 
@@ -299,9 +300,10 @@ async def auth_status() -> Dict[str, Any]:
 
 
 @router.get("/health")
-async def auth_health() -> Dict[str, Any]:
+async def auth_health(
+    auth_service_instance: CoreAuthService = Depends(get_auth_service),
+) -> Dict[str, Any]:
     """Authentication service health check."""
-    auth_service_instance = await get_auth_service()
     is_healthy = await auth_service_instance.health_check()
 
     return {
@@ -312,17 +314,18 @@ async def auth_health() -> Dict[str, Any]:
 
 
 @router.get("/first-run")
-async def check_first_run() -> Dict[str, Any]:
+async def check_first_run(
+    auth_service_instance: CoreAuthService = Depends(get_auth_service),
+) -> Dict[str, Any]:
     """Check if first-run setup is required."""
     try:
-        auth_service_instance = await get_auth_service()
         is_first_run = await auth_service_instance.is_first_run()
-    except Exception:
+    except Exception as exc:
         logger.exception("Unable to determine first-run state")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="First-run state unavailable",
-        )
+        ) from exc
 
     return {
         "first_run_required": is_first_run,
@@ -334,18 +337,11 @@ async def check_first_run() -> Dict[str, Any]:
 
 @router.post("/first-run/setup")
 async def first_run_setup(
-    request: FirstRunSetupRequest, http_request: Request
+    request: FirstRunSetupRequest,
+    http_request: Request,
+    auth_svc: CoreAuthService = Depends(get_auth_service),
 ) -> JSONResponse:
     """Set up the first admin user through the canonical auth authority."""
-    try:
-        auth_svc = await get_auth_service()
-    except Exception as exc:
-        logger.exception("Auth service unavailable for first-run setup")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Auth service unavailable for first-run setup",
-        ) from exc
-
     if request.password != request.confirm_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -507,10 +503,11 @@ async def login(
 
 @router.post("/refresh")
 async def refresh_token(
-    request: RefreshTokenRequest, http_request: Request
+    request: RefreshTokenRequest,
+    http_request: Request,
+    auth_svc: CoreAuthService = Depends(get_auth_service),
 ) -> JSONResponse:
     """Rotate the refresh token and return a fresh token pair."""
-    auth_svc = await get_auth_service()
     access_token, new_refresh_token, error = await auth_svc.refresh_access_token(
         request.refresh_token
     )
@@ -552,10 +549,10 @@ async def refresh_token(
 async def logout(
     request: RefreshTokenRequest,
     current_user=Depends(get_authenticated_user),
+    auth_svc: CoreAuthService = Depends(get_auth_service),
 ) -> JSONResponse:
     """Invalidate the supplied canonical refresh session."""
     _ensure_authenticated_user_payload(current_user)
-    auth_svc = await get_auth_service()
     await auth_svc.logout(request.refresh_token)
 
     response = JSONResponse(content={"detail": "Successfully logged out"})
@@ -672,10 +669,10 @@ async def update_current_user_info(
 async def change_password(
     request: ChangePasswordRequest,
     current_user=Depends(get_authenticated_user),
+    auth_svc: CoreAuthService = Depends(get_auth_service),
 ) -> JSONResponse:
     """Change current user's password and terminate the current session."""
     current_user_id = _resolve_current_user_id(current_user)
-    auth_svc = await get_auth_service()
     error = await auth_svc.change_user_password(
         current_user_id,
         request.current_password,
@@ -703,6 +700,7 @@ async def change_password(
 async def create_user(
     request: CreateUserRequest,
     current_user=Depends(get_authenticated_user),
+    auth_svc: CoreAuthService = Depends(get_auth_service),
 ) -> JSONResponse:
     """Create a user inside the authenticated admin's durable tenant."""
     if not _has_role(current_user, "admin") and not _has_role(
@@ -714,7 +712,6 @@ async def create_user(
         )
 
     actor = _ensure_authenticated_user_payload(current_user)
-    auth_svc = await get_auth_service()
     user, error = await auth_svc.create_user(
         email=request.email,
         password=request.password,
@@ -747,6 +744,7 @@ async def create_user(
 @router.get("/stats", response_model=None)
 async def get_auth_stats(
     current_user=Depends(get_authenticated_user),
+    auth_svc: CoreAuthService = Depends(get_auth_service),
 ) -> Dict[str, Any]:
     """Get authentication statistics (admin only)."""
     if not _has_role(current_user, "admin") and not _has_role(
@@ -758,7 +756,6 @@ async def get_auth_stats(
         )
 
     actor = _ensure_authenticated_user_payload(current_user)
-    auth_svc = await get_auth_service()
     stats = await auth_svc.get_auth_stats()
     stats["tenant_id"] = actor["tenant_id"]
     return stats
