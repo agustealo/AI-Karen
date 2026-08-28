@@ -13,9 +13,9 @@ class RuntimeRequest:
     query: str
     session_id: str
     request_id: str = field(default_factory=lambda: str(uuid4()))
+    user_id: Optional[str] = None
     correlation_id: Optional[str] = None
     tenant_id: Optional[str] = None
-    user_id: Optional[str] = None
     context: Dict[str, Any] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
@@ -33,9 +33,9 @@ class RuntimeRequest:
             "query": self.query,
             "session_id": self.session_id,
             "request_id": self.request_id,
+            "user_id": self.user_id,
             "correlation_id": self.correlation_id,
             "tenant_id": self.tenant_id,
-            "user_id": self.user_id,
             "context": self.context,
             "timestamp": self.timestamp.isoformat(),
             "priority": self.priority,
