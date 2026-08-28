@@ -26,7 +26,15 @@ def test_authenticated_dependency_requires_user_and_tenant_scope() -> None:
     assert 'detail="Authenticated user identity is incomplete"' in source
     assert 'detail="Authenticated tenant context is required"' in source
     assert '"anonymous"' not in source
-    assert '"dev-tenant"' not in source
+
+    # Synthetic tenant identifiers may exist only as explicit deny-list values
+    # and in the configured development bypass path. Production-authenticated
+    # requests must reject them rather than silently treating them as durable scope.
+    assert '_SYNTHETIC_TENANT_IDS = frozenset({"default", "dev-tenant"})' in source
+    assert "if not allow_synthetic_tenant and tenant_id.lower() in _SYNTHETIC_TENANT_IDS:" in source
+    assert 'detail="Authenticated tenant context is not authoritative"' in source
+    assert "allow_synthetic_tenant=True" in source
+    assert "if auth_config.should_bypass_auth():" in source
 
 
 def test_auth_route_requires_durable_tenant_instead_of_inventing_default() -> None:

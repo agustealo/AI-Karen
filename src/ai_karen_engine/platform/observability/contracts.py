@@ -29,6 +29,9 @@ class EventType(str, Enum):
     INTELLIGENCE_COMPLETED = "intelligence.completed"
     CORTEX_STARTED = "cortex.started"
     CORTEX_COMPLETED = "cortex.completed"
+    # Compatibility alias for legacy ChatRuntime emitters. New code should use
+    # CORTEX_COMPLETED; remove after the runtime caller is migrated.
+    CORTEX_DECISION = "cortex.completed"
     POLICY_STARTED = "policy.started"
     POLICY_COMPLETED = "policy.completed"
     POLICY_DENIED = "policy.denied"
@@ -44,6 +47,9 @@ class EventType(str, Enum):
 
     # Provider / model execution
     PROVIDER_SELECTION_COMPLETED = "provider.selection.completed"
+    # Compatibility alias for legacy ChatRuntime emitters. New code should use
+    # PROVIDER_SELECTION_COMPLETED; remove after the runtime caller is migrated.
+    PROVIDER_SELECTION = "provider.selection.completed"
     PROVIDER_EXECUTION_STARTED = "provider.execution.started"
     PROVIDER_EXECUTION_COMPLETED = "provider.execution.completed"
     PROVIDER_EXECUTION_FAILED = "provider.execution.failed"
@@ -101,8 +107,6 @@ class OperationalState(str, Enum):
     BLOCKED = "blocked"
 
 
-# Fields that must never be used as a metric label: they are unbounded and
-# belong only in structured events / traces.
 HIGH_CARDINALITY_LABELS: frozenset[str] = frozenset(
     {
         "user_id",
@@ -124,12 +128,7 @@ HIGH_CARDINALITY_LABELS: frozenset[str] = frozenset(
 
 @dataclass(slots=True)
 class ExecutionEvent:
-    """Canonical operational event envelope.
-
-    Identity fields are optional because some lifecycle stages legitimately
-    run before identity is resolved; once resolved they are propagated via the
-    correlation context and must not be replaced mid-request.
-    """
+    """Canonical operational event envelope."""
 
     event_id: str
     event_type: EventType
@@ -151,7 +150,6 @@ class ExecutionEvent:
 
     duration_ms: float | None = None
 
-    # Runtime metadata bridge (OBS-107)
     requested_target: str | None = None
     resolved_target: str | None = None
     provider: str | None = None
