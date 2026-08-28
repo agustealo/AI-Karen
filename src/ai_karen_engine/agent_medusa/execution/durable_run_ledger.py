@@ -31,6 +31,10 @@ class DurableRunLedgerConflict(RuntimeError):
     """Raised when a durable transition conflicts with current run history."""
 
 
+class DurableRunLedgerTransitionConflict(DurableRunLedgerUnavailable):
+    """Raised when a required durable state transition affects no active row."""
+
+
 class DurableRunLedger(Protocol):
     """Persistence contract consumed by the canonical Medusa run manager."""
 
@@ -125,13 +129,30 @@ class DurableRunLedger(Protocol):
 
 
 def _canonical_tenant_id(tenant_id: str) -> str:
-    """Return the canonical UUID representation for a tenant scope."""
+    """Return the canonical UUID representation for a non-empty tenant scope.
 
-    raw = str(tenant_id or "default").strip() or "default"
+    Runtime ingress should normally provide a UUID tenant identifier. Legacy
+    callers may still carry stable string scopes; those are deterministically
+    mapped to UUIDs so PostgreSQL/RLS remain strongly typed without collapsing
+    distinct scopes. Missing tenant identity is rejected rather than fabricated.
+    """
+
+    raw = str(tenant_id or "").strip()
+    if not raw:
+        raise ValueError("Medusa durable ledger requires tenant_id")
     try:
         return str(UUID(raw))
     except ValueError:
         return str(uuid5(NAMESPACE_URL, f"ai-karen-tenant:{raw}"))
+
+
+def _require_transition(result: Any, *, run_id: str, transition: str) -> None:
+    """Fail closed when an expected durable transition touched no active row."""
+
+    if int(result.rowcount or 0) != 1:
+        raise DurableRunLedgerTransitionConflict(
+            f"Medusa durable {transition} transition rejected for run {run_id}"
+        )
 
 
 class PostgresDurableRunLedger:
@@ -247,7 +268,7 @@ class PostgresDurableRunLedger:
         try:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
-                await session.execute(
+                result = await session.execute(
                     text("""
                         UPDATE agent_medusa_runs
                         SET heartbeat_at = :heartbeat_at
@@ -263,6 +284,9 @@ class PostgresDurableRunLedger:
                         "heartbeat_at": heartbeat_at,
                     },
                 )
+                _require_transition(result, run_id=run_id, transition="heartbeat")
+        except DurableRunLedgerTransitionConflict:
+            raise
         except SQLAlchemyError as exc:
             raise DurableRunLedgerUnavailable(
                 "medusa_durable_ledger_unavailable"
@@ -378,7 +402,10 @@ class PostgresDurableRunLedger:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
-                    text(self._select_sql() + " WHERE run_id = :run_id AND tenant_id = CAST(:tenant_id AS uuid)"),
+                    text(
+                        self._select_sql()
+                        + " WHERE run_id = :run_id AND tenant_id = CAST(:tenant_id AS uuid)"
+                    ),
                     {"run_id": run_id, "tenant_id": canonical_tenant_id},
                 )
                 row = result.mappings().first()
@@ -396,8 +423,10 @@ class PostgresDurableRunLedger:
         limit: int = 250,
     ) -> list[dict[str, Any]]:
         safe_limit = max(1, min(limit, 1000))
-        terminal_clause = "" if include_terminal else (
-            "AND status IN ('created', 'running', 'cancellation_requested', 'orphaned')"
+        terminal_clause = (
+            ""
+            if include_terminal
+            else "AND status IN ('created', 'running', 'cancellation_requested', 'orphaned')"
         )
         try:
             async with self._postgres.get_async_session() as session:
@@ -713,6 +742,7 @@ class PostgresDurableRunLedger:
 __all__ = [
     "DurableRunLedger",
     "DurableRunLedgerConflict",
+    "DurableRunLedgerTransitionConflict",
     "DurableRunLedgerUnavailable",
     "PostgresDurableRunLedger",
 ]
