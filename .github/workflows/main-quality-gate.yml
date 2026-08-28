@@ -70,6 +70,11 @@ jobs:
           pytest tests/architecture/test_beta_conversation_reload_contract.py -q
           pytest tests/architecture/test_authenticated_tenant_context_contract.py -q
 
+      - name: Runtime evidence authority proofs
+        run: |
+          pytest tests/core/runtime/test_context_evidence_contracts.py -q
+          pytest tests/core/runtime/test_runtime_evidence_resolution.py -q
+
       - name: Personalization authority proofs
         run: pytest tests/core/personalization/test_personalization.py -q
 
