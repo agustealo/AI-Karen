@@ -50,60 +50,11 @@ jobs:
       - name: Run classifier architecture contract
         run: pytest tests/architecture/test_classifier_authority_contract.py -q
 
-      - id: intent_problem_solving
-        name: Burn problem-solving heuristic
-        continue-on-error: true
-        run: pytest 'tests/core/intelligence/test_intent_classifier_burn.py::test_heuristic_burn_routes_specific_intents_before_generic_request_cues[problem_solving]' -q
+      - name: Run adversarial predictor burn
+        run: pytest tests/core/intelligence/test_intent_classifier_burn.py -q
 
-      - id: intent_decision_making
-        name: Burn decision-making heuristic
-        continue-on-error: true
-        run: pytest 'tests/core/intelligence/test_intent_classifier_burn.py::test_heuristic_burn_routes_specific_intents_before_generic_request_cues[decision_making]' -q
-
-      - id: intent_creative_assistance
-        name: Burn creative-assistance heuristic
-        continue-on-error: true
-        run: pytest 'tests/core/intelligence/test_intent_classifier_burn.py::test_heuristic_burn_routes_specific_intents_before_generic_request_cues[creative_assistance]' -q
-
-      - id: intent_information_seeking
-        name: Burn information-seeking heuristic
-        continue-on-error: true
-        run: pytest 'tests/core/intelligence/test_intent_classifier_burn.py::test_heuristic_burn_routes_specific_intents_before_generic_request_cues[information_seeking]' -q
-
-      - id: intent_task_completion
-        name: Burn task-completion heuristic
-        continue-on-error: true
-        run: pytest 'tests/core/intelligence/test_intent_classifier_burn.py::test_heuristic_burn_routes_specific_intents_before_generic_request_cues[task_completion]' -q
-
-      - id: intent_social_interaction
-        name: Burn social-interaction heuristic
-        continue-on-error: true
-        run: pytest 'tests/core/intelligence/test_intent_classifier_burn.py::test_heuristic_burn_routes_specific_intents_before_generic_request_cues[social_interaction]' -q
-
-      - name: Enforce supported-intent heuristic matrix
-        shell: bash
-        run: |
-          test '${{ steps.intent_problem_solving.outcome }}' = success
-          test '${{ steps.intent_decision_making.outcome }}' = success
-          test '${{ steps.intent_creative_assistance.outcome }}' = success
-          test '${{ steps.intent_information_seeking.outcome }}' = success
-          test '${{ steps.intent_task_completion.outcome }}' = success
-          test '${{ steps.intent_social_interaction.outcome }}' = success
-
-      - name: Burn unknown and noise rejection
-        run: |
-          pytest tests/core/intelligence/test_intent_classifier_burn.py -q \
-            -k "unknown_noise"
-
-      - name: Burn semantic intent path
-        run: |
-          pytest tests/core/intelligence/test_intent_classifier_burn.py -q \
-            -k "semantic_path or degraded_semantic or weak_semantic"
-
-      - name: Burn public classify contract
-        run: |
-          pytest tests/core/intelligence/test_intent_classifier_burn.py -q \
-            -k "public_classify"
+      - name: Run public runtime classify burn
+        run: pytest tests/core/intelligence/test_intelligence_runtime_classify_burn.py -q
 
   backend-quality:
     name: backend-quality
@@ -167,6 +118,7 @@ jobs:
       - name: Classifier burn contracts
         run: |
           pytest tests/core/intelligence/test_intent_classifier_burn.py -q
+          pytest tests/core/intelligence/test_intelligence_runtime_classify_burn.py -q
           pytest tests/core/intelligence/test_intelligence_runtime.py -q
 
       - name: Chat runtime burn contracts
