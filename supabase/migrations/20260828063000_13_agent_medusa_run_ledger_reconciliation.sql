@@ -14,8 +14,7 @@ ALTER TABLE agent_medusa_runs
 UPDATE agent_medusa_runs
 SET request_id = COALESCE(request_id, correlation_id, run_id),
     created_at = COALESCE(created_at, started_at),
-    last_worker_transition_at = COALESCE(last_worker_transition_at, updated_at, started_at),
-    status = CASE WHEN status = 'cancelling' THEN 'cancellation_requested' ELSE status END;
+    last_worker_transition_at = COALESCE(last_worker_transition_at, updated_at, started_at);
 
 ALTER TABLE agent_medusa_runs
     ALTER COLUMN request_id SET NOT NULL,
@@ -24,6 +23,10 @@ ALTER TABLE agent_medusa_runs
 ALTER TABLE agent_medusa_runs
     DROP CONSTRAINT agent_medusa_runs_status_check,
     DROP CONSTRAINT agent_medusa_runs_terminal_time_check;
+
+UPDATE agent_medusa_runs
+SET status = 'cancellation_requested'
+WHERE status = 'cancelling';
 
 ALTER TABLE agent_medusa_runs
     ADD CONSTRAINT agent_medusa_runs_status_check CHECK (
