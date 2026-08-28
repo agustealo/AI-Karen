@@ -50,10 +50,15 @@ jobs:
       - name: Run classifier architecture contract
         run: pytest tests/architecture/test_classifier_authority_contract.py -q
 
-      - name: Burn heuristic and unknown intent handling
+      - name: Burn supported heuristic routing
         run: |
           pytest tests/core/intelligence/test_intent_classifier_burn.py -q \
-            -k "heuristic_burn or unknown_noise"
+            -k "heuristic_burn"
+
+      - name: Burn unknown and noise rejection
+        run: |
+          pytest tests/core/intelligence/test_intent_classifier_burn.py -q \
+            -k "unknown_noise"
 
       - name: Burn semantic intent path
         run: |
