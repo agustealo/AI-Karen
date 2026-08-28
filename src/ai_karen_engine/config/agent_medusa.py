@@ -75,9 +75,9 @@ class AgentMedusaRuntimeSettings:
             raise AgentMedusaConfigError(
                 "run_orphan_grace_seconds must be at least run_lease_ttl_seconds"
             )
-        if self.durable_run_ledger_required and not self.durable_run_ledger_enabled:
+        if self.durable_run_ledger_enabled != self.durable_run_ledger_required:
             raise AgentMedusaConfigError(
-                "durable_run_ledger_required cannot be true when durable_run_ledger_enabled is false"
+                "durable run ledger must be either disabled or enabled in fail-closed mode"
             )
         if not self.run_key_prefix.strip():
             raise AgentMedusaConfigError("run_key_prefix must not be empty")
