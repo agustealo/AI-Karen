@@ -29,6 +29,14 @@ def _features(text: str) -> IntelligenceFeatures:
         ("Please build the release checklist.", "task_completion"),
         ("Hello there", "social_interaction"),
     ],
+    ids=[
+        "problem_solving",
+        "decision_making",
+        "creative_assistance",
+        "information_seeking",
+        "task_completion",
+        "social_interaction",
+    ],
 )
 async def test_heuristic_burn_routes_specific_intents_before_generic_request_cues(
     text: str,
