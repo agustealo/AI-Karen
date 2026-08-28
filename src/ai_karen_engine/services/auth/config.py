@@ -64,7 +64,15 @@ class AuthConfig:
     # ------------------------------------------------------------------
     jwt_secret_key: str = field(
         default="change-me-in-production",
-        metadata={"env": ["AUTH_JWT_SECRET_KEY", "AUTH_SECRET_KEY", "JWT_SECRET_KEY", "JWT_SECRET", "SECRET_KEY"]},
+        metadata={
+            "env": [
+                "AUTH_JWT_SECRET_KEY",
+                "AUTH_SECRET_KEY",
+                "JWT_SECRET_KEY",
+                "JWT_SECRET",
+                "SECRET_KEY",
+            ]
+        },
     )
     jwt_algorithm: str = field(
         default="HS256",
@@ -104,6 +112,18 @@ class AuthConfig:
     )
 
     # ------------------------------------------------------------------
+    # First-run bootstrap
+    # ------------------------------------------------------------------
+    first_run_tenant_slug: str = field(
+        default="installation",
+        metadata={"env": ["KARI_FIRST_RUN_TENANT_SLUG"]},
+    )
+    first_run_tenant_name: str = field(
+        default="AI KAREN",
+        metadata={"env": ["KARI_FIRST_RUN_TENANT_NAME"]},
+    )
+
+    # ------------------------------------------------------------------
     # Feature flags
     # ------------------------------------------------------------------
     enable_two_factor: bool = field(
@@ -136,7 +156,7 @@ class AuthConfig:
         return self.environment == Environment.STAGING
 
     def validate(self) -> None:
-        """Raise on insecure configuration in production/staging."""
+        """Raise on insecure or invalid authentication configuration."""
         if self.environment in (Environment.PRODUCTION, Environment.STAGING):
             secret = self.jwt_secret_key
             if not secret or secret in INSECURE_SECRET_MARKERS:
@@ -151,19 +171,19 @@ class AuthConfig:
                 )
 
         if self.password_min_length < 8:
-            raise RuntimeError(
-                "password_min_length must be at least 8 characters."
-            )
+            raise RuntimeError("password_min_length must be at least 8 characters.")
 
         if self.max_failed_login_attempts < 3:
-            raise RuntimeError(
-                "max_failed_login_attempts must be at least 3."
-            )
+            raise RuntimeError("max_failed_login_attempts must be at least 3.")
 
         if self.bcrypt_rounds < 10:
-            raise RuntimeError(
-                "bcrypt_rounds must be at least 10."
-            )
+            raise RuntimeError("bcrypt_rounds must be at least 10.")
+
+        if not self.first_run_tenant_slug.strip():
+            raise RuntimeError("first_run_tenant_slug must not be empty.")
+
+        if not self.first_run_tenant_name.strip():
+            raise RuntimeError("first_run_tenant_name must not be empty.")
 
 
 def load_auth_config(overrides: Optional[Dict[str, Any]] = None) -> AuthConfig:
@@ -176,15 +196,17 @@ def load_auth_config(overrides: Optional[Dict[str, Any]] = None) -> AuthConfig:
       4. Dataclass defaults
     """
 
-    from ai_karen_engine.config.config_manager import get_config, resolve_jwt_secret
+    from ai_karen_engine.config.config_manager import get_config
 
-    env_secret = _resolve_env([
-        "AUTH_JWT_SECRET_KEY",
-        "AUTH_SECRET_KEY",
-        "JWT_SECRET_KEY",
-        "JWT_SECRET",
-        "SECRET_KEY",
-    ])
+    env_secret = _resolve_env(
+        [
+            "AUTH_JWT_SECRET_KEY",
+            "AUTH_SECRET_KEY",
+            "JWT_SECRET_KEY",
+            "JWT_SECRET",
+            "SECRET_KEY",
+        ]
+    )
 
     cfg = get_config()
     config_secret = ""
@@ -193,7 +215,9 @@ def load_auth_config(overrides: Optional[Dict[str, Any]] = None) -> AuthConfig:
             candidate = cfg.security.jwt_secret
             if candidate not in ("your-secret-key",):
                 config_secret = candidate
-        if not config_secret and hasattr(cfg, "auth") and hasattr(cfg.auth, "secret_key"):
+        if not config_secret and hasattr(cfg, "auth") and hasattr(
+            cfg.auth, "secret_key"
+        ):
             candidate = cfg.auth.secret_key
             if candidate not in ("changeme",):
                 config_secret = candidate
@@ -219,13 +243,23 @@ def load_auth_config(overrides: Optional[Dict[str, Any]] = None) -> AuthConfig:
         environment=_detect_environment(),
         jwt_secret_key=jwt_secret,
         jwt_algorithm=_resolve_env(["AUTH_JWT_ALGORITHM"], "HS256"),
-        access_token_expire_minutes=_env_int(["AUTH_ACCESS_TOKEN_EXPIRE_MINUTES"], 480),
+        access_token_expire_minutes=_env_int(
+            ["AUTH_ACCESS_TOKEN_EXPIRE_MINUTES"], 480
+        ),
         refresh_token_expire_days=_env_int(["AUTH_REFRESH_TOKEN_EXPIRE_DAYS"], 30),
         password_min_length=_env_int(["AUTH_PASSWORD_MIN_LENGTH"], 8),
-        password_require_complexity=_env_bool(["AUTH_PASSWORD_REQUIRE_COMPLEXITY"], True),
+        password_require_complexity=_env_bool(
+            ["AUTH_PASSWORD_REQUIRE_COMPLEXITY"], True
+        ),
         max_failed_login_attempts=_env_int(["AUTH_MAX_FAILED_LOGIN_ATTEMPTS"], 5),
         account_lockout_minutes=_env_int(["AUTH_ACCOUNT_LOCKOUT_MINUTES"], 30),
         bcrypt_rounds=_env_int(["AUTH_BCRYPT_ROUNDS"], 12),
+        first_run_tenant_slug=_resolve_env(
+            ["KARI_FIRST_RUN_TENANT_SLUG"], "installation"
+        ).strip(),
+        first_run_tenant_name=_resolve_env(
+            ["KARI_FIRST_RUN_TENANT_NAME"], "AI KAREN"
+        ).strip(),
         enable_two_factor=_env_bool(["AUTH_ENABLE_TWO_FACTOR"], True),
         session_timeout_hours=_env_int(["AUTH_SESSION_TIMEOUT_HOURS"], 168),
         auto_create_tables=_env_bool(["AUTH_AUTO_CREATE_TABLES"], False),
