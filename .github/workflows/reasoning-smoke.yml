@@ -1,0 +1,74 @@
+name: Reasoning Smoke
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reasoning-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reasoning-smoke:
+    name: reasoning-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: src
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install reasoning smoke dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            pytest pytest-asyncio numpy scipy sqlalchemy asyncpg psycopg psycopg2-binary \
+            PyJWT bcrypt argon2-cffi structlog cryptography PyYAML \
+            pydantic pydantic-settings python-dotenv prometheus_client \
+            fastapi httpx requests tenacity redis fakeredis langchain-core
+
+      - name: Compile reasoning authority surfaces
+        run: |
+          python -m compileall -q \
+            src/ai_karen_engine/core/reasoning \
+            src/ai_karen_engine/core/cortex \
+            src/ai_karen_engine/core/runtime
+
+      - name: Smoke CORTEX reasoning activation
+        run: pytest tests/core/reasoning/test_chat_runtime_reasoning_activation.py -q
+
+      - name: Smoke runtime reasoning bridge
+        run: pytest tests/core/reasoning/test_runtime_reasoning_bridge.py -q
+
+      - name: Smoke reasoning executor authority
+        run: pytest tests/core/reasoning/test_executor_mode_authority.py -q
+
+      - name: Smoke reasoning mode compatibility
+        run: pytest tests/core/reasoning/test_mode_compat.py -q
+
+      - name: Smoke soft exploration
+        run: pytest tests/core/reasoning/test_soft_exploration.py -q
+
+      - name: Smoke soft verifier and multi-generation
+        run: |
+          pytest tests/core/reasoning/test_soft_multi_generate_verifier.py -q
+          pytest tests/core/reasoning/test_soft_verifier_objective.py -q
+
+      - name: Smoke token budget and writeback
+        run: |
+          pytest tests/core/reasoning/test_soft_reasoning_token_manager.py -q
+          pytest tests/core/reasoning/test_soft_reasoning_writeback.py -q
+
+      - name: Smoke soft runtime adapter
+        run: pytest tests/core/reasoning/test_soft_runtime_adapter.py -q
