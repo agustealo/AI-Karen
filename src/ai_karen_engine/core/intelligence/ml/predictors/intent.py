@@ -132,9 +132,9 @@ class IntentPredictor(BasePredictor):
         text: str,
         features: IntelligenceFeatures,
     ) -> Prediction:
-        normalized = " ".join(text.casefold().split())
+        tokens = self._tokenize(text)
         for label, cues, confidence in self._HEURISTIC_RULES:
-            matched = self._first_matching_cue(normalized, cues)
+            matched = self._first_matching_cue(tokens, cues)
             if matched is None:
                 continue
             return Prediction(
@@ -149,15 +149,30 @@ class IntentPredictor(BasePredictor):
         return self._unknown_prediction(features, reason="no_supported_signal")
 
     @staticmethod
-    def _first_matching_cue(text: str, cues: tuple[str, ...]) -> str | None:
+    def _tokenize(text: str) -> tuple[str, ...]:
+        return tuple(re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?", text.casefold()))
+
+    @classmethod
+    def _first_matching_cue(
+        cls,
+        tokens: tuple[str, ...],
+        cues: tuple[str, ...],
+    ) -> str | None:
         for cue in cues:
-            if " " in cue:
-                if cue in text:
-                    return cue
-                continue
-            if re.search(rf"(?<!\w){re.escape(cue)}(?!\w)", text):
+            cue_tokens = cls._tokenize(cue)
+            if cls._contains_token_sequence(tokens, cue_tokens):
                 return cue
         return None
+
+    @staticmethod
+    def _contains_token_sequence(
+        tokens: tuple[str, ...],
+        cue_tokens: tuple[str, ...],
+    ) -> bool:
+        if not cue_tokens or len(cue_tokens) > len(tokens):
+            return False
+        width = len(cue_tokens)
+        return any(tokens[index : index + width] == cue_tokens for index in range(len(tokens) - width + 1))
 
     @staticmethod
     def _unknown_prediction(
