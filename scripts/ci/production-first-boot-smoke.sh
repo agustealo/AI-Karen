@@ -230,13 +230,17 @@ assert payload.get("message") == "System already configured", payload
 PY
 
 me_json="$(curl -fsS -b "${COOKIE_JAR}" "${BASE_URL}/api/auth/me")"
-python3 - "${me_json}" <<'PY'
+python3 - "${me_json}" "${ADMIN_EMAIL}" <<'PY'
 import json
 import sys
 payload = json.loads(sys.argv[1])
+expected_email = sys.argv[2]
+roles = {str(role).lower() for role in payload.get("roles", [])}
+assert payload.get("user_id"), payload
+assert payload.get("email") == expected_email, payload
 assert payload.get("tenant_id"), payload
 assert payload.get("username"), payload
-assert payload.get("authenticated") is True, payload
+assert {"admin", "user"}.issubset(roles), payload
 PY
 
 echo "[smoke] restarting exact production image"
@@ -269,12 +273,17 @@ assert "admin" in [str(role).lower() for role in user.get("roles", [])], payload
 PY
 
 me_after_restart="$(curl -fsS -b "${COOKIE_JAR}" "${BASE_URL}/api/auth/me")"
-python3 - "${me_after_restart}" <<'PY'
+python3 - "${me_after_restart}" "${ADMIN_EMAIL}" <<'PY'
 import json
 import sys
 payload = json.loads(sys.argv[1])
+expected_email = sys.argv[2]
+roles = {str(role).lower() for role in payload.get("roles", [])}
+assert payload.get("user_id"), payload
+assert payload.get("email") == expected_email, payload
 assert payload.get("tenant_id"), payload
-assert payload.get("authenticated") is True, payload
+assert payload.get("username"), payload
+assert {"admin", "user"}.issubset(roles), payload
 PY
 
 echo "PRODUCTION FIRST-RUN SMOKE PASSED"
