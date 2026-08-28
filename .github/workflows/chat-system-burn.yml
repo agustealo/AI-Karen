@@ -36,7 +36,7 @@ jobs:
             pytest pytest-asyncio numpy sqlalchemy asyncpg psycopg psycopg2-binary \
             PyJWT bcrypt argon2-cffi structlog cryptography PyYAML \
             pydantic pydantic-settings python-dotenv prometheus_client \
-            fastapi httpx requests tenacity redis fakeredis
+            fastapi httpx requests tenacity redis fakeredis langchain-core
 
       - name: Compile chat authority surfaces
         run: |
