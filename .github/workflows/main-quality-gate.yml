@@ -50,8 +50,20 @@ jobs:
       - name: Run classifier architecture contract
         run: pytest tests/architecture/test_classifier_authority_contract.py -q
 
-      - name: Run adversarial classifier burn
-        run: pytest tests/core/intelligence/test_intent_classifier_burn.py -q
+      - name: Burn heuristic and unknown intent handling
+        run: |
+          pytest tests/core/intelligence/test_intent_classifier_burn.py -q \
+            -k "heuristic_burn or unknown_noise"
+
+      - name: Burn semantic intent path
+        run: |
+          pytest tests/core/intelligence/test_intent_classifier_burn.py -q \
+            -k "semantic_path or degraded_semantic or weak_semantic"
+
+      - name: Burn public classify contract
+        run: |
+          pytest tests/core/intelligence/test_intent_classifier_burn.py -q \
+            -k "public_classify"
 
   backend-quality:
     name: backend-quality
