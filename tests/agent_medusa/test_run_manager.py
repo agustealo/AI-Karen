@@ -9,11 +9,21 @@ from ai_karen_engine.agent_medusa.execution.run_manager import (
     MedusaRunManager,
     RunTenantMismatchError,
 )
+from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
+
+
+def _local_settings() -> AgentMedusaRuntimeSettings:
+    return AgentMedusaRuntimeSettings(
+        distributed_run_control_enabled=False,
+        durable_run_ledger_enabled=False,
+        durable_run_ledger_required=False,
+        worker_id="test-local-worker",
+    )
 
 
 def test_run_manager_cancels_actual_task_and_records_terminal_state() -> None:
     async def scenario() -> None:
-        manager = MedusaRunManager()
+        manager = MedusaRunManager(settings=_local_settings())
         started = asyncio.Event()
         cancelled = asyncio.Event()
 
@@ -54,7 +64,7 @@ def test_run_manager_cancels_actual_task_and_records_terminal_state() -> None:
 
 def test_run_manager_blocks_cross_tenant_observation_and_cancellation() -> None:
     async def scenario() -> None:
-        manager = MedusaRunManager()
+        manager = MedusaRunManager(settings=_local_settings())
         task = asyncio.create_task(asyncio.sleep(60))
         await manager.register(
             run_id="run-2",

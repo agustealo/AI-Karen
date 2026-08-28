@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -15,15 +16,34 @@ EXPECTED_BASELINE = [
     "20260827060000_06_auth_refresh_history.sql",
     "20260827070000_07_identity_vault.sql",
 ]
+MIGRATION_NAME = re.compile(r"^(?P<timestamp>\d{14})_(?P<domain>[a-z0-9_]+)\.sql$")
 
 
 def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_canonical_baseline_is_small_ordered_and_domain_named() -> None:
+def test_canonical_baseline_is_immutable_prefix_with_ordered_forward_migrations() -> None:
     names = [path.name for path in sorted(MIGRATIONS.glob("*.sql"))]
-    assert names == EXPECTED_BASELINE
+
+    assert names[: len(EXPECTED_BASELINE)] == EXPECTED_BASELINE
+    assert len(names) == len(set(names))
+
+    timestamps: list[str] = []
+    for name in names:
+        match = MIGRATION_NAME.fullmatch(name)
+        assert match is not None, f"Invalid canonical migration name: {name}"
+        timestamps.append(match.group("timestamp"))
+
+    assert timestamps == sorted(timestamps)
+    assert len(timestamps) == len(set(timestamps))
+
+    baseline_cutover = MIGRATION_NAME.fullmatch(EXPECTED_BASELINE[-1])
+    assert baseline_cutover is not None
+    for name in names[len(EXPECTED_BASELINE) :]:
+        forward = MIGRATION_NAME.fullmatch(name)
+        assert forward is not None
+        assert forward.group("timestamp") > baseline_cutover.group("timestamp")
 
 
 def test_fresh_install_declares_pgvector_before_vector_columns() -> None:
@@ -32,9 +52,9 @@ def test_fresh_install_declares_pgvector_before_vector_columns() -> None:
 
     assert "CREATE EXTENSION IF NOT EXISTS vector;" in extensions
     assert "VECTOR(" in core
-    assert EXPECTED_BASELINE.index("20260827005000_00_required_extensions.sql") < EXPECTED_BASELINE.index(
-        "20260827010000_01_core_persona_runtime.sql"
-    )
+    assert EXPECTED_BASELINE.index(
+        "20260827005000_00_required_extensions.sql"
+    ) < EXPECTED_BASELINE.index("20260827010000_01_core_persona_runtime.sql")
 
 
 def test_competing_primary_postgres_migration_authorities_are_absent() -> None:
@@ -136,5 +156,8 @@ def test_baseline_cutover_is_documented() -> None:
     baseline = _read("docs/database/BASELINE_2026_08.md")
     supabase_readme = _read("supabase/README.md")
     assert "only primary PostgreSQL schema-evolution authority" in baseline
-    assert "Every subsequent schema change is a new forward-only Supabase migration" in baseline
+    assert (
+        "Every subsequent schema change is a new forward-only Supabase migration"
+        in baseline
+    )
     assert "Production Baseline 2026-08" in supabase_readme
