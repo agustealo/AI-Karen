@@ -1,0 +1,56 @@
+name: One-shot Branch Collapse
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/one-shot-branch-collapse.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  collapse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Delete every remote branch except main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t branches < <(
+            gh api --paginate "repos/${REPOSITORY}/branches?per_page=100" --jq '.[].name'
+          )
+
+          deleted=0
+          failed=0
+
+          for branch in "${branches[@]}"; do
+            if [[ "$branch" == "main" ]]; then
+              continue
+            fi
+
+            echo "Deleting branch: $branch"
+            if gh api -X DELETE "repos/${REPOSITORY}/git/refs/heads/${branch}"; then
+              deleted=$((deleted + 1))
+            else
+              echo "Failed to delete branch: $branch" >&2
+              failed=$((failed + 1))
+            fi
+          done
+
+          echo "Deleted branches: $deleted"
+          echo "Failed deletions: $failed"
+
+          remaining="$(gh api --paginate "repos/${REPOSITORY}/branches?per_page=100" --jq '.[].name')"
+          printf 'Remaining branches:\n%s\n' "$remaining"
+
+          if [[ "$remaining" != "main" ]]; then
+            echo "Branch collapse incomplete." >&2
+            exit 1
+          fi
