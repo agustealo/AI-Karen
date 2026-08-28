@@ -159,7 +159,8 @@ class InMemoryDurableLedger:
             rows = [
                 r
                 for r in rows
-                if r["status"] in {
+                if r["status"]
+                in {
                     "created",
                     "running",
                     "cancellation_requested",
@@ -353,7 +354,10 @@ class SharedTruthStore:
             dict(record)
             for record in self.records.values()
             if record["tenant_id"] == tenant_id
-            and (include_terminal or record["status"] in {"running", "cancelling", "orphaned"})
+            and (
+                include_terminal
+                or record["status"] in {"running", "cancelling", "orphaned"}
+            )
         ]
 
     def seed(self, *, run_id: str, tenant_id: str, status: str) -> None:
@@ -365,10 +369,17 @@ class SharedTruthStore:
             "user_id": "user-1",
             "status": status,
             "started_at": now.isoformat(),
-            "completed_at": now.isoformat() if status in {"completed", "failed", "cancelled"} else None,
+            "completed_at": (
+                now.isoformat()
+                if status in {"completed", "failed", "cancelled"}
+                else None
+            ),
             "error_type": "SharedFailure" if status == "failed" else None,
             "cancellable": status == "running",
-            "distributed_control": {"supported": True, "lease_alive": status == "running"},
+            "distributed_control": {
+                "supported": True,
+                "lease_alive": status == "running",
+            },
         }
 
 
@@ -391,7 +402,9 @@ def _settings(
     )
 
 
-def test_terminal_run_survives_manager_recreation_with_context_and_transitions() -> None:
+def test_terminal_run_survives_manager_recreation_with_context_and_transitions() -> (
+    None
+):
     async def scenario() -> None:
         ledger = InMemoryDurableLedger()
         manager = MedusaRunManager(settings=_settings(), durable_ledger=ledger)
@@ -521,7 +534,9 @@ def test_reconciliation_batch_is_config_bounded() -> None:
             ledger.seed_active(run_id=f"bounded-{index}", tenant_id=tenant_id)
         shared = SharedTruthStore()
         for index in range(5):
-            shared.seed(run_id=f"bounded-{index}", tenant_id=tenant_id, status="running")
+            shared.seed(
+                run_id=f"bounded-{index}", tenant_id=tenant_id, status="running"
+            )
         manager = MedusaRunManager(
             settings=_settings(distributed=True, worker_id="observer", batch_size=2),
             distributed_store=shared,
@@ -539,7 +554,9 @@ def test_stale_worker_cannot_overwrite_durable_terminal_state() -> None:
     async def scenario() -> None:
         tenant_id = "11111111-1111-1111-1111-111111111111"
         ledger = InMemoryDurableLedger()
-        ledger.seed_active(run_id="fenced-1", tenant_id=tenant_id, worker_id="worker-new")
+        ledger.seed_active(
+            run_id="fenced-1", tenant_id=tenant_id, worker_id="worker-new"
+        )
 
         with pytest.raises(DurableRunLedgerConflict):
             await ledger.mark_terminal(

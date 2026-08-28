@@ -82,7 +82,9 @@ class MedusaCoordinator:
 
         tenant_id = str(getattr(request, "tenant_id", None) or "default")
         user_id = str(request.user_id or "anonymous")
-        plan_data = request.authorized_plan if isinstance(request.authorized_plan, dict) else {}
+        plan_data = (
+            request.authorized_plan if isinstance(request.authorized_plan, dict) else {}
+        )
         policy_decision_id_raw = plan_data.get("policy_decision_id")
         policy_decision_id = (
             str(policy_decision_id_raw) if policy_decision_id_raw is not None else None
@@ -338,7 +340,9 @@ class MedusaCoordinator:
 
         registration = await self.registry.get_agent(step.agent_specialist)
         if registration is None:
-            raise ValueError(f"Specialist {step.agent_specialist} not found in registry")
+            raise ValueError(
+                f"Specialist {step.agent_specialist} not found in registry"
+            )
         specialist = self.factory.resolve(registration)
 
         if emitter is not None:

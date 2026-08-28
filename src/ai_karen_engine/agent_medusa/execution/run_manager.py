@@ -79,7 +79,9 @@ class ExecutionRun:
             "user_id": self.user_id,
             "status": self.status.value,
             "started_at": self.started_at.isoformat(),
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "completed_at": (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
             "error_type": self.error_type,
             "cancellable": self.status is ExecutionRunStatus.RUNNING,
             "durable": self.durable_registered,
@@ -644,7 +646,9 @@ class MedusaRunManager:
 
         async with self._lock:
             local_run_ids = {
-                run_id for run_id, run in self._runs.items() if run.tenant_id == tenant_id
+                run_id
+                for run_id, run in self._runs.items()
+                if run.tenant_id == tenant_id
             }
 
         reconciled = 0
@@ -666,7 +670,11 @@ class MedusaRunManager:
                 )
                 continue
             except DistributedRunNotFound:
-                shared = {"status": "orphaned", "completed_at": None, "error_type": "WorkerLeaseExpired"}
+                shared = {
+                    "status": "orphaned",
+                    "completed_at": None,
+                    "error_type": "WorkerLeaseExpired",
+                }
 
             shared_status = str(shared.get("status") or "")
             if shared_status == "running":
