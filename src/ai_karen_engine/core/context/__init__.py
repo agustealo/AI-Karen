@@ -1,5 +1,21 @@
 """Canonical context-domain public surface."""
 
-from .contracts import ContextScope, ContextSnapshot
+from .contracts import (
+    CognitiveContext,
+    ContextEvidence,
+    ContextRequirement,
+    ContextRequirements,
+    ContextScope,
+    ContextSnapshot,
+    EvidenceSource,
+)
 
-__all__ = ["ContextScope", "ContextSnapshot"]
+__all__ = [
+    "CognitiveContext",
+    "ContextEvidence",
+    "ContextRequirement",
+    "ContextRequirements",
+    "ContextScope",
+    "ContextSnapshot",
+    "EvidenceSource",
+]
