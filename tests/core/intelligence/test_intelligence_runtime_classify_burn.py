@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from ai_karen_engine.core.intelligence.features import IntelligenceFeatures
@@ -8,12 +10,7 @@ from ai_karen_engine.core.intelligence.ml.contracts import Prediction, Predictio
 
 
 @pytest.mark.asyncio
-async def test_public_classify_returns_registered_predictor_truth(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = IntelligenceRuntime()
-    runtime._initialized = True
-
+async def test_public_classify_returns_registered_predictor_truth() -> None:
     async def fake_predict(
         features: IntelligenceFeatures,
         task: PredictionTask,
@@ -33,7 +30,9 @@ async def test_public_classify_returns_registered_predictor_truth(
             metadata={"burn": True},
         )
 
-    monkeypatch.setattr(runtime._ml_runtime, "predict", fake_predict)
+    runtime = object.__new__(IntelligenceRuntime)
+    runtime._initialized = True
+    runtime._ml_runtime = SimpleNamespace(predict=fake_predict)
 
     result = await runtime.classify("intent", "Fix this error")
 
@@ -55,8 +54,9 @@ async def test_public_classify_returns_registered_predictor_truth(
 
 @pytest.mark.asyncio
 async def test_public_classify_rejects_unknown_prediction_task_without_fake_model_truth() -> None:
-    runtime = IntelligenceRuntime()
+    runtime = object.__new__(IntelligenceRuntime)
     runtime._initialized = True
+    runtime._ml_runtime = SimpleNamespace()
 
     result = await runtime.classify("not-a-real-task", "hello")
 
