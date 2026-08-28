@@ -11,9 +11,7 @@ from ai_karen_engine.core.intelligence.contracts import (
     SignalType,
 )
 from ai_karen_engine.core.intelligence.features import IntelligenceFeatures
-from ai_karen_engine.core.intelligence.linguistic.contracts import (
-    LinguisticAnalysisResult,
-)
+from ai_karen_engine.core.intelligence.linguistic.contracts import LinguisticAnalysisResult
 from ai_karen_engine.core.intelligence.ml.contracts import PredictionTask
 from ai_karen_engine.core.intelligence.ml.ml_runtime import MLRuntime
 from ai_karen_engine.core.intelligence.ml.predictors.ambiguity import AmbiguityPredictor
@@ -21,12 +19,7 @@ from ai_karen_engine.core.intelligence.ml.predictors.capability import Capabilit
 from ai_karen_engine.core.intelligence.ml.predictors.complexity import ComplexityPredictor
 from ai_karen_engine.core.intelligence.ml.predictors.domain import DomainClassifier
 from ai_karen_engine.core.intelligence.ml.predictors.intent import IntentPredictor
-from ai_karen_engine.core.intelligence.ml.predictors.memory_relevance import (
-    MemoryRelevancePredictor,
-)
-from ai_karen_engine.core.intelligence.ml.predictors.topology import (
-    ExecutionTopologyPredictor,
-)
+from ai_karen_engine.core.intelligence.ml.predictors.memory_relevance import MemoryRelevancePredictor
 from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
 from ai_karen_engine.core.intelligence.task_signature_builder import TaskSignatureBuilder
 
@@ -45,9 +38,7 @@ class IntelligenceRuntime:
         if self._initialized:
             return
         try:
-            from ai_karen_engine.core.intelligence.linguistic.spacy_analyzer import (
-                SpacyAnalyzer,
-            )
+            from ai_karen_engine.core.intelligence.linguistic.spacy_analyzer import SpacyAnalyzer
 
             self._linguistic = SpacyAnalyzer()
         except Exception as exc:
@@ -84,10 +75,21 @@ class IntelligenceRuntime:
             PredictionTask.CAPABILITY,
             CapabilityPredictor(self._ml_runtime, semantic_encoder),
         )
-        self._ml_runtime.register_predictor(
-            PredictionTask.EXECUTION_TOPOLOGY,
-            ExecutionTopologyPredictor(self._ml_runtime, semantic_encoder),
-        )
+
+        try:
+            from ai_karen_engine.core.intelligence.ml.predictors.topology import (
+                ExecutionTopologyPredictor,
+            )
+
+            self._ml_runtime.register_predictor(
+                PredictionTask.EXECUTION_TOPOLOGY,
+                ExecutionTopologyPredictor(self._ml_runtime, semantic_encoder),
+            )
+        except Exception as exc:
+            logger.warning(
+                "IntelligenceRuntime: execution topology predictor unavailable: %s",
+                exc,
+            )
 
     async def analyze(
         self,
@@ -122,10 +124,10 @@ class IntelligenceRuntime:
                 ]
                 features.key_phrases = ling_result.parsed.noun_phrases[:10]
                 features.linguistic_features = {
-                    "pos_tags": ling_result.parsed.pos_tags
+                    "pos_tags": ling_result.parsed.pos_tags,
                 }
                 features.syntax_features = {
-                    "dependencies": ling_result.parsed.dependencies
+                    "dependencies": ling_result.parsed.dependencies,
                 }
                 signals.append(
                     IntelligenceSignal(
@@ -170,13 +172,13 @@ class IntelligenceRuntime:
                 )
             )
 
-        predictions = {}
+        predictions: dict[PredictionTask, Any] = {}
         for task in PredictionTask:
             pred = await self._ml_runtime.predict(features, task)
             if pred is None:
                 continue
-
             predictions[task] = pred
+
             if task == PredictionTask.INTENT:
                 signal_type = SignalType.INTENT
             elif task == PredictionTask.DOMAIN:
@@ -256,7 +258,9 @@ class IntelligenceRuntime:
     async def embed(self, texts: list[str]) -> list[list[float] | None]:
         await self.initialize()
         encodings = await self._ml_runtime.encode_batch(texts, "default")
-        return [encoding.vector if encoding is not None else None for encoding in encodings]
+        return [
+            encoding.vector if encoding is not None else None for encoding in encodings
+        ]
 
     async def classify(self, task: str, text: str) -> dict[str, Any]:
         """Return one predictor signal without promoting Intelligence to CORTEX authority."""
@@ -407,7 +411,8 @@ class IntelligenceRuntime:
                 keyword in lower for keyword in ["run", "execute", "compile", "build"]
             ),
             "filesystem_operation": any(
-                keyword in lower for keyword in ["file", "folder", "directory", "save", "write"]
+                keyword in lower
+                for keyword in ["file", "folder", "directory", "save", "write"]
             ),
             "parallelizable": any(
                 keyword in lower
@@ -456,15 +461,13 @@ class IntelligenceRuntime:
                 keyword in lower for keyword in ["search", "look up", "find", "research"]
             ),
             "code_execution": any(
-                keyword in lower
-                for keyword in ["run", "execute", "compile", "build", "test"]
+                keyword in lower for keyword in ["run", "execute", "compile", "build", "test"]
             ),
             "filesystem_read": any(
                 keyword in lower for keyword in ["read", "open", "show", "display"]
             ),
             "filesystem_write": any(
-                keyword in lower
-                for keyword in ["write", "save", "create file", "update"]
+                keyword in lower for keyword in ["write", "save", "create file", "update"]
             ),
             "tool_use": len(analysis.topology_signals.get("tool_requirements", [])) > 0,
             "deep_reasoning": analysis.task_complexity in {"complex", "multi_step"},
