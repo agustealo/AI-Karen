@@ -42,6 +42,8 @@ class DurableRunLedger(Protocol):
         user_id: str,
         worker_id: str,
         started_at: datetime,
+        request_id: str | None = None,
+        policy_decision_id: str | None = None,
     ) -> None: ...
 
     async def heartbeat(
@@ -59,6 +61,8 @@ class DurableRunLedger(Protocol):
         run_id: str,
         tenant_id: str,
         requested_at: datetime,
+        worker_id: str | None = None,
+        audit_event_id: str | None = None,
     ) -> None: ...
 
     async def mark_terminal(
@@ -69,6 +73,9 @@ class DurableRunLedger(Protocol):
         status: str,
         completed_at: datetime,
         error_type: str | None,
+        worker_id: str | None = None,
+        audit_event_id: str | None = None,
+        reason_code: str | None = None,
     ) -> None: ...
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any] | None: ...
@@ -91,13 +98,7 @@ class DurableRunLedger(Protocol):
 
 
 def _canonical_tenant_id(tenant_id: str) -> str:
-    """Return the canonical UUID representation for a tenant scope.
-
-    Runtime ingress should normally provide a UUID tenant identifier. Legacy
-    callers may still carry stable string scopes such as ``default``. Those are
-    deterministically mapped to UUIDs here so PostgreSQL/RLS remain strongly
-    typed without collapsing distinct tenant scopes or allowing runtime DDL.
-    """
+    """Return the canonical UUID representation for a tenant scope."""
 
     raw = str(tenant_id or "default").strip() or "default"
     try:
@@ -129,17 +130,24 @@ class PostgresDurableRunLedger:
         user_id: str,
         worker_id: str,
         started_at: datetime,
+        request_id: str | None = None,
+        policy_decision_id: str | None = None,
     ) -> None:
+        """Persist one run and append created -> running history atomically."""
+
         try:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
-                    text("""
+                    text(
+                        """
                         INSERT INTO agent_medusa_runs (
                             run_id,
                             tenant_id,
                             user_id,
                             correlation_id,
+                            request_id,
+                            policy_decision_id,
                             owner_worker_id,
                             status,
                             started_at,
@@ -150,6 +158,8 @@ class PostgresDurableRunLedger:
                             CAST(:tenant_id AS uuid),
                             :user_id,
                             :correlation_id,
+                            :request_id,
+                            :policy_decision_id,
                             :worker_id,
                             'running',
                             :started_at,
@@ -157,12 +167,15 @@ class PostgresDurableRunLedger:
                             :started_at
                         )
                         ON CONFLICT (run_id) DO NOTHING
-                        """),
+                        """
+                    ),
                     {
                         "run_id": run_id,
                         "tenant_id": canonical_tenant_id,
                         "user_id": user_id,
                         "correlation_id": correlation_id,
+                        "request_id": request_id,
+                        "policy_decision_id": policy_decision_id,
                         "worker_id": worker_id,
                         "started_at": started_at,
                     },
@@ -171,6 +184,30 @@ class PostgresDurableRunLedger:
                     raise DurableRunLedgerConflict(
                         f"Medusa durable run already exists: {run_id}"
                     )
+                await self._append_event(
+                    session,
+                    run_id=run_id,
+                    tenant_id=canonical_tenant_id,
+                    from_status=None,
+                    to_status="created",
+                    worker_id=worker_id,
+                    correlation_id=correlation_id,
+                    request_id=request_id,
+                    policy_decision_id=policy_decision_id,
+                    occurred_at=started_at,
+                )
+                await self._append_event(
+                    session,
+                    run_id=run_id,
+                    tenant_id=canonical_tenant_id,
+                    from_status="created",
+                    to_status="running",
+                    worker_id=worker_id,
+                    correlation_id=correlation_id,
+                    request_id=request_id,
+                    policy_decision_id=policy_decision_id,
+                    occurred_at=started_at,
+                )
         except DurableRunLedgerConflict:
             raise
         except SQLAlchemyError as exc:
@@ -190,7 +227,8 @@ class PostgresDurableRunLedger:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
                 await session.execute(
-                    text("""
+                    text(
+                        """
                         UPDATE agent_medusa_runs
                         SET heartbeat_at = :heartbeat_at,
                             updated_at = :heartbeat_at
@@ -198,7 +236,8 @@ class PostgresDurableRunLedger:
                           AND tenant_id = CAST(:tenant_id AS uuid)
                           AND owner_worker_id = :worker_id
                           AND status IN ('running', 'cancelling')
-                        """),
+                        """
+                    ),
                     {
                         "run_id": run_id,
                         "tenant_id": canonical_tenant_id,
@@ -217,29 +256,54 @@ class PostgresDurableRunLedger:
         run_id: str,
         tenant_id: str,
         requested_at: datetime,
+        worker_id: str | None = None,
+        audit_event_id: str | None = None,
     ) -> None:
         try:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
-                await session.execute(
-                    text("""
+                result = await session.execute(
+                    text(
+                        """
                         UPDATE agent_medusa_runs
                         SET status = 'cancelling',
                             cancel_requested_at = COALESCE(
                                 cancel_requested_at,
                                 :requested_at
                             ),
+                            audit_event_id = COALESCE(:audit_event_id, audit_event_id),
                             updated_at = :requested_at
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
                           AND status = 'running'
-                        """),
+                        RETURNING correlation_id,
+                                  request_id,
+                                  policy_decision_id,
+                                  owner_worker_id
+                        """
+                    ),
                     {
                         "run_id": run_id,
                         "tenant_id": canonical_tenant_id,
                         "requested_at": requested_at,
+                        "audit_event_id": audit_event_id,
                     },
                 )
+                row = result.mappings().first()
+                if row is not None:
+                    await self._append_event(
+                        session,
+                        run_id=run_id,
+                        tenant_id=canonical_tenant_id,
+                        from_status="running",
+                        to_status="cancellation_requested",
+                        worker_id=worker_id or row.get("owner_worker_id"),
+                        correlation_id=str(row["correlation_id"]),
+                        request_id=row.get("request_id"),
+                        policy_decision_id=row.get("policy_decision_id"),
+                        audit_event_id=audit_event_id,
+                        occurred_at=requested_at,
+                    )
         except SQLAlchemyError as exc:
             raise DurableRunLedgerUnavailable(
                 "medusa_durable_ledger_unavailable"
@@ -253,31 +317,74 @@ class PostgresDurableRunLedger:
         status: str,
         completed_at: datetime,
         error_type: str | None,
+        worker_id: str | None = None,
+        audit_event_id: str | None = None,
+        reason_code: str | None = None,
     ) -> None:
         if status not in _TERMINAL_STATUSES:
             raise ValueError(f"Invalid durable Medusa terminal status: {status}")
         try:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
+                current_result = await session.execute(
+                    text(
+                        """
+                        SELECT status,
+                               correlation_id,
+                               request_id,
+                               policy_decision_id,
+                               owner_worker_id,
+                               audit_event_id
+                        FROM agent_medusa_runs
+                        WHERE run_id = :run_id
+                          AND tenant_id = CAST(:tenant_id AS uuid)
+                        FOR UPDATE
+                        """
+                    ),
+                    {"run_id": run_id, "tenant_id": canonical_tenant_id},
+                )
+                current = current_result.mappings().first()
+                if current is None or current["status"] not in {"running", "cancelling"}:
+                    return
                 await session.execute(
-                    text("""
+                    text(
+                        """
                         UPDATE agent_medusa_runs
                         SET status = :status,
                             completed_at = :completed_at,
                             heartbeat_at = :completed_at,
                             updated_at = :completed_at,
-                            error_type = :error_type
+                            error_type = :error_type,
+                            audit_event_id = COALESCE(:audit_event_id, audit_event_id)
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
-                          AND status IN ('running', 'cancelling')
-                        """),
+                          AND status = :expected_status
+                        """
+                    ),
                     {
                         "run_id": run_id,
                         "tenant_id": canonical_tenant_id,
                         "status": status,
+                        "expected_status": current["status"],
                         "completed_at": completed_at,
                         "error_type": error_type,
+                        "audit_event_id": audit_event_id,
                     },
+                )
+                await self._append_event(
+                    session,
+                    run_id=run_id,
+                    tenant_id=canonical_tenant_id,
+                    from_status=str(current["status"]),
+                    to_status=status,
+                    worker_id=worker_id or current.get("owner_worker_id"),
+                    correlation_id=str(current["correlation_id"]),
+                    request_id=current.get("request_id"),
+                    policy_decision_id=current.get("policy_decision_id"),
+                    audit_event_id=audit_event_id or current.get("audit_event_id"),
+                    error_type=error_type,
+                    reason_code=reason_code,
+                    occurred_at=completed_at,
                 )
         except SQLAlchemyError as exc:
             raise DurableRunLedgerUnavailable(
@@ -289,21 +396,27 @@ class PostgresDurableRunLedger:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
-                    text("""
+                    text(
+                        """
                         SELECT run_id,
                                correlation_id,
+                               request_id,
+                               policy_decision_id,
+                               audit_event_id,
                                tenant_id::text AS tenant_id,
                                user_id,
                                owner_worker_id,
                                status,
                                started_at,
                                heartbeat_at,
+                               cancel_requested_at,
                                completed_at,
                                error_type
                         FROM agent_medusa_runs
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
-                        """),
+                        """
+                    ),
                     {"run_id": run_id, "tenant_id": canonical_tenant_id},
                 )
                 row = result.mappings().first()
@@ -330,15 +443,20 @@ class PostgresDurableRunLedger:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
-                    text(f"""
+                    text(
+                        f"""
                         SELECT run_id,
                                correlation_id,
+                               request_id,
+                               policy_decision_id,
+                               audit_event_id,
                                tenant_id::text AS tenant_id,
                                user_id,
                                owner_worker_id,
                                status,
                                started_at,
                                heartbeat_at,
+                               cancel_requested_at,
                                completed_at,
                                error_type
                         FROM agent_medusa_runs
@@ -346,7 +464,8 @@ class PostgresDurableRunLedger:
                         {terminal_clause}
                         ORDER BY started_at DESC
                         LIMIT :limit
-                        """),
+                        """
+                    ),
                     {"tenant_id": canonical_tenant_id, "limit": safe_limit},
                 )
                 return [self._snapshot(dict(row)) for row in result.mappings().all()]
@@ -362,49 +481,161 @@ class PostgresDurableRunLedger:
         stale_before: datetime,
         reconciled_at: datetime,
     ) -> int:
-        """Mark stale active rows orphaned within the caller's tenant scope."""
+        """Mark stale active rows orphaned and append durable transitions."""
+
         try:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
-                    text("""
-                        UPDATE agent_medusa_runs
+                    text(
+                        """
+                        WITH stale AS (
+                            SELECT run_id,
+                                   status AS from_status,
+                                   correlation_id,
+                                   request_id,
+                                   policy_decision_id,
+                                   audit_event_id,
+                                   owner_worker_id
+                            FROM agent_medusa_runs
+                            WHERE tenant_id = CAST(:tenant_id AS uuid)
+                              AND status IN ('running', 'cancelling')
+                              AND heartbeat_at < :stale_before
+                            FOR UPDATE
+                        )
+                        UPDATE agent_medusa_runs AS runs
                         SET status = 'orphaned',
                             completed_at = :reconciled_at,
                             updated_at = :reconciled_at,
                             error_type = COALESCE(
-                                error_type,
+                                runs.error_type,
                                 'WorkerLeaseExpired'
                             )
-                        WHERE tenant_id = CAST(:tenant_id AS uuid)
-                          AND status IN ('running', 'cancelling')
-                          AND heartbeat_at < :stale_before
-                        """),
+                        FROM stale
+                        WHERE runs.run_id = stale.run_id
+                        RETURNING runs.run_id,
+                                  stale.from_status,
+                                  stale.correlation_id,
+                                  stale.request_id,
+                                  stale.policy_decision_id,
+                                  stale.audit_event_id,
+                                  stale.owner_worker_id
+                        """
+                    ),
                     {
                         "tenant_id": canonical_tenant_id,
                         "stale_before": stale_before,
                         "reconciled_at": reconciled_at,
                     },
                 )
-                return int(result.rowcount or 0)
+                rows = list(result.mappings().all())
+                for row in rows:
+                    await self._append_event(
+                        session,
+                        run_id=str(row["run_id"]),
+                        tenant_id=canonical_tenant_id,
+                        from_status=str(row["from_status"]),
+                        to_status="orphaned",
+                        worker_id=row.get("owner_worker_id"),
+                        correlation_id=str(row["correlation_id"]),
+                        request_id=row.get("request_id"),
+                        policy_decision_id=row.get("policy_decision_id"),
+                        audit_event_id=row.get("audit_event_id"),
+                        error_type="WorkerLeaseExpired",
+                        reason_code="durable_heartbeat_stale",
+                        occurred_at=reconciled_at,
+                    )
+                return len(rows)
         except SQLAlchemyError as exc:
             raise DurableRunLedgerUnavailable(
                 "medusa_durable_ledger_unavailable"
             ) from exc
 
+    async def _append_event(
+        self,
+        session: Any,
+        *,
+        run_id: str,
+        tenant_id: str,
+        from_status: str | None,
+        to_status: str,
+        worker_id: str | None,
+        correlation_id: str,
+        request_id: str | None,
+        policy_decision_id: str | None,
+        occurred_at: datetime,
+        audit_event_id: str | None = None,
+        error_type: str | None = None,
+        reason_code: str | None = None,
+    ) -> None:
+        await session.execute(
+            text(
+                """
+                INSERT INTO agent_medusa_run_events (
+                    run_id,
+                    tenant_id,
+                    from_status,
+                    to_status,
+                    worker_id,
+                    correlation_id,
+                    request_id,
+                    policy_decision_id,
+                    audit_event_id,
+                    error_type,
+                    reason_code,
+                    occurred_at
+                ) VALUES (
+                    :run_id,
+                    CAST(:tenant_id AS uuid),
+                    :from_status,
+                    :to_status,
+                    :worker_id,
+                    :correlation_id,
+                    :request_id,
+                    :policy_decision_id,
+                    :audit_event_id,
+                    :error_type,
+                    :reason_code,
+                    :occurred_at
+                )
+                """
+            ),
+            {
+                "run_id": run_id,
+                "tenant_id": tenant_id,
+                "from_status": from_status,
+                "to_status": to_status,
+                "worker_id": worker_id,
+                "correlation_id": correlation_id,
+                "request_id": request_id,
+                "policy_decision_id": policy_decision_id,
+                "audit_event_id": audit_event_id,
+                "error_type": error_type,
+                "reason_code": reason_code,
+                "occurred_at": occurred_at,
+            },
+        )
+
     def _snapshot(self, row: dict[str, Any]) -> dict[str, Any]:
         status = str(row["status"])
         started_at = row.get("started_at")
         heartbeat_at = row.get("heartbeat_at")
+        cancel_requested_at = row.get("cancel_requested_at")
         completed_at = row.get("completed_at")
         return {
             "run_id": str(row["run_id"]),
             "correlation_id": str(row["correlation_id"]),
+            "request_id": row.get("request_id"),
+            "policy_decision_id": row.get("policy_decision_id"),
+            "audit_event_id": row.get("audit_event_id"),
             "tenant_id": str(row["tenant_id"]),
             "user_id": str(row["user_id"]),
             "status": status,
             "started_at": started_at.isoformat() if started_at else None,
             "heartbeat_at": heartbeat_at.isoformat() if heartbeat_at else None,
+            "cancel_requested_at": (
+                cancel_requested_at.isoformat() if cancel_requested_at else None
+            ),
             "completed_at": completed_at.isoformat() if completed_at else None,
             "error_type": row.get("error_type"),
             "cancellable": False,
