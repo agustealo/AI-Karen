@@ -3,10 +3,11 @@ set -euo pipefail
 
 # Real fresh-worker production boot proof.
 #
-# This script owns the container-level smoke contract. It intentionally uses the
-# production API image and canonical Supabase migrations rather than importing
-# application services directly. The beta workflow and ad-hoc CI can call this
-# same script without creating a second test implementation.
+# This script owns the container-level first-run smoke contract. It intentionally
+# uses the production API image, canonical Supabase migrations, a fresh database,
+# and password-protected Redis rather than importing application services directly.
+# The beta workflow and ad-hoc CI can call this same script without creating a
+# second bootstrap implementation.
 
 API_IMAGE="${KAREN_SMOKE_API_IMAGE:-ai-karen-api:beta}"
 POSTGRES_IMAGE="${KAREN_SMOKE_POSTGRES_IMAGE:-pgvector/pgvector:pg16}"
@@ -30,9 +31,10 @@ ADMIN_NAME="Beta Smoke Owner"
 BASE_URL="http://127.0.0.1:${HOST_PORT}"
 COOKIE_JAR="$(mktemp)"
 API_LOG="$(mktemp)"
+DUPLICATE_BODY="$(mktemp)"
 
 cleanup() {
-  rm -f "${COOKIE_JAR}" "${API_LOG}"
+  rm -f "${COOKIE_JAR}" "${API_LOG}" "${DUPLICATE_BODY}"
   docker rm -f "${API_CONTAINER}" >/dev/null 2>&1 || true
   docker rm -f "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
   docker rm -f "${POSTGRES_CONTAINER}" >/dev/null 2>&1 || true
@@ -41,7 +43,7 @@ cleanup() {
 trap cleanup EXIT
 
 fail_with_api_logs() {
-  echo "production first-boot smoke failed" >&2
+  echo "production first-run smoke failed" >&2
   docker logs "${API_CONTAINER}" >&2 2>/dev/null || true
   exit 1
 }
@@ -166,6 +168,7 @@ import json
 import sys
 payload = json.loads(sys.argv[1])
 assert payload.get("first_run_required") is True, payload
+assert payload.get("message") == "First-run setup required", payload
 PY
 
 echo "[smoke] creating and authenticating first durable owner"
@@ -184,15 +187,46 @@ assert payload.get("refresh_token"), payload
 assert user.get("tenant_id"), payload
 assert user.get("username"), payload
 assert "admin" in [str(role).lower() for role in user.get("roles", [])], payload
+assert "user" in [str(role).lower() for role in user.get("roles", [])], payload
 PY
 
-echo "[smoke] proving setup is one-time and account is queryable"
+echo "[smoke] proving bootstrap is one-time"
+duplicate_status="$(curl -sS \
+  -o "${DUPLICATE_BODY}" \
+  -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  -d "{\"email\":\"duplicate@example.invalid\",\"password\":\"${ADMIN_PASSWORD}\",\"confirm_password\":\"${ADMIN_PASSWORD}\",\"full_name\":\"Duplicate Owner\"}" \
+  "${BASE_URL}/api/auth/first-run/setup")"
+if [[ "${duplicate_status}" != "400" ]]; then
+  cat "${DUPLICATE_BODY}" >&2 || true
+  echo "expected duplicate first-run setup to return HTTP 400, got ${duplicate_status}" >&2
+  fail_with_api_logs
+fi
+
+admin_count="$(docker exec "${POSTGRES_CONTAINER}" \
+  psql -At -U "${DB_USER}" -d "${DB_NAME}" \
+  -c "SELECT COUNT(*) FROM auth_users;")"
+if [[ "${admin_count}" != "1" ]]; then
+  echo "expected exactly one durable bootstrap user, got ${admin_count}" >&2
+  exit 1
+fi
+
+tenant_count="$(docker exec "${POSTGRES_CONTAINER}" \
+  psql -At -U "${DB_USER}" -d "${DB_NAME}" \
+  -c "SELECT COUNT(*) FROM tenants WHERE is_active = TRUE;")"
+if [[ "${tenant_count}" -lt "1" ]]; then
+  echo "expected at least one active durable tenant" >&2
+  exit 1
+fi
+
+echo "[smoke] proving setup state and authenticated identity are queryable"
 post_setup_json="$(curl -fsS "${BASE_URL}/api/auth/first-run")"
 python3 - "${post_setup_json}" <<'PY'
 import json
 import sys
 payload = json.loads(sys.argv[1])
 assert payload.get("first_run_required") is False, payload
+assert payload.get("message") == "System already configured", payload
 PY
 
 me_json="$(curl -fsS -b "${COOKIE_JAR}" "${BASE_URL}/api/auth/me")"
@@ -209,7 +243,15 @@ echo "[smoke] restarting exact production image"
 docker rm -f "${API_CONTAINER}" >/dev/null
 start_api
 
-echo "[smoke] proving durable owner survives process restart"
+echo "[smoke] proving durable owner and completed first-run state survive restart"
+post_restart_first_run="$(curl -fsS "${BASE_URL}/api/auth/first-run")"
+python3 - "${post_restart_first_run}" <<'PY'
+import json
+import sys
+payload = json.loads(sys.argv[1])
+assert payload.get("first_run_required") is False, payload
+PY
+
 login_json="$(curl -fsS \
   -c "${COOKIE_JAR}" \
   -H 'Content-Type: application/json' \
@@ -223,6 +265,7 @@ user = payload.get("user") or {}
 assert payload.get("access_token"), payload
 assert user.get("tenant_id"), payload
 assert user.get("username"), payload
+assert "admin" in [str(role).lower() for role in user.get("roles", [])], payload
 PY
 
 me_after_restart="$(curl -fsS -b "${COOKIE_JAR}" "${BASE_URL}/api/auth/me")"
@@ -234,4 +277,4 @@ assert payload.get("tenant_id"), payload
 assert payload.get("authenticated") is True, payload
 PY
 
-echo "PRODUCTION FIRST-BOOT SMOKE PASSED"
+echo "PRODUCTION FIRST-RUN SMOKE PASSED"
