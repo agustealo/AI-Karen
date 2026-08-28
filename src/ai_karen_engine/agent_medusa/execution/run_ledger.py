@@ -75,8 +75,6 @@ class MedusaRunLedger(Protocol):
         limit: int,
     ) -> list[dict[str, Any]]: ...
 
-    async def list_active(self, *, limit: int) -> list[dict[str, Any]]: ...
-
 
 class PostgresMedusaRunLedger:
     """Tenant-scoped, transition-checked Medusa execution ledger."""
@@ -128,7 +126,9 @@ class PostgresMedusaRunLedger:
                 },
             )
             if inserted.scalar_one_or_none() is None:
-                raise MedusaRunLedgerConflict(f"Durable Medusa run already exists: {run_id}")
+                raise MedusaRunLedgerConflict(
+                    f"Durable Medusa run already exists: {run_id}"
+                )
 
             await self._append_event(
                 session,
@@ -143,18 +143,28 @@ class PostgresMedusaRunLedger:
                 policy_decision_id=policy_decision_id,
                 occurred_at=created_at,
             )
-            await session.execute(
+            transitioned = await session.execute(
                 text(
                     """
                     UPDATE medusa_execution_runs
                     SET status = 'running', started_at = :started_at,
                         updated_at = :started_at, version = version + 1
-                    WHERE run_id = :run_id AND tenant_id = CAST(:tenant_id AS uuid)
+                    WHERE run_id = :run_id
+                      AND tenant_id = CAST(:tenant_id AS uuid)
                       AND status = 'created'
+                    RETURNING run_id
                     """
                 ),
-                {"run_id": run_id, "tenant_id": tenant_id, "started_at": started_at},
+                {
+                    "run_id": run_id,
+                    "tenant_id": tenant_id,
+                    "started_at": started_at,
+                },
             )
+            if transitioned.scalar_one_or_none() is None:
+                raise MedusaRunLedgerConflict(
+                    f"Durable Medusa run failed created -> running transition: {run_id}"
+                )
             await self._append_event(
                 session,
                 run_id=run_id,
@@ -189,14 +199,19 @@ class PostgresMedusaRunLedger:
                 raise MedusaRunLedgerConflict(
                     f"Run {run_id} is {current}, not eligible for cancellation request"
                 )
-            await session.execute(
+            transitioned = await session.execute(
                 text(
                     """
                     UPDATE medusa_execution_runs
-                    SET status = 'cancellation_requested', cancel_requested_at = :now,
-                        updated_at = :now, audit_event_id = COALESCE(:audit_event_id, audit_event_id),
+                    SET status = 'cancellation_requested',
+                        cancel_requested_at = :now,
+                        updated_at = :now,
+                        audit_event_id = COALESCE(:audit_event_id, audit_event_id),
                         version = version + 1
-                    WHERE run_id = :run_id AND tenant_id = CAST(:tenant_id AS uuid)
+                    WHERE run_id = :run_id
+                      AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND status = 'running'
+                    RETURNING run_id
                     """
                 ),
                 {
@@ -206,6 +221,10 @@ class PostgresMedusaRunLedger:
                     "audit_event_id": audit_event_id,
                 },
             )
+            if transitioned.scalar_one_or_none() is None:
+                raise MedusaRunLedgerConflict(
+                    f"Concurrent cancellation transition rejected for {run_id}"
+                )
             await self._append_event(
                 session,
                 run_id=run_id,
@@ -234,7 +253,7 @@ class PostgresMedusaRunLedger:
         reason_code: str | None = None,
         audit_event_id: str | None = None,
     ) -> None:
-        """Persist an immutable terminal transition under a row lock."""
+        """Persist an immutable terminal transition under a tenant-scoped row lock."""
 
         if status not in self._TERMINAL:
             raise ValueError(f"Unsupported Medusa terminal status: {status}")
@@ -249,28 +268,38 @@ class PostgresMedusaRunLedger:
                 raise MedusaRunLedgerConflict(
                     f"Illegal Medusa transition {current} -> {status} for {run_id}"
                 )
-            await session.execute(
+            transitioned = await session.execute(
                 text(
                     """
                     UPDATE medusa_execution_runs
-                    SET status = :status, completed_at = :completed_at,
-                        updated_at = :completed_at, error_type = :error_type,
+                    SET status = :status,
+                        completed_at = :completed_at,
+                        updated_at = :completed_at,
+                        error_type = :error_type,
                         terminal_reason = :reason_code,
                         audit_event_id = COALESCE(:audit_event_id, audit_event_id),
                         version = version + 1
-                    WHERE run_id = :run_id AND tenant_id = CAST(:tenant_id AS uuid)
+                    WHERE run_id = :run_id
+                      AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND status = :expected_status
+                    RETURNING run_id
                     """
                 ),
                 {
                     "run_id": run_id,
                     "tenant_id": tenant_id,
                     "status": status,
+                    "expected_status": current,
                     "completed_at": completed_at,
                     "error_type": error_type,
                     "reason_code": reason_code,
                     "audit_event_id": audit_event_id,
                 },
             )
+            if transitioned.scalar_one_or_none() is None:
+                raise MedusaRunLedgerConflict(
+                    f"Concurrent terminal transition rejected for {run_id}"
+                )
             await self._append_event(
                 session,
                 run_id=run_id,
@@ -294,7 +323,8 @@ class PostgresMedusaRunLedger:
                 text(
                     """
                     SELECT * FROM medusa_execution_runs
-                    WHERE run_id = :run_id AND tenant_id = CAST(:tenant_id AS uuid)
+                    WHERE run_id = :run_id
+                      AND tenant_id = CAST(:tenant_id AS uuid)
                     """
                 ),
                 {"run_id": run_id, "tenant_id": tenant_id},
@@ -312,15 +342,18 @@ class PostgresMedusaRunLedger:
         limit: int,
     ) -> list[dict[str, Any]]:
         bounded = max(1, min(limit, 1000))
-        terminal_clause = "" if include_terminal else (
-            "AND status IN ('created', 'running', 'cancellation_requested')"
+        terminal_clause = (
+            ""
+            if include_terminal
+            else "AND status IN ('created', 'running', 'cancellation_requested')"
         )
         async with async_transaction_scope(tenant_id) as session:
             result = await session.execute(
                 text(
                     f"""
                     SELECT * FROM medusa_execution_runs
-                    WHERE tenant_id = CAST(:tenant_id AS uuid) {terminal_clause}
+                    WHERE tenant_id = CAST(:tenant_id AS uuid)
+                    {terminal_clause}
                     ORDER BY updated_at DESC
                     LIMIT :limit
                     """
@@ -330,35 +363,19 @@ class PostgresMedusaRunLedger:
             rows = [dict(row) for row in result.mappings().all()]
         return [self._snapshot(row) for row in rows]
 
-    async def list_active(self, *, limit: int) -> list[dict[str, Any]]:
-        """Return bounded active history across tenants for privileged reconciliation.
-
-        This method deliberately does not install tenant RLS context and is intended only
-        for the runtime reconciliation worker running with the service database role.
-        """
-
-        bounded = max(1, min(limit, 1000))
-        async with async_transaction_scope() as session:
-            result = await session.execute(
-                text(
-                    """
-                    SELECT * FROM medusa_execution_runs
-                    WHERE status IN ('created', 'running', 'cancellation_requested')
-                    ORDER BY updated_at ASC
-                    LIMIT :limit
-                    """
-                ),
-                {"limit": bounded},
-            )
-            rows = [dict(row) for row in result.mappings().all()]
-        return [self._snapshot(row) for row in rows]
-
-    async def _locked_row(self, session: Any, *, run_id: str, tenant_id: str) -> dict[str, Any] | None:
+    async def _locked_row(
+        self,
+        session: Any,
+        *,
+        run_id: str,
+        tenant_id: str,
+    ) -> dict[str, Any] | None:
         result = await session.execute(
             text(
                 """
                 SELECT * FROM medusa_execution_runs
-                WHERE run_id = :run_id AND tenant_id = CAST(:tenant_id AS uuid)
+                WHERE run_id = :run_id
+                  AND tenant_id = CAST(:tenant_id AS uuid)
                 FOR UPDATE
                 """
             ),
@@ -429,8 +446,16 @@ class PostgresMedusaRunLedger:
             "user_id": str(row["user_id"]),
             "status": status,
             "started_at": started_at.isoformat() if started_at else None,
-            "completed_at": row.get("completed_at").isoformat() if row.get("completed_at") else None,
-            "cancel_requested_at": row.get("cancel_requested_at").isoformat() if row.get("cancel_requested_at") else None,
+            "completed_at": (
+                row.get("completed_at").isoformat()
+                if row.get("completed_at")
+                else None
+            ),
+            "cancel_requested_at": (
+                row.get("cancel_requested_at").isoformat()
+                if row.get("cancel_requested_at")
+                else None
+            ),
             "error_type": row.get("error_type"),
             "terminal_reason": row.get("terminal_reason"),
             "owner_worker_id": row.get("owner_worker_id"),
