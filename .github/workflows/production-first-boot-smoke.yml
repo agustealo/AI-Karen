@@ -9,6 +9,24 @@ on:
       - "src/ai_karen_engine/**"
       - "supabase/migrations/**"
       - "scripts/ci/production-first-boot-smoke.sh"
+      - "tests/architecture/test_first_run_system_contract.py"
+      - "docs/architecture/FIRST_RUN_SYSTEM.md"
+      - "README.md"
+      - "PROJECT_DEV_MANIFEST.md"
+      - ".github/workflows/production-first-boot-smoke.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "Dockerfile"
+      - "requirements.txt"
+      - "src/ai_karen_engine/**"
+      - "supabase/migrations/**"
+      - "scripts/ci/production-first-boot-smoke.sh"
+      - "tests/architecture/test_first_run_system_contract.py"
+      - "docs/architecture/FIRST_RUN_SYSTEM.md"
+      - "README.md"
+      - "PROJECT_DEV_MANIFEST.md"
       - ".github/workflows/production-first-boot-smoke.yml"
 
 permissions:
@@ -27,6 +45,15 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run first-run architecture contract
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          pytest tests/architecture/test_first_run_system_contract.py -q
 
       - name: Validate smoke harness
         run: bash -n scripts/ci/production-first-boot-smoke.sh
