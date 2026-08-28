@@ -17,6 +17,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  classifier-burn:
+    name: classifier-burn
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: src
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install classifier proof dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            pytest pytest-asyncio numpy sqlalchemy asyncpg psycopg psycopg2-binary \
+            PyJWT bcrypt argon2-cffi structlog cryptography PyYAML \
+            pydantic pydantic-settings python-dotenv prometheus_client \
+            fastapi httpx requests tenacity redis fakeredis
+
+      - name: Compile classifier surfaces
+        run: |
+          python -m compileall -q \
+            src/ai_karen_engine/core/intelligence \
+            src/ai_karen_engine/core/cortex
+
+      - name: Run classifier architecture contract
+        run: pytest tests/architecture/test_classifier_authority_contract.py -q
+
+      - name: Run adversarial predictor burn
+        run: pytest tests/core/intelligence/test_intent_classifier_burn.py -q
+
+      - name: Run public runtime classify burn
+        run: pytest tests/core/intelligence/test_intelligence_runtime_classify_burn.py -q
+
   backend-quality:
     name: backend-quality
     runs-on: ubuntu-latest
@@ -36,7 +75,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install \
-            ruff mypy pytest pytest-asyncio sqlalchemy asyncpg psycopg psycopg2-binary \
+            ruff mypy pytest pytest-asyncio numpy sqlalchemy asyncpg psycopg psycopg2-binary \
             PyJWT bcrypt argon2-cffi structlog cryptography PyYAML \
             pydantic pydantic-settings python-dotenv prometheus_client \
             fastapi httpx requests tenacity redis fakeredis
@@ -60,6 +99,7 @@ jobs:
           pytest tests/architecture/test_core_ai_machine_isolation.py -q
           pytest tests/architecture/test_provider_chat_authority.py -q
           pytest tests/architecture/test_cortex_intelligence_authority.py -q
+          pytest tests/architecture/test_classifier_authority_contract.py -q
           pytest tests/architecture/test_context_authority_convergence.py -q
           pytest tests/architecture/test_memory_consumer_domain_migration.py -q
           pytest tests/architecture/test_memory_stm_boundaries.py -q
@@ -74,6 +114,12 @@ jobs:
         run: |
           pytest tests/core/runtime/test_context_evidence_contracts.py -q
           pytest tests/core/runtime/test_runtime_evidence_resolution.py -q
+
+      - name: Classifier burn contracts
+        run: |
+          pytest tests/core/intelligence/test_intent_classifier_burn.py -q
+          pytest tests/core/intelligence/test_intelligence_runtime_classify_burn.py -q
+          pytest tests/core/intelligence/test_intelligence_runtime.py -q
 
       - name: Chat runtime burn contracts
         run: |
@@ -167,6 +213,7 @@ jobs:
     name: main-quality-gate
     runs-on: ubuntu-latest
     needs:
+      - classifier-burn
       - backend-quality
       - frontend-quality
       - deployment-contract
