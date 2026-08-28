@@ -72,4 +72,14 @@ jobs:
         run: pytest tests/architecture/test_cortex_intelligence_authority.py -q
 
       - name: Run authenticated tenant contract
-        run: pytest tests/architecture/test_authenticated_tenant_context_contract.py -q
+        run: |
+          set -o pipefail
+          pytest tests/architecture/test_authenticated_tenant_context_contract.py -vv 2>&1 | tee authenticated-tenant-contract.log
+
+      - name: Upload tenant contract diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: authenticated-tenant-contract
+          path: authenticated-tenant-contract.log
+          if-no-files-found: ignore
