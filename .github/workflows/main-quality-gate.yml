@@ -70,6 +70,9 @@ jobs:
           pytest tests/architecture/test_beta_conversation_reload_contract.py -q
           pytest tests/architecture/test_authenticated_tenant_context_contract.py -q
 
+      - name: Personalization authority proofs
+        run: pytest tests/core/personalization/test_personalization.py -q
+
       - name: STM closure and tenant security proofs
         run: |
           pytest tests/memory/test_stm_closure_1b.py -q
