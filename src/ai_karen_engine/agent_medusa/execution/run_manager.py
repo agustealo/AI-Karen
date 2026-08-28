@@ -39,8 +39,6 @@ logger = get_logger(__name__)
 
 
 class ExecutionRunStatus(str, Enum):
-    """Canonical worker-local lifecycle states for one Medusa execution."""
-
     RUNNING = "running"
     CANCELLING = "cancelling"
     COMPLETED = "completed"
@@ -50,8 +48,6 @@ class ExecutionRunStatus(str, Enum):
 
 @dataclass
 class ExecutionRun:
-    """Mutable worker-local record for one coordinator request."""
-
     run_id: str
     correlation_id: str
     tenant_id: str
@@ -83,25 +79,29 @@ class ExecutionRun:
             "durable_history": {
                 "supported": self.durable_registered,
                 "source": "postgresql" if self.durable_registered else None,
-                "reason_code": None if self.durable_registered else "run_not_registered_in_durable_history",
+                "reason_code": (
+                    None
+                    if self.durable_registered
+                    else "run_not_registered_in_durable_history"
+                ),
             },
         }
 
 
 class RunNotFoundError(LookupError):
-    """Raised when a requested execution run is unknown."""
+    pass
 
 
 class RunTenantMismatchError(PermissionError):
-    """Raised when an operator crosses tenant scope."""
+    pass
 
 
 class RunNotCancellableError(RuntimeError):
-    """Raised when a terminal, orphaned, or cancelling run is cancelled."""
+    pass
 
 
 class MedusaRunManager:
-    """Own local tasks while coordinating live and durable run truth."""
+    """Own concrete local tasks while combining Redis and PostgreSQL truth."""
 
     _DURABLE_ACTIVE = {"created", "running", "cancellation_requested"}
 
@@ -152,73 +152,75 @@ class MedusaRunManager:
             )
             self._runs[run_id] = run
 
-        if self._settings.durable_run_history_enabled:
-            try:
-                await self._durable_ledger.register_running(
-                    run_id=run_id,
-                    correlation_id=correlation_id,
-                    request_id=request_id,
-                    policy_decision_id=policy_decision_id,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    worker_id=self._settings.worker_id,
-                    started_at=run.started_at,
-                )
-            except MedusaRunLedgerConflict:
-                async with self._lock:
-                    if self._runs.get(run_id) is run:
-                        self._runs.pop(run_id, None)
-                raise
-            except Exception as exc:
-                logger.error(
-                    "Medusa durable run registration unavailable",
-                    extra={
-                        "run_id": run_id,
-                        "correlation_id": correlation_id,
-                        "tenant_id": tenant_id,
-                        "error_type": type(exc).__name__,
-                    },
-                )
-            else:
-                run.durable_registered = True
-
-        if await self._distributed_available():
-            try:
-                await self._distributed_store.register(
-                    run_id=run_id,
-                    correlation_id=correlation_id,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    worker_id=self._settings.worker_id,
-                    started_at=run.started_at,
-                )
-            except DistributedRunStoreUnavailable:
-                logger.warning(
-                    "Medusa distributed coordination unavailable during registration",
-                    extra={"run_id": run_id, "correlation_id": correlation_id},
-                )
-            except Exception:
-                async with self._lock:
-                    if self._runs.get(run_id) is run:
-                        self._runs.pop(run_id, None)
-                if run.durable_registered:
-                    await self._safe_mark_durable_terminal(
-                        run,
-                        status="failed",
-                        completed_at=datetime.now(timezone.utc),
-                        error_type="DistributedRegistrationError",
-                        reason_code="distributed_registration_failed",
-                    )
-                raise
-            else:
-                async with self._lock:
-                    run.shared_registered = True
-                    run.heartbeat_task = asyncio.create_task(
-                        self._heartbeat_loop(run),
-                        name=f"medusa-run-heartbeat:{run_id}",
-                    )
-
+        await self._register_durable(run)
+        await self._register_distributed(run)
         return run
+
+    async def _register_durable(self, run: ExecutionRun) -> None:
+        if not self._settings.durable_run_history_enabled:
+            return
+        try:
+            await self._durable_ledger.register_running(
+                run_id=run.run_id,
+                correlation_id=run.correlation_id,
+                request_id=run.request_id,
+                policy_decision_id=run.policy_decision_id,
+                tenant_id=run.tenant_id,
+                user_id=run.user_id,
+                worker_id=self._settings.worker_id,
+                started_at=run.started_at,
+            )
+        except MedusaRunLedgerConflict:
+            async with self._lock:
+                self._runs.pop(run.run_id, None)
+            raise
+        except Exception as exc:
+            logger.error(
+                "Medusa durable run registration unavailable",
+                extra={
+                    "run_id": run.run_id,
+                    "correlation_id": run.correlation_id,
+                    "tenant_id": run.tenant_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+        else:
+            run.durable_registered = True
+
+    async def _register_distributed(self, run: ExecutionRun) -> None:
+        if not await self._distributed_available():
+            return
+        try:
+            await self._distributed_store.register(
+                run_id=run.run_id,
+                correlation_id=run.correlation_id,
+                tenant_id=run.tenant_id,
+                user_id=run.user_id,
+                worker_id=self._settings.worker_id,
+                started_at=run.started_at,
+            )
+        except DistributedRunStoreUnavailable:
+            logger.warning(
+                "Medusa distributed coordination unavailable during registration",
+                extra={"run_id": run.run_id, "correlation_id": run.correlation_id},
+            )
+        except Exception:
+            async with self._lock:
+                self._runs.pop(run.run_id, None)
+            if run.durable_registered:
+                await self._safe_mark_durable_terminal(
+                    run,
+                    status="failed",
+                    error_type="DistributedRegistrationError",
+                    reason_code="distributed_registration_failed",
+                )
+            raise
+        else:
+            run.shared_registered = True
+            run.heartbeat_task = asyncio.create_task(
+                self._heartbeat_loop(run),
+                name=f"medusa-run-heartbeat:{run.run_id}",
+            )
 
     async def mark_completed(self, run_id: str) -> None:
         await self._mark_terminal(run_id, ExecutionRunStatus.COMPLETED)
@@ -240,8 +242,6 @@ class MedusaRunManager:
         *,
         error_type: str | None = None,
     ) -> None:
-        heartbeat_task: asyncio.Task[None] | None = None
-        shared_registered = False
         completed_at = datetime.now(timezone.utc)
         async with self._lock:
             run = self._runs.get(run_id)
@@ -252,7 +252,6 @@ class MedusaRunManager:
             run.error_type = error_type
             heartbeat_task = run.heartbeat_task
             run.heartbeat_task = None
-            shared_registered = run.shared_registered
             if run_id not in self._terminal_order:
                 self._terminal_order.append(run_id)
             self._prune_locked()
@@ -264,7 +263,7 @@ class MedusaRunManager:
             except asyncio.CancelledError:
                 pass
 
-        if shared_registered:
+        if run.shared_registered:
             try:
                 await self._distributed_store.mark_terminal(
                     run_id=run_id,
@@ -294,9 +293,6 @@ class MedusaRunManager:
         tenant_id: str,
         audit_event_id: str | None = None,
     ) -> dict[str, Any]:
-        local_task: asyncio.Task[Any] | None = None
-        local_run: ExecutionRun | None = None
-        local_shared = False
         async with self._lock:
             run = self._runs.get(run_id)
             if run is not None:
@@ -307,12 +303,9 @@ class MedusaRunManager:
                         f"Run {run_id} is {run.status.value}, not cancellable"
                     )
                 run.status = ExecutionRunStatus.CANCELLING
-                local_task = run.task
-                local_run = run
-                local_shared = run.shared_registered
 
-        if local_task is not None and local_run is not None:
-            if local_shared:
+        if run is not None:
+            if run.shared_registered:
                 try:
                     await self._distributed_store.request_cancel(
                         run_id=run_id,
@@ -325,24 +318,30 @@ class MedusaRunManager:
                     )
                 except DistributedRunNotCancellable:
                     pass
-            await self._safe_request_durable_cancel(local_run, audit_event_id=audit_event_id)
-            local_task.cancel()
+            await self._safe_request_durable_cancel(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                audit_event_id=audit_event_id,
+            )
+            run.task.cancel()
             return await self.get(run_id=run_id, tenant_id=tenant_id)
 
         if not await self._distributed_available():
-            durable = await self._get_durable_or_none(run_id=run_id, tenant_id=tenant_id)
+            durable = await self._get_durable(run_id=run_id, tenant_id=tenant_id)
             if durable is not None:
                 raise RunNotCancellableError(
-                    f"Run {run_id} has durable state {durable['status']} but live ownership is unavailable"
+                    f"Run {run_id} has durable state {durable['status']} "
+                    "but live ownership is unavailable"
                 )
             raise RunNotFoundError(run_id)
+
         try:
             shared = await self._distributed_store.request_cancel(
                 run_id=run_id,
                 tenant_id=tenant_id,
             )
         except DistributedRunNotFound as exc:
-            await self._reconcile_missing_shared_run(run_id=run_id, tenant_id=tenant_id)
+            await self._reconcile_missing(run_id=run_id, tenant_id=tenant_id)
             raise RunNotFoundError(run_id) from exc
         except DistributedRunTenantMismatch as exc:
             raise RunTenantMismatchError(run_id) from exc
@@ -351,7 +350,7 @@ class MedusaRunManager:
         except DistributedRunStoreUnavailable as exc:
             raise RunNotFoundError(run_id) from exc
 
-        await self._safe_request_durable_cancel_by_id(
+        await self._safe_request_durable_cancel(
             run_id=run_id,
             tenant_id=tenant_id,
             audit_event_id=audit_event_id,
@@ -361,38 +360,37 @@ class MedusaRunManager:
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
         async with self._lock:
-            run = self._runs.get(run_id)
-            if run is not None:
-                if run.tenant_id != tenant_id:
-                    raise RunTenantMismatchError(run_id)
-                snapshot = run.snapshot()
-                shared_registered = run.shared_registered
-            else:
-                snapshot = None
-                shared_registered = False
+            local = self._runs.get(run_id)
+            if local is not None and local.tenant_id != tenant_id:
+                raise RunTenantMismatchError(run_id)
 
-        if snapshot is not None:
+        if local is not None:
+            snapshot = local.snapshot()
             snapshot["distributed_control"] = await self._distributed_capability(
-                shared_registered=shared_registered
+                local.shared_registered
             )
             return snapshot
 
         if await self._distributed_available():
             try:
-                shared = await self._distributed_store.get(run_id=run_id, tenant_id=tenant_id)
+                shared = await self._distributed_store.get(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                )
             except DistributedRunTenantMismatch as exc:
                 raise RunTenantMismatchError(run_id) from exc
-            except DistributedRunStoreUnavailable:
+            except (DistributedRunNotFound, DistributedRunStoreUnavailable):
                 shared = None
-            except DistributedRunNotFound:
-                shared = None
-            else:
+            if shared is not None:
                 if shared.get("status") == "orphaned":
-                    await self._mark_durable_orphaned(run_id=run_id, tenant_id=tenant_id)
-                shared["durable_history"] = await self._durable_capability(run_id, tenant_id)
+                    await self._mark_durable_orphaned(run_id, tenant_id)
+                shared["durable_history"] = await self._durable_capability(
+                    run_id,
+                    tenant_id,
+                )
                 return shared
 
-        durable = await self._get_durable_or_none(run_id=run_id, tenant_id=tenant_id)
+        durable = await self._get_durable(run_id=run_id, tenant_id=tenant_id)
         if durable is None:
             raise RunNotFoundError(run_id)
         durable["distributed_control"] = {
@@ -409,22 +407,24 @@ class MedusaRunManager:
         include_terminal: bool = True,
     ) -> list[dict[str, Any]]:
         async with self._lock:
-            local_pairs = [
-                (run.snapshot(), run.shared_registered)
+            local_runs = [
+                run
                 for run in self._runs.values()
                 if run.tenant_id == tenant_id
                 and (
                     include_terminal
-                    or run.status in {ExecutionRunStatus.RUNNING, ExecutionRunStatus.CANCELLING}
+                    or run.status
+                    in {ExecutionRunStatus.RUNNING, ExecutionRunStatus.CANCELLING}
                 )
             ]
 
         merged: dict[str, dict[str, Any]] = {}
-        for snapshot, shared_registered in local_pairs:
+        for run in local_runs:
+            snapshot = run.snapshot()
             snapshot["distributed_control"] = await self._distributed_capability(
-                shared_registered=shared_registered
+                run.shared_registered
             )
-            merged[snapshot["run_id"]] = snapshot
+            merged[run.run_id] = snapshot
 
         shared_available = await self._distributed_available()
         if shared_available:
@@ -439,37 +439,47 @@ class MedusaRunManager:
             for snapshot in shared_runs:
                 run_id = snapshot["run_id"]
                 if snapshot.get("status") == "orphaned":
-                    await self._mark_durable_orphaned(run_id=run_id, tenant_id=tenant_id)
-                snapshot["durable_history"] = await self._durable_capability(run_id, tenant_id)
-                if run_id not in merged or run_id not in self._runs:
+                    await self._mark_durable_orphaned(run_id, tenant_id)
+                snapshot["durable_history"] = await self._durable_capability(
+                    run_id,
+                    tenant_id,
+                )
+                if run_id not in merged:
                     merged[run_id] = snapshot
 
-        durable_runs = await self._list_durable_safe(
-            tenant_id=tenant_id,
-            include_terminal=include_terminal,
-        )
-        reconcile_budget = self._settings.run_reconciliation_batch_size
+        durable_runs = await self._list_durable(tenant_id, include_terminal)
+        budget = self._settings.run_reconciliation_batch_size
         for durable in durable_runs:
             run_id = durable["run_id"]
             if run_id in merged:
                 continue
-            if shared_available and durable.get("status") in self._DURABLE_ACTIVE and reconcile_budget > 0:
-                reconcile_budget -= 1
+            if (
+                shared_available
+                and durable.get("status") in self._DURABLE_ACTIVE
+                and budget > 0
+            ):
+                budget -= 1
                 try:
-                    shared = await self._distributed_store.get(run_id=run_id, tenant_id=tenant_id)
+                    shared = await self._distributed_store.get(
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                    )
                 except DistributedRunNotFound:
-                    await self._mark_durable_orphaned(run_id=run_id, tenant_id=tenant_id)
+                    await self._mark_durable_orphaned(run_id, tenant_id)
                     durable["status"] = "orphaned"
-                    durable["completed_at"] = datetime.now(timezone.utc).isoformat()
                 except DistributedRunStoreUnavailable:
                     shared_available = False
                 else:
-                    shared["durable_history"] = durable.get("durable_history")
+                    shared["durable_history"] = durable["durable_history"]
                     merged[run_id] = shared
                     continue
             durable["distributed_control"] = {
                 "supported": False,
-                "reason_code": "no_live_cluster_ownership" if shared_available else "shared_redis_unavailable",
+                "reason_code": (
+                    "no_live_cluster_ownership"
+                    if shared_available
+                    else "shared_redis_unavailable"
+                ),
             }
             durable["cancellable"] = False
             merged[run_id] = durable
@@ -502,33 +512,24 @@ class MedusaRunManager:
                             return
                         if current.status is ExecutionRunStatus.RUNNING:
                             current.status = ExecutionRunStatus.CANCELLING
-                        task = current.task
-                    await self._safe_request_durable_cancel(run)
-                    task.cancel()
+                    await self._safe_request_durable_cancel(
+                        run_id=run.run_id,
+                        tenant_id=run.tenant_id,
+                    )
+                    run.task.cancel()
                     return
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.error(
                 "Medusa shared run heartbeat failed",
-                extra={"run_id": run.run_id, "error_type": type(exc).__name__},
+                extra={
+                    "run_id": run.run_id,
+                    "error_type": type(exc).__name__,
+                },
             )
 
     async def _safe_request_durable_cancel(
-        self,
-        run: ExecutionRun,
-        *,
-        audit_event_id: str | None = None,
-    ) -> None:
-        if not run.durable_registered:
-            return
-        await self._safe_request_durable_cancel_by_id(
-            run_id=run.run_id,
-            tenant_id=run.tenant_id,
-            audit_event_id=audit_event_id,
-        )
-
-    async def _safe_request_durable_cancel_by_id(
         self,
         *,
         run_id: str,
@@ -549,7 +550,11 @@ class MedusaRunManager:
         except Exception as exc:
             logger.error(
                 "Medusa cancellation request could not be persisted durably",
-                extra={"run_id": run_id, "tenant_id": tenant_id, "error_type": type(exc).__name__},
+                extra={
+                    "run_id": run_id,
+                    "tenant_id": tenant_id,
+                    "error_type": type(exc).__name__,
+                },
             )
 
     async def _safe_mark_durable_terminal(
@@ -557,7 +562,7 @@ class MedusaRunManager:
         run: ExecutionRun,
         *,
         status: str,
-        completed_at: datetime,
+        completed_at: datetime | None = None,
         error_type: str | None = None,
         reason_code: str | None = None,
     ) -> None:
@@ -566,7 +571,7 @@ class MedusaRunManager:
                 run_id=run.run_id,
                 tenant_id=run.tenant_id,
                 status=status,
-                completed_at=completed_at,
+                completed_at=completed_at or datetime.now(timezone.utc),
                 worker_id=self._settings.worker_id,
                 error_type=error_type,
                 reason_code=reason_code,
@@ -574,15 +579,23 @@ class MedusaRunManager:
         except (MedusaRunLedgerNotFound, MedusaRunLedgerConflict) as exc:
             logger.warning(
                 "Medusa durable terminal transition rejected",
-                extra={"run_id": run.run_id, "status": status, "error_type": type(exc).__name__},
+                extra={
+                    "run_id": run.run_id,
+                    "status": status,
+                    "error_type": type(exc).__name__,
+                },
             )
         except Exception as exc:
             logger.error(
                 "Medusa terminal state could not be persisted durably",
-                extra={"run_id": run.run_id, "status": status, "error_type": type(exc).__name__},
+                extra={
+                    "run_id": run.run_id,
+                    "status": status,
+                    "error_type": type(exc).__name__,
+                },
             )
 
-    async def _mark_durable_orphaned(self, *, run_id: str, tenant_id: str) -> None:
+    async def _mark_durable_orphaned(self, run_id: str, tenant_id: str) -> None:
         if not self._settings.durable_run_history_enabled:
             return
         try:
@@ -599,31 +612,46 @@ class MedusaRunManager:
         except Exception as exc:
             logger.error(
                 "Medusa orphan reconciliation could not be persisted",
-                extra={"run_id": run_id, "tenant_id": tenant_id, "error_type": type(exc).__name__},
+                extra={
+                    "run_id": run_id,
+                    "tenant_id": tenant_id,
+                    "error_type": type(exc).__name__,
+                },
             )
 
-    async def _reconcile_missing_shared_run(self, *, run_id: str, tenant_id: str) -> None:
-        durable = await self._get_durable_or_none(run_id=run_id, tenant_id=tenant_id)
+    async def _reconcile_missing(self, *, run_id: str, tenant_id: str) -> None:
+        durable = await self._get_durable(run_id=run_id, tenant_id=tenant_id)
         if durable and durable.get("status") in self._DURABLE_ACTIVE:
-            await self._mark_durable_orphaned(run_id=run_id, tenant_id=tenant_id)
+            await self._mark_durable_orphaned(run_id, tenant_id)
 
-    async def _get_durable_or_none(self, *, run_id: str, tenant_id: str) -> dict[str, Any] | None:
+    async def _get_durable(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+    ) -> dict[str, Any] | None:
         if not self._settings.durable_run_history_enabled:
             return None
         try:
-            return await self._durable_ledger.get(run_id=run_id, tenant_id=tenant_id)
+            return await self._durable_ledger.get(
+                run_id=run_id,
+                tenant_id=tenant_id,
+            )
         except MedusaRunLedgerNotFound:
             return None
         except Exception as exc:
             logger.error(
                 "Medusa durable run lookup unavailable",
-                extra={"run_id": run_id, "tenant_id": tenant_id, "error_type": type(exc).__name__},
+                extra={
+                    "run_id": run_id,
+                    "tenant_id": tenant_id,
+                    "error_type": type(exc).__name__,
+                },
             )
             return None
 
-    async def _list_durable_safe(
+    async def _list_durable(
         self,
-        *,
         tenant_id: str,
         include_terminal: bool,
     ) -> list[dict[str, Any]]:
@@ -638,16 +666,29 @@ class MedusaRunManager:
         except Exception as exc:
             logger.error(
                 "Medusa durable run listing unavailable",
-                extra={"tenant_id": tenant_id, "error_type": type(exc).__name__},
+                extra={
+                    "tenant_id": tenant_id,
+                    "error_type": type(exc).__name__,
+                },
             )
             return []
 
-    async def _durable_capability(self, run_id: str, tenant_id: str) -> dict[str, Any]:
+    async def _durable_capability(
+        self,
+        run_id: str,
+        tenant_id: str,
+    ) -> dict[str, Any]:
         if not self._settings.durable_run_history_enabled:
-            return {"supported": False, "reason_code": "durable_run_history_disabled"}
-        durable = await self._get_durable_or_none(run_id=run_id, tenant_id=tenant_id)
+            return {
+                "supported": False,
+                "reason_code": "durable_run_history_disabled",
+            }
+        durable = await self._get_durable(run_id=run_id, tenant_id=tenant_id)
         if durable is None:
-            return {"supported": False, "reason_code": "durable_history_unavailable"}
+            return {
+                "supported": False,
+                "reason_code": "durable_history_unavailable",
+            }
         return {"supported": True, "source": "postgresql"}
 
     async def _distributed_available(self) -> bool:
@@ -658,13 +699,25 @@ class MedusaRunManager:
         except Exception:
             return False
 
-    async def _distributed_capability(self, *, shared_registered: bool) -> dict[str, Any]:
+    async def _distributed_capability(
+        self,
+        shared_registered: bool,
+    ) -> dict[str, Any]:
         if not self._settings.distributed_run_control_enabled:
-            return {"supported": False, "reason_code": "distributed_run_control_disabled"}
+            return {
+                "supported": False,
+                "reason_code": "distributed_run_control_disabled",
+            }
         if not shared_registered:
-            return {"supported": False, "reason_code": "run_not_registered_in_shared_coordination"}
+            return {
+                "supported": False,
+                "reason_code": "run_not_registered_in_shared_coordination",
+            }
         if not await self._distributed_available():
-            return {"supported": False, "reason_code": "shared_redis_unavailable"}
+            return {
+                "supported": False,
+                "reason_code": "shared_redis_unavailable",
+            }
         return {"supported": True, "lease_alive": True}
 
     def _prune_locked(self) -> None:
@@ -679,3 +732,25 @@ class MedusaRunManager:
             }:
                 self._runs.pop(run_id, None)
         del self._terminal_order[:excess]
+
+
+_RUN_MANAGER: MedusaRunManager | None = None
+
+
+def get_medusa_run_manager() -> MedusaRunManager:
+    """Return the process-wide Medusa execution authority."""
+
+    global _RUN_MANAGER
+    if _RUN_MANAGER is None:
+        _RUN_MANAGER = MedusaRunManager()
+    return _RUN_MANAGER
+
+
+__all__ = [
+    "ExecutionRunStatus",
+    "MedusaRunManager",
+    "RunNotCancellableError",
+    "RunNotFoundError",
+    "RunTenantMismatchError",
+    "get_medusa_run_manager",
+]
