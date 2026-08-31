@@ -130,8 +130,9 @@ jobs:
       - name: Personalization authority proofs
         run: pytest tests/core/personalization/test_personalization.py -q
 
-      - name: STM closure and tenant security proofs
+      - name: Memory recall, STM closure, and tenant security proofs
         run: |
+          pytest tests/core/memory/test_neuro_recall_scope.py -q
           pytest tests/memory/test_stm_closure_1b.py -q
           pytest tests/auth/test_tenant_scope_fail_closed.py -q
 
