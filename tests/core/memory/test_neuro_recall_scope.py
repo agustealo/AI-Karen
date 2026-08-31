@@ -1,4 +1,6 @@
-"""Tests for canonical NeuroRecall scope, governance, fusion, and ranking."""
+"""Tests for canonical NeuroRecall scope, governance, fusion, ranking, and deadlines."""
+
+import asyncio
 
 import pytest
 
@@ -58,6 +60,15 @@ async def test_recall_requires_tenant_scope():
 
 
 @pytest.mark.asyncio
+async def test_recall_rejects_default_tenant_scope():
+    service = NeuroRecall(_FakeRetriever([]))
+    with pytest.raises(RecallScopeError, match="non-default tenant_id"):
+        await service.recall(
+            RecallRequest(query="hello", tenant_id="default", user_id="user-1")
+        )
+
+
+@pytest.mark.asyncio
 async def test_recall_requires_user_scope():
     service = NeuroRecall(_FakeRetriever([]))
     with pytest.raises(RecallScopeError, match="user_id"):
@@ -99,7 +110,7 @@ async def test_session_scope_reaches_source_retrievers():
             session_id="session-9",
         )
     )
-    assert getattr(retriever.seen_query, "session_id") == "session-9"
+    assert retriever.seen_query.session_id == "session-9"
 
 
 @pytest.mark.asyncio
@@ -115,6 +126,48 @@ async def test_retrieval_failure_is_degraded_not_cross_scope_fallback():
     assert result.memories == ()
     assert result.degraded is True
     assert result.degradation_reason == "retrieval_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_recall_deadline_returns_explicit_degraded_result():
+    class _SlowRetriever:
+        async def recall(self, query):
+            await asyncio.sleep(0.1)
+            return []
+
+    result = await NeuroRecall(_SlowRetriever()).recall(
+        RecallRequest(
+            query="hello",
+            tenant_id="tenant-1",
+            user_id="user-1",
+            latency_budget_ms=10,
+        )
+    )
+
+    assert result.memories == ()
+    assert result.degraded is True
+    assert result.degradation_reason == "recall_deadline_exceeded"
+    assert result.latency_ms < 100
+
+
+@pytest.mark.asyncio
+async def test_legacy_metadata_latency_budget_remains_supported():
+    class _SlowRetriever:
+        async def recall(self, query):
+            await asyncio.sleep(0.1)
+            return []
+
+    result = await NeuroRecall(_SlowRetriever()).recall(
+        RecallRequest(
+            query="hello",
+            tenant_id="tenant-1",
+            user_id="user-1",
+            metadata={"latency_budget_ms": 10},
+        )
+    )
+
+    assert result.degraded is True
+    assert result.degradation_reason == "recall_deadline_exceeded"
 
 
 @pytest.mark.asyncio
