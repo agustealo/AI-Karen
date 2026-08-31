@@ -25,6 +25,9 @@ from ai_karen_engine.core.memory.types import MemoryEntry, MemoryQuery
 
 logger = get_logger(__name__)
 
+DEFAULT_RECALL_LATENCY_BUDGET_MS = 300
+MAX_RECALL_LATENCY_BUDGET_MS = 5_000
+
 
 class RecallScopeError(ValueError):
     """Raised when a recall request lacks mandatory isolation scope."""
@@ -41,17 +44,36 @@ class RecallRequest:
     correlation_id: str | None = None
     request_id: str | None = None
     namespaces: tuple[str, ...] = ()
+    latency_budget_ms: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
-        if not str(self.tenant_id or "").strip():
-            raise RecallScopeError("tenant_id is required for memory recall")
+        resolved_tenant = str(self.tenant_id or "").strip()
+        if not resolved_tenant or resolved_tenant == "default":
+            raise RecallScopeError(
+                "explicit non-default tenant_id is required for memory recall"
+            )
         if not str(self.user_id or "").strip():
             raise RecallScopeError("user_id is required for memory recall")
         if not str(self.query or "").strip():
             raise RecallScopeError("query is required for memory recall")
         if self.top_k < 1:
             raise RecallScopeError("top_k must be greater than zero")
+        if self.latency_budget_ms is not None and self.latency_budget_ms < 1:
+            raise RecallScopeError("latency_budget_ms must be greater than zero")
+
+    def resolved_latency_budget_ms(self) -> int:
+        """Return a bounded deadline while preserving legacy metadata callers."""
+        raw_budget: Any = self.latency_budget_ms
+        if raw_budget is None:
+            raw_budget = self.metadata.get("latency_budget_ms")
+        if raw_budget is None:
+            return DEFAULT_RECALL_LATENCY_BUDGET_MS
+        try:
+            budget = int(raw_budget)
+        except (TypeError, ValueError):
+            return DEFAULT_RECALL_LATENCY_BUDGET_MS
+        return min(max(budget, 1), MAX_RECALL_LATENCY_BUDGET_MS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,25 +125,49 @@ class NeuroRecall:
         request.validate()
         started = time.perf_counter()
         effective_top_k = min(max(int(request.top_k), 1), 100)
+        latency_budget_ms = request.resolved_latency_budget_ms()
 
         query = MemoryQuery(
             text=request.query,
             tenant_id=request.tenant_id,
             user_id=request.user_id,
             conversation_id=request.conversation_id,
+            session_id=request.session_id,
             top_k=effective_top_k,
         )
-        # MemoryQuery predates explicit session scope and is intentionally not
-        # rewritten here during recall-authority closure. It is a non-slotted
-        # dataclass, so propagate session scope without losing it at the Runtime
-        # -> NeuroRecall -> Redis boundary. A typed field is a follow-up contract
-        # cleanup, not a reason to fork the query type.
-        setattr(query, "session_id", request.session_id)
 
-        raw_results = await asyncio.gather(
-            *(retriever.recall(query) for retriever in self._retrievers),
-            return_exceptions=True,
-        )
+        try:
+            raw_results = await asyncio.wait_for(
+                asyncio.gather(
+                    *(retriever.recall(query) for retriever in self._retrievers),
+                    return_exceptions=True,
+                ),
+                timeout=latency_budget_ms / 1000.0,
+            )
+        except TimeoutError:
+            latency_ms = (time.perf_counter() - started) * 1000
+            logger.warning(
+                "memory.neuro_recall.deadline_exceeded",
+                extra={
+                    "tenant_id": request.tenant_id,
+                    "user_id": request.user_id,
+                    "correlation_id": request.correlation_id,
+                    "request_id": request.request_id,
+                    "retriever_count": len(self._retrievers),
+                    "latency_budget_ms": latency_budget_ms,
+                    "latency_ms": latency_ms,
+                },
+            )
+            return RecallResult(
+                memories=(),
+                tenant_id=request.tenant_id,
+                user_id=request.user_id,
+                query=request.query,
+                latency_ms=latency_ms,
+                degraded=True,
+                degradation_reason="recall_deadline_exceeded",
+                provenance=(),
+            )
 
         failures: list[BaseException] = []
         raw_candidates: list[MemoryEntry] = []
@@ -222,6 +268,7 @@ class NeuroRecall:
                 "deduped_candidate_count": len(ranked),
                 "result_count": len(selected),
                 "degraded": degraded,
+                "latency_budget_ms": latency_budget_ms,
             },
         )
         return RecallResult(
@@ -283,6 +330,8 @@ class NeuroRecall:
 
 
 __all__ = [
+    "DEFAULT_RECALL_LATENCY_BUDGET_MS",
+    "MAX_RECALL_LATENCY_BUDGET_MS",
     "NeuroRecall",
     "RecallRequest",
     "RecallResult",
