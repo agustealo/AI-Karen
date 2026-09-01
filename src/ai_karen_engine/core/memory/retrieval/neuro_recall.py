@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol, Sequence, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.memory.neuro import (
@@ -24,6 +25,9 @@ from ai_karen_engine.core.memory.neuro.scoring import blended_score
 from ai_karen_engine.core.memory.types import MemoryEntry, MemoryQuery
 
 logger = get_logger(__name__)
+
+DEFAULT_RECALL_LATENCY_BUDGET_MS = 300
+MAX_RECALL_LATENCY_BUDGET_MS = 5_000
 
 
 class RecallScopeError(ValueError):
@@ -41,17 +45,36 @@ class RecallRequest:
     correlation_id: str | None = None
     request_id: str | None = None
     namespaces: tuple[str, ...] = ()
+    latency_budget_ms: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
-        if not str(self.tenant_id or "").strip():
-            raise RecallScopeError("tenant_id is required for memory recall")
+        resolved_tenant = str(self.tenant_id or "").strip()
+        if not resolved_tenant or resolved_tenant == "default":
+            raise RecallScopeError(
+                "explicit non-default tenant_id is required for memory recall"
+            )
         if not str(self.user_id or "").strip():
             raise RecallScopeError("user_id is required for memory recall")
         if not str(self.query or "").strip():
             raise RecallScopeError("query is required for memory recall")
         if self.top_k < 1:
             raise RecallScopeError("top_k must be greater than zero")
+        if self.latency_budget_ms is not None and self.latency_budget_ms < 1:
+            raise RecallScopeError("latency_budget_ms must be greater than zero")
+
+    def resolved_latency_budget_ms(self) -> int:
+        """Return a bounded deadline while preserving legacy metadata callers."""
+        raw_budget: Any = self.latency_budget_ms
+        if raw_budget is None:
+            raw_budget = self.metadata.get("latency_budget_ms")
+        if raw_budget is None:
+            return DEFAULT_RECALL_LATENCY_BUDGET_MS
+        try:
+            budget = int(raw_budget)
+        except (TypeError, ValueError):
+            return DEFAULT_RECALL_LATENCY_BUDGET_MS
+        return min(max(budget, 1), MAX_RECALL_LATENCY_BUDGET_MS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,40 +119,64 @@ class NeuroRecall:
             raise ValueError("NeuroRecall requires at least one retriever")
         for candidate in selected:
             if not hasattr(candidate, "recall"):
-                raise TypeError("every NeuroRecall retriever must provide async recall(query)")
+                raise TypeError(
+                    "every NeuroRecall retriever must provide async recall(query)"
+                )
         self._retrievers = selected
 
     async def recall(self, request: RecallRequest) -> RecallResult:
         request.validate()
         started = time.perf_counter()
         effective_top_k = min(max(int(request.top_k), 1), 100)
+        latency_budget_ms = request.resolved_latency_budget_ms()
 
         query = MemoryQuery(
             text=request.query,
             tenant_id=request.tenant_id,
             user_id=request.user_id,
             conversation_id=request.conversation_id,
+            session_id=request.session_id,
             top_k=effective_top_k,
         )
-        # MemoryQuery predates explicit session scope and is intentionally not
-        # rewritten here during recall-authority closure. It is a non-slotted
-        # dataclass, so propagate session scope without losing it at the Runtime
-        # -> NeuroRecall -> Redis boundary. A typed field is a follow-up contract
-        # cleanup, not a reason to fork the query type.
-        setattr(query, "session_id", request.session_id)
 
-        raw_results = await asyncio.gather(
-            *(retriever.recall(query) for retriever in self._retrievers),
-            return_exceptions=True,
+        tasks = [
+            asyncio.create_task(retriever.recall(query))
+            for retriever in self._retrievers
+        ]
+        done, pending = await asyncio.wait(
+            tasks,
+            timeout=latency_budget_ms / 1000.0,
         )
+        deadline_exceeded = bool(pending)
+        if pending:
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            logger.warning(
+                "memory.neuro_recall.deadline_exceeded",
+                extra={
+                    "tenant_id": request.tenant_id,
+                    "user_id": request.user_id,
+                    "correlation_id": request.correlation_id,
+                    "request_id": request.request_id,
+                    "retriever_count": len(self._retrievers),
+                    "timed_out_retriever_count": len(pending),
+                    "latency_budget_ms": latency_budget_ms,
+                    "latency_ms": (time.perf_counter() - started) * 1000,
+                },
+            )
 
         failures: list[BaseException] = []
         raw_candidates: list[MemoryEntry] = []
-        for index, value in enumerate(raw_results):
-            if isinstance(value, BaseException):
-                if isinstance(value, RecallScopeError):
-                    raise value
-                failures.append(value)
+        for index, task in enumerate(tasks):
+            if task not in done:
+                continue
+            try:
+                value = task.result()
+            except RecallScopeError:
+                raise
+            except BaseException as exc:
+                failures.append(exc)
                 logger.warning(
                     "memory.neuro_recall.retriever_failed",
                     extra={
@@ -139,13 +186,18 @@ class NeuroRecall:
                         "request_id": request.request_id,
                         "retriever_index": index,
                         "retriever_type": type(self._retrievers[index]).__name__,
-                        "error_type": type(value).__name__,
+                        "error_type": type(exc).__name__,
                     },
                 )
                 continue
             raw_candidates.extend(value)
 
-        if failures and not raw_candidates:
+        if not raw_candidates and (failures or deadline_exceeded):
+            reason = (
+                "recall_deadline_exceeded"
+                if deadline_exceeded
+                else "retrieval_unavailable"
+            )
             return RecallResult(
                 memories=(),
                 tenant_id=request.tenant_id,
@@ -153,7 +205,7 @@ class NeuroRecall:
                 query=request.query,
                 latency_ms=(time.perf_counter() - started) * 1000,
                 degraded=True,
-                degradation_reason="retrieval_unavailable",
+                degradation_reason=reason,
                 provenance=(),
             )
 
@@ -163,7 +215,9 @@ class NeuroRecall:
 
         for memory in raw_candidates:
             metadata = getattr(memory, "metadata", None)
-            memory_tenant = getattr(metadata, "tenant_id", None) if metadata else None
+            memory_tenant = (
+                getattr(metadata, "tenant_id", None) if metadata else None
+            )
             memory_user = getattr(metadata, "user_id", None) if metadata else None
             if str(memory_tenant or "") != request.tenant_id:
                 rejected_count += 1
@@ -192,22 +246,46 @@ class NeuroRecall:
             previous = selected_by_id.get(memory_id)
             if previous is None or self._sort_key(memory) > self._sort_key(previous):
                 selected_by_id[memory_id] = memory
-                provenance = custom.get("provenance", {}) if isinstance(custom, dict) else {}
+                provenance = (
+                    custom.get("provenance", {})
+                    if isinstance(custom, dict)
+                    else {}
+                )
                 provenance_by_id[memory_id] = {
                     "memory_id": memory_id,
-                    "source": getattr(metadata, "source", None) if metadata else None,
-                    "source_store": custom.get("source_store") if isinstance(custom, dict) else None,
+                    "source": (
+                        getattr(metadata, "source", None) if metadata else None
+                    ),
+                    "source_store": (
+                        custom.get("source_store")
+                        if isinstance(custom, dict)
+                        else None
+                    ),
                     "memory_class": candidate.memory_class.value,
-                    "provenance": provenance if isinstance(provenance, dict) else {},
+                    "provenance": (
+                        provenance if isinstance(provenance, dict) else {}
+                    ),
                     "correlation_id": request.correlation_id,
                 }
 
-        ranked = sorted(selected_by_id.values(), key=self._sort_key, reverse=True)
+        ranked = sorted(
+            selected_by_id.values(),
+            key=self._sort_key,
+            reverse=True,
+        )
         selected = ranked[:effective_top_k]
-        provenance = tuple(provenance_by_id[str(item.id)] for item in selected)
+        provenance = tuple(
+            provenance_by_id[str(item.id)] for item in selected
+        )
 
-        degraded = bool(failures)
-        degradation_reason = "partial_retrieval_failure" if failures else None
+        degraded = bool(failures or deadline_exceeded)
+        if deadline_exceeded:
+            degradation_reason = "recall_deadline_exceeded"
+        elif failures:
+            degradation_reason = "partial_retrieval_failure"
+        else:
+            degradation_reason = None
+
         logger.info(
             "memory.neuro_recall.completed",
             extra={
@@ -217,11 +295,13 @@ class NeuroRecall:
                 "request_id": request.request_id,
                 "retriever_count": len(self._retrievers),
                 "failed_retriever_count": len(failures),
+                "timed_out_retriever_count": len(pending),
                 "raw_candidate_count": len(raw_candidates),
                 "rejected_candidate_count": rejected_count,
                 "deduped_candidate_count": len(ranked),
                 "result_count": len(selected),
                 "degraded": degraded,
+                "latency_budget_ms": latency_budget_ms,
             },
         )
         return RecallResult(
@@ -236,10 +316,21 @@ class NeuroRecall:
         )
 
     @staticmethod
-    def _to_candidate(memory: MemoryEntry, request: RecallRequest) -> MemoryCandidate:
+    def _to_candidate(
+        memory: MemoryEntry,
+        request: RecallRequest,
+    ) -> MemoryCandidate:
         metadata = memory.metadata
-        custom = metadata.custom if metadata and isinstance(metadata.custom, dict) else {}
-        source = str(custom.get("source_store") or (metadata.source if metadata else "unknown"))
+        custom = (
+            metadata.custom
+            if metadata and isinstance(metadata.custom, dict)
+            else {}
+        )
+        source = str(
+            custom.get("source_store")
+            or (metadata.source if metadata else "unknown")
+        )
+        provenance = custom.get("provenance", {})
         candidate = MemoryCandidate(
             id=str(memory.id),
             text=str(memory.content or ""),
@@ -250,7 +341,7 @@ class NeuroRecall:
             confidence=float(memory.confidence or 0.0),
             importance=float(memory.importance or 0.0) / 10.0,
             freshness=float(custom.get("freshness", 1.0) or 1.0),
-            provenance=custom.get("provenance", {}) if isinstance(custom.get("provenance", {}), dict) else {},
+            provenance=provenance if isinstance(provenance, dict) else {},
             created_at=memory.created_at,
             updated_at=memory.updated_at,
             expires_at=memory.expires_at,
@@ -272,7 +363,9 @@ class NeuroRecall:
     def _sort_key(item: MemoryEntry) -> tuple[float, float, float]:
         timestamp = getattr(item, "timestamp", None)
         try:
-            timestamp_value = float(timestamp.timestamp()) if timestamp is not None else 0.0
+            timestamp_value = (
+                float(timestamp.timestamp()) if timestamp is not None else 0.0
+            )
         except (AttributeError, OSError, OverflowError, TypeError, ValueError):
             timestamp_value = 0.0
         return (
@@ -283,6 +376,8 @@ class NeuroRecall:
 
 
 __all__ = [
+    "DEFAULT_RECALL_LATENCY_BUDGET_MS",
+    "MAX_RECALL_LATENCY_BUDGET_MS",
     "NeuroRecall",
     "RecallRequest",
     "RecallResult",
