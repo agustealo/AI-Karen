@@ -14,16 +14,14 @@ from fastapi import HTTPException
 
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 
-_SYNTHETIC_TENANT_IDS = frozenset({"default", "dev-tenant"})
-
 
 def require_execution_identity(user: Mapping[str, Any]) -> tuple[str, str]:
     """Return authoritative ``(user_id, tenant_id)`` or fail closed.
 
     Authentication middleware owns identity construction. Chat transports only
     verify that the resulting scope is explicit enough to enter the runtime.
-    Synthetic tenant identifiers are deliberately rejected here because memory
-    recall and persistence require tenant isolation to be authoritative.
+    The historical ``default`` tenant is rejected because it is not an
+    isolation boundary and NeuroRecall already rejects it.
     """
 
     user_id = str(user.get("user_id") or "").strip()
@@ -39,7 +37,7 @@ def require_execution_identity(user: Mapping[str, Any]) -> tuple[str, str]:
             status_code=401,
             detail="Authenticated tenant context is required",
         )
-    if tenant_id.lower() in _SYNTHETIC_TENANT_IDS:
+    if tenant_id.lower() == "default":
         raise HTTPException(
             status_code=401,
             detail="Authenticated tenant context is not authoritative",
