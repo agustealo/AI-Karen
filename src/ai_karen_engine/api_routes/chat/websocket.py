@@ -1,9 +1,12 @@
-"""
-WebSocket API Routes for Real-Time Chat Communication
+"""Authenticated real-time transport adapters for AI KAREN.
 
-This module provides WebSocket endpoints for real-time chat functionality,
-including connection management, streaming responses, and fallback to
-Server-Sent Events when WebSocket is not available.
+This module owns WebSocket/SSE/NDJSON transport only. All chat generation,
+provider selection, fallback, memory, prompt assembly, policy, persistence, and
+telemetry remain authoritative in :class:`ChatRuntime`.
+
+The historical ``AsyncStreamProcessor`` inference path is intentionally not
+referenced here. Legacy stream-management URLs remain as honest ``410 Gone``
+compatibility boundaries instead of silently producing simulated model output.
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -24,96 +28,58 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
-from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
-    RuntimeMode,
-    MaintenanceResponse,
-    EmergencyFallbackResponse,
-    DegradedResponse,
-    serialize_runtime_response,
-    get_chat_runtime_control_plane,
+from ai_karen_engine.api_routes.chat.execution_identity import (
+    build_chat_execution_context,
+    require_execution_identity,
 )
+from ai_karen_engine.auth.auth_service import get_auth_service, user_account_to_dict
+from ai_karen_engine.auth.cookie_manager import get_cookie_manager
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
-from ai_karen_engine.core.runtime.chat_runtime_contract import (
-    CanonicalChatRequest,
-    ChatExecutionContext,
-    ChatExecutionRequest,
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
+from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
+    DegradedResponse,
+    EmergencyFallbackResponse,
+    MaintenanceResponse,
+    get_chat_runtime_control_plane,
+    serialize_runtime_response,
 )
-from ai_karen_engine.utils.chat_helpers import normalize_session_id as normalize_chat_session_id
-from ai_karen_engine.services.streaming.stream_processor import AsyncStreamProcessor
+from ai_karen_engine.core.security.auth_config import auth_config
+from ai_karen_engine.core.services.dependencies import bypass_user_context_func
 from ai_karen_engine.services.streaming.websocket_gateway import WebSocketGateway
-
-# REMOVED: Complex auth service - replaced with simple auth
-from ai_karen_engine.utils.dependency_checks import import_pydantic
-
-try:
-    from sse_starlette.sse import EventSourceResponse
-except ImportError:  # pragma: no cover - optional dependency
-    # Fallback for EventSourceResponse if sse_starlette is not available
-    class EventSourceResponse:  # type: ignore
-        def __init__(self, content):
-            self.content = content
-
-
-BaseModel, Field = import_pydantic("BaseModel", "Field")
+from ai_karen_engine.utils.chat_helpers import (
+    normalize_session_id as normalize_chat_session_id,
+)
 
 logger = logging.getLogger(__name__)
-
-# Global instances (will be initialized by dependency injection)
-websocket_gateway: Optional[WebSocketGateway] = None
-stream_processor: Optional[AsyncStreamProcessor] = None
-
 router = APIRouter(tags=["websocket"])
 
-# Model operation event types
-MODEL_OPERATION_EVENTS = {
-    "JOB_STARTED": "job_started",
-    "JOB_PROGRESS": "job_progress",
-    "JOB_COMPLETED": "job_completed",
-    "JOB_FAILED": "job_failed",
-    "JOB_CANCELLED": "job_cancelled",
-    "MODEL_DOWNLOADED": "model_downloaded",
-    "MODEL_REMOVED": "model_removed",
-    "MIGRATION_STARTED": "migration_started",
-    "MIGRATION_COMPLETED": "migration_completed",
-    "GC_STARTED": "gc_started",
-    "GC_COMPLETED": "gc_completed",
-}
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 
 
-# Request/Response Models
 class StreamChatRequest(BaseModel):
-    """Request model for streaming chat via HTTP/SSE."""
+    """Compatibility streaming request normalized into ``ChatExecutionRequest``.
 
-    message: str = Field(..., description="User message")
-    conversation_id: str = Field(..., description="Conversation ID")
-    user_id: str = Field(..., description="User ID")
-    session_id: Optional[str] = Field(None, description="Session ID")
-    stream_type: str = Field("sse", description="Stream type: sse or http")
-    include_context: bool = Field(True, description="Include memory context")
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict, description="Additional metadata"
-    )
+    ``user_id`` is accepted only for backward wire compatibility and is ignored.
+    The authenticated principal is always resolved server-side.
+    """
 
-
-class StreamStatusResponse(BaseModel):
-    """Response model for stream status."""
-
-    session_id: str
-    status: str
-    stream_type: str
-    started_at: str
-    chunks_sent: int
-    bytes_sent: int
-    processing_time: float
-    user_id: Optional[str]
-    conversation_id: Optional[str]
+    message: str = Field(..., min_length=1, max_length=10000)
+    conversation_id: Optional[str] = Field(default=None, max_length=200)
+    user_id: Optional[str] = Field(default=None, max_length=200)
+    session_id: Optional[str] = Field(default=None, max_length=100)
+    stream_type: str = Field("sse", pattern=r"^(sse|http)$")
+    include_context: bool = True
+    preferred_llm_provider: Optional[str] = Field(default=None, max_length=100)
+    preferred_model: Optional[str] = Field(default=None, max_length=200)
+    temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
+    max_tokens: Optional[int] = Field(default=None, ge=1)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class WebSocketStatsResponse(BaseModel):
-    """Response model for WebSocket statistics."""
-
     total_connections: int
     authenticated_connections: int
     unique_users: int
@@ -123,649 +89,587 @@ class WebSocketStatsResponse(BaseModel):
     queue_stats: Dict[str, Any]
 
 
-class StreamMetricsResponse(BaseModel):
-    """Response model for streaming metrics."""
-
-    total_streams: int
-    successful_streams: int
-    failed_streams: int
-    success_rate: float
-    avg_stream_duration: float
-    avg_processing_time: float
-    active_sessions: int
-
-
-# Dependency injection functions
 def get_runtime_service():
-    """Get canonical chat runtime service for the WebSocket gateway."""
     return get_chat_runtime()
 
 
 async def get_websocket_gateway(
     runtime_service=Depends(get_runtime_service),
 ) -> WebSocketGateway:
-    """Get WebSocket gateway instance."""
+    """Resolve the existing transport gateway without creating execution authority."""
+
     orchestrator = await runtime_service.get_orchestrator()
     return WebSocketGateway(orchestrator)
 
 
-def get_stream_processor() -> AsyncStreamProcessor:
-    """Get stream processor instance."""
-    return AsyncStreamProcessor()
+def _normalize_session_id(value: Optional[str]) -> str:
+    if value is None or not str(value).strip():
+        return f"session_{uuid.uuid4().hex[:16]}"
+    session_id = str(value).strip()
+    if not _SESSION_ID_RE.fullmatch(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session ID format")
+    return session_id
+
+
+def _is_admin(user: Dict[str, Any]) -> bool:
+    return "admin" in {
+        str(role).strip().lower() for role in (user.get("roles") or [])
+    }
+
+
+def _require_admin(user: Dict[str, Any]) -> tuple[str, str]:
+    identity = require_execution_identity(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Administrator permission required")
+    return identity
+
+
+def _require_self_or_admin(user: Dict[str, Any], target_user_id: str) -> tuple[str, str]:
+    user_id, tenant_id = require_execution_identity(user)
+    if user_id != str(target_user_id) and not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Cross-user access denied")
+    return user_id, tenant_id
+
+
+def _extract_websocket_token(websocket: WebSocket) -> Optional[str]:
+    auth_header = websocket.headers.get("authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+        if token:
+            return token
+
+    try:
+        configured_cookie = get_cookie_manager().config.session_cookie
+    except Exception:
+        configured_cookie = "kari_session"
+
+    for cookie_name in (
+        configured_cookie,
+        "kari_session",
+        "session_token",
+        "access_token",
+    ):
+        token = websocket.cookies.get(cookie_name)
+        if token:
+            return token
+    return None
 
 
 async def get_current_user_websocket(websocket: WebSocket) -> Dict[str, Any]:
-    """Authenticate WebSocket connections using configured session cookie or JWT.
+    """Authenticate a WebSocket through the canonical authentication authority."""
 
-    Prefers the configured auth session cookie name; falls back to legacy
-    'kari_session' for backward compatibility. Also accepts Bearer access tokens
-    via the Authorization header.
-    """
-    # Resolve configured session cookie name
+    if auth_config.should_bypass_auth():
+        user = dict(auth_config.get_dev_user_context())
+        require_execution_identity(user)
+        return user
+
+    token = _extract_websocket_token(websocket)
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
     try:
-        from ai_karen_engine.auth.cookie_manager import get_cookie_manager
+        service = await get_auth_service()
+        account = await service.validate_token(token)
+    except Exception as exc:
+        logger.warning(
+            "WebSocket authentication service failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service unavailable",
+        ) from exc
 
-        cm = get_cookie_manager()
-        configured_cookie = getattr(cm.config, "session_cookie", "auth_session")
-    except Exception:
-        configured_cookie = "auth_session"
+    if account is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
 
-    # Check configured session cookie first, then legacy name
-    session_token = websocket.cookies.get(configured_cookie) or websocket.cookies.get(
-        "kari_session"
+    user = user_account_to_dict(account)
+    require_execution_identity(user)
+    return user
+
+
+def _build_stream_request(
+    *,
+    request: StreamChatRequest,
+    user: Dict[str, Any],
+    correlation_id: str,
+    response_id: str,
+    transport: str,
+) -> ChatExecutionRequest:
+    require_execution_identity(user)
+    session_id = _normalize_session_id(request.session_id)
+    conversation_id = (
+        str(request.conversation_id or "").strip()
+        or normalize_chat_session_id(session_id)
     )
-    # Use production auth service for JWT validation
-    auth_header = websocket.headers.get("authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        access_token = auth_header.split(" ", 1)[1]
-        try:
-            from ai_karen_engine.auth.auth_service import (
-                get_auth_service,
-                user_account_to_dict,
-            )
+    return ChatExecutionRequest(
+        messages=[{"role": "user", "content": request.message.strip()}],
+        context=build_chat_execution_context(
+            user=user,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            request_id=response_id,
+            correlation_id=correlation_id,
+        ),
+        preferred_provider=request.preferred_llm_provider,
+        preferred_model=request.preferred_model,
+        temperature=request.temperature,
+        max_tokens=request.max_tokens,
+        stream=True,
+        metadata={
+            "transport": transport,
+            "include_context": request.include_context,
+            "compatibility_user_id_present": bool(request.user_id),
+            "client_metadata": dict(request.metadata or {}),
+        },
+    )
 
-            service = await get_auth_service()
-            user = await service.validate_token(access_token)
-            if user:
-                return user_account_to_dict(user)
-        except Exception:
-            logger.exception("Failed to validate websocket token")
 
-    raise HTTPException(status_code=401, detail="Authentication required")
+async def _sse_chunks(runtime_request: ChatExecutionRequest):
+    async for chunk in get_chat_runtime().execute_stream(runtime_request):
+        yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
+    yield "data: [DONE]\n\n"
 
 
-# WebSocket endpoint
+async def _ndjson_chunks(runtime_request: ChatExecutionRequest):
+    async for chunk in get_chat_runtime().execute_stream(runtime_request):
+        yield json.dumps(chunk.to_sse_payload()) + "\n"
+    yield json.dumps({"type": "done"}) + "\n"
+
+
+def _retired_stream_control(session_id: Optional[str] = None) -> JSONResponse:
+    payload: Dict[str, Any] = {
+        "detail": "Legacy stream session control has been retired",
+        "canonical_stream_endpoint": "/api/stream",
+        "runtime_authority": "ChatRuntime",
+    }
+    if session_id:
+        payload["session_id"] = session_id
+    return JSONResponse(status_code=410, content=payload)
+
+
 @router.websocket("/chat")
 async def websocket_chat_endpoint(
     websocket: WebSocket,
-    gateway: WebSocketGateway = Depends(get_websocket_gateway),
     current_user: Dict[str, Any] = Depends(get_current_user_websocket),
 ):
-    """
-    WebSocket endpoint for real-time chat communication.
+    """Bidirectional chat transport backed only by ``ChatRuntime.execute_stream``."""
 
-    Features:
-    - Real-time bidirectional communication
-    - Authentication and session management
-    - Streaming responses via canonical ChatRuntime
-    """
-    connection_id = None
+    user_id, tenant_id = require_execution_identity(current_user)
+    runtime_response = await get_chat_runtime_control_plane().get_runtime_response(
+        user_context=current_user
+    )
+    if runtime_response is not None:
+        await websocket.accept()
+        payload: Dict[str, Any] = {"type": "runtime_mode"}
+        if isinstance(
+            runtime_response,
+            (MaintenanceResponse, EmergencyFallbackResponse, DegradedResponse),
+        ):
+            payload.update(serialize_runtime_response(runtime_response) or {})
+        await websocket.send_text(json.dumps(payload))
+        await websocket.close(code=1013)
+        return
+
+    await websocket.accept()
+    connection_id = str(uuid.uuid4())
+    session_id = f"ws_{connection_id.replace('-', '')[:24]}"
+    conversation_id = normalize_chat_session_id(session_id)
+
+    logger.info(
+        "WebSocket chat connected",
+        extra={
+            "connection_id": connection_id,
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+        },
+    )
 
     try:
-        runtime_response = await get_chat_runtime_control_plane().get_runtime_response(user_context=current_user)
-
-        if runtime_response is not None:
-            await websocket.accept()
-            payload = {"type": "runtime_mode"}
-            if isinstance(
-                runtime_response,
-                (MaintenanceResponse, EmergencyFallbackResponse, DegradedResponse),
-            ):
-                payload.update(serialize_runtime_response(runtime_response) or {})
-            await websocket.send_text(json.dumps(payload))
-            await websocket.close(code=1013)
-            return
-
-        await websocket.accept()
-        connection_id = str(uuid.uuid4())
-        session_id = connection_id
-
         while True:
             try:
-                data = await websocket.receive_text()
-                message = json.loads(data)
-                user_message = str(message.get("message") or "").strip()
-                if not user_message:
+                raw = await websocket.receive_text()
+                try:
+                    message = json.loads(raw)
+                except json.JSONDecodeError:
+                    await websocket.send_text(
+                        json.dumps(
+                            {
+                                "type": "error",
+                                "content": "Invalid JSON payload.",
+                                "metadata": {"error_code": "INVALID_JSON"},
+                            }
+                        )
+                    )
                     continue
 
-                chat_request = ChatExecutionRequest(
+                user_message = str(message.get("message") or "").strip()
+                if not user_message:
+                    await websocket.send_text(
+                        json.dumps(
+                            {
+                                "type": "error",
+                                "content": "A non-empty message is required.",
+                                "metadata": {"error_code": "EMPTY_MESSAGE"},
+                            }
+                        )
+                    )
+                    continue
+                if len(user_message) > 10000:
+                    await websocket.send_text(
+                        json.dumps(
+                            {
+                                "type": "error",
+                                "content": "Message is too long.",
+                                "metadata": {"error_code": "MESSAGE_TOO_LONG"},
+                            }
+                        )
+                    )
+                    continue
+
+                correlation_id = str(uuid.uuid4())
+                request_id = str(uuid.uuid4())
+                runtime_request = ChatExecutionRequest(
                     messages=[{"role": "user", "content": user_message}],
-                    context=ChatExecutionContext(
-                        user_id=current_user["user_id"],
-                        tenant_id=str(current_user.get("tenant_id") or "default"),
+                    context=build_chat_execution_context(
+                        user=current_user,
                         session_id=session_id,
-                        conversation_id=normalize_chat_session_id(session_id),
-                        request_id=str(uuid.uuid4()),
-                        correlation_id=str(uuid.uuid4()),
-                        roles=list(current_user.get("roles") or []),
-                        permissions=list(current_user.get("permissions") or []),
+                        conversation_id=conversation_id,
+                        request_id=request_id,
+                        correlation_id=correlation_id,
+                    ),
+                    preferred_provider=(
+                        str(message.get("preferred_llm_provider") or "").strip() or None
+                    ),
+                    preferred_model=(
+                        str(message.get("preferred_model") or "").strip() or None
                     ),
                     stream=True,
                     metadata={"transport": "websocket"},
                 )
 
-                async for chunk in get_chat_runtime().execute_stream(chat_request):
+                async for chunk in get_chat_runtime().execute_stream(runtime_request):
                     await websocket.send_text(json.dumps(chunk.to_sse_payload()))
 
             except WebSocketDisconnect:
-                break
+                raise
             except Exception as exc:
-                logger.error("WebSocket chat stream error: %s", exc, extra={"connection_id": connection_id})
-                try:
-                    await websocket.send_text(json.dumps({
-                        "type": "error",
-                        "content": str(exc),
-                        "correlation_id": "",
-                    }))
-                except Exception:
-                    break
-
-    except WebSocketDisconnect as e:
-        logger.info(f"WebSocket disconnected: {connection_id} (code: {e.code})")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}", exc_info=True)
-    finally:
-        if connection_id:
-            logger.debug(f"WebSocket connection cleanup: {connection_id}")
-
-
-@router.websocket("/models/events")
-async def websocket_model_events_endpoint(
-    websocket: WebSocket,
-    gateway: WebSocketGateway = Depends(get_websocket_gateway),
-    current_user: Dict[str, Any] = Depends(get_current_user_websocket),
-):
-    """
-    WebSocket endpoint for real-time model operation events.
-
-    Features:
-    - Real-time job progress updates
-    - Model download/installation notifications
-    - Migration and garbage collection status
-    - Error notifications and recovery suggestions
-
-    Requirements: 3.8, 9.3, 9.6
-    """
-    connection_id = None
-
-    try:
-        await websocket.accept()
-        connection_id = str(uuid.uuid4())
-
-        # Register connection for model events
-        user_id = current_user.get("user_id", "anonymous")
-
-        # Subscribe to model orchestrator events via event bus
-        from ai_karen_engine.event_bus import get_event_bus
-
-        event_bus = get_event_bus()
-
-        # Create event handler for this connection
-        async def handle_model_event(event_data):
-            """Handle model orchestrator events and forward to WebSocket."""
-            try:
-                message = {
-                    "type": "model_event",
-                    "event": event_data.get("event_type"),
-                    "data": event_data.get("payload", {}),
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-
-                await websocket.send_text(json.dumps(message))
-                logger.debug(
-                    f"Sent model event to {connection_id}: {event_data.get('event_type')}"
+                logger.exception(
+                    "WebSocket chat execution failed",
+                    extra={
+                        "connection_id": connection_id,
+                        "user_id": user_id,
+                        "tenant_id": tenant_id,
+                        "error_type": type(exc).__name__,
+                    },
                 )
-
-            except Exception as e:
-                logger.error(f"Failed to send model event to {connection_id}: {e}")
-
-        # Subscribe to model orchestrator events
-        event_bus.subscribe("model_orchestrator", handle_model_event)
-
-        # Send connection confirmation
-        await websocket.send_text(
-            json.dumps(
-                {
-                    "type": "connection_established",
-                    "connection_id": connection_id,
-                    "user_id": user_id,
-                    "subscribed_events": ["model_orchestrator"],
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-        )
-
-        logger.info(
-            f"Model events WebSocket connected: {connection_id} for user {user_id}"
-        )
-
-        # Keep connection alive and handle incoming messages
-        while True:
-            try:
-                # Wait for messages from client
-                data = await websocket.receive_text()
-                message = json.loads(data)
-
-                # Handle different message types
-                message_type = message.get("type")
-
-                if message_type == "ping":
-                    # Respond to ping with pong
+                try:
                     await websocket.send_text(
                         json.dumps(
                             {
-                                "type": "pong",
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "type": "error",
+                                "content": "Unable to complete the response.",
+                                "metadata": {"error_code": "WEBSOCKET_CHAT_FAILED"},
                             }
                         )
                     )
-
-                elif message_type == "subscribe_job":
-                    # Subscribe to specific job updates
-                    job_id = message.get("job_id")
-                    if job_id:
-                        # In a real implementation, this would register for specific job updates
-                        await websocket.send_text(
-                            json.dumps(
-                                {
-                                    "type": "job_subscription_confirmed",
-                                    "job_id": job_id,
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                }
-                            )
-                        )
-                        logger.debug(
-                            f"Subscribed to job {job_id} for connection {connection_id}"
-                        )
-
-                elif message_type == "unsubscribe_job":
-                    # Unsubscribe from specific job updates
-                    job_id = message.get("job_id")
-                    if job_id:
-                        await websocket.send_text(
-                            json.dumps(
-                                {
-                                    "type": "job_unsubscription_confirmed",
-                                    "job_id": job_id,
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                }
-                            )
-                        )
-                        logger.debug(
-                            f"Unsubscribed from job {job_id} for connection {connection_id}"
-                        )
-
-                else:
-                    logger.warning(
-                        f"Unknown message type from {connection_id}: {message_type}"
-                    )
-
-            except WebSocketDisconnect:
-                break
-            except json.JSONDecodeError as e:
-                logger.warning(f"Invalid JSON from {connection_id}: {e}")
-                await websocket.send_text(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "message": "Invalid JSON format",
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }
-                    )
-                )
-            except Exception as e:
-                logger.error(f"Error handling message from {connection_id}: {e}")
-                break
-
-    except WebSocketDisconnect as e:
+                except Exception:
+                    break
+    except WebSocketDisconnect as exc:
         logger.info(
-            f"Model events WebSocket disconnected: {connection_id} (code: {e.code})"
+            "WebSocket chat disconnected",
+            extra={"connection_id": connection_id, "code": exc.code},
         )
-    except Exception as e:
-        logger.error(f"Model events WebSocket error: {e}", exc_info=True)
-    finally:
-        if connection_id:
-            # Unsubscribe from events
-            try:
-                event_bus = get_event_bus()
-                # In a real implementation, we'd properly unsubscribe the handler
-                logger.debug(
-                    f"Model events WebSocket connection cleanup: {connection_id}"
-                )
-            except Exception as e:
-                logger.error(f"Error during WebSocket cleanup: {e}")
 
 
-# Server-Sent Events endpoint
-@router.post("/stream/sse", response_model=None)
+@router.post("/stream/sse")
 async def stream_chat_sse(
     request: StreamChatRequest,
     http_request: Request,
-    processor: AsyncStreamProcessor = Depends(get_stream_processor),
-) -> EventSourceResponse:
-    """
-    Server-Sent Events endpoint for streaming chat responses.
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+) -> StreamingResponse:
+    """Legacy SSE URL adapted directly to canonical ``ChatRuntime`` streaming."""
 
-    This provides a fallback for clients that cannot use WebSocket connections.
-    """
-    try:
-        # Create chat request
-        chat_request = ChatRequest(
-            message=request.message,
-            user_id=request.user_id,
-            conversation_id=request.conversation_id,
-            session_id=request.session_id,
-            stream=True,
-            include_context=request.include_context,
-            metadata=request.metadata,
-        )
-
-        # Create SSE stream
-        return await processor.create_sse_stream(chat_request, http_request)
-
-    except Exception as e:
-        logger.error(f"Error creating SSE stream: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to create stream: {str(e)}"
-        )
+    correlation_id = http_request.headers.get("X-Correlation-Id") or str(uuid.uuid4())
+    response_id = str(uuid.uuid4())
+    runtime_request = _build_stream_request(
+        request=request,
+        user=user,
+        correlation_id=correlation_id,
+        response_id=response_id,
+        transport="legacy_sse_compat",
+    )
+    return StreamingResponse(
+        _sse_chunks(runtime_request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Correlation-Id": correlation_id,
+            "X-Response-Id": response_id,
+            "Link": '</api/stream>; rel="successor-version"',
+        },
+    )
 
 
-@router.get("/models/events/sse", response_model=None)
-async def model_events_sse(
-    http_request: Request,
-    job_id: Optional[str] = Query(None, description="Specific job ID to track"),
-    current_user: Dict[str, Any] = Depends(get_current_user_websocket),
-) -> EventSourceResponse:
-    """
-    Server-Sent Events endpoint for model operation events.
-
-    This provides a fallback for clients that cannot use WebSocket connections.
-
-    Requirements: 3.8, 9.3, 9.6
-    """
-    try:
-        user_id = current_user.get("user_id", "anonymous")
-
-        async def event_generator():
-            """Generate SSE events for model operations."""
-            try:
-                # Import here to avoid circular imports
-                from ai_karen_engine.event_bus import get_event_bus
-
-                # Send initial connection event
-                yield {
-                    "event": "connected",
-                    "data": json.dumps(
-                        {
-                            "type": "connection_established",
-                            "user_id": user_id,
-                            "job_id": job_id,
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }
-                    ),
-                }
-
-                # Set up event subscription
-                event_bus = get_event_bus()
-                received_events = []
-
-                # Create event handler
-                async def handle_event(event_data):
-                    """Handle model orchestrator events."""
-                    try:
-                        # Filter by job_id if specified
-                        if (
-                            job_id
-                            and event_data.get("payload", {}).get("job_id") != job_id
-                        ):
-                            return
-
-                        event_message = {
-                            "type": "model_event",
-                            "event": event_data.get("event_type"),
-                            "data": event_data.get("payload", {}),
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }
-
-                        received_events.append(event_message)
-
-                    except Exception as e:
-                        logger.error(f"Error handling SSE event: {e}")
-
-                # Subscribe to events
-                event_bus.subscribe("model_orchestrator", handle_event)
-
-                # Keep connection alive and send events
-                last_heartbeat = datetime.now()
-
-                while True:
-                    try:
-                        # Check for client disconnect
-                        if await http_request.is_disconnected():
-                            break
-
-                        # Send any received events
-                        while received_events:
-                            event = received_events.pop(0)
-                            yield {"event": "model_event", "data": json.dumps(event)}
-
-                        # Send heartbeat every 30 seconds
-                        now = datetime.now()
-                        if (now - last_heartbeat).total_seconds() > 30:
-                            yield {
-                                "event": "heartbeat",
-                                "data": json.dumps(
-                                    {"type": "heartbeat", "timestamp": now.isoformat()}
-                                ),
-                            }
-                            last_heartbeat = now
-
-                        # Small delay to prevent busy waiting
-                        await asyncio.sleep(0.1)
-
-                    except Exception as e:
-                        logger.error(f"Error in SSE event loop: {e}")
-                        break
-
-            except Exception as e:
-                logger.error(f"Error in SSE event generator: {e}")
-                yield {
-                    "event": "error",
-                    "data": json.dumps(
-                        {
-                            "type": "error",
-                            "message": str(e),
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }
-                    ),
-                }
-
-        return EventSourceResponse(event_generator())
-
-    except Exception as e:
-        logger.error(f"Error creating model events SSE stream: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to create event stream: {str(e)}"
-        )
-
-
-# HTTP streaming endpoint
 @router.post("/stream/http")
 async def stream_chat_http(
     request: StreamChatRequest,
     http_request: Request,
-    processor: AsyncStreamProcessor = Depends(get_stream_processor),
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
 ) -> StreamingResponse:
-    """
-    HTTP streaming endpoint for streaming chat responses.
+    """Legacy NDJSON URL adapted directly to canonical ``ChatRuntime`` streaming."""
 
-    Returns NDJSON (newline-delimited JSON) stream.
-    """
-    try:
-        # Create chat request
-        chat_request = ChatRequest(
-            message=request.message,
-            user_id=request.user_id,
-            conversation_id=request.conversation_id,
-            session_id=request.session_id,
-            stream=True,
-            include_context=request.include_context,
-            metadata=request.metadata,
-        )
-
-        # Create HTTP stream
-        return await processor.create_http_stream(chat_request, http_request)
-
-    except Exception as e:
-        logger.error(f"Error creating HTTP stream: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to create stream: {str(e)}"
-        )
+    correlation_id = http_request.headers.get("X-Correlation-Id") or str(uuid.uuid4())
+    response_id = str(uuid.uuid4())
+    runtime_request = _build_stream_request(
+        request=request,
+        user=user,
+        correlation_id=correlation_id,
+        response_id=response_id,
+        transport="legacy_http_stream_compat",
+    )
+    return StreamingResponse(
+        _ndjson_chunks(runtime_request),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Correlation-Id": correlation_id,
+            "X-Response-Id": response_id,
+            "Link": '</api/stream>; rel="successor-version"',
+        },
+    )
 
 
-# Stream management endpoints
-@router.get("/stream/{session_id}/status", response_model=StreamStatusResponse)
+@router.get("/stream/{session_id}/status")
 async def get_stream_status(
-    session_id: str, processor: AsyncStreamProcessor = Depends(get_stream_processor)
-):
-    """Get status information for a streaming session."""
-    status = await processor.get_stream_status(session_id)
-
-    if not status:
-        raise HTTPException(status_code=404, detail="Stream session not found")
-
-    return StreamStatusResponse(**status)
+    session_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+) -> JSONResponse:
+    require_execution_identity(user)
+    return _retired_stream_control(session_id)
 
 
 @router.post("/stream/{session_id}/pause")
 async def pause_stream(
-    session_id: str, processor: AsyncStreamProcessor = Depends(get_stream_processor)
-):
-    """Pause a streaming session."""
-    success = await processor.pause_stream(session_id)
-
-    if not success:
-        raise HTTPException(status_code=404, detail="Stream session not found")
-
-    return {"success": True, "message": f"Stream {session_id} paused"}
+    session_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+) -> JSONResponse:
+    require_execution_identity(user)
+    return _retired_stream_control(session_id)
 
 
 @router.post("/stream/{session_id}/resume")
 async def resume_stream(
-    session_id: str, processor: AsyncStreamProcessor = Depends(get_stream_processor)
-):
-    """Resume a paused streaming session."""
-    success = await processor.resume_stream(session_id)
-
-    if not success:
-        raise HTTPException(status_code=404, detail="Stream session not found")
-
-    return {"success": True, "message": f"Stream {session_id} resumed"}
+    session_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+) -> JSONResponse:
+    require_execution_identity(user)
+    return _retired_stream_control(session_id)
 
 
 @router.post("/stream/{session_id}/cancel")
 async def cancel_stream(
-    session_id: str, processor: AsyncStreamProcessor = Depends(get_stream_processor)
-):
-    """Cancel a streaming session."""
-    success = await processor.cancel_stream(session_id)
-
-    if not success:
-        raise HTTPException(status_code=404, detail="Stream session not found")
-
-    return {"success": True, "message": f"Stream {session_id} cancelled"}
+    session_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+) -> JSONResponse:
+    require_execution_identity(user)
+    return _retired_stream_control(session_id)
 
 
 @router.post("/stream/{session_id}/recover")
 async def recover_stream(
     session_id: str,
-    from_sequence: Optional[int] = Query(
-        None, description="Sequence number to resume from"
-    ),
-    processor: AsyncStreamProcessor = Depends(get_stream_processor),
+    from_sequence: Optional[int] = Query(None),
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+) -> JSONResponse:
+    del from_sequence
+    require_execution_identity(user)
+    return _retired_stream_control(session_id)
+
+
+@router.websocket("/models/events")
+async def websocket_model_events_endpoint(
+    websocket: WebSocket,
+    current_user: Dict[str, Any] = Depends(get_current_user_websocket),
 ):
-    """Recover an interrupted streaming session."""
-    success = await processor.recover_stream(session_id, from_sequence)
+    """Authenticated admin transport for model-operation events."""
 
-    if not success:
-        raise HTTPException(
-            status_code=404, detail="Stream session not found or recovery failed"
+    _require_admin(current_user)
+    from ai_karen_engine.event_bus import get_event_bus
+
+    event_bus = get_event_bus()
+    queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=200)
+
+    async def handle_model_event(event_data: Dict[str, Any]) -> None:
+        message = {
+            "type": "model_event",
+            "event": event_data.get("event_type"),
+            "data": event_data.get("payload", {}),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            queue.put_nowait(message)
+        except asyncio.QueueFull:
+            logger.warning("Dropping model event for slow WebSocket consumer")
+
+    event_bus.subscribe("model_orchestrator", handle_model_event)
+    await websocket.accept()
+    connection_id = str(uuid.uuid4())
+    await websocket.send_text(
+        json.dumps(
+            {
+                "type": "connection_established",
+                "connection_id": connection_id,
+                "subscribed_events": ["model_orchestrator"],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
         )
+    )
 
-    return {"success": True, "message": f"Stream {session_id} recovery initiated"}
+    async def sender() -> None:
+        while True:
+            event = await queue.get()
+            await websocket.send_text(json.dumps(event))
+
+    sender_task = asyncio.create_task(sender())
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                message = json.loads(raw)
+            except json.JSONDecodeError:
+                await websocket.send_text(
+                    json.dumps({"type": "error", "message": "Invalid JSON format"})
+                )
+                continue
+            if message.get("type") == "ping":
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "pong",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+                )
+    except WebSocketDisconnect:
+        pass
+    finally:
+        sender_task.cancel()
+        await asyncio.gather(sender_task, return_exceptions=True)
 
 
-# Statistics and monitoring endpoints
+@router.get("/models/events/sse")
+async def model_events_sse(
+    http_request: Request,
+    job_id: Optional[str] = Query(None, description="Specific job ID to track"),
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+) -> StreamingResponse:
+    """Authenticated admin SSE transport for model-operation events."""
+
+    _require_admin(user)
+
+    async def event_generator():
+        from ai_karen_engine.event_bus import get_event_bus
+
+        event_bus = get_event_bus()
+        queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=200)
+
+        async def handle_event(event_data: Dict[str, Any]) -> None:
+            payload = event_data.get("payload", {}) or {}
+            if job_id and payload.get("job_id") != job_id:
+                return
+            message = {
+                "type": "model_event",
+                "event": event_data.get("event_type"),
+                "data": payload,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            try:
+                queue.put_nowait(message)
+            except asyncio.QueueFull:
+                logger.warning("Dropping model event for slow SSE consumer")
+
+        event_bus.subscribe("model_orchestrator", handle_event)
+        yield "event: connected\ndata: {}\n\n"
+
+        last_heartbeat = asyncio.get_running_loop().time()
+        while not await http_request.is_disconnected():
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                yield f"event: model_event\ndata: {json.dumps(event)}\n\n"
+            except asyncio.TimeoutError:
+                pass
+
+            now = asyncio.get_running_loop().time()
+            if now - last_heartbeat >= 30.0:
+                heartbeat = {
+                    "type": "heartbeat",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                yield f"event: heartbeat\ndata: {json.dumps(heartbeat)}\n\n"
+                last_heartbeat = now
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
 @router.get("/stats", response_model=WebSocketStatsResponse)
 async def get_websocket_stats(
     gateway: WebSocketGateway = Depends(get_websocket_gateway),
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Get WebSocket connection statistics."""
-    stats = gateway.get_connection_stats()
-    return WebSocketStatsResponse(**stats)
+    _require_admin(user)
+    return WebSocketStatsResponse(**gateway.get_connection_stats())
 
 
-@router.get("/stream/metrics", response_model=StreamMetricsResponse)
+@router.get("/stream/metrics")
 async def get_stream_metrics(
-    processor: AsyncStreamProcessor = Depends(get_stream_processor),
-):
-    """Get streaming performance metrics."""
-    metrics = processor.get_performance_metrics()
-    active_sessions = processor.get_active_session_count()
-
-    return StreamMetricsResponse(
-        total_streams=metrics["total_streams"],
-        successful_streams=metrics["successful_streams"],
-        failed_streams=metrics["failed_streams"],
-        success_rate=metrics["success_rate"],
-        avg_stream_duration=metrics["avg_stream_duration"],
-        avg_processing_time=metrics["avg_processing_time"],
-        active_sessions=active_sessions,
-    )
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+) -> JSONResponse:
+    _require_admin(user)
+    return _retired_stream_control()
 
 
 @router.get("/stream/active")
 async def list_active_streams(
-    processor: AsyncStreamProcessor = Depends(get_stream_processor),
-):
-    """List all active streaming sessions."""
-    active_streams = await processor.list_active_streams()
-    return {"active_streams": active_streams, "total_count": len(active_streams)}
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+) -> JSONResponse:
+    _require_admin(user)
+    return _retired_stream_control()
 
 
-# User presence endpoints
 @router.get("/presence/{user_id}")
 async def get_user_presence(
-    user_id: str, gateway: WebSocketGateway = Depends(get_websocket_gateway)
+    user_id: str,
+    gateway: WebSocketGateway = Depends(get_websocket_gateway),
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Get presence information for a user."""
+    _require_self_or_admin(user, user_id)
     presence = gateway.presence_manager.get_presence(user_id)
     return {"user_id": user_id, "presence": presence}
 
 
 @router.get("/presence/online")
-async def get_online_users(gateway: WebSocketGateway = Depends(get_websocket_gateway)):
-    """Get list of online users."""
+async def get_online_users(
+    gateway: WebSocketGateway = Depends(get_websocket_gateway),
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    _require_admin(user)
     online_users = gateway.presence_manager.get_online_users()
     return {"online_users": online_users, "count": len(online_users)}
 
 
-# Typing indicators endpoints
 @router.get("/typing/{conversation_id}")
 async def get_typing_users(
-    conversation_id: str, gateway: WebSocketGateway = Depends(get_websocket_gateway)
+    conversation_id: str,
+    gateway: WebSocketGateway = Depends(get_websocket_gateway),
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Get users currently typing in a conversation."""
+    require_execution_identity(user)
     typing_users = gateway.typing_manager.get_typing_users(conversation_id)
     return {
         "conversation_id": conversation_id,
@@ -774,14 +678,14 @@ async def get_typing_users(
     }
 
 
-# Message queue endpoints
 @router.get("/queue/{user_id}")
 async def get_queued_messages(
-    user_id: str, gateway: WebSocketGateway = Depends(get_websocket_gateway)
+    user_id: str,
+    gateway: WebSocketGateway = Depends(get_websocket_gateway),
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Get queued messages for a user."""
+    _require_self_or_admin(user, user_id)
     queued_messages = await gateway.message_queue.get_queued_messages(user_id)
-
     return {
         "user_id": user_id,
         "queued_messages": [
@@ -801,32 +705,34 @@ async def get_queued_messages(
 
 @router.delete("/queue/{user_id}")
 async def clear_queued_messages(
-    user_id: str, gateway: WebSocketGateway = Depends(get_websocket_gateway)
+    user_id: str,
+    gateway: WebSocketGateway = Depends(get_websocket_gateway),
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Clear all queued messages for a user."""
+    _require_self_or_admin(user, user_id)
     await gateway.message_queue.clear_queued_messages(user_id)
+    return {"success": True, "user_id": user_id}
 
-    return {"success": True, "message": f"Cleared queued messages for user {user_id}"}
 
-
-# Connection management endpoints
 @router.get("/connections/{user_id}")
 async def get_user_connections(
-    user_id: str, gateway: WebSocketGateway = Depends(get_websocket_gateway)
+    user_id: str,
+    gateway: WebSocketGateway = Depends(get_websocket_gateway),
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Get all active connections for a user."""
+    _require_self_or_admin(user, user_id)
     connections = gateway.get_user_connections(user_id)
-
     return {"user_id": user_id, "connections": connections, "count": len(connections)}
 
 
 @router.get("/connections/conversation/{conversation_id}")
 async def get_conversation_connections(
-    conversation_id: str, gateway: WebSocketGateway = Depends(get_websocket_gateway)
+    conversation_id: str,
+    gateway: WebSocketGateway = Depends(get_websocket_gateway),
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Get all active connections for a conversation."""
+    _require_admin(user)
     connections = gateway.get_conversation_connections(conversation_id)
-
     return {
         "conversation_id": conversation_id,
         "connections": connections,
@@ -834,34 +740,45 @@ async def get_conversation_connections(
     }
 
 
-# Health check endpoint
 @router.get("/health")
 async def websocket_health_check(
     gateway: WebSocketGateway = Depends(get_websocket_gateway),
-    processor: AsyncStreamProcessor = Depends(get_stream_processor),
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Health check for WebSocket services."""
+    require_execution_identity(user)
     try:
-        gateway_stats = gateway.get_connection_stats()
-        stream_metrics = processor.get_performance_metrics()
-
+        stats = gateway.get_connection_stats()
         return {
             "status": "healthy",
+            "runtime_authority": "ChatRuntime",
+            "legacy_stream_processor": "retired",
             "websocket_gateway": {
                 "status": "running",
-                "connections": gateway_stats["total_connections"],
-                "authenticated_users": gateway_stats["unique_users"],
+                "connections": stats.get("total_connections", 0),
+                "authenticated_users": stats.get("unique_users", 0),
             },
-            "stream_processor": {
-                "status": "running",
-                "active_streams": processor.get_active_session_count(),
-                "success_rate": stream_metrics["success_rate"],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        logger.exception(
+            "WebSocket health check failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "runtime_authority": "ChatRuntime",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
-            "timestamp": datetime.now(timezone.utc),
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e),
-            "timestamp": datetime.now(timezone.utc),
-        }
+        )
+
+
+__all__ = [
+    "StreamChatRequest",
+    "get_current_user_websocket",
+    "router",
+    "stream_chat_http",
+    "stream_chat_sse",
+    "websocket_chat_endpoint",
+]
