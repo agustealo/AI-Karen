@@ -1,6 +1,16 @@
+"""Copilot transport adapters for canonical AI KAREN execution.
+
+Copilot is an ingress surface only. Chat generation delegates to ``ChatRuntime``;
+identity is server-owned; tenant scope is never synthesized; authorization
+failures fail closed. Predictor action dispatch remains a compatibility surface
+until action execution is moved behind the runtime action authority.
+"""
+
+from __future__ import annotations
+
+import inspect
 import json
 import logging
-import os
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -9,9 +19,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse, StreamingResponse
 
+from ai_karen_engine.api_routes.chat.execution_identity import (
+    build_chat_execution_context,
+    can_execute_copilot_action,
+    require_execution_identity,
+)
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
-    ChatExecutionContext,
     ChatExecutionRequest,
     ChatExecutionStatus,
 )
@@ -21,38 +35,17 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     serialize_runtime_response,
 )
 from ai_karen_engine.core.services.dependencies import bypass_user_context_func
-from ai_karen_engine.utils.chat_helpers import (
-    is_production_env as _is_production_env,
-)
-from ai_karen_engine.utils.chat_helpers import (
-    json_safe as _json_safe,
-)
-from ai_karen_engine.utils.chat_helpers import (
-    normalize_session_id as _normalize_session_id,
-)
-from ai_karen_engine.utils.chat_helpers import (
-    resolve_user_context as _resolve_user_context,
-)
-
+from ai_karen_engine.utils.chat_helpers import json_safe as _json_safe
+from ai_karen_engine.utils.chat_helpers import normalize_session_id as _normalize_session_id
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(tags=["copilot"])
-
-
-def get_chat_runtime_service():
-    """Return the singleton authoritative chat runtime service."""
-    return get_chat_runtime()
-
-
-async def _get_chat_orchestrator():
-    """Return the canonical chat orchestrator via the runtime service."""
-    return await get_chat_runtime_service().get_orchestrator()
 
 
 class SuggestedAction(BaseModel):
     type: str = Field(
-        ..., examples=["add_task", "pin_memory", "open_doc", "export_note"]
+        ...,
+        examples=["add_task", "pin_memory", "open_doc", "export_note"],
     )
     params: Optional[Dict[str, Any]] = Field(default_factory=dict)
     confidence: float = Field(0.8, ge=0.0, le=1.0)
@@ -60,7 +53,14 @@ class SuggestedAction(BaseModel):
 
 
 class AssistRequest(BaseModel):
-    user_id: str = Field(..., min_length=1)
+    """Copilot assist request.
+
+    ``user_id`` and ``org_id`` remain accepted for wire compatibility but are
+    never trusted as execution identity. Authentication middleware owns user and
+    tenant scope.
+    """
+
+    user_id: Optional[str] = Field(default=None, min_length=1)
     org_id: Optional[str] = None
     message: str = Field(..., min_length=1, max_length=8000)
     top_k: int = Field(6, ge=1, le=50)
@@ -71,7 +71,10 @@ class AssistRequest(BaseModel):
     session_id: Optional[str] = None
     response_mode: Optional[str] = Field(
         default=None,
-        description="Optional per-request override: streaming_first, auto, non_streaming. If not provided, uses admin default.",
+        description=(
+            "Optional compatibility hint: streaming_first, auto, or non_streaming. "
+            "Execution authority remains in ChatRuntime."
+        ),
     )
 
 
@@ -83,55 +86,12 @@ class AssistResponse(BaseModel):
     correlation_id: str
 
 
-def _build_chat_execution_request_from_assist_request(
-    *,
-    request: "AssistRequest",
-    user: Dict[str, Any],
-    conversation_id: str,
-    correlation_id: str,
-    response_id: str,
-    stream: bool = False,
-) -> ChatExecutionRequest:
-    """Construct a canonical ChatExecutionRequest from an AssistRequest.
-
-    Identity (user_id, tenant_id, roles, permissions) is taken only from
-    the server-side ``user`` dependency; ``request.user_id`` is intentionally
-    not trusted for execution.
-    """
-    preferred_provider = (
-        request.preferred_provider or request.preferred_llm_provider
-    )
-    messages = [{"role": "user", "content": request.message}]
-
-    return ChatExecutionRequest(
-        messages=messages,
-        context=ChatExecutionContext(
-            user_id=user["user_id"],
-            tenant_id=str(user.get("tenant_id") or "default"),
-            session_id=request.session_id,
-            conversation_id=conversation_id,
-            request_id=response_id,
-            correlation_id=correlation_id,
-            roles=list(user.get("roles") or []),
-            permissions=list(user.get("permissions") or []),
-        ),
-        preferred_provider=preferred_provider,
-        preferred_model=request.preferred_model,
-        stream=stream,
-        metadata={
-            "surface": "copilot",
-            "top_k": request.top_k,
-            "context": _json_safe(request.context or {}),
-            "preferred_llm_provider": request.preferred_llm_provider,
-            "preferred_provider": request.preferred_provider,
-            "preferred_model": request.preferred_model,
-        },
-    )
-
-
 class StartActionRequest(BaseModel):
     action: str = Field(
-        ..., description="Registered action/predictor name, e.g. routing.select"
+        ...,
+        min_length=1,
+        max_length=200,
+        description="Registered action/predictor name, e.g. routing.select",
     )
     payload: Dict[str, Any] = Field(default_factory=dict)
     context: Dict[str, Any] = Field(default_factory=dict)
@@ -143,8 +103,56 @@ class StartActionResponse(BaseModel):
     correlation_id: str
 
 
+def get_chat_runtime_service():
+    """Return the singleton authoritative chat runtime service."""
+
+    return get_chat_runtime()
+
+
+async def _get_chat_orchestrator():
+    """Compatibility health adapter for callers that inspect the orchestrator."""
+
+    return await get_chat_runtime_service().get_orchestrator()
+
+
 def get_correlation_id(request: Request) -> str:
     return request.headers.get("X-Correlation-Id", "")
+
+
+def _get_predictor_registry():
+    """Return the existing CORTEX predictor registry without inventing handlers."""
+
+    try:
+        from ai_karen_engine.core.cortex.predictors import predictor_registry
+
+        return predictor_registry
+    except Exception:
+        logger.exception("CORTEX predictor registry unavailable")
+        return {}
+
+
+def _get_audit_logger():
+    try:
+        from ai_karen_engine.services.audit.audit_logger import get_audit_logger
+
+        return get_audit_logger()
+    except Exception:
+        logger.debug("Audit logger unavailable", exc_info=True)
+        return None
+
+
+async def _log_audit_event(**kwargs: Any) -> None:
+    """Emit an audit event without allowing audit failure to mask the action result."""
+
+    audit_logger = _get_audit_logger()
+    if audit_logger is None or not hasattr(audit_logger, "log_audit_event"):
+        return
+    try:
+        result = audit_logger.log_audit_event(**kwargs)
+        if inspect.isawaitable(result):
+            await result
+    except Exception:
+        logger.warning("Copilot audit event failed", exc_info=True)
 
 
 def _assist_response_json(
@@ -165,234 +173,204 @@ def _assist_response_json(
             "metadata": _json_safe(metadata or {}),
             "correlation_id": correlation_id,
         },
+        headers={"X-Correlation-Id": correlation_id},
     )
 
 
-def _get_predictor_registry():
-    """Return the predictor registry with graceful fallback."""
+def _build_chat_execution_request_from_assist_request(
+    *,
+    request: AssistRequest,
+    user: Dict[str, Any],
+    conversation_id: str,
+    correlation_id: str,
+    response_id: str,
+    stream: bool,
+) -> ChatExecutionRequest:
+    """Adapt Copilot input into the canonical runtime request."""
 
-    try:
-        from ai_karen_engine.core.cortex.predictors import (
-            predictor_registry as registry,
-        )
+    require_execution_identity(user)
+    session_id = str(request.session_id or conversation_id).strip() or conversation_id
+    preferred_provider = request.preferred_provider or request.preferred_llm_provider
 
-        return registry
-    except Exception:
+    return ChatExecutionRequest(
+        messages=[{"role": "user", "content": request.message.strip()}],
+        context=build_chat_execution_context(
+            user=user,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            request_id=response_id,
+            correlation_id=correlation_id,
+        ),
+        preferred_provider=preferred_provider,
+        preferred_model=request.preferred_model,
+        stream=stream,
+        metadata={
+            "surface": "copilot",
+            "top_k": request.top_k,
+            "context": _json_safe(request.context or {}),
+            "response_mode": request.response_mode,
+            "compatibility_user_id_present": bool(request.user_id),
+            "compatibility_org_id_present": bool(request.org_id),
+        },
+    )
+
+
+def _action_output(value: Any) -> Dict[str, Any]:
+    if value is None:
         return {}
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump()
+        return dumped if isinstance(dumped, dict) else {"result": dumped}
+    return {"result": value}
 
 
-def _get_audit_logger():
-    """Lazily import the audit logger to avoid heavy startup costs."""
-
-    try:
-        from ai_karen_engine.services.audit.audit_logger import (
-            get_audit_logger as _getter,
+async def _execute_copilot_action(
+    *,
+    req: StartActionRequest,
+    user_ctx: Dict[str, Any],
+    correlation_id: str,
+) -> StartActionResponse:
+    user_id, tenant_id = require_execution_identity(user_ctx)
+    if not can_execute_copilot_action(user_ctx):
+        await _log_audit_event(
+            event_type="copilot.action.denied",
+            user_id=user_id,
+            tenant_id=tenant_id,
+            session_id=user_ctx.get("session_id"),
+            correlation_id=correlation_id,
+            details={"action": req.action},
+            surface="copilot",
+            success=False,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Copilot action permission required",
         )
 
-        return _getter()
-    except Exception:
-        return None
+    registry = _get_predictor_registry()
+    handler_getter = getattr(registry, "get", None)
+    handler = handler_getter(req.action) if callable(handler_getter) else None
+    if handler is None:
+        available = sorted(registry.keys()) if hasattr(registry, "keys") else []
+        raise HTTPException(
+            status_code=404,
+            detail={"message": "Unknown Copilot action", "available": available},
+        )
 
+    await _log_audit_event(
+        event_type="copilot.action.started",
+        user_id=user_id,
+        tenant_id=tenant_id,
+        session_id=user_ctx.get("session_id"),
+        correlation_id=correlation_id,
+        details={"action": req.action, "payload_keys": sorted(req.payload.keys())},
+        surface="copilot",
+    )
 
-class _AuditLoggerProtocol:
-    async def log_event(self, *args: Any, **kwargs: Any) -> Any: ...
-
-
-async def _log_audit_event(**kwargs: Any) -> None:
-    """Best-effort audit logging with compatibility for partial shims."""
     try:
-        audit_logger = _get_audit_logger()
-        if audit_logger is not None and hasattr(audit_logger, "log_audit_event"):
-            audit_logger.log_audit_event(**kwargs)
-    except Exception:
-        pass
+        result = handler(user_ctx, req.payload, req.context)
+        if inspect.isawaitable(result):
+            result = await result
+        output = _action_output(result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "Copilot action execution failed",
+            extra={
+                "correlation_id": correlation_id,
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "action": req.action,
+                "error_type": type(exc).__name__,
+            },
+        )
+        await _log_audit_event(
+            event_type="copilot.action.failed",
+            user_id=user_id,
+            tenant_id=tenant_id,
+            session_id=user_ctx.get("session_id"),
+            correlation_id=correlation_id,
+            details={"action": req.action, "error_type": type(exc).__name__},
+            surface="copilot",
+            success=False,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Copilot action execution failed",
+        ) from exc
+
+    await _log_audit_event(
+        event_type="copilot.action.completed",
+        user_id=user_id,
+        tenant_id=tenant_id,
+        session_id=user_ctx.get("session_id"),
+        correlation_id=correlation_id,
+        details={"action": req.action, "success": True},
+        surface="copilot",
+    )
+    return StartActionResponse(
+        status="ok",
+        output=output,
+        correlation_id=correlation_id,
+    )
 
 
 @router.get("/health")
-async def copilot_health():
-    """Lightweight health check for copilot routes to verify wiring.
-
-    Returns minimal info without invoking heavy dependencies.
-    """
-    try:
-        registry = _get_predictor_registry()
-        if hasattr(registry, "keys"):
-            registered = list(registry.keys())
-        else:
-            registered = []
-    except Exception:
-        registered = []
-
+async def copilot_health() -> Dict[str, Any]:
+    registry = _get_predictor_registry()
+    registered = sorted(registry.keys()) if hasattr(registry, "keys") else []
     return {
         "status": "ok",
         "registered_actions": registered,
+        "runtime_authority": "ChatRuntime",
         "timestamp": int(time.time()),
     }
 
 
 @router.post("/start", response_model=StartActionResponse)
 async def copilot_start_action(
+    req: StartActionRequest,
     http_request: Request,
-    # In dev/bypass we allow anonymous; compute context inside to avoid hard 401
-    user_ctx: Optional[Dict[str, Any]] = None,
-):
-    """Generic CopilotKit action starter. Routes to predictor-registered actions."""
-    correlation_id = (
-        http_request.headers.get("X-Correlation-Id") or f"copilot_{int(time.time())}"
-    )
-
-    # Parse request body manually
-    try:
-        body = await http_request.json()
-        req = StartActionRequest(**body)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid request body: {e}")
-
-    # Resolve user context: prefer provided; otherwise permissive in dev/bypass
-    if user_ctx is None:
-        auth_mode = os.getenv("AUTH_MODE", "hybrid").lower()
-        allow_public = os.getenv("ALLOW_PUBLIC_COPILOT", "false").lower() in (
-            "1",
-            "true",
-            "yes",
-        )
-        if not _is_production_env() and (allow_public or auth_mode == "bypass"):
-            user_ctx = {
-                "user_id": "anonymous",
-                "roles": ["admin"],
-                "scopes": ["chat:write"],
-            }
-        else:
-            try:
-                # Try to resolve real context if available
-                user_ctx = await _resolve_user_context(http_request)
-            except Exception:
-                # If strict mode, deny
-                raise HTTPException(status_code=401, detail="Unauthorized")
-            if user_ctx is None:
-                raise HTTPException(status_code=401, detail="Unauthorized")
-
-    # RBAC: basic scope check; allow admin or chat:write by default
-    try:
-        allow_public = os.getenv("ALLOW_PUBLIC_COPILOT", "false").lower() in (
-            "1",
-            "true",
-            "yes",
-        )
-        if not allow_public:
-            # Simple role checking - admin or user role required
-            user_roles = user_ctx.get("roles", [])
-            if not any(role in user_roles for role in ["admin", "user"]):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Insufficient permissions - user or admin role required",
-                )
-    except Exception:
-        # If RBAC service not configured, proceed in permissive mode
-        pass
-
-    # Audit: action started
-    await _log_audit_event(
-        event_type="copilot.action.started",
-        user_id=user_ctx.get("user_id"),
-        session_id=user_ctx.get("session_id"),
+    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
+) -> StartActionResponse:
+    correlation_id = get_correlation_id(http_request) or str(uuid.uuid4())
+    return await _execute_copilot_action(
+        req=req,
+        user_ctx=user_ctx,
         correlation_id=correlation_id,
-        details={"action": req.action, "payload_keys": list(req.payload.keys())},
-        surface="copilot",
     )
 
-    # Dispatch to predictor registry
-    registry = _get_predictor_registry()
-    handler_getter = getattr(registry, "get", lambda *_: None)
-    handler = handler_getter(req.action)
-    if handler is None:
-        available = []
-        try:
-            registry = _get_predictor_registry()
-            available = list(registry.keys()) if hasattr(registry, "keys") else []
-        except Exception:
-            available = []
-        raise HTTPException(
-            status_code=404,
-            detail=f"Unknown action: {req.action}. Available: {available}",
-        )
 
-    try:
-        import inspect
-
-        # Normalize user context and pass payload/context
-        args = (user_ctx, req.payload, req.context)
-        if inspect.iscoroutinefunction(handler):
-            output = await handler(*args)
-        else:
-            output = handler(*args)
-
-        # Audit: action completed
-        await _log_audit_event(
-            event_type="copilot.action.completed",
-            user_id=user_ctx.get("user_id"),
-            session_id=user_ctx.get("session_id"),
-            correlation_id=correlation_id,
-            details={"action": req.action, "success": True},
-            surface="copilot",
-        )
-
-        return StartActionResponse(
-            status="ok", output=output or {}, correlation_id=correlation_id
-        )
-    except Exception as e:
-        # Audit: action failed
-        await _log_audit_event(
-            event_type="copilot.action.failed",
-            user_id=user_ctx.get("user_id"),
-            session_id=user_ctx.get("session_id"),
-            correlation_id=correlation_id,
-            details={"action": req.action, "error": str(e)},
-            surface="copilot",
-            success=False,
-            error_message=str(e),
-        )
-        raise HTTPException(status_code=500, detail=f"Action failed: {e}")
-
-
-# Convenience GET endpoint for clients that mistakenly use GET
 @router.get("/start", response_model=StartActionResponse)
-async def copilot_start_action_get(action: str, http_request: Request):
-    """Shallow wrapper that maps GET to the same start action handler.
+async def copilot_start_action_get(
+    action: str,
+    http_request: Request,
+    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
+) -> StartActionResponse:
+    """Compatibility GET adapter with the same fail-closed authorization path."""
 
-    Accepts `action` as a query param and calls the POST handler with empty payload/context.
-    Keeps legacy or misconfigured clients working without 404s.
-    """
-    return await copilot_start_action(http_request=http_request)
+    correlation_id = get_correlation_id(http_request) or str(uuid.uuid4())
+    return await _execute_copilot_action(
+        req=StartActionRequest(action=action),
+        user_ctx=user_ctx,
+        correlation_id=correlation_id,
+    )
 
 
-@router.post("/assist")
+@router.post("/assist", response_model=AssistResponse)
 async def copilot_assist(
     request: AssistRequest,
     http_request: Request,
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Copilot assist endpoint normalized through the canonical chat runtime.
-
-    AssistRequest → ChatExecutionRequest → ChatRuntime.execute → serialize result.
-    All identity (user_id, tenant_id, roles, permissions) is server-owned.
-    """
-    correlation_id = get_correlation_id(http_request) or f"copilot_{int(time.time())}"
+    correlation_id = get_correlation_id(http_request) or str(uuid.uuid4())
     response_id = str(uuid.uuid4())
+    require_execution_identity(user)
 
-    logger.info(
-        "Copilot assist request received",
-        extra={
-            "correlation_id": correlation_id,
-            "user_id": user.get("user_id"),
-            "message_length": len(request.message),
-        },
-    )
-
-    conversation_id = _normalize_session_id(request.session_id)
-    if not conversation_id:
-        conversation_id = str(uuid.uuid4())
-
+    conversation_id = _normalize_session_id(request.session_id) or str(uuid.uuid4())
     chat_request = _build_chat_execution_request_from_assist_request(
         request=request,
         user=user,
@@ -402,81 +380,91 @@ async def copilot_assist(
         stream=False,
     )
 
+    logger.info(
+        "Copilot assist request received",
+        extra={
+            "correlation_id": correlation_id,
+            "user_id": user.get("user_id"),
+            "tenant_id": user.get("tenant_id"),
+            "message_length": len(request.message),
+        },
+    )
+
     try:
         result = await get_chat_runtime().execute(chat_request)
-
-        if result.status == ChatExecutionStatus.GATE and result.gate_response is not None:
-            gate = result.gate_response
-            payload = serialize_runtime_response(gate) or {}
-            status_code = runtime_response_http_status(gate) or 503
-            return JSONResponse(
-                status_code=status_code,
-                content=payload,
-                headers={"X-Correlation-Id": correlation_id},
-            )
-
-        metadata = _json_safe(result.metadata.to_dict())
-        metadata["llm"] = {
-            "requested_provider": metadata.get("requested_provider"),
-            "requested_model": metadata.get("requested_model"),
-            "actual_provider": metadata.get("actual_provider"),
-            "actual_model": metadata.get("actual_model"),
-            "runtime_engine": metadata.get("runtime_engine"),
-            "response_source": metadata.get("response_source"),
-            "fallback_level": metadata.get("fallback_level", 0),
-            "degraded_mode": metadata.get("degraded_mode", False),
-            "is_degraded": metadata.get("degraded_mode", False),
-            "used_fallback": metadata.get("used_fallback", False),
-            "correlation_id": metadata.get("correlation_id"),
-        }
-
-        action_models: List[SuggestedAction] = []
-        for action in result.actions or []:
-            if not isinstance(action, dict):
-                continue
-            params_value = action.get("params")
-            if isinstance(params_value, dict):
-                params = params_value
-            else:
-                params = {
-                    k: v
-                    for k, v in action.items()
-                    if k not in {"type", "confidence", "description"}
-                } or {}
-            action_models.append(
-                SuggestedAction(
-                    type=str(action.get("type", "unknown")),
-                    params=params,
-                    confidence=float(action.get("confidence", 0.8)),
-                    description=action.get("description"),
-                )
-            )
-
-        return _assist_response_json(
-            answer=result.answer,
-            structured_content=_json_safe(result.structured_content or {}),
-            actions=action_models,
-            metadata=metadata,
-            correlation_id=correlation_id,
-            status_code=200,
-        )
-
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as exc:
         logger.exception(
-            "Copilot assist failed: %s",
-            e,
-            extra={"correlation_id": correlation_id},
+            "Copilot assist runtime call failed",
+            extra={
+                "correlation_id": correlation_id,
+                "error_type": type(exc).__name__,
+            },
         )
         emergency = EmergencyFallbackResponse()
         payload = serialize_runtime_response(emergency) or {}
         payload["correlation_id"] = correlation_id
         return JSONResponse(
-            status_code=200,
+            status_code=runtime_response_http_status(emergency) or 503,
             content=payload,
             headers={"X-Correlation-Id": correlation_id},
         )
+
+    if result.status == ChatExecutionStatus.GATE and result.gate_response is not None:
+        gate = result.gate_response
+        payload = serialize_runtime_response(gate) or {}
+        payload["correlation_id"] = correlation_id
+        return JSONResponse(
+            status_code=runtime_response_http_status(gate) or 503,
+            content=payload,
+            headers={"X-Correlation-Id": correlation_id},
+        )
+
+    metadata = _json_safe(result.metadata.to_dict())
+    metadata["llm"] = {
+        "requested_provider": metadata.get("requested_provider"),
+        "requested_model": metadata.get("requested_model"),
+        "actual_provider": metadata.get("actual_provider"),
+        "actual_model": metadata.get("actual_model"),
+        "runtime_engine": metadata.get("runtime_engine"),
+        "response_source": metadata.get("response_source"),
+        "fallback_level": metadata.get("fallback_level", 0),
+        "degraded_mode": metadata.get("degraded_mode", False),
+        "used_fallback": metadata.get("used_fallback", False),
+        "correlation_id": metadata.get("correlation_id") or correlation_id,
+    }
+
+    action_models: List[SuggestedAction] = []
+    for action in result.actions or []:
+        if not isinstance(action, dict):
+            continue
+        params_value = action.get("params")
+        params = (
+            params_value
+            if isinstance(params_value, dict)
+            else {
+                key: value
+                for key, value in action.items()
+                if key not in {"type", "confidence", "description"}
+            }
+        )
+        action_models.append(
+            SuggestedAction(
+                type=str(action.get("type", "unknown")),
+                params=params,
+                confidence=float(action.get("confidence", 0.8)),
+                description=action.get("description"),
+            )
+        )
+
+    return _assist_response_json(
+        answer=result.answer,
+        structured_content=_json_safe(result.structured_content or {}),
+        actions=action_models,
+        metadata=metadata,
+        correlation_id=correlation_id,
+    )
 
 
 @router.post("/assist/stream")
@@ -484,30 +472,12 @@ async def copilot_assist_stream(
     request: AssistRequest,
     http_request: Request,
     user: Dict[str, Any] = Depends(bypass_user_context_func),
-):
-    """Streaming copilot assist endpoint normalized through the canonical chat runtime.
-
-    AssistRequest → ChatExecutionRequest → ChatRuntime.execute_stream → serialize
-    canonical ChatStreamChunk events. No provider/fallback inference at the transport.
-    """
-    correlation_id = (
-        get_correlation_id(http_request) or f"copilot_stream_{int(time.time())}"
-    )
+) -> StreamingResponse:
+    correlation_id = get_correlation_id(http_request) or str(uuid.uuid4())
     response_id = str(uuid.uuid4())
+    require_execution_identity(user)
 
-    logger.info(
-        "Copilot assist stream request received",
-        extra={
-            "correlation_id": correlation_id,
-            "user_id": user.get("user_id"),
-            "message_length": len(request.message),
-        },
-    )
-
-    conversation_id = _normalize_session_id(request.session_id)
-    if not conversation_id:
-        conversation_id = str(uuid.uuid4())
-
+    conversation_id = _normalize_session_id(request.session_id) or str(uuid.uuid4())
     chat_request = _build_chat_execution_request_from_assist_request(
         request=request,
         user=user,
@@ -518,9 +488,27 @@ async def copilot_assist_stream(
     )
 
     async def generate_stream():
-        async for chunk in get_chat_runtime().execute_stream(chat_request):
-            yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
-        yield "data: [DONE]\n\n"
+        try:
+            async for chunk in get_chat_runtime().execute_stream(chat_request):
+                yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
+        except Exception as exc:
+            logger.exception(
+                "Copilot assist stream failed",
+                extra={
+                    "correlation_id": correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            yield "data: " + json.dumps(
+                {
+                    "type": "error",
+                    "content": "Unable to complete the response.",
+                    "correlation_id": correlation_id,
+                    "metadata": {"error_code": "COPILOT_STREAM_FAILED"},
+                }
+            ) + "\n\n"
+        finally:
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         generate_stream(),
@@ -529,8 +517,19 @@ async def copilot_assist_stream(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Correlation-Id": correlation_id,
+            "X-Response-Id": response_id,
         },
     )
 
 
-__all__ = ["router"]
+__all__ = [
+    "AssistRequest",
+    "AssistResponse",
+    "StartActionRequest",
+    "StartActionResponse",
+    "_build_chat_execution_request_from_assist_request",
+    "copilot_assist",
+    "copilot_assist_stream",
+    "copilot_start_action",
+    "router",
+]
