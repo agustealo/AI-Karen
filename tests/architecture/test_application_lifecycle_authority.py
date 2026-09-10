@@ -6,7 +6,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 APP_ENTRYPOINT = REPO_ROOT / "src" / "ai_karen_engine" / "app.py"
 APPLICATION_RUNTIME = REPO_ROOT / "src" / "ai_karen_engine" / "server" / "application_runtime.py"
-CANONICAL_STARTUP = REPO_ROOT / "src" / "ai_karen_engine" / "server" / "startup.py"
 LEGACY_SERVER_APP = REPO_ROOT / "server" / "app.py"
 
 
@@ -28,11 +27,14 @@ def test_application_runtime_owns_runtime_shutdown_before_service_shutdown() -> 
     )
 
 
-def test_database_shutdown_is_owned_by_canonical_lifespan_services() -> None:
-    source = CANONICAL_STARTUP.read_text(encoding="utf-8")
+def test_database_shutdown_is_owned_by_canonical_application_runtime() -> None:
+    source = APPLICATION_RUNTIME.read_text(encoding="utf-8")
 
     assert "get_database_config(settings)" in source
     assert "await database_config.cleanup()" in source
+    assert source.index("await database_config.cleanup()") < source.index(
+        "await on_shutdown(app)"
+    )
 
 
 def test_legacy_server_app_has_no_lifecycle_or_shutdown_authority() -> None:

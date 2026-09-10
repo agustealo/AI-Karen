@@ -25,6 +25,14 @@ class _FakeCortex:
     pass
 
 
+class _FakePolicy:
+    pass
+
+
+class _FakeDecisionPipeline:
+    pass
+
+
 class _AvailabilityOnlyGateway:
     def __init__(self, healthy: bool = True, reason: str | None = None) -> None:
         self.healthy = healthy
@@ -36,16 +44,25 @@ class _AvailabilityOnlyGateway:
         return self.healthy, self.reason
 
 
-def test_runtime_composition_owns_explicit_cortex_and_expression_gateway() -> None:
+def test_runtime_composition_owns_explicit_decision_chain_and_expression_gateway() -> None:
+    cognitive_cortex = _FakeCortex()
+    runtime_policy = _FakePolicy()
+    decision_pipeline = _FakeDecisionPipeline()
+    gateway = _AvailabilityOnlyGateway()
     replacement = RuntimeComposition(
-        cortex=_FakeCortex(),
-        expression_gateway=_AvailabilityOnlyGateway(),
+        cognitive_cortex=cognitive_cortex,
+        runtime_policy=runtime_policy,
+        decision_pipeline=decision_pipeline,
+        expression_gateway=gateway,
     )
     set_runtime_composition(replacement)
 
     assert get_runtime_composition() is replacement
-    assert get_cortex_execution_decider() is replacement.cortex
-    assert get_expression_gateway() is replacement.expression_gateway
+    assert replacement.cognitive_cortex is cognitive_cortex
+    assert replacement.runtime_policy is runtime_policy
+    assert replacement.cortex is decision_pipeline
+    assert get_cortex_execution_decider() is decision_pipeline
+    assert get_expression_gateway() is gateway
 
     reset_runtime_composition()
 
@@ -59,6 +76,8 @@ def test_composition_contract_keeps_concrete_cognitive_imports_lazy() -> None:
     build_body = source.split("def build_runtime_composition()", 1)[1]
     assert "from ai_karen_engine.core.cortex.executive import CortexExecutionDecider" in build_body
     assert "from ai_karen_engine.core.expression.gateway import ExpressionGateway" in build_body
+    assert "RuntimeDecisionPipeline(" in build_body
+    assert "RuntimePolicyEnforcer()" in build_body
 
 
 def test_cortex_public_surface_does_not_export_process_singleton_accessor() -> None:
