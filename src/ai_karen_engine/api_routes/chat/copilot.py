@@ -42,6 +42,36 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["copilot"])
 
 
+def _is_placeholder_response(content: str) -> bool:
+    """Check if a response string is a degraded shim or placeholder response."""
+    if not content or not isinstance(content, str):
+        return True
+    lowered = content.lower()
+    degraded_indicators = [
+        "operating with limited capabilities",
+        "degraded mode",
+        "placeholder response",
+        "fallback response",
+    ]
+    for indicator in degraded_indicators:
+        if indicator in lowered:
+            return True
+    return False
+
+
+def _sanitize_user_visible_text(content: str) -> str:
+    """Strip internal analysis scaffold or reasoning markers from user-facing output."""
+    if not content or not isinstance(content, str):
+        return ""
+    if "\n===\n" in content:
+        content = content.split("\n===\n")[0]
+    elif "\n===" in content:
+        content = content.split("\n===")[0]
+    elif "===" in content:
+        content = content.split("===")[0]
+    return content.strip()
+
+
 class SuggestedAction(BaseModel):
     type: str = Field(
         ...,

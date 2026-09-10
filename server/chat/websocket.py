@@ -6,18 +6,18 @@ import json
 import logging
 import asyncio
 from typing import Dict, Any, Optional, List
-from fastapi import WebSocket, WebSocketDisconnect, Depends, Query, HTTPException, status
+from fastapi import WebSocket, WebSocketDisconnect, Depends, Query, HTTPException, status, APIRouter
 from fastapi.websockets import WebSocketState
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from datetime import datetime
 
 from .models import ChatConversation, ChatMessage, ChatSession
+from .database import get_db_session
 from .schemas import StreamMessageRequest, StreamChunkResponse
-from .services import ChatService
-from .services_enhanced import create_secure_chat_service, SecureChatService
+from .services import ChatService, create_secure_chat_service, SecureChatService
 from .providers.base import AIRequest
-from .middleware import get_current_chat_user, require_chat_permission
+from .middleware import get_current_chat_user, require_chat_permission, verify_jwt_token
 from .security import (
     validate_content, sanitize_content, get_content_validator, 
     SecurityLevel, ThreatLevel
@@ -29,6 +29,9 @@ from .security_monitoring import (
 from ai_karen_engine.config.llm_provider_config import get_provider_config_manager
 
 logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["websocket"])
+require_chat_admin = require_chat_permission("admin")
 
 
 def _resolve_max_tokens(
@@ -294,13 +297,20 @@ async def get_current_user_websocket(
 ) -> Optional[Dict[str, Any]]:
     """Get current user from WebSocket connection with JWT validation."""
     if not token:
+        headers = getattr(websocket, "headers", {})
+        auth_header = headers.get("authorization") if hasattr(headers, "get") else None
+        if auth_header and isinstance(auth_header, str) and auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+
+    if not token:
         await websocket.close(code=4001, reason="Authentication token required")
         return None
     
     try:
         # Validate JWT token
-        from .middleware import verify_jwt_token
-        user_context = await verify_jwt_token(token)
+        user_context = verify_jwt_token(token)
+        if asyncio.iscoroutine(user_context):
+            user_context = await user_context
         
         if not user_context:
             await websocket.close(code=4002, reason="Invalid authentication token")

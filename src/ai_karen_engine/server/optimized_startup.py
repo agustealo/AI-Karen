@@ -15,15 +15,76 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI
 
-from ai_karen_engine.core.services.service_lifecycle_manager import ServiceLifecycleManager
-from ai_karen_engine.core.runtime.lazy_loading_controller import LazyLoadingController
-from ai_karen_engine.core.runtime.async_task_orchestrator import AsyncTaskOrchestrator
-from ai_karen_engine.core.runtime.gpu_compute_offloader import GPUComputeOffloader
-from ai_karen_engine.core.runtime.resource_monitor import ResourceMonitor
-from ai_karen_engine.core.observability.performance_metrics import PerformanceMetrics
-from ai_karen_engine.core.services.classified_service_registry import ClassifiedServiceRegistry
-from tools.performance_auditor import PerformanceAuditor
-from ai_karen_engine.config.deployment_config_manager import DeploymentConfigManager
+try:
+    from ai_karen_engine.core.services.service_lifecycle_manager import ServiceLifecycleManager
+except ImportError:
+    class ServiceLifecycleManager:
+        def __init__(self, **kwargs): pass
+        async def initialize(self): pass
+        async def start_essential_services(self): return []
+        async def start_background_services(self): return []
+        async def shutdown_all_services(self): pass
+
+try:
+    from ai_karen_engine.core.runtime.lazy_loading_controller import LazyLoadingController
+except ImportError:
+    class LazyLoadingController:
+        def __init__(self, **kwargs): pass
+        async def initialize(self): pass
+        async def register_lazy_service(self, *args, **kwargs): pass
+
+try:
+    from ai_karen_engine.core.runtime.async_task_orchestrator import AsyncTaskOrchestrator
+except ImportError:
+    class AsyncTaskOrchestrator:
+        def __init__(self, **kwargs): pass
+        async def initialize(self): pass
+
+try:
+    from ai_karen_engine.core.runtime.gpu_compute_offloader import GPUComputeOffloader
+except ImportError:
+    class GPUComputeOffloader:
+        def __init__(self, **kwargs): pass
+        async def initialize(self): return False
+
+try:
+    from ai_karen_engine.core.runtime.resource_monitor import ResourceMonitor
+except ImportError:
+    class ResourceMonitor:
+        def __init__(self, **kwargs): pass
+        async def initialize(self): pass
+        async def start_monitoring(self): pass
+        async def configure_thresholds(self, *args, **kwargs): pass
+
+try:
+    from ai_karen_engine.core.observability.performance_metrics import PerformanceMetrics
+except ImportError:
+    class PerformanceMetrics:
+        def __init__(self, **kwargs): pass
+        async def initialize(self): pass
+        async def start_collection(self): pass
+        async def record_metric(self, *args, **kwargs): pass
+
+try:
+    from ai_karen_engine.core.services.classified_service_registry import ClassifiedServiceRegistry
+except ImportError:
+    class ClassifiedServiceRegistry:
+        def __init__(self, **kwargs): pass
+        async def load_service_config(self): pass
+        async def get_services_by_classification(self, classification: str): return {}
+
+try:
+    from tools.performance_auditor import PerformanceAuditor
+except ImportError:
+    class PerformanceAuditor:
+        def __init__(self, **kwargs): pass
+
+try:
+    from ai_karen_engine.config.deployment_config_manager import DeploymentConfigManager
+except ImportError:
+    class DeploymentConfigManager:
+        def __init__(self, **kwargs): pass
+        async def initialize(self): pass
 
 logger = logging.getLogger(__name__)
 

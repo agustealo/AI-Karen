@@ -155,8 +155,8 @@ class AbuseDetector:
                 if match_time >= cutoff_time
             ]
             
-            # Check if threshold exceeded
-            if len(self.pattern_matches[identifier]) > self.config.max_pattern_matches:
+            # Check if threshold exceeded or patterns matched
+            if matched_patterns or len(self.pattern_matches[identifier]) > self.config.max_pattern_matches:
                 await self._record_violation(identifier, matched_patterns)
                 return False, matched_patterns
             

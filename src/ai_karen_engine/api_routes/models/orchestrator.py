@@ -48,8 +48,8 @@ from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.services.dependencies import (
     get_langgraph_orchestrator_service,
 )
-from ai_karen_engine.models.shared_types import FlowType
-from ai_karen_engine.models.web_api_error_responses import (
+from ai_karen_engine.core.automation.contracts import FlowType
+from ai_karen_engine.services.error_response_schemas import (
     WebAPIErrorCode,
     create_service_error_response,
     get_http_status_for_error_code,
@@ -208,7 +208,7 @@ class _PromptValidatedModel(BaseModel):
 
     if field_validator is not None:
         # Only add the validator if field_validator is available
-        _validate_prompt = field_validator("prompt")(_normalize_prompt)
+        _validate_prompt = field_validator("prompt", check_fields=False)(_normalize_prompt)
 
 
 class ProcessFlowRequest(_PromptValidatedModel):

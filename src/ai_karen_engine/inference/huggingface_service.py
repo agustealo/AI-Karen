@@ -24,6 +24,7 @@ from ai_karen_engine.core.model_runtime.huggingface_service import (
     ModelFilters,
     TrainingFilters,
     TrainableModel,
+    get_huggingface_service,
 )
 
 __all__ = [
@@ -32,4 +33,5 @@ __all__ = [
     "ModelFilters",
     "TrainingFilters",
     "TrainableModel",
+    "get_huggingface_service",
 ]

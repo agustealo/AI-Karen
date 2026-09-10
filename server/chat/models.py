@@ -13,7 +13,6 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     JSON,
-    JSONB,
     ForeignKey,
     Column,
     Index,
@@ -21,6 +20,7 @@ from sqlalchemy import (
     CheckConstraint,
     func,
     LargeBinary,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import relationship, declarative_base
@@ -29,7 +29,15 @@ from sqlalchemy.sql import expression
 Base = declarative_base()
 
 
-class ChatConversation(Base):
+class BaseChatModel:
+    """Base class for chat models that maps kwarg 'metadata' to 'metadata_' attribute."""
+    def __init__(self, **kwargs):
+        if "metadata" in kwargs and "metadata_" not in kwargs:
+            kwargs["metadata_"] = kwargs.pop("metadata")
+        super().__init__(**kwargs)
+
+
+class ChatConversation(BaseChatModel, Base):
     """Chat conversation model for the production chat system."""
     
     __tablename__ = "chat_conversations"
@@ -42,7 +50,7 @@ class ChatConversation(Base):
     provider_id = Column(String(50))
     model_used = Column(String(100))
     message_count = Column(Integer, default=0)
-    metadata = Column(JSONB, default=dict)
+    metadata_ = Column("metadata", JSONB, default=dict)
     is_archived = Column(Boolean, default=False)
     
     # Security fields
@@ -67,7 +75,7 @@ class ChatConversation(Base):
     )
     
     __table_args__ = (
-        Index("idx_chat_conversations_user_id_updated_at", "user_id", "updated_at DESC"),
+        Index("idx_chat_conversations_user_id_updated_at", "user_id", text("updated_at DESC")),
         Index("idx_chat_conversations_provider_id", "provider_id"),
         Index("idx_chat_conversations_is_archived", "is_archived"),
         Index("idx_chat_conversations_security_level", "security_level"),
@@ -78,7 +86,7 @@ class ChatConversation(Base):
         return f"<ChatConversation(id={self.id}, user_id={self.user_id}, title='{self.title}')>"
 
 
-class ChatMessage(Base):
+class ChatMessage(BaseChatModel, Base):
     """Chat message model for the production chat system."""
     
     __tablename__ = "chat_messages"
@@ -97,7 +105,7 @@ class ChatMessage(Base):
     model_used = Column(String(100))
     token_count = Column(Integer)
     processing_time_ms = Column(Integer)
-    metadata = Column(JSONB, default=dict)
+    metadata_ = Column("metadata", JSONB, default=dict)
     parent_message_id = Column(UUID(as_uuid=True), ForeignKey("chat_messages.id"))
     is_streaming = Column(Boolean, default=False)
     streaming_completed_at = Column(DateTime(timezone=True))
@@ -123,8 +131,8 @@ class ChatMessage(Base):
     )
     
     __table_args__ = (
-        Index("idx_chat_messages_conversation_id_created_at", "conversation_id", "created_at ASC"),
-        Index("idx_chat_messages_role_created_at", "role", "created_at DESC"),
+        Index("idx_chat_messages_conversation_id_created_at", "conversation_id", text("created_at ASC")),
+        Index("idx_chat_messages_role_created_at", "role", text("created_at DESC")),
         Index("idx_chat_messages_parent_message_id", "parent_message_id"),
         Index("idx_chat_messages_provider_id", "provider_id"),
         Index("idx_chat_messages_is_streaming", "is_streaming"),
@@ -177,7 +185,7 @@ class ChatProviderConfiguration(Base):
         return f"<ChatProviderConfiguration(id={self.id}, provider_id='{self.provider_id}', user_id={self.user_id})>"
 
 
-class ChatSession(Base):
+class ChatSession(BaseChatModel, Base):
     """Chat session model for tracking active chat sessions."""
     
     __tablename__ = "chat_sessions"
@@ -193,7 +201,7 @@ class ChatSession(Base):
     started_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     ended_at = Column(DateTime(timezone=True))
     last_activity_at = Column(DateTime(timezone=True), default=datetime.utcnow)
-    metadata = Column(JSONB, default=dict)
+    metadata_ = Column("metadata", JSONB, default=dict)
     
     # Security fields
     is_encrypted = Column(Boolean, default=False)
@@ -213,7 +221,7 @@ class ChatSession(Base):
     
     __table_args__ = (
         Index("idx_chat_sessions_token", "session_token"),
-        Index("idx_chat_sessions_user_activity", "user_id", "last_activity_at DESC"),
+        Index("idx_chat_sessions_user_activity", "user_id", text("last_activity_at DESC")),
         Index("idx_chat_sessions_conversation_id", "conversation_id"),
         Index("idx_chat_sessions_security_level", "security_level"),
         Index("idx_chat_sessions_is_suspicious", "is_suspicious"),
@@ -224,7 +232,7 @@ class ChatSession(Base):
         return f"<ChatSession(id={self.id}, user_id={self.user_id}, session_token='{self.session_token}')>"
 
 
-class MessageAttachment(Base):
+class MessageAttachment(BaseChatModel, Base):
     """Message attachment model for file attachments in chat messages."""
     
     __tablename__ = "message_attachments"
@@ -240,7 +248,7 @@ class MessageAttachment(Base):
     mime_type = Column(String(100))
     file_size = Column(BigInteger)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
-    metadata = Column(JSONB, default=dict)
+    metadata_ = Column("metadata", JSONB, default=dict)
     
     # Relationships
     message = relationship("ChatMessage", back_populates="attachments")

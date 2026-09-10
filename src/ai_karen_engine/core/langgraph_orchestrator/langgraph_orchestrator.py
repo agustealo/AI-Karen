@@ -69,11 +69,25 @@ from ai_karen_engine.core.langgraph_orchestrator.utils.message_serialization imp
     history_entry_to_message,
 )
 
-from langgraph.graph import StateGraph, END, START
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.prebuilt import ToolNode
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
-from langchain_core.tools import BaseTool
+try:
+    from langgraph.graph import StateGraph, END, START
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.prebuilt import ToolNode
+    from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+    from langchain_core.tools import BaseTool
+    HAS_LANGGRAPH = True
+except ImportError:
+    HAS_LANGGRAPH = False
+    StateGraph = object
+    END = "END"
+    START = "START"
+    MemorySaver = object
+    ToolNode = object
+    BaseMessage = object
+    HumanMessage = object
+    AIMessage = object
+    SystemMessage = object
+    BaseTool = object
 
 from ai_karen_engine.agent_medusa.agent_medusa_node import medusa_node
 
@@ -1021,4 +1035,8 @@ def get_default_orchestrator() -> LangGraphOrchestrator:
     if default_orchestrator is None:
         default_orchestrator = create_orchestrator()
     return default_orchestrator
+
+
+# Alias for backward-compatibility
+ChatOrchestrator = LangGraphOrchestrator
 

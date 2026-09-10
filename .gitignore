@@ -188,14 +188,17 @@ token.txt
 .kilocodemodes
 .pre-commit-config.yaml
 .agents/
-.codex
+.codex/
+.claude/
 .gemini/
 .goose/
 .kiro/
 .kilo/
+.mypy_cache/
 .ruff_cache/
 .virEnv/
 .fuse_hidden*
+.kilocodemodes
 core.*
 
 # Platform specific

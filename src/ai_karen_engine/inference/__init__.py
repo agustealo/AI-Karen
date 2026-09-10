@@ -28,9 +28,15 @@ warnings.warn(
 from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
     TransformersRuntime,
 )
-from ai_karen_engine.core.model_runtime.providers.vllm_runtime import (
-    VLLMRuntime,
-)
+try:
+    from ai_karen_engine.core.model_runtime.providers.vllm_runtime import (
+        VLLMRuntime,
+    )
+except ImportError:
+    try:
+        from .vllm_runtime import VLLMRuntime
+    except ImportError:
+        VLLMRuntime = object
 from ai_karen_engine.core.model_runtime.providers.core_helpers_runtime import (
     CoreHelpersRuntime,
 )

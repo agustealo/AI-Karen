@@ -270,8 +270,7 @@ class EncryptionManager:
     def encrypt(self, data: str) -> str:
         """Encrypt data."""
         try:
-            encrypted_data = self.cipher_suite.encrypt(data.encode())
-            return base64.b64encode(encrypted_data).decode()
+            return self.cipher_suite.encrypt(data.encode()).decode()
         except Exception as e:
             logger.error(f"Encryption failed: {e}")
             raise ValueError("Encryption failed")
@@ -279,9 +278,7 @@ class EncryptionManager:
     def decrypt(self, encrypted_data: str) -> str:
         """Decrypt data."""
         try:
-            decoded_data = base64.b64decode(encrypted_data.encode())
-            decrypted_data = self.cipher_suite.decrypt(decoded_data)
-            return decrypted_data.decode()
+            return self.cipher_suite.decrypt(encrypted_data.encode()).decode()
         except Exception as e:
             logger.error(f"Decryption failed: {e}")
             raise ValueError("Decryption failed")
@@ -610,3 +607,26 @@ def validate_file_upload(file_data: bytes, filename: str) -> ValidationResult:
             "validation_time": datetime.utcnow().isoformat()
         }
     )
+
+
+_content_validators: Dict[SecurityLevel, ContentValidator] = {}
+
+
+def get_content_validator(security_level: SecurityLevel = SecurityLevel.MEDIUM) -> ContentValidator:
+    """Get or create a ContentValidator instance for the given security level."""
+    if security_level not in _content_validators:
+        _content_validators[security_level] = ContentValidator(security_level)
+    return _content_validators[security_level]
+
+
+def validate_content(content: str, security_level: SecurityLevel = SecurityLevel.MEDIUM) -> ValidationResult:
+    """Validate content using the specified security level."""
+    validator = get_content_validator(security_level)
+    return validator.validate_content(content)
+
+
+def sanitize_content(content: str, security_level: SecurityLevel = SecurityLevel.MEDIUM) -> str:
+    """Sanitize content using the specified security level."""
+    validator = get_content_validator(security_level)
+    result = validator.validate_content(content)
+    return result.sanitized_content or content

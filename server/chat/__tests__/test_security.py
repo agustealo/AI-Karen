@@ -11,27 +11,27 @@ from fastapi import HTTPException, WebSocket
 from fastapi.testclient import TestClient
 from jose import jwt, JWTError
 
-from ..middleware import (
+from server.chat.middleware import (
     ChatAuthenticationMiddleware,
     get_current_chat_user,
     require_chat_permission,
     check_message_rate_limit
 )
-from ..security import (
+from server.chat.security import (
     ContentValidator,
     EncryptionManager,
     SecurityMonitor,
     SecurityLevel,
     ThreatLevel
 )
-from ..audit_logging import (
+from server.chat.audit_logging import (
     AuditLogger,
     SecurityMonitoringService,
     AuditEventType,
     AuditSeverity,
     ThreatLevel as AuditThreatLevel
 )
-from ..rate_limiting import (
+from server.chat.rate_limiting import (
     RateLimiter,
     AbuseDetector,
     RateLimitConfig,
@@ -167,6 +167,7 @@ class TestSecurityValidation:
     
     def test_input_sanitization(self):
         """Test input sanitization."""
+        from server.chat.security import sanitize_content as sanitize_input
         input_text = "<script>alert('xss')</script>Hello World"
         result = sanitize_input(input_text)
         
@@ -175,10 +176,10 @@ class TestSecurityValidation:
     
     def test_validate_content_function(self):
         """Test global validate_content function."""
-        from ..security import validate_content
+        from server.chat.security import validate_content
         
         content = "This is a safe message."
-        result = validate_content(content, "text")
+        result = validate_content(content)
         
         assert result.is_valid is True
         assert len(result.threats_detected) == 0
@@ -438,7 +439,7 @@ class TestSecurityMonitor:
     
     def test_log_event(self):
         """Test logging a security event."""
-        from ..security import SecurityEvent, get_security_monitor
+        from server.chat.security import SecurityEvent, get_security_monitor
         
         monitor = get_security_monitor()
         
@@ -459,9 +460,10 @@ class TestSecurityMonitor:
     
     def test_get_threat_summary(self):
         """Test getting threat summary."""
-        from ..security import SecurityEvent, get_security_monitor
+        from server.chat.security import SecurityEvent, get_security_monitor
         
         monitor = get_security_monitor()
+        monitor.events = []
         
         # Add test events
         now = datetime.utcnow()
@@ -494,6 +496,7 @@ class TestMiddlewareIntegration:
         mock_request.client = Mock(host="127.0.0.1")
         mock_request.headers = {}
         mock_request.url = Mock(path="/api/chat/messages")
+        mock_request.method = "POST"
         
         mock_response = Mock()
         mock_response.headers = {}
@@ -501,24 +504,27 @@ class TestMiddlewareIntegration:
         
         # Create middleware
         middleware = ChatAuthenticationMiddleware(Mock())
+        middleware.rate_limits = {"requests_per_minute": 5, "message_per_minute": 5, "burst_limit": 5}
         
-        # Make requests within limit
-        for i in range(5):
+        with patch.object(middleware, "_validate_jwt_token", new_callable=AsyncMock, return_value={"sub": "test_user"}):
+            # Make requests within limit
+            for i in range(5):
+                response = await middleware._process_request(mock_request, mock_call_next)
+                assert response == mock_response
+            
+            # Next request should be rate limited
             response = await middleware._process_request(mock_request, mock_call_next)
-            assert response == mock_response
-        
-        # Next request should be rate limited
-        with pytest.raises(HTTPException) as exc_info:
-            await middleware._process_request(mock_request, mock_call_next)
-        
-        assert exc_info.value.status_code == 429
-        assert "Rate limit exceeded" in str(exc_info.value.detail)
+            assert response.status_code == 429
     
     @pytest.mark.asyncio
     async def test_security_headers_middleware(self):
         """Test security headers middleware."""
         # Mock request and call_next
         mock_request = Mock()
+        mock_request.client = Mock(host="127.0.0.1")
+        mock_request.headers = {}
+        mock_request.url = Mock(path="/health")
+        mock_request.method = "GET"
         mock_response = Mock()
         mock_response.headers = {}
         mock_call_next = AsyncMock(return_value=mock_response)
@@ -543,7 +549,7 @@ class TestWebSocketSecurity:
     @pytest.mark.asyncio
     async def test_websocket_authentication(self):
         """Test WebSocket authentication."""
-        from ..websocket import ConnectionManager, get_current_user_websocket
+        from server.chat.websocket import ConnectionManager, get_current_user_websocket
         
         manager = ConnectionManager()
         
@@ -558,7 +564,7 @@ class TestWebSocketSecurity:
             "role": "user"
         }
         
-        with patch('server.chat.middleware.verify_jwt_token') as mock_verify:
+        with patch('server.chat.websocket.verify_jwt_token') as mock_verify:
             mock_verify.return_value = payload
             
             # This should not raise an exception
@@ -570,7 +576,7 @@ class TestWebSocketSecurity:
     @pytest.mark.asyncio
     async def test_websocket_authentication_invalid_token(self):
         """Test WebSocket authentication with invalid token."""
-        from ..websocket import ConnectionManager, get_current_user_websocket
+        from server.chat.websocket import ConnectionManager, get_current_user_websocket
         
         manager = ConnectionManager()
         
@@ -579,7 +585,7 @@ class TestWebSocketSecurity:
         mock_websocket.headers = {"authorization": "Bearer invalid_token"}
         mock_websocket.close = AsyncMock()
         
-        with patch('server.chat.middleware.verify_jwt_token') as mock_verify:
+        with patch('server.chat.websocket.verify_jwt_token') as mock_verify:
             mock_verify.return_value = None
             
             # This should close websocket

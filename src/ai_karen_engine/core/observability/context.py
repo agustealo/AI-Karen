@@ -21,9 +21,13 @@ def bind_observability_context(**kwargs: Any) -> None:
     bind_correlation_context(**kwargs)
 
 
+get_observability_context = get_correlation_context
+
+
 __all__ = [
     "CorrelationContext",
     "bind_observability_context",
+    "get_observability_context",
     "bind_correlation_context",
     "clear_correlation_context",
     "get_correlation_context",

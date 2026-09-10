@@ -19,7 +19,7 @@ class TestMiddlewareConfiguration:
     """Test middleware configuration and setup."""
     
     @pytest.fixture
-    def app():
+    def app(self):
         """Create a test FastAPI app."""
         return FastAPI()
     

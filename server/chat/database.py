@@ -524,3 +524,11 @@ class DatabaseOperations:
         except Exception as e:
             logger.error(f"Failed to generate database optimization suggestions: {e}")
             raise
+
+
+async def get_db_session():
+    """Dependency generator for getting async database session."""
+    from ..database_config import get_database_manager
+    manager = get_database_manager()
+    async with manager.session() as session:
+        yield session

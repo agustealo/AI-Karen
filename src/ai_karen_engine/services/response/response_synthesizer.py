@@ -4,8 +4,6 @@ import logging
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from ai_karen_engine.core.runtime.provider_runtime import ProviderRuntime
-from ai_karen_engine.core.model_runtime.runtime_contracts import ProviderExecutionResult, ProviderRouteDecision
 from .response_contracts import ResponseContract
 from .response_prompt_builder import ResponsePromptBuilder
 from .response_sanitizer import ResponseSanitizer
@@ -15,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 class ResponseSynthesizer:
     def __init__(self, llm_router: Any):
+        from ai_karen_engine.core.runtime.provider_runtime import ProviderRuntime
+
         self.llm_router = llm_router
         self.provider_runtime = ProviderRuntime(llm_router)
         self.prompt_builder = ResponsePromptBuilder()

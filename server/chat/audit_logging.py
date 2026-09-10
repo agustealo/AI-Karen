@@ -312,7 +312,7 @@ class AuditLogger:
             filtered_events = [e for e in filtered_events if e.timestamp <= end_time]
         
         # Sort by timestamp (newest first) and limit
-        filtered_events.sort(key=lambda x: x.timestamp, reverse=True)
+        filtered_events.sort(key=lambda x: str(x.timestamp or ""), reverse=True)
         return filtered_events[:limit]
     
     def get_alerts(

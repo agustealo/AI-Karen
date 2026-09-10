@@ -601,3 +601,7 @@ class CopilotSafetyMiddleware:
             retry_suggested=validation_result.overall_risk_score < 5.0,
             retry_after_seconds=300 if validation_result.requires_moderation else 60,
         )
+
+
+# Alias for backward-compatibility
+SafetyMiddleware = CopilotSafetyMiddleware

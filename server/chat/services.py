@@ -1,5 +1,11 @@
 """
-Chat service layer with business logic for the production chat system.
+Enhanced chat service layer with security and audit logging for the AI-Karen
+production chat system.
+
+Provides:
+- SecureChatService: full security + audit logging overlay
+- ChatService: core business logic (conversations, messages, providers)
+- create_secure_chat_service: factory helper
 """
 
 import asyncio
@@ -7,53 +13,12 @@ import logging
 import uuid
 from datetime import datetime
 from typing import Dict, Any, List, Optional, AsyncGenerator
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, and_, or_, desc
 from sqlalchemy.orm import selectinload
 
 from ai_karen_engine.config.llm_provider_config import get_provider_config_manager
-from .models import (
-    ChatConversation,
-    ChatMessage,
-    ChatProviderConfiguration,
-    ChatSession,
-    MessageAttachment,
-)
-from .schemas import (
-    CreateConversationRequest,
-    UpdateConversationRequest,
-    SendMessageRequest,
-    ConversationResponse,
-    MessageResponse,
-    ConfigureProviderRequest,
-    ProviderResponse,
-    MessageMetadata,
-    ConversationMetadata,
-)
-from .providers import (
-    BaseLLMProvider,
-    OpenAIProvider,
-    AnthropicProvider,
-    GeminiProvider,
-    LocalModelProvider,
-)
-from .providers.base import AIRequest, AIResponse, AIStreamChunk
-
-logger = logging.getLogger(__name__)
-
-"""
-Enhanced chat service layer with security and audit logging for AI-Karen production chat system.
-This extends the existing ChatService with security features.
-"""
-
-import asyncio
-import logging
-import uuid
-from datetime import datetime
-from typing import Dict, Any, List, Optional, AsyncGenerator
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete, and_, or_, desc
-from sqlalchemy.orm import selectinload
 
 from .models import (
     ChatConversation,
@@ -101,6 +66,71 @@ from .security_monitoring import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _module_resolve_max_tokens(
+    provider_name: Optional[str],
+    model_name: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+    default: int = 2048,
+) -> int:
+    """Module-level helper: resolve the effective output token budget."""
+    requested_max_tokens = (metadata or {}).get("max_tokens")
+    if not provider_name:
+        return (
+            requested_max_tokens
+            if isinstance(requested_max_tokens, int) and requested_max_tokens > 0
+            else default
+        )
+    try:
+        manager = get_provider_config_manager()
+        resolved = manager.get_effective_max_tokens(
+            provider_name,
+            model_name=model_name,
+            requested_max_tokens=requested_max_tokens,
+        )
+        if isinstance(resolved, int) and resolved > 0:
+            return resolved
+    except Exception as exc:
+        logger.debug(
+            "Falling back to request/default max_tokens for %s/%s: %s",
+            provider_name,
+            model_name,
+            exc,
+        )
+    if isinstance(requested_max_tokens, int) and requested_max_tokens > 0:
+        return requested_max_tokens
+    return default
+
+
+def _safe_conversation_metadata(raw: Any) -> ConversationMetadata:
+    """Build a ConversationMetadata tolerating extra or missing keys."""
+    if not isinstance(raw, dict):
+        return ConversationMetadata()
+    try:
+        known = set(ConversationMetadata.__fields__.keys())
+    except AttributeError:
+        known = set(ConversationMetadata.model_fields.keys())
+    filtered = {k: v for k, v in raw.items() if k in known}
+    try:
+        return ConversationMetadata(**filtered)
+    except Exception:
+        return ConversationMetadata()
+
+
+def _safe_message_metadata(raw: Any) -> MessageMetadata:
+    """Build a MessageMetadata tolerating extra or missing keys."""
+    if not isinstance(raw, dict):
+        return MessageMetadata()
+    try:
+        known = set(MessageMetadata.__fields__.keys())
+    except AttributeError:
+        known = set(MessageMetadata.model_fields.keys())
+    filtered = {k: v for k, v in raw.items() if k in known}
+    try:
+        return MessageMetadata(**filtered)
+    except Exception:
+        return MessageMetadata()
 
 
 class SecureChatService:
@@ -174,17 +204,18 @@ class SecureChatService:
         """Create a provider instance from configuration."""
         try:
             provider_config = dict(config.config)
+            provider_type = getattr(config, "provider_type", None) or provider_config.get("provider_type", "openai")
 
-            if config.provider_type == "openai":
+            if provider_type == "openai":
                 provider = OpenAIProvider(str(config.provider_id), provider_config)
-            elif config.provider_type == "anthropic":
+            elif provider_type == "anthropic":
                 provider = AnthropicProvider(str(config.provider_id), provider_config)
-            elif config.provider_type == "gemini":
+            elif provider_type == "gemini":
                 provider = GeminiProvider(str(config.provider_id), provider_config)
-            elif config.provider_type == "local":
+            elif provider_type == "local":
                 provider = LocalModelProvider(str(config.provider_id), provider_config)
             else:
-                logger.warning(f"Unknown provider type: {config.provider_type}")
+                logger.warning(f"Unknown provider type: {provider_type}")
                 return None
 
             # Configure provider
@@ -239,15 +270,22 @@ class SecureChatService:
 
                 request.title = title_validation.sanitized_content
 
-            # Extract values from request metadata if available
-            metadata = request.metadata or {}
-            provider_config = metadata.get("provider_id", "openai")
-            model = metadata.get("model_used", "gpt-3.5-turbo")
-            system_prompt = metadata.get(
+            # Extract config from request metadata if available
+            raw_metadata = request.metadata
+            if hasattr(raw_metadata, "dict"):
+                meta_dict = raw_metadata.dict()
+            elif isinstance(raw_metadata, dict):
+                meta_dict = raw_metadata
+            else:
+                meta_dict = {}
+
+            provider_config_id = meta_dict.get("provider_id", "openai")
+            model_name = meta_dict.get("model_used", "gpt-4o-mini")
+            system_prompt = meta_dict.get(
                 "system_prompt", "You are a helpful AI assistant."
             )
-            temperature = metadata.get("temperature", 0.7)
-            max_tokens = self._resolve_max_tokens(provider_config, model, metadata)
+            temperature = meta_dict.get("temperature", 0.7)
+            max_tokens = self._resolve_max_tokens(provider_config_id, model_name, meta_dict)
 
             # Validate system prompt
             if system_prompt:
@@ -270,22 +308,24 @@ class SecureChatService:
 
                 system_prompt = prompt_validation.sanitized_content
 
-            # Encrypt sensitive metadata
+            # Encrypt sensitive metadata and store runtime config in it
             sensitive_fields = ["api_key", "auth_token", "webhook_url"]
             encrypted_metadata = self.encryption_manager.encrypt_sensitive_fields(
-                metadata, sensitive_fields
+                meta_dict, sensitive_fields
             )
+            # Store AI runtime config in metadata (not as separate DB columns)
+            encrypted_metadata.setdefault("model_used", model_name)
+            encrypted_metadata.setdefault("system_prompt", system_prompt)
+            encrypted_metadata.setdefault("temperature", temperature)
+            encrypted_metadata.setdefault("max_tokens", max_tokens)
 
-            # Create conversation
+            # Create conversation using only real DB columns
             conversation = ChatConversation(
                 id=str(uuid.uuid4()),
                 user_id=user_id,
                 title=request.title or "New Conversation",
-                provider_id=provider_config,
-                model=model,
-                system_prompt=system_prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
+                provider_id=provider_config_id,
+                model_used=model_name,
                 metadata=encrypted_metadata,
             )
 
@@ -297,9 +337,9 @@ class SecureChatService:
             await log_security_event(
                 "conversation_created",
                 {
-                    "conversation_id": conversation.id,
-                    "provider_id": provider_config,
-                    "model": model,
+                    "conversation_id": str(conversation.id),
+                    "provider_id": provider_config_id,
+                    "model": model_name,
                 },
                 user_id=user_id,
             )
@@ -311,16 +351,16 @@ class SecureChatService:
 
             # Create response
             return ConversationResponse(
-                id=conversation.id,
-                user_id=conversation.user_id,
-                title=conversation.title,
+                id=str(conversation.id),
+                user_id=str(conversation.user_id),
+                title=conversation.title or "New Conversation",
                 created_at=conversation.created_at,
                 updated_at=conversation.updated_at,
-                provider_id=conversation.provider_id,
-                model_used=conversation.model,
+                provider_id=str(conversation.provider_id or ""),
+                model_used=str(conversation.model_used or ""),
                 message_count=0,
-                metadata=ConversationMetadata(**conversation.metadata),
-                is_archived=False,
+                metadata=_safe_conversation_metadata(conversation.metadata),
+                is_archived=bool(conversation.is_archived),
                 messages=[],
             )
 
@@ -418,11 +458,19 @@ class SecureChatService:
             )
             history_messages = history_result.scalars().all()
 
-            # Prepare messages for AI
+            # Prepare messages for AI - read config from conversation metadata
+            conv_meta = conversation.metadata or {}
+            model_name = conv_meta.get("model_used", conversation.model_used or "gpt-4o-mini")
+            system_prompt = conv_meta.get("system_prompt", "You are a helpful AI assistant.")
+            temperature = conv_meta.get("temperature", 0.7)
+            max_tokens = conv_meta.get("max_tokens") or self._resolve_max_tokens(
+                conversation.provider_id, model_name, conv_meta
+            )
+
             messages = []
-            if conversation.system_prompt:
+            if system_prompt:
                 messages.append(
-                    {"role": "system", "content": conversation.system_prompt}
+                    {"role": "system", "content": system_prompt}
                 )
 
             for msg in history_messages:
@@ -431,19 +479,17 @@ class SecureChatService:
             # Create AI request
             ai_request = AIRequest(
                 messages=messages,
-                model=conversation.model,
-                temperature=conversation.temperature,
-                max_tokens=conversation.max_tokens
-                or self._resolve_max_tokens(
-                    conversation.provider_id, conversation.model, conversation.metadata
-                ),
-                metadata=conversation.metadata,
+                model=model_name,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                metadata=conv_meta,
             )
 
             # Get AI response with fallback mechanism
             start_time = datetime.utcnow()
             ai_response = None
             last_error = None
+            response_time = 0.0
 
             # Try primary provider
             try:
@@ -469,33 +515,33 @@ class SecureChatService:
                     if p_id != provider.provider_id and p != provider
                 ]
 
-                if fallback_providers:
-                    for fallback_provider in fallback_providers:
-                        try:
-                            logger.info(
-                                f"Attempting fallback provider: {fallback_provider.provider_id}"
-                            )
-                            ai_response = await fallback_provider.complete(ai_request)
-                            response_time = (
-                                datetime.utcnow() - start_time
-                            ).total_seconds() * 1000
-                            logger.info(
-                                f"Fallback provider {fallback_provider.provider_id} succeeded in {response_time:.2f}ms"
-                            )
-                            break
-                        except Exception as fallback_error:
-                            logger.warning(
-                                f"Fallback provider {fallback_provider.provider_id} also failed: {str(fallback_error)}"
-                            )
-                            last_error = fallback_error
-                            continue
+                for fallback_provider in fallback_providers:
+                    try:
+                        logger.info(
+                            f"Attempting fallback provider: {fallback_provider.provider_id}"
+                        )
+                        ai_response = await fallback_provider.complete(ai_request)
+                        response_time = (
+                            datetime.utcnow() - start_time
+                        ).total_seconds() * 1000
+                        logger.info(
+                            f"Fallback provider {fallback_provider.provider_id} succeeded in {response_time:.2f}ms"
+                        )
+                        break
+                    except Exception as fallback_error:
+                        logger.warning(
+                            f"Fallback provider {fallback_provider.provider_id} also failed: {str(fallback_error)}"
+                        )
+                        last_error = fallback_error
+                        continue
                 else:
-                    # All providers failed - use degraded response
-                    logger.error(f"All AI providers failed, using degraded response")
-                    ai_response = self._get_degraded_response(ai_request)
-                    response_time = (
-                        datetime.utcnow() - start_time
-                    ).total_seconds() * 1000
+                    if not ai_response:
+                        # All providers failed - use degraded response
+                        logger.error("All AI providers failed, using degraded response")
+                        ai_response = self._get_degraded_response(ai_request)
+                        response_time = (
+                            datetime.utcnow() - start_time
+                        ).total_seconds() * 1000
 
             # Validate AI response content
             response_validation = self.content_validator.validate_content(
@@ -507,16 +553,20 @@ class SecureChatService:
                 else ai_response.content
             )
 
-            # Create AI message
+            # Extract token counts from AI response usage dict
+            usage = ai_response.usage or {}
+            total_tokens = usage.get("total_tokens") or usage.get("completion_tokens")
+
+            # Create AI message using correct DB column names
             ai_message = ChatMessage(
                 id=str(uuid.uuid4()),
                 conversation_id=conversation_id,
                 role="assistant",
                 content=validated_content,
-                provider_id=conversation.provider_id,
-                model=ai_response.model,
-                usage=ai_response.usage,
-                response_time=response_time,
+                provider_id=str(conversation.provider_id or ""),
+                model_used=ai_response.model or model_name,
+                token_count=total_tokens,
+                processing_time_ms=int(response_time),
                 metadata=ai_response.metadata or {},
             )
 
@@ -531,7 +581,7 @@ class SecureChatService:
                 session_id,
                 message_count=2,  # user + assistant
                 response_time=response_time,
-                provider_used=conversation.provider_id,
+                provider_used=str(conversation.provider_id or ""),
             )
 
             # Record metrics
@@ -543,7 +593,7 @@ class SecureChatService:
                 "message_sent",
                 {
                     "conversation_id": conversation_id,
-                    "message_id": user_message.id,
+                    "message_id": str(user_message.id),
                     "content_length": len(sanitized_content),
                 },
                 user_id=user_id,
@@ -554,7 +604,7 @@ class SecureChatService:
                     "ai_content_sanitized",
                     {
                         "conversation_id": conversation_id,
-                        "message_id": ai_message.id,
+                        "message_id": str(ai_message.id),
                         "threats": response_validation.threats_detected,
                     },
                     user_id=user_id,
@@ -564,19 +614,17 @@ class SecureChatService:
             await end_chat_session(session_id)
 
             return MessageResponse(
-                id=ai_message.id,
-                conversation_id=ai_message.conversation_id,
+                id=str(ai_message.id),
+                conversation_id=str(ai_message.conversation_id),
                 role=ai_message.role,
                 content=ai_message.content,
                 created_at=ai_message.created_at,
                 updated_at=ai_message.updated_at,
-                provider_id=ai_message.provider_id,
-                model_used=ai_message.model,
-                token_count=ai_response.usage.get("total_tokens")
-                if ai_response.usage
-                else None,
-                processing_time_ms=int(response_time),
-                metadata=MessageMetadata(**ai_message.metadata),
+                provider_id=str(ai_message.provider_id or ""),
+                model_used=str(ai_message.model_used or ""),
+                token_count=ai_message.token_count,
+                processing_time_ms=ai_message.processing_time_ms,
+                metadata=_safe_message_metadata(ai_message.metadata),
                 parent_message_id=None,
                 is_streaming=False,
                 streaming_completed_at=None,
@@ -732,17 +780,18 @@ class ChatService:
         """Create a provider instance from configuration."""
         try:
             provider_config = dict(config.config)
+            provider_type = getattr(config, "provider_type", None) or provider_config.get("provider_type", "openai")
 
-            if config.provider_type == "openai":
+            if provider_type == "openai":
                 provider = OpenAIProvider(str(config.provider_id), provider_config)
-            elif config.provider_type == "anthropic":
+            elif provider_type == "anthropic":
                 provider = AnthropicProvider(str(config.provider_id), provider_config)
-            elif config.provider_type == "gemini":
+            elif provider_type == "gemini":
                 provider = GeminiProvider(str(config.provider_id), provider_config)
-            elif config.provider_type == "local":
+            elif provider_type == "local":
                 provider = LocalModelProvider(str(config.provider_id), provider_config)
             else:
-                logger.warning(f"Unknown provider type: {config.provider_type}")
+                logger.warning(f"Unknown provider type: {provider_type}")
                 return None
 
             # Configure the provider
@@ -834,15 +883,22 @@ class ChatService:
 
                 request.title = title_validation.sanitized_content
 
-            # Extract values from request metadata if available
-            metadata = request.metadata or {}
-            provider_config = metadata.get("provider_id", "openai")
-            model = metadata.get("model_used", "gpt-3.5-turbo")
-            system_prompt = metadata.get(
+            # Extract config from request metadata if available
+            raw_metadata = request.metadata
+            if hasattr(raw_metadata, "dict"):
+                meta_dict = raw_metadata.dict()
+            elif isinstance(raw_metadata, dict):
+                meta_dict = raw_metadata
+            else:
+                meta_dict = {}
+
+            provider_config_id = meta_dict.get("provider_id", "openai")
+            model_name = meta_dict.get("model_used", "gpt-4o-mini")
+            system_prompt = meta_dict.get(
                 "system_prompt", "You are a helpful AI assistant."
             )
-            temperature = metadata.get("temperature", 0.7)
-            max_tokens = self._resolve_max_tokens(provider_config, model, metadata)
+            temperature = meta_dict.get("temperature", 0.7)
+            max_tokens = self._resolve_max_tokens(provider_config_id, model_name, meta_dict)
 
             # Validate system prompt
             if system_prompt:
@@ -865,22 +921,23 @@ class ChatService:
 
                 system_prompt = prompt_validation.sanitized_content
 
-            # Encrypt sensitive metadata
+            # Encrypt sensitive metadata and store runtime config in it
             sensitive_fields = ["api_key", "auth_token", "webhook_url"]
             encrypted_metadata = self.encryption_manager.encrypt_sensitive_fields(
-                metadata, sensitive_fields
+                meta_dict, sensitive_fields
             )
+            encrypted_metadata.setdefault("model_used", model_name)
+            encrypted_metadata.setdefault("system_prompt", system_prompt)
+            encrypted_metadata.setdefault("temperature", temperature)
+            encrypted_metadata.setdefault("max_tokens", max_tokens)
 
-            # Create conversation
+            # Create conversation using only real DB columns
             conversation = ChatConversation(
                 id=str(uuid.uuid4()),
                 user_id=user_id,
                 title=request.title or "New Conversation",
-                provider_id=provider_config,
-                model=model,
-                system_prompt=system_prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
+                provider_id=provider_config_id,
+                model_used=model_name,
                 metadata=encrypted_metadata,
             )
 
@@ -892,25 +949,25 @@ class ChatService:
             await log_security_event(
                 "conversation_created",
                 {
-                    "conversation_id": conversation.id,
-                    "provider_id": provider_config,
-                    "model": model,
+                    "conversation_id": str(conversation.id),
+                    "provider_id": provider_config_id,
+                    "model": model_name,
                 },
                 user_id=user_id,
             )
 
             # Create response
             return ConversationResponse(
-                id=conversation.id,
-                user_id=conversation.user_id,
-                title=conversation.title,
+                id=str(conversation.id),
+                user_id=str(conversation.user_id),
+                title=conversation.title or "New Conversation",
                 created_at=conversation.created_at,
                 updated_at=conversation.updated_at,
-                provider_id=conversation.provider_id,
-                model_used=conversation.model,
+                provider_id=str(conversation.provider_id or ""),
+                model_used=str(conversation.model_used or ""),
                 message_count=0,
-                metadata=ConversationMetadata(**conversation.metadata),
-                is_archived=False,
+                metadata=_safe_conversation_metadata(conversation.metadata),
+                is_archived=bool(conversation.is_archived),
                 messages=[],
             )
 
@@ -956,16 +1013,16 @@ class ChatService:
             last_message = last_message_result.scalar_one_or_none()
 
             return ConversationResponse(
-                id=conversation.id,
-                user_id=conversation.user_id,
-                title=conversation.title,
+                id=str(conversation.id),
+                user_id=str(conversation.user_id),
+                title=conversation.title or "",
                 created_at=conversation.created_at,
                 updated_at=conversation.updated_at,
-                provider_id=conversation.provider_id,
-                model_used=conversation.model,
+                provider_id=str(conversation.provider_id or ""),
+                model_used=str(conversation.model_used or ""),
                 message_count=message_count,
-                metadata=ConversationMetadata(**conversation.metadata),
-                is_archived=conversation.is_archived,
+                metadata=_safe_conversation_metadata(conversation.metadata),
+                is_archived=bool(conversation.is_archived),
                 messages=[],
             )
 
@@ -1008,16 +1065,16 @@ class ChatService:
 
                 conversation_responses.append(
                     ConversationResponse(
-                        id=conversation.id,
-                        user_id=conversation.user_id,
-                        title=conversation.title,
+                        id=str(conversation.id),
+                        user_id=str(conversation.user_id),
+                        title=conversation.title or "",
                         created_at=conversation.created_at,
                         updated_at=conversation.updated_at,
-                        provider_id=conversation.provider_id,
-                        model_used=conversation.model,
+                        provider_id=str(conversation.provider_id or ""),
+                        model_used=str(conversation.model_used or ""),
                         message_count=message_count,
-                        metadata=ConversationMetadata(**conversation.metadata),
-                        is_archived=conversation.is_archived,
+                        metadata=_safe_conversation_metadata(conversation.metadata),
+                        is_archived=bool(conversation.is_archived),
                         messages=[],
                     )
                 )
@@ -1076,11 +1133,20 @@ class ChatService:
             )
             history_messages = history_result.scalars().all()
 
+            # Read AI runtime config from conversation metadata
+            conv_meta = conversation.metadata or {}
+            model_name = conv_meta.get("model_used", conversation.model_used or "gpt-4o-mini")
+            system_prompt = conv_meta.get("system_prompt", "You are a helpful AI assistant.")
+            temperature = conv_meta.get("temperature", 0.7)
+            max_tokens = conv_meta.get("max_tokens") or self._resolve_max_tokens(
+                conversation.provider_id, model_name, conv_meta
+            )
+
             # Prepare messages for AI
             messages = []
-            if conversation.system_prompt:
+            if system_prompt:
                 messages.append(
-                    {"role": "system", "content": conversation.system_prompt}
+                    {"role": "system", "content": system_prompt}
                 )
 
             for msg in history_messages:
@@ -1089,55 +1155,50 @@ class ChatService:
             # Create AI request
             ai_request = AIRequest(
                 messages=messages,
-                model=conversation.model,
-                temperature=conversation.temperature,
-                max_tokens=conversation.max_tokens
-                or self._resolve_max_tokens(
-                    conversation.provider_id, conversation.model, conversation.metadata
-                ),
-                metadata=conversation.metadata,
+                model=model_name,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                metadata=conv_meta,
             )
 
             # Get AI response
             ai_response = await provider.complete(ai_request)
 
-            # Create AI message
+            # Extract token counts from AI response usage dict
+            usage = ai_response.usage or {}
+            total_tokens = usage.get("total_tokens") or usage.get("completion_tokens")
+            resp_time = getattr(ai_response, "response_time", 0.0) or 0.0
+            resp_time_ms = int(resp_time * 1000) if resp_time < 1000 else int(resp_time)
+
+            # Create AI message using correct DB column names
             ai_message = ChatMessage(
                 id=str(uuid.uuid4()),
                 conversation_id=conversation_id,
                 role="assistant",
                 content=ai_response.content,
-                provider_id=conversation.provider_id,
-                model=ai_response.model,
-                usage=ai_response.usage,
-                response_time=ai_response.response_time,
+                provider_id=str(conversation.provider_id or ""),
+                model_used=ai_response.model or model_name,
+                token_count=total_tokens,
+                processing_time_ms=resp_time_ms,
                 metadata=ai_response.metadata or {},
             )
 
             self.db_session.add(ai_message)
-
-            # Update conversation
-            # conversation.updated_at = datetime.utcnow()  # SQLAlchemy handles this automatically
-
             await self.db_session.commit()
             await self.db_session.refresh(ai_message)
 
             return MessageResponse(
-                id=ai_message.id,
-                conversation_id=ai_message.conversation_id,
+                id=str(ai_message.id),
+                conversation_id=str(ai_message.conversation_id),
                 role=ai_message.role,
                 content=ai_message.content,
                 created_at=ai_message.created_at,
                 updated_at=ai_message.updated_at,
-                provider_id=ai_message.provider_id,
-                model_used=ai_message.model,
-                token_count=ai_message.usage.get("total_tokens")
-                if ai_message.usage
-                else None,
-                processing_time_ms=int(ai_response.response_time)
-                if ai_response.response_time
-                else None,
-                metadata=MessageMetadata(**ai_message.metadata),
+                provider_id=str(ai_message.provider_id or ""),
+                model_used=str(ai_message.model_used or ""),
+                token_count=ai_message.token_count,
+                processing_time_ms=ai_message.processing_time_ms,
+                metadata=_safe_message_metadata(ai_message.metadata),
                 parent_message_id=None,
                 is_streaming=False,
                 streaming_completed_at=None,
@@ -1182,24 +1243,20 @@ class ChatService:
 
             return [
                 MessageResponse(
-                    id=message.id,
-                    conversation_id=message.conversation_id,
+                    id=str(message.id),
+                    conversation_id=str(message.conversation_id),
                     role=message.role,
                     content=message.content,
                     created_at=message.created_at,
                     updated_at=message.updated_at,
-                    provider_id=message.provider_id,
-                    model_used=message.model,
-                    token_count=message.usage.get("total_tokens")
-                    if message.usage
-                    else None,
-                    processing_time_ms=int(message.response_time)
-                    if message.response_time
-                    else None,
-                    metadata=MessageMetadata(**message.metadata),
+                    provider_id=str(message.provider_id or ""),
+                    model_used=str(message.model_used or ""),
+                    token_count=message.token_count,
+                    processing_time_ms=message.processing_time_ms,
+                    metadata=_safe_message_metadata(message.metadata),
                     parent_message_id=None,
-                    is_streaming=False,
-                    streaming_completed_at=None,
+                    is_streaming=bool(message.is_streaming),
+                    streaming_completed_at=message.streaming_completed_at,
                     attachments=[],
                 )
                 for message in messages
@@ -1226,9 +1283,6 @@ class ChatService:
 
             if config:
                 # Update existing configuration
-                config.provider_type = request.config.dict().get(
-                    "provider_type", "openai"
-                )
                 config.config = request.config.dict()
                 config.is_active = (
                     request.is_active if request.is_active is not None else True
@@ -1238,7 +1292,7 @@ class ChatService:
                 # Create new configuration
                 config = ChatProviderConfiguration(
                     provider_id=provider_id,
-                    provider_type=request.config.dict().get("provider_type", "openai"),
+                    provider_name=request.config.dict().get("provider_name", provider_id),
                     config=request.config.dict(),
                     is_active=request.is_active
                     if request.is_active is not None
@@ -1272,7 +1326,7 @@ class ChatService:
                 {
                     "provider_id": str(config.provider_id),
                     "provider_name": config.provider_name,
-                    "provider_type": config.provider_type,
+                    "provider_type": config.config.get("provider_type", "openai") if isinstance(config.config, dict) else "openai",
                     "config": config.config,
                     "is_active": config.is_active,
                     "priority": config.priority,
@@ -1308,7 +1362,7 @@ class ChatService:
             return {
                 "provider_id": str(config.provider_id),
                 "provider_name": config.provider_name,
-                "provider_type": config.provider_type,
+                "provider_type": config.config.get("provider_type", "openai") if isinstance(config.config, dict) else "openai",
                 "config": config.config,
                 "is_active": config.is_active,
                 "priority": config.priority,
@@ -1352,7 +1406,6 @@ class ChatService:
                 user_id=user_id,
                 provider_id=provider_id,
                 provider_name=provider_name,
-                provider_type=provider_type,
                 config=config,
                 is_active=True,
                 priority=priority,

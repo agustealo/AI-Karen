@@ -48,6 +48,16 @@ class ChatStreamEventType(str, Enum):
     COMPLETE = "complete"
 
 
+class ToolType(str, Enum):
+    """Tool type classifications for chat execution."""
+
+    SYSTEM = "system"
+    SEARCH = "search"
+    CODE = "code"
+    INTEGRATION = "integration"
+    CUSTOM = "custom"
+
+
 @dataclass
 class ChatExecutionContext:
     """Stable request/tenant/session identity for one chat execution.

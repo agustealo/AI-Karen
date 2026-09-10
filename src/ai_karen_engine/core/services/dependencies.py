@@ -72,6 +72,7 @@ async def get_user_context(request: Request) -> UserData:
 
 
 bypass_user_context_func = get_user_context
+get_current_user = get_user_context
 
 
 async def get_current_user_id(

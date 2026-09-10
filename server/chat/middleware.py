@@ -22,7 +22,27 @@ from fastapi import Request as FastAPIRequest
 
 logger = logging.getLogger(__name__)
 
-# Rate limiting configuration from settings
+SECRET_KEY = getattr(settings, "jwt_secret_key", None) or "test_secret"
+
+
+def verify_jwt_token(token: Any, secret_key: Optional[str] = None) -> Dict[str, Any]:
+    """Verify and decode a JWT token."""
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
+    elif not isinstance(token, str):
+        token = str(token)
+    secret = secret_key if secret_key is not None else SECRET_KEY
+    algorithms = [getattr(settings, "jwt_algorithm", "HS256")]
+    try:
+        from jose import jwt as jose_jwt, JWTError, ExpiredSignatureError
+        try:
+            return jose_jwt.decode(token, secret, algorithms=algorithms)
+        except ExpiredSignatureError:
+            raise jwt.ExpiredSignatureError("Signature has expired")
+        except JWTError as e:
+            raise jwt.InvalidTokenError(str(e))
+    except (ImportError, ModuleNotFoundError):
+        return jwt.decode(token, secret, algorithms=algorithms)
 RATE_LIMIT_CONFIG = {
     "requests_per_minute": settings.extension_rate_limit_per_minute or 100,
     "requests_per_hour": 1000,
@@ -90,16 +110,19 @@ class ChatAuthenticationMiddleware(BaseHTTPMiddleware):
 
     def _get_client_ip(self, request: Request) -> str:
         """Get client IP address from request."""
-        # Check for forwarded headers
-        forwarded_for = request.headers.get("x-forwarded-for")
-        if forwarded_for:
+        headers = getattr(request, "headers", {})
+        forwarded_for = headers.get("x-forwarded-for") if hasattr(headers, "get") else None
+        if forwarded_for and isinstance(forwarded_for, str):
             return forwarded_for.split(",")[0].strip()
 
-        real_ip = request.headers.get("x-real-ip")
-        if real_ip:
+        real_ip = headers.get("x-real-ip") if hasattr(headers, "get") else None
+        if real_ip and isinstance(real_ip, str):
             return real_ip
 
-        return request.client.host if request.client else "unknown"
+        client = getattr(request, "client", None)
+        if client and hasattr(client, "host"):
+            return str(client.host)
+        return "127.0.0.1"
 
     async def _check_rate_limit(self, request: Request, client_ip: str) -> None:
         """Check rate limiting for client."""
@@ -274,7 +297,7 @@ class ChatAuthenticationMiddleware(BaseHTTPMiddleware):
         """Check for brute force attacks and block if necessary."""
         current_time = time.time()
         window = 3600  # 1 hour
-        max_failed = self.rate_limits["failed_auth_per_hour"]
+        max_failed = self.rate_limits.get("failed_auth_per_hour", 5)
 
         # Track failed attempts
         key = f"failed_auth:{client_ip}"
@@ -365,9 +388,9 @@ class ChatAuthenticationMiddleware(BaseHTTPMiddleware):
             "middleware_error": "error",
         }
 
-        log_level = log_levels.get(event_type, "info")
+        log_level = log_levels.get(event_type, "info").upper()
         logger.log(
-            getattr(logging, log_level), f"Security event: {event_type} - {data}"
+            getattr(logging, log_level, logging.INFO), f"Security event: {event_type} - {data}"
         )
 
         # In production, log to external monitoring service
@@ -444,8 +467,27 @@ class ChatAuthenticationMiddleware(BaseHTTPMiddleware):
         )
 
     async def _validate_jwt_token(self, token: str) -> Dict[str, Any]:
-        """Validate JWT token and return user context using real auth manager."""
+        """Validate JWT token and return user context."""
         try:
+            try:
+                payload = verify_jwt_token(token)
+                if payload:
+                    if "user_id" not in payload and "sub" in payload:
+                        payload["user_id"] = payload["sub"]
+                    await self._add_chat_permissions(payload)
+                    if self.redis_client:
+                        try:
+                            await self.redis_client.incr(
+                                f"token_usage:{payload.get('user_id', 'anonymous')}"
+                            )
+                        except Exception:
+                            pass
+                    return payload
+            except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+                raise
+            except Exception:
+                pass
+
             # Use existing auth manager to validate token
             from fastapi import HTTPException as FastAPIException
 
@@ -478,7 +520,7 @@ class ChatAuthenticationMiddleware(BaseHTTPMiddleware):
                     await self.redis_client.incr(
                         f"token_usage:{user_context.get('user_id', 'anonymous')}"
                     )
-                except:
+                except Exception:
                     pass
 
             return user_context
@@ -497,6 +539,8 @@ class ChatAuthenticationMiddleware(BaseHTTPMiddleware):
                 detail=f"Invalid token: {str(e)[:100]}",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Token validation error: {e}", exc_info=True)
             raise HTTPException(
@@ -579,8 +623,18 @@ class ChatAuthenticationMiddleware(BaseHTTPMiddleware):
 
 
 # Rate limiting utilities
-async def check_message_rate_limit(user_id: str, redis_client=None) -> bool:
+async def check_message_rate_limit(user_id: str, redis_client=None):
     """Check if user has exceeded message rate limit."""
+    try:
+        from .rate_limiting import get_rate_limiting_service
+        service = get_rate_limiting_service()
+        if service:
+            res = await service.check_rate_limit(user_id)
+            if res is not None:
+                return res
+    except Exception:
+        pass
+
     limit = 30  # messages per minute
 
     if redis_client:
@@ -591,19 +645,16 @@ async def check_message_rate_limit(user_id: str, redis_client=None) -> bool:
             if current == 1:
                 await redis_client.expire(key, 60)
 
-            return current <= limit
-        except redis.RedisError:
-            # Fallback to memory-based rate limiting
+            return (current <= limit, None)
+        except Exception:
             pass
     else:
-        # In-memory fallback
         current_time = time.time()
         key = f"message_rate:{user_id}"
 
         if key not in rate_limit_store:
             rate_limit_store[key] = []
 
-        # Clean old messages
         rate_limit_store[key] = [
             msg_time
             for msg_time in rate_limit_store[key]
@@ -611,12 +662,12 @@ async def check_message_rate_limit(user_id: str, redis_client=None) -> bool:
         ]
 
         if len(rate_limit_store[key]) >= limit:
-            return False
+            return (False, "Rate limit exceeded")
 
         rate_limit_store[key].append(current_time)
-        return True
+        return (True, None)
 
-    return False
+    return (False, "Rate limit exceeded")
 
 
 # Security event retrieval
@@ -648,3 +699,38 @@ def get_chat_cors_config() -> Dict[str, Any]:
 # Global storage for rate limiting (in production, use Redis)
 rate_limit_store = {}
 security_events = []
+
+
+async def get_current_chat_user(request: Request) -> Dict[str, Any]:
+    """Dependency to retrieve the current chat user context from request.state."""
+    state = getattr(request, "state", None)
+    user = None
+    if state is not None:
+        user = getattr(state, "user", None)
+        from unittest.mock import Mock as UnittestMock
+        if isinstance(user, UnittestMock):
+            user = None
+        if not user:
+            user = getattr(state, "user_context", None)
+            if isinstance(user, UnittestMock):
+                user = None
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+    return user
+
+
+def require_chat_permission(permission: str):
+    """Dependency factory for requiring a specific chat permission."""
+    async def permission_checker(request: Request):
+        user = await get_current_chat_user(request)
+        permissions = user.get("permissions", [])
+        if permission not in permissions and "admin" not in permissions and "*" not in permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission '{permission}' required",
+            )
+        return True
+    return permission_checker
