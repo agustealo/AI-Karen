@@ -158,7 +158,16 @@ class ExtensionExecutionService:
         try:
             registration = self._get_registration(plugin_id)
         except ExtensionError as exc:
-            return self._fail(request, start, execution_id, exc.error_code, str(exc))
+            return self._fail_with_provenance(
+                request,
+                start,
+                execution_id,
+                exc.error_code,
+                str(exc),
+                TrustTier.UNTRUSTED,
+                ResultTrust.UNVERIFIED,
+                DataClassification.PUBLIC,
+            )
 
         manifest = registration.manifest
         context = request.context
