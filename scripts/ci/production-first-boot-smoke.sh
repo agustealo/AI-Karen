@@ -78,7 +78,7 @@ api_env=(
   -e EXTENSION_API_KEY="${EXTENSION_SECRET}"
   -e EXTENSION_DEV_BYPASS_ENABLED=false
   -e KARI_DUCKDB_PASSWORD="BetaSmokeDuckDb_6f2a1d93"
-  -e KARI_JOB_ENC_KEY="beta-smoke-job-enc-1b7d2f93a64c4f0c8e7a51d2c3b4e5f6"
+  -e KARI_JOB_ENC_KEY="YmV0YS1zbW9rZS1qb2ItZW5jLWtleS0zMi1ieXRlISE="
   -e KARI_JOB_SIGNING_KEY="beta-smoke-job-sign-54c6a781d2e34f7ba90c13d8e5f624ab"
   -e KARI_MODEL_SIGNING_KEY="beta-smoke-model-sign-7e4a2c98f1364db5b0a7c21d9e6f83ab"
   -e KARI_FAST_STARTUP=false
