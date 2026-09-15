@@ -75,7 +75,7 @@ class PluginLifecycleManager:
         )
         self.package_manager = get_package_manager(extensions_dir)
         self.database_service = get_database_service()
-        self.state_machine = get_state_manager(database_service=self.database_service)
+        self.state_machine = get_state_machine(database_service=self.database_service)
         self._lifecycle_state: Dict[str, str] = {}
 
         logger.info(f"PluginLifecycleManager initialized with dir={extensions_dir}")
