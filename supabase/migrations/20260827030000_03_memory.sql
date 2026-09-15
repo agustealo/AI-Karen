@@ -192,18 +192,8 @@ ALTER TABLE memory_items
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
 
--- Convert legacy ARRAY(Float) embedding to pgvector when dimensions match
-ALTER TABLE memory_items
-    ADD COLUMN IF NOT EXISTS embedding_vector vector;
-
-UPDATE memory_items
-SET embedding_vector = embedding::vector
-WHERE embedding IS NOT NULL
-  AND array_length(embedding, 1) IS NOT NULL
-  AND embedding_vector IS NULL;
-
--- Drop legacy embedding column after backfill verification
--- ALTER TABLE memory_items DROP COLUMN embedding;
+-- memory_items.embeddings is already the canonical pgvector column from the
+-- production baseline. Do not create a parallel embedding authority.
 
 -- Backfill tenant_id/user_id from metadata when not yet set
 UPDATE memory_items
@@ -219,9 +209,9 @@ CREATE INDEX IF NOT EXISTS idx_memory_items_scope_kind
     ON memory_items(scope, kind);
 
 -- pgvector HNSW index for semantic search
-CREATE INDEX IF NOT EXISTS idx_memory_items_embedding_vector
+CREATE INDEX IF NOT EXISTS idx_memory_items_embeddings_hnsw
     ON memory_items
-    USING hnsw (embedding_vector vector_cosine_ops)
+    USING hnsw (embeddings vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
 -- PostgreSQL FTS index over content
