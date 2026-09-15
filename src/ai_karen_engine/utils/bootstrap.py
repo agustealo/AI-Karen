@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from ai_karen_engine.core.memory.unified_memory_service import (
+from ai_karen_engine.integrations.memory.unified_memory_service import (
     MemoryCommitRequest,
     MemoryQueryRequest,
     UnifiedMemoryService,
