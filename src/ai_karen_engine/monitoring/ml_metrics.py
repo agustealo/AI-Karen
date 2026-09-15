@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Optional
 
-from src.ai_karen_engine.platform.observability.metrics import get_metrics_collector as get_metrics_manager
+from ai_karen_engine.platform.observability.metrics import get_metrics_collector
 
 logger = logging.getLogger(__name__)
 
@@ -14,53 +14,52 @@ class MLMetrics:
     """Collects ML inference and fallback metrics."""
 
     def __init__(self) -> None:
-        self.metrics_manager = get_metrics_manager()
+        self.metrics_manager = get_metrics_collector()
         self._initialize_metrics()
 
     def _initialize_metrics(self) -> None:
-        with self.metrics_manager.safe_metrics_context():
-            self.inference_seconds = self.metrics_manager.register_histogram(
-                "karen_ml_inference_seconds",
-                "ML inference latency in seconds",
-                ["prediction_task", "model_id", "model_version", "status"],
-                buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
-            )
-            self.predictions_total = self.metrics_manager.register_counter(
-                "karen_ml_predictions_total",
-                "Total ML predictions served",
-                ["prediction_task", "model_id", "model_version", "status"],
-            )
-            self.fallback_total = self.metrics_manager.register_counter(
-                "karen_ml_fallback_total",
-                "Total ML fallback events",
-                ["prediction_task", "model_id", "fallback_reason"],
-            )
-            self.model_load_failures_total = self.metrics_manager.register_counter(
-                "karen_ml_model_load_failures_total",
-                "Total ML model load failures",
-                ["model_id", "error_type"],
-            )
-            self.shadow_disagreement_total = self.metrics_manager.register_counter(
-                "karen_ml_shadow_disagreement_total",
-                "Total shadow model disagreements with primary",
-                ["model_id", "model_version", "prediction_task"],
-            )
-            self.calibration_error = self.metrics_manager.register_histogram(
-                "karen_ml_calibration_error",
-                "ML model calibration error (ECE)",
-                ["model_id", "model_version", "prediction_task"],
-                buckets=[0.0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5],
-            )
-            self.evaluation_score = self.metrics_manager.register_gauge(
-                "karen_ml_evaluation_score",
-                "ML model evaluation score (F1/accuracy)",
-                ["model_id", "model_version", "prediction_task", "metric"],
-            )
-            self.promotion_status = self.metrics_manager.register_gauge(
-                "karen_ml_promotion_status",
-                "ML model promotion status (1=eligible, 0=blocked, -1=insufficient)",
-                ["model_id", "model_version", "purpose"],
-            )
+        self.inference_seconds = self.metrics_manager.histogram(
+            "karen_ml_inference_seconds",
+            "ML inference latency in seconds",
+            ["prediction_task", "model_id", "model_version", "status"],
+            buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+        )
+        self.predictions_total = self.metrics_manager.counter(
+            "karen_ml_predictions_total",
+            "Total ML predictions served",
+            ["prediction_task", "model_id", "model_version", "status"],
+        )
+        self.fallback_total = self.metrics_manager.counter(
+            "karen_ml_fallback_total",
+            "Total ML fallback events",
+            ["prediction_task", "model_id", "fallback_reason"],
+        )
+        self.model_load_failures_total = self.metrics_manager.counter(
+            "karen_ml_model_load_failures_total",
+            "Total ML model load failures",
+            ["model_id", "error_type"],
+        )
+        self.shadow_disagreement_total = self.metrics_manager.counter(
+            "karen_ml_shadow_disagreement_total",
+            "Total shadow model disagreements with primary",
+            ["model_id", "model_version", "prediction_task"],
+        )
+        self.calibration_error = self.metrics_manager.histogram(
+            "karen_ml_calibration_error",
+            "ML model calibration error (ECE)",
+            ["model_id", "model_version", "prediction_task"],
+            buckets=[0.0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5],
+        )
+        self.evaluation_score = self.metrics_manager.gauge(
+            "karen_ml_evaluation_score",
+            "ML model evaluation score (F1/accuracy)",
+            ["model_id", "model_version", "prediction_task", "metric"],
+        )
+        self.promotion_status = self.metrics_manager.gauge(
+            "karen_ml_promotion_status",
+            "ML model promotion status (1=eligible, 0=blocked, -1=insufficient)",
+            ["model_id", "model_version", "purpose"],
+        )
 
     def record_inference(
         self,
