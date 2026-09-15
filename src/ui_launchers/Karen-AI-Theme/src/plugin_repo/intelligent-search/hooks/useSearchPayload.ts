@@ -20,7 +20,7 @@ export function useSearchPayload() {
     ];
 
     // Build crawl object if any crawl options are present
-    const crawlOptions: Record<string, any> = {};
+    const crawlOptions: Record<string, unknown> = {};
     let hasCrawlOptions = false;
 
     crawlKeys.forEach(key => {
@@ -34,7 +34,7 @@ export function useSearchPayload() {
     });
 
     // Build context with non-crawl options
-    const context: Record<string, any> = {};
+    const context: Record<string, unknown> = {};
     Object.entries(options).forEach(([key, value]) => {
       if (
         value !== undefined &&
@@ -45,7 +45,7 @@ export function useSearchPayload() {
       }
     });
 
-    const payload: Record<string, any> = {
+    const payload: Record<string, unknown> = {
       mode,
       query,
       context,
@@ -54,7 +54,7 @@ export function useSearchPayload() {
     // Add crawl options if present
     if (hasCrawlOptions) {
       payload.crawl = {
-        enabled: crawlOptions.enabled || false,
+        enabled: crawlOptions.enabled === true,
         ...crawlOptions,
       };
     }
