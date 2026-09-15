@@ -73,7 +73,9 @@ export function ResultsPanel({ response }: PanelProps) {
 
   const sourceCount = response.diagnostics?.sourceCount ?? sources.length ?? 0;
   const resultCount = results.length;
-  const providerLabel = response.provider || response.metadata?.provider || 'crawl4ai';
+  const providerLabel = String(
+    response.provider || response.metadata?.provider || 'crawl4ai',
+  );
 
   React.useEffect(() => {
     setActiveSourceIndex(initialActiveSourceIndex);
