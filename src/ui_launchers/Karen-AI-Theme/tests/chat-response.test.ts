@@ -192,8 +192,8 @@ describe('Degraded Runtime Fallback Presentation', () => {
       expect(normalizeProviderName('builtin-transformers')).toBe('builtin_transformers');
       expect(normalizeProviderName('builtin_transformers')).toBe('builtin_transformers');
       expect(normalizeProviderName('hf-transformers')).toBe('builtin_transformers');
-      expect(normalizeProviderName('hugging-face')).toBe('builtin_transformers');
-      expect(normalizeProviderName('huggingface')).toBe('builtin_transformers');
+      expect(normalizeProviderName('hugging-face')).toBe('hugging_face');
+      expect(normalizeProviderName('huggingface')).toBe('huggingface');
     });
 
     it('should normalize other providers correctly', () => {
@@ -414,7 +414,7 @@ describe('Degraded Runtime Fallback Presentation', () => {
       const result = deriveResponseDetailsPresentation(metadata);
 
       expect(result.requestedProviderLabel).toBe('vLLM');
-      expect(result.requestedModelLabel).toBe('GPT-2');
+      expect(result.requestedModelLabel).toBe('gpt2');
       expect(result.providerLabel).toBe('vLLM');
       expect(result.modelLabel).toBe('GPT-2');
       expect(result.degradedMode).toBe(false);
@@ -437,7 +437,7 @@ describe('Degraded Runtime Fallback Presentation', () => {
 
       const result = deriveResponseDetailsPresentation(metadata);
 
-      expect(result.requestedProviderLabel).toBe('Gemini');
+      expect(result.requestedProviderLabel).toBe('gemini');
       expect(result.requestedModelLabel).toBe('Gemini-2.5-flash');
       expect(result.providerLabel).toBe('vLLM');
       expect(result.modelLabel).toBe('Qwen Local');
