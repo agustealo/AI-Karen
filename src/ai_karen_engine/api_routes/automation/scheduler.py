@@ -27,8 +27,7 @@ from ai_karen_engine.services.scheduling.scheduler_manager import (
     SafetyLevel,
 )
 from ai_karen_engine.learning.autonomous_learner import AutonomousLearner
-from ai_karen_engine.core.cortex.analysis import SpacyAnalyzer
-from ai_karen_engine.core.memory.signals.spacy_service import SpacyService
+from ai_karen_engine.core.intelligence.linguistic.spacy_analyzer import SpacyAnalyzer
 
 # Simple auth imports
 from ai_karen_engine.core.services.dependencies import bypass_user_context_func, get_memory_service
@@ -51,7 +50,7 @@ async def get_scheduler_manager() -> SchedulerManager:
         try:
             memory_service = await get_memory_service()
             learner = AutonomousLearner(
-                spacy_analyzer=SpacyAnalyzer(spacy_service=SpacyService()),
+                spacy_analyzer=SpacyAnalyzer(),
                 memory_service=memory_service,
             )
             _global_scheduler_manager = SchedulerManager(
