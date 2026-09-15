@@ -7,7 +7,7 @@
 -- BASELINE SOURCE: 20260823010000_agui_chat_core.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/001_agui_chat_core.sql (preserving original lineage)
+-- Migrated from database/migrations/001_agui_chat_core.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 -- Initial schema for AG-UI + Copilot-ready chat core
@@ -335,7 +335,7 @@ CREATE TABLE rate_limits (
 -- BASELINE SOURCE: 20260823020000_persona_persistence.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/003_persona_persistence.sql (preserving original lineage)
+-- Migrated from database/migrations/003_persona_persistence.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 CREATE TABLE IF NOT EXISTS custom_personas (
@@ -431,7 +431,7 @@ $$;
 -- BASELINE SOURCE: 20260823030000_chat_runtime_control_plane.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/004_chat_runtime_control_plane.sql (preserving original lineage)
+-- Migrated from database/migrations/004_chat_runtime_control_plane.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 -- Migration: Add Chat Runtime Control Plane Tables
