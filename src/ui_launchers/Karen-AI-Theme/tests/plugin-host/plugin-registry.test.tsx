@@ -7,13 +7,6 @@ import React from 'react';
 global.fetch = vi.fn() as unknown as Mock;
 const mockedFetch = vi.mocked(fetch);
 
-// Mock DOM for React testing
-global.document = {
-  createElement: vi.fn(),
-  querySelector: vi.fn(),
-  // Add other DOM methods as needed
-} as any;
-
 // Mock authentication
 vi.mock('@/lib/useAuth', () => ({
   useAuth: () => ({ user: { id: 'test-user', roles: ['user', 'admin'] } })
