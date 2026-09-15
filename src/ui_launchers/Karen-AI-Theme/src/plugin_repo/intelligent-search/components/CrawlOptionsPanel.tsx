@@ -14,8 +14,8 @@ interface CrawlOptionsPanelProps {
 export function CrawlOptionsPanel({ options, onChange, capabilities }: CrawlOptionsPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const handleChange = (key: keyof IntelligentSearchOptions, value: any) => {
-    onChange({ [key]: value });
+  const handleChange = <K extends keyof IntelligentSearchOptions>(key: K, value: IntelligentSearchOptions[K]) => {
+    onChange({ [key]: value } as Pick<IntelligentSearchOptions, K>);
   };
 
   const handleArrayChange = (key: keyof IntelligentSearchOptions, value: string, action: 'add' | 'remove') => {
