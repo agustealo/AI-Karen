@@ -9,7 +9,7 @@ Carries the authorization + identity needed for canonical routing:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from ...core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudgetMeter
 
