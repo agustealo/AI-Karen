@@ -25,7 +25,7 @@ def test_canonical_conversation_router_is_mounted_for_beta_reload() -> None:
     source = ROUTERS.read_text(encoding="utf-8")
 
     assert "conversation_router" in source
-    assert 'prefix="/api/conversations"' in source
+    assert 'RouterSpec(conversation_router, "/api/conversations"' in source
 
 
 def test_beta_reload_must_not_depend_on_legacy_chat_session_surface() -> None:
