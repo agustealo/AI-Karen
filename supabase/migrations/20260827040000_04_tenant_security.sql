@@ -19,7 +19,7 @@ ALTER TABLE conversations
 
 -- Backfill tenant_id from auth_users
 UPDATE conversations c
-SET tenant_id = au.tenant_id
+SET tenant_id = NULLIF(au.tenant_id, '')::uuid
 FROM auth_users au
 WHERE c.user_id = au.user_id
   AND c.tenant_id IS NULL;
@@ -72,7 +72,7 @@ ALTER TABLE memory_items ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY memory_items_tenant_isolation ON memory_items
     FOR ALL
-    USING (tenant_id = current_setting('app.current_tenant_id')::uuid);
+    USING (tenant_id = current_setting('app.current_tenant_id'));
 
 -- Enable RLS on conversations
 ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
@@ -98,7 +98,7 @@ ALTER TABLE files ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY files_tenant_isolation ON files
     FOR ALL
-    USING (tenant_id = current_setting('app.current_tenant_id')::uuid);
+    USING (tenant_id = current_setting('app.current_tenant_id'));
 
 -- Enable RLS on memory_event (ledger)
 ALTER TABLE memory_event ENABLE ROW LEVEL SECURITY;
