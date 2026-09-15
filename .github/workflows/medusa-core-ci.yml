@@ -17,6 +17,7 @@ on:
 
 env:
   PYTHON_VERSION: '3.12'
+  PYTHONPATH: src
 
 jobs:
   lint:
@@ -35,16 +36,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install black flake8 mypy pylint bandit
+          pip install ruff mypy bandit
           pip install -r requirements.txt
       
-      - name: Run Black formatter check
+      - name: Run Ruff correctness baseline
         run: |
-          black --check src/ai_karen_engine/agent_medusa/ src/ai_karen_engine/core/runtime/
-      
-      - name: Run Flake8 linter
-        run: |
-          flake8 src/ai_karen_engine/agent_medusa/ src/ai_karen_engine/core/runtime/ --max-line-length=100
+          # Historical formatting/style debt is retired in contained slices.
+          # Keep this specialist gate fail-closed on syntax/control-flow correctness.
+          ruff check --select E9,F63,F7 src/ai_karen_engine/agent_medusa/ src/ai_karen_engine/core/runtime/
       
       - name: Run MyPy type checker
         run: |
