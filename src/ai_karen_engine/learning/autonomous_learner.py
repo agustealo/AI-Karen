@@ -21,8 +21,8 @@ import shutil
 
 from ai_karen_engine.core.intelligence.linguistic.spacy_analyzer import SpacyAnalyzer
 from ai_karen_engine.core.memory.signals.spacy_service import SpacyService, ParsedMessage
-from ai_karen_engine.core.memory.unified_memory_service import UnifiedMemoryService
-from ai_karen_engine.core.memory.unified_memory_service import MemoryCommitRequest, MemoryQueryRequest
+from ai_karen_engine.integrations.memory.unified_memory_service import UnifiedMemoryService
+from ai_karen_engine.integrations.memory.unified_memory_service import MemoryCommitRequest, MemoryQueryRequest
 from ai_karen_engine.core.runtime.resilience import get_feature_flags
 
 logger = logging.getLogger(__name__)
