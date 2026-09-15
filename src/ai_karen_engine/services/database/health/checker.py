@@ -19,7 +19,7 @@ from sqlalchemy import text
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.database.client import get_database_client
-from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
+from ai_karen_engine.platform.memory.redis.redis_connection_manager import get_redis_manager
 from ai_karen_engine.services.database.database_consistency_validator import (
     get_database_consistency_validator,
     ValidationStatus,
