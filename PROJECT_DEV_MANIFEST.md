@@ -471,6 +471,10 @@ Compatibility shims may remain only when they resolve to canonical composed inst
 
 ## 11. Current Sprint Program
 
+### Canonical sprint source
+
+Detailed implementation order, Do/Reuse/Avoid guidance, proof gates, stop conditions, current blockers and handoff format live in `KARI_OS_DEV_SHEET.md`. This manifest owns architecture law; the dev sheet owns the current execution program. They must not diverge.
+
 ### KARI-OS-0: architecture freeze
 
 - codify domain-neutral cognitive substrate;
@@ -584,12 +588,13 @@ A paper using a graph database is not an ADR for KARI to adopt that database.
 Read in this order:
 
 1. `PROJECT_DEV_MANIFEST.md`
-2. live code, migrations, dependency manifests, deployment composition and architecture tests
-3. `docs/architecture/KARI_OS_MANIFEST.md`
-4. `docs/architecture/KARI_OS_ADVERSARIAL_BURN.md`
-5. current accepted ADR/dev sprint
-6. subsystem documentation
-7. historical sprint sheets as history only
+2. `KARI_OS_DEV_SHEET.md`
+3. live code, migrations, dependency manifests, deployment composition and architecture tests
+4. `docs/architecture/KARI_OS_CURRENT_BLUEPRINT.md`
+5. `docs/architecture/KARI_OS_MANIFEST.md`
+6. `docs/architecture/KARI_OS_ADVERSARIAL_BURN.md`
+7. accepted ADRs and subsystem documentation
+8. historical sprint sheets as history only
 
 If documentation disagrees with tested live behavior, classify it as documentation drift or implementation debt. Do not silently average conflicting documents into a fictional architecture.
 
