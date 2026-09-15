@@ -496,7 +496,7 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
 
                       {renderMetadataPair({
                         label: 'Correlation ID',
-                        value: message.metadata?.correlation_id || 'N/A',
+                        value: String(message.metadata?.correlation_id || 'N/A'),
                         testId: 'chat-correlation-id',
                       })}
 
