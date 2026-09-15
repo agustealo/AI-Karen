@@ -44,7 +44,8 @@ trap cleanup EXIT
 
 fail_with_api_logs() {
   echo "production first-run smoke failed" >&2
-  docker logs "${API_CONTAINER}" >&2 2>/dev/null || true
+  docker inspect "${API_CONTAINER}" --format='status={{.State.Status}} exit_code={{.State.ExitCode}} error={{.State.Error}}' >&2 || true
+  docker logs "${API_CONTAINER}" >&2 || true
   exit 1
 }
 
@@ -113,9 +114,20 @@ start_api() {
     "${api_env[@]}" \
     "${API_IMAGE}" >/dev/null
 
-  if ! wait_for_command "production API liveness" 90 curl -fsS "${BASE_URL}/health/live"; then
-    fail_with_api_logs
-  fi
+  for ((attempt = 1; attempt <= 90; attempt++)); do
+    if curl -fsS "${BASE_URL}/health/live" >/dev/null 2>&1; then
+      break
+    fi
+    if [[ "$(docker inspect -f '{{.State.Running}}' "${API_CONTAINER}" 2>/dev/null || echo false)" != "true" ]]; then
+      echo "production API container exited before liveness" >&2
+      fail_with_api_logs
+    fi
+    if [[ "${attempt}" -eq 90 ]]; then
+      echo "timed out waiting for production API liveness" >&2
+      fail_with_api_logs
+    fi
+    sleep 2
+  done
 
   if ! wait_for_command "production auth readiness" 30 curl -fsS "${BASE_URL}/api/auth/health"; then
     fail_with_api_logs
