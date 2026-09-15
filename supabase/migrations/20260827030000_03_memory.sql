@@ -185,7 +185,6 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- migration. Do not compare or assign UUID values before that conversion.
 ALTER TABLE memory_items
     ADD COLUMN IF NOT EXISTS conversation_id UUID,
-    ADD COLUMN IF NOT EXISTS content_tsv TEXT GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
     ADD COLUMN IF NOT EXISTS importance FLOAT DEFAULT 0.5,
     ADD COLUMN IF NOT EXISTS confidence FLOAT DEFAULT 1.0,
     ADD COLUMN IF NOT EXISTS source_type VARCHAR(100) DEFAULT 'system',
@@ -209,6 +208,4 @@ CREATE INDEX IF NOT EXISTS idx_memory_items_embeddings_hnsw
     USING hnsw (embeddings vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
--- PostgreSQL FTS index over content
-CREATE INDEX IF NOT EXISTS idx_memory_items_content_tsv
-    ON memory_items USING GIN (content_tsv);
+-- FTS column/type/index are finalized in 20260827050000_05_schema_security_finalization.sql.
