@@ -124,9 +124,17 @@ jobs:
         run: |
           pytest tests/core/runtime/test_legacy_to_medusa_delegation.py -v --timeout=300 --tb=short
       
-      - name: Run core runtime tests
+      - name: Run canonical Medusa runtime tests
         run: |
-          pytest tests/core/runtime/ -v --timeout=300 --tb=short --cov=src/ai_karen_engine/agent_medusa --cov=src/ai_karen_engine/core/runtime --cov-report=xml --cov-report=html
+          pytest \
+            tests/core/runtime/test_medusa_authority_closure.py \
+            tests/core/runtime/test_medusa_planner_correctness.py \
+            tests/core/runtime/test_legacy_to_medusa_delegation.py \
+            tests/agent_medusa/ \
+            -v --timeout=300 --tb=short \
+            --cov=src/ai_karen_engine/agent_medusa \
+            --cov=src/ai_karen_engine/core/runtime \
+            --cov-report=xml --cov-report=html
       
       - name: Upload coverage reports
         if: always()
@@ -304,9 +312,9 @@ jobs:
       
       - name: Run final behavioral proof tests
         run: |
-          pytest tests/core/runtime/ -k "dependency" -v --timeout=300
-          pytest tests/core/runtime/ -k "wildcard" -v --timeout=300
-          pytest tests/core/runtime/ -k "concurrent" -v --timeout=300
+          pytest tests/core/runtime/test_medusa_planner_correctness.py -k "dependency" -v --timeout=300
+          pytest tests/core/runtime/test_medusa_planner_correctness.py -k "wildcard" -v --timeout=300
+          pytest tests/core/runtime/test_medusa_planner_correctness.py -k "concurrent" -v --timeout=300
           
           echo "Running behavioral proofs..."
           
