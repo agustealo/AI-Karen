@@ -45,7 +45,7 @@ async def test_register_and_get():
     registry = ExtensionRegistry()
     registration = ExtensionRegistration(manifest=_manifest("echo"), state=ExtensionLifecycleState.DISCOVERED)
     await registry.register(registration)
-    assert await registry.get("echo") is registration
+    assert registry.get("echo") is registration
 
 
 @pytest.mark.asyncio
@@ -63,7 +63,7 @@ async def test_unregister():
     registration = ExtensionRegistration(manifest=_manifest("echo"), state=ExtensionLifecycleState.DISCOVERED)
     await registry.register(registration)
     await registry.unregister("echo")
-    assert await registry.get("echo") is None
+    assert registry.get("echo") is None
 
 
 @pytest.mark.asyncio
@@ -71,7 +71,7 @@ async def test_get_by_capability():
     registry = ExtensionRegistry()
     registration = ExtensionRegistration(manifest=_manifest("echo"), state=ExtensionLifecycleState.DISCOVERED)
     await registry.register(registration)
-    results = await registry.get_by_capability("test")
+    results = registry.get_by_capability("test")
     assert len(results) == 1
     assert results[0].manifest.id == "echo"
 
@@ -81,7 +81,7 @@ async def test_get_by_intent():
     registry = ExtensionRegistry()
     registration = ExtensionRegistration(manifest=_manifest("echo"), state=ExtensionLifecycleState.DISCOVERED)
     await registry.register(registration)
-    results = await registry.get_by_intent("test")
+    results = registry.get_by_intent("test")
     assert len(results) == 1
 
 
@@ -91,7 +91,7 @@ async def test_list_enabled():
     registration = ExtensionRegistration(manifest=_manifest("echo"), state=ExtensionLifecycleState.DISCOVERED)
     await registry.register(registration)
     registration.state = ExtensionLifecycleState.ENABLED
-    assert len(await registry.list_enabled()) == 1
+    assert len(registry.list_enabled()) == 1
 
 
 @pytest.mark.asyncio
