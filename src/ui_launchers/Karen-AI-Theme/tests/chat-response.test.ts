@@ -438,7 +438,7 @@ describe('Degraded Runtime Fallback Presentation', () => {
       const result = deriveResponseDetailsPresentation(metadata);
 
       expect(result.requestedProviderLabel).toBe('gemini');
-      expect(result.requestedModelLabel).toBe('Gemini-2.5-flash');
+      expect(result.requestedModelLabel).toBe('gemini-2.5-flash');
       expect(result.providerLabel).toBe('vLLM');
       expect(result.modelLabel).toBe('Qwen Local');
       expect(result.degradedMode).toBe(true);
