@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ai_karen_engine.core.memory.unified_memory_service import UnifiedMemoryService
+from ai_karen_engine.integrations.memory.unified_memory_service import UnifiedMemoryService
 
 
 @dataclass(frozen=True)
