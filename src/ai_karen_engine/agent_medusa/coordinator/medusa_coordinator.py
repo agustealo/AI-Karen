@@ -198,7 +198,7 @@ class MedusaCoordinator:
         request_emitter = EventEmitter(sinks=list(self._global_sinks))
         self.active_plans[request.request_id] = plan
         degraded_agents: List[str] = []
-        degradation_reasons: Dict[str, str] = {}
+        degradation_reasons: Dict[str, Any] = {}
         step_outputs: list[Dict[str, Any]] = []
         agent_trace: list[str] = []
 
@@ -265,7 +265,7 @@ class MedusaCoordinator:
         trajectory.complete(final_status.value)
         trajectory.events = request_emitter._events
         self.trajectories[request.request_id] = trajectory
-        response_metadata = {
+        response_metadata: Dict[str, Any] = {
             "plan": plan.to_dict(),
             "trajectory": trajectory.to_dict(),
             "execution_topology": "multi_agent",
@@ -335,7 +335,13 @@ class MedusaCoordinator:
                 ),
                 affected_agent=step.agent_specialist,
                 fallback_level=DegradationLevel.PARTIAL,
-                capabilities_lost=health.get("capabilities_lost", []),
+                capabilities_lost=(
+                    list(health.get("capabilities_lost", []))
+                    if isinstance(health.get("capabilities_lost", []), (list, tuple, set))
+                    else [str(health.get("capabilities_lost"))]
+                    if health.get("capabilities_lost")
+                    else []
+                ),
             )
 
         registration = await self.registry.get_agent(step.agent_specialist)
