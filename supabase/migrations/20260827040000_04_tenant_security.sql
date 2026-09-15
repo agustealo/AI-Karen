@@ -7,7 +7,7 @@
 -- BASELINE SOURCE: 20260823080000_conversation_tenant_scoping.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/009_conversation_tenant_scoping.sql (preserving original lineage)
+-- Migrated from database/migrations/009_conversation_tenant_scoping.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 -- Migration: 009_conversation_tenant_scoping.sql
@@ -61,7 +61,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_conversations_tenant_archived
 -- BASELINE SOURCE: 20260823090000_row_level_security.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/010_row_level_security.sql (preserving original lineage)
+-- Migrated from database/migrations/010_row_level_security.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 -- Migration: 010_row_level_security.sql
