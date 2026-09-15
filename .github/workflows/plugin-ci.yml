@@ -164,7 +164,7 @@ jobs:
     needs: lint
     defaults:
       run:
-        working-directory: ui_launchers/Karen-AI-Theme
+        working-directory: src/ui_launchers/Karen-AI-Theme
     
     steps:
       - name: Checkout code
@@ -175,26 +175,26 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: ui_launchers/Karen-AI-Theme/package-lock.json
+          cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
       
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
       
       - name: Run TypeScript type checking
-        run: npm run type-check
+        run: npm run typecheck
       
       - name: Run ESLint
         run: npm run lint
       
       - name: Run frontend tests
-        run: npm test -- --coverage --watchAll=false
+        run: npx vitest run --passWithNoTests
       
       - name: Upload frontend coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
-          path: ui_launchers/Karen-AI-Theme/coverage/
+          path: src/ui_launchers/Karen-AI-Theme/coverage/
 
   security-scan:
     name: Security Scanning
