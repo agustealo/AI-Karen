@@ -240,7 +240,7 @@ BEGIN
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'llm_requests'
           AND column_name = 'tenant_id'
-          AND data_type = 'text'
+          AND data_type IN ('text', 'character varying')
     ) THEN
         ALTER TABLE llm_requests
             ALTER COLUMN tenant_id TYPE UUID
@@ -254,7 +254,7 @@ BEGIN
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'llm_requests'
           AND column_name = 'user_id'
-          AND data_type = 'text'
+          AND data_type IN ('text', 'character varying')
     ) THEN
         ALTER TABLE llm_requests
             ALTER COLUMN user_id TYPE UUID
