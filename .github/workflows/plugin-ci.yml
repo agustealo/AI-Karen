@@ -128,7 +128,11 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           PLUGIN_ENV: test
         run: |
-          pytest tests/integration/ -v \
+          pytest \
+            tests/extensions/ \
+            tests/architecture/test_extension_lifecycle_authority.py \
+            tests/architecture/test_extension_route_authority.py \
+            -v \
             --cov=src/ai_karen_engine/extensions \
             --cov-report=xml \
             --cov-report=html \
@@ -171,9 +175,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
-            node_modules
+          cache-dependency-path: ui_launchers/Karen-AI-Theme/package-lock.json
       
       - name: Install dependencies
         run: npm ci
@@ -192,7 +194,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
-          path: coverage/
+          path: ui_launchers/Karen-AI-Theme/coverage/
 
   security-scan:
     name: Security Scanning
