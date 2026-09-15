@@ -18,6 +18,16 @@
 -- Do NOT amend 008/009/010. This is a corrective migration.
 
 -- ============================================================================
+-- 0. Release temporary pre-finalization RLS dependencies
+-- ============================================================================
+-- Migration 010 enables tenant RLS before legacy TEXT tenant identifiers are
+-- finalized as UUIDs. PostgreSQL will not alter a column type while a policy
+-- depends on that column, so release only those temporary policies here.
+-- Section 8 recreates the canonical fail-closed UUID policies.
+DROP POLICY IF EXISTS memory_items_tenant_isolation ON memory_items;
+DROP POLICY IF EXISTS files_tenant_isolation ON files;
+
+-- ============================================================================
 -- 1. Fix memory_items.content_tsv: must be TSVECTOR, not TEXT
 -- ============================================================================
 DO $$
