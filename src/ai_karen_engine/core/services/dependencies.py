@@ -144,7 +144,16 @@ async def get_langgraph_orchestrator_service() -> Any:
 
 
 async def get_memory_service() -> Any:
-    return await _resolve_service("memory_service")
+    from ai_karen_engine.core.memory.runtime_gateway import resolve_memory_runtime
+
+    resolution = await resolve_memory_runtime()
+    if resolution.available and resolution.service is not None:
+        return resolution.service
+    logger.error("Canonical memory service unavailable: %s", resolution.reason)
+    raise HTTPException(
+        status_code=503,
+        detail="Service 'memory_service' is currently unavailable.",
+    )
 
 
 async def get_profile_service() -> Any:
@@ -172,10 +181,7 @@ async def get_conversation_service() -> Any:
         from ai_karen_engine.database.conversation_manager import ConversationManager
         from ai_karen_engine.services.memory.conversation_service import ConversationService
 
-        memory_service = await _get_runtime_service("memory_service")
-        if memory_service is None:
-            logger.error("Canonical memory service is not registered for conversation service")
-            raise RuntimeError("memory_service unavailable")
+        memory_service = await get_memory_service()
 
         base_manager = ConversationManager(db_client=MultiTenantPostgresClient())
         return ConversationService(
