@@ -395,7 +395,7 @@ Finish one execution authority chain.
 python -m compileall src
 pytest tests/architecture -q
 pytest tests/ -q
-ruff check src tests
+ruff check --select E9,F63,F7 src tests
 mypy src
 ```
 
@@ -1023,6 +1023,8 @@ supabase db reset
 ```
 
 Narrow tests are appropriate during development.
+
+Current Main Quality uses the correctness-critical Ruff baseline above while historical formatting/style debt is retired in contained slices. Do not represent that baseline as full-repository style cleanliness. Full Ruff convergence remains technical debt.
 
 Architecture-affecting merges require the applicable canonical GitHub gates.
 
