@@ -61,7 +61,6 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY src/ /app/src/
-COPY .env.production.plugins /app/.env.production
 
 # Create necessary directories
 RUN mkdir -p /var/lib/karen/plugins \
@@ -79,7 +78,6 @@ RUN pip install --no-cache-dir gunicorn uvicorn[standard] psycopg2-binary redis
 
 # Security hardening
 RUN chmod 755 /app/src && \
-    chmod 644 /app/.env.production && \
     chmod 750 /var/log/karen && \
     chmod 750 /var/lib/karen && \
     chmod 750 /var/cache/karen && \
