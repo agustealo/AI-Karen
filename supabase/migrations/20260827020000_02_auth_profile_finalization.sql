@@ -7,7 +7,7 @@
 -- BASELINE SOURCE: 20260823040000_fix_auth_user_schema.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/005_fix_auth_user_schema.sql (preserving original lineage)
+-- Migrated from database/migrations/005_fix_auth_user_schema.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 -- Migration 005: Fix auth_users schema alignment with models
@@ -35,7 +35,7 @@ END $$;
 -- BASELINE SOURCE: 20260823050000_populate_missing_profile_fields.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/006_populate_missing_profile_fields.sql (preserving original lineage)
+-- Migrated from database/migrations/006_populate_missing_profile_fields.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 -- Migration 006: Populate missing profile fields for existing users
