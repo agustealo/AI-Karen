@@ -7,7 +7,7 @@
 -- BASELINE SOURCE: 20260823060000_memory_ledger.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/007_memory_ledger.sql (preserving original lineage)
+-- Migrated from database/migrations/007_memory_ledger.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 -- Migration: 007_memory_ledger.sql
@@ -169,7 +169,7 @@ CREATE TABLE IF NOT EXISTS retention_policy (
 -- BASELINE SOURCE: 20260823070000_memory_convergence.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/008_memory_convergence.sql (preserving original lineage)
+-- Migrated from database/migrations/008_memory_convergence.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 -- Migration: 008_memory_convergence.sql
