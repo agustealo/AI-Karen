@@ -5,7 +5,7 @@ from __future__ import annotations
 The FastAPI lifespan is the process lifecycle boundary. Runtime composition,
 ChatRuntime, and ChatRuntimeControlPlane are attached to ``app.state`` here so
 application startup owns the live service graph and application shutdown owns
-its background tasks.
+its background tasks and database teardown.
 
 Module-level runtime accessors remain compatibility surfaces during
 CORE-COMPOSE convergence, but they resolve the same process composition and are
@@ -53,7 +53,7 @@ async def initialize_application_runtime(app: FastAPI) -> None:
 
 
 async def shutdown_application_runtime(app: FastAPI) -> None:
-    """Stop application-owned Runtime background work exactly once."""
+    """Stop application-owned Runtime and database resources exactly once."""
     if getattr(app.state, _RUNTIME_SHUTDOWN_STATE_KEY, False):
         return
 
@@ -64,6 +64,15 @@ async def shutdown_application_runtime(app: FastAPI) -> None:
         except Exception as exc:
             logger.warning("Runtime ControlPlane shutdown degraded: %s", exc)
 
+    try:
+        from ai_karen_engine.services.database.database_config import get_database_config
+
+        settings = getattr(app.state, "settings", None)
+        database_config = get_database_config(settings)
+        await database_config.cleanup()
+    except Exception as exc:
+        logger.warning("Database cleanup degraded during application shutdown: %s", exc)
+
     setattr(app.state, _RUNTIME_SHUTDOWN_STATE_KEY, True)
     logger.info("Canonical application Runtime services shut down")
 
@@ -72,9 +81,8 @@ def create_application_lifespan(settings: Any):
     """Create the canonical app lifespan around existing service startup.
 
     Existing service initialization remains in ``server.startup`` while this
-    boundary takes ownership of Runtime attachment and teardown. That keeps the
-    migration behavior-preserving and gives CORE-COMPOSE a stable seam for the
-    later ``server.app`` inversion.
+    boundary owns Runtime attachment and teardown. This preserves one process
+    lifecycle authority while legacy startup helpers continue to converge.
     """
     from ai_karen_engine.server.startup import on_shutdown, on_startup
 
