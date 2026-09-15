@@ -43,7 +43,7 @@ describe('Property 5: Root Manifest Detection', () => {
       ];
 
       invalidLocations.forEach(location => {
-        expect(location).not.toMatch(/^src\/extensions\/(plugins|sys_extensions|channels)\/[^\/]+\/[^\/]+\/manifest\.json$/);
+        expect(location).not.toMatch(/^src\/extensions\/(plugins|sys_extensions|channels)\/([^\/]+)\/\2\/manifest\.json$/);
       });
     });
 
@@ -68,9 +68,9 @@ describe('Property 5: Root Manifest Detection', () => {
       const incorrectLocation = 'src/extensions/plugins/weather-query/manifest.json';
       const anotherIncorrect = 'src/extensions/plugins/weather-query/weather-query/components/manifest.json';
       
-      expect(canonicalGUI).toMatch(/src\/extensions\/(plugins|sys_extensions|channels)\/[^\/]+\/[^\/]+\/manifest\.json$/);
-      expect(incorrectLocation).not.toMatch(/src\/extensions\/(plugins|sys_extensions|channels)\/[^\/]+\/[^\/]+\/manifest\.json$/);
-      expect(anotherIncorrect).not.toMatch(/src\/extensions\/(plugins|sys_extensions|channels)\/[^\/]+\/[^\/]+\/manifest\.json$/);
+      expect(canonicalGUI).toMatch(/^src\/extensions\/(plugins|sys_extensions|channels)\/([^\/]+)\/\2\/manifest\.json$/);
+      expect(incorrectLocation).not.toMatch(/^src\/extensions\/(plugins|sys_extensions|channels)\/([^\/]+)\/\2\/manifest\.json$/);
+      expect(anotherIncorrect).not.toMatch(/^src\/extensions\/(plugins|sys_extensions|channels)\/([^\/]+)\/\2\/manifest\.json$/);
     });
 
     it('should reject GUI manifests in non-canonical locations', () => {
@@ -81,7 +81,7 @@ describe('Property 5: Root Manifest Detection', () => {
       ];
 
       invalidLocations.forEach(location => {
-        expect(location).not.toMatch(/^src\/extensions\/(plugins|sys_extensions|channels)\/[^\/]+\/[^\/]+\/manifest\.json$/);
+        expect(location).not.toMatch(/^src\/extensions\/(plugins|sys_extensions|channels)\/([^\/]+)\/\2\/manifest\.json$/);
       });
     });
   });
