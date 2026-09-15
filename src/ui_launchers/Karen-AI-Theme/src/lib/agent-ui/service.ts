@@ -146,7 +146,6 @@ export class AgentUIService {
         correlation_id: response.request_id,
         processing_time: response.processing_time,
       },
-      {}
     );
 
     return {
