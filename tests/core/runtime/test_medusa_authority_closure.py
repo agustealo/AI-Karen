@@ -188,6 +188,7 @@ class TestMedusaNodePlanConsumption:
             "session_id": "session-1",
             "request_id": "req-1",
             "correlation_id": "corr-1",
+            "tenant_id": "tenant-1",
             "runtime_policy": {
                 "execution_id": plan.execution_id,
                 "policy_decision_id": plan.policy_decision_id,
