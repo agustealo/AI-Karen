@@ -337,10 +337,14 @@ class MedusaCoordinator:
                 fallback_level=DegradationLevel.PARTIAL,
                 capabilities_lost=(
                     list(health.get("capabilities_lost", []))
-                    if isinstance(health.get("capabilities_lost", []), (list, tuple, set))
-                    else [str(health.get("capabilities_lost"))]
-                    if health.get("capabilities_lost")
-                    else []
+                    if isinstance(
+                        health.get("capabilities_lost", []), (list, tuple, set)
+                    )
+                    else (
+                        [str(health.get("capabilities_lost"))]
+                        if health.get("capabilities_lost")
+                        else []
+                    )
                 ),
             )
 
