@@ -220,7 +220,17 @@ class WorkflowRuntime:
             "request_config": request_config,
         }
 
-    def _to_langchain(self, messages: List[Dict[str, Any]]) -> List[BaseMessage]:
+    def _to_langchain(self, messages: List[Dict[str, Any]]) -> List["BaseMessage"]:
+        # LangChain is a specialist workflow dependency. Import it only when
+        # Runtime has explicitly selected graph-required execution so direct
+        # chat/evidence paths remain independent of the graph stack.
+        from langchain_core.messages import (
+            AIMessage,
+            BaseMessage,
+            HumanMessage,
+            SystemMessage,
+        )
+
         converted: List[BaseMessage] = []
         for msg in messages:
             content = str(msg.get("content") or "")
