@@ -24,7 +24,7 @@ async def resolve_memory_runtime() -> MemoryRuntimeResolution:
         from ai_karen_engine.core.services.service_registry import get_service_registry
 
         registry = get_service_registry()
-        service = await registry.get_service("memory_service")
+        service = registry.get_service("memory_service")
         if service is None:
             return MemoryRuntimeResolution(
                 available=False,
