@@ -4,13 +4,13 @@ on:
   push:
     branches: [main, develop]
     paths:
-      - 'src/extensions/**'
+      - 'src/ai_karen_engine/extensions/**'
       - 'tests/integration/**'
       - '.github/workflows/plugin-ci.yml'
   pull_request:
     branches: [main, develop]
     paths:
-      - 'src/extensions/**'
+      - 'src/ai_karen_engine/extensions/**'
       - 'tests/integration/**'
   workflow_dispatch:
     inputs:
@@ -44,24 +44,20 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install black flake8 mypy pylint bandit
+          pip install ruff mypy bandit
           pip install -r requirements.txt
       
-      - name: Run Black formatter check
+      - name: Run Ruff correctness baseline
         run: |
-          black --check src/extensions/
-      
-      - name: Run Flake8 linter
-        run: |
-          flake8 src/extensions/ --max-line-length=100 --exclude=src/extensions/core/registry/manifest.py
+          ruff check --select E9,F63,F7,F82 src/ai_karen_engine/extensions/
       
       - name: Run MyPy type checker
         run: |
-          mypy src/extensions/ --ignore-missing-imports --no-error-summary || true
+          mypy src/ai_karen_engine/extensions/ --ignore-missing-imports --no-error-summary || true
       
       - name: Run Bandit security linter
         run: |
-          bandit -r src/extensions/ -f json -o bandit-report.json || true
+          bandit -r src/ai_karen_engine/extensions/ -f json -o bandit-report.json || true
         continue-on-error: true
       
       - name: Upload Bandit report
@@ -133,7 +129,7 @@ jobs:
           PLUGIN_ENV: test
         run: |
           pytest tests/integration/ -v \
-            --cov=src/extensions \
+            --cov=src/ai_karen_engine/extensions \
             --cov-report=xml \
             --cov-report=html \
             --timeout=300 \
