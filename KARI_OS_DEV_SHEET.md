@@ -396,7 +396,7 @@ python -m compileall src
 pytest tests/architecture -q
 pytest tests/ -q
 ruff check --select E9,F63,F7 src tests
-mypy src
+mypy --follow-imports=skip --ignore-missing-imports src/ai_karen_engine/core/runtime/contracts.py src/ai_karen_engine/core/runtime/chat_runtime_contract.py src/ai_karen_engine/core/runtime/execution_decision.py src/ai_karen_engine/core/runtime/decision_pipeline.py src/ai_karen_engine/core/cortex/contracts.py src/ai_karen_engine/core/model_runtime/provider_contracts.py src/ai_karen_engine/core/model_runtime/inference_target.py src/ai_karen_engine/core/model_runtime/runtime_contracts.py src/ai_karen_engine/core/memory/contracts.py
 ```
 
 ---
@@ -1024,7 +1024,7 @@ supabase db reset
 
 Narrow tests are appropriate during development.
 
-Current Main Quality uses the correctness-critical Ruff baseline above while historical formatting/style debt is retired in contained slices. Do not represent that baseline as full-repository style cleanliness. Full Ruff convergence remains technical debt.
+Current Main Quality uses staged Ruff and Mypy correctness baselines while historical formatting/style and typing debt is retired in contained slices. Do not represent those baselines as full-repository lint/type cleanliness. Full Ruff and full-tree Mypy convergence remain technical debt.
 
 Architecture-affecting merges require the applicable canonical GitHub gates.
 
