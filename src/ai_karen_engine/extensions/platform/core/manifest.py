@@ -18,6 +18,7 @@ The manifest supports:
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,6 +27,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+logger = logging.getLogger(__name__)
 
 
 # Constants
