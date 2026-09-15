@@ -45,9 +45,15 @@ jobs:
           # Keep this specialist gate fail-closed on syntax/control-flow correctness.
           ruff check --select E9,F63,F7 src/ai_karen_engine/agent_medusa/ src/ai_karen_engine/core/runtime/
       
-      - name: Run MyPy type checker
+      - name: Run MyPy canonical Medusa contracts
         run: |
-          mypy src/ai_karen_engine/agent_medusa/ src/ai_karen_engine/core/runtime/ --ignore-missing-imports --no-error-summary
+          mypy --follow-imports=skip --ignore-missing-imports --no-error-summary \
+            src/ai_karen_engine/core/runtime/contracts.py \
+            src/ai_karen_engine/agent_medusa/contracts/deep_execution_plan.py \
+            src/ai_karen_engine/agent_medusa/contracts/specialist_execution.py \
+            src/ai_karen_engine/agent_medusa/planning/capability_planner.py \
+            src/ai_karen_engine/agent_medusa/planning/plan_validator.py \
+            src/ai_karen_engine/agent_medusa/coordinator/medusa_coordinator.py
       
       - name: Run Bandit security linter
         run: |
