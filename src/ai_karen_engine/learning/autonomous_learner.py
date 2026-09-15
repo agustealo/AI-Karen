@@ -19,7 +19,7 @@ import pickle
 import tempfile
 import shutil
 
-from ai_karen_engine.core.cortex.analysis import SpacyAnalyzer
+from ai_karen_engine.core.intelligence.linguistic.spacy_analyzer import SpacyAnalyzer
 from ai_karen_engine.core.memory.signals.spacy_service import SpacyService, ParsedMessage
 from ai_karen_engine.core.memory.unified_memory_service import UnifiedMemoryService
 from ai_karen_engine.core.memory.unified_memory_service import MemoryCommitRequest, MemoryQueryRequest
