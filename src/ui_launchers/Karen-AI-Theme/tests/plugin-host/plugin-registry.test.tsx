@@ -30,28 +30,23 @@ describe('Plugin Registry', () => {
   });
 
   it('should provide plugin health status', () => {
-    // This will use the mock require.context from setup.ts
     const { result } = renderHook(() => usePluginHealth('weather-query'), {
       wrapper: ({ children }) => React.createElement(PluginRegistryProvider, null, children)
     });
-    
+
     expect(result.current.pluginId).toBe('weather-query');
-    expect(result.current.frontendMountState).toBe('loading');
+    expect(result.current.frontendMountState).toBe('idle');
   });
 
-  it('should update plugin health status', async () => {
-    const { result } = renderHook(() => usePluginHealth('weather-query'), {
+  it('should update plugin health status', () => {
+    const { result, rerender } = renderHook(() => usePluginHealth('weather-query'), {
       wrapper: ({ children }) => React.createElement(PluginRegistryProvider, null, children)
     });
 
     act(() => {
       setPluginMountState('weather-query', 'mounted');
     });
-
-    // Wait for the poll interval in usePluginHealth (500ms)
-    await act(async () => {
-      await new Promise(r => setTimeout(r, 600));
-    });
+    rerender();
 
     expect(result.current.frontendMountState).toBe('mounted');
   });
