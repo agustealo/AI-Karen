@@ -179,10 +179,11 @@ CREATE TABLE IF NOT EXISTS retention_policy (
 -- Enable pgvector extension
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Add canonical columns to memory_items for tenant/user scoping and lifecycle
+-- Add canonical lifecycle/search columns to memory_items.
+-- tenant_id and user_id already exist in the production baseline as TEXT and
+-- are converted fail-closed to UUID by the dedicated schema finalization
+-- migration. Do not compare or assign UUID values before that conversion.
 ALTER TABLE memory_items
-    ADD COLUMN IF NOT EXISTS tenant_id UUID NOT NULL DEFAULT gen_random_uuid(),
-    ADD COLUMN IF NOT EXISTS user_id UUID NOT NULL DEFAULT gen_random_uuid(),
     ADD COLUMN IF NOT EXISTS conversation_id UUID,
     ADD COLUMN IF NOT EXISTS content_tsv TEXT GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
     ADD COLUMN IF NOT EXISTS importance FLOAT DEFAULT 0.5,
@@ -194,12 +195,6 @@ ALTER TABLE memory_items
 
 -- memory_items.embeddings is already the canonical pgvector column from the
 -- production baseline. Do not create a parallel embedding authority.
-
--- Backfill tenant_id/user_id from metadata when not yet set
-UPDATE memory_items
-SET tenant_id = COALESCE((metadata->>'tenant_id')::uuid, gen_random_uuid()),
-    user_id = COALESCE((metadata->>'user_id')::uuid, gen_random_uuid())
-WHERE tenant_id = gen_random_uuid();
 
 -- Indexes for tenant-scoped access
 CREATE INDEX IF NOT EXISTS idx_memory_items_tenant_user
