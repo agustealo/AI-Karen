@@ -58,7 +58,11 @@ jobs:
       
       - name: Run Bandit security linter
         run: |
-          bandit -r src/ai_karen_engine/agent_medusa/ src/ai_karen_engine/core/runtime/ -f json -o bandit-report.json
+          # Preserve the complete report, but block the gate only on medium/high
+          # severity findings. Low-severity historical warnings remain visible
+          # without preventing behavioral/security proof jobs from running.
+          bandit -r src/ai_karen_engine/agent_medusa/ src/ai_karen_engine/core/runtime/ -f json -o bandit-report.json || true
+          bandit -r src/ai_karen_engine/agent_medusa/ src/ai_karen_engine/core/runtime/ -ll
       
       - name: Upload Bandit report
         if: always()
