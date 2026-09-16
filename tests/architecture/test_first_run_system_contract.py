@@ -110,7 +110,6 @@ def test_auth_initialization_requires_migration_owned_schema() -> None:
     assert "Missing migration-owned auth tables" in source
 
 
-
 def test_auth_readiness_is_public_during_first_run() -> None:
     source = _read(AUTH_MIDDLEWARE)
 
@@ -131,7 +130,6 @@ def test_tenant_schema_is_owned_by_forward_migration() -> None:
     assert "FOREIGN KEY (tenant_id)" in source
     assert "REFERENCES public.tenants (id)" in source
     assert "NOT VALID" in source
-
 
 
 def test_first_boot_extension_prompt_validation_uses_canonical_registry_api() -> None:

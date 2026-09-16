@@ -159,7 +159,10 @@ class DatabaseConfig:
                 }
             )
 
-            # Durable tenant/user bootstrap belongs exclusively to AuthService\n            # first-run authority. Database connection startup must never create\n            # default identities, tenants, credentials, or tenant-scoped RBAC rows.\n
+            # Durable tenant/user bootstrap belongs exclusively to AuthService
+            # first-run authority. Database connection startup must never create
+            # default identities, tenants, credentials, or tenant-scoped RBAC rows.
+
             return True
 
         except Exception as e:

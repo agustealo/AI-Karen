@@ -235,7 +235,10 @@ class DatabaseServiceFactory:
             # Initialize canonical repositories and Supabase platform
             self.create_canonical_repositories()
 
-            # Runtime initialization never seeds identities or tenant-scoped RBAC.\n            # Schema/baseline data are migration-owned; first-user creation belongs\n            # exclusively to the canonical AuthService first-run transaction.\n
+            # Runtime initialization never seeds identities or tenant-scoped RBAC.
+            # Schema/baseline data are migration-owned; first-user creation belongs
+            # exclusively to the canonical AuthService first-run transaction.
+
             logger.info("Database initialization completed successfully")
             return True
 
