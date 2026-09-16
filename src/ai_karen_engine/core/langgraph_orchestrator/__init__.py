@@ -15,6 +15,7 @@ __all__ = [
     "LangGraphOrchestrationConfig",
     "create_orchestrator",
     "get_default_orchestrator",
+    "set_default_orchestrator",
     "DecisionEngine",
     "LangGraphOrchestrationState",
 ]
@@ -26,6 +27,7 @@ def __getattr__(name: str) -> Any:
         "LangGraphOrchestrationConfig",
         "create_orchestrator",
         "get_default_orchestrator",
+        "set_default_orchestrator",
     }:
         module = import_module(
             "ai_karen_engine.core.langgraph_orchestrator.langgraph_orchestrator"
