@@ -6,6 +6,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 APP_ENTRYPOINT = REPO_ROOT / "src" / "ai_karen_engine" / "app.py"
 APPLICATION_RUNTIME = REPO_ROOT / "src" / "ai_karen_engine" / "server" / "application_runtime.py"
+STARTUP = REPO_ROOT / "src" / "ai_karen_engine" / "server" / "startup.py"
 LEGACY_SERVER_APP = REPO_ROOT / "server" / "app.py"
 
 
@@ -52,3 +53,18 @@ def test_canonical_entrypoint_does_not_create_database_shutdown_authority() -> N
 
     assert "get_database_config" not in source
     assert "db_config.cleanup" not in source
+
+
+def test_canonical_startup_does_not_run_legacy_ai_startup_manager() -> None:
+    source = STARTUP.read_text(encoding="utf-8")
+
+    start = source.index("async def on_startup(")
+    end = source.index("\n\nasync def on_shutdown(", start)
+    startup_source = source[start:end]
+
+    assert "await init_database(app)" in startup_source
+    assert "await init_crawl4ai_service(app)" in startup_source
+    assert "init_security(settings)" in startup_source
+    assert "init_ai_services(" not in startup_source
+    assert "optimized_startup_sequence" not in startup_source
+    assert "MinimalStartupMode" not in startup_source
