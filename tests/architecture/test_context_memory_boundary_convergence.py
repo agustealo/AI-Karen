@@ -44,11 +44,13 @@ def test_stale_memory_service_registry_lookup_is_removed() -> None:
     assert "get_memory_service" not in adapter
 
 
-def test_diagnostics_does_not_call_memory_or_context_services() -> None:
+def test_diagnostics_does_not_own_memory_or_context_resolution() -> None:
     diagnostics = _text("src/ai_karen_engine/core/langgraph_orchestrator/diagnostics.py")
     assert "build_context(" not in diagnostics
-    assert '"conversation_history": sanitized_history' in diagnostics
-    assert '"memories": memories or []' in diagnostics
+    assert "get_memory_service" not in diagnostics
+    assert "recall_context" not in diagnostics
+    assert "ChatExecutionRequest" in diagnostics
+    assert "get_runtime_composition().decision_pipeline" in diagnostics
 
 
 def test_shadow_webui_memory_context_builder_is_deleted() -> None:
