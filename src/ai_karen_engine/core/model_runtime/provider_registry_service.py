@@ -11,7 +11,6 @@ fallback chains to ensure system resilience when providers are unavailable.
 import asyncio
 import os
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -1015,28 +1014,6 @@ class ProviderRegistryService:
             )
 
         return status
-
-    def _start_health_monitoring(self):
-        """Start background health monitoring"""
-
-        def monitor_loop():
-            while True:
-                try:
-                    # Refresh provider statuses from canonical state
-                    for provider_name in self._provider_registrations:
-                        status = self.get_provider_status(
-                            provider_name
-                        )  # This will refresh if stale
-
-                    time.sleep(300)  # Check every 5 minutes
-                except Exception as e:
-                    logger.error(f"Error in health monitoring loop: %s", e)
-                    time.sleep(60)  # Wait 1 minute before retrying
-
-        # Start monitoring in background thread
-        monitoring_thread = threading.Thread(target=monitor_loop, daemon=True)
-        monitoring_thread.start()
-        logger.info("Started provider health monitoring")
 
     def shutdown(self):
         """Shutdown the provider registry service"""
