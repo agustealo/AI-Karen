@@ -9,6 +9,9 @@ LEGACY_PLUGIN_DOCKERFILE = ROOT / "docker" / "Dockerfile.plugins"
 LEGACY_PLUGIN_COMPOSE = ROOT / "deploy" / "compose" / "docker-compose.plugins.yml"
 CANONICAL_DOCKERFILE = ROOT / "Dockerfile"
 CANONICAL_PRODUCTION_COMPOSE = ROOT / "deploy" / "compose" / "docker-compose.prod.yml"
+LEGACY_MOCK_PLUGIN_STORE = ROOT / "src" / "ai_karen_engine" / "api_routes" / "plugins" / "store_mock.py"
+CANONICAL_PLUGIN_STORE = ROOT / "src" / "ai_karen_engine" / "api_routes" / "plugins" / "store.py"
+SERVER_ROUTERS = ROOT / "src" / "ai_karen_engine" / "server" / "routers.py"
 
 
 def test_plugins_do_not_own_a_parallel_application_runtime() -> None:
@@ -22,6 +25,19 @@ def test_plugins_do_not_own_a_parallel_application_runtime() -> None:
     assert "plugins-backend:" not in production
     assert "karen-plugins-db" not in production
     assert "karen-plugins-redis" not in production
+
+
+def test_mock_plugin_store_is_retired_and_canonical_store_is_wired() -> None:
+    assert not LEGACY_MOCK_PLUGIN_STORE.exists()
+
+    store = CANONICAL_PLUGIN_STORE.read_text(encoding="utf-8")
+    routers = SERVER_ROUTERS.read_text(encoding="utf-8")
+
+    assert "MOCK_PLUGINS" not in store
+    assert "MOCK_CATEGORIES" not in store
+    assert "Depends(get_plugin_service)" in store
+    assert "from ai_karen_engine.api_routes.plugins.store import router as plugin_store_router" in routers
+    assert 'RouterSpec(plugin_store_router, "/api", ("plugin-store",))' in routers
 
 
 def test_plugin_ci_proves_governed_plugin_surfaces_without_deploying_a_sidecar() -> None:

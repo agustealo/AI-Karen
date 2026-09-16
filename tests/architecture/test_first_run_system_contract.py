@@ -21,6 +21,8 @@ DATABASE_FACTORY = ROOT / "src" / "ai_karen_engine" / "database" / "factory.py"
 TENANT_MIGRATION = ROOT / "supabase" / "migrations" / "20260916010000_14_auth_tenant_authority.sql"
 EXTENSION_VALIDATOR = ROOT / "src" / "ai_karen_engine" / "extensions" / "platform" / "core" / "registry" / "validator.py"
 CRAWL4AI_INTEGRATION = ROOT / "src" / "ai_karen_engine" / "integrations" / "web" / "crawl4ai_integration.py"
+LEGACY_AUTH_SEED = ROOT / "src" / "ai_karen_engine" / "database" / "seed" / "auth_seed.py"
+DATABASE_SEED_INIT = ROOT / "src" / "ai_karen_engine" / "database" / "seed" / "__init__.py"
 
 
 def _read(path: Path) -> str:
@@ -121,6 +123,19 @@ def test_runtime_startup_cannot_seed_default_identities() -> None:
         source = _read(path)
         assert "seed_default_auth" not in source
         assert "DEFAULT_ADMINS" not in source
+
+
+def test_legacy_default_auth_seed_is_retired() -> None:
+    assert not LEGACY_AUTH_SEED.exists()
+
+    source = _read(DATABASE_SEED_INIT)
+    for token in (
+        "seed_default_auth",
+        "seed_auth_data",
+        "DEFAULT_ADMINS",
+        "DEFAULT_ADMIN_PASSWORD_HASH",
+    ):
+        assert token not in source
 
 
 def test_tenant_schema_is_owned_by_forward_migration() -> None:
