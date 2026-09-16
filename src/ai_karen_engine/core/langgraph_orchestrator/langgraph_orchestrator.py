@@ -783,9 +783,7 @@ class LangGraphOrchestrator:
     ) -> Dict[str, Any]:
         """Simulate orchestration without side effects for diagnostics."""
 
-        diagnostics_engine = DiagnosticsEngine(
-            profile_manager=self._profile_manager,
-        )
+        diagnostics_engine = DiagnosticsEngine()
 
         return await diagnostics_engine.run_dry_run_analysis(
             message=message,
