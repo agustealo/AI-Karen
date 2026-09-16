@@ -9,7 +9,6 @@ from ai_karen_engine.core.cortex.behavior.contracts import (
     BehaviorSource,
     BehaviorTarget,
     BehaviorType,
-    VerificationDepth,
     VerificationReason,
     VerificationRequirement,
 )
@@ -31,7 +30,6 @@ __all__ = [
     "BehaviorTarget",
     "BehaviorType",
     "VerificationDecider",
-    "VerificationDepth",
     "VerificationReason",
     "VerificationRequirement",
 ]
