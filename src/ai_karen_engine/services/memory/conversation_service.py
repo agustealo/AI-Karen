@@ -24,7 +24,7 @@ from typing import (
 )
 from dataclasses import dataclass, field
 from ai_karen_engine.services.caching.production_cache_service import get_cache_service
-from ai_karen_engine.core.memory.unified_memory_service import (
+from ai_karen_engine.integrations.memory.unified_memory_service import (
     MemoryCommitRequest,
     MemoryQueryRequest,
     UnifiedMemoryService,
