@@ -5,7 +5,7 @@
 # Last updated: 2026-04-04
 
 # Stage 1: Base Image
-FROM python:3.13-slim as base
+FROM python:3.12-slim as base
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -47,7 +47,7 @@ RUN pip install --upgrade pip && \
     rm -rf /root/.cache/pip
 
 # Stage 3: Production Image
-FROM python:3.13-slim as production
+FROM python:3.12-slim as production
 
 # Create non-root user for security
 RUN groupadd -r karen && useradd -r -g karen karen
@@ -56,12 +56,11 @@ RUN groupadd -r karen && useradd -r -g karen karen
 WORKDIR /app
 
 # Copy necessary files from builder stage
-COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY src/ /app/src/
-COPY .env.production.plugins /app/.env.production
 
 # Create necessary directories
 RUN mkdir -p /var/lib/karen/plugins \
@@ -79,7 +78,6 @@ RUN pip install --no-cache-dir gunicorn uvicorn[standard] psycopg2-binary redis
 
 # Security hardening
 RUN chmod 755 /app/src && \
-    chmod 644 /app/.env.production && \
     chmod 750 /var/log/karen && \
     chmod 750 /var/lib/karen && \
     chmod 750 /var/cache/karen && \

@@ -7,7 +7,7 @@
 -- BASELINE SOURCE: 20260823100000_schema_corrections.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/011_schema_corrections.sql (preserving original lineage)
+-- Migrated from database/migrations/011_schema_corrections.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 -- Migration: 011_schema_corrections.sql
@@ -16,6 +16,16 @@
 --         RLS fail-closed semantics, and broken backfill assumptions.
 --
 -- Do NOT amend 008/009/010. This is a corrective migration.
+
+-- ============================================================================
+-- 0. Release temporary pre-finalization RLS dependencies
+-- ============================================================================
+-- Migration 010 enables tenant RLS before legacy TEXT tenant identifiers are
+-- finalized as UUIDs. PostgreSQL will not alter a column type while a policy
+-- depends on that column, so release only those temporary policies here.
+-- Section 8 recreates the canonical fail-closed UUID policies.
+DROP POLICY IF EXISTS memory_items_tenant_isolation ON memory_items;
+DROP POLICY IF EXISTS files_tenant_isolation ON files;
 
 -- ============================================================================
 -- 1. Fix memory_items.content_tsv: must be TSVECTOR, not TEXT
@@ -230,7 +240,7 @@ BEGIN
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'llm_requests'
           AND column_name = 'tenant_id'
-          AND data_type = 'text'
+          AND data_type IN ('text', 'character varying')
     ) THEN
         ALTER TABLE llm_requests
             ALTER COLUMN tenant_id TYPE UUID
@@ -244,7 +254,7 @@ BEGIN
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'llm_requests'
           AND column_name = 'user_id'
-          AND data_type = 'text'
+          AND data_type IN ('text', 'character varying')
     ) THEN
         ALTER TABLE llm_requests
             ALTER COLUMN user_id TYPE UUID
@@ -328,7 +338,7 @@ CREATE POLICY memory_assertion_tenant_isolation ON memory_assertion
 -- BASELINE SOURCE: 20260823110000_embedding_provenance.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/012_embedding_provenance.sql (preserving original lineage)
+-- Migrated from database/migrations/012_embedding_provenance.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 -- Migration: 012_embedding_provenance.sql
@@ -365,7 +375,7 @@ CREATE INDEX IF NOT EXISTS idx_memory_items_embedding_provenance
 -- BASELINE SOURCE: 20260823120000_rls_expansion.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/013_rls_expansion.sql (preserving original lineage)
+-- Migrated from database/migrations/013_rls_expansion.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 -- Migration: 013_rls_expansion.sql

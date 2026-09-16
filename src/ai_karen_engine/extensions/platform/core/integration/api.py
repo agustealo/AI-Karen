@@ -37,6 +37,9 @@ from ai_karen_engine.extensions.platform.core.integration.models import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 # Pydantic models for API requests/responses
 class ExtensionInfo(BaseModel):
     """Extension information model."""

@@ -696,25 +696,18 @@ def create_langgraph_orchestrator_factory():
     return factory
 
 
-def create_memory_service_factory():
-    def factory():
-        from ai_karen_engine.core.memory.service_factory import (
-            create_unified_memory_service,
-        )
-
-        return create_unified_memory_service()
-
-    return factory
-
-
 def create_conversation_service_factory():
     async def factory():
         from ai_karen_engine.services.memory.conversation_service import ConversationService
         from ai_karen_engine.database.conversation_manager import ConversationManager
         from ai_karen_engine.database.client import MultiTenantPostgresClient
 
-        # Get memory service from lazy registry
-        memory_service = await lazy_registry.get_service_instance("memory_service")
+        from ai_karen_engine.core.memory.runtime_gateway import resolve_memory_runtime
+
+        resolution = await resolve_memory_runtime()
+        if not resolution.available or resolution.service is None:
+            raise RuntimeError(f"memory_service unavailable: {resolution.reason}")
+        memory_service = resolution.service
 
         # Create database client and conversation manager
         db_client = MultiTenantPostgresClient()
@@ -792,15 +785,6 @@ async def setup_lazy_services():
         name="chat_orchestrator",
         factory=create_chat_orchestrator_factory(),
         idle_timeout=orchestrator_timeout,
-        priority=4,
-    )
-
-    # Register memory service (high priority)
-    logger.info("🔍 DEBUG: Registering memory service...")
-    lazy_registry.register(
-        name="memory_service",
-        factory=create_memory_service_factory(),
-        idle_timeout=orchestrator_timeout * 2,
         priority=4,
     )
 

@@ -34,15 +34,12 @@ def test_root_server_app_owns_no_extension_lifecycle() -> None:
         assert token not in source
 
 
-def test_metrics_endpoint_has_no_extension_lifecycle_side_effects() -> None:
+def test_root_server_app_has_no_extension_lifecycle_side_effects() -> None:
     source = SERVER_APP.read_text(encoding="utf-8")
 
-    metrics_source = source.split('@app.get("/metrics"', 1)[1].split(
-        '@app.get("/plugins"', 1
-    )[0]
-    assert "extension_health_monitor" not in metrics_source
-    assert "check_extension_system_health" not in metrics_source
-    assert "update_extension_metrics" not in metrics_source
+    assert "extension_health_monitor" not in source
+    assert "check_extension_system_health" not in source
+    assert "update_extension_metrics" not in source
 
 
 def test_canonical_extension_health_module_exists() -> None:

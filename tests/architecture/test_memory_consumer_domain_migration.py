@@ -21,22 +21,18 @@ def test_web_ui_memory_service_has_no_live_consumer_imports() -> None:
     assert offenders == []
 
 
-def test_unified_memory_construction_has_one_factory_owner() -> None:
-    factory = _text("src/ai_karen_engine/core/memory/service_factory.py")
+def test_core_memory_resolution_has_no_construction_authority() -> None:
+    retired_factory = ROOT / "src/ai_karen_engine/core/memory/service_factory.py"
     lazy = _text("src/ai_karen_engine/core/runtime/lazy_loading.py")
     deps = _text("src/ai_karen_engine/core/services/dependencies.py")
-    agent_registry = _text("src/ai_karen_engine/agents/agent_registry.py")
-    agent_orchestrator = _text("src/ai_karen_engine/agents/agent_orchestrator.py")
 
-    assert "MultiTenantPostgresClient()" in factory
-    assert "EmbeddingManager()" in factory
-    assert "UnifiedMemoryService(" in factory
-    assert "create_unified_memory_service()" in lazy
-    assert "create_unified_memory_service()" in deps
-    assert "create_unified_memory_service()" in agent_registry
-    assert "create_unified_memory_service()" in agent_orchestrator
-    assert "UnifiedMemoryService(" not in agent_registry
-    assert "UnifiedMemoryService(" not in agent_orchestrator
+    assert not retired_factory.exists()
+    assert "create_memory_service_factory" not in lazy
+    assert 'name="memory_service"' not in lazy
+    assert "create_unified_memory_service" not in lazy
+    assert "resolve_memory_runtime" in lazy
+    assert "resolve_memory_runtime" in deps
+    assert 'return await _resolve_service("memory_service")' not in deps
 
 
 def test_training_and_learning_consume_unified_memory_contract() -> None:
@@ -85,7 +81,9 @@ def test_bootstrap_is_unified_and_tenant_explicit() -> None:
 
 def test_runtime_gateway_resolves_but_does_not_construct_memory() -> None:
     gateway = _text("src/ai_karen_engine/core/memory/runtime_gateway.py")
-    assert "UnifiedMemoryService | None" in gateway
+    assert "service: Any | None" in gateway
     assert 'registry.get_service("memory_service")' in gateway
+    assert 'await registry.get_service("memory_service")' not in gateway
+    assert "ai_karen_engine.integrations.memory" not in gateway
     assert "create_unified_memory_service" not in gateway
     assert "WebUIMemoryService" not in gateway

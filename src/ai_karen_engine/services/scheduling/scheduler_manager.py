@@ -36,7 +36,7 @@ except ImportError:
     # Note: croniter not available - cron scheduling will be disabled
 
 from ai_karen_engine.learning.autonomous_learner import AutonomousLearner, LearningCycleResult
-from ai_karen_engine.core.memory.unified_memory_service import (
+from ai_karen_engine.integrations.memory.unified_memory_service import (
     MemoryCommitRequest,
     UnifiedMemoryService,
 )

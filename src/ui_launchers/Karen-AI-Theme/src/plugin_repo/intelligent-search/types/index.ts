@@ -35,6 +35,19 @@ export interface SearchResultItem {
   extracted_data?: Record<string, unknown>;
 }
 
+export interface CrawlDiagnostics {
+  enabled: boolean;
+  engine: string;
+  status: string;
+  pages_requested: number;
+  pages_succeeded: number;
+  pages_failed: number;
+  latency_ms: number;
+  capabilities: Record<string, boolean>;
+  degraded: boolean;
+  degradation_reason?: string;
+}
+
 export interface SearchDiagnostics {
   mode: SearchModeId;
   strategy?: string;
@@ -100,6 +113,7 @@ export interface IntelligentSearchResponse {
   extractedData?: Record<string, unknown>;
   insights?: string[];
   diagnostics?: SearchDiagnostics;
+  crawl?: CrawlDiagnostics;
   results?: SearchResultItem[];
   liveSearch?: {
     mode?: string;

@@ -12,6 +12,7 @@ import copy
 import logging
 from typing import Any
 
+from ai_karen_engine.extensions.errors import ExtensionNotFoundError
 from ai_karen_engine.extensions.contracts import (
     ExtensionLifecycleState,
     ExtensionRegistration,
@@ -82,7 +83,7 @@ class ExtensionRegistry:
         async with self._lock:
             registration = self._registrations.pop(plugin_id, None)
             if registration is None:
-                raise Exception(f"Extension '{plugin_id}' not found")
+                raise ExtensionNotFoundError(plugin_id)
 
             manifest = registration.manifest
             versions = self._versions.get(plugin_id, {})

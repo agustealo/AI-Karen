@@ -173,6 +173,7 @@ class TestMedusaNodePlanConsumption:
             "messages": [],
             "user_id": "user-1",
             "session_id": "session-1",
+            "request_id": "req-1",
             "runtime_policy": {"topology": "direct"},
         }
         with pytest.raises(PermissionError, match="blocked by runtime policy"):
@@ -185,6 +186,9 @@ class TestMedusaNodePlanConsumption:
             "messages": [],
             "user_id": "user-1",
             "session_id": "session-1",
+            "request_id": "req-1",
+            "correlation_id": "corr-1",
+            "tenant_id": "tenant-1",
             "runtime_policy": {
                 "execution_id": plan.execution_id,
                 "policy_decision_id": plan.policy_decision_id,
@@ -250,7 +254,12 @@ class TestMedusaCoordinatorUsesAuthorizedPlan:
         request.user_id = "user-1"
         request.session_id = "session-1"
 
-        coordinator = MedusaCoordinator()
+        run_manager = MagicMock()
+        run_manager.register = AsyncMock()
+        run_manager.mark_completed = AsyncMock()
+        run_manager.mark_failed = AsyncMock()
+        run_manager.mark_cancelled = AsyncMock()
+        coordinator = MedusaCoordinator(run_manager=run_manager)
         with patch.object(
             coordinator.planner, "create_plan", new_callable=AsyncMock
         ) as mock_plan:

@@ -7,7 +7,7 @@
 -- BASELINE SOURCE: 20260823060000_memory_ledger.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/007_memory_ledger.sql (preserving original lineage)
+-- Migrated from database/migrations/007_memory_ledger.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 -- Migration: 007_memory_ledger.sql
@@ -169,7 +169,7 @@ CREATE TABLE IF NOT EXISTS retention_policy (
 -- BASELINE SOURCE: 20260823070000_memory_convergence.sql
 -- ============================================================================
 
-﻿-- Migrated from database/migrations/008_memory_convergence.sql (preserving original lineage)
+-- Migrated from database/migrations/008_memory_convergence.sql (preserving original lineage)
 -- Part of DATA-CONVERGE-2: Supabase data spine authority
 
 -- Migration: 008_memory_convergence.sql
@@ -179,12 +179,12 @@ CREATE TABLE IF NOT EXISTS retention_policy (
 -- Enable pgvector extension
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Add canonical columns to memory_items for tenant/user scoping and lifecycle
+-- Add canonical lifecycle/search columns to memory_items.
+-- tenant_id and user_id already exist in the production baseline as TEXT and
+-- are converted fail-closed to UUID by the dedicated schema finalization
+-- migration. Do not compare or assign UUID values before that conversion.
 ALTER TABLE memory_items
-    ADD COLUMN IF NOT EXISTS tenant_id UUID NOT NULL DEFAULT gen_random_uuid(),
-    ADD COLUMN IF NOT EXISTS user_id UUID NOT NULL DEFAULT gen_random_uuid(),
     ADD COLUMN IF NOT EXISTS conversation_id UUID,
-    ADD COLUMN IF NOT EXISTS content_tsv TEXT GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
     ADD COLUMN IF NOT EXISTS importance FLOAT DEFAULT 0.5,
     ADD COLUMN IF NOT EXISTS confidence FLOAT DEFAULT 1.0,
     ADD COLUMN IF NOT EXISTS source_type VARCHAR(100) DEFAULT 'system',
@@ -192,24 +192,8 @@ ALTER TABLE memory_items
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
 
--- Convert legacy ARRAY(Float) embedding to pgvector when dimensions match
-ALTER TABLE memory_items
-    ADD COLUMN IF NOT EXISTS embedding_vector vector;
-
-UPDATE memory_items
-SET embedding_vector = embedding::vector
-WHERE embedding IS NOT NULL
-  AND array_length(embedding, 1) IS NOT NULL
-  AND embedding_vector IS NULL;
-
--- Drop legacy embedding column after backfill verification
--- ALTER TABLE memory_items DROP COLUMN embedding;
-
--- Backfill tenant_id/user_id from metadata when not yet set
-UPDATE memory_items
-SET tenant_id = COALESCE((metadata->>'tenant_id')::uuid, gen_random_uuid()),
-    user_id = COALESCE((metadata->>'user_id')::uuid, gen_random_uuid())
-WHERE tenant_id = gen_random_uuid();
+-- memory_items.embeddings is already the canonical pgvector column from the
+-- production baseline. Do not create a parallel embedding authority.
 
 -- Indexes for tenant-scoped access
 CREATE INDEX IF NOT EXISTS idx_memory_items_tenant_user
@@ -219,11 +203,9 @@ CREATE INDEX IF NOT EXISTS idx_memory_items_scope_kind
     ON memory_items(scope, kind);
 
 -- pgvector HNSW index for semantic search
-CREATE INDEX IF NOT EXISTS idx_memory_items_embedding_vector
+CREATE INDEX IF NOT EXISTS idx_memory_items_embeddings_hnsw
     ON memory_items
-    USING hnsw (embedding_vector vector_cosine_ops)
+    USING hnsw (embeddings vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
--- PostgreSQL FTS index over content
-CREATE INDEX IF NOT EXISTS idx_memory_items_content_tsv
-    ON memory_items USING GIN (content_tsv);
+-- FTS column/type/index are finalized in 20260827050000_05_schema_security_finalization.sql.

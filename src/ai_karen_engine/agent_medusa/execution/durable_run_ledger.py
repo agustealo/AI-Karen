@@ -252,7 +252,7 @@ class PostgresDurableRunLedger:
             to_status="running",
             event_at=started_at,
             source="runtime",
-            assignments="started_at = :event_at, heartbeat_at = :event_at",
+            transition_kind="start",
         )
 
     async def heartbeat(
@@ -390,10 +390,7 @@ class PostgresDurableRunLedger:
             to_status=status,
             event_at=completed_at,
             source="runtime",
-            assignments=(
-                "completed_at = :event_at, heartbeat_at = :event_at, "
-                "error_type = :error_type"
-            ),
+            transition_kind="terminal",
             error_type=error_type,
         )
 
@@ -498,34 +495,44 @@ class PostgresDurableRunLedger:
                 if current not in _ACTIVE_STATUSES or current == normalized:
                     return False
                 terminal_at = completed_at or reconciled_at
+                params = {
+                    "run_id": run_id,
+                    "tenant_id": canonical_tenant_id,
+                    "status": normalized,
+                    "terminal_at": terminal_at,
+                    "reconciled_at": reconciled_at,
+                    "error_type": error_type,
+                }
                 if normalized in _TERMINAL_STATUSES:
-                    assignments = (
-                        "status = :status, completed_at = :terminal_at, "
-                        "heartbeat_at = :reconciled_at, updated_at = :reconciled_at, "
-                        "reconciled_at = :reconciled_at, error_type = COALESCE(:error_type, error_type), "
-                        "last_worker_transition_at = :reconciled_at"
+                    await session.execute(
+                        text("""
+                            UPDATE agent_medusa_runs
+                            SET status = :status,
+                                completed_at = :terminal_at,
+                                heartbeat_at = :reconciled_at,
+                                updated_at = :reconciled_at,
+                                reconciled_at = :reconciled_at,
+                                error_type = COALESCE(:error_type, error_type),
+                                last_worker_transition_at = :reconciled_at
+                            WHERE run_id = :run_id
+                              AND tenant_id = CAST(:tenant_id AS uuid)
+                        """),
+                        params,
                     )
                 else:
-                    assignments = (
-                        "status = :status, cancel_requested_at = COALESCE(cancel_requested_at, :reconciled_at), "
-                        "updated_at = :reconciled_at, reconciled_at = :reconciled_at, "
-                        "last_worker_transition_at = :reconciled_at"
+                    await session.execute(
+                        text("""
+                            UPDATE agent_medusa_runs
+                            SET status = :status,
+                                cancel_requested_at = COALESCE(cancel_requested_at, :reconciled_at),
+                                updated_at = :reconciled_at,
+                                reconciled_at = :reconciled_at,
+                                last_worker_transition_at = :reconciled_at
+                            WHERE run_id = :run_id
+                              AND tenant_id = CAST(:tenant_id AS uuid)
+                        """),
+                        params,
                     )
-                await session.execute(
-                    text(
-                        "UPDATE agent_medusa_runs SET "
-                        + assignments
-                        + " WHERE run_id = :run_id AND tenant_id = CAST(:tenant_id AS uuid)"
-                    ),
-                    {
-                        "run_id": run_id,
-                        "tenant_id": canonical_tenant_id,
-                        "status": normalized,
-                        "terminal_at": terminal_at,
-                        "reconciled_at": reconciled_at,
-                        "error_type": error_type,
-                    },
-                )
                 await self._append_transition(
                     session,
                     run_id=run_id,
@@ -581,7 +588,7 @@ class PostgresDurableRunLedger:
         to_status: str,
         event_at: datetime,
         source: str,
-        assignments: str,
+        transition_kind: str,
         error_type: str | None = None,
     ) -> None:
         try:
@@ -599,23 +606,49 @@ class PostgresDurableRunLedger:
                     raise DurableRunLedgerConflict(
                         f"Run {run_id} cannot transition {current} -> {to_status}"
                     )
-                await session.execute(
-                    text(
-                        "UPDATE agent_medusa_runs SET status = :to_status, "
-                        + assignments
-                        + ", updated_at = :event_at, last_worker_transition_at = :event_at"
-                        + " WHERE run_id = :run_id AND tenant_id = CAST(:tenant_id AS uuid)"
-                        + " AND owner_worker_id = :worker_id"
-                    ),
-                    {
-                        "run_id": run_id,
-                        "tenant_id": canonical_tenant_id,
-                        "worker_id": worker_id,
-                        "to_status": to_status,
-                        "event_at": event_at,
-                        "error_type": error_type,
-                    },
-                )
+                params = {
+                    "run_id": run_id,
+                    "tenant_id": canonical_tenant_id,
+                    "worker_id": worker_id,
+                    "to_status": to_status,
+                    "event_at": event_at,
+                    "error_type": error_type,
+                }
+                if transition_kind == "start":
+                    await session.execute(
+                        text("""
+                            UPDATE agent_medusa_runs
+                            SET status = :to_status,
+                                started_at = :event_at,
+                                heartbeat_at = :event_at,
+                                updated_at = :event_at,
+                                last_worker_transition_at = :event_at
+                            WHERE run_id = :run_id
+                              AND tenant_id = CAST(:tenant_id AS uuid)
+                              AND owner_worker_id = :worker_id
+                        """),
+                        params,
+                    )
+                elif transition_kind == "terminal":
+                    await session.execute(
+                        text("""
+                            UPDATE agent_medusa_runs
+                            SET status = :to_status,
+                                completed_at = :event_at,
+                                heartbeat_at = :event_at,
+                                error_type = :error_type,
+                                updated_at = :event_at,
+                                last_worker_transition_at = :event_at
+                            WHERE run_id = :run_id
+                              AND tenant_id = CAST(:tenant_id AS uuid)
+                              AND owner_worker_id = :worker_id
+                        """),
+                        params,
+                    )
+                else:
+                    raise ValueError(
+                        f"Unsupported durable transition kind: {transition_kind}"
+                    )
                 await self._append_transition(
                     session,
                     run_id=run_id,

@@ -17,7 +17,7 @@ export function LoadingState({ state }: { state: IntelligentSearchState }) {
         </h3>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
           Running <span className="font-semibold text-primary">{state.mode}</span> mode for
-          <span className="font-medium text-foreground"> "{state.query.slice(0, 48)}{state.query.length > 48 ? '...' : ''}"</span>
+          <span className="font-medium text-foreground"> &quot;{state.query.slice(0, 48)}{state.query.length > 48 ? '...' : ''}&quot;</span>
         </p>
       </div>
     </div>

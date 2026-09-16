@@ -25,7 +25,6 @@ from ai_karen_engine.core.contracts.compatibility import COGNITIVE_COMPATIBILITY
 from ai_karen_engine.core.cortex.behavior import contracts as behavior_contracts
 from ai_karen_engine.core.memory.contracts import ClaimStatus as MemoryClaimStatus
 from ai_karen_engine.core.personalization.goals.contracts import (
-    EvidenceSourceType,
     EvidenceType,
     GoalSnapshot as CanonicalGoalSnapshot,
     GoalState,
@@ -38,13 +37,15 @@ CORE = ROOT / "src" / "ai_karen_engine" / "core"
 
 
 def test_one_reasoning_depth_authority() -> None:
-    assert behavior_contracts.VerificationDepth is ReasoningDepth
+    assert behavior_contracts.ReasoningDepth is ReasoningDepth
+    assert not hasattr(behavior_contracts, "VerificationDepth")
     assert meta_contracts.ReasoningDepth is ReasoningDepth
 
 
 def test_one_verification_contract() -> None:
     assert behavior_contracts.VerificationRequirement is VerificationRequirement
-    assert meta_contracts.VerificationNeedAssessment is VerificationRequirement
+    assert meta_contracts.VerificationRequirement is VerificationRequirement
+    assert not hasattr(meta_contracts, "VerificationNeedAssessment")
 
 
 def test_one_claim_status_authority() -> None:
@@ -52,7 +53,7 @@ def test_one_claim_status_authority() -> None:
 
 
 def test_one_evidence_type_authority() -> None:
-    assert EvidenceSourceType is EvidenceType
+    assert EvidenceType.__module__ == "ai_karen_engine.core.reasoning.belief.contracts"
 
 
 def test_goal_state_and_snapshot_have_one_domain_authority() -> None:
@@ -127,14 +128,14 @@ def test_temporal_cognitive_state_uses_datetime() -> None:
     assert get_type_hints(CognitiveState)["created_at"] is datetime
 
 
-def test_legacy_goal_and_evidence_types_have_sunsets() -> None:
+def test_legacy_goal_type_has_sunset_and_expired_aliases_are_retired() -> None:
     mapping = {shim.legacy_symbol: shim for shim in COGNITIVE_COMPATIBILITY_SHIMS}
     goal = "ai_karen_engine.core.personalization.contracts.UserGoalStatus"
-    evidence = "ai_karen_engine.core.personalization.goals.contracts.EvidenceSourceType"
     assert mapping[goal].canonical_symbol.endswith("personalization.goals.contracts.GoalState")
-    assert mapping[evidence].canonical_symbol.endswith("reasoning.belief.contracts.EvidenceType")
     assert mapping[goal].remove_after > date(2026, 8, 25)
-    assert mapping[evidence].remove_after > date(2026, 8, 25)
+    assert "ai_karen_engine.core.cortex.behavior.contracts.VerificationDepth" not in mapping
+    assert "ai_karen_engine.core.reasoning.meta.contracts.VerificationNeedAssessment" not in mapping
+    assert "ai_karen_engine.core.personalization.goals.contracts.EvidenceSourceType" not in mapping
 
 
 def test_no_expired_cognitive_shims() -> None:

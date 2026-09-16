@@ -50,7 +50,6 @@ jobs:
       - name: Compile migrated memory consumer boundaries
         run: |
           python -m py_compile \
-            src/ai_karen_engine/core/memory/service_factory.py \
             src/ai_karen_engine/core/memory/runtime_gateway.py \
             src/ai_karen_engine/core/runtime/lazy_loading.py \
             src/ai_karen_engine/core/services/dependencies.py \

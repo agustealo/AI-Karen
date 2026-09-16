@@ -149,9 +149,7 @@ export const ProviderSettingsModal = ({
         return (
           bucket === 'thirdParty' &&
           provider.enabled !== false &&
-          provider.user_selectable !== false &&
-          provider.policy_allowed !== false &&
-          provider.is_configured !== false
+          provider.selectable !== false
         );
       }),
     [providers],

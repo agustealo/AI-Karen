@@ -8,10 +8,15 @@ interface PanelProps {
 
 type ViewMode = 'snippet' | 'markdown' | 'json';
 
+type ChatInjectItem = Partial<SearchSourceItem & SearchResultItem> & {
+  extractedData?: Record<string, unknown>;
+};
+
 /**
  * Enhanced function to send rich content to the main Karen chat
  */
-const sendToChat = (item: any) => {
+const sendToChat = (item: ChatInjectItem | undefined) => {
+  if (!item) return;
   let content = `I found this information for you:\n\n**${item.title || 'Search Result'}**\n\n`;
   
   if (item.extracted_data || item.extractedData) {
@@ -73,7 +78,9 @@ export function ResultsPanel({ response }: PanelProps) {
 
   const sourceCount = response.diagnostics?.sourceCount ?? sources.length ?? 0;
   const resultCount = results.length;
-  const providerLabel = response.provider || response.metadata?.provider || 'crawl4ai';
+  const providerLabel = String(
+    response.provider || response.metadata?.provider || 'crawl4ai',
+  );
 
   React.useEffect(() => {
     setActiveSourceIndex(initialActiveSourceIndex);
@@ -374,7 +381,7 @@ export function SourcesPanel({ response }: PanelProps) {
   );
 }
 
-function ResultCard({ result, index, onSend }: { result: SearchResultItem; index: number; onSend: (item: any) => void }) {
+function ResultCard({ result, index, onSend }: { result: SearchResultItem; index: number; onSend: (item: ChatInjectItem) => void }) {
   const [viewMode, setViewMode] = useState<ViewMode>('snippet');
 
   return (

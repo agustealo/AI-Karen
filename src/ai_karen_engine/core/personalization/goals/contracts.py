@@ -136,8 +136,6 @@ class ProspectiveState(str, Enum):
     ARCHIVED = "archived"
 
 
-EvidenceSourceType = EvidenceType
-
 
 class GoalRelationship(str, Enum):
     PARENT = "parent"
@@ -531,7 +529,6 @@ __all__ = [
     "CompletionEvidenceSource",
     "ConflictSeverity",
     "ConflictType",
-    "EvidenceSourceType",
     "EvidenceType",
     "Goal",
     "GoalConflict",

@@ -29,6 +29,7 @@ from ai_karen_engine.extensions.platform.core.registry.marketplace_discovery imp
 from ai_karen_engine.extensions.platform.core.host.lifecycle_manager import (
     LifecycleManager,
 )
+from ai_karen_engine.database.dependencies import get_async_db_session_dependency
 
 
 logger = logging.getLogger(__name__)
@@ -574,7 +575,7 @@ router = APIRouter(prefix="/api/store", tags=["plugin-store"])
 
 @router.get("/search", response_model=Dict[str, Any])
 async def search_plugins_endpoint(
-    request: PluginSearchRequest, session: AsyncSession = Depends(get_db_session)
+    request: PluginSearchRequest, session: AsyncSession = Depends(get_async_db_session_dependency)
 ) -> Dict[str, Any]:
     """Search for plugins."""
     # Initialize plugin store
@@ -597,7 +598,7 @@ async def search_plugins_endpoint(
 
 @router.get("/plugins/{plugin_id}", response_model=Dict[str, Any])
 async def get_plugin_details_endpoint(
-    plugin_id: str, session: AsyncSession = Depends(get_db_session)
+    plugin_id: str, session: AsyncSession = Depends(get_async_db_session_dependency)
 ) -> Dict[str, Any]:
     """Get plugin details."""
     # Initialize plugin store
@@ -620,7 +621,7 @@ async def get_plugin_details_endpoint(
 async def install_plugin_endpoint(
     request: PluginInstallRequest,
     api_key: APIKey = Depends(APIKeyHeader(name="X-API-Key")),
-    session: AsyncSession = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session_dependency),
 ) -> Dict[str, Any]:
     """Install plugin from store."""
     # Initialize plugin store
@@ -643,7 +644,7 @@ async def install_plugin_endpoint(
 async def rate_plugin_endpoint(
     request: PluginRatingRequest,
     api_key: APIKey = Depends(APIKeyHeader(name="X-API-Key")),
-    session: AsyncSession = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session_dependency),
 ) -> Dict[str, Any]:
     """Rate a plugin."""
     # Initialize plugin store
@@ -664,7 +665,7 @@ async def rate_plugin_endpoint(
 
 @router.get("/statistics", response_model=PluginStoreStats)
 async def get_statistics_endpoint(
-    session: AsyncSession = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session_dependency),
 ) -> PluginStoreStats:
     """Get store statistics."""
     # Initialize plugin store
@@ -685,7 +686,7 @@ async def get_statistics_endpoint(
 
 @router.get("/categories", response_model=List[Dict[str, Any]])
 async def get_categories_endpoint(
-    session: AsyncSession = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session_dependency),
 ) -> List[Dict[str, Any]]:
     """Get plugin categories."""
     # Initialize plugin store
@@ -706,7 +707,7 @@ async def get_categories_endpoint(
 
 @router.get("/trending", response_model=List[Dict[str, Any]])
 async def get_trending_endpoint(
-    limit: int = Query(10, ge=1, le=50), session: AsyncSession = Depends(get_db_session)
+    limit: int = Query(10, ge=1, le=50), session: AsyncSession = Depends(get_async_db_session_dependency)
 ) -> List[Dict[str, Any]]:
     """Get trending plugins."""
     # Initialize plugin store
@@ -727,7 +728,7 @@ async def get_trending_endpoint(
 
 @router.get("/updates", response_model=List[Dict[str, Any]])
 async def get_updates_endpoint(
-    session: AsyncSession = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session_dependency),
 ) -> List[Dict[str, Any]]:
     """Get available updates for installed plugins."""
     # Initialize plugin store

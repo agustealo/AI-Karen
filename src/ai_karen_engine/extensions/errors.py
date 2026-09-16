@@ -6,6 +6,8 @@ All extension kernel errors inherit from ExtensionError.
 
 from __future__ import annotations
 
+from typing import Optional
+
 
 class ExtensionError(Exception):
     """Base exception for extension kernel errors."""

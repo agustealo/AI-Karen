@@ -14,8 +14,8 @@ interface CrawlOptionsPanelProps {
 export function CrawlOptionsPanel({ options, onChange, capabilities }: CrawlOptionsPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const handleChange = (key: keyof IntelligentSearchOptions, value: any) => {
-    onChange({ [key]: value });
+  const handleChange = <K extends keyof IntelligentSearchOptions>(key: K, value: IntelligentSearchOptions[K]) => {
+    onChange({ [key]: value } as Pick<IntelligentSearchOptions, K>);
   };
 
   const handleArrayChange = (key: keyof IntelligentSearchOptions, value: string, action: 'add' | 'remove') => {
@@ -73,7 +73,9 @@ export function CrawlOptionsPanel({ options, onChange, capabilities }: CrawlOpti
               <label htmlFor="crawlEnabled" className="text-sm font-medium">
                 Enable Deep Crawl
               </label>
-              <Info className="h-3.5 w-3.5 text-muted-foreground" title="Use Crawl4AI to extract full content from web pages" />
+              <span title="Use Crawl4AI to extract full content from web pages">
+                <Info className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+              </span>
             </div>
           </div>
 

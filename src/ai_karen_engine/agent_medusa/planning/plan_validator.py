@@ -89,12 +89,12 @@ class PlanValidator:
         cycle = self._detect_cycle(plan.steps)
         if cycle:
             errors.append(f"dependency cycle detected: {' -> '.join(cycle)}")
-
-        max_parallel = self._calculate_max_parallelism(plan)
-        if max_parallel > max_parallel_steps:
-            errors.append(
-                f"plan requires {max_parallel} parallel steps but max_parallelism is {max_parallel_steps}"
-            )
+        else:
+            max_parallel = self._calculate_max_parallelism(plan)
+            if max_parallel > max_parallel_steps:
+                errors.append(
+                    f"plan requires {max_parallel} parallel steps but max_parallelism is {max_parallel_steps}"
+                )
 
         capability_errors = self._validate_capability_chains(plan)
         errors.extend(capability_errors)

@@ -25,7 +25,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.database.client import DatabaseClient
-from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
+from ai_karen_engine.platform.memory.redis.redis_connection_manager import get_redis_manager
 from ai_karen_engine.database.models import (
     Base,
     TenantConversation,

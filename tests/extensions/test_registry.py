@@ -40,55 +40,62 @@ def _manifest(plugin_id: str = "test") -> ExtensionManifest:
     )
 
 
-def test_register_and_get():
+@pytest.mark.asyncio
+async def test_register_and_get():
     registry = ExtensionRegistry()
     registration = ExtensionRegistration(manifest=_manifest("echo"), state=ExtensionLifecycleState.DISCOVERED)
-    registry.register(registration)
+    await registry.register(registration)
     assert registry.get("echo") is registration
 
 
-def test_duplicate_version_raises():
+@pytest.mark.asyncio
+async def test_duplicate_version_raises():
     registry = ExtensionRegistry()
     registration = ExtensionRegistration(manifest=_manifest("echo"), state=ExtensionLifecycleState.DISCOVERED)
-    registry.register(registration)
+    await registry.register(registration)
     with pytest.raises(ValueError):
-        registry.register(registration)
+        await registry.register(registration)
 
 
-def test_unregister():
+@pytest.mark.asyncio
+async def test_unregister():
     registry = ExtensionRegistry()
     registration = ExtensionRegistration(manifest=_manifest("echo"), state=ExtensionLifecycleState.DISCOVERED)
-    registry.register(registration)
-    registry.unregister("echo")
+    await registry.register(registration)
+    await registry.unregister("echo")
     assert registry.get("echo") is None
 
 
-def test_get_by_capability():
+@pytest.mark.asyncio
+async def test_get_by_capability():
     registry = ExtensionRegistry()
     registration = ExtensionRegistration(manifest=_manifest("echo"), state=ExtensionLifecycleState.DISCOVERED)
-    registry.register(registration)
+    await registry.register(registration)
     results = registry.get_by_capability("test")
     assert len(results) == 1
     assert results[0].manifest.id == "echo"
 
 
-def test_get_by_intent():
+@pytest.mark.asyncio
+async def test_get_by_intent():
     registry = ExtensionRegistry()
     registration = ExtensionRegistration(manifest=_manifest("echo"), state=ExtensionLifecycleState.DISCOVERED)
-    registry.register(registration)
+    await registry.register(registration)
     results = registry.get_by_intent("test")
     assert len(results) == 1
 
 
-def test_list_enabled():
+@pytest.mark.asyncio
+async def test_list_enabled():
     registry = ExtensionRegistry()
     registration = ExtensionRegistration(manifest=_manifest("echo"), state=ExtensionLifecycleState.DISCOVERED)
-    registry.register(registration)
+    await registry.register(registration)
     registration.state = ExtensionLifecycleState.ENABLED
     assert len(registry.list_enabled()) == 1
 
 
-def test_not_found_error():
+@pytest.mark.asyncio
+async def test_not_found_error():
     registry = ExtensionRegistry()
     with pytest.raises(ExtensionNotFoundError):
-        registry.unregister("missing")
+        await registry.unregister("missing")

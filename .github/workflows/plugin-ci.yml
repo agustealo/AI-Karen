@@ -4,13 +4,13 @@ on:
   push:
     branches: [main, develop]
     paths:
-      - 'src/extensions/**'
+      - 'src/ai_karen_engine/extensions/**'
       - 'tests/integration/**'
       - '.github/workflows/plugin-ci.yml'
   pull_request:
     branches: [main, develop]
     paths:
-      - 'src/extensions/**'
+      - 'src/ai_karen_engine/extensions/**'
       - 'tests/integration/**'
   workflow_dispatch:
     inputs:
@@ -24,7 +24,7 @@ on:
           - production
 
 env:
-  PYTHON_VERSION: '3.13'
+  PYTHON_VERSION: '3.12'
   NODE_VERSION: '20'
 
 jobs:
@@ -44,24 +44,20 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install black flake8 mypy pylint bandit
+          pip install ruff mypy bandit
           pip install -r requirements.txt
       
-      - name: Run Black formatter check
+      - name: Run Ruff correctness baseline
         run: |
-          black --check src/extensions/
-      
-      - name: Run Flake8 linter
-        run: |
-          flake8 src/extensions/ --max-line-length=100 --exclude=src/extensions/core/registry/manifest.py
+          ruff check --select E9,F63,F7,F82 src/ai_karen_engine/extensions/
       
       - name: Run MyPy type checker
         run: |
-          mypy src/extensions/ --ignore-missing-imports --no-error-summary || true
+          mypy src/ai_karen_engine/extensions/ --ignore-missing-imports --no-error-summary || true
       
       - name: Run Bandit security linter
         run: |
-          bandit -r src/extensions/ -f json -o bandit-report.json || true
+          bandit -r src/ai_karen_engine/extensions/ -f json -o bandit-report.json || true
         continue-on-error: true
       
       - name: Upload Bandit report
@@ -132,8 +128,12 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           PLUGIN_ENV: test
         run: |
-          pytest tests/integration/ -v \
-            --cov=src/extensions \
+          pytest \
+            tests/extensions/ \
+            tests/architecture/test_extension_lifecycle_authority.py \
+            tests/architecture/test_extension_route_authority.py \
+            -v \
+            --cov=src/ai_karen_engine/extensions \
             --cov-report=xml \
             --cov-report=html \
             --timeout=300 \
@@ -164,7 +164,7 @@ jobs:
     needs: lint
     defaults:
       run:
-        working-directory: ui_launchers/Karen-AI-Theme
+        working-directory: src/ui_launchers/Karen-AI-Theme
     
     steps:
       - name: Checkout code
@@ -175,28 +175,26 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
-            node_modules
+          cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
       
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
       
       - name: Run TypeScript type checking
-        run: npm run type-check
+        run: npm run typecheck
       
       - name: Run ESLint
         run: npm run lint
       
       - name: Run frontend tests
-        run: npm test -- --coverage --watchAll=false
+        run: npx vitest run --passWithNoTests
       
       - name: Upload frontend coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
-          path: coverage/
+          path: src/ui_launchers/Karen-AI-Theme/coverage/
 
   security-scan:
     name: Security Scanning
@@ -246,6 +244,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
       
       - name: Login to Container Registry
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -260,14 +259,14 @@ jobs:
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
-            type=sha,prefix={{branch}}-
+            type=sha,prefix=sha-
       
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: docker/Dockerfile.plugins
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

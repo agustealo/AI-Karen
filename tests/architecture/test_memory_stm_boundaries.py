@@ -157,9 +157,7 @@ def test_legacy_sql_memory_runtime_is_retired() -> None:
     assert not (CORE_MEMORY / "_legacy_memory_runtime_impl.py").exists()
     assert not (INTEGRATIONS_MEMORY / "legacy_memory_runtime_impl.py").exists()
 
-    base = _text("_memory_runtime_base.py")
-    assert "_legacy_memory_runtime_impl" not in base
-    assert "integrations.memory.legacy_memory_runtime_impl" not in base
+    assert not (CORE_MEMORY / "_memory_runtime_base.py").exists()
 
     for path in CORE_MEMORY.rglob("*.py"):
         source = path.read_text(encoding="utf-8")

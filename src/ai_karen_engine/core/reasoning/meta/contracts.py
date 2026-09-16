@@ -13,9 +13,6 @@ from ai_karen_engine.core.contracts.cognitive import (
 )
 from ai_karen_engine.core.contracts.values import JsonMap
 
-# Compatibility name: there is one canonical verification contract.
-VerificationNeedAssessment = VerificationRequirement
-
 
 class MetaCognitiveDimension(str, Enum):
     KNOWLEDGE_SUFFICIENCY = "knowledge_sufficiency"
@@ -244,6 +241,5 @@ __all__ = [
     "ReasoningDepthRecommendation",
     "StrategyAttempt",
     "StrategyFingerprint",
-    "VerificationNeedAssessment",
     "VerificationRequirement",
 ]
