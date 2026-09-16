@@ -19,7 +19,6 @@ from .profile_models import (
     ProfileSummary,
     UserPreference,
 )
-from .profile_service import ProfileService, get_profile_service
 from .reinforcement_tracker import ReinforcementTracker
 from .scope_resolver import ScopeResolver
 
@@ -32,7 +31,6 @@ __all__ = [
     "MemoryBudget",
     "ProfileGrowth",
     "ProfileManager",
-    "ProfileService",
     "ProfileSummary",
     "ProviderPreferences",
     "ReinforcementTracker",
@@ -40,5 +38,4 @@ __all__ = [
     "ScopeResolver",
     "UserPreference",
     "get_profile_manager",
-    "get_profile_service"
 ]
