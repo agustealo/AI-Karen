@@ -15,6 +15,10 @@ AUTH_ROUTE = ROOT / "src/ai_karen_engine/api_routes/auth/auth.py"
 AUTH_SERVICE = ROOT / "src/ai_karen_engine/services/auth/auth_service.py"
 SMOKE = ROOT / "scripts/ci/production-first-boot-smoke.sh"
 WORKFLOW = ROOT / ".github/workflows/production-first-boot-smoke.yml"
+AUTH_MIDDLEWARE = ROOT / "src" / "ai_karen_engine" / "auth" / "auth_middleware.py"
+DATABASE_STARTUP = ROOT / "src" / "ai_karen_engine" / "services" / "database" / "database_config.py"
+DATABASE_FACTORY = ROOT / "src" / "ai_karen_engine" / "database" / "factory.py"
+TENANT_MIGRATION = ROOT / "supabase" / "migrations" / "20260916010000_14_auth_tenant_authority.sql"
 
 
 def _read(path: Path) -> str:
@@ -102,6 +106,29 @@ def test_auth_initialization_requires_migration_owned_schema() -> None:
     ):
         assert table in source
     assert "Missing migration-owned auth tables" in source
+
+
+
+def test_auth_readiness_is_public_during_first_run() -> None:
+    source = _read(AUTH_MIDDLEWARE)
+
+    assert '"/api/auth/health"' in source
+
+
+def test_runtime_startup_cannot_seed_default_identities() -> None:
+    for path in (DATABASE_STARTUP, DATABASE_FACTORY):
+        source = _read(path)
+        assert "seed_default_auth" not in source
+        assert "DEFAULT_ADMINS" not in source
+
+
+def test_tenant_schema_is_owned_by_forward_migration() -> None:
+    source = _read(TENANT_MIGRATION)
+
+    assert "CREATE TABLE IF NOT EXISTS public.tenants" in source
+    assert "FOREIGN KEY (tenant_id)" in source
+    assert "REFERENCES public.tenants (id)" in source
+    assert "NOT VALID" in source
 
 
 def test_production_first_run_smoke_proves_durability_and_reentry_denial() -> None:

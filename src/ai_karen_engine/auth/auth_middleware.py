@@ -347,6 +347,7 @@ class SecureAuthMiddleware:
             "/redoc",
             "/openapi.json",
             "/api/auth/validate-session",
+            "/api/auth/health",
             "/api/auth/login",
             "/api/auth/register",
             "/api/auth/refresh",
