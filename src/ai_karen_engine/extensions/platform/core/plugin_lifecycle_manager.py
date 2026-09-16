@@ -27,12 +27,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, and_, or_, func
 
 from ai_karen_engine.extensions.platform.core.registry.plugin_registry import PluginRegistry
+from ai_karen_engine.extensions.platform.core.manifest import ExtensionManifest
 from ai_karen_engine.extensions.platform.core.registry.database_models import (
     ExtensionDBModel,
     ExtensionInstallationHistory,
 )
 
 logger = logging.getLogger("kari.plugin_lifecycle")
+
+# Lifecycle managers are request-scoped because their AsyncSession is request-scoped.
+# The operation lock is process-scoped so concurrent requests cannot mutate the same
+# plugin lifecycle through independent manager instances.
+_PLUGIN_OPERATION_LOCK = asyncio.Lock()
 
 
 class PluginLifecycleState(Enum):
@@ -136,7 +142,7 @@ class PluginLifecycleManager:
 
         # Operation tracking
         self._active_operations: Dict[str, PluginOperationResult] = {}
-        self._operation_lock = asyncio.Lock()
+        self._operation_lock = _PLUGIN_OPERATION_LOCK
 
     async def install_plugin(
         self,
@@ -488,11 +494,12 @@ class PluginLifecycleManager:
                 # Set enabling state
                 await self._set_plugin_state(plugin_id, PluginLifecycleState.ENABLING)
 
-                # Load plugin into registry
-                record = await self.registry.load_extension(plugin_id)
+                # Runtime loading is owned by the canonical extension core facade.
+                from ai_karen_engine.extensions.platform.core.manager import (
+                    get_extension_core_manager,
+                )
 
-                # Register UI components
-                await self._register_ui_components(plugin_id)
+                record = await get_extension_core_manager().load_extension(plugin_id)
 
                 # Set enabled state
                 await self._set_plugin_state(plugin_id, PluginLifecycleState.ENABLED)
@@ -597,11 +604,12 @@ class PluginLifecycleManager:
                 # Set disabling state
                 await self._set_plugin_state(plugin_id, PluginLifecycleState.DISABLING)
 
-                # Unregister UI components
-                await self._unregister_ui_components(plugin_id)
+                # Runtime unloading is owned by the canonical extension core facade.
+                from ai_karen_engine.extensions.platform.core.manager import (
+                    get_extension_core_manager,
+                )
 
-                # Unload from registry
-                await self.registry.unload_extension(plugin_id)
+                await get_extension_core_manager().unload_extension(plugin_id)
 
                 # Set disabled state
                 await self._set_plugin_state(plugin_id, PluginLifecycleState.DISABLED)
@@ -856,12 +864,10 @@ class PluginLifecycleManager:
             except ValueError:
                 logger.warning(f"Invalid lifecycle state for {plugin_id}: {state_str}")
                 return PluginLifecycleState.ERROR
-        else:
-            # Check if plugin directory exists (legacy detection)
-            if await self._plugin_directory_exists(plugin_id):
-                return PluginLifecycleState.INSTALLED
-            else:
-                return PluginLifecycleState.AVAILABLE
+
+        # Filesystem presence means the plugin is discoverable, not installed.
+        # Durable lifecycle truth is the migrated extension_registry row.
+        return PluginLifecycleState.AVAILABLE
 
     async def _set_plugin_state(
         self, plugin_id: str, state: PluginLifecycleState
@@ -878,7 +884,7 @@ class PluginLifecycleManager:
     async def _plugin_directory_exists(self, plugin_id: str) -> bool:
         """Check if plugin directory exists."""
         plugin_path = self.plugins_dir / plugin_id
-        manifest_path = plugin_path / "manifest.json"
+        manifest_path = plugin_path / "plugin_manifest.json"
         return plugin_path.exists() and manifest_path.exists()
 
     async def _download_plugin(
@@ -892,35 +898,40 @@ class PluginLifecycleManager:
     async def _install_local_plugin(
         self, plugin_id: str, version: Optional[str] = None
     ) -> Path:
-        """Install plugin from local discovery."""
-        # For now, assume plugin is already in the plugins directory
+        """Resolve an installable plugin from canonical local discovery."""
         plugin_path = self.plugins_dir / plugin_id
-        if not plugin_path.exists():
-            raise ValueError(f"Plugin {plugin_id} not found in local plugins directory")
+        manifest_path = plugin_path / "plugin_manifest.json"
+        if not plugin_path.exists() or not manifest_path.exists():
+            raise ValueError(f"Plugin {plugin_id} not found in local plugin discovery")
+
+        if version:
+            manifest = ExtensionManifest.from_dict(
+                json.loads(manifest_path.read_text(encoding="utf-8"))
+            )
+            if manifest.version != version:
+                raise ValueError(
+                    f"Requested {plugin_id} version {version}, "
+                    f"but local discovery provides {manifest.version}"
+                )
 
         return plugin_path
 
     async def _validate_plugin(self, plugin_path: Path) -> Dict[str, Any]:
-        """Validate plugin structure and manifest."""
-        manifest_path = plugin_path / "manifest.json"
+        """Validate a plugin through the canonical ExtensionManifest contract."""
+        manifest_path = plugin_path / "plugin_manifest.json"
         if not manifest_path.exists():
             raise ValueError(f"Plugin manifest not found: {manifest_path}")
 
-        with open(manifest_path, "r") as f:
-            manifest = json.load(f)
-
-        # Basic validation
-        required_fields = ["id", "version", "display_name"]
-        for field in required_fields:
-            if field not in manifest:
-                raise ValueError(f"Missing required field in manifest: {field}")
-
-        if manifest["id"] != plugin_path.name:
+        manifest = ExtensionManifest.from_dict(
+            json.loads(manifest_path.read_text(encoding="utf-8"))
+        )
+        if manifest.name != plugin_path.name:
             raise ValueError(
-                f"Plugin ID mismatch: manifest says {manifest['id']}, directory is {plugin_path.name}"
+                f"Plugin ID mismatch: manifest says {manifest.name}, "
+                f"directory is {plugin_path.name}"
             )
 
-        return manifest
+        return manifest.to_dict()
 
     async def _check_dependencies(self, manifest: Dict[str, Any]) -> None:
         """Check plugin dependencies."""
@@ -966,11 +977,19 @@ class PluginLifecycleManager:
             existing.version = manifest.get("version")
             existing.display_name = manifest.get("display_name")
             existing.description = manifest.get("description")
+            existing.author = manifest.get("author")
+            existing.license = manifest.get("license")
+            existing.tags = manifest.get("tags") or []
+            existing.dependencies = manifest.get("dependencies") or {}
+            existing.permissions = manifest.get("permissions") or {}
+            existing.resources = manifest.get("resources") or {}
             existing.lifecycle_state = PluginLifecycleState.INSTALLED.value
             existing.installed_at = datetime.now()
             existing.enabled = False
             existing.capabilities = manifest.get("capabilities", {})
             existing.category = manifest.get("category", "plugins")
+            existing.directory_path = str(plugin_path)
+            existing.install_path = str(plugin_path)
             existing.updated_at = datetime.now()
         else:
             # Create new
@@ -979,11 +998,18 @@ class PluginLifecycleManager:
                 version=manifest.get("version"),
                 display_name=manifest.get("display_name"),
                 description=manifest.get("description"),
+                author=manifest.get("author"),
+                license=manifest.get("license"),
+                tags=manifest.get("tags") or [],
                 lifecycle_state=PluginLifecycleState.INSTALLED.value,
                 installed_at=datetime.now(),
                 enabled=False,
                 capabilities=manifest.get("capabilities", {}),
+                dependencies=manifest.get("dependencies") or {},
+                permissions=manifest.get("permissions") or {},
+                resources=manifest.get("resources") or {},
                 category=manifest.get("category", "plugins"),
+                directory_path=str(plugin_path),
                 install_path=str(plugin_path),
             )
             self.db_session.add(plugin_record)
@@ -1029,17 +1055,6 @@ class PluginLifecycleManager:
         if ui_path.exists():
             shutil.rmtree(ui_path)
 
-    async def _register_ui_components(self, plugin_id: str) -> None:
-        """Register UI components with the frontend loader."""
-        # This would update the import map and notify frontend
-        # For now, this is handled by the UI materialization pipeline
-        pass
-
-    async def _unregister_ui_components(self, plugin_id: str) -> None:
-        """Unregister UI components from frontend loader."""
-        # This would remove from import map and notify frontend
-        pass
-
     async def _create_backup(self, plugin_id: str) -> Optional[Path]:
         """Create backup of plugin."""
         plugin_path = self.plugins_dir / plugin_id
@@ -1067,11 +1082,10 @@ class PluginLifecycleManager:
         }
 
         # Try to read original manifest
-        manifest_path = plugin_path / "manifest.json"
+        manifest_path = plugin_path / "plugin_manifest.json"
         if manifest_path.exists():
-            with open(manifest_path, "r") as f:
-                original_manifest = json.load(f)
-                manifest.update(original_manifest)
+            original_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest.update(original_manifest)
 
         with open(backup_path / "manifest.json", "w") as f:
             json.dump(manifest, f, indent=2)

@@ -161,3 +161,24 @@ def test_baseline_cutover_is_documented() -> None:
         in baseline
     )
     assert "Production Baseline 2026-08" in supabase_readme
+
+
+def test_extension_lifecycle_schema_is_owned_by_forward_migration() -> None:
+    migration = _read("supabase/migrations/20260916020000_15_extension_lifecycle_authority.sql")
+    models = _read(
+        "src/ai_karen_engine/extensions/platform/core/registry/database_models.py"
+    )
+
+    for table in (
+        "extension_registry",
+        "extension_installation_history",
+        "extension_hook_assignments",
+        "extension_dependency_graph",
+        "extension_validation_logs",
+        "extension_usage_metrics",
+    ):
+        assert f"CREATE TABLE IF NOT EXISTS public.{table}" in migration
+
+    for column in ("lifecycle_state", "installed_at", "enabled", "install_path"):
+        assert f"ADD COLUMN IF NOT EXISTS {column}" in migration
+        assert column in models

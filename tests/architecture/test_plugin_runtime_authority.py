@@ -35,7 +35,7 @@ def test_mock_plugin_store_is_retired_and_canonical_store_is_wired() -> None:
 
     assert "MOCK_PLUGINS" not in store
     assert "MOCK_CATEGORIES" not in store
-    assert "Depends(get_plugin_service)" in store
+    assert "MOCK_PLUGINS" not in store
     assert "from ai_karen_engine.api_routes.plugins.store import router as plugin_store_router" in routers
     assert 'RouterSpec(plugin_store_router, "/api", ("plugin-store",))' in routers
 
@@ -67,3 +67,34 @@ def test_reintroducing_retired_plugin_runtime_artifacts_retriggers_plugin_ci() -
 
     assert "'docker/Dockerfile.plugins'" in source
     assert "'deploy/compose/docker-compose.plugins.yml'" in source
+
+
+def test_plugin_lifecycle_authority_uses_canonical_manifest_and_async_db_dependency() -> None:
+    lifecycle = (
+        ROOT
+        / "src"
+        / "ai_karen_engine"
+        / "extensions"
+        / "platform"
+        / "core"
+        / "plugin_lifecycle_manager.py"
+    ).read_text(encoding="utf-8")
+    management = (
+        ROOT
+        / "src"
+        / "ai_karen_engine"
+        / "api_routes"
+        / "plugins"
+        / "management.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'plugin_path / "plugin_manifest.json"' in lifecycle
+    assert 'plugin_path / "manifest.json"' not in lifecycle
+    assert "registry.load_extension" not in lifecycle
+    assert "registry.unload_extension" not in lifecycle
+    assert "get_extension_core_manager().load_extension" in lifecycle
+    assert "get_extension_core_manager().unload_extension" in lifecycle
+    assert "_PLUGIN_OPERATION_LOCK" in lifecycle
+    assert "get_async_db_session_dependency" in management
+    assert "await get_db_session()" not in management
+    assert "Permission.ADMIN_PLUGINS_MANAGE" in management

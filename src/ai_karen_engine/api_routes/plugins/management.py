@@ -17,6 +17,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_karen_engine.extensions.platform.core.plugin_lifecycle_manager import (
     PluginLifecycleManager,
@@ -27,7 +28,8 @@ from ai_karen_engine.extensions.platform.core.plugin_lifecycle_manager import (
 from ai_karen_engine.extensions.platform.core.registry.plugin_registry import (
     PluginRegistry,
 )
-from ai_karen_engine.auth.auth_middleware import get_current_user
+from ai_karen_engine.auth.rbac_middleware import Permission, require_permission
+from ai_karen_engine.database.dependencies import get_async_db_session_dependency
 
 logger = logging.getLogger("kari.plugin_api")
 
@@ -36,27 +38,18 @@ router = APIRouter(prefix="/plugins", tags=["plugin-management"])
 
 
 # Dependency to get plugin manager
-async def get_plugin_manager() -> PluginLifecycleManager:
-    """Get the plugin lifecycle manager instance."""
+async def get_plugin_manager(
+    db_session: AsyncSession = Depends(get_async_db_session_dependency),
+) -> PluginLifecycleManager:
+    """Bind canonical lifecycle authority to the request-scoped async session."""
     from ai_karen_engine.extensions.platform.core.registry.plugin_registry import (
         get_registry,
     )
-    from ai_karen_engine.database.client import get_db_session
 
-    registry = get_registry()
-    db_session = await get_db_session()
-
-    # Import here to avoid circular imports
-    from ai_karen_engine.extensions.platform.core.plugin_lifecycle_manager import (
-        PluginLifecycleManager,
-    )
-
-    manager = PluginLifecycleManager(
-        registry=registry,
+    return PluginLifecycleManager(
+        registry=get_registry(),
         db_session=db_session,
     )
-
-    return manager
 
 
 # Pydantic models for API
@@ -116,7 +109,7 @@ async def list_plugins(
     include_available: bool = Query(True, description="Include available plugins"),
     include_installed: bool = Query(True, description="Include installed plugins"),
     manager: PluginLifecycleManager = Depends(get_plugin_manager),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.ADMIN_PLUGINS_READ)),
 ):
     """
     List all plugins with their current states.
@@ -154,7 +147,7 @@ async def list_plugins(
 async def get_plugin_info(
     plugin_id: str,
     manager: PluginLifecycleManager = Depends(get_plugin_manager),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.ADMIN_PLUGINS_READ)),
 ):
     """Get detailed information about a specific plugin."""
     try:
@@ -196,7 +189,7 @@ async def install_plugin(
     request: PluginOperationRequest,
     background_tasks: BackgroundTasks,
     manager: PluginLifecycleManager = Depends(get_plugin_manager),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.ADMIN_PLUGINS_MANAGE)),
 ):
     """
     Install a plugin.
@@ -233,7 +226,7 @@ async def uninstall_plugin(
     plugin_id: str,
     keep_backup: bool = Query(True, description="Keep backup after uninstallation"),
     manager: PluginLifecycleManager = Depends(get_plugin_manager),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.ADMIN_PLUGINS_MANAGE)),
 ):
     """Uninstall a plugin completely."""
     try:
@@ -260,7 +253,7 @@ async def uninstall_plugin(
 async def enable_plugin(
     plugin_id: str,
     manager: PluginLifecycleManager = Depends(get_plugin_manager),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.ADMIN_PLUGINS_MANAGE)),
 ):
     """Enable a plugin (make it active)."""
     try:
@@ -285,7 +278,7 @@ async def enable_plugin(
 async def disable_plugin(
     plugin_id: str,
     manager: PluginLifecycleManager = Depends(get_plugin_manager),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.ADMIN_PLUGINS_MANAGE)),
 ):
     """Disable a plugin (make it inactive)."""
     try:
@@ -310,7 +303,7 @@ async def disable_plugin(
 async def create_plugin_backup(
     plugin_id: str,
     manager: PluginLifecycleManager = Depends(get_plugin_manager),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.ADMIN_PLUGINS_MANAGE)),
 ):
     """Create a backup of an installed plugin."""
     try:
@@ -343,7 +336,7 @@ async def restore_plugin_backup(
     plugin_id: str,
     backup_path: str = Query(..., description="Path to backup directory"),
     manager: PluginLifecycleManager = Depends(get_plugin_manager),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.ADMIN_PLUGINS_MANAGE)),
 ):
     """Restore a plugin from backup."""
     try:
@@ -381,7 +374,7 @@ async def restore_plugin_backup(
 async def list_plugin_backups(
     plugin_id: str,
     manager: PluginLifecycleManager = Depends(get_plugin_manager),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.ADMIN_PLUGINS_READ)),
 ):
     """List all available backups for a plugin."""
     try:
@@ -399,7 +392,7 @@ async def list_plugin_backups(
 async def get_marketplace_plugins(
     category: Optional[str] = Query(None, description="Filter by category"),
     search: Optional[str] = Query(None, description="Search query"),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.ADMIN_PLUGINS_READ)),
 ):
     """
     Get available plugins from the marketplace.
@@ -463,7 +456,7 @@ async def get_plugin_operation_history(
     operation: Optional[str] = Query(None, description="Filter by operation type"),
     limit: int = Query(100, description="Maximum number of records to return"),
     manager: PluginLifecycleManager = Depends(get_plugin_manager),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.ADMIN_PLUGINS_READ)),
 ):
     """Get plugin operation history."""
     try:

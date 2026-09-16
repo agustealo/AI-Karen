@@ -71,6 +71,10 @@ class ExtensionDBModel(Base):
 
     # Runtime state
     status = Column(String(50), default="inactive", index=True)
+    lifecycle_state = Column(String(32), default="available", nullable=False, index=True)
+    enabled = Column(Boolean, default=False, nullable=False, index=True)
+    installed_at = Column(DateTime(timezone=True))
+    install_path = Column(String(500))
     directory_path = Column(String(500))
     is_validated = Column(Boolean, default=False)
     validation_errors = Column(JSON, default=list)
@@ -110,6 +114,7 @@ class ExtensionDBModel(Base):
         Index("idx_extension_name_version", "name", "version"),
         Index("idx_extension_category_status", "category", "status"),
         Index("idx_extension_status_created", "status", "created_at"),
+        Index("idx_extension_lifecycle_enabled", "lifecycle_state", "enabled"),
         Index("idx_extension_author", "author"),
     )
 
@@ -146,7 +151,11 @@ class ExtensionDBModel(Base):
             "description": self.description,
             "author": self.author,
             "category": self.category,
-            "status": self.status.value,
+            "status": getattr(self.status, "value", self.status),
+            "lifecycle_state": self.lifecycle_state,
+            "enabled": self.enabled,
+            "installed_at": self.installed_at.isoformat() if self.installed_at else None,
+            "install_path": self.install_path,
             "is_validated": self.is_validated,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,

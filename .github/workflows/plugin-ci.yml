@@ -9,6 +9,8 @@ on:
       - 'tests/architecture/test_extension_lifecycle_authority.py'
       - 'tests/architecture/test_extension_route_authority.py'
       - 'tests/architecture/test_plugin_runtime_authority.py'
+      - 'tests/architecture/test_plugin_lifecycle_authority.py'
+      - 'supabase/migrations/**'
       - 'docker/Dockerfile.plugins'
       - 'deploy/compose/docker-compose.plugins.yml'
       - '.github/workflows/plugin-ci.yml'
@@ -20,6 +22,8 @@ on:
       - 'tests/architecture/test_extension_lifecycle_authority.py'
       - 'tests/architecture/test_extension_route_authority.py'
       - 'tests/architecture/test_plugin_runtime_authority.py'
+      - 'tests/architecture/test_plugin_lifecycle_authority.py'
+      - 'supabase/migrations/**'
       - 'docker/Dockerfile.plugins'
       - 'deploy/compose/docker-compose.plugins.yml'
       - '.github/workflows/plugin-ci.yml'
@@ -133,6 +137,7 @@ jobs:
             tests/architecture/test_extension_lifecycle_authority.py \
             tests/architecture/test_extension_route_authority.py \
             tests/architecture/test_plugin_runtime_authority.py \
+            tests/architecture/test_plugin_lifecycle_authority.py \
             -v \
             --cov=src/ai_karen_engine/extensions \
             --cov-report=xml \
