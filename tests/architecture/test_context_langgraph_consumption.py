@@ -77,7 +77,14 @@ def test_langgraph_delegates_canonical_prompt_and_provider_execution_to_runtime(
     assert '"prompt_text": prompt_runtime.render_text_prompt' in workflow_runtime
     assert 'context.get("prompt_text")' in provider
     assert 'return prompt_text.strip()' in provider
-    assert 'context.get("prompt_text")' in router
+
+    # LLMRouter is selection-only. Prompt consumption and provider execution
+    # belong exclusively to ProviderRuntime.
+    assert 'context.get("prompt_text")' not in router
+    assert "process_chat_request" not in router
+    assert "_invoke_provider_for_text" not in router
+    assert "_build_provider_prompt" not in router
+    assert "select_provider" in router
 
 
 def test_file_context_is_separate_from_conversation_context() -> None:

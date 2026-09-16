@@ -3,8 +3,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
-
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "ai_karen_engine"
 LLM_ROUTER_PATH = SRC_ROOT / "core" / "model_runtime" / "routing" / "llm_router_service.py"
 PROVIDER_RUNTIME_PATH = SRC_ROOT / "core" / "runtime" / "provider_runtime.py"
@@ -45,7 +43,6 @@ EXECUTION_METHODS_THAT_MUST_NOT_BE_ON_LLM_ROUTER = {
 }
 
 
-@pytest.mark.xfail(reason="LLMRouter still contains execution methods during migration to ProviderRuntime")
 def test_llm_router_does_not_own_execution_methods() -> None:
     assert LLM_ROUTER_PATH.exists(), "LLMRouter file should exist during migration"
     source = LLM_ROUTER_PATH.read_text(encoding="utf-8")
