@@ -111,8 +111,6 @@ from .runtime_policy import runtime_policy_enforcer_node, select_execution_branc
 from .formatting.response_formatter_pipeline import response_formatter_node
 from .diagnostics import DiagnosticsEngine
 
-# Import consolidated classes from separate modules
-from .decision_engine import DecisionEngine
 
 from .contracts.orchestration_state import (
     LangGraphOrchestrationState,
@@ -135,9 +133,7 @@ class LangGraphOrchestrator:
         safety_service: Optional[DistilBertService] = None,
         memory_service: Optional[Any] = None,
         memory_recall: Optional[Any] = None,
-        decision_engine: Optional[DecisionEngine] = None,
         tool_service: Optional[ToolService] = None,
-        llm_router: Optional[Any] = None,
         profile_manager: Optional[ProfileManager] = None,
         session_state_manager: Optional[SessionStateManager] = None,
     ):
@@ -168,13 +164,8 @@ class LangGraphOrchestrator:
         self._session_state_manager: Optional[SessionStateManager] = (
             session_state_manager
         )
-        self._decision_engine: DecisionEngine = decision_engine or DecisionEngine()
         self._tool_service: Optional[ToolService] = tool_service
 
-        # Local import to avoid circular dependency
-        from ai_karen_engine.core.model_runtime.routing.llm_router_service import LLMRouter
-
-        self._llm_router: LLMRouter = llm_router or LLMRouter()
         self._profile_manager: ProfileManager = profile_manager or ProfileManager()
 
         # Track fallback resolutions so we only warn once per dependency.
@@ -379,12 +370,11 @@ class LangGraphOrchestrator:
             )
 
         def _intent_detect_node(state: LangGraphOrchestrationState) -> Any:
-            return intent_detect_node(state, decision_engine=self._decision_engine)
+            return intent_detect_node(state)
 
         def _router_select_node(state: LangGraphOrchestrationState) -> Any:
             return router_select_node(
                 state,
-                llm_router=self._llm_router,
                 profile_manager=self._profile_manager,
             )
 
@@ -395,7 +385,7 @@ class LangGraphOrchestrator:
             return tool_exec_node(state, tool_service=self._tool_service)
 
         def _response_synth_node(state: LangGraphOrchestrationState) -> Any:
-            return response_synth_node(state, llm_router=self._llm_router)
+            return response_synth_node(state)
 
         workflow.add_node("auth_gate", _auth_gate_node)
         workflow.add_node("safety_gate", _safety_gate_node)
@@ -794,8 +784,6 @@ class LangGraphOrchestrator:
         """Simulate orchestration without side effects for diagnostics."""
 
         diagnostics_engine = DiagnosticsEngine(
-            decision_engine=self._decision_engine,
-            llm_router=self._llm_router,
             profile_manager=self._profile_manager,
         )
 
@@ -1005,11 +993,6 @@ class LangGraphOrchestrator:
 
         logger.info("Shutting down LangGraph orchestrator")
         self._initialized = False
-
-        try:
-            await self._llm_router.shutdown()
-        except Exception as exc:  # pragma: no cover - defensive cleanup
-            logger.warning("LLM router shutdown encountered an error: %s", exc)
 
 
         async with self._stats_lock:
