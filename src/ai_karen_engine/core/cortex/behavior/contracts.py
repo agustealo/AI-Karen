@@ -22,8 +22,6 @@ from ai_karen_engine.core.contracts.cognitive import (
     VerificationRequirement,
 )
 
-VerificationDepth = ReasoningDepth
-
 
 class BehaviorType(str, Enum):
     RESPOND = "respond"
@@ -211,7 +209,6 @@ __all__ = [
     "BehaviorTarget",
     "BehaviorType",
     "CognitivePolicyConfig",
-    "VerificationDepth",
     "VerificationReason",
     "VerificationRequirement",
 ]
