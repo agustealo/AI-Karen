@@ -177,6 +177,17 @@ done < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort)
 echo "[smoke] booting production API image"
 start_api
 
+echo "[smoke] rejecting known first-boot startup wiring faults"
+startup_logs="$(docker logs "${API_CONTAINER}" 2>&1 || true)"
+if grep -Fq "'PromptRegistry' object has no attribute 'get'" <<<"${startup_logs}"; then
+  echo "extension discovery used retired PromptRegistry.get API" >&2
+  fail_with_api_logs
+fi
+if grep -Fq "name 'RobotsPolicy' is not defined" <<<"${startup_logs}"; then
+  echo "Crawl4AI started without RobotsPolicy wiring" >&2
+  fail_with_api_logs
+fi
+
 echo "[smoke] proving empty installation reports first-run"
 first_run_json="$(curl -fsS "${BASE_URL}/api/auth/first-run")"
 python3 - "${first_run_json}" <<'PY'

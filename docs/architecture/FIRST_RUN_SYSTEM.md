@@ -80,6 +80,8 @@ Required invariants:
 
 Runtime auth code verifies schema readiness but does not create production tables.
 
+Runtime database startup also does **not** seed default users, credentials, or synthetic tenants. A fresh migrated installation must retain zero durable users until `POST /api/auth/first-run/setup` creates the first owner through `AuthService`. Legacy/manual seed helpers are not production bootstrap authority.
+
 The required auth bootstrap tables currently include:
 
 ```text

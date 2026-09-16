@@ -135,6 +135,7 @@ class LangGraphOrchestrator:
         memory_recall: Optional[Any] = None,
         tool_service: Optional[ToolService] = None,
         profile_manager: Optional[ProfileManager] = None,
+        profile_service: Optional[Any] = None,
         session_state_manager: Optional[SessionStateManager] = None,
     ):
         self.config = config or LangGraphOrchestrationConfig()
@@ -167,6 +168,7 @@ class LangGraphOrchestrator:
         self._tool_service: Optional[ToolService] = tool_service
 
         self._profile_manager: ProfileManager = profile_manager or ProfileManager()
+        self._profile_service: Optional[Any] = profile_service
 
         # Track fallback resolutions so we only warn once per dependency.
         self._tool_resolution_failed = False
@@ -367,6 +369,7 @@ class LangGraphOrchestrator:
                 memory_recall=memory_recall,
                 memory_recall_top_k=self.config.memory_recall_top_k,
                 session_state_manager=self._session_state_manager,
+                profile_service=self._profile_service,
             )
 
         def _intent_detect_node(state: LangGraphOrchestrationState) -> Any:
@@ -1001,9 +1004,14 @@ class LangGraphOrchestrator:
 # Factory function for easy instantiation
 def create_orchestrator(
     config: LangGraphOrchestrationConfig = None,
+    *,
+    profile_service: Optional[Any] = None,
 ) -> LangGraphOrchestrator:
-    """Create a new LangGraph orchestrator instance"""
-    return LangGraphOrchestrator(config)
+    """Create a new LangGraph orchestrator instance."""
+    return LangGraphOrchestrator(
+        config,
+        profile_service=profile_service,
+    )
 
 
 # Default orchestrator instance
@@ -1011,11 +1019,17 @@ default_orchestrator = None
 
 
 def get_default_orchestrator() -> LangGraphOrchestrator:
-    """Get the default orchestrator instance (singleton)"""
+    """Get the default orchestrator instance (singleton)."""
     global default_orchestrator
     if default_orchestrator is None:
         default_orchestrator = create_orchestrator()
     return default_orchestrator
+
+
+def set_default_orchestrator(orchestrator: LangGraphOrchestrator) -> None:
+    """Install the application-composed default workflow orchestrator."""
+    global default_orchestrator
+    default_orchestrator = orchestrator
 
 
 # Alias for backward-compatibility

@@ -252,49 +252,55 @@ class ExtensionValidator:
                 self.warnings.append(f"Unknown system service dependency: {service}")
 
     def _validate_prompt_contracts(self, manifest: ExtensionManifest) -> None:
-        """Validate that plugin prompt contracts resolve through the canonical PromptRegistry."""
+        """Validate explicit custom plugin prompt contracts against PromptRegistry."""
         try:
-            from ai_karen_engine.core.runtime.prompt import get_prompt_registry
+            from ai_karen_engine.core.runtime.prompt import (
+                PromptNotFoundError,
+                get_prompt_registry,
+            )
         except ImportError:
-            self.warnings.append("PromptRegistry is unavailable; skipping prompt contract validation")
+            self.warnings.append(
+                "PromptRegistry is unavailable; skipping prompt contract validation"
+            )
             return
 
         prompt_files = manifest.prompt_files
         capabilities = manifest.capabilities
 
-        if not getattr(prompt_files, "prompt_first", False) and not getattr(capabilities, "prompt_first", False):
+        if not getattr(prompt_files, "prompt_first", False) and not getattr(
+            capabilities, "prompt_first", False
+        ):
             return
 
         mode = getattr(prompt_files, "mode", "default")
+        mode_value = getattr(mode, "value", mode)
         contract_id = getattr(prompt_files, "contract_id", None)
 
-        if mode == "none":
+        # Default mode delegates to the host/runtime prompt authority. Discovery
+        # must not invent an undeclared plugin.<name>.default contract.
+        if mode_value in {"none", "default"}:
             return
 
-        if mode == "custom" and not contract_id:
+        if mode_value != "custom":
+            self.errors.append(f"Unsupported plugin prompt mode: {mode_value}")
+            return
+
+        if not contract_id:
             self.errors.append(
                 "Plugin prompt mode is 'custom' but no contract_id is declared"
             )
             return
 
         registry = get_prompt_registry()
-        resolved = None
-
-        if contract_id:
+        try:
             if "@" in contract_id:
                 prompt_id, version = contract_id.split("@", 1)
-                resolved = registry.get(prompt_id, version)
+                registry.get_prompt(prompt_id, version)
             else:
-                resolved = registry.get(contract_id)
-        else:
-            default_contract_id = f"plugin.{manifest.name}.default@v1"
-            prompt_id, version = default_contract_id.split("@", 1)
-            resolved = registry.get(prompt_id, version)
-
-        if resolved is None:
+                registry.get_prompt(contract_id)
+        except PromptNotFoundError:
             self.errors.append(
-                f"Plugin prompt contract not found in PromptRegistry: "
-                f"{contract_id or f'plugin.{manifest.name}.default@v1'}"
+                f"Plugin prompt contract not found in PromptRegistry: {contract_id}"
             )
 
     def _validate_permissions(self, manifest: ExtensionManifest) -> None:

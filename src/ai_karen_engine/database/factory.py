@@ -235,21 +235,9 @@ class DatabaseServiceFactory:
             # Initialize canonical repositories and Supabase platform
             self.create_canonical_repositories()
 
-            # Seed initial data if needed
-            try:
-                from ai_karen_engine.database.seed.auth_seed import seed_default_auth
-                from ai_karen_engine.database.seed.rbac_seed import seed_rbac_data
-
-                # Seed auth data
-                seed_default_auth()
-                logger.info("Auth data seeded")
-
-                # Seed RBAC data
-                seed_rbac_data()
-                logger.info("RBAC data seeded")
-
-            except Exception as e:
-                logger.warning(f"Data seeding failed (may already exist): {e}")
+            # Runtime initialization never seeds identities or tenant-scoped RBAC.
+            # Schema/baseline data are migration-owned; first-user creation belongs
+            # exclusively to the canonical AuthService first-run transaction.
 
             logger.info("Database initialization completed successfully")
             return True

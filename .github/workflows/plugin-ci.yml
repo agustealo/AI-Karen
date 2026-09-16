@@ -5,23 +5,28 @@ on:
     branches: [main, develop]
     paths:
       - 'src/ai_karen_engine/extensions/**'
-      - 'tests/integration/**'
+      - 'tests/extensions/**'
+      - 'tests/architecture/test_extension_lifecycle_authority.py'
+      - 'tests/architecture/test_extension_route_authority.py'
+      - 'tests/architecture/test_plugin_runtime_authority.py'
+      - 'docker/Dockerfile.plugins'
+      - 'deploy/compose/docker-compose.plugins.yml'
       - '.github/workflows/plugin-ci.yml'
   pull_request:
     branches: [main, develop]
     paths:
       - 'src/ai_karen_engine/extensions/**'
-      - 'tests/integration/**'
+      - 'tests/extensions/**'
+      - 'tests/architecture/test_extension_lifecycle_authority.py'
+      - 'tests/architecture/test_extension_route_authority.py'
+      - 'tests/architecture/test_plugin_runtime_authority.py'
+      - 'docker/Dockerfile.plugins'
+      - 'deploy/compose/docker-compose.plugins.yml'
+      - '.github/workflows/plugin-ci.yml'
   workflow_dispatch:
-    inputs:
-      deploy_environment:
-        description: 'Deployment environment (staging/production)'
-        required: false
-        default: 'staging'
-        type: choice
-        options:
-          - staging
-          - production
+
+permissions:
+  contents: read
 
 env:
   PYTHON_VERSION: '3.12'
@@ -34,32 +39,27 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
-      
-      - name: Install dependencies
+
+      - name: Install static-analysis tools
         run: |
           python -m pip install --upgrade pip
           pip install ruff mypy bandit
-          pip install -r requirements.txt
-      
+
       - name: Run Ruff correctness baseline
-        run: |
-          ruff check --select E9,F63,F7,F82 src/ai_karen_engine/extensions/
-      
+        run: ruff check --select E9,F63,F7,F82 src/ai_karen_engine/extensions/
+
       - name: Run MyPy type checker
-        run: |
-          mypy src/ai_karen_engine/extensions/ --ignore-missing-imports --no-error-summary || true
-      
-      - name: Run Bandit security linter
-        run: |
-          bandit -r src/ai_karen_engine/extensions/ -f json -o bandit-report.json || true
-        continue-on-error: true
-      
+        run: mypy src/ai_karen_engine/extensions/ --ignore-missing-imports --no-error-summary || true
+
+      - name: Generate Bandit report
+        run: bandit -r src/ai_karen_engine/extensions/ -f json -o bandit-report.json || true
+
       - name: Upload Bandit report
         if: always()
         uses: actions/upload-artifact@v4
@@ -94,17 +94,17 @@ jobs:
           --health-retries 5
         ports:
           - 6379:6379
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
-      
+
       - name: Cache Python dependencies
         uses: actions/cache@v4
         with:
@@ -112,7 +112,7 @@ jobs:
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
-      
+
       - name: Install dependencies
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/karen_test
@@ -121,8 +121,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov pytest-timeout
-      
-      - name: Run integration tests
+
+      - name: Run plugin runtime contracts
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/karen_test
           REDIS_URL: redis://localhost:6379/0
@@ -132,13 +132,14 @@ jobs:
             tests/extensions/ \
             tests/architecture/test_extension_lifecycle_authority.py \
             tests/architecture/test_extension_route_authority.py \
+            tests/architecture/test_plugin_runtime_authority.py \
             -v \
             --cov=src/ai_karen_engine/extensions \
             --cov-report=xml \
             --cov-report=html \
             --timeout=300 \
             --tb=short
-      
+
       - name: Upload coverage reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -148,7 +149,7 @@ jobs:
             htmlcov/
             coverage.xml
             .coverage
-      
+
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v4
@@ -165,30 +166,30 @@ jobs:
     defaults:
       run:
         working-directory: src/ui_launchers/Karen-AI-Theme
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
-      
+
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
-      
+
       - name: Run TypeScript type checking
         run: npm run typecheck
-      
+
       - name: Run ESLint
         run: npm run lint
-      
+
       - name: Run frontend tests
         run: npx vitest run --passWithNoTests
-      
+
       - name: Upload frontend coverage
         if: always()
         uses: actions/upload-artifact@v4
@@ -196,202 +197,34 @@ jobs:
           name: frontend-coverage
           path: src/ui_launchers/Karen-AI-Theme/coverage/
 
-  security-scan:
-    name: Security Scanning
+  security-report:
+    name: Plugin Security Reports
     runs-on: ubuntu-latest
     needs: [test-backend, test-frontend]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
-      - name: Run Trivy vulnerability scanner
+
+      - name: Generate Trivy filesystem report
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'sarif'
           output: 'trivy-results.sarif'
-      
-      - name: Run pip-audit
+
+      - name: Generate dependency audit reports
         run: |
-          pip install pip-audit
-          pip-audit --desc --format json || true
-      
-      - name: Run safety check
-        run: |
-          pip install safety
-          safety check --json || true
-      
+          python -m pip install --upgrade pip pip-audit
+          pip-audit -r requirements.txt --desc --format json > pip-audit-requirements.json || true
+          pip-audit -r requirements-database.txt --desc --format json > pip-audit-database.json || true
+
       - name: Upload security reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: security-reports
+          name: plugin-security-reports
           path: |
             trivy-results.sarif
-
-  build-docker:
-    name: Build Plugin Docker Images
-    runs-on: ubuntu-latest
-    needs: [test-backend, test-frontend, security-scan]
-    outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Login to Container Registry
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/karen-ai/plugin-ecosystem
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=sha,prefix=sha-
-      
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/Dockerfile.plugins
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      
-      - name: Image digest
-        run: echo ${{ steps.meta.outputs.digest }}
-
-  deploy-staging:
-    name: Deploy to Staging
-    runs-on: ubuntu-latest
-    needs: build-docker
-    if: github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
-    environment:
-      name: staging
-      url: https://staging.karen.ai
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
-      
-      - name: Configure kubectl
-        run: |
-          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
-          export KUBECONFIG=kubeconfig
-      
-      - name: Update deployment
-        run: |
-          kubectl set image deployment/plugin-ecosystem \
-            plugin-ecosystem=ghcr.io/karen-ai/plugin-ecosystem:${{ github.sha }} \
-            -n staging
-      
-      - name: Rollout restart
-        run: |
-          kubectl rollout restart deployment/plugin-ecosystem -n staging
-      
-      - name: Wait for rollout
-        run: |
-          kubectl rollout status deployment/plugin-ecosystem -n staging --timeout=5m
-
-  deploy-production:
-    name: Deploy to Production
-    runs-on: ubuntu-latest
-    needs: build-docker
-    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_environment == 'production'
-    environment:
-      name: production
-      url: https://karen.ai
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
-      
-      - name: Configure kubectl
-        run: |
-          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > kubeconfig
-          export KUBECONFIG=kubeconfig
-      
-      - name: Run pre-deployment health check
-        run: |
-          echo "Checking production environment health..."
-          kubectl get pods -n production
-      
-      - name: Update deployment
-        run: |
-          kubectl set image deployment/plugin-ecosystem \
-            plugin-ecosystem=ghcr.io/karen-ai/plugin-ecosystem:${{ github.sha }} \
-            -n production
-      
-      - name: Blue-green deployment switch
-        run: |
-          kubectl rollout restart deployment/plugin-ecosystem -n production
-          kubectl rollout status deployment/plugin-ecosystem -n production --timeout=10m
-      
-      - name: Post-deployment health check
-        run: |
-          echo "Waiting for production deployment to be ready..."
-          sleep 30
-          kubectl get pods -n production
-          kubectl rollout status deployment/plugin-ecosystem -n production
-      
-      - name: Run smoke tests
-        run: |
-          curl -f https://karen.ai/api/health/system || exit 1
-          curl -f https://karen.ai/api/health/plugins || exit 1
-      
-      - name: Notify deployment success
-        if: success()
-        run: |
-          echo "Production deployment successful!"
-          # Add webhook notification here
-      
-      - name: Rollback on failure
-        if: failure()
-        run: |
-          echo "Deployment failed, initiating rollback..."
-          kubectl rollout undo deployment/plugin-ecosystem -n production
-
-  migrate-plugins:
-    name: Migrate Plugins to Production
-    runs-on: ubuntu-latest
-    needs: deploy-production
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Install dependencies
-        run: |
-          pip install requests pyyaml
-          
-      - name: Run plugin migration
-        env:
-          PRODUCTION_API_URL: https://karen.ai/api
-          PRODUCTION_API_KEY: ${{ secrets.PRODUCTION_API_KEY }}
-        run: |
-          python scripts/migrate_plugins.py \
-            --source development \
-            --target production \
-            --verify
+            pip-audit-requirements.json
+            pip-audit-database.json
