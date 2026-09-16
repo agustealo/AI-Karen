@@ -30,6 +30,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 from ai_karen_engine.integrations.web.web_utils import canonicalize_url, is_content_type_binary
+from ai_karen_engine.integrations.web.robots_policy import RobotsPolicy
 
 from prometheus_client import Counter, Histogram
 

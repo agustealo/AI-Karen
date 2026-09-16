@@ -19,6 +19,8 @@ AUTH_MIDDLEWARE = ROOT / "src" / "ai_karen_engine" / "auth" / "auth_middleware.p
 DATABASE_STARTUP = ROOT / "src" / "ai_karen_engine" / "services" / "database" / "database_config.py"
 DATABASE_FACTORY = ROOT / "src" / "ai_karen_engine" / "database" / "factory.py"
 TENANT_MIGRATION = ROOT / "supabase" / "migrations" / "20260916010000_14_auth_tenant_authority.sql"
+EXTENSION_VALIDATOR = ROOT / "src" / "ai_karen_engine" / "extensions" / "platform" / "core" / "registry" / "validator.py"
+CRAWL4AI_INTEGRATION = ROOT / "src" / "ai_karen_engine" / "integrations" / "web" / "crawl4ai_integration.py"
 
 
 def _read(path: Path) -> str:
@@ -129,6 +131,26 @@ def test_tenant_schema_is_owned_by_forward_migration() -> None:
     assert "FOREIGN KEY (tenant_id)" in source
     assert "REFERENCES public.tenants (id)" in source
     assert "NOT VALID" in source
+
+
+
+def test_first_boot_extension_prompt_validation_uses_canonical_registry_api() -> None:
+    source = _read(EXTENSION_VALIDATOR)
+
+    assert "registry.get(" not in source
+    assert "registry.get_prompt(" in source
+    assert 'mode_value in {"none", "default"}' in source
+    assert "PromptNotFoundError" in source
+
+
+def test_first_boot_crawl4ai_imports_robots_policy() -> None:
+    source = _read(CRAWL4AI_INTEGRATION)
+
+    assert (
+        "from ai_karen_engine.integrations.web.robots_policy import RobotsPolicy"
+        in source
+    )
+    assert "self.robots_policy = RobotsPolicy(" in source
 
 
 def test_production_first_run_smoke_proves_durability_and_reentry_denial() -> None:
