@@ -5,7 +5,6 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Dict, Optional
 
-from ai_karen_engine.integrations.memory.profile_service import get_profile_service
 from ai_karen_engine.utils.chat_helpers import wants_long_form_markdown_article
 
 from ..context.context_manager_adapter import (
@@ -29,8 +28,9 @@ class MemoryFetchNode:
         memory_recall: Optional[MemoryRecall] = None,
         memory_recall_top_k: int = 10,
         session_state_manager: Optional[Any] = None,
+        profile_service: Optional[Any] = None,
     ) -> None:
-        self.profile_service = get_profile_service()
+        self._profile_service = profile_service
         self._memory_recall = memory_recall
         self._memory_recall_top_k = memory_recall_top_k
         self._session_state_manager = session_state_manager
@@ -57,9 +57,9 @@ class MemoryFetchNode:
             if not user_id:
                 warnings.append("Memory disabled for this turn: missing user_id")
 
-            if user_id:
+            if user_id and self._profile_service is not None:
                 try:
-                    profile_summary = await self.profile_service.get_profile_summary(
+                    profile_summary = await self._profile_service.get_profile_summary(
                         user_id,
                         tenant_id,
                     )
@@ -169,6 +169,7 @@ async def memory_fetch_node(
     memory_recall: Optional[MemoryRecall] = None,
     memory_recall_top_k: int = 10,
     session_state_manager: Optional[Any] = None,
+    profile_service: Optional[Any] = None,
 ) -> LangGraphOrchestrationState:
     """Execute memory fetch with composition-root supplied dependencies."""
 
@@ -176,5 +177,6 @@ async def memory_fetch_node(
         memory_recall=memory_recall,
         memory_recall_top_k=memory_recall_top_k,
         session_state_manager=session_state_manager,
+        profile_service=profile_service,
     )
     return await node(state)
