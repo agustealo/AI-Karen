@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from ai_karen_engine.core.contracts.cognitive import MetaConfidence, RetrievalConfidence
+from ai_karen_engine.core.contracts.cognitive import MetaConfidence, RetrievalConfidence, VerificationRequirement
 from ai_karen_engine.core.reasoning.meta.contracts import (
     CalibrationObservation,
     LoopAssessment,
@@ -18,7 +18,6 @@ from ai_karen_engine.core.reasoning.meta.contracts import (
     ReasoningDepthRecommendation,
     StrategyAttempt,
     StrategyFingerprint,
-    VerificationNeedAssessment,
 )
 
 logger = logging.getLogger(__name__)
@@ -167,9 +166,9 @@ class MetaCognitiveAssessor:
         self,
         state: MetaCognitiveState,
         request: MetaCognitiveRequest,
-    ) -> VerificationNeedAssessment:
+    ) -> VerificationRequirement:
         if float(state.memory_reliability) < 0.3:
-            return VerificationNeedAssessment(
+            return VerificationRequirement(
                 required=True,
                 reason=MetaReasonCode.LOW_MEMORY_CONFIDENCE,
                 depth=ReasoningDepth.STANDARD,
@@ -177,7 +176,7 @@ class MetaCognitiveAssessor:
                 source="meta",
             )
         if state.reasoning_confidence < 0.3:
-            return VerificationNeedAssessment(
+            return VerificationRequirement(
                 required=True,
                 reason=MetaReasonCode.LOW_REASONING_CONFIDENCE,
                 depth=ReasoningDepth.STANDARD,
@@ -185,14 +184,14 @@ class MetaCognitiveAssessor:
                 source="meta",
             )
         if state.evidence_consistency < 0.3:
-            return VerificationNeedAssessment(
+            return VerificationRequirement(
                 required=True,
                 reason=MetaReasonCode.EVIDENCE_INCONSISTENT,
                 depth=ReasoningDepth.STANDARD,
                 urgency=0.8,
                 source="meta",
             )
-        return VerificationNeedAssessment(required=False, source="meta")
+        return VerificationRequirement(required=False, source="meta")
 
     def _assess_depth(
         self,

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from ai_karen_engine.core.contracts.cognitive import ReasoningDepth
 from ai_karen_engine.core.cortex.behavior.contracts import (
     BehaviorCandidate,
     BehaviorSelectionContext,
     BehaviorType,
-    VerificationDepth,
     VerificationReason,
     VerificationRequirement,
 )
@@ -22,7 +22,7 @@ class VerificationDecider:
             return VerificationRequirement(
                 required=True,
                 reason=VerificationReason.LOW_CONFIDENCE,
-                depth=VerificationDepth.STANDARD,
+                depth=ReasoningDepth.STANDARD,
                 source="cortex",
             )
 
@@ -30,7 +30,7 @@ class VerificationDecider:
             return VerificationRequirement(
                 required=True,
                 reason=VerificationReason.LOW_REASONING_CONFIDENCE,
-                depth=VerificationDepth.STANDARD,
+                depth=ReasoningDepth.STANDARD,
                 urgency=0.8,
                 source="cortex",
             )
@@ -39,7 +39,7 @@ class VerificationDecider:
             return VerificationRequirement(
                 required=True,
                 reason=VerificationReason.HIGH_RISK,
-                depth=VerificationDepth.DEEP,
+                depth=ReasoningDepth.DEEP,
                 urgency=context.policy.risk_level,
                 source="cortex",
             )
@@ -48,7 +48,7 @@ class VerificationDecider:
             return VerificationRequirement(
                 required=True,
                 reason=VerificationReason.CONFLICTING_EVIDENCE,
-                depth=VerificationDepth.STANDARD,
+                depth=ReasoningDepth.STANDARD,
                 urgency=0.8,
                 source="cortex",
             )
