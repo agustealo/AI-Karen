@@ -49,11 +49,20 @@ RUN pip install --upgrade pip && \
 # Stage 3: Production Image
 FROM python:3.12-slim as production
 
+# Install runtime-only system dependencies required by health probes.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user for security
 RUN groupadd -r karen && useradd -r -g karen karen
 
 # Set working directory
 WORKDIR /app
+
+# Canonical import root used by the production API image.
+ENV PYTHONPATH=/app/src
 
 # Copy necessary files from builder stage
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
@@ -73,8 +82,8 @@ RUN mkdir -p /var/lib/karen/plugins \
 # Set ownership of directories
 RUN chown -R karen:karen /app /var/lib/karen /var/cache/karen /tmp/karen /var/log/karen /var/backups/karen /app/static
 
-# Install production dependencies only
-RUN pip install --no-cache-dir gunicorn uvicorn[standard] psycopg2-binary redis
+# Keep the container entrypoint aligned with the canonical API runtime.
+RUN pip install --no-cache-dir uvicorn[standard] psycopg2-binary redis
 
 # Security hardening
 RUN chmod 755 /app/src && \
@@ -86,44 +95,19 @@ RUN chmod 755 /app/src && \
 # Switch to non-root user
 USER karen
 
-# Health check
+# Liveness only: optional plugin/provider degradation must not restart the process.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health/system || exit 1
+    CMD curl -fsS http://localhost:8000/health/live || exit 1
 
 # Expose ports
 EXPOSE 8000
 
-# Set default environment variables
-ENV PORT=8000 \
-    WORKERS=4 \
-    WORKER_CLASS=uvicorn.workers.UvicornWorker \
-    WORKER_CONNECTIONS=1000 \
-    MAX_REQUESTS=10000 \
-    TIMEOUT=120 \
-    GRACEFUL_TIMEOUT=30 \
-    KEEPALIVE=5 \
-    LOG_LEVEL=info
-
-# Default command
-CMD ["gunicorn", \
-    "--bind", "0.0.0.0:8000", \
-    "--workers", "$WORKERS", \
-    "--worker-class", "$WORKER_CLASS", \
-    "--worker-connections", "$WORKER_CONNECTIONS", \
-    "--max-requests", "$MAX_REQUESTS", \
-    "--max-requests-jitter", "1000", \
-    "--timeout", "$TIMEOUT", \
-    "--graceful-timeout", "$GRACEFUL_TIMEOUT", \
-    "--keepalive", "$KEEPALIVE", \
-    "--log-level", "$LOG_LEVEL", \
-    "--access-logfile", "-", \
-    "--error-logfile", "-", \
-    "--capture-output", \
-    "src.ai_karen_engine.server:app"]
+# Reuse the canonical production ASGI application factory.
+CMD ["python", "-m", "uvicorn", "ai_karen_engine.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
 
 # Labels for metadata
 LABEL maintainer="Karen AI Platform Team" \
       version="1.0.0" \
       description="Production plugin ecosystem image" \
-      org.opencontainers.image.source=https://github.com/karen-ai/karen \
+      org.opencontainers.image.source=https://github.com/agustealo/AI-Karen \
       org.opencontainers.image.licenses=MPL-2.0

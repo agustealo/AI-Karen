@@ -6,12 +6,17 @@ on:
     paths:
       - 'src/ai_karen_engine/extensions/**'
       - 'tests/integration/**'
+      - 'tests/architecture/test_plugin_container_contract.py'
+      - 'docker/Dockerfile.plugins'
       - '.github/workflows/plugin-ci.yml'
   pull_request:
     branches: [main, develop]
     paths:
       - 'src/ai_karen_engine/extensions/**'
       - 'tests/integration/**'
+      - 'tests/architecture/test_plugin_container_contract.py'
+      - 'docker/Dockerfile.plugins'
+      - '.github/workflows/plugin-ci.yml'
   workflow_dispatch:
     inputs:
       deploy_environment:
@@ -26,6 +31,7 @@ on:
 env:
   PYTHON_VERSION: '3.12'
   NODE_VERSION: '20'
+  PLUGIN_IMAGE: ghcr.io/${{ github.repository_owner }}/plugin-ecosystem
 
 jobs:
   lint:
@@ -132,6 +138,7 @@ jobs:
             tests/extensions/ \
             tests/architecture/test_extension_lifecycle_authority.py \
             tests/architecture/test_extension_route_authority.py \
+            tests/architecture/test_plugin_container_contract.py \
             -v \
             --cov=src/ai_karen_engine/extensions \
             --cov-report=xml \
@@ -255,25 +262,41 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/karen-ai/plugin-ecosystem
+          images: ${{ env.PLUGIN_IMAGE }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=sha,prefix=sha-
+            type=raw,value=${{ github.sha }}
       
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
           file: docker/Dockerfile.plugins
           push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      
+
+      - name: Smoke loaded plugin image contract
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${PLUGIN_IMAGE}:${GITHUB_SHA}"
+          docker image inspect "${image}" >/dev/null
+          docker run --rm "${image}" curl --version >/dev/null
+          docker run --rm "${image}" python -c "from ai_karen_engine.app import create_app; app = create_app(); assert app is not None"
+          contract="$(docker image inspect "${image}" --format '{{json .Config.Cmd}} {{json .Config.Healthcheck.Test}}')"
+          grep -Fq 'ai_karen_engine.app:create_app' <<<"${contract}"
+          grep -Fq '/health/live' <<<"${contract}"
+
       - name: Image digest
-        run: echo ${{ steps.meta.outputs.digest }}
+        run: echo "${{ steps.build.outputs.digest }}"
 
   deploy-staging:
     name: Deploy to Staging
@@ -298,7 +321,7 @@ jobs:
       - name: Update deployment
         run: |
           kubectl set image deployment/plugin-ecosystem \
-            plugin-ecosystem=ghcr.io/karen-ai/plugin-ecosystem:${{ github.sha }} \
+            plugin-ecosystem="${PLUGIN_IMAGE}:${GITHUB_SHA}" \
             -n staging
       
       - name: Rollout restart
@@ -337,7 +360,7 @@ jobs:
       - name: Update deployment
         run: |
           kubectl set image deployment/plugin-ecosystem \
-            plugin-ecosystem=ghcr.io/karen-ai/plugin-ecosystem:${{ github.sha }} \
+            plugin-ecosystem="${PLUGIN_IMAGE}:${GITHUB_SHA}" \
             -n production
       
       - name: Blue-green deployment switch
@@ -354,8 +377,8 @@ jobs:
       
       - name: Run smoke tests
         run: |
-          curl -f https://karen.ai/api/health/system || exit 1
-          curl -f https://karen.ai/api/health/plugins || exit 1
+          curl -fsS https://karen.ai/health/live
+          curl -fsS https://karen.ai/ready
       
       - name: Notify deployment success
         if: success()
