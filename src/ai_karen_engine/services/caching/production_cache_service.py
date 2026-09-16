@@ -17,7 +17,7 @@ from threading import RLock
 import asyncio
 from functools import wraps
 
-from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager, RedisConnectionManager
+from ai_karen_engine.platform.memory.redis.redis_connection_manager import get_redis_manager, RedisConnectionManager
 
 logger = logging.getLogger(__name__)
 
