@@ -5,7 +5,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Dict, Optional
 
-from ai_karen_engine.core.memory.profile_synthesis import get_profile_service
+from ai_karen_engine.integrations.memory.profile_service import get_profile_service
 from ai_karen_engine.utils.chat_helpers import wants_long_form_markdown_article
 
 from ..context.context_manager_adapter import (
