@@ -36,14 +36,24 @@ async def initialize_application_runtime(app: FastAPI) -> None:
         get_chat_runtime_control_plane,
     )
     from ai_karen_engine.core.runtime.composition import get_runtime_composition
+    from ai_karen_engine.core.langgraph_orchestrator import (
+        create_orchestrator,
+        set_default_orchestrator,
+    )
+    from ai_karen_engine.integrations.memory.profile_service import get_profile_service
 
     composition = get_runtime_composition()
+    workflow_orchestrator = create_orchestrator(
+        profile_service=get_profile_service(),
+    )
+    set_default_orchestrator(workflow_orchestrator)
     control_plane = await get_chat_runtime_control_plane()
     if not getattr(control_plane, "_initialized", False):
         await control_plane.initialize()
     chat_runtime = get_chat_runtime()
 
     app.state.runtime_composition = composition
+    app.state.workflow_orchestrator = workflow_orchestrator
     app.state.chat_runtime = chat_runtime
     app.state.chat_runtime_control_plane = control_plane
     setattr(app.state, _RUNTIME_SHUTDOWN_STATE_KEY, False)
