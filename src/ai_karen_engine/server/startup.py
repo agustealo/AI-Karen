@@ -643,23 +643,11 @@ async def on_startup(settings: Any, app: Optional[FastAPI] = None) -> None:
     except Exception as e:
         logger.warning("Could not initialize extension system: %s", e)
 
-    fast_start = os.getenv(
-        "KARI_FAST_STARTUP", os.getenv("FAST_STARTUP", "true")
-    ).lower() in ("1", "true", "yes")
-
-    if fast_start and (settings.environment or "").lower() in (
-        "development",
-        "dev",
-        "local",
-    ):
-        logger.info("⚡ Fast startup enabled: initializing AI services in background")
-        _startup_init_task = asyncio.create_task(init_ai_services(settings))
-    else:
-        try:
-            await init_ai_services(settings)
-        except Exception as e:
-            logger.error("Failed to initialize AI services: %s", e, exc_info=True)
-            logger.warning("Continuing startup without AI services")
+    # Canonical Runtime services are attached by application_runtime after this
+    # base startup boundary. Do not run the legacy AI startup manager here: it
+    # re-initializes database/config/health/extension services and fabricates
+    # placeholder startup work that belongs outside the production hot path.
+    logger.info("Deferring AI runtime construction to canonical application lifecycle")
 
     init_security(settings)
     start_background_tasks(settings)
