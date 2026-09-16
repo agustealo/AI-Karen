@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ai_karen_engine.core.contracts.cognitive import VerificationRequirement
 from ai_karen_engine.core.reasoning.meta.contracts import (
     BeliefConflictSummary,
     LoopAssessment,
@@ -10,7 +11,6 @@ from ai_karen_engine.core.reasoning.meta.contracts import (
     ReasoningDepth,
     ReasoningDepthRecommendation,
     StrategyFingerprint,
-    VerificationNeedAssessment,
 )
 
 
@@ -41,8 +41,8 @@ def test_memory_reliability_assessment():
     assert mra.recall_confidence == 0.3
 
 
-def test_verification_need_assessment():
-    vna = VerificationNeedAssessment(
+def test_verification_requirement():
+    vna = VerificationRequirement(
         required=True,
         reason=MetaReasonCode.LOW_MEMORY_CONFIDENCE,
     )
