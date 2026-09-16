@@ -134,7 +134,7 @@ class Settings(BaseSettings):
     rate_limit: str = "300/minute"
     debug: bool = Field(default_factory=_default_debug, validation_alias="KARI_DEBUG_MODE")
     plugin_dir: str = "/app/plugins"
-    llm_refresh_interval: int = 3600
+    llm_refresh_interval: int = Field(default=0, validation_alias="KARI_LLM_REFRESH_INTERVAL")
 
     # Performance Optimization Settings
     enable_performance_optimization: bool = Field(
