@@ -10,6 +10,9 @@ AUTH_GATE = (
     / "src/ai_karen_engine/core/langgraph_orchestrator/nodes/auth_gate.py"
 )
 WORKFLOW_RUNTIME = ROOT / "src/ai_karen_engine/core/runtime/workflow_runtime.py"
+LANGGRAPH_ORCHESTRATOR = (
+    ROOT / "src/ai_karen_engine/core/langgraph_orchestrator/langgraph_orchestrator.py"
+)
 
 
 def _class_method_source(path: Path, class_name: str, method_name: str) -> str:
@@ -66,3 +69,30 @@ def test_workflow_runtime_reapplies_trusted_identity_after_request_metadata() ->
     assert build_config.index(metadata_update) < build_config.index(trusted_update)
     assert '"tenant_id": ctx.tenant_id' in build_config
     assert '"auth_context": auth_context' in build_config
+
+
+def test_langgraph_orchestrator_does_not_construct_runtime_decision_or_provider_authority() -> None:
+    source = LANGGRAPH_ORCHESTRATOR.read_text(encoding="utf-8")
+
+    forbidden = {
+        "DecisionEngine()",
+        "LLMRouter()",
+        "self._decision_engine",
+        "self._llm_router",
+        "llm_router=self._llm_router",
+        "decision_engine=self._decision_engine",
+    }
+
+    found = sorted(token for token in forbidden if token in source)
+    assert not found, (
+        "LangGraph must consume Runtime/CORTEX decisions and Runtime provider execution "
+        f"instead of constructing private authorities: {found}"
+    )
+
+
+def test_langgraph_runtime_nodes_consume_runtime_decisions_without_legacy_dependencies() -> None:
+    source = LANGGRAPH_ORCHESTRATOR.read_text(encoding="utf-8")
+
+    assert "return intent_detect_node(state)" in source
+    assert "return response_synth_node(state)" in source
+    assert "profile_manager=self._profile_manager" in source
