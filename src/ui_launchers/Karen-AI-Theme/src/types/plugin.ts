@@ -1,17 +1,6 @@
 import { z } from 'zod';
 
-export const PluginCategorySchema = z.enum([
-  'productivity',
-  'communication',
-  'automation',
-  'analytics',
-  'utilities',
-  'development',
-  'integration',
-  'security',
-  'ai_ml',
-]);
-
+export const PluginCategorySchema = z.string().min(1);
 export type PluginCategory = z.infer<typeof PluginCategorySchema>;
 
 export const PluginSortOrderSchema = z.enum([
@@ -41,21 +30,24 @@ export const PluginSchema = z.object({
   author: z.string(),
   version: z.string(),
   status: PluginStatusSchema,
+  runtime_status: z.string().optional(),
   category: PluginCategorySchema.optional(),
-  downloads: z.number().optional(),
-  rating: z.number().optional(),
-  rating_count: z.number().optional(),
-  latest_version: z.string().optional(),
-  installed_at: z.string().optional(),
+  downloads: z.number().nullable().optional(),
+  rating: z.number().nullable().optional(),
+  rating_count: z.number().nullable().optional(),
+  latest_version: z.string().nullable().optional(),
+  installed_at: z.string().nullable().optional(),
   icon: z.string().optional(),
   marketplace_url: z.string().optional(),
   homepage_url: z.string().optional(),
   repository_url: z.string().optional(),
-  license: z.string().optional(),
+  documentation_url: z.string().nullable().optional(),
+  support_url: z.string().nullable().optional(),
+  license: z.string().nullable().optional(),
   tags: z.array(z.string()).optional(),
   compatibility: z.object({
-    min_karen_version: z.string().optional(),
-    max_karen_version: z.string().optional(),
+    min_karen_version: z.string().nullable().optional(),
+    max_karen_version: z.string().nullable().optional(),
     requirements: z.array(z.string()).optional(),
   }).optional(),
   dependencies: z.array(z.string()).optional(),
@@ -91,7 +83,7 @@ export const PluginDetailsSchema = z.object({
   marketplace_info: z.any().optional(),
   analytics: z.any().optional(),
   installed: z.boolean(),
-  update_available: z.boolean(),
+  update_available: z.boolean().nullable().optional(),
 });
 
 export type PluginDetails = z.infer<typeof PluginDetailsSchema>;
@@ -108,6 +100,7 @@ export const PluginInstallResponseSchema = z.object({
   message: z.string(),
   plugin_id: z.string().optional(),
   version: z.string().optional(),
+  operation: z.string().optional(),
   error: z.string().optional(),
 });
 
@@ -131,9 +124,9 @@ export type PluginRatingResponse = z.infer<typeof PluginRatingResponseSchema>;
 export const PluginStoreStatsSchema = z.object({
   total_plugins: z.number(),
   active_plugins: z.number(),
-  total_downloads: z.number(),
-  total_ratings: z.number(),
-  recent_updates: z.number(),
+  total_downloads: z.number().nullable().optional(),
+  total_ratings: z.number().nullable().optional(),
+  recent_updates: z.number().nullable().optional(),
 });
 
 export type PluginStoreStats = z.infer<typeof PluginStoreStatsSchema>;
@@ -149,7 +142,7 @@ export type CategoryInfo = z.infer<typeof CategoryInfoSchema>;
 export const PluginUpdateSchema = z.object({
   plugin_id: z.string(),
   current_version: z.string(),
-  latest_version: z.string(),
+  latest_version: z.string().nullable().optional(),
   update_available: z.boolean(),
 });
 
