@@ -13,21 +13,35 @@ import {
   PluginUpdate,
 } from '@/types/plugin';
 
-// API response types
+type PluginApiItem = {
+  id: string;
+  name: string;
+  display_name?: string;
+  description: string;
+  author: string;
+  version: string;
+  status: string;
+  runtime_status?: string;
+  category?: string | null;
+  downloads?: number | null;
+  rating?: number | null;
+  rating_count?: number | null;
+  latest_version?: string | null;
+  installed_at?: string | null;
+  icon?: string;
+  marketplace_url?: string;
+  homepage_url?: string;
+  repository_url?: string;
+  documentation_url?: string | null;
+  support_url?: string | null;
+  license?: string | null;
+  tags?: string[];
+  compatibility?: Plugin['compatibility'];
+  dependencies?: string[];
+};
+
 type PluginSearchApiResponse = {
-  plugins: Array<{
-    id: string;
-    name: string;
-    description: string;
-    author: string;
-    version: string;
-    status: string;
-    category: string;
-    downloads: number;
-    rating: number;
-    rating_count?: number;
-    tags?: string[];
-  }>;
+  plugins: PluginApiItem[];
   total: number;
   page: number;
   per_page: number;
@@ -36,38 +50,19 @@ type PluginSearchApiResponse = {
 };
 
 type PluginDetailsApiResponse = {
-  plugin?: {
-    id: string;
-    name: string;
-    description: string;
-    author: string;
-    version: string;
-    status: string;
-    category: string;
-    downloads: number;
-    rating: number;
-    rating_count?: number;
-    tags?: string[];
-  };
+  plugin?: PluginApiItem;
   marketplace_info?: unknown;
   analytics?: unknown;
-  installed?: boolean;
-  update_available?: boolean;
+  installed: boolean;
+  update_available?: boolean | null;
 };
 
-type TrendingPluginApiResponse = {
-  id: string;
-  name: string;
-  description: string;
-  author: string;
-  version: string;
-  status: string;
-  category: string;
-  downloads: number;
-  rating: number;
-  rating_count?: number;
-  tags?: string[];
-};
+const PLUGIN_STATUSES = new Set<Plugin['status']>([
+  'installed',
+  'available',
+  'compatible',
+  'incompatible',
+]);
 
 class PluginStoreService {
   private readonly baseUrl = '/api/store';
@@ -83,21 +78,12 @@ class PluginStoreService {
     if (params.min_version) searchParams.append('min_version', params.min_version);
     if (params.max_version) searchParams.append('max_version', params.max_version);
 
-    const url = `${this.baseUrl}/search?${searchParams.toString()}`;
+    const response = await apiClient.get<PluginSearchApiResponse>(
+      `${this.baseUrl}/search?${searchParams.toString()}`,
+    );
 
-    try {
-      const response = await apiClient.get<PluginSearchApiResponse>(url);
-      console.log('[PluginStoreService] Search response:', response);
-      return this.transformPluginSearchResponse(response);
-    } catch (error) {
-      console.error('[PluginStoreService] Search error:', error);
-      throw error;
-    }
-  }
-
-  private transformPluginSearchResponse(response: PluginSearchApiResponse): PluginSearchResponse {
     return {
-      plugins: response.plugins.map((plugin: { id: string; name: string; description: string; author: string; version: string; status: string; category?: string; downloads?: number; rating?: number; rating_count?: number; tags?: string[] }) => this.transformPlugin(plugin)),
+      plugins: response.plugins.map((plugin) => this.transformPlugin(plugin)),
       total: response.total,
       page: response.page,
       per_page: response.per_page,
@@ -106,72 +92,50 @@ class PluginStoreService {
     };
   }
 
-  private transformPlugin(plugin: { id: string; name: string; description: string; author: string; version: string; status: string; category?: string; downloads?: number; rating?: number; rating_count?: number; tags?: string[] }) {
-    // Ensure status is always a valid PluginStatus
-    let status: 'installed' | 'available' | 'compatible' | 'incompatible' = 'available';
-    if (plugin.status === 'installed') {
-      status = 'installed';
-    } else if (plugin.status === 'incompatible') {
-      status = 'incompatible';
-    } else if (plugin.status === 'compatible') {
-      status = 'compatible';
-    } else {
-      // Default to 'available' for any other status (including 'active')
-      status = 'available';
+  private transformPlugin(plugin: PluginApiItem): Plugin {
+    if (!PLUGIN_STATUSES.has(plugin.status as Plugin['status'])) {
+      throw new Error(`Unsupported plugin status from backend: ${plugin.status}`);
     }
 
     return {
       id: plugin.id,
       name: plugin.name,
-      display_name: plugin.name, // Use name as display_name for now
+      display_name: plugin.display_name ?? plugin.name,
       description: plugin.description,
       author: plugin.author,
       version: plugin.version,
-      status,
-      category: plugin.category as 'productivity' | 'communication' | 'automation' | 'analytics' | 'utilities' | 'development' | 'integration' | 'security' | 'ai_ml' | undefined,
+      status: plugin.status as Plugin['status'],
+      runtime_status: plugin.runtime_status,
+      category: plugin.category ?? undefined,
       downloads: plugin.downloads,
       rating: plugin.rating,
       rating_count: plugin.rating_count,
-      latest_version: plugin.version,
-      installed_at: undefined,
-      icon: undefined,
-      marketplace_url: undefined,
-      homepage_url: undefined,
-      repository_url: undefined,
-      license: undefined,
+      latest_version: plugin.latest_version,
+      installed_at: plugin.installed_at,
+      icon: plugin.icon,
+      marketplace_url: plugin.marketplace_url,
+      homepage_url: plugin.homepage_url,
+      repository_url: plugin.repository_url,
+      documentation_url: plugin.documentation_url,
+      support_url: plugin.support_url,
+      license: plugin.license,
       tags: plugin.tags,
-      compatibility: {
-        min_karen_version: '1.0.0',
-        max_karen_version: undefined,
-        requirements: [],
-      },
-      dependencies: [],
-    };
-  }
-
-  private transformPluginDetails(plugin: { id: string; name: string; description: string; author: string; version: string; status: string; category?: string; downloads?: number; rating?: number; rating_count?: number; tags?: string[] }) {
-    const pluginData = this.transformPlugin(plugin);
-    return {
-      plugin: pluginData,
-      installed: pluginData.status === 'installed',
-      update_available: false, // This would need to be calculated based on actual version comparison
-      analytics: undefined,
-      marketplace_info: undefined,
+      compatibility: plugin.compatibility,
+      dependencies: plugin.dependencies,
     };
   }
 
   async getPluginDetails(pluginId: string): Promise<PluginDetails> {
-    const response = await apiClient.get<PluginDetailsApiResponse>(`${this.baseUrl}/plugins/${pluginId}`);
-    return this.transformPluginDetailsResponse(response);
-  }
+    const response = await apiClient.get<PluginDetailsApiResponse>(
+      `${this.baseUrl}/plugins/${pluginId}`,
+    );
 
-  private transformPluginDetailsResponse(response: PluginDetailsApiResponse): PluginDetails {
     return {
       plugin: response.plugin ? this.transformPlugin(response.plugin) : undefined,
       marketplace_info: response.marketplace_info,
       analytics: response.analytics,
-      installed: response.installed || false,
-      update_available: response.update_available || false,
+      installed: response.installed,
+      update_available: response.update_available,
     };
   }
 
@@ -191,16 +155,18 @@ class PluginStoreService {
     return apiClient.get<CategoryInfo[]>(`${this.baseUrl}/categories`);
   }
 
-  async getTrendingPlugins(limit: number = 10): Promise<Plugin[]> {
-    const response = await apiClient.get<TrendingPluginApiResponse[]>(`${this.baseUrl}/trending?limit=${limit}`);
-    return response.map((plugin: TrendingPluginApiResponse) => this.transformPlugin(plugin));
+  async getTrendingPlugins(limit = 10): Promise<Plugin[]> {
+    const response = await apiClient.get<PluginApiItem[]>(
+      `${this.baseUrl}/trending?limit=${limit}`,
+    );
+    return response.map((plugin) => this.transformPlugin(plugin));
   }
 
   async getUpdates(installedPluginIds?: string[]): Promise<PluginUpdate[]> {
     let url = `${this.baseUrl}/updates`;
     if (installedPluginIds && installedPluginIds.length > 0) {
       const params = new URLSearchParams();
-      installedPluginIds.forEach(id => params.append('plugin_ids', id));
+      installedPluginIds.forEach((id) => params.append('plugin_ids', id));
       url += `?${params.toString()}`;
     }
     return apiClient.get<PluginUpdate[]>(url);
