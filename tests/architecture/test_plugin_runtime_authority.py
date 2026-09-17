@@ -9,8 +9,30 @@ LEGACY_PLUGIN_DOCKERFILE = ROOT / "docker" / "Dockerfile.plugins"
 LEGACY_PLUGIN_COMPOSE = ROOT / "deploy" / "compose" / "docker-compose.plugins.yml"
 CANONICAL_DOCKERFILE = ROOT / "Dockerfile"
 CANONICAL_PRODUCTION_COMPOSE = ROOT / "deploy" / "compose" / "docker-compose.prod.yml"
-LEGACY_MOCK_PLUGIN_STORE = ROOT / "src" / "ai_karen_engine" / "api_routes" / "plugins" / "store_mock.py"
-CANONICAL_PLUGIN_STORE = ROOT / "src" / "ai_karen_engine" / "api_routes" / "plugins" / "store.py"
+LEGACY_MOCK_PLUGIN_STORE = (
+    ROOT / "src" / "ai_karen_engine" / "api_routes" / "plugins" / "store_mock.py"
+)
+CANONICAL_PLUGIN_STORE = (
+    ROOT / "src" / "ai_karen_engine" / "api_routes" / "plugins" / "store.py"
+)
+PLUGIN_STORE_SERVICE = (
+    ROOT
+    / "src"
+    / "ui_launchers"
+    / "Karen-AI-Theme"
+    / "src"
+    / "lib"
+    / "PluginStoreService.ts"
+)
+PLUGIN_TYPES = (
+    ROOT
+    / "src"
+    / "ui_launchers"
+    / "Karen-AI-Theme"
+    / "src"
+    / "types"
+    / "plugin.ts"
+)
 SERVER_ROUTERS = ROOT / "src" / "ai_karen_engine" / "server" / "routers.py"
 
 
@@ -36,8 +58,52 @@ def test_mock_plugin_store_is_retired_and_canonical_store_is_wired() -> None:
     assert "MOCK_PLUGINS" not in store
     assert "MOCK_CATEGORIES" not in store
     assert "Depends(get_plugin_service)" in store
-    assert "from ai_karen_engine.api_routes.plugins.store import router as plugin_store_router" in routers
+    assert (
+        "from ai_karen_engine.api_routes.plugins.store import router as plugin_store_router"
+        in routers
+    )
     assert 'RouterSpec(plugin_store_router, "/api", ("plugin-store",))' in routers
+
+
+def test_plugin_store_is_thin_and_does_not_fabricate_capabilities() -> None:
+    source = CANONICAL_PLUGIN_STORE.read_text(encoding="utf-8")
+
+    forbidden = (
+        "class PluginStore:",
+        "async def get_db_session",
+        "ExtensionDBModel",
+        "MarketplaceDiscovery(None",
+        "LifecycleManager(None",
+        '"Rating captured"',
+        'return []  # No updates available',
+        '"current_version": "1.0.0"',
+        '"latest_version": "1.1.0"',
+    )
+    for token in forbidden:
+        assert token not in source
+
+    assert "metadata_items = await plugin_service.list_plugins()" in source
+    assert "await plugin_service.get_plugin_info(plugin_id)" in source
+    assert "await plugin_service.enable_plugin(request.plugin_id)" in source
+    assert "status.HTTP_501_NOT_IMPLEMENTED" in source
+    assert "durable_plugin_rating_store_not_configured" in source
+    assert "canonical_update_feed_not_configured" in source
+    assert "_audit_plugin_event(" in source
+    assert '"correlation_id": meta["correlation_id"]' in source
+
+
+def test_plugin_store_frontend_displays_backend_truth_only() -> None:
+    service = PLUGIN_STORE_SERVICE.read_text(encoding="utf-8")
+    types = PLUGIN_TYPES.read_text(encoding="utf-8")
+
+    assert "latest_version: plugin.version" not in service
+    assert "min_karen_version: '1.0.0'" not in service
+    assert "requirements: []" not in service
+    assert "Default to 'available'" not in service
+    assert "Unsupported plugin status from backend" in service
+    assert "display_name: plugin.display_name ?? plugin.name" in service
+    assert "update_available: response.update_available" in service
+    assert "z.boolean().nullable().optional()" in types
 
 
 def test_plugin_ci_proves_governed_plugin_surfaces_without_deploying_a_sidecar() -> None:
@@ -62,8 +128,16 @@ def test_plugin_ci_proves_governed_plugin_surfaces_without_deploying_a_sidecar()
         assert token not in source
 
 
-def test_reintroducing_retired_plugin_runtime_artifacts_retriggers_plugin_ci() -> None:
+def test_plugin_truth_surfaces_retrigger_plugin_ci() -> None:
     source = PLUGIN_CI.read_text(encoding="utf-8")
 
-    assert "'docker/Dockerfile.plugins'" in source
-    assert "'deploy/compose/docker-compose.plugins.yml'" in source
+    required_paths = (
+        "'src/ai_karen_engine/api_routes/plugins/store.py'",
+        "'src/ui_launchers/Karen-AI-Theme/src/lib/PluginStoreService.ts'",
+        "'src/ui_launchers/Karen-AI-Theme/src/types/plugin.ts'",
+        "'tests/architecture/test_plugin_runtime_authority.py'",
+        "'docker/Dockerfile.plugins'",
+        "'deploy/compose/docker-compose.plugins.yml'",
+    )
+    for path in required_paths:
+        assert path in source
