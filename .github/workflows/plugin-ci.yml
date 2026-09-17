@@ -5,6 +5,9 @@ on:
     branches: [main, develop]
     paths:
       - 'src/ai_karen_engine/extensions/**'
+      - 'src/ai_karen_engine/api_routes/plugins/store.py'
+      - 'src/ui_launchers/Karen-AI-Theme/src/lib/PluginStoreService.ts'
+      - 'src/ui_launchers/Karen-AI-Theme/src/types/plugin.ts'
       - 'tests/extensions/**'
       - 'tests/architecture/test_extension_lifecycle_authority.py'
       - 'tests/architecture/test_extension_route_authority.py'
@@ -16,6 +19,9 @@ on:
     branches: [main, develop]
     paths:
       - 'src/ai_karen_engine/extensions/**'
+      - 'src/ai_karen_engine/api_routes/plugins/store.py'
+      - 'src/ui_launchers/Karen-AI-Theme/src/lib/PluginStoreService.ts'
+      - 'src/ui_launchers/Karen-AI-Theme/src/types/plugin.ts'
       - 'tests/extensions/**'
       - 'tests/architecture/test_extension_lifecycle_authority.py'
       - 'tests/architecture/test_extension_route_authority.py'
@@ -52,7 +58,10 @@ jobs:
           pip install ruff mypy bandit
 
       - name: Run Ruff correctness baseline
-        run: ruff check --select E9,F63,F7,F82 src/ai_karen_engine/extensions/
+        run: |
+          ruff check --select E9,F63,F7,F82 \
+            src/ai_karen_engine/extensions/ \
+            src/ai_karen_engine/api_routes/plugins/store.py
 
       - name: Run MyPy type checker
         run: mypy src/ai_karen_engine/extensions/ --ignore-missing-imports --no-error-summary || true
