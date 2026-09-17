@@ -86,6 +86,34 @@ def _response_meta(request: Request) -> Dict[str, str]:
     return {"request_id": request_id, "correlation_id": correlation_id}
 
 
+def _audit_plugin_event(
+    *,
+    request: Request,
+    current_user: Dict[str, Any],
+    event_type: str,
+    action: str,
+    outcome: str,
+    details: Dict[str, Any],
+) -> None:
+    meta = _response_meta(request)
+    get_audit_logger().log_audit_event(
+        {
+            "event_type": event_type,
+            "severity": "info" if outcome == "ok" else "warning",
+            "message": action,
+            "user_id": current_user.get("user_id"),
+            "tenant_id": current_user.get("tenant_id"),
+            "correlation_id": meta["correlation_id"],
+            "metadata": {
+                "action": action,
+                "outcome": outcome,
+                "request_id": meta["request_id"],
+                **details,
+            },
+        }
+    )
+
+
 def _manifest(metadata: Dict[str, Any]) -> Any:
     manifest = metadata.get("manifest")
     if manifest is None:
@@ -191,7 +219,6 @@ def _sort_plugins(
             key=lambda item: (
                 int(item.get("downloads") or 0),
                 float(item.get("rating") or 0.0),
-                str(item["display_name"]).casefold(),
             ),
             reverse=True,
         )
@@ -199,8 +226,8 @@ def _sort_plugins(
     timestamp_field = "published_at" if order == PluginSortOrder.NEWEST else "updated_at"
 
     def timestamp(item: Dict[str, Any]) -> float:
-        manifest_marketplace = item.get("marketplace") or {}
-        raw = manifest_marketplace.get(timestamp_field)
+        marketplace = item.get("marketplace") or {}
+        raw = marketplace.get(timestamp_field)
         if not raw:
             return 0.0
         try:
@@ -341,17 +368,13 @@ async def install_plugin_endpoint(
         )
 
     success = await plugin_service.enable_plugin(request.plugin_id)
-    audit_status = "ok" if success else "error"
-    get_audit_logger().log_audit_event(
-        user_id=current_user.get("user_id", "unknown"),
+    _audit_plugin_event(
+        request=http_request,
+        current_user=current_user,
         event_type="plugin_install",
         action="enable_local_catalog_plugin",
-        status=audit_status,
-        details={
-            "plugin_id": request.plugin_id,
-            "version": actual_version,
-            **_response_meta(http_request),
-        },
+        outcome="ok" if success else "error",
+        details={"plugin_id": request.plugin_id, "version": actual_version},
     )
 
     if not success:
@@ -377,15 +400,15 @@ async def rate_plugin_endpoint(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
     _require_admin(current_user)
-    get_audit_logger().log_audit_event(
-        user_id=current_user.get("user_id", "unknown"),
+    _audit_plugin_event(
+        request=http_request,
+        current_user=current_user,
         event_type="plugin_rate",
         action="rate",
-        status="unavailable",
+        outcome="unavailable",
         details={
             "plugin_id": request.plugin_id,
             "reason": "durable_plugin_rating_store_not_configured",
-            **_response_meta(http_request),
         },
     )
     _unsupported("Plugin ratings are unavailable until a durable rating store is configured")
@@ -442,15 +465,15 @@ async def get_updates_endpoint(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
     _require_admin(current_user)
-    get_audit_logger().log_audit_event(
-        user_id=current_user.get("user_id", "unknown"),
+    _audit_plugin_event(
+        request=http_request,
+        current_user=current_user,
         event_type="plugin_update_check",
         action="updates",
-        status="unavailable",
+        outcome="unavailable",
         details={
             "plugin_ids": plugin_ids or [],
             "reason": "canonical_update_feed_not_configured",
-            **_response_meta(http_request),
         },
     )
     _unsupported(
