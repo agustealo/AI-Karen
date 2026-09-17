@@ -25,18 +25,6 @@ from ai_karen_engine.services.plugin_service import PluginService
 logger = logging.getLogger(__name__)
 
 
-class PluginCategory(str, Enum):
-    PRODUCTIVITY = "productivity"
-    COMMUNICATION = "communication"
-    AUTOMATION = "automation"
-    ANALYTICS = "analytics"
-    UTILITIES = "utilities"
-    DEVELOPMENT = "development"
-    INTEGRATION = "integration"
-    SECURITY = "security"
-    AI_ML = "ai_ml"
-
-
 class PluginSortOrder(str, Enum):
     POPULARITY = "popularity"
     NEWEST = "newest"
@@ -47,7 +35,7 @@ class PluginSortOrder(str, Enum):
 
 class PluginSearchRequest(BaseModel):
     query: Optional[str] = Field(None, description="Search query string")
-    category: Optional[PluginCategory] = Field(None, description="Filter by category")
+    category: Optional[str] = Field(None, min_length=1, description="Filter by category")
     sort_by: PluginSortOrder = Field(
         PluginSortOrder.POPULARITY,
         description="Sort order",
@@ -138,7 +126,11 @@ def _marketplace_payload(manifest: Any) -> Dict[str, Any]:
     if marketplace is None:
         return {}
     if hasattr(marketplace, "model_dump"):
-        return marketplace.model_dump(mode="json", exclude_none=True)
+        return marketplace.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude_unset=True,
+        )
     if isinstance(marketplace, dict):
         return dict(marketplace)
     return {}
@@ -293,7 +285,7 @@ async def search_plugins_endpoint(
             plugin
             for plugin in plugins
             if str(plugin.get("category") or "").casefold()
-            == request.category.value.casefold()
+            == request.category.casefold()
         ]
 
     if request.min_version or request.max_version:
