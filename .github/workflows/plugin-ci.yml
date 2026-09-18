@@ -5,6 +5,7 @@ on:
     branches: [main, develop]
     paths:
       - 'src/ai_karen_engine/extensions/**'
+      - 'src/ai_karen_engine/extensions/platform/api_routes/plugin_store_routes.py'
       - 'src/ai_karen_engine/api_routes/plugins/store.py'
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/PluginStoreService.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/types/plugin.ts'
@@ -19,6 +20,7 @@ on:
     branches: [main, develop]
     paths:
       - 'src/ai_karen_engine/extensions/**'
+      - 'src/ai_karen_engine/extensions/platform/api_routes/plugin_store_routes.py'
       - 'src/ai_karen_engine/api_routes/plugins/store.py'
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/PluginStoreService.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/types/plugin.ts'
