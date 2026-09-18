@@ -14,6 +14,14 @@ EXTENSION_ROUTES = (
     / "extensions"
     / "extensions.py"
 )
+PLUGIN_API_ROUTES = (
+    REPO_ROOT
+    / "src"
+    / "ai_karen_engine"
+    / "api_routes"
+    / "plugins"
+)
+RETIRED_PLUGIN_MANAGEMENT_ROUTE = PLUGIN_API_ROUTES / "management.py"
 PLATFORM_API_ROUTES = (
     REPO_ROOT
     / "src"
@@ -58,13 +66,13 @@ def test_canonical_extension_routes_are_mounted() -> None:
     assert '@router.get("/list"' in route_source
 
 
-def test_plugin_management_has_separate_canonical_surface() -> None:
+def test_shadow_plugin_management_route_stays_retired() -> None:
     router_source = SERVER_ROUTERS.read_text(encoding="utf-8")
 
-    assert (
-        'RouterSpec(plugin_management_router, "/api/plugins", ("plugin-management",))'
-        in router_source
-    )
+    assert not RETIRED_PLUGIN_MANAGEMENT_ROUTE.exists()
+    assert "api_routes.plugins.management" not in router_source
+    assert "plugin_management_router" not in router_source
+    assert 'RouterSpec(plugin_router, "/api/plugins", ("plugins",))' in router_source
     assert 'RouterSpec(plugin_store_router, "/api", ("plugin-store",))' in router_source
 
 

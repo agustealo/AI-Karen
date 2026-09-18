@@ -48,7 +48,6 @@ from ai_karen_engine.api_routes.monitoring.audit import router as audit_router
 from ai_karen_engine.api_routes.monitoring.health import router as health_router
 from ai_karen_engine.api_routes.monitoring.performance import router as performance_router
 from ai_karen_engine.api_routes.monitoring.validation import router as validation_metrics_router
-from ai_karen_engine.api_routes.plugins.management import router as plugin_management_router
 from ai_karen_engine.api_routes.plugins.plugins import public_router as plugin_public_router
 from ai_karen_engine.api_routes.plugins.plugins import router as plugin_router
 from ai_karen_engine.api_routes.plugins.store import router as plugin_store_router
@@ -107,7 +106,6 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     RouterSpec(tool_router, "/api/tools", ("tools",)),
     RouterSpec(audit_router, "/api/audit", ("audit",)),
     RouterSpec(extensions_router, "/api/extensions", ("extensions",)),
-    RouterSpec(plugin_management_router, "/api/plugins", ("plugin-management",)),
     RouterSpec(ui_materialization_router, tags=("ui-materialization",)),
     RouterSpec(file_attachment_router, "/api/files", ("files",)),
     RouterSpec(code_execution_router, "/api/code", ("code",)),
