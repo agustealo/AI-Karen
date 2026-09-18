@@ -1,8 +1,10 @@
 """Thin UI materialization API routes backed by governed extension services.
 
 The API layer does not discover plugins independently, infer plugin health,
-assume RBAC, invent versions/capabilities, or inspect installation paths. It
-translates canonical registry/materialization/installer state for UI clients.
+invent versions/capabilities, or inspect installation paths. Read operations
+translate canonical registry/materialization state for authenticated UI clients.
+State-changing operations additionally require canonical plugin-management RBAC
+and emit structured authorization and mutation audit evidence.
 """
 
 from __future__ import annotations
@@ -10,20 +12,103 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from ai_karen_engine.auth.rbac_middleware import (
+    Permission,
+    get_current_user,
+    get_rbac_manager,
+)
 from ai_karen_engine.extensions.platform.core.registry.ui_installer import get_ui_service
 from ai_karen_engine.extensions.platform.core.registry.ui_materialization import (
     get_ui_pipeline,
 )
+from ai_karen_engine.services.audit.audit_logging import get_audit_logger
 
 logger = logging.getLogger("kari.ui_materialization_routes")
 
 router = APIRouter(prefix="/api/ui-materialization", tags=["ui-materialization"])
 
+_UI_MUTATION_PERMISSION = Permission.ADMIN_PLUGINS_MANAGE
+
 
 def _enum_value(value: Any) -> Any:
     return getattr(value, "value", value)
+
+
+def _response_meta(request: Request) -> Dict[str, str]:
+    correlation_id = (
+        getattr(request.state, "correlation_id", None)
+        or request.headers.get("X-Correlation-Id")
+        or "unknown"
+    )
+    request_id = (
+        getattr(request.state, "request_id", None)
+        or request.headers.get("X-Request-Id")
+        or correlation_id
+    )
+    return {
+        "request_id": str(request_id),
+        "correlation_id": str(correlation_id),
+    }
+
+
+def _audit_ui_operation(
+    *,
+    request: Request,
+    current_user: Dict[str, Any],
+    action: str,
+    outcome: str,
+    details: Dict[str, Any] | None = None,
+) -> None:
+    meta = _response_meta(request)
+    get_audit_logger().log_audit_event(
+        {
+            "event_type": "ui_materialization_mutation",
+            "severity": "info" if outcome in {"attempt", "ok"} else "warning",
+            "message": action,
+            "user_id": current_user.get("user_id"),
+            "tenant_id": current_user.get("tenant_id"),
+            "correlation_id": meta["correlation_id"],
+            "metadata": {
+                "action": action,
+                "outcome": outcome,
+                "request_id": meta["request_id"],
+                **(details or {}),
+            },
+        }
+    )
+
+
+async def _require_ui_mutation_access(
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Authorize UI artifact mutation through the canonical RBAC authority."""
+
+    rbac = get_rbac_manager()
+    granted = rbac.has_permission(current_user, _UI_MUTATION_PERMISSION)
+    meta = _response_meta(request)
+    rbac.audit_access_attempt(
+        current_user,
+        _UI_MUTATION_PERMISSION,
+        resource=request.url.path,
+        granted=granted,
+        request=request,
+        additional_context={
+            "action": "manage_ui_artifacts",
+            "request_id": meta["request_id"],
+            "correlation_id": meta["correlation_id"],
+        },
+    )
+
+    if not granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Plugin UI materialization management permission required",
+        )
+
+    return current_user
 
 
 def _capabilities_to_dict(metadata: Any) -> Dict[str, Any]:
@@ -177,8 +262,8 @@ async def get_materialization_status():
     """Return canonical materialization artifact status."""
 
     try:
-        status = await get_ui_pipeline().get_artifact_status()
-        return {"status": "success", "data": status}
+        status_data = await get_ui_pipeline().get_artifact_status()
+        return {"status": "success", "data": status_data}
     except Exception as exc:
         logger.exception("Failed to get UI materialization status")
         raise HTTPException(
@@ -206,13 +291,43 @@ async def discover_ui_plugins():
 
 
 @router.post("/materialize", response_model=Dict[str, Any])
-async def materialize_all_artifacts():
+async def materialize_all_artifacts(
+    http_request: Request,
+    current_user: Dict[str, Any] = Depends(_require_ui_mutation_access),
+):
     """Delegate full materialization to the canonical pipeline."""
 
+    action = "materialize_all_ui_artifacts"
+    _audit_ui_operation(
+        request=http_request,
+        current_user=current_user,
+        action=action,
+        outcome="attempt",
+    )
     try:
         result = await get_ui_pipeline().materialize_all()
+        result_status = str(result.get("status") or "unknown")
+        _audit_ui_operation(
+            request=http_request,
+            current_user=current_user,
+            action=action,
+            outcome="ok" if result_status == "success" else result_status,
+            details={
+                "plugins_processed": result.get("plugins_processed"),
+                "artifacts_generated": result.get("artifacts_generated"),
+                "artifacts_updated": result.get("artifacts_updated"),
+                "artifacts_removed": result.get("artifacts_removed"),
+            },
+        )
         return {"status": "success", "data": result}
     except Exception as exc:
+        _audit_ui_operation(
+            request=http_request,
+            current_user=current_user,
+            action=action,
+            outcome="error",
+            details={"error_type": type(exc).__name__},
+        )
         logger.exception("Failed to materialize UI artifacts")
         raise HTTPException(
             status_code=500,
@@ -221,46 +336,149 @@ async def materialize_all_artifacts():
 
 
 @router.post("/materialize/{plugin_id}", response_model=Dict[str, Any])
-async def materialize_plugin_artifacts(plugin_id: str):
+async def materialize_plugin_artifacts(
+    plugin_id: str,
+    http_request: Request,
+    current_user: Dict[str, Any] = Depends(_require_ui_mutation_access),
+):
     """Install a plugin UI only when canonical installer state requires it."""
 
-    ui_service = get_ui_service()
-    current_state = ui_service.get_ui_state(plugin_id)
-    state = current_state.get("state")
-    install_status = current_state.get("status")
+    action = "materialize_plugin_ui_artifacts"
+    _audit_ui_operation(
+        request=http_request,
+        current_user=current_user,
+        action=action,
+        outcome="attempt",
+        details={"plugin_id": plugin_id},
+    )
 
-    if state == "installed" and install_status == "success":
-        return {
-            "status": "success",
-            "data": {
-                "plugin_id": plugin_id,
-                "state": state,
-                "install_status": install_status,
-                "message": current_state.get("message"),
-                "details": current_state.get("details") or {},
-            },
-        }
+    try:
+        ui_service = get_ui_service()
+        current_state = ui_service.get_ui_state(plugin_id)
+        state = current_state.get("state")
+        install_status = current_state.get("status")
 
-    if state == "installed":
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": "Installed UI failed canonical validation.",
+        if state == "installed" and install_status == "success":
+            response = {
+                "status": "success",
+                "data": {
+                    "plugin_id": plugin_id,
+                    "state": state,
+                    "install_status": install_status,
+                    "message": current_state.get("message"),
+                    "details": current_state.get("details") or {},
+                },
+            }
+            _audit_ui_operation(
+                request=http_request,
+                current_user=current_user,
+                action=action,
+                outcome="ok",
+                details={"plugin_id": plugin_id, "result": "already_installed"},
+            )
+            return response
+
+        if state == "installed":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Installed UI failed canonical validation.",
+                    "plugin_id": plugin_id,
+                    "state": state,
+                    "install_status": install_status,
+                    "details": current_state.get("details") or {},
+                },
+            )
+
+        response = _install_plugin_ui_authoritatively(plugin_id)
+        _audit_ui_operation(
+            request=http_request,
+            current_user=current_user,
+            action=action,
+            outcome="ok",
+            details={
                 "plugin_id": plugin_id,
-                "state": state,
-                "install_status": install_status,
-                "details": current_state.get("details") or {},
+                "state": response["data"].get("state"),
+                "install_status": response["data"].get("install_status"),
             },
         )
-
-    return _install_plugin_ui_authoritatively(plugin_id)
+        return response
+    except HTTPException as exc:
+        _audit_ui_operation(
+            request=http_request,
+            current_user=current_user,
+            action=action,
+            outcome="rejected",
+            details={"plugin_id": plugin_id, "status_code": exc.status_code},
+        )
+        raise
+    except Exception as exc:
+        _audit_ui_operation(
+            request=http_request,
+            current_user=current_user,
+            action=action,
+            outcome="error",
+            details={"plugin_id": plugin_id, "error_type": type(exc).__name__},
+        )
+        logger.exception("Failed to materialize UI artifacts for plugin %s", plugin_id)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to materialize plugin UI artifacts.",
+        ) from exc
 
 
 @router.post("/install/{plugin_id}", response_model=Dict[str, Any])
-async def install_plugin_ui(plugin_id: str):
+async def install_plugin_ui(
+    plugin_id: str,
+    http_request: Request,
+    current_user: Dict[str, Any] = Depends(_require_ui_mutation_access),
+):
     """Delegate installation using registry-owned plugin metadata."""
 
-    return _install_plugin_ui_authoritatively(plugin_id)
+    action = "install_plugin_ui"
+    _audit_ui_operation(
+        request=http_request,
+        current_user=current_user,
+        action=action,
+        outcome="attempt",
+        details={"plugin_id": plugin_id},
+    )
+    try:
+        response = _install_plugin_ui_authoritatively(plugin_id)
+        _audit_ui_operation(
+            request=http_request,
+            current_user=current_user,
+            action=action,
+            outcome="ok",
+            details={
+                "plugin_id": plugin_id,
+                "state": response["data"].get("state"),
+                "install_status": response["data"].get("install_status"),
+            },
+        )
+        return response
+    except HTTPException as exc:
+        _audit_ui_operation(
+            request=http_request,
+            current_user=current_user,
+            action=action,
+            outcome="rejected",
+            details={"plugin_id": plugin_id, "status_code": exc.status_code},
+        )
+        raise
+    except Exception as exc:
+        _audit_ui_operation(
+            request=http_request,
+            current_user=current_user,
+            action=action,
+            outcome="error",
+            details={"plugin_id": plugin_id, "error_type": type(exc).__name__},
+        )
+        logger.exception("Failed to install UI for plugin %s", plugin_id)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to install plugin UI.",
+        ) from exc
 
 
 @router.get("/installed", response_model=Dict[str, Any])
@@ -307,18 +525,42 @@ async def get_import_map():
 
 
 @router.post("/cleanup", response_model=Dict[str, Any])
-async def cleanup_stale_artifacts():
+async def cleanup_stale_artifacts(
+    http_request: Request,
+    current_user: Dict[str, Any] = Depends(_require_ui_mutation_access),
+):
     """Delegate stale artifact cleanup to the materialization pipeline."""
 
+    action = "cleanup_stale_ui_artifacts"
+    _audit_ui_operation(
+        request=http_request,
+        current_user=current_user,
+        action=action,
+        outcome="attempt",
+    )
     try:
         pipeline = get_ui_pipeline()
         ui_plugins = await pipeline.discover_ui_plugins()
         removed = await pipeline.cleanup_stale_artifacts(ui_plugins)
+        _audit_ui_operation(
+            request=http_request,
+            current_user=current_user,
+            action=action,
+            outcome="ok",
+            details={"removed_count": len(removed)},
+        )
         return {
             "status": "success",
             "data": {"removed_count": len(removed), "removed": removed},
         }
     except Exception as exc:
+        _audit_ui_operation(
+            request=http_request,
+            current_user=current_user,
+            action=action,
+            outcome="error",
+            details={"error_type": type(exc).__name__},
+        )
         logger.exception("Failed to clean stale UI artifacts")
         raise HTTPException(
             status_code=500,
