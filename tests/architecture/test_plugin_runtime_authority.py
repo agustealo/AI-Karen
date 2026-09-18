@@ -15,6 +15,14 @@ LEGACY_MOCK_PLUGIN_STORE = (
 LEGACY_PLUGIN_MANAGEMENT_ROUTE = (
     ROOT / "src" / "ai_karen_engine" / "api_routes" / "plugins" / "management.py"
 )
+LEGACY_INTELLIGENT_SEARCH_ROUTE = (
+    ROOT
+    / "src"
+    / "ai_karen_engine"
+    / "api_routes"
+    / "plugins"
+    / "intelligent_search.py"
+)
 LEGACY_SHADOW_PLUGIN_STORE = (
     ROOT
     / "src"
@@ -64,6 +72,7 @@ def test_plugins_do_not_own_a_parallel_application_runtime() -> None:
 def test_shadow_plugin_ingress_is_retired_and_canonical_store_is_wired() -> None:
     assert not LEGACY_MOCK_PLUGIN_STORE.exists()
     assert not LEGACY_PLUGIN_MANAGEMENT_ROUTE.exists()
+    assert not LEGACY_INTELLIGENT_SEARCH_ROUTE.exists()
     assert not LEGACY_SHADOW_PLUGIN_STORE.exists()
 
     store = CANONICAL_PLUGIN_STORE.read_text(encoding="utf-8")
@@ -74,6 +83,7 @@ def test_shadow_plugin_ingress_is_retired_and_canonical_store_is_wired() -> None
     assert "Depends(get_plugin_service)" in store
     assert "api_routes.plugins.management" not in routers
     assert "plugin_management_router" not in routers
+    assert "intelligent_search_router" not in routers
     assert (
         "from ai_karen_engine.api_routes.plugins.store import router as plugin_store_router"
         in routers
