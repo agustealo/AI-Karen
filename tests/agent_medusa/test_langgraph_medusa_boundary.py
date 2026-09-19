@@ -37,6 +37,9 @@ def _authorized_state() -> dict[str, Any]:
         "runtime_policy": {
             "execution_id": "exec-1",
             "policy_decision_id": "policy-1",
+            "authorized_user_id": "user-1",
+            "authorized_tenant_id": "tenant-alpha",
+            "authorized_session_id": "session-1",
             "topology": "multi_agent",
             "allowed_capabilities": ["analysis"],
             "allowed_tools": [],
@@ -75,9 +78,14 @@ async def test_medusa_node_preserves_tenant_request_and_policy_identity(
 
     assert fake.request is not None
     assert fake.request.request_id == "req-123"
+    assert fake.request.user_id == "user-1"
     assert fake.request.tenant_id == "tenant-alpha"
+    assert fake.request.session_id == "session-1"
     assert fake.request.context["tenant_id"] == "tenant-alpha"
     assert fake.request.authorized_plan["policy_decision_id"] == "policy-1"
+    assert fake.request.authorized_plan["authorized_user_id"] == "user-1"
+    assert fake.request.authorized_plan["authorized_tenant_id"] == "tenant-alpha"
+    assert fake.request.authorized_plan["authorized_session_id"] == "session-1"
     assert result["response"] == "ok"
     assert result["medusa_status"] == "completed"
 
