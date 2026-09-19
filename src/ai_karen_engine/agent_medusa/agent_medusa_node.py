@@ -27,21 +27,47 @@ def _require_state_identity(
     return value
 
 
+def _require_plan_identity(plan: Dict[str, Any], field_name: str) -> str:
+    """Return one Runtime-bound authorization identity from the serialized plan."""
+
+    value = str(plan.get(field_name) or "").strip()
+    if not value:
+        raise PermissionError(f"Medusa authorization requires {field_name}")
+    return value
+
+
 def _build_execution_context(
     state: Dict[str, Any], plan: Dict[str, Any]
 ) -> ExecutionContext:
     request_id = _require_state_identity(state, "request_id", "correlation_id")
     correlation_id = _require_state_identity(state, "correlation_id", "request_id")
-    tenant_id = _require_state_identity(state, "tenant_id")
+    state_user_id = _require_state_identity(state, "user_id")
+    state_tenant_id = _require_state_identity(state, "tenant_id")
+    state_session_id = _require_state_identity(state, "session_id")
+
+    authorized_user_id = _require_plan_identity(plan, "authorized_user_id")
+    authorized_tenant_id = _require_plan_identity(plan, "authorized_tenant_id")
+    policy_decision_id = _require_plan_identity(plan, "policy_decision_id")
+
+    if authorized_user_id != state_user_id or authorized_tenant_id != state_tenant_id:
+        raise PermissionError(
+            "Medusa execution identity does not match Runtime authorization"
+        )
+
+    authorized_session = plan.get("authorized_session_id")
+    if authorized_session is not None and str(authorized_session).strip() != state_session_id:
+        raise PermissionError(
+            "Medusa session does not match Runtime authorization"
+        )
 
     return ExecutionContext(
         request_id=request_id,
         correlation_id=correlation_id,
-        user_id=str(state.get("user_id") or "anonymous"),
-        tenant_id=tenant_id,
-        session_id=state.get("session_id"),
+        user_id=authorized_user_id,
+        tenant_id=authorized_tenant_id,
+        session_id=state_session_id,
         conversation_id=state.get("conversation_id"),
-        policy_decision_id=plan.get("policy_decision_id"),
+        policy_decision_id=policy_decision_id,
         allowed_capabilities=plan.get("allowed_capabilities", []),
         resource_scope=plan.get("resource_scope", {}),
         budget=plan.get("budget"),
@@ -71,9 +97,9 @@ async def medusa_node(state: Dict[str, Any]) -> Dict[str, Any]:
     execution_context = _build_execution_context(state, policy_decision)
     request = RuntimeRequest(
         query=query,
-        session_id=str(state.get("session_id") or ""),
+        session_id=execution_context.session_id or "",
         request_id=execution_context.request_id,
-        user_id=state.get("user_id"),
+        user_id=execution_context.user_id,
         tenant_id=execution_context.tenant_id,
         authorized_plan=policy_decision,
         execution_requirements=state.get("execution_requirements"),

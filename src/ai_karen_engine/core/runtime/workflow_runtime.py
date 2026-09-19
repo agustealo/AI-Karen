@@ -105,6 +105,8 @@ class WorkflowRuntime:
         auth_context = {
             "user_id": ctx.user_id,
             "tenant_id": ctx.tenant_id,
+            "session_id": ctx.session_id,
+            "conversation_id": conversation_id,
             "roles": list(ctx.roles),
             "permissions": list(ctx.permissions),
         }
@@ -119,6 +121,7 @@ class WorkflowRuntime:
             "response_id": request_id,
             "request_id": request_id,
             "correlation_id": ctx.correlation_id,
+            "session_id": ctx.session_id,
             "conversation_id": conversation_id,
             "tenant_id": ctx.tenant_id,
             "auth_context": auth_context,
@@ -184,6 +187,7 @@ class WorkflowRuntime:
             {
                 "request_id": request_id,
                 "correlation_id": ctx.correlation_id,
+                "session_id": ctx.session_id,
                 "conversation_id": conversation_id,
                 "tenant_id": ctx.tenant_id,
                 "auth_context": auth_context,
@@ -212,6 +216,7 @@ class WorkflowRuntime:
             "max_tokens": request.max_tokens,
             "request_id": request_id,
             "correlation_id": ctx.correlation_id,
+            "session_id": ctx.session_id,
             "conversation_id": conversation_id,
             "tenant_id": ctx.tenant_id,
             "auth_context": auth_context,
@@ -301,6 +306,9 @@ def _serialize_plan(plan: AuthorizedExecutionPlan) -> Dict[str, Any]:
     return {
         "execution_id": plan.execution_id,
         "policy_decision_id": plan.policy_decision_id,
+        "authorized_user_id": plan.authorized_user_id,
+        "authorized_tenant_id": plan.authorized_tenant_id,
+        "authorized_session_id": plan.authorized_session_id,
         "topology": (
             plan.topology.value
             if hasattr(plan.topology, "value")

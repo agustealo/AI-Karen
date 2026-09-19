@@ -816,6 +816,9 @@ class ChatRuntime:
             policy_decision_id=(
                 decision.policy_decision_id or f"policy-{ctx.correlation_id}"
             ),
+            authorized_user_id=ctx.user_id,
+            authorized_tenant_id=ctx.tenant_id,
+            authorized_session_id=ctx.session_id,
             topology=decision.topology,
             allowed_capabilities=allowed_caps,
             allowed_tools=list(decision.tool_requirements),

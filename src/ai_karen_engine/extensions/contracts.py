@@ -18,6 +18,8 @@ try:
 except ImportError:
     from ai_karen_engine.pydantic_stub import BaseModel, ConfigDict, Field
 
+from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+
 
 class TrustTier(str, Enum):
     BUILTIN_TRUSTED = "builtin_trusted"
@@ -241,7 +243,7 @@ class ExtensionHealthRecord:
 @dataclass(frozen=True)
 class ExtensionExecutionContext:
     """Scoped execution context for an extension invocation.
-    
+
     Immutable context that provides all necessary execution metadata.
     Cannot be modified after creation to ensure audit integrity.
     """
@@ -257,7 +259,7 @@ class ExtensionExecutionContext:
     resource_scope: Dict[str, Any] = field(default_factory=dict)
     budget: Optional[Dict[str, Any]] = None
     audit_context: Dict[str, Any] = field(default_factory=dict)
-    
+
     def __post_init__(self):
         """Validate context integrity after initialization."""
         if not self.request_id:
@@ -266,8 +268,7 @@ class ExtensionExecutionContext:
             raise ValueError("correlation_id is required")
         if not self.user_id:
             raise ValueError("user_id is required")
-        
-        # Ensure budget has required structure if present
+
         if self.budget is not None:
             if not isinstance(self.budget, dict):
                 raise ValueError("budget must be a dictionary")
@@ -277,14 +278,14 @@ class ExtensionExecutionContext:
                 raise ValueError("budget must contain 'token_used'")
             if "exhausted" not in self.budget:
                 raise ValueError("budget must contain 'exhausted'")
-    
+
     @property
     def is_budget_exhausted(self) -> bool:
         """Check if execution budget is exhausted."""
         if self.budget is None:
             return False
         return self.budget.get("exhausted", False)
-    
+
     @property
     def remaining_tokens(self) -> Optional[int]:
         """Get remaining tokens in budget."""
@@ -293,11 +294,11 @@ class ExtensionExecutionContext:
         token_limit = self.budget.get("token_limit", 0)
         token_used = self.budget.get("token_used", 0)
         return max(0, token_limit - token_used)
-    
+
     def has_capability(self, capability_id: str) -> bool:
         """Check if capability is allowed in this context."""
         return capability_id in self.allowed_capabilities
-    
+
     def get_tenant_scope(self, manifest: ExtensionManifest) -> bool:
         """Check if tenant scope is satisfied for this manifest."""
         if manifest.tenant_scope == "global":
@@ -307,7 +308,7 @@ class ExtensionExecutionContext:
         if manifest.tenant_scope == "multi":
             return self.tenant_id in manifest.allowed_tenant_ids
         return False
-    
+
     def to_audit_dict(self) -> Dict[str, Any]:
         """Convert to dictionary suitable for audit logging."""
         return {
@@ -340,7 +341,7 @@ class CapabilityInvocationRequest:
         request_id="", correlation_id="", user_id=""
     ))
     provider_hint: Optional[str] = None
-    authorized_plan: Optional[Dict[str, Any]] = None
+    authorized_plan: Optional[AuthorizedExecutionPlan] = None
     deadline: Optional[str] = None
     idempotency_key: Optional[str] = None
 
@@ -370,7 +371,7 @@ class ExtensionExecutionRequest:
     capability: str
     payload: Dict[str, Any]
     context: ExtensionExecutionContext
-    authorized_plan: Optional[Dict[str, Any]] = None
+    authorized_plan: Optional[AuthorizedExecutionPlan] = None
     timeout_override_ms: Optional[int] = None
 
 

@@ -156,6 +156,15 @@ class PolicyDecision:
         return AuthorizedExecutionPlan(
             execution_id=self.decision_id,
             policy_decision_id=self.decision_id,
+            authorized_user_id=str(
+                self.runtime_constraints.get("authorized_user_id") or ""
+            ),
+            authorized_tenant_id=str(
+                self.runtime_constraints.get("authorized_tenant_id") or ""
+            ),
+            authorized_session_id=self.runtime_constraints.get(
+                "authorized_session_id"
+            ),
             topology=topology,
             allowed_capabilities=list(self.allowed_capabilities),
             allowed_tools=list(self.runtime_constraints.get("allowed_tools") or []),
@@ -206,6 +215,7 @@ class PolicyDecision:
                 "policy_version": self.policy_version,
                 "evaluated_at": self.evaluated_at,
                 "risk_level": self.risk_level,
+                "correlation_id": self.runtime_constraints.get("correlation_id"),
                 "allowed_reasoning_modes": list(self.allowed_reasoning_modes),
                 "denied_reasoning_modes": list(self.denied_reasoning_modes),
                 "reasoning_denial_reasons": dict(self.reasoning_denial_reasons),
@@ -271,6 +281,13 @@ class RuntimePolicyEnforcer:
                     evaluated_at=evaluated_at,
                 )
 
+        topology_tools = request.execution_topology.get("tool_requirements", []) or []
+        if not isinstance(topology_tools, list):
+            topology_tools = []
+        topology_plugins = request.execution_topology.get("plugin_candidates", []) or []
+        if not isinstance(topology_plugins, list):
+            topology_plugins = []
+
         risk_score = float(request.risk_signals.get("score", 0.0) or 0.0)
         risk_categories = request.risk_signals.get("categories", []) or []
         if "credential_access" in risk_categories or "production_impact" in risk_categories:
@@ -312,7 +329,11 @@ class RuntimePolicyEnforcer:
                 evaluated_at=evaluated_at,
             )
 
-        if request.tool_id and "admin" not in request.permissions and risk_score >= 0.5:
+        if (
+            (request.tool_id or topology_tools)
+            and "admin" not in request.permissions
+            and risk_score >= 0.5
+        ):
             return PolicyDecision(
                 decision_id=decision_id,
                 policy_version=policy_version,
@@ -325,6 +346,20 @@ class RuntimePolicyEnforcer:
                 risk_level=risk_level,
                 evaluated_at=evaluated_at,
             )
+
+        allowed_plugins: List[str] = []
+        plugin_candidates = [request.plugin_id, request.extension_id, *topology_plugins]
+        for candidate in plugin_candidates:
+            normalized = str(candidate or "").strip()
+            if normalized and normalized not in allowed_plugins:
+                allowed_plugins.append(normalized)
+
+        allowed_tools: List[str] = []
+        tool_candidates = [request.tool_id, *topology_tools]
+        for candidate in tool_candidates:
+            normalized = str(candidate or "").strip()
+            if normalized and normalized not in allowed_tools:
+                allowed_tools.append(normalized)
 
         runtime_constraints = self._build_runtime_constraints(request.runtime_level)
         runtime_constraints.update(
@@ -339,6 +374,12 @@ class RuntimePolicyEnforcer:
                 "agent_delegation": bool(
                     request.execution_topology.get("agent_delegation", False)
                 ),
+                "allowed_plugins": allowed_plugins,
+                "allowed_tools": allowed_tools,
+                "authorized_user_id": request.user_id,
+                "authorized_tenant_id": request.tenant_id,
+                "authorized_session_id": request.session_id,
+                "correlation_id": request.correlation_id,
             }
         )
 

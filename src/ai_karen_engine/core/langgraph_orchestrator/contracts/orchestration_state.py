@@ -135,6 +135,11 @@ def create_initial_state(
         or request_config.get("response_id")
         or correlation_id
     )
+    state_session_id = str(
+        runtime_config.get("session_id")
+        or request_config.get("session_id")
+        or session_id
+    )
     runtime_policy = runtime_config.get("runtime_policy")
     if runtime_policy is None:
         runtime_policy = request_config.get("runtime_policy")
@@ -152,7 +157,7 @@ def create_initial_state(
         ),
         "messages": messages,
         "user_id": user_id,
-        "session_id": session_id,
+        "session_id": state_session_id,
         "tenant_id": runtime_config.get("tenant_id")
         or request_config.get("tenant_id"),
         "auth_status": None,

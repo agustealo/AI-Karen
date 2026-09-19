@@ -259,13 +259,18 @@ class AuthorizedExecutionPlan:
     """Single runtime instruction after RuntimePolicy evaluation.
 
     Nothing below RuntimePolicy needs to re-decide authorization. The
-    ``deep``/``standard`` handling below is a compatibility shim for the
-    pre-typed ChatRuntime plan builder and must be removed when that caller
-    forwards ``ExecutionDecision.reasoning_modes`` directly.
+    authorization subject is bound into the plan so executors can reject
+    cross-user, cross-tenant, or cross-session replay without re-evaluating
+    policy. The ``deep``/``standard`` handling below is a compatibility shim
+    for the pre-typed ChatRuntime plan builder and must be removed when that
+    caller forwards ``ExecutionDecision.reasoning_modes`` directly.
     """
 
     execution_id: str
     policy_decision_id: str
+    authorized_user_id: str = ""
+    authorized_tenant_id: str = ""
+    authorized_session_id: Optional[str] = None
     topology: ExecutionTopology = ExecutionTopology.DIRECT
     allowed_capabilities: List[str] = field(default_factory=list)
     allowed_tools: List[str] = field(default_factory=list)
@@ -299,6 +304,31 @@ class AuthorizedExecutionPlan:
             ]
             return
         self.reasoning_modes = raw_modes
+
+    def matches_execution_scope(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        session_id: Optional[str] = None,
+        policy_decision_id: Optional[str] = None,
+    ) -> bool:
+        """Return whether this plan is valid for the supplied runtime subject."""
+        if not self.authorized_user_id or not self.authorized_tenant_id:
+            return False
+        if user_id != self.authorized_user_id or tenant_id != self.authorized_tenant_id:
+            return False
+        if (
+            self.authorized_session_id is not None
+            and session_id != self.authorized_session_id
+        ):
+            return False
+        if (
+            policy_decision_id is not None
+            and policy_decision_id != self.policy_decision_id
+        ):
+            return False
+        return True
 
 
 @dataclass(slots=True)

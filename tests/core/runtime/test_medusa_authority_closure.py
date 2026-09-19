@@ -1,5 +1,3 @@
-import asyncio
-from dataclasses import asdict
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,14 +14,20 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionRequest,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
-from ai_karen_engine.agent_medusa.agent_medusa_node import medusa_node, _build_execution_context
+from ai_karen_engine.agent_medusa.agent_medusa_node import medusa_node
 from ai_karen_engine.agent_medusa.coordinator.medusa_coordinator import MedusaCoordinator
+from ai_karen_engine.core.langgraph_orchestrator.contracts.orchestration_state import (
+    create_initial_state,
+)
+from ai_karen_engine.core.langgraph_orchestrator.runtime_policy import (
+    runtime_policy_enforcer_node,
+)
 
 
 def _make_context() -> ChatExecutionContext:
     return ChatExecutionContext(
         user_id="user-1",
-        tenant_id="default",
+        tenant_id="tenant-1",
         session_id="session-1",
         conversation_id="conv-1",
         request_id="req-1",
@@ -74,6 +78,9 @@ def _make_plan() -> AuthorizedExecutionPlan:
     return AuthorizedExecutionPlan(
         execution_id="exec-req-1",
         policy_decision_id="policy-1",
+        authorized_user_id="user-1",
+        authorized_tenant_id="tenant-1",
+        authorized_session_id="session-1",
         topology=ExecutionTopology.MULTI_AGENT,
         allowed_capabilities=["agent.multi_agent"],
         allowed_tools=["web_search"],
@@ -100,6 +107,9 @@ class TestSerializePlan:
         serialized = _serialize_plan(plan)
         assert serialized["execution_id"] == "exec-req-1"
         assert serialized["policy_decision_id"] == "policy-1"
+        assert serialized["authorized_user_id"] == "user-1"
+        assert serialized["authorized_tenant_id"] == "tenant-1"
+        assert serialized["authorized_session_id"] == "session-1"
         assert serialized["topology"] == "multi_agent"
         assert serialized["allowed_capabilities"] == ["agent.multi_agent"]
         assert serialized["allowed_tools"] == ["web_search"]
@@ -129,9 +139,15 @@ class TestWorkflowRuntimePlanPropagation:
             await runtime.run(request, decision, plan)
 
             config = mock_orchestrator.process.call_args[1]["config"]
+            assert config["session_id"] == "session-1"
+            assert config["conversation_id"] == "conv-1"
             assert "runtime_policy" in config["request_config"]
-            assert config["request_config"]["runtime_policy"]["topology"] == "multi_agent"
-            assert config["request_config"]["runtime_policy"]["policy_decision_id"] == "policy-1"
+            serialized = config["request_config"]["runtime_policy"]
+            assert serialized["topology"] == "multi_agent"
+            assert serialized["policy_decision_id"] == "policy-1"
+            assert serialized["authorized_user_id"] == "user-1"
+            assert serialized["authorized_tenant_id"] == "tenant-1"
+            assert serialized["authorized_session_id"] == "session-1"
 
     @pytest.mark.asyncio
     async def test_stream_passes_plan_to_config(self):
@@ -139,21 +155,53 @@ class TestWorkflowRuntimePlanPropagation:
         request = _make_request()
         decision = _make_decision()
         plan = _make_plan()
+        captured: Dict[str, Any] = {}
 
         with patch.object(
             runtime, "_get_orchestrator", new_callable=AsyncMock
         ) as mock_get:
             mock_orchestrator = AsyncMock()
-            mock_orchestrator.stream_process = AsyncMock()
-            mock_orchestrator.stream_process.return_value = iter([])
+
+            async def _empty_stream(**kwargs):
+                captured.update(kwargs)
+                if False:
+                    yield kwargs
+
+            mock_orchestrator.stream_process = _empty_stream
             mock_get.return_value = mock_orchestrator
 
             async for _ in runtime.stream(request, decision, plan):
                 pass
 
-            config = mock_orchestrator.stream_process.call_args[1]["config"]
-            assert "runtime_policy" in config["request_config"]
-            assert config["request_config"]["runtime_policy"]["topology"] == "multi_agent"
+        config = captured["config"]
+        assert config["session_id"] == "session-1"
+        assert config["conversation_id"] == "conv-1"
+        assert config["request_config"]["runtime_policy"]["topology"] == "multi_agent"
+        assert (
+            config["request_config"]["runtime_policy"]["authorized_session_id"]
+            == "session-1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_graph_state_uses_security_session_not_checkpoint_key(self):
+        runtime = WorkflowRuntime()
+        request = _make_request()
+        config = runtime._build_config(
+            request,
+            request.context,
+            "conv-1",
+            _make_decision(),
+            _make_plan(),
+        )
+
+        state = create_initial_state([], "user-1", "conv-1", config)
+
+        assert state["session_id"] == "session-1"
+        assert state["conversation_id"] == "conv-1"
+        runtime_policy = state["runtime_policy"]
+        assert runtime_policy is not None
+        assert runtime_policy["authorized_session_id"] == "session-1"
+        await runtime_policy_enforcer_node(state)
 
 
 class TestMedusaNodePlanConsumption:
@@ -186,21 +234,11 @@ class TestMedusaNodePlanConsumption:
             "messages": [],
             "user_id": "user-1",
             "session_id": "session-1",
+            "conversation_id": "conv-1",
             "request_id": "req-1",
             "correlation_id": "corr-1",
             "tenant_id": "tenant-1",
-            "runtime_policy": {
-                "execution_id": plan.execution_id,
-                "policy_decision_id": plan.policy_decision_id,
-                "topology": plan.topology.value,
-                "allowed_capabilities": list(plan.allowed_capabilities),
-                "allowed_tools": list(plan.allowed_tools),
-                "allowed_plugins": list(plan.allowed_plugins),
-                "allowed_agents": list(plan.allowed_agents),
-                "budget": asdict(plan.budget),
-                "memory_scope": plan.memory_scope,
-                "audit_context": dict(plan.audit_context),
-            },
+            "runtime_policy": _serialize_plan(plan),
         }
 
         mock_response = MagicMock()
@@ -220,6 +258,26 @@ class TestMedusaNodePlanConsumption:
         call_request = mock_handle.call_args[0][0]
         assert call_request.authorized_plan is not None
         assert call_request.authorized_plan["topology"] == "multi_agent"
+        assert call_request.user_id == "user-1"
+        assert call_request.tenant_id == "tenant-1"
+        assert call_request.session_id == "session-1"
+
+    @pytest.mark.asyncio
+    async def test_medusa_node_rejects_cross_tenant_plan_replay(self):
+        plan = _make_plan()
+        state: Dict[str, Any] = {
+            "messages": [],
+            "user_id": "user-1",
+            "session_id": "session-1",
+            "conversation_id": "conv-1",
+            "request_id": "req-1",
+            "correlation_id": "corr-1",
+            "tenant_id": "tenant-other",
+            "runtime_policy": _serialize_plan(plan),
+        }
+
+        with pytest.raises(PermissionError, match="does not match Runtime authorization"):
+            await medusa_node(state)
 
 
 class TestMedusaCoordinatorUsesAuthorizedPlan:
@@ -228,30 +286,12 @@ class TestMedusaCoordinatorUsesAuthorizedPlan:
         plan = _make_plan()
         request = MagicMock()
         request.request_id = "req-1"
-        request.authorized_plan = {
-            "execution_id": plan.execution_id,
-            "policy_decision_id": plan.policy_decision_id,
-            "topology": plan.topology.value,
-            "allowed_capabilities": list(plan.allowed_capabilities),
-            "allowed_tools": list(plan.allowed_tools),
-            "allowed_plugins": list(plan.allowed_plugins),
-            "allowed_agents": list(plan.allowed_agents),
-            "provider_constraints": dict(plan.provider_constraints),
-            "memory_scope": plan.memory_scope,
-            "resource_scope": dict(plan.resource_scope),
-            "budget": plan.budget.__dict__ if hasattr(plan.budget, "__dict__") else {},
-            "approval_requirements": list(plan.approval_requirements),
-            "reasoning_modes": list(plan.reasoning_modes),
-            "workflow_id": plan.workflow_id,
-            "agent_topology": plan.agent_topology,
-            "degraded_allowed": plan.degraded_allowed,
-            "degradation_state": plan.degradation_state.__dict__ if plan.degradation_state else None,
-            "audit_context": dict(plan.audit_context),
-        }
+        request.authorized_plan = _serialize_plan(plan)
         request.execution_requirements = None
         request.query = "test"
         request.context = {}
         request.user_id = "user-1"
+        request.tenant_id = "tenant-1"
         request.session_id = "session-1"
 
         run_manager = MagicMock()
@@ -273,3 +313,7 @@ class TestMedusaCoordinatorUsesAuthorizedPlan:
                 await coordinator.handle_request(request)
 
         assert mock_plan.called
+        authorized_plan = mock_plan.call_args.kwargs["authorized_plan"]
+        assert authorized_plan.authorized_user_id == "user-1"
+        assert authorized_plan.authorized_tenant_id == "tenant-1"
+        assert authorized_plan.authorized_session_id == "session-1"
