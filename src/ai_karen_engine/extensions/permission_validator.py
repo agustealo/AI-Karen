@@ -307,9 +307,11 @@ class PermissionValidator:
         context: ExtensionExecutionContext
     ) -> PermissionCheck:
         """Check risk class compatibility."""
-        
-        # Get applicable risk class
-        risk_class = getattr(capability, "risk_class", manifest.risk_class) if capability else manifest.risk_class
+        risk_class = (
+            capability.risk_class
+            if capability is not None
+            else getattr(manifest, "risk_class", RiskClass.LOW)
+        )
         
         # Check if risk class is acceptable for context
         if risk_class == RiskClass.CRITICAL:
@@ -336,9 +338,11 @@ class PermissionValidator:
         context: ExtensionExecutionContext
     ) -> PermissionCheck:
         """Check data classification compatibility."""
-        
-        # Get applicable data classification
-        data_classification = getattr(capability, "data_classification", manifest.data_classification) if capability else manifest.data_classification
+        data_classification = (
+            capability.data_classification
+            if capability is not None
+            else getattr(manifest, "data_classification", DataClassification.PUBLIC)
+        )
         
         # Check if data classification is acceptable for context
         if data_classification in [DataClassification.RESTRICTED, DataClassification.CONFIDENTIAL]:
@@ -470,7 +474,11 @@ class PermissionValidator:
             )
         
         # Check risk class compatibility
-        risk_class = getattr(capability, "risk_class", manifest.risk_class) if capability else manifest.risk_class
+        risk_class = (
+            capability.risk_class
+            if capability is not None
+            else getattr(manifest, "risk_class", RiskClass.LOW)
+        )
         if risk_class not in policy.allowed_risk_classes:
             return PermissionCheck(
                 result=PermissionResult.DENIED,
@@ -481,7 +489,11 @@ class PermissionValidator:
             )
         
         # Check data classification compatibility
-        data_classification = getattr(capability, "data_classification", manifest.data_classification) if capability else manifest.data_classification
+        data_classification = (
+            capability.data_classification
+            if capability is not None
+            else getattr(manifest, "data_classification", DataClassification.PUBLIC)
+        )
         if data_classification not in policy.allowed_data_classifications:
             return PermissionCheck(
                 result=PermissionResult.DENIED,
