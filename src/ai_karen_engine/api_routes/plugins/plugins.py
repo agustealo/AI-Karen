@@ -21,8 +21,7 @@ from ai_karen_engine.services.error_response_schemas import (
     create_service_error_response,
     get_http_status_for_error_code,
 )
-from ai_karen_engine.services.plugin_execution import ExecutionStatus
-from ai_karen_engine.services.plugin_service import PluginService
+from ai_karen_engine.services.plugin_service import ExecutionStatus, PluginService
 
 logger = get_logger(__name__)
 router = APIRouter(
@@ -31,7 +30,7 @@ router = APIRouter(
 )
 public_router = APIRouter(tags=["plugins-public"], prefix="/api/public/plugins")
 _PLUGIN_MUTATION_PERMISSION = Permission.ADMIN_PLUGINS_MANAGE
-_ENABLED_STATES = {"registered", "loaded", "active"}
+_ENABLED_STATES = {"registered", "enabled", "loaded", "active"}
 
 
 class ExecutePluginRequest(BaseModel):
@@ -168,7 +167,9 @@ def _plugin_info_response(
     metadata: Dict[str, Any], plugin_service: PluginService
 ) -> PluginInfoResponse:
     manifest = metadata.get("manifest")
-    state = str(getattr(metadata.get("status"), "value", metadata.get("status", "unknown")))
+    state = str(
+        getattr(metadata.get("status"), "value", metadata.get("status", "unknown"))
+    )
     runtime = plugin_service.get_plugin_runtime_stats(
         str(getattr(manifest, "name", metadata.get("name", "unknown")))
     )

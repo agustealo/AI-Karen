@@ -140,7 +140,7 @@ def _plugin_payload(metadata: Dict[str, Any]) -> Dict[str, Any]:
     manifest = _manifest(metadata)
     marketplace = _marketplace_payload(manifest)
     runtime_status = str(metadata.get("status") or "unknown")
-    installed = runtime_status in {"registered", "disabled"}
+    installed = runtime_status in {"registered", "enabled", "disabled"}
     dependencies = _dependencies(manifest)
 
     return {
