@@ -9,6 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ai_karen_engine.core.runtime.contracts import (
+    ActionExecutionGate,
+    AuthorizedExecutionPlan,
+)
 from ai_karen_engine.core.runtime.policy import PolicyEvaluationRequest, RuntimePolicyEnforcer
 from ai_karen_engine.services.plugin_discovery import PluginRegistry, initialize_plugin_registry
 from ai_karen_engine.services.plugin_execution import (
@@ -231,10 +235,12 @@ class PluginService:
         user_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
         roles: Optional[List[str]] = None,
         permissions: Optional[List[str]] = None,
         policy_decision_id: Optional[str] = None,
+        authorized_plan: Optional[AuthorizedExecutionPlan] = None,
         allowed_capabilities: Optional[List[str]] = None,
         forbidden_capabilities: Optional[List[str]] = None,
     ) -> ExecutionResult:
@@ -255,6 +261,7 @@ class PluginService:
                 user_id=resolved_user,
                 tenant_id=resolved_tenant,
                 correlation_id=resolved_correlation,
+                policy_decision_id=str(policy_decision_id or ""),
                 requested_capabilities=requested_caps,
                 granted_capabilities=[],
             )
@@ -277,8 +284,20 @@ class PluginService:
                 "Plugin parameters do not satisfy the manifest contract",
             )
 
-        authorized_plan = None
-        if not policy_decision_id:
+        if authorized_plan is not None and not isinstance(
+            authorized_plan, AuthorizedExecutionPlan
+        ):
+            return failure(
+                "authorized_plan_invalid",
+                "Plugin execution requires a typed AuthorizedExecutionPlan",
+            )
+
+        if authorized_plan is None:
+            if policy_decision_id:
+                return failure(
+                    "authorized_plan_required",
+                    "A policy_decision_id alone cannot authorize plugin execution",
+                )
             policy_request = PolicyEvaluationRequest(
                 user_id=resolved_user,
                 tenant_id=resolved_tenant,
@@ -298,10 +317,37 @@ class PluginService:
                 )
                 denied.policy_decision_id = decision.decision_id
                 return denied
-            policy_decision_id = decision.decision_id
-            allowed_capabilities = list(decision.allowed_capabilities)
-            forbidden_capabilities = list(decision.denied_capabilities)
             authorized_plan = decision.to_authorized_plan()
+        elif policy_decision_id and policy_decision_id != authorized_plan.policy_decision_id:
+            return failure(
+                "policy_decision_mismatch",
+                "policy_decision_id does not match AuthorizedExecutionPlan",
+            )
+
+        policy_decision_id = authorized_plan.policy_decision_id
+        if not authorized_plan.matches_execution_scope(
+            user_id=resolved_user,
+            tenant_id=resolved_tenant,
+            session_id=session_id,
+            policy_decision_id=policy_decision_id,
+        ):
+            return failure(
+                "authorized_scope_mismatch",
+                "AuthorizedExecutionPlan does not match execution identity scope",
+            )
+        if plugin_name not in authorized_plan.allowed_plugins:
+            return failure(
+                "plugin_not_authorized",
+                "Plugin is not present in AuthorizedExecutionPlan.allowed_plugins",
+            )
+        if not await ActionExecutionGate.authorize(authorized_plan, plugin_name):
+            return failure(
+                "action_gate_denied",
+                "Plugin execution denied by ActionExecutionGate",
+            )
+
+        allowed_capabilities = list(authorized_plan.allowed_capabilities)
+        forbidden_capabilities = []
 
         request = ExecutionRequest(
             plugin_name=plugin_name,
@@ -309,18 +355,17 @@ class PluginService:
             execution_mode=execution_mode,
             timeout_seconds=timeout_seconds,
             user_id=resolved_user,
+            tenant_id=resolved_tenant,
             session_id=session_id,
+            conversation_id=conversation_id,
+            correlation_id=resolved_correlation or None,
             policy_decision_id=policy_decision_id,
-            allowed_capabilities=list(allowed_capabilities or []),
-            forbidden_capabilities=list(forbidden_capabilities or []),
+            allowed_capabilities=list(allowed_capabilities),
+            forbidden_capabilities=list(forbidden_capabilities),
         )
-        result = await self._get_execution_engine().execute_plugin(
+        return await self._get_execution_engine().execute_plugin(
             request, plan=authorized_plan
         )
-        result.user_id = resolved_user
-        result.tenant_id = resolved_tenant
-        result.correlation_id = resolved_correlation
-        return result
 
     async def cancel_execution(self, request_id: str) -> bool:
         await self._ensure_initialized()
