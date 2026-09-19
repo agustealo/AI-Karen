@@ -156,6 +156,15 @@ class PolicyDecision:
         return AuthorizedExecutionPlan(
             execution_id=self.decision_id,
             policy_decision_id=self.decision_id,
+            authorized_user_id=str(
+                self.runtime_constraints.get("authorized_user_id") or ""
+            ),
+            authorized_tenant_id=str(
+                self.runtime_constraints.get("authorized_tenant_id") or ""
+            ),
+            authorized_session_id=self.runtime_constraints.get(
+                "authorized_session_id"
+            ),
             topology=topology,
             allowed_capabilities=list(self.allowed_capabilities),
             allowed_tools=list(self.runtime_constraints.get("allowed_tools") or []),
@@ -206,6 +215,7 @@ class PolicyDecision:
                 "policy_version": self.policy_version,
                 "evaluated_at": self.evaluated_at,
                 "risk_level": self.risk_level,
+                "correlation_id": self.runtime_constraints.get("correlation_id"),
                 "allowed_reasoning_modes": list(self.allowed_reasoning_modes),
                 "denied_reasoning_modes": list(self.denied_reasoning_modes),
                 "reasoning_denial_reasons": dict(self.reasoning_denial_reasons),
@@ -326,6 +336,11 @@ class RuntimePolicyEnforcer:
                 evaluated_at=evaluated_at,
             )
 
+        allowed_plugins = []
+        for candidate in (request.plugin_id, request.extension_id):
+            if candidate and candidate not in allowed_plugins:
+                allowed_plugins.append(candidate)
+
         runtime_constraints = self._build_runtime_constraints(request.runtime_level)
         runtime_constraints.update(
             {
@@ -339,6 +354,12 @@ class RuntimePolicyEnforcer:
                 "agent_delegation": bool(
                     request.execution_topology.get("agent_delegation", False)
                 ),
+                "allowed_plugins": allowed_plugins,
+                "allowed_tools": [request.tool_id] if request.tool_id else [],
+                "authorized_user_id": request.user_id,
+                "authorized_tenant_id": request.tenant_id,
+                "authorized_session_id": request.session_id,
+                "correlation_id": request.correlation_id,
             }
         )
 
