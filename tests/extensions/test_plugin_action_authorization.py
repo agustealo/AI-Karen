@@ -294,6 +294,14 @@ async def test_compatibility_engine_awaits_action_gate_before_handler(monkeypatc
     assert result.status is ExecutionStatus.FAILED
     assert result.error_code == "policy_denied"
     assert "ActionExecutionGate" in (result.error or "")
+    assert result.plugin_id == "echo"
+    assert result.user_id == "user-1"
+    assert result.tenant_id == "tenant-1"
+    assert result.session_id == "session-1"
+    assert result.conversation_id == "conversation-1"
+    assert result.correlation_id == "corr-1"
+    assert result.policy_decision_id == "policy-1"
+    assert result.completed_at is not None
     assert registry.calls == 1
 
 
@@ -314,6 +322,11 @@ async def test_compatibility_engine_rejects_missing_plan_before_registry_lookup(
 
     assert result.status is ExecutionStatus.FAILED
     assert result.error_code == "policy_denied"
+    assert result.user_id == "user-1"
+    assert result.tenant_id == "tenant-1"
+    assert result.correlation_id == "corr-1"
+    assert result.policy_decision_id == "policy-1"
+    assert result.completed_at is not None
     assert registry.calls == 0
 
 
