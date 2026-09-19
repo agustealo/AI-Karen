@@ -1,9 +1,9 @@
-"""Regression tests for plugin authorization scope and action-gate enforcement."""
+"""Regression tests for plugin authorization scope and canonical delegation."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
@@ -17,75 +17,15 @@ from ai_karen_engine.core.runtime.policy import (
     PolicyEvaluationRequest,
     RuntimePolicyEnforcer,
 )
-from ai_karen_engine.services.plugin_execution import (
-    ExecutionMode,
-    ExecutionRequest,
-    ExecutionResult,
-    ExecutionStatus,
-    PluginExecutionEngine,
-    ResourceLimits,
-    SecurityPolicy,
+from ai_karen_engine.extensions.contracts import (
+    DataClassification,
+    ExtensionExecutionResult,
+    ResponseSource,
+    ResultTrust,
+    TrustTier,
 )
-from ai_karen_engine.services.plugin_service import PluginService
-
-
-class _ServiceRegistry:
-    def get_plugin(self, plugin_name: str) -> dict[str, Any] | None:
-        if plugin_name != "echo":
-            return None
-        return {
-            "manifest": SimpleNamespace(
-                name="echo",
-                version="1.0.0",
-                config_schema=None,
-            ),
-            "status": "registered",
-        }
-
-
-class _CapturingEngine:
-    def __init__(self) -> None:
-        self.calls = 0
-        self.request: ExecutionRequest | None = None
-        self.plan: AuthorizedExecutionPlan | None = None
-
-    async def execute_plugin(
-        self,
-        request: ExecutionRequest,
-        plan: AuthorizedExecutionPlan,
-    ) -> ExecutionResult:
-        self.calls += 1
-        self.request = request
-        self.plan = plan
-        return ExecutionResult(
-            request_id=request.request_id,
-            plugin_name=request.plugin_name,
-            status=ExecutionStatus.COMPLETED,
-            user_id=request.user_id or "",
-            tenant_id=request.tenant_id or "",
-            correlation_id=request.correlation_id or "",
-            policy_decision_id=request.policy_decision_id or "",
-        )
-
-
-class _EngineRegistry:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def get_plugin(self, plugin_name: str) -> dict[str, Any] | None:
-        self.calls += 1
-        if plugin_name != "echo":
-            return None
-        return {
-            "manifest": SimpleNamespace(
-                name="echo",
-                version="1.0.0",
-                permissions={},
-                resources=None,
-                capabilities=None,
-            ),
-            "status": "registered",
-        }
+from ai_karen_engine.extensions.platform.core.manifest import ExtensionManifest
+from ai_karen_engine.services.plugin_service import ExecutionStatus, PluginService
 
 
 def _plan(
@@ -105,13 +45,65 @@ def _plan(
     )
 
 
-def _service() -> tuple[PluginService, _CapturingEngine]:
+def _manifest() -> ExtensionManifest:
+    return ExtensionManifest(
+        name="echo",
+        version="1.0.0",
+        display_name="Echo",
+        description="Authorization fixture",
+        author="Kari",
+        license="MIT",
+        category="test",
+        entrypoint="handler:MainExtension",
+    )
+
+
+class _Kernel:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.request = None
+        self.record = {
+            "manifest": _manifest(),
+            "path": Path("/tmp/echo"),
+            "status": "enabled",
+            "checksum": "fixture",
+            "error_message": None,
+            "dependencies_resolved": True,
+            "compatibility_checked": True,
+        }
+
+    def get_record(self, plugin_id: str):
+        return self.record if plugin_id == "echo" else None
+
+    def list_records(self):
+        return [self.record]
+
+    async def execute(self, request):
+        self.calls += 1
+        self.request = request
+        return ExtensionExecutionResult(
+            request_id=request.context.request_id,
+            plugin_id=request.plugin_id,
+            plugin_version="1.0.0",
+            capability=request.capability,
+            source=ResponseSource.PLUGIN,
+            payload={"ok": True},
+            latency_ms=1.0,
+            status="success",
+            correlation_id=request.context.correlation_id,
+            policy_decision_id=request.context.policy_decision_id,
+            trust_tier=TrustTier.FIRST_PARTY,
+            result_trust=ResultTrust.VERIFIED,
+            data_classification=DataClassification.PUBLIC,
+        )
+
+
+def _service() -> tuple[PluginService, _Kernel]:
     service = PluginService()
-    engine = _CapturingEngine()
-    service.registry = _ServiceRegistry()  # type: ignore[assignment]
-    service.execution_engine = engine  # type: ignore[assignment]
+    kernel = _Kernel()
+    service.kernel = kernel  # type: ignore[assignment]
     service.initialized = True
-    return service, engine
+    return service, kernel
 
 
 def test_chat_runtime_authorized_plan_binds_request_principal():
@@ -185,12 +177,6 @@ async def test_runtime_policy_emits_exact_plugin_tool_and_principal_scope():
     assert plan.authorized_tenant_id == "tenant-1"
     assert plan.authorized_session_id == "session-1"
     assert plan.audit_context["correlation_id"] == "corr-1"
-    assert plan.matches_execution_scope(
-        user_id="user-1",
-        tenant_id="tenant-1",
-        session_id="session-1",
-        policy_decision_id=decision.decision_id,
-    )
     assert await ActionExecutionGate.authorize(plan, "echo") is True
     assert await ActionExecutionGate.authorize(plan, "search-plugin") is True
     assert await ActionExecutionGate.authorize(plan, "web-search") is True
@@ -198,7 +184,7 @@ async def test_runtime_policy_emits_exact_plugin_tool_and_principal_scope():
 
 @pytest.mark.asyncio
 async def test_plugin_service_rejects_bare_policy_decision_id():
-    service, engine = _service()
+    service, kernel = _service()
 
     result = await service.execute_plugin(
         "echo",
@@ -211,12 +197,12 @@ async def test_plugin_service_rejects_bare_policy_decision_id():
 
     assert result.status is ExecutionStatus.FAILED
     assert result.error_code == "authorized_plan_required"
-    assert engine.calls == 0
+    assert kernel.calls == 0
 
 
 @pytest.mark.asyncio
 async def test_plugin_service_rejects_cross_tenant_plan_replay():
-    service, engine = _service()
+    service, kernel = _service()
 
     result = await service.execute_plugin(
         "echo",
@@ -229,54 +215,42 @@ async def test_plugin_service_rejects_cross_tenant_plan_replay():
 
     assert result.status is ExecutionStatus.FAILED
     assert result.error_code == "authorized_scope_mismatch"
-    assert engine.calls == 0
+    assert kernel.calls == 0
 
 
 @pytest.mark.asyncio
-async def test_plugin_service_propagates_authorized_scope_to_engine():
-    service, engine = _service()
+async def test_plugin_service_propagates_scope_to_canonical_kernel():
+    service, kernel = _service()
     plan = _plan()
 
     result = await service.execute_plugin(
         "echo",
         parameters={"message": "hello"},
-        execution_mode=ExecutionMode.DIRECT,
         user_id="user-1",
         tenant_id="tenant-1",
         session_id="session-1",
         conversation_id="conversation-1",
         correlation_id="corr-1",
+        roles=["user"],
         authorized_plan=plan,
     )
 
     assert result.status is ExecutionStatus.COMPLETED
-    assert engine.calls == 1
-    assert engine.plan is plan
-    assert engine.request is not None
-    assert engine.request.user_id == "user-1"
-    assert engine.request.tenant_id == "tenant-1"
-    assert engine.request.session_id == "session-1"
-    assert engine.request.conversation_id == "conversation-1"
-    assert engine.request.correlation_id == "corr-1"
-    assert engine.request.policy_decision_id == "policy-1"
+    assert kernel.calls == 1
+    assert kernel.request is not None
+    assert kernel.request.authorized_plan is plan
+    assert kernel.request.context.user_id == "user-1"
+    assert kernel.request.context.tenant_id == "tenant-1"
+    assert kernel.request.context.session_id == "session-1"
+    assert kernel.request.context.conversation_id == "conversation-1"
+    assert kernel.request.context.correlation_id == "corr-1"
+    assert kernel.request.context.policy_decision_id == "policy-1"
 
 
 @pytest.mark.asyncio
-async def test_compatibility_engine_awaits_action_gate_before_handler(monkeypatch):
-    registry = _EngineRegistry()
-    engine = PluginExecutionEngine(registry=registry)  # type: ignore[arg-type]
+async def test_plugin_service_awaits_action_gate_before_kernel(monkeypatch):
+    service, kernel = _service()
     plan = _plan()
-    request = ExecutionRequest(
-        plugin_name="echo",
-        parameters={"message": "hello"},
-        execution_mode=ExecutionMode.DIRECT,
-        user_id="user-1",
-        tenant_id="tenant-1",
-        session_id="session-1",
-        conversation_id="conversation-1",
-        correlation_id="corr-1",
-        policy_decision_id="policy-1",
-    )
 
     async def deny(
         authorized_plan: AuthorizedExecutionPlan,
@@ -288,76 +262,22 @@ async def test_compatibility_engine_awaits_action_gate_before_handler(monkeypatc
 
     monkeypatch.setattr(ActionExecutionGate, "authorize", staticmethod(deny))
 
-    result = await engine.execute_plugin(request, plan=plan)
-    await engine.cleanup()
+    result = await service.execute_plugin(
+        "echo",
+        user_id="user-1",
+        tenant_id="tenant-1",
+        session_id="session-1",
+        conversation_id="conversation-1",
+        correlation_id="corr-1",
+        authorized_plan=plan,
+    )
 
     assert result.status is ExecutionStatus.FAILED
-    assert result.error_code == "policy_denied"
-    assert "ActionExecutionGate" in (result.error or "")
-    assert result.plugin_id == "echo"
+    assert result.error_code == "action_gate_denied"
     assert result.user_id == "user-1"
     assert result.tenant_id == "tenant-1"
     assert result.session_id == "session-1"
     assert result.conversation_id == "conversation-1"
     assert result.correlation_id == "corr-1"
     assert result.policy_decision_id == "policy-1"
-    assert result.completed_at is not None
-    assert registry.calls == 1
-
-
-@pytest.mark.asyncio
-async def test_compatibility_engine_rejects_missing_plan_before_registry_lookup():
-    registry = _EngineRegistry()
-    engine = PluginExecutionEngine(registry=registry)  # type: ignore[arg-type]
-    request = ExecutionRequest(
-        plugin_name="echo",
-        user_id="user-1",
-        tenant_id="tenant-1",
-        correlation_id="corr-1",
-        policy_decision_id="policy-1",
-    )
-
-    result = await engine.execute_plugin(request, plan=None)
-    await engine.cleanup()
-
-    assert result.status is ExecutionStatus.FAILED
-    assert result.error_code == "policy_denied"
-    assert result.user_id == "user-1"
-    assert result.tenant_id == "tenant-1"
-    assert result.correlation_id == "corr-1"
-    assert result.policy_decision_id == "policy-1"
-    assert result.completed_at is not None
-    assert registry.calls == 0
-
-
-@pytest.mark.asyncio
-async def test_sandbox_uses_dict_backed_manifest_entrypoint(monkeypatch):
-    engine = PluginExecutionEngine(registry=_EngineRegistry())  # type: ignore[arg-type]
-    metadata = {
-        "manifest": SimpleNamespace(entrypoint="handler:MainExtension"),
-    }
-    calls: list[str] = []
-
-    async def execute_direct(*args, **kwargs):
-        calls.append("direct")
-        return {"ok": True}
-
-    async def execute_process(*args, **kwargs):
-        calls.append("process")
-        return {"ok": False}
-
-    monkeypatch.setattr(engine, "_execute_direct", execute_direct)
-    monkeypatch.setattr(engine, "_execute_in_process", execute_process)
-
-    result = await engine._execute_in_sandbox(
-        metadata,
-        {},
-        ResourceLimits(),
-        SecurityPolicy(),
-        30,
-        "request-1",
-    )
-    await engine.cleanup()
-
-    assert result == {"ok": True}
-    assert calls == ["direct"]
+    assert kernel.calls == 0
