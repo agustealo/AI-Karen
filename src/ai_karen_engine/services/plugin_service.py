@@ -368,6 +368,15 @@ class PluginService:
             del self._history[:-1000]
         return result
 
+    @staticmethod
+    def _permission_granted(grants: List[str], required: str) -> bool:
+        normalized = {str(value).strip() for value in grants if str(value).strip()}
+        if "*" in normalized or required in normalized:
+            return True
+        if ":" in required and required.split(":", 1)[0] in normalized:
+            return True
+        return False
+
     async def execute_plugin(
         self,
         plugin_name: str,
@@ -430,6 +439,23 @@ class PluginService:
                 "Plugin parameters do not satisfy the manifest contract",
             )
 
+        required_permissions = self._get_kernel().get_required_permissions(plugin_name)
+        principal_permissions = list(permissions or [])
+        missing_principal_permissions = [
+            permission
+            for permission in required_permissions
+            if not self._permission_granted(principal_permissions, permission)
+        ]
+        if missing_principal_permissions:
+            return failure(
+                "permission_denied",
+                "Plugin execution requires permissions: "
+                + ", ".join(missing_principal_permissions),
+            )
+        for permission in required_permissions:
+            if permission not in requested_caps:
+                requested_caps.append(permission)
+
         if authorized_plan is not None and not isinstance(
             authorized_plan, AuthorizedExecutionPlan
         ):
@@ -451,7 +477,7 @@ class PluginService:
                     session_id=session_id,
                     correlation_id=resolved_correlation,
                     roles=list(roles or []),
-                    permissions=list(permissions or []),
+                    permissions=principal_permissions,
                     action="plugin_execution",
                     plugin_id=plugin_name,
                     requested_capabilities=requested_caps,
@@ -486,6 +512,19 @@ class PluginService:
                 "plugin_not_authorized",
                 "Plugin is not present in AuthorizedExecutionPlan.allowed_plugins",
             )
+        missing_plan_permissions = [
+            permission
+            for permission in required_permissions
+            if not self._permission_granted(
+                list(authorized_plan.allowed_capabilities), permission
+            )
+        ]
+        if missing_plan_permissions:
+            return failure(
+                "permission_plan_mismatch",
+                "AuthorizedExecutionPlan does not grant plugin permissions: "
+                + ", ".join(missing_plan_permissions),
+            )
         if not await ActionExecutionGate.authorize(authorized_plan, plugin_name):
             return failure(
                 "action_gate_denied",
@@ -504,7 +543,7 @@ class PluginService:
             resource_scope=dict(authorized_plan.resource_scope),
             audit_context={
                 "user_roles": list(roles or []),
-                "permissions": list(permissions or []),
+                "permissions": principal_permissions,
             },
         )
         canonical_request = ExtensionExecutionRequest(
