@@ -1,8 +1,8 @@
 """Canonical bridge between extension catalog truth and governed execution.
 
-The extension platform manifest and registry own on-disk catalog truth.  The
+The extension platform manifest and registry own on-disk catalog truth. The
 runtime registry is a typed execution projection of that catalog, not a second
-discovery authority.  All invocation is delegated to ExtensionExecutionService.
+discovery authority. All invocation is delegated to ExtensionExecutionService.
 """
 
 from __future__ import annotations
@@ -11,9 +11,8 @@ import inspect
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Optional
 
 from ai_karen_engine.extensions.contracts import (
     DataClassification,
@@ -40,27 +39,18 @@ from ai_karen_engine.extensions.platform.core.registry.plugin_registry import (
 from ai_karen_engine.extensions.registry import ExtensionRegistry
 
 logger = logging.getLogger("kari.extensions.plugin_kernel")
+_CANONICAL_PLUGIN_ROOT = Path("src/ai_karen_engine/extensions/plugins")
 
 
 class RuntimeExtensionManifest(RuntimeExtensionManifestBase):
-    """Execution projection with manifest-level governance fallbacks.
-
-    The current permission validator accepts capability-level risk/data fields,
-    but also reads manifest-level fallbacks.  Keep those fields explicit on the
-    projection until the validator is fully capability-only.
-    """
+    """Execution projection with explicit manifest-level policy fallbacks."""
 
     risk_class: RiskClass = RiskClass.LOW
     data_classification: DataClassification = DataClassification.PUBLIC
 
 
 class _NormalizedExtensionLoader(ExtensionLoader):
-    """Use the catalog manifest normalizer for host loading.
-
-    Shipped manifests contain compatibility metadata such as ``id`` and
-    ``purpose``.  The platform manifest owns that normalization; host loading
-    must not bypass it by constructing the strict model directly from JSON.
-    """
+    """Load host manifests through the platform compatibility normalizer."""
 
     def load_manifest(self, extension_name: str) -> CatalogExtensionManifest:
         extension_dir = self._resolve_extension_dir(extension_name)
@@ -96,8 +86,7 @@ class _RuntimeInstanceAdapter:
         if not callable(handler):
             raise RuntimeError("Extension exposes neither execute() nor run()")
 
-        signature = inspect.signature(handler)
-        parameters = list(signature.parameters.values())
+        parameters = list(inspect.signature(handler).parameters.values())
         accepts_varargs = any(
             parameter.kind is inspect.Parameter.VAR_POSITIONAL
             for parameter in parameters
@@ -121,8 +110,6 @@ class _RuntimeInstanceAdapter:
 
 @dataclass(frozen=True)
 class PluginCatalogRecord:
-    """Stable application projection of catalog and runtime state."""
-
     manifest: CatalogExtensionManifest
     path: Path
     status: str
@@ -143,13 +130,7 @@ class PluginCatalogRecord:
 
 
 class PluginKernel:
-    """Single plugin kernel used by the application service.
-
-    Ownership:
-      * CatalogPluginRegistry: filesystem/catalog discovery truth.
-      * ExtensionRegistry: typed runtime execution projection only.
-      * ExtensionExecutionService: the only invocation path.
-    """
+    """One bridge from catalog discovery to typed, governed execution."""
 
     EXECUTE_CAPABILITY = "execute"
 
@@ -160,6 +141,7 @@ class PluginKernel:
         audit_sink: Any = None,
     ) -> None:
         self.extensions_root = Path(extensions_root)
+        self._audit_sink = audit_sink
         self.catalog_registry = CatalogPluginRegistry(
             extensions_dir=str(self.extensions_root)
         )
@@ -169,17 +151,22 @@ class PluginKernel:
         self.executor = ExtensionExecutionService(
             registry=self.runtime_registry,
             lifecycle=self.lifecycle,
-            audit_sink=audit_sink,
+            audit_sink=self._audit_sink,
         )
         self._catalog_manifests: Dict[str, CatalogExtensionManifest] = {}
         self._disabled: set[str] = set()
-        self._history: list[ExtensionExecutionResult] = []
         self._active: Dict[str, str] = {}
         self._initialized = False
 
     @property
     def initialized(self) -> bool:
         return self._initialized
+
+    def _is_builtin_root(self) -> bool:
+        try:
+            return self.extensions_root.resolve() == _CANONICAL_PLUGIN_ROOT.resolve()
+        except OSError:
+            return False
 
     async def initialize(self, *, auto_discover: bool = True) -> None:
         if self._initialized:
@@ -189,7 +176,7 @@ class PluginKernel:
         self._initialized = True
 
     async def refresh(self) -> int:
-        """Refresh catalog truth and rebuild the typed execution projection."""
+        """Refresh catalog truth and atomically rebuild the execution projection."""
         self._disabled.update(
             registration.manifest.id
             for registration in self.runtime_registry.list_registered()
@@ -202,7 +189,7 @@ class PluginKernel:
         executor = ExtensionExecutionService(
             registry=runtime_registry,
             lifecycle=lifecycle,
-            audit_sink=self.executor._audit_sink,
+            audit_sink=self._audit_sink,
         )
         catalog_manifests: Dict[str, CatalogExtensionManifest] = {}
 
@@ -211,7 +198,9 @@ class PluginKernel:
             if metadata is None:
                 continue
             try:
-                raw = json.loads(Path(metadata.manifest_path).read_text(encoding="utf-8"))
+                raw = json.loads(
+                    Path(metadata.manifest_path).read_text(encoding="utf-8")
+                )
                 catalog_manifest = CatalogExtensionManifest.from_dict(raw)
             except Exception as exc:
                 logger.error("Failed to normalize manifest for %s: %s", plugin_id, exc)
@@ -221,9 +210,8 @@ class PluginKernel:
             if not metadata.is_valid:
                 continue
 
-            runtime_manifest = self._project_runtime_manifest(catalog_manifest)
             registration = ExtensionRegistration(
-                manifest=runtime_manifest,
+                manifest=self._project_runtime_manifest(catalog_manifest),
                 state=ExtensionLifecycleState.DISCOVERED,
                 checksum=metadata.file_hash,
             )
@@ -262,13 +250,12 @@ class PluginKernel:
             declared.append("tool_access")
         return declared
 
-    @classmethod
     def _project_runtime_manifest(
-        cls, manifest: CatalogExtensionManifest
+        self, manifest: CatalogExtensionManifest
     ) -> RuntimeExtensionManifest:
         schema: Dict[str, Any] = {}
         if manifest.config_schema is not None:
-            schema = manifest.config_schema.model_dump(by_alias=True)
+            schema = manifest.config_schema.model_dump()
             if "additional_properties" in schema:
                 schema["additionalProperties"] = schema.pop("additional_properties")
 
@@ -276,9 +263,9 @@ class PluginKernel:
             getattr(role, "value", str(role))
             for role in (manifest.rbac.allowed_roles or [])
         ]
-        required_permissions = cls._declared_permissions(manifest)
+        required_permissions = self._declared_permissions(manifest)
         capability = ExtensionCapability(
-            id=cls.EXECUTE_CAPABILITY,
+            id=self.EXECUTE_CAPABILITY,
             input_schema=schema,
             required_permissions=required_permissions,
             required_roles=roles,
@@ -298,6 +285,9 @@ class PluginKernel:
             "tags": list(manifest.tags),
             "catalog_api_version": manifest.api_version,
         }
+        trust_tier = (
+            TrustTier.FIRST_PARTY if self._is_builtin_root() else TrustTier.UNTRUSTED
+        )
         return RuntimeExtensionManifest(
             id=manifest.name,
             name=manifest.name,
@@ -313,7 +303,7 @@ class PluginKernel:
             prompt_contract_id=manifest.prompt_files.contract_id,
             enabled_by_default=manifest.rbac.default_enabled,
             trusted_ui=False,
-            trust_tier=TrustTier.FIRST_PARTY,
+            trust_tier=trust_tier,
             metadata=metadata,
             risk_class=RiskClass.LOW,
             data_classification=DataClassification.PUBLIC,
@@ -360,9 +350,7 @@ class PluginKernel:
         if registration is None:
             return False
         self._disabled.discard(plugin_id)
-        await self.runtime_registry.update_state(
-            plugin_id, ExtensionLifecycleState.ENABLED
-        )
+        await self.runtime_registry.update_state(plugin_id, ExtensionLifecycleState.ENABLED)
         return True
 
     async def disable(self, plugin_id: str) -> bool:
@@ -370,16 +358,12 @@ class PluginKernel:
         if registration is None:
             return False
         self._disabled.add(plugin_id)
-        await self.runtime_registry.update_state(
-            plugin_id, ExtensionLifecycleState.DISABLED
-        )
+        await self.runtime_registry.update_state(plugin_id, ExtensionLifecycleState.DISABLED)
         return True
 
     async def _ensure_loaded(self, plugin_id: str) -> None:
         registration = self.runtime_registry.get(plugin_id)
-        if registration is None:
-            return
-        if registration.instance is not None:
+        if registration is None or registration.instance is not None:
             return
         if registration.state is not ExtensionLifecycleState.ENABLED:
             return
@@ -399,25 +383,15 @@ class PluginKernel:
         await self._ensure_loaded(request.plugin_id)
         self._active[request.context.request_id] = request.plugin_id
         try:
-            result = await self.executor.execute(request)
+            return await self.executor.execute(request)
         finally:
             self._active.pop(request.context.request_id, None)
-        self._history.append(result)
-        if len(self._history) > 1000:
-            del self._history[:-1000]
-        return result
-
-    def execution_history(self, limit: int = 100) -> list[ExtensionExecutionResult]:
-        if limit <= 0:
-            return []
-        return list(self._history[-limit:])
 
     def active_executions(self) -> Dict[str, str]:
         return dict(self._active)
 
     async def cleanup(self) -> None:
-        loaded = list(self.loader.get_loaded_extensions().values())
-        for instance in loaded:
+        for instance in self.loader.get_loaded_extensions().values():
             shutdown = getattr(instance, "_shutdown", None)
             is_shutdown = getattr(instance, "is_shutdown", None)
             already_shutdown = bool(is_shutdown()) if callable(is_shutdown) else False
