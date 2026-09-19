@@ -1,4 +1,3 @@
-import asyncio
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -156,6 +155,7 @@ class TestWorkflowRuntimePlanPropagation:
         request = _make_request()
         decision = _make_decision()
         plan = _make_plan()
+        captured: Dict[str, Any] = {}
 
         with patch.object(
             runtime, "_get_orchestrator", new_callable=AsyncMock
@@ -163,6 +163,7 @@ class TestWorkflowRuntimePlanPropagation:
             mock_orchestrator = AsyncMock()
 
             async def _empty_stream(**kwargs):
+                captured.update(kwargs)
                 if False:
                     yield kwargs
 
@@ -172,18 +173,14 @@ class TestWorkflowRuntimePlanPropagation:
             async for _ in runtime.stream(request, decision, plan):
                 pass
 
-            config = mock_orchestrator.process.call_args[1]["config"] if mock_orchestrator.process.called else None
-            if config is None:
-                config = runtime._build_config(
-                    request,
-                    request.context,
-                    request.context.conversation_id or "session-1",
-                    decision,
-                    plan,
-                )
-            assert config["session_id"] == "session-1"
-            assert config["request_config"]["runtime_policy"]["topology"] == "multi_agent"
-            assert config["request_config"]["runtime_policy"]["authorized_session_id"] == "session-1"
+        config = captured["config"]
+        assert config["session_id"] == "session-1"
+        assert config["conversation_id"] == "conv-1"
+        assert config["request_config"]["runtime_policy"]["topology"] == "multi_agent"
+        assert (
+            config["request_config"]["runtime_policy"]["authorized_session_id"]
+            == "session-1"
+        )
 
     @pytest.mark.asyncio
     async def test_graph_state_uses_security_session_not_checkpoint_key(self):
@@ -201,7 +198,9 @@ class TestWorkflowRuntimePlanPropagation:
 
         assert state["session_id"] == "session-1"
         assert state["conversation_id"] == "conv-1"
-        assert state["runtime_policy"]["authorized_session_id"] == "session-1"
+        runtime_policy = state["runtime_policy"]
+        assert runtime_policy is not None
+        assert runtime_policy["authorized_session_id"] == "session-1"
         await runtime_policy_enforcer_node(state)
 
 
