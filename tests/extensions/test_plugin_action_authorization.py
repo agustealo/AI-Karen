@@ -21,6 +21,8 @@ from ai_karen_engine.services.plugin_execution import (
     ExecutionResult,
     ExecutionStatus,
     PluginExecutionEngine,
+    ResourceLimits,
+    SecurityPolicy,
 )
 from ai_karen_engine.services.plugin_service import PluginService
 
@@ -111,7 +113,7 @@ def _service() -> tuple[PluginService, _CapturingEngine]:
 
 
 @pytest.mark.asyncio
-async def test_runtime_policy_emits_exact_plugin_and_principal_scope():
+async def test_runtime_policy_emits_exact_plugin_tool_and_principal_scope():
     decision = await RuntimePolicyEnforcer().evaluate(
         PolicyEvaluationRequest(
             user_id="user-1",
@@ -120,12 +122,17 @@ async def test_runtime_policy_emits_exact_plugin_and_principal_scope():
             correlation_id="corr-1",
             plugin_id="echo",
             action="plugin_execution",
+            execution_topology={
+                "plugin_candidates": ["echo", "search-plugin"],
+                "tool_requirements": ["web-search", "file-reader"],
+            },
         )
     )
 
     assert decision.allowed is True
     plan = decision.to_authorized_plan()
-    assert plan.allowed_plugins == ["echo"]
+    assert plan.allowed_plugins == ["echo", "search-plugin"]
+    assert plan.allowed_tools == ["web-search", "file-reader"]
     assert plan.authorized_user_id == "user-1"
     assert plan.authorized_tenant_id == "tenant-1"
     assert plan.authorized_session_id == "session-1"
@@ -137,6 +144,8 @@ async def test_runtime_policy_emits_exact_plugin_and_principal_scope():
         policy_decision_id=decision.decision_id,
     )
     assert await ActionExecutionGate.authorize(plan, "echo") is True
+    assert await ActionExecutionGate.authorize(plan, "search-plugin") is True
+    assert await ActionExecutionGate.authorize(plan, "web-search") is True
 
 
 @pytest.mark.asyncio
@@ -258,3 +267,36 @@ async def test_compatibility_engine_rejects_missing_plan_before_registry_lookup(
     assert result.status is ExecutionStatus.FAILED
     assert result.error_code == "policy_denied"
     assert registry.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_sandbox_uses_dict_backed_manifest_entrypoint(monkeypatch):
+    engine = PluginExecutionEngine(registry=_EngineRegistry())  # type: ignore[arg-type]
+    metadata = {
+        "manifest": SimpleNamespace(entrypoint="handler:MainExtension"),
+    }
+    calls: list[str] = []
+
+    async def execute_direct(*args, **kwargs):
+        calls.append("direct")
+        return {"ok": True}
+
+    async def execute_process(*args, **kwargs):
+        calls.append("process")
+        return {"ok": False}
+
+    monkeypatch.setattr(engine, "_execute_direct", execute_direct)
+    monkeypatch.setattr(engine, "_execute_in_process", execute_process)
+
+    result = await engine._execute_in_sandbox(
+        metadata,
+        {},
+        ResourceLimits(),
+        SecurityPolicy(),
+        30,
+        "request-1",
+    )
+    await engine.cleanup()
+
+    assert result == {"ok": True}
+    assert calls == ["direct"]
