@@ -70,6 +70,9 @@ class _Kernel:
     def list_records(self):
         return [self.record]
 
+    def get_required_permissions(self, name: str) -> list[str]:
+        return [] if name == "alpha-plugin" else []
+
     async def execute(self, request):
         self.request = request
         return ExtensionExecutionResult(
