@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI
@@ -426,14 +427,20 @@ async def run_canonical_runtime_bootstrap(settings: Any, app: Optional[FastAPI] 
                     )
                 except Exception:
                     pass
+
             available_plugins: List[str] = []
             try:
-                from ai_karen_engine.extensions.registry import ExtensionRegistry
+                await initialize_extension_kernel(settings)
+                from ai_karen_engine.services.plugin_service import get_plugin_service
 
-                extension_registry = ExtensionRegistry()
-                available_plugins = [r.manifest.id for r in extension_registry.list_enabled()]
-            except Exception:
-                pass
+                plugin_service = get_plugin_service()
+                available_plugins = [
+                    str(getattr(record.get("manifest"), "name", ""))
+                    for record in await plugin_service.list_plugins(enabled_only=True)
+                    if getattr(record.get("manifest"), "name", None)
+                ]
+            except Exception as exc:
+                logger.warning("Plugin capability snapshot degraded: %s", exc)
 
             snapshot = RuntimeCapabilitiesSnapshot(
                 available_providers=available_providers,
@@ -528,56 +535,51 @@ def init_security(settings: Any) -> None:
 
 
 async def initialize_extension_kernel(settings: Any) -> None:
-    """Initialize the canonical extension kernel.
-
-    Replaces legacy plugin_loader and load_plugins_optimized.
-    """
+    """Initialize the one configured plugin kernel used by startup and the API."""
     try:
-        from ai_karen_engine.extensions.registry import ExtensionRegistry
-        from ai_karen_engine.extensions.discovery import ExtensionDiscovery
-        from ai_karen_engine.extensions.lifecycle import ExtensionLifecycleManager
-        from ai_karen_engine.extensions.manifest import ExtensionManifestLoader
-
-        plugin_dirs = getattr(settings, "plugin_dirs", None) or ["src/ai_karen_engine/extensions/plugins"]
-        directories = [Path(d) for d in plugin_dirs]
-
-        discovery = ExtensionDiscovery(directories=directories)
-        registry = ExtensionRegistry()
-        lifecycle = ExtensionLifecycleManager(registry=registry)
-        manifest_loader = ExtensionManifestLoader(extensions_root=directories[0] if directories else Path("src/ai_karen_engine/extensions/plugins"))
-
-        discovered = await discovery.discover(force_refresh=True)
-        for plugin_id, metadata in discovered.items():
-            if not metadata.is_valid or metadata.manifest is None:
-                continue
-
-            from ai_karen_engine.extensions.contracts import ExtensionRegistration, ExtensionLifecycleState
-
-            registration = ExtensionRegistration(
-                manifest=metadata.manifest,
-                state=ExtensionLifecycleState.DISCOVERED,
-                checksum=metadata.checksum,
-            )
-            try:
-                await registry.register(registration)
-                lifecycle.transition(plugin_id, ExtensionLifecycleState.VALIDATED)
-                lifecycle.transition(plugin_id, ExtensionLifecycleState.REGISTERED)
-                if metadata.manifest.enabled_by_default:
-                    lifecycle.transition(plugin_id, ExtensionLifecycleState.ENABLED)
-                    registration.state = ExtensionLifecycleState.ENABLED
-                else:
-                    registration.state = ExtensionLifecycleState.REGISTERED
-            except Exception as exc:
-                logger.warning("Extension registration failed for %s: %s", plugin_id, exc)
-                lifecycle.transition(plugin_id, ExtensionLifecycleState.FAILED, reason=str(exc))
-
-        logger.info(
-            "Extension kernel initialized: %d discovered, %d registered",
-            len(discovered),
-            len(registry.list_registered()),
+        from ai_karen_engine.services.plugin_service import (
+            get_plugin_service,
+            initialize_plugin_service,
         )
-    except Exception as exc:
-        logger.warning("Extension kernel initialization failed: %s", exc)
+
+        plugin_dirs = getattr(settings, "plugin_dirs", None) or [
+            "src/ai_karen_engine/extensions/plugins"
+        ]
+        roots = [Path(directory) for directory in plugin_dirs]
+        resolved_roots = {root.resolve() for root in roots}
+        if len(resolved_roots) != 1:
+            raise ValueError(
+                "Plugin runtime requires one canonical plugin root; "
+                "configure plugin_dirs with one unique path"
+            )
+        root = roots[0]
+
+        service = get_plugin_service()
+        if service.initialized:
+            active_root = Path(
+                service.core_plugins_path
+                or service.marketplace_path
+                or "src/ai_karen_engine/extensions/plugins"
+            )
+            if active_root.resolve() != root.resolve():
+                raise RuntimeError(
+                    "Plugin service is already initialized for a different root"
+                )
+        else:
+            service = await initialize_plugin_service(
+                marketplace_path=root,
+                core_plugins_path=root,
+                auto_discover=True,
+            )
+
+        stats = service.get_service_stats().get("registry_stats", {})
+        logger.info(
+            "Extension kernel initialized: %d catalog plugins",
+            int(stats.get("total_plugins", 0) or 0),
+        )
+    except Exception:
+        logger.exception("Extension kernel initialization failed")
+        raise
 
 
 def start_background_tasks(settings: Any) -> None:
@@ -827,7 +829,7 @@ async def _authentication_degradation_handler() -> None:
     """Graceful degradation handler for authentication service."""
     try:
         logger.info("Enabling graceful degradation for authentication service")
-        logger.info("Authentication service graceful degradation enabled")
+        logger.info("Authentication graceful degradation enabled")
     except Exception as e:
         logger.error("Authentication degradation handler failed: %s", e)
 
