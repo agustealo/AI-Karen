@@ -778,7 +778,9 @@ class PluginExecutionEngine:
         request_id: str
     ) -> Any:
         """Execute plugin in enhanced sandbox mode."""
-        if ":" in (getattr(plugin_metadata.manifest, "entry_point", None) or ""):
+        manifest = plugin_metadata.get("manifest")
+        entrypoint = getattr(manifest, "entrypoint", None) or ""
+        if ":" in entrypoint:
             return await self._execute_direct(
                 plugin_metadata,
                 parameters,
