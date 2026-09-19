@@ -1,158 +1,78 @@
-# Extension System Migration Complete
+# Extension Kernel Authority Map
 
-## Migration Summary
+The extension tree is consolidated under `src/ai_karen_engine/extensions/`, but
+physical colocation does not by itself prove a single runtime authority. This
+file records the active ownership model after PLUGIN-KERNEL-2.
 
-Successfully consolidated the extension system into the canonical root at `src/ai_karen_engine/extensions/`, eliminating the dual-extension-architecture that previously existed between `src/extensions/` and `src/ai_karen_engine/extensions/`.
+## Active ownership
 
-## What Changed
+| Responsibility | Owner | Notes |
+| --- | --- | --- |
+| On-disk plugin/catalog manifest | `extensions/platform/core/manifest.py` | Preserves UI, prompt, RBAC, config, dependency, marketplace, and catalog metadata. |
+| Filesystem/catalog discovery | `extensions/platform/core/registry/` | The platform registry and discovery service are the only plugin filesystem discovery authority. |
+| Catalog-to-runtime normalization | `extensions/plugin_kernel.py` | Projects the catalog manifest into the typed execution contract once. It does not discover independently. |
+| Runtime execution registration | `extensions/registry.py` | Typed in-memory execution projection only. It is not a filesystem/catalog registry. |
+| Lifecycle state | `extensions/contracts.py` + `extensions/registry.py` | `ExtensionLifecycleState` is authoritative for enabled/disabled execution state. |
+| Invocation | `extensions/executor.py` | `ExtensionExecutionService` is the only plugin invocation path. |
+| Action authorization | RuntimePolicy + `ActionExecutionGate` | User, tenant, session, policy decision, plugin identity, RBAC, and permissions remain fail-closed. |
+| HTTP/application facade | `services/plugin_service.py` | Adapts API requests/results and metrics; does not select a second executor or registry. |
 
-### Before
-- **Dual Extension Roots**: 
-  - `src/extensions/` - Platform/framework layer with rich discovery, validation, lifecycle management
-  - `src/ai_karen_engine/extensions/` - Runtime engine-facing services
-  
-### After
-- **Single Canonical Root**: `src/ai_karen_engine/extensions/`
-  - `platform/` - Extension platform framework (host, registry, integration, API routes, docs, meta, artifacts)
-  - `plugins/` - User/community plugin packages
-  - `system_extensions/` - Built-in system extension packages
-  - `runtime/` - Engine-facing runtime services (loader, executor, auth, permissions, etc.)
+## Manifest rule
 
-## Structure Details
+A plugin has one catalog manifest source on disk. The platform manifest is the
+catalog schema because shipped plugins and UI materialization depend on its
+prompt, RBAC, configuration, UI, and marketplace fields.
 
-```
-src/ai_karen_engine/extensions/
-├── platform/                    # Extension platform framework
-│   ├── core/                   # Platform core: host, registry, integration
-│   │   ├── host/              # Extension host mechanics and management
-│   │   ├── registry/          # Extension registry and discovery
-│   │   ├── integration/       # Extension integration framework
-│   │   ├── manager.py         # Metrics, memory, and lifecycle
-│   │   └── orchestrator.py    # Hook-based workflow engine
-│   ├── api_routes/            # Platform API routes
-│   ├── docs/                  # Platform documentation
-│   ├── meta/                  # Platform metadata
-│   ├── artifacts/             # Platform assets
-│   └── README.md
-├── plugins/                   # User/community plugin packages
-├── system_extensions/         # Built-in system extension packages
-└── runtime/                   # Engine-facing runtime services
-    ├── extension_loader.py
-    ├── extension_executor.py
-    ├── extension_registry.py
-    ├── extension_auth.py
-    ├── extension_permissions.py
-    ├── extension_rbac.py
-    ├── extension_config.py
-    ├── extension_health_monitor.py
-    ├── extension_monitor.py
-    ├── extension_marketplace.py
-    ├── extension_api.py
-    ├── extension_error_recovery.py
-    ├── extension_tenant_access.py
-    ├── extension_environment_config.py
-    ├── extension_config_validator.py
-    ├── extension_config_hot_reload.py
-    ├── extension_config_integration.py
-    ├── extension_alerting_system.py
-    ├── health_monitor/
-    ├── monitoring/
-    ├── service_recovery/
-    └── internal/
+The execution manifest in `extensions/contracts.py` is a typed runtime
+projection. It is intentionally narrower and contains execution governance such
+as capabilities, tenant scope, trust tier, isolation, schemas, and side effects.
+It is not a competing file format.
+
+New code must not parse the same plugin manifest into an independent service
+registry or construct an alternate execution policy model.
+
+## Compatibility boundary
+
+`services/plugin_execution.py` is a temporary import shim for the legacy HTTP
+route's status/result symbols only. It contains no execution, sandbox, routing,
+policy, or registry implementation. Execution authority remains
+`ExtensionExecutionService`.
+
+`services/plugin_discovery.py` was removed. Do not recreate service-layer
+filesystem discovery.
+
+## Shipped plugin root
+
+The canonical bundled plugin root is:
+
+```text
+src/ai_karen_engine/extensions/plugins/
 ```
 
-## Import Updates
+Only that bundled root may be projected as first-party trust by the kernel.
+Custom roots are projected as untrusted unless a separate signed/trust process
+explicitly promotes them.
 
-All imports have been updated to use the canonical paths:
+## Proof requirements
 
-### Old Paths (removed)
-- `from extensions.core` → `from ai_karen_engine.extensions.platform.core`
-- `from extensions.core.host` → `from ai_karen_engine.extensions.platform.core.host`
-- `from extensions.core.registry` → `from ai_karen_engine.extensions.platform.core.registry`
-- `from extensions.core.integration` → `from ai_karen_engine.extensions.platform.core.integration`
-- `from extensions.core.manager` → `from ai_karen_engine.extensions.platform.core.manager`
-- `from extensions` → `from extensions`
-
-### New Canonical Paths
-- `from ai_karen_engine.extensions.platform.core` → Platform core logic
-- `from ai_karen_engine.extensions.platform.core.host` → Host mechanics
-- `from ai_karen_engine.extensions.platform.core.registry` → Registry
-- `from ai_karen_engine.extensions.platform.core.integration` → Integration
-- `from ai_karen_engine.extensions.platform.core.manager` → Manager
-- `from ai_karen_engine.extensions.runtime` → Runtime services
-
-## Files Migrated
-
-### Platform Logic (65 files)
-- Core framework files (host, registry, integration, manager, orchestrator)
-- API routes (health, marketplace, plugin settings, prompt, UI materialization)
-- Documentation and metadata
-- Assets and artifacts
-
-### Plugins (preserved as-is)
-- `plugins/time_query/`
-- `plugins/weather-query/`
-- `plugins/data_connector/`
-- `plugins/monitoring/`
-- `plugins/response_formatting/`
-
-### System Extensions (preserved as-is)
-- `system_extensions/monitoring/`
-- `system_extensions/data_connector/`
-- `system_extensions/response_formatting/`
-
-### Runtime Services (24 files)
-- Engine-facing services: loader, executor, registry, auth, permissions, RBAC, config, marketplace, API, health monitoring, error recovery, tenant access, environment config
-- Supporting modules: health_monitor, monitoring, service_recovery, internal
-
-## Key Features Preserved
-
-### Stronger Implementations Chosen
-1. **Extension Loader**: `platform/core/host/loader.py` (more feature-rich with manifest validation, discovery, dependency resolution)
-2. **Extension Registry**: `platform/core/registry/plugin_registry.py` (database-backed with discovery, validation)
-3. **Integration Framework**: `platform/core/integration/` (rich orchestration capabilities)
-
-### Missing Features Merged
-- Runtime services from the old runtime tree integrated into new runtime module
-- Health monitoring and service recovery capabilities from both sides merged
-- Configuration management from both sides consolidated
-
-## Verification
-
-All imports have been tested and verified to work correctly:
+Changes to the extension kernel must prove at minimum:
 
 ```bash
-✅ Platform imports work
-✅ Runtime imports work  
-✅ Root extension imports work
-✅ All __init__ files compile successfully
+python -m compileall src
+pytest tests/extensions -q
+ruff check src tests
+mypy src
 ```
 
-## Removed Legacy Files
+The repository's exact-head CI remains the merge authority. Plugin Ecosystem,
+Main Quality, Production First-Boot, Agent/Medusa burns, and any automatically
+triggered architecture/security gates must be green before merge.
 
-- Entire `src/extensions/` directory removed (211 files)
-- No dual-extension-architecture remains
-- No backward-compatibility wrappers
+## Known compatibility cleanup
 
-## Benefits
+The remaining `services/plugin_execution.py` import shim should be removed only
+after its final HTTP route import is migrated. Do not add behavior to that shim.
 
-1. **Single Source of Truth**: All extension logic now in one canonical location
-2. **No Split Authority**: Clear ownership of each responsibility
-3. **DRY Architecture**: No duplicate functionality
-4. **Package-Native**: Extension ownership inside the `ai_karen_engine` package
-5. **Maintainability**: Clear separation of concerns with explicit ownership
-
-## Next Steps
-
-The extension system is now ready for:
-- Full integration testing
-- Documentation updates (if any references to old paths exist)
-- CI/CD pipeline updates
-- Developer onboarding
-
----
-
-**Migration Date**: 2025-04-18  
-**Migrated Files**: 143 Python files  
-**Removed Legacy Files**: 211 Python files  
-**Status**: ✅ COMPLETE
+This document supersedes the former 2025 claim that the migration was fully
+complete. The earlier document described directories and files that no longer
+matched the live repository and overstated the absence of duplicate authority.
