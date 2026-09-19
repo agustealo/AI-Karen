@@ -5,8 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import ai_karen_engine.services.plugin_discovery as plugin_discovery
-from ai_karen_engine.services.plugin_discovery import PluginRegistry
+from ai_karen_engine.extensions.contracts import ExtensionLifecycleState
 from ai_karen_engine.services.plugin_service import PluginService
 
 
@@ -34,45 +33,36 @@ def _write_plugin(root: Path) -> None:
     )
 
 
-def _registry(root: Path) -> PluginRegistry:
-    registry = PluginRegistry(marketplace_path=root, core_plugins_path=root)
-    registry.extensions_core_path = root
-    registry.legacy_marketplace_path = root / "missing-marketplace"
-    registry.legacy_core_plugins_path = root / "missing-core"
-    return registry
-
-
-def test_legacy_plugin_metadata_symbol_remains_retired() -> None:
-    assert not hasattr(plugin_discovery, "PluginMetadata")
-
-
 @pytest.mark.asyncio
 async def test_force_refresh_preserves_disabled_state(tmp_path: Path) -> None:
     _write_plugin(tmp_path)
-    registry = _registry(tmp_path)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
 
-    await registry.discover_plugins()
-    registry.plugins["alpha-plugin"]["status"] = "disabled"
-
-    refreshed = await registry.discover_plugins(force_refresh=True)
-
-    assert refreshed["alpha-plugin"]["status"] == "disabled"
-    assert registry.plugins["alpha-plugin"]["status"] == "disabled"
-
-
-@pytest.mark.asyncio
-async def test_service_reload_does_not_reenable_disabled_plugin(tmp_path: Path) -> None:
-    _write_plugin(tmp_path)
-    registry = _registry(tmp_path)
-    await registry.discover_plugins()
-    registry.plugins["alpha-plugin"]["status"] = "disabled"
-
-    service = PluginService()
-    service.initialized = True
-    service.registry = registry
+    assert await service.disable_plugin("alpha-plugin") is True
+    before = service.kernel.runtime_registry.get("alpha-plugin")
+    assert before is not None
+    assert before.state is ExtensionLifecycleState.DISABLED
 
     count = await service.refresh_plugins()
 
     assert count == 1
-    assert registry.plugins["alpha-plugin"]["status"] == "disabled"
-    assert registry.get_plugins_by_status("registered") == []
+    after = service.kernel.runtime_registry.get("alpha-plugin")
+    assert after is not None
+    assert after.state is ExtensionLifecycleState.DISABLED
+    assert (await service.get_plugin_info("alpha-plugin"))["status"] == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_refresh_does_not_reenable_disabled_plugin(tmp_path: Path) -> None:
+    _write_plugin(tmp_path)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    assert await service.disable_plugin("alpha-plugin") is True
+
+    await service.discover_plugins(force_refresh=True)
+    registration = service.kernel.runtime_registry.get("alpha-plugin")
+
+    assert registration is not None
+    assert registration.state is ExtensionLifecycleState.DISABLED
+    assert service.get_plugins_by_status("enabled") == []
