@@ -301,6 +301,9 @@ def _serialize_plan(plan: AuthorizedExecutionPlan) -> Dict[str, Any]:
     return {
         "execution_id": plan.execution_id,
         "policy_decision_id": plan.policy_decision_id,
+        "authorized_user_id": plan.authorized_user_id,
+        "authorized_tenant_id": plan.authorized_tenant_id,
+        "authorized_session_id": plan.authorized_session_id,
         "topology": (
             plan.topology.value
             if hasattr(plan.topology, "value")
