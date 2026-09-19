@@ -37,15 +37,22 @@ class FakeHandler:
 
 
 class FakeRegistry:
-    def __init__(self, *, enabled: bool = True, handler: FakeHandler | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        enabled: bool = True,
+        handler: FakeHandler | None = None,
+        manifest: ExtensionManifest | None = None,
+    ) -> None:
         self.handler = handler or FakeHandler()
         self.enabled = enabled
+        self.manifest = manifest or _manifest()
 
     def get(self, plugin_id: str) -> ExtensionRegistration | None:
         if plugin_id != "echo":
             return None
         return ExtensionRegistration(
-            manifest=_manifest(),
+            manifest=self.manifest,
             state=(
                 ExtensionLifecycleState.ENABLED
                 if self.enabled
@@ -77,7 +84,10 @@ class FakeCapabilityResolver:
         )
 
 
-def _manifest() -> ExtensionManifest:
+def _manifest(
+    *, required_permissions: list[str] | None = None
+) -> ExtensionManifest:
+    permissions = list(required_permissions or [])
     return ExtensionManifest(
         id="echo",
         name="echo",
@@ -85,9 +95,15 @@ def _manifest() -> ExtensionManifest:
         plugin_api_version="1.0",
         description="Test",
         entrypoint="handler:EchoExtension",
-        capabilities=[ExtensionCapability(id="echo", version="1.0.0")],
+        capabilities=[
+            ExtensionCapability(
+                id="echo",
+                version="1.0.0",
+                required_permissions=permissions,
+            )
+        ],
         intents=["echo"],
-        required_permissions=[],
+        required_permissions=permissions,
         optional_permissions=[],
         required_roles=[],
         tenant_scope="single",
@@ -131,6 +147,7 @@ def _context(
 def _plan(
     *,
     allowed_plugins: list[str] | None = None,
+    allowed_capabilities: list[str] | None = None,
     user_id: str = "user-1",
     tenant_id: str = "tenant-1",
     session_id: str | None = "session-1",
@@ -142,6 +159,7 @@ def _plan(
         authorized_tenant_id=tenant_id,
         authorized_session_id=session_id,
         allowed_plugins=list(allowed_plugins if allowed_plugins is not None else ["echo"]),
+        allowed_capabilities=list(allowed_capabilities or []),
     )
 
 
@@ -203,6 +221,46 @@ async def test_empty_allowed_plugins_is_fail_closed():
     assert result.status == "failed"
     assert result.error_code == "not_authorized"
     assert handler.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_required_permission_is_fail_closed_when_plan_grant_is_empty():
+    handler = FakeHandler()
+    service = ExtensionExecutionService(
+        registry=FakeRegistry(
+            handler=handler,
+            manifest=_manifest(required_permissions=["custom_access"]),
+        ),
+        lifecycle=FakeLifecycle(),
+    )
+
+    result = await service.execute(
+        _request(plan=_plan(allowed_capabilities=[]))
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "permission_denied"
+    assert handler.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_required_permission_executes_only_when_plan_grants_it():
+    handler = FakeHandler()
+    service = ExtensionExecutionService(
+        registry=FakeRegistry(
+            handler=handler,
+            manifest=_manifest(required_permissions=["custom_access"]),
+        ),
+        lifecycle=FakeLifecycle(),
+    )
+
+    result = await service.execute(
+        _request(plan=_plan(allowed_capabilities=["custom_access"]))
+    )
+
+    assert result.status == "success"
+    assert result.payload == {"echo": "hello"}
+    assert handler.calls == 1
 
 
 @pytest.mark.asyncio
