@@ -33,6 +33,30 @@ def _runtime_plan(state: Dict[str, Any]) -> Dict[str, Any]:
         raise PermissionError(
             "LangGraph authorization requires a policy_decision_id"
         )
+
+    authorized_user_id = str(plan.get("authorized_user_id") or "").strip()
+    authorized_tenant_id = str(plan.get("authorized_tenant_id") or "").strip()
+    if not authorized_user_id or not authorized_tenant_id:
+        raise PermissionError(
+            "LangGraph authorization requires a Runtime-bound user and tenant"
+        )
+
+    state_user_id = str(state.get("user_id") or "").strip()
+    state_tenant_id = str(state.get("tenant_id") or "").strip()
+    if authorized_user_id != state_user_id or authorized_tenant_id != state_tenant_id:
+        raise PermissionError(
+            "LangGraph execution identity does not match Runtime authorization"
+        )
+
+    authorized_session = plan.get("authorized_session_id")
+    if authorized_session is not None:
+        authorized_session_id = str(authorized_session).strip()
+        state_session_id = str(state.get("session_id") or "").strip()
+        if authorized_session_id != state_session_id:
+            raise PermissionError(
+                "LangGraph session does not match Runtime authorization"
+            )
+
     topology = str(plan.get("topology") or "").strip().lower()
     if topology not in _ALLOWED_GRAPH_TOPOLOGIES:
         raise PermissionError(
