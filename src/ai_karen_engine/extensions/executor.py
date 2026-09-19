@@ -31,6 +31,10 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
+from ai_karen_engine.core.runtime.contracts import (
+    ActionExecutionGate,
+    AuthorizedExecutionPlan,
+)
 from ai_karen_engine.extensions.contracts import (
     CapabilityInvocationRequest,
     DataClassification,
@@ -87,7 +91,7 @@ class ExtensionExecutionService:
     async def execute_capability(
         self,
         request: CapabilityInvocationRequest,
-        authorized_plan: Optional[Dict[str, Any]] = None,
+        authorized_plan: Optional[AuthorizedExecutionPlan] = None,
     ) -> ExtensionExecutionResult:
         """Execute a capability request through full governance.
 
@@ -95,6 +99,7 @@ class ExtensionExecutionService:
         """
         start = time.perf_counter()
         execution_id = str(uuid.uuid4())
+        plan = authorized_plan or request.authorized_plan
 
         if self._capability_resolver is None:
             raise ExtensionError(
@@ -102,8 +107,17 @@ class ExtensionExecutionService:
                 error_code="missing_resolver",
             )
 
+        if plan is not None and not isinstance(plan, AuthorizedExecutionPlan):
+            return self._fail_capability(
+                request,
+                start,
+                execution_id,
+                "authorized_plan_invalid",
+                "Capability execution requires a typed AuthorizedExecutionPlan",
+            )
+
         try:
-            resolved = await self._capability_resolver.resolve(request, authorized_plan)
+            resolved = await self._capability_resolver.resolve(request, plan)
         except Exception as exc:
             return self._fail_capability(
                 request,
@@ -113,18 +127,16 @@ class ExtensionExecutionService:
                 str(exc),
             )
 
-        ext_request = self._convert_to_ext_request(request, resolved)
-
-        result = await self.execute(ext_request, authorized_plan)
-
+        ext_request = self._convert_to_ext_request(request, resolved, plan)
+        result = await self.execute(ext_request)
         self._enrich_result_with_provenance(result, resolved)
-
         return result
 
     def _convert_to_ext_request(
         self,
         request: CapabilityInvocationRequest,
         resolved: Any,
+        authorized_plan: Optional[AuthorizedExecutionPlan],
     ) -> ExtensionExecutionRequest:
         """Convert capability invocation to extension execution request."""
         return ExtensionExecutionRequest(
@@ -132,7 +144,7 @@ class ExtensionExecutionService:
             capability=request.capability_id,
             payload=request.payload,
             context=request.context,
-            authorized_plan=request.authorized_plan,
+            authorized_plan=authorized_plan,
         )
 
     def _enrich_result_with_provenance(
@@ -171,7 +183,6 @@ class ExtensionExecutionService:
 
         manifest = registration.manifest
         context = request.context
-
         capability_obj = self._get_capability(manifest, capability)
 
         if capability_obj is not None:
@@ -182,6 +193,72 @@ class ExtensionExecutionService:
             result_trust = ResultTrust.UNTRUSTED_EXTERNAL
             data_classification = DataClassification.PUBLIC
             trust_tier = getattr(manifest, "trust_tier", TrustTier.UNTRUSTED)
+
+        plan = request.authorized_plan
+        if not isinstance(plan, AuthorizedExecutionPlan):
+            return self._fail_with_provenance(
+                request,
+                start,
+                execution_id,
+                "authorized_plan_required",
+                "Extension execution requires a typed AuthorizedExecutionPlan",
+                trust_tier,
+                result_trust,
+                data_classification,
+            )
+
+        if not context.policy_decision_id or context.policy_decision_id != plan.policy_decision_id:
+            return self._fail_with_provenance(
+                request,
+                start,
+                execution_id,
+                "policy_decision_mismatch",
+                "Execution context policy decision does not match AuthorizedExecutionPlan",
+                trust_tier,
+                result_trust,
+                data_classification,
+            )
+
+        if not plan.matches_execution_scope(
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            session_id=context.session_id,
+            policy_decision_id=context.policy_decision_id,
+        ):
+            return self._fail_with_provenance(
+                request,
+                start,
+                execution_id,
+                "authorized_scope_mismatch",
+                "Execution identity scope does not match AuthorizedExecutionPlan",
+                trust_tier,
+                result_trust,
+                data_classification,
+            )
+
+        if plugin_id not in plan.allowed_plugins:
+            return self._fail_with_provenance(
+                request,
+                start,
+                execution_id,
+                "not_authorized",
+                f"Plugin '{plugin_id}' not in AuthorizedExecutionPlan.allowed_plugins",
+                trust_tier,
+                result_trust,
+                data_classification,
+            )
+
+        if not await ActionExecutionGate.authorize(plan, plugin_id):
+            return self._fail_with_provenance(
+                request,
+                start,
+                execution_id,
+                "action_gate_denied",
+                f"ActionExecutionGate denied plugin '{plugin_id}'",
+                trust_tier,
+                result_trust,
+                data_classification,
+            )
 
         if registration.state != ExtensionLifecycleState.ENABLED:
             error = ExtensionDisabledError(plugin_id)
@@ -222,24 +299,19 @@ class ExtensionExecutionService:
                 data_classification,
             )
 
-        authorized_plan = request.authorized_plan or {}
-        allowed_plugins = authorized_plan.get("allowed_plugins", [])
-        if allowed_plugins and plugin_id not in allowed_plugins:
-            return self._fail_with_provenance(
-                request,
-                start,
-                execution_id,
-                "not_authorized",
-                f"Plugin '{plugin_id}' not in allowed_plugins",
-                trust_tier,
-                result_trust,
-                data_classification,
-            )
-
-        # Validate permissions using comprehensive permission validator
-        permission_summary = validate_plugin_permissions(manifest, capability_obj, context, authorized_plan)
+        permission_plan = self._permission_plan_view(plan)
+        permission_summary = validate_plugin_permissions(
+            manifest,
+            capability_obj,
+            context,
+            permission_plan,
+        )
         if not permission_summary["valid"]:
-            denied_permissions = [check["permission_id"] for check in permission_summary["checks"] if check["result"] == "denied"]
+            denied_permissions = [
+                check["permission_id"]
+                for check in permission_summary["checks"]
+                if check["result"] == "denied"
+            ]
             error = ExtensionPermissionError(plugin_id, denied_permissions)
             return self._fail_with_provenance(
                 request,
@@ -318,7 +390,9 @@ class ExtensionExecutionService:
 
         timeout_ms = self._get_timeout(request, manifest, capability_obj)
         try:
-            raw_result = await asyncio.wait_for(self._invoke(handler, request), timeout=timeout_ms / 1000.0)
+            raw_result = await asyncio.wait_for(
+                self._invoke(handler, request), timeout=timeout_ms / 1000.0
+            )
         except asyncio.TimeoutError:
             error = ExtensionTimeoutError(plugin_id, timeout_ms)
             return self._fail_with_provenance(
@@ -378,6 +452,8 @@ class ExtensionExecutionService:
             error_code=None,
             side_effects=self._infer_side_effects(manifest, capability_obj),
             permission_set=self._get_required_permissions(manifest, capability_obj),
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
             correlation_id=context.correlation_id,
             policy_decision_id=context.policy_decision_id,
             trust_tier=trust_tier,
@@ -406,6 +482,19 @@ class ExtensionExecutionService:
             backend_version=manifest.metadata.get("backend_version"),
         )
 
+    @staticmethod
+    def _permission_plan_view(plan: AuthorizedExecutionPlan) -> Dict[str, Any]:
+        """Expose only authorization fields required by the legacy permission validator."""
+        return {
+            "policy_decision_id": plan.policy_decision_id,
+            "allowed_capabilities": list(plan.allowed_capabilities),
+            "allowed_tools": list(plan.allowed_tools),
+            "allowed_plugins": list(plan.allowed_plugins),
+            "allowed_agents": list(plan.allowed_agents),
+            "resource_scope": dict(plan.resource_scope),
+            "approval_requirements": list(plan.approval_requirements),
+        }
+
     def _get_capability(self, manifest: ExtensionManifest, capability_id: str) -> Optional[ExtensionCapability]:
         """Get the capability object from manifest."""
         for cap in manifest.capabilities:
@@ -420,7 +509,7 @@ class ExtensionExecutionService:
         return manifest.required_permissions
 
     def _get_timeout(self, request: ExtensionExecutionRequest, manifest: ExtensionManifest, capability: Optional[ExtensionCapability]) -> int:
-        """Get timeout preferring capability-level over manifest-level over request override."""
+        """Get timeout preferring request override over capability and manifest defaults."""
         if request.timeout_override_ms:
             return request.timeout_override_ms
         if capability and hasattr(capability, "retry_policy"):
@@ -448,6 +537,8 @@ class ExtensionExecutionService:
             latency_ms=latency_ms,
             error_code=error_code,
             side_effects=[],
+            user_id=request.context.user_id,
+            tenant_id=request.context.tenant_id,
             correlation_id=request.context.correlation_id,
             policy_decision_id=request.context.policy_decision_id,
             trust_tier=trust_tier,
@@ -492,6 +583,8 @@ class ExtensionExecutionService:
             latency_ms=latency_ms,
             error_code=error_code,
             side_effects=[],
+            user_id=request.context.user_id,
+            tenant_id=request.context.tenant_id,
             correlation_id=request.context.correlation_id,
             policy_decision_id=request.context.policy_decision_id,
             trust_tier=TrustTier.UNTRUSTED,
@@ -535,9 +628,9 @@ class ExtensionExecutionService:
                 return record
         return "unknown"
 
-    async def _check_permissions(self, manifest: ExtensionManifest, context: ExtensionExecutionContext, authorized_plan: Dict[str, Any], capability: Optional[ExtensionCapability]) -> List[str]:
+    async def _check_permissions(self, manifest: ExtensionManifest, context: ExtensionExecutionContext, authorized_plan: AuthorizedExecutionPlan, capability: Optional[ExtensionCapability]) -> List[str]:
         missing: List[str] = []
-        granted = set(authorized_plan.get("allowed_capabilities", []))
+        granted = set(authorized_plan.allowed_capabilities)
         required_perms = self._get_required_permissions(manifest, capability)
         for perm in required_perms:
             if perm not in granted:
@@ -545,8 +638,6 @@ class ExtensionExecutionService:
         return missing
 
     def _check_rbac(self, manifest: ExtensionManifest, context: ExtensionExecutionContext, capability: Optional[ExtensionCapability]) -> bool:
-        # This is now handled by the comprehensive permission validator
-        # Keeping for backward compatibility
         user_roles = context.audit_context.get("user_roles", [])
         required_roles = capability.required_roles if capability else manifest.required_roles
         if not required_roles:
@@ -607,7 +698,7 @@ class ExtensionExecutionService:
             except Exception as exc:
                 logger.warning("Audit sink failed: %s", exc)
         logger.info(
-            "extension_audit plugin_id=%s plugin_version=%s capability=%s status=%s error_code=%s latency_ms=%s side_effects=%s correlation_id=%s trust_tier=%s result_trust=%s detail=%s",
+            "extension_audit plugin_id=%s plugin_version=%s capability=%s status=%s error_code=%s latency_ms=%s side_effects=%s user_id=%s tenant_id=%s correlation_id=%s policy_decision_id=%s trust_tier=%s result_trust=%s detail=%s",
             kwargs.get("plugin_id"),
             kwargs.get("plugin_version"),
             kwargs.get("capability"),
@@ -615,7 +706,10 @@ class ExtensionExecutionService:
             kwargs.get("error_code"),
             kwargs.get("latency_ms"),
             kwargs.get("side_effects"),
+            kwargs.get("user_id"),
+            kwargs.get("tenant_id"),
             kwargs.get("correlation_id"),
+            kwargs.get("policy_decision_id"),
             kwargs.get("trust_tier"),
             kwargs.get("result_trust"),
             kwargs.get("detail"),
