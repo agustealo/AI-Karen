@@ -34,6 +34,7 @@ def _plan(
     tenant_id: str = "tenant-1",
     session_id: str | None = "session-1",
     plugin_id: str = "echo",
+    allowed_capabilities: list[str] | None = None,
 ) -> AuthorizedExecutionPlan:
     return AuthorizedExecutionPlan(
         execution_id="exec-1",
@@ -42,6 +43,7 @@ def _plan(
         authorized_tenant_id=tenant_id,
         authorized_session_id=session_id,
         allowed_plugins=[plugin_id],
+        allowed_capabilities=list(allowed_capabilities or []),
     )
 
 
@@ -59,9 +61,10 @@ def _manifest() -> ExtensionManifest:
 
 
 class _Kernel:
-    def __init__(self) -> None:
+    def __init__(self, required_permissions: list[str] | None = None) -> None:
         self.calls = 0
         self.request = None
+        self.required_permissions = list(required_permissions or [])
         self.record = {
             "manifest": _manifest(),
             "path": Path("/tmp/echo"),
@@ -77,6 +80,9 @@ class _Kernel:
 
     def list_records(self):
         return [self.record]
+
+    def get_required_permissions(self, plugin_id: str) -> list[str]:
+        return list(self.required_permissions) if plugin_id == "echo" else []
 
     async def execute(self, request):
         self.calls += 1
@@ -98,9 +104,11 @@ class _Kernel:
         )
 
 
-def _service() -> tuple[PluginService, _Kernel]:
+def _service(
+    required_permissions: list[str] | None = None,
+) -> tuple[PluginService, _Kernel]:
     service = PluginService()
-    kernel = _Kernel()
+    kernel = _Kernel(required_permissions)
     service.kernel = kernel  # type: ignore[assignment]
     service.initialized = True
     return service, kernel
@@ -216,6 +224,61 @@ async def test_plugin_service_rejects_cross_tenant_plan_replay():
     assert result.status is ExecutionStatus.FAILED
     assert result.error_code == "authorized_scope_mismatch"
     assert kernel.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_plugin_service_denies_missing_manifest_permission_before_policy():
+    service, kernel = _service(["network_access"])
+
+    result = await service.execute_plugin(
+        "echo",
+        user_id="user-1",
+        tenant_id="tenant-1",
+        session_id="session-1",
+    )
+
+    assert result.status is ExecutionStatus.FAILED
+    assert result.error_code == "permission_denied"
+    assert kernel.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_plugin_service_rejects_plan_missing_manifest_permission():
+    service, kernel = _service(["network_access"])
+
+    result = await service.execute_plugin(
+        "echo",
+        user_id="user-1",
+        tenant_id="tenant-1",
+        session_id="session-1",
+        permissions=["network_access"],
+        authorized_plan=_plan(),
+    )
+
+    assert result.status is ExecutionStatus.FAILED
+    assert result.error_code == "permission_plan_mismatch"
+    assert kernel.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_plugin_service_binds_manifest_permission_into_policy_plan():
+    service, kernel = _service(["network_access"])
+
+    result = await service.execute_plugin(
+        "echo",
+        user_id="user-1",
+        tenant_id="tenant-1",
+        session_id="session-1",
+        correlation_id="corr-1",
+        permissions=["network_access"],
+    )
+
+    assert result.status is ExecutionStatus.COMPLETED
+    assert kernel.calls == 1
+    assert kernel.request is not None
+    assert "network_access" in kernel.request.authorized_plan.allowed_capabilities
+    assert "network_access" in result.requested_capabilities
+    assert "network_access" in result.granted_capabilities
 
 
 @pytest.mark.asyncio
