@@ -197,6 +197,15 @@ class PermissionValidator:
         if capability and capability.required_permissions:
             return capability.required_permissions
         return manifest.required_permissions
+
+    @staticmethod
+    def _permission_granted(grants: List[str], required: str) -> bool:
+        normalized = {str(value).strip() for value in grants if str(value).strip()}
+        if "*" in normalized or required in normalized:
+            return True
+        if ":" in required and required.split(":", 1)[0] in normalized:
+            return True
+        return False
     
     def _check_single_permission(
         self,
@@ -208,14 +217,22 @@ class PermissionValidator:
     ) -> PermissionCheck:
         """Check a single permission against context and policy."""
         
-        # Check if permission is explicitly allowed
-        allowed_capabilities = authorized_plan.get("allowed_capabilities", []) if authorized_plan else []
-        if allowed_capabilities and permission_id not in allowed_capabilities:
+        if authorized_plan is None:
             return PermissionCheck(
                 result=PermissionResult.DENIED,
                 granted=False,
                 permission_id=permission_id,
-                reason=f"Permission '{permission_id}' not in allowed_capabilities",
+                reason="Permission grant requires an AuthorizedExecutionPlan",
+                metadata={"source": "authorized_plan"},
+            )
+
+        allowed_capabilities = list(authorized_plan.get("allowed_capabilities", []) or [])
+        if not self._permission_granted(allowed_capabilities, permission_id):
+            return PermissionCheck(
+                result=PermissionResult.DENIED,
+                granted=False,
+                permission_id=permission_id,
+                reason=f"Permission '{permission_id}' not granted by AuthorizedExecutionPlan",
                 metadata={"source": "authorized_plan"}
             )
         
