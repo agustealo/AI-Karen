@@ -281,6 +281,13 @@ class RuntimePolicyEnforcer:
                     evaluated_at=evaluated_at,
                 )
 
+        topology_tools = request.execution_topology.get("tool_requirements", []) or []
+        if not isinstance(topology_tools, list):
+            topology_tools = []
+        topology_plugins = request.execution_topology.get("plugin_candidates", []) or []
+        if not isinstance(topology_plugins, list):
+            topology_plugins = []
+
         risk_score = float(request.risk_signals.get("score", 0.0) or 0.0)
         risk_categories = request.risk_signals.get("categories", []) or []
         if "credential_access" in risk_categories or "production_impact" in risk_categories:
@@ -322,7 +329,11 @@ class RuntimePolicyEnforcer:
                 evaluated_at=evaluated_at,
             )
 
-        if request.tool_id and "admin" not in request.permissions and risk_score >= 0.5:
+        if (
+            (request.tool_id or topology_tools)
+            and "admin" not in request.permissions
+            and risk_score >= 0.5
+        ):
             return PolicyDecision(
                 decision_id=decision_id,
                 policy_version=policy_version,
@@ -336,10 +347,19 @@ class RuntimePolicyEnforcer:
                 evaluated_at=evaluated_at,
             )
 
-        allowed_plugins = []
-        for candidate in (request.plugin_id, request.extension_id):
-            if candidate and candidate not in allowed_plugins:
-                allowed_plugins.append(candidate)
+        allowed_plugins: List[str] = []
+        plugin_candidates = [request.plugin_id, request.extension_id, *topology_plugins]
+        for candidate in plugin_candidates:
+            normalized = str(candidate or "").strip()
+            if normalized and normalized not in allowed_plugins:
+                allowed_plugins.append(normalized)
+
+        allowed_tools: List[str] = []
+        tool_candidates = [request.tool_id, *topology_tools]
+        for candidate in tool_candidates:
+            normalized = str(candidate or "").strip()
+            if normalized and normalized not in allowed_tools:
+                allowed_tools.append(normalized)
 
         runtime_constraints = self._build_runtime_constraints(request.runtime_level)
         runtime_constraints.update(
@@ -355,7 +375,7 @@ class RuntimePolicyEnforcer:
                     request.execution_topology.get("agent_delegation", False)
                 ),
                 "allowed_plugins": allowed_plugins,
-                "allowed_tools": [request.tool_id] if request.tool_id else [],
+                "allowed_tools": allowed_tools,
                 "authorized_user_id": request.user_id,
                 "authorized_tenant_id": request.tenant_id,
                 "authorized_session_id": request.session_id,
