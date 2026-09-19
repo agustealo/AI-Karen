@@ -31,15 +31,16 @@ It is not a competing file format.
 New code must not parse the same plugin manifest into an independent service
 registry or construct an alternate execution policy model.
 
-## Compatibility boundary
+## Removed compatibility authorities
 
-`services/plugin_execution.py` is a temporary import shim for the legacy HTTP
-route's status/result symbols only. It contains no execution, sandbox, routing,
-policy, or registry implementation. Execution authority remains
-`ExtensionExecutionService`.
+`services/plugin_discovery.py` and `services/plugin_execution.py` are removed.
+Do not recreate service-layer filesystem discovery, sandboxing, provider/routing,
+or plugin invocation logic. Application callers go through `PluginService`, and
+execution reaches `ExtensionExecutionService` through `PluginKernel`.
 
-`services/plugin_discovery.py` was removed. Do not recreate service-layer
-filesystem discovery.
+The duplicate top-level `extensions/discovery.py` and `extensions/manifest.py`
+loaders are also removed. Catalog discovery and manifest normalization belong to
+the platform registry/manifest implementation above.
 
 ## Shipped plugin root
 
@@ -67,11 +68,6 @@ mypy src
 The repository's exact-head CI remains the merge authority. Plugin Ecosystem,
 Main Quality, Production First-Boot, Agent/Medusa burns, and any automatically
 triggered architecture/security gates must be green before merge.
-
-## Known compatibility cleanup
-
-The remaining `services/plugin_execution.py` import shim should be removed only
-after its final HTTP route import is migrated. Do not add behavior to that shim.
 
 This document supersedes the former 2025 claim that the migration was fully
 complete. The earlier document described directories and files that no longer
