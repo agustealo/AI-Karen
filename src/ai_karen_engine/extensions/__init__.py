@@ -1,10 +1,8 @@
-"""
-Canonical extension kernel for AI Karen.
+"""Canonical extension execution kernel for AI Karen.
 
-This package owns the full extension lifecycle:
-  manifest -> discovery -> registry -> lifecycle -> execution -> audit -> health
-
-No other module should bypass this kernel to load or execute extensions.
+On-disk catalog discovery is owned by ``extensions.platform.core.registry``.
+This package root exposes typed execution contracts, runtime registration,
+lifecycle, permissions, health, and the canonical executor.
 """
 
 from __future__ import annotations
@@ -12,8 +10,8 @@ from __future__ import annotations
 from ai_karen_engine.extensions.contracts import (
     ExtensionCapability,
     ExtensionDependency,
-    ExtensionExecutionRequest,
     ExtensionExecutionContext,
+    ExtensionExecutionRequest,
     ExtensionExecutionResult,
     ExtensionHealth,
     ExtensionHealthRecord,
@@ -25,29 +23,26 @@ from ai_karen_engine.extensions.contracts import (
     SideEffectLevel,
     TenantScope,
 )
-from ai_karen_engine.extensions.discovery import ExtensionDiscovery, ExtensionMetadata
 from ai_karen_engine.extensions.errors import (
+    ExtensionDisabledError,
     ExtensionError,
+    ExtensionExecutionEngineError,
+    ExtensionManifestError,
     ExtensionNotFoundError,
     ExtensionNotRegisteredError,
-    ExtensionDisabledError,
-    ExtensionManifestError,
-    ExtensionValidationError,
     ExtensionPermissionError,
     ExtensionTimeoutError,
-    ExtensionExecutionEngineError,
+    ExtensionValidationError,
 )
 from ai_karen_engine.extensions.executor import ExtensionExecutionService
-from ai_karen_engine.extensions.health import ExtensionHealthMonitor, ExtensionHealthRecord
+from ai_karen_engine.extensions.health import ExtensionHealthMonitor
 from ai_karen_engine.extensions.lifecycle import ExtensionLifecycleManager
-from ai_karen_engine.extensions.manifest import ExtensionManifestLoader
 from ai_karen_engine.extensions.permissions import ExtensionPermissionResolver
 from ai_karen_engine.extensions.registry import ExtensionRegistry
 
 __all__ = [
     "ExtensionCapability",
     "ExtensionDependency",
-    "ExtensionDiscovery",
     "ExtensionError",
     "ExtensionExecutionEngineError",
     "ExtensionExecutionRequest",
@@ -60,12 +55,9 @@ __all__ = [
     "ExtensionLifecycleState",
     "ExtensionManifest",
     "ExtensionManifestError",
-    "ExtensionManifestLoader",
-    "ExtensionMetadata",
     "ExtensionNotFoundError",
     "ExtensionNotRegisteredError",
     "ExtensionDisabledError",
-    "ExtensionExecutionError",
     "ExtensionTimeoutError",
     "ExtensionPermissionError",
     "ExtensionPermissionGrant",
