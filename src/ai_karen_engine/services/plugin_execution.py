@@ -171,6 +171,8 @@ class ExecutionResult:
     plugin_version: str = ""
     user_id: str = ""
     tenant_id: str = ""
+    session_id: str = ""
+    conversation_id: str = ""
     correlation_id: str = ""
     policy_decision_id: str = ""
     requested_capabilities: List[str] = field(default_factory=list)
@@ -529,7 +531,15 @@ class PluginExecutionEngine:
         result = ExecutionResult(
             request_id=request.request_id,
             plugin_name=request.plugin_name,
-            status=ExecutionStatus.PENDING
+            status=ExecutionStatus.PENDING,
+            plugin_id=request.plugin_name,
+            user_id=request.user_id or "",
+            tenant_id=request.tenant_id or "",
+            session_id=request.session_id or "",
+            conversation_id=request.conversation_id or "",
+            correlation_id=request.correlation_id or request.request_id,
+            policy_decision_id=request.policy_decision_id or "",
+            requested_capabilities=list(request.allowed_capabilities),
         )
 
         self.active_executions[request.request_id] = result
@@ -619,6 +629,8 @@ class PluginExecutionEngine:
             result.plugin_version = execution_context.plugin_version
             result.user_id = execution_context.user_id
             result.tenant_id = execution_context.tenant_id
+            result.session_id = execution_context.session_id
+            result.conversation_id = execution_context.conversation_id
             result.correlation_id = execution_context.correlation_id
             result.policy_decision_id = execution_context.policy_decision_id
             result.requested_capabilities = list(request.allowed_capabilities)
@@ -648,12 +660,16 @@ class PluginExecutionEngine:
             result.status = ExecutionStatus.TIMEOUT
             result.error = f"Plugin execution timed out after {request.timeout_seconds} seconds"
             result.error_code = "timeout"
+            result.execution_time = time.time() - start_time
+            result.completed_at = datetime.utcnow()
             self.metrics["executions_timeout"] += 1
 
         except Exception as e:
             result.status = ExecutionStatus.FAILED
             result.error = str(e)
             result.error_code = "execution_error"
+            result.execution_time = time.time() - start_time
+            result.completed_at = datetime.utcnow()
             result.metadata["traceback"] = traceback.format_exc()
             self.metrics["executions_failed"] += 1
             logger.error(f"Plugin execution failed: {e}")
@@ -740,7 +756,7 @@ class PluginExecutionEngine:
 
                 with PluginSandbox(resource_limits, security_policy) as sandbox:
                     if asyncio.iscoroutinefunction(entry_point):
-                        return asyncio.run(sandbox.run_async(entry_point, parameters))
+                        return asyncio.run(sandbox.run_async(entrypoint, parameters))
                     return sandbox.run(entry_point, parameters)
             except Exception as e:
                 return {"error": str(e), "traceback": traceback.format_exc()}
@@ -1226,7 +1242,7 @@ def get_plugin_execution_engine() -> PluginExecutionEngine:
 async def initialize_plugin_execution_engine(
     registry: Optional[PluginRegistry] = None
 ) -> PluginExecutionEngine:
-    """Initialize the plugin execution engine."""
+    """Initialize plugin execution engine."""
     global _execution_engine
     _execution_engine = PluginExecutionEngine(registry)
     return _execution_engine
