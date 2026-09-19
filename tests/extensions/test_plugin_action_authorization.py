@@ -7,9 +7,11 @@ from typing import Any
 
 import pytest
 
+from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.contracts import (
     ActionExecutionGate,
     AuthorizedExecutionPlan,
+    ExecutionTopology,
 )
 from ai_karen_engine.core.runtime.policy import (
     PolicyEvaluationRequest,
@@ -110,6 +112,52 @@ def _service() -> tuple[PluginService, _CapturingEngine]:
     service.execution_engine = engine  # type: ignore[assignment]
     service.initialized = True
     return service, engine
+
+
+def test_chat_runtime_authorized_plan_binds_request_principal():
+    runtime = object.__new__(ChatRuntime)
+    request = SimpleNamespace(
+        context=SimpleNamespace(
+            request_id="request-1",
+            correlation_id="corr-1",
+            user_id="user-1",
+            tenant_id="tenant-1",
+            session_id="session-1",
+        ),
+        max_tokens=1024,
+    )
+    decision = SimpleNamespace(
+        time_budget_ms=30000,
+        max_model_calls=1,
+        tool_requirements=[],
+        max_steps=1,
+        execution_mode=SimpleNamespace(value="direct"),
+        policy_reason_codes=[],
+        risk_level=SimpleNamespace(value="low"),
+        required_capabilities=[],
+        memory_write_allowed=False,
+        policy_decision_id="policy-1",
+        topology=ExecutionTopology.DIRECT,
+        plugin_candidates=["echo"],
+        memory_scope="session",
+        reasoning_modes=[],
+        workflow_id=None,
+        intent="plugin_execution",
+        reason_codes=[],
+    )
+
+    plan = runtime._build_authorized_plan(request, decision)
+
+    assert plan.authorized_user_id == "user-1"
+    assert plan.authorized_tenant_id == "tenant-1"
+    assert plan.authorized_session_id == "session-1"
+    assert plan.allowed_plugins == ["echo"]
+    assert plan.matches_execution_scope(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        session_id="session-1",
+        policy_decision_id="policy-1",
+    )
 
 
 @pytest.mark.asyncio
