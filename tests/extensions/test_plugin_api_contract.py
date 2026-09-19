@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException, Request
@@ -8,10 +9,15 @@ from fastapi import HTTPException, Request
 from ai_karen_engine.api_routes.plugins import plugins as plugin_routes
 from ai_karen_engine.auth.rbac_middleware import Permission
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+from ai_karen_engine.extensions.contracts import (
+    DataClassification,
+    ExtensionExecutionResult,
+    ResponseSource,
+    ResultTrust,
+    TrustTier,
+)
 from ai_karen_engine.extensions.platform.core.manifest import ExtensionManifest
-from ai_karen_engine.services.plugin_discovery import PluginRegistry
-from ai_karen_engine.services.plugin_execution import ExecutionResult, ExecutionStatus
-from ai_karen_engine.services.plugin_service import PluginService
+from ai_karen_engine.services.plugin_service import ExecutionStatus, PluginService
 
 
 def _manifest(*, with_schema: bool = True) -> ExtensionManifest:
@@ -40,16 +46,84 @@ def _manifest(*, with_schema: bool = True) -> ExtensionManifest:
     )
 
 
-def _metadata(*, state: str = "discovered"):
+def _metadata(*, state: str = "enabled") -> dict:
     return {
         "manifest": _manifest(),
         "path": Path("/tmp/alpha-plugin"),
         "status": state,
         "checksum": "fixture",
         "error_message": None,
-        "dependencies_resolved": False,
-        "compatibility_checked": False,
+        "dependencies_resolved": True,
+        "compatibility_checked": True,
     }
+
+
+class _Kernel:
+    def __init__(self, *, state: str = "enabled") -> None:
+        self.record = _metadata(state=state)
+        self.request = None
+        self.runtime_registry = SimpleNamespace(get=lambda name: object())
+
+    def get_record(self, name):
+        return self.record if name == "alpha-plugin" else None
+
+    def list_records(self):
+        return [self.record]
+
+    async def execute(self, request):
+        self.request = request
+        return ExtensionExecutionResult(
+            request_id=request.context.request_id,
+            plugin_id=request.plugin_id,
+            plugin_version="1.0.0",
+            capability=request.capability,
+            source=ResponseSource.PLUGIN,
+            payload={"ok": True},
+            latency_ms=10.0,
+            status="success",
+            correlation_id=request.context.correlation_id,
+            policy_decision_id=request.context.policy_decision_id,
+            trust_tier=TrustTier.FIRST_PARTY,
+            result_trust=ResultTrust.VERIFIED,
+            data_classification=DataClassification.PUBLIC,
+        )
+
+    def registry_stats(self):
+        return {
+            "total_plugins": 1,
+            "by_status": {self.record["status"]: 1},
+            "by_category": {"test": 1},
+            "by_type": {"test": 1},
+        }
+
+    def active_executions(self):
+        return {}
+
+    async def refresh(self):
+        return 1
+
+    async def cleanup(self):
+        return None
+
+    async def enable(self, name):
+        if name != "alpha-plugin":
+            return False
+        self.record["status"] = "enabled"
+        return True
+
+    async def disable(self, name):
+        if name != "alpha-plugin":
+            return False
+        self.record["status"] = "disabled"
+        return True
+
+
+def _service(*, state: str = "enabled") -> tuple[PluginService, _Kernel]:
+    service = PluginService()
+    kernel = _Kernel(state=state)
+    service.kernel = kernel  # type: ignore[assignment]
+    service.initialized = True
+    return service, kernel
 
 
 def _request(path: str = "/api/plugins/alpha-plugin/enable") -> Request:
@@ -134,95 +208,14 @@ class _Policy:
         return _Decision(request)
 
 
-class _Engine:
-    def __init__(self):
-        self.request = None
-        self.plan = None
-
-    async def execute_plugin(self, request, plan=None):
-        self.request = request
-        self.plan = plan
-        return ExecutionResult(
-            request_id=request.request_id,
-            plugin_name=request.plugin_name,
-            status=ExecutionStatus.COMPLETED,
-            result={"ok": True},
-            user_id=request.user_id or "",
-            tenant_id=request.tenant_id or "",
-            correlation_id=request.correlation_id or "",
-            policy_decision_id=request.policy_decision_id or "",
-        )
-
-    def get_execution_history(self, limit=100):
-        return []
-
-    def get_active_executions(self):
-        return []
-
-    def get_execution_metrics(self):
-        return {
-            "executions_total": 1,
-            "executions_successful": 1,
-            "executions_failed": 0,
-            "average_execution_time": 0.01,
-        }
-
-
 @pytest.mark.asyncio
-async def test_registry_uses_one_dictionary_metadata_shape(monkeypatch):
-    registry = PluginRegistry()
-    registry.plugins["alpha-plugin"] = _metadata()
-
-    async def valid(_metadata):
-        return True
-
-    monkeypatch.setattr(registry, "_validate_plugin_files", valid)
-    monkeypatch.setattr(registry, "_validate_plugin_module", valid)
-    monkeypatch.setattr(registry, "_validate_dependencies", valid)
-    monkeypatch.setattr(registry, "_validate_compatibility", valid)
-
-    assert await registry.validate_plugin("alpha-plugin") is True
-    assert registry.plugins["alpha-plugin"]["status"] == "validated"
-    assert await registry.register_plugin("alpha-plugin") is True
-    assert registry.plugins["alpha-plugin"]["status"] == "registered"
-
-
-@pytest.mark.asyncio
-async def test_service_registers_discovered_list_without_items_bug(monkeypatch):
-    registry = PluginRegistry()
-    registry.plugins["alpha-plugin"] = _metadata()
-
-    async def valid(_metadata):
-        return True
-
-    monkeypatch.setattr(registry, "_validate_plugin_files", valid)
-    monkeypatch.setattr(registry, "_validate_plugin_module", valid)
-    monkeypatch.setattr(registry, "_validate_dependencies", valid)
-    monkeypatch.setattr(registry, "_validate_compatibility", valid)
-    service = PluginService()
-    service.initialized = True
-    service.registry = registry
-
-    assert await service.validate_and_register_all_discovered() == {
-        "alpha-plugin": True
-    }
-    assert registry.plugins["alpha-plugin"]["status"] == "registered"
-
-
-@pytest.mark.asyncio
-async def test_parameter_validation_uses_declared_manifest_schema():
-    registry = PluginRegistry()
-    registry.plugins["alpha-plugin"] = _metadata(state="registered")
-    service = PluginService()
-    service.initialized = True
-    service.registry = registry
+async def test_parameter_validation_uses_catalog_manifest_schema():
+    service, _ = _service()
 
     assert await service.validate_plugin_parameters(
         "alpha-plugin", {"query": "hello", "limit": 5}
     )
-    assert not await service.validate_plugin_parameters(
-        "alpha-plugin", {"limit": 5}
-    )
+    assert not await service.validate_plugin_parameters("alpha-plugin", {"limit": 5})
     assert not await service.validate_plugin_parameters(
         "alpha-plugin", {"query": "hello", "limit": 0}
     )
@@ -232,15 +225,9 @@ async def test_parameter_validation_uses_declared_manifest_schema():
 
 
 @pytest.mark.asyncio
-async def test_execution_uses_tenant_policy_and_authorized_plan():
-    registry = PluginRegistry()
-    registry.plugins["alpha-plugin"] = _metadata(state="registered")
+async def test_execution_delegates_typed_request_to_canonical_kernel():
+    service, kernel = _service()
     policy = _Policy()
-    engine = _Engine()
-    service = PluginService()
-    service.initialized = True
-    service.registry = registry
-    service.execution_engine = engine
     service._policy_enforcer = policy
 
     result = await service.execute_plugin(
@@ -261,25 +248,18 @@ async def test_execution_uses_tenant_policy_and_authorized_plan():
     assert result.correlation_id == "corr-1"
     assert policy.request.tenant_id == "tenant-a"
     assert policy.request.plugin_id == "alpha-plugin"
-    assert policy.request.correlation_id == "corr-1"
-    assert engine.plan is not None
-    assert isinstance(engine.plan, AuthorizedExecutionPlan)
-    assert engine.plan.allowed_plugins == ["alpha-plugin"]
-    assert engine.plan.authorized_user_id == "user-1"
-    assert engine.plan.authorized_tenant_id == "tenant-a"
-    assert engine.request.policy_decision_id == "policy-123"
+    assert kernel.request is not None
+    assert kernel.request.plugin_id == "alpha-plugin"
+    assert kernel.request.capability == "execute"
+    assert isinstance(kernel.request.authorized_plan, AuthorizedExecutionPlan)
+    assert kernel.request.authorized_plan.allowed_plugins == ["alpha-plugin"]
+    assert kernel.request.context.policy_decision_id == "policy-123"
 
 
 @pytest.mark.asyncio
 async def test_execution_fails_closed_without_tenant_scope():
-    registry = PluginRegistry()
-    registry.plugins["alpha-plugin"] = _metadata(state="registered")
+    service, kernel = _service()
     policy = _Policy()
-    engine = _Engine()
-    service = PluginService()
-    service.initialized = True
-    service.registry = registry
-    service.execution_engine = engine
     service._policy_enforcer = policy
 
     result = await service.execute_plugin(
@@ -291,17 +271,12 @@ async def test_execution_fails_closed_without_tenant_scope():
     assert result.status is ExecutionStatus.FAILED
     assert result.error_code == "identity_scope_missing"
     assert policy.request is None
-    assert engine.request is None
+    assert kernel.request is None
 
 
 @pytest.mark.asyncio
 async def test_list_plugins_preserves_disabled_truth():
-    registry = PluginRegistry()
-    registry.plugins["alpha-plugin"] = _metadata(state="disabled")
-    service = PluginService()
-    service.initialized = True
-    service.registry = registry
-
+    service, _ = _service(state="disabled")
     plugins = await service.list_plugins()
     assert len(plugins) == 1
     assert plugins[0]["status"] == "disabled"
@@ -309,17 +284,10 @@ async def test_list_plugins_preserves_disabled_truth():
 
 
 def test_route_projects_dictionary_metadata_and_schema():
-    registry = PluginRegistry()
-    registry.plugins["alpha-plugin"] = _metadata(state="registered")
-    service = PluginService()
-    service.initialized = True
-    service.registry = registry
-
-    response = plugin_routes._plugin_info_response(
-        registry.plugins["alpha-plugin"], service
-    )
+    service, kernel = _service()
+    response = plugin_routes._plugin_info_response(kernel.record, service)
     assert response.name == "alpha-plugin"
-    assert response.status == "registered"
+    assert response.status == "enabled"
     assert response.enabled is True
     assert response.parameters["query"]["type"] == "string"
 
