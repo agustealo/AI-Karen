@@ -756,7 +756,7 @@ class PluginExecutionEngine:
 
                 with PluginSandbox(resource_limits, security_policy) as sandbox:
                     if asyncio.iscoroutinefunction(entry_point):
-                        return asyncio.run(sandbox.run_async(entrypoint, parameters))
+                        return asyncio.run(sandbox.run_async(entry_point, parameters))
                     return sandbox.run(entry_point, parameters)
             except Exception as e:
                 return {"error": str(e), "traceback": traceback.format_exc()}
