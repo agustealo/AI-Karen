@@ -7,6 +7,7 @@ discovery authority. All invocation is delegated to ExtensionExecutionService.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -108,6 +109,47 @@ class _RuntimeInstanceAdapter:
         return await result if inspect.isawaitable(result) else result
 
 
+class _LazyRuntimeInstanceAdapter:
+    """Resolve plugin code only when the canonical executor invokes the handler.
+
+    The object itself is safe to register before authorization because it does
+    not import or initialize plugin code. ``ExtensionExecutionService`` reaches
+    this adapter only after plan, action, permission, RBAC, tenant, schema, and
+    budget gates have passed.
+    """
+
+    def __init__(self, loader: _NormalizedExtensionLoader, plugin_id: str) -> None:
+        self._loader = loader
+        self._plugin_id = plugin_id
+        self._adapter: Optional[_RuntimeInstanceAdapter] = None
+        self._lock = asyncio.Lock()
+
+    async def _resolve(self) -> _RuntimeInstanceAdapter:
+        if self._adapter is not None:
+            return self._adapter
+        async with self._lock:
+            if self._adapter is not None:
+                return self._adapter
+            instance = self._loader.load_extension(self._plugin_id)
+            initialize = getattr(instance, "_initialize", None)
+            is_initialized = getattr(instance, "is_initialized", None)
+            already_initialized = (
+                bool(is_initialized()) if callable(is_initialized) else False
+            )
+            if callable(initialize) and not already_initialized:
+                await initialize()
+            self._adapter = _RuntimeInstanceAdapter(instance)
+            return self._adapter
+
+    async def execute(
+        self,
+        payload: Dict[str, Any],
+        context: ExtensionExecutionContext,
+    ) -> Any:
+        adapter = await self._resolve()
+        return await adapter.execute(payload, context)
+
+
 @dataclass(frozen=True)
 class PluginCatalogRecord:
     manifest: CatalogExtensionManifest
@@ -175,6 +217,63 @@ class PluginKernel:
             await self.refresh()
         self._initialized = True
 
+    @staticmethod
+    def _dependency_ids(manifest: CatalogExtensionManifest) -> list[str]:
+        dependencies = manifest.dependencies
+        raw = [
+            *list(getattr(dependencies, "plugins", []) or []),
+            *list(getattr(dependencies, "extensions", []) or []),
+        ]
+        normalized: list[str] = []
+        for value in raw:
+            dependency_id = str(value).split("@", 1)[0].strip()
+            if dependency_id and dependency_id not in normalized:
+                normalized.append(dependency_id)
+        return normalized
+
+    @classmethod
+    def _dependency_errors(
+        cls,
+        manifests: Dict[str, CatalogExtensionManifest],
+    ) -> Dict[str, list[str]]:
+        graph = {
+            plugin_id: cls._dependency_ids(manifest)
+            for plugin_id, manifest in manifests.items()
+        }
+        errors: Dict[str, list[str]] = {}
+        available = set(manifests)
+
+        for plugin_id, dependencies in graph.items():
+            missing = sorted(dep for dep in dependencies if dep not in available)
+            if missing:
+                errors.setdefault(plugin_id, []).append(
+                    "Missing extension dependencies: " + ", ".join(missing)
+                )
+
+        visiting: list[str] = []
+        visited: set[str] = set()
+
+        def visit(plugin_id: str) -> None:
+            if plugin_id in visited:
+                return
+            if plugin_id in visiting:
+                cycle_start = visiting.index(plugin_id)
+                cycle = visiting[cycle_start:] + [plugin_id]
+                message = "Circular extension dependency: " + " -> ".join(cycle)
+                for member in set(cycle):
+                    errors.setdefault(member, []).append(message)
+                return
+            visiting.append(plugin_id)
+            for dependency_id in graph.get(plugin_id, []):
+                if dependency_id in graph:
+                    visit(dependency_id)
+            visiting.pop()
+            visited.add(plugin_id)
+
+        for plugin_id in graph:
+            visit(plugin_id)
+        return errors
+
     async def refresh(self) -> int:
         """Refresh catalog truth and atomically rebuild the execution projection."""
         self._disabled.update(
@@ -201,19 +300,42 @@ class PluginKernel:
                 raw = json.loads(
                     Path(metadata.manifest_path).read_text(encoding="utf-8")
                 )
-                catalog_manifest = CatalogExtensionManifest.from_dict(raw)
+                catalog_manifests[plugin_id] = CatalogExtensionManifest.from_dict(raw)
             except Exception as exc:
+                metadata.is_valid = False
+                metadata.validation_errors.append(
+                    f"Manifest normalization failed: {type(exc).__name__}"
+                )
                 logger.error("Failed to normalize manifest for %s: %s", plugin_id, exc)
-                continue
 
-            catalog_manifests[plugin_id] = catalog_manifest
-            if not metadata.is_valid:
+        valid_manifests = {
+            plugin_id: manifest
+            for plugin_id, manifest in catalog_manifests.items()
+            if (
+                self.catalog_registry.get_metadata(plugin_id) is not None
+                and bool(self.catalog_registry.get_metadata(plugin_id).is_valid)
+            )
+        }
+        dependency_errors = self._dependency_errors(valid_manifests)
+        for plugin_id, plugin_errors in dependency_errors.items():
+            metadata = self.catalog_registry.get_metadata(plugin_id)
+            if metadata is None:
+                continue
+            metadata.is_valid = False
+            for error in plugin_errors:
+                if error not in metadata.validation_errors:
+                    metadata.validation_errors.append(error)
+
+        for plugin_id, catalog_manifest in catalog_manifests.items():
+            metadata = self.catalog_registry.get_metadata(plugin_id)
+            if metadata is None or not metadata.is_valid:
                 continue
 
             registration = ExtensionRegistration(
                 manifest=self._project_runtime_manifest(catalog_manifest),
                 state=ExtensionLifecycleState.DISCOVERED,
                 checksum=metadata.file_hash,
+                instance=_LazyRuntimeInstanceAdapter(self.loader, plugin_id),
             )
             await runtime_registry.register(registration)
             target = (
@@ -235,6 +357,12 @@ class PluginKernel:
     def _declared_permissions(manifest: CatalogExtensionManifest) -> list[str]:
         permissions = manifest.permissions
         declared: list[str] = []
+
+        def add(permission_id: str) -> None:
+            normalized = str(permission_id).strip()
+            if normalized and normalized not in declared:
+                declared.append(normalized)
+
         boolean_permissions = {
             "memory_read": "memory_read",
             "memory_write": "memory_write",
@@ -245,9 +373,26 @@ class PluginKernel:
         }
         for attribute, permission_id in boolean_permissions.items():
             if bool(getattr(permissions, attribute, False)):
-                declared.append(permission_id)
+                add(permission_id)
+
         if list(getattr(permissions, "tools", []) or []):
-            declared.append("tool_access")
+            add("tool_access")
+            for tool_id in getattr(permissions, "tools", []) or []:
+                add(f"tool_access:{tool_id}")
+
+        for category in (
+            "data_access",
+            "plugin_access",
+            "system_access",
+            "network_access",
+        ):
+            values = list(getattr(permissions, category, []) or [])
+            if not values:
+                continue
+            add(category)
+            for value in values:
+                add(f"{category}:{value}")
+
         return declared
 
     def _project_runtime_manifest(
@@ -312,6 +457,12 @@ class PluginKernel:
     def get_catalog_manifest(self, plugin_id: str) -> Optional[CatalogExtensionManifest]:
         return self._catalog_manifests.get(plugin_id)
 
+    def get_required_permissions(self, plugin_id: str) -> list[str]:
+        registration = self.runtime_registry.get(plugin_id)
+        if registration is None:
+            return []
+        return list(registration.manifest.required_permissions)
+
     def get_record(self, plugin_id: str) -> Optional[Dict[str, Any]]:
         metadata = self.catalog_registry.get_metadata(plugin_id)
         manifest = self._catalog_manifests.get(plugin_id)
@@ -361,26 +512,10 @@ class PluginKernel:
         await self.runtime_registry.update_state(plugin_id, ExtensionLifecycleState.DISABLED)
         return True
 
-    async def _ensure_loaded(self, plugin_id: str) -> None:
-        registration = self.runtime_registry.get(plugin_id)
-        if registration is None or registration.instance is not None:
-            return
-        if registration.state is not ExtensionLifecycleState.ENABLED:
-            return
-
-        instance = self.loader.load_extension(plugin_id)
-        initialize = getattr(instance, "_initialize", None)
-        is_initialized = getattr(instance, "is_initialized", None)
-        already_initialized = bool(is_initialized()) if callable(is_initialized) else False
-        if callable(initialize) and not already_initialized:
-            await initialize()
-        registration.instance = _RuntimeInstanceAdapter(instance)
-
     async def execute(
         self,
         request: ExtensionExecutionRequest,
     ) -> ExtensionExecutionResult:
-        await self._ensure_loaded(request.plugin_id)
         self._active[request.context.request_id] = request.plugin_id
         try:
             return await self.executor.execute(request)
