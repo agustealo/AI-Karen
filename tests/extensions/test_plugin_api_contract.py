@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException, Request
 
 from ai_karen_engine.api_routes.plugins import plugins as plugin_routes
 from ai_karen_engine.auth.rbac_middleware import Permission
+from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
 from ai_karen_engine.extensions.platform.core.manifest import ExtensionManifest
 from ai_karen_engine.services.plugin_discovery import PluginRegistry
 from ai_karen_engine.services.plugin_execution import ExecutionResult, ExecutionStatus
@@ -110,14 +110,15 @@ class _Decision:
     allowed_capabilities = ["search"]
     denied_capabilities = []
 
-    def __init__(self):
-        self.plan = SimpleNamespace(
+    def __init__(self, request):
+        self.plan = AuthorizedExecutionPlan(
+            execution_id="exec-policy-123",
+            policy_decision_id=self.decision_id,
+            authorized_user_id=request.user_id,
+            authorized_tenant_id=request.tenant_id,
+            authorized_session_id=request.session_id,
             allowed_capabilities=["search"],
-            resource_scope={},
-            allowed_tools=[],
-            allowed_plugins=[],
-            provider_constraints={},
-            budget=None,
+            allowed_plugins=[request.plugin_id] if request.plugin_id else [],
         )
 
     def to_authorized_plan(self):
@@ -130,7 +131,7 @@ class _Policy:
 
     async def evaluate(self, request):
         self.request = request
-        return _Decision()
+        return _Decision(request)
 
 
 class _Engine:
@@ -146,6 +147,10 @@ class _Engine:
             plugin_name=request.plugin_name,
             status=ExecutionStatus.COMPLETED,
             result={"ok": True},
+            user_id=request.user_id or "",
+            tenant_id=request.tenant_id or "",
+            correlation_id=request.correlation_id or "",
+            policy_decision_id=request.policy_decision_id or "",
         )
 
     def get_execution_history(self, limit=100):
@@ -258,6 +263,10 @@ async def test_execution_uses_tenant_policy_and_authorized_plan():
     assert policy.request.plugin_id == "alpha-plugin"
     assert policy.request.correlation_id == "corr-1"
     assert engine.plan is not None
+    assert isinstance(engine.plan, AuthorizedExecutionPlan)
+    assert engine.plan.allowed_plugins == ["alpha-plugin"]
+    assert engine.plan.authorized_user_id == "user-1"
+    assert engine.plan.authorized_tenant_id == "tenant-a"
     assert engine.request.policy_decision_id == "policy-123"
 
 
