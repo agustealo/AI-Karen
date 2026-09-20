@@ -1,9 +1,6 @@
 """Enhanced rate limiting middleware with configurable rules and optimizations."""
 
-import ipaddress
 import logging
-import os
-import socket
 import time
 from typing import Any, Optional
 
@@ -13,6 +10,7 @@ try:
 except Exception:  # pragma: no cover - fallback for tests
     from ai_karen_engine.fastapi_stub import Request, JSONResponse
 
+from ai_karen_engine.middleware.client_identity import resolve_client_ip
 from ai_karen_engine.server.rate_limiter import (
     DEFAULT_RATE_LIMIT_RULES,
     EnhancedRateLimiter,
@@ -30,41 +28,29 @@ _rate_limiter: Optional[EnhancedRateLimiter] = None
 _rate_limiter_config: dict[str, Any] = {
     "storage_type": "memory",
     "redis_url": None,
-    "trusted_proxy_hosts": (),
 }
-_proxy_address_cache: dict[str, tuple[float, frozenset[str]]] = {}
-_PROXY_ADDRESS_CACHE_TTL_SECONDS = 30.0
-
-
-def _csv_values(value: Optional[str]) -> list[str]:
-    if not value:
-        return []
-    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def configure_rate_limiter(
     storage_type: str = "memory",
     redis_url: Optional[str] = None,
     custom_rules: Optional[list] = None,
-    trusted_proxy_hosts: Optional[list[str]] = None,
 ) -> None:
-    """Configure the global rate limiter instance and transport trust boundary."""
-    global _rate_limiter, _rate_limiter_config
+    """Configure the global rate limiter instance.
 
-    configured_proxy_hosts = trusted_proxy_hosts
-    if configured_proxy_hosts is None:
-        configured_proxy_hosts = _csv_values(
-            os.getenv("RATE_LIMIT_TRUSTED_PROXY_HOSTS", "")
-        )
+    HTTP client identity and trusted-proxy configuration are owned separately by
+    ``middleware.client_identity`` so throttling is never a transport trust
+    authority.
+    """
+
+    global _rate_limiter, _rate_limiter_config
 
     _rate_limiter_config.update(
         {
             "storage_type": storage_type,
             "redis_url": redis_url,
-            "trusted_proxy_hosts": tuple(configured_proxy_hosts),
         }
     )
-    _proxy_address_cache.clear()
 
     try:
         _rate_limiter = create_rate_limiter(
@@ -72,11 +58,7 @@ def configure_rate_limiter(
             redis_url=redis_url,
             custom_rules=custom_rules,
         )
-        logger.info(
-            "Rate limiter configured with %s storage and %d trusted proxy host(s)",
-            storage_type,
-            len(configured_proxy_hosts),
-        )
+        logger.info("Rate limiter configured with %s storage", storage_type)
     except Exception as exc:
         logger.error("Failed to configure rate limiter: %s", exc)
         # Fallback to memory storage. This keeps the limiter active rather than
@@ -93,57 +75,6 @@ def get_rate_limiter() -> EnhancedRateLimiter:
         configure_rate_limiter()
 
     return _rate_limiter
-
-
-def _normalize_ip(value: Any) -> Optional[str]:
-    """Normalize one IP literal without accepting hostnames or header chains."""
-    candidate = str(value or "").strip().strip("[]")
-    if not candidate or "," in candidate:
-        return None
-    if "%" in candidate:
-        candidate = candidate.split("%", 1)[0]
-    try:
-        address = ipaddress.ip_address(candidate)
-    except ValueError:
-        return None
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
-        return str(address.ipv4_mapped)
-    return address.compressed
-
-
-def _resolve_proxy_host(host: str) -> frozenset[str]:
-    """Resolve a configured proxy hostname with a short cache for container churn."""
-    literal = _normalize_ip(host)
-    if literal:
-        return frozenset({literal})
-
-    now = time.monotonic()
-    cached = _proxy_address_cache.get(host)
-    if cached and now - cached[0] < _PROXY_ADDRESS_CACHE_TTL_SECONDS:
-        return cached[1]
-
-    resolved: set[str] = set()
-    try:
-        for info in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM):
-            normalized = _normalize_ip(info[4][0])
-            if normalized:
-                resolved.add(normalized)
-    except OSError:
-        logger.warning("Unable to resolve configured rate-limit proxy host %s", host)
-
-    result = frozenset(resolved)
-    _proxy_address_cache[host] = (now, result)
-    return result
-
-
-def _peer_is_trusted_proxy(peer_ip: str) -> bool:
-    normalized_peer = _normalize_ip(peer_ip)
-    if not normalized_peer:
-        return False
-    for host in _rate_limiter_config.get("trusted_proxy_hosts", ()):
-        if normalized_peer in _resolve_proxy_host(str(host)):
-            return True
-    return False
 
 
 def _principal_value(principal: Any, key: str) -> Any:
@@ -180,29 +111,9 @@ def _canonical_user_type(principal: Any) -> Optional[str]:
 
 
 def _extract_client_info(request: Request) -> tuple[str, Optional[str], Optional[str]]:
-    """Extract trusted transport identity plus canonical authenticated identity.
+    """Extract canonical transport identity plus authenticated principal identity."""
 
-    Direct clients are identified by the ASGI socket peer and cannot override
-    that identity with forwarding headers. When the peer resolves to an
-    explicitly configured trusted proxy host, exactly one valid
-    ``X-Forwarded-For`` address is accepted. The canonical production web
-    ingress overwrites that header from its own socket before Next.js handles
-    the request, so browser-supplied forwarding headers never become authority.
-    """
-
-    raw_peer = request.client.host if request.client else ""
-    peer_ip = _normalize_ip(raw_peer) or ""
-    trusted_proxy = _peer_is_trusted_proxy(peer_ip)
-
-    if trusted_proxy:
-        forwarded_ip = _normalize_ip(request.headers.get("x-forwarded-for"))
-        # Fail away from a shared proxy-wide IP bucket when the trusted ingress
-        # contract is missing or malformed. Auth's credential-failure limiter
-        # still applies while the global limiter falls through to non-IP rules.
-        ip_address = forwarded_ip or ""
-    else:
-        ip_address = peer_ip
-
+    ip_address = resolve_client_ip(request)
     principal = getattr(request.state, "user", None)
     user_id = _canonical_user_id(principal)
     user_type = _canonical_user_type(principal)
