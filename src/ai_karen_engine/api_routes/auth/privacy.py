@@ -178,7 +178,7 @@ async def request_data_erasure(
 
 @router.get("/request/{request_id}/status", response_model=PrivacyRequestStatusResponse)
 async def get_privacy_request_status(
-    request_id: str,
+    request_id: uuid.UUID,
     current_user: UserData = Depends(get_current_user),
     privacy_service: PrivacyComplianceService = Depends(get_privacy_service),
 ) -> PrivacyRequestStatusResponse:
@@ -187,7 +187,7 @@ async def get_privacy_request_status(
     user_id, tenant_id = _identity(current_user)
     try:
         privacy_request = await privacy_service.get_privacy_request_status(
-            request_id,
+            str(request_id),
             user_id=user_id,
             tenant_id=tenant_id,
         )
@@ -214,7 +214,7 @@ async def get_privacy_request_status(
 
 @router.post("/request/{request_id}/process")
 async def process_privacy_request(
-    request_id: str,
+    request_id: uuid.UUID,
     request_data: PrivacyProcessRequest,
     http_request: Request,
     current_user: UserData = Depends(get_current_user),
@@ -226,7 +226,7 @@ async def process_privacy_request(
     correlation_id = get_correlation_id(http_request)
     try:
         result = await privacy_service.process_privacy_request(
-            request_id,
+            str(request_id),
             verification_token=request_data.verification_token,
             user_id=user_id,
             tenant_id=tenant_id,
