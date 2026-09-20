@@ -706,9 +706,16 @@ class EnhancedRateLimiter:
             self._cache_timestamps.pop(key, None)
 
 
+STRICT_AUTH_ENDPOINTS = (
+    "/auth/first-run/setup",
+    "/auth/login",
+    "/auth/refresh",
+)
+
+
 # Default rate limiting rules
 DEFAULT_RATE_LIMIT_RULES = [
-    # High priority rules for specific endpoints
+    # High priority rule for unauthenticated credential/session-minting edges.
     RateLimitRule(
         name="auth_strict",
         scope=RateLimitScope.IP_ENDPOINT,
@@ -716,8 +723,11 @@ DEFAULT_RATE_LIMIT_RULES = [
         limit=10,
         window_seconds=60,
         priority=100,
-        endpoints=["/auth/login", "/auth/register", "/auth/reset-password"],
-        description="Strict rate limiting for authentication endpoints"
+        endpoints=list(STRICT_AUTH_ENDPOINTS),
+        description=(
+            "Strict IP and endpoint throttling for public authentication "
+            "credential/session-minting endpoints"
+        )
     ),
     
     # User-specific limits
