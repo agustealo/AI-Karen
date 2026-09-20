@@ -21,7 +21,6 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.logging.middleware import RuntimeLoggingMiddleware
-from ai_karen_engine.middleware.client_identity import configure_client_identity
 from ai_karen_engine.middleware.intelligent_error_handler import (
     IntelligentErrorHandlerMiddleware,
 )
@@ -29,6 +28,7 @@ from ai_karen_engine.middleware.rate_limit import (
     configure_rate_limiter,
     rate_limit_middleware,
 )
+from ai_karen_engine.server.client_identity import configure_client_identity
 
 logger = get_logger(__name__)
 
