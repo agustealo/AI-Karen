@@ -202,9 +202,12 @@ def test_strict_auth_registry_matches_live_public_session_minting_routes() -> No
     assert STRICT_AUTH_ENDPOINTS == expected
 
     auth_routes = _read(AUTH_ROUTES)
+    route_lines = [line.strip() for line in auth_routes.splitlines()]
     for endpoint in expected:
         route_path = endpoint.removeprefix("/auth")
-        assert f'@router.post("{route_path}")' in auth_routes
+        assert any(
+            line.startswith(f'@router.post("{route_path}"') for line in route_lines
+        )
 
     assert "/auth/register" not in STRICT_AUTH_ENDPOINTS
     assert "/auth/reset-password" not in STRICT_AUTH_ENDPOINTS
