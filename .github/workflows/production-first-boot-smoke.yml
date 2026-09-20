@@ -80,6 +80,22 @@ jobs:
             -t ai-karen-web:beta \
             src/ui_launchers/Karen-AI-Theme
 
+      - name: Prove web ingress rejects missing public scheme
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=/tmp/ai-karen-web-missing-scheme.log
+          set +e
+          timeout 15s docker run --rm ai-karen-web:beta >"$log" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ] || [ "$status" -eq 124 ]; then
+            cat "$log" >&2 || true
+            echo "Production web image did not fail closed without WEB_PUBLIC_SCHEME" >&2
+            exit 1
+          fi
+          grep -q 'WEB_PUBLIC_SCHEME must be explicitly configured as "http" or "https"' "$log"
+
       - name: Execute real production first boot
         env:
           KAREN_SMOKE_API_IMAGE: ai-karen-api:beta
