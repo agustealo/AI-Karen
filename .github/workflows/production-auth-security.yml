@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
-      - "src/ai_karen_engine/middleware/client_identity.py"
+      - "src/ai_karen_engine/server/client_identity.py"
       - "src/ai_karen_engine/middleware/rate_limit.py"
       - "src/ai_karen_engine/server/rate_limiter.py"
       - "src/ai_karen_engine/services/auth/**"
@@ -32,7 +32,7 @@ on:
   pull_request:
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
-      - "src/ai_karen_engine/middleware/client_identity.py"
+      - "src/ai_karen_engine/server/client_identity.py"
       - "src/ai_karen_engine/middleware/rate_limit.py"
       - "src/ai_karen_engine/server/rate_limiter.py"
       - "src/ai_karen_engine/services/auth/**"
@@ -102,7 +102,7 @@ jobs:
             src/ai_karen_engine/database/models/session_security.py \
             src/ai_karen_engine/api_routes/auth/auth.py \
             src/ai_karen_engine/api_routes/auth/privacy.py \
-            src/ai_karen_engine/middleware/client_identity.py \
+            src/ai_karen_engine/server/client_identity.py \
             src/ai_karen_engine/middleware/rate_limit.py \
             src/ai_karen_engine/server/rate_limiter.py \
             src/ai_karen_engine/monitoring
