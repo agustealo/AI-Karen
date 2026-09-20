@@ -33,6 +33,13 @@ def _workflow_text(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
+def _normalized_workflow_command(line: str) -> str:
+    stripped = line.strip()
+    if stripped.startswith("- run: "):
+        return stripped.removeprefix("- run: ").strip()
+    return stripped
+
+
 def test_canonical_python_proof_workflows_use_runtime_python_version() -> None:
     for relative_path in CANONICAL_WORKFLOWS:
         text = _workflow_text(relative_path)
@@ -45,12 +52,12 @@ def test_canonical_python_proof_workflows_do_not_own_package_inventories() -> No
     for relative_path in CANONICAL_WORKFLOWS:
         text = _workflow_text(relative_path)
         for line in text.splitlines():
-            stripped = line.strip()
-            if "pip install" not in stripped:
+            command = _normalized_workflow_command(line)
+            if "pip install" not in command:
                 continue
-            assert stripped.startswith(ALLOWED_PIP_INSTALL_PREFIXES), (
+            assert command.startswith(ALLOWED_PIP_INSTALL_PREFIXES), (
                 relative_path,
-                stripped,
+                command,
             )
 
 
