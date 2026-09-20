@@ -86,18 +86,29 @@ class PIIDetector:
     """Deterministic PII detector used for safe previews and redacted exports."""
 
     def __init__(self) -> None:
+        # Address must run before name so street names are not partially consumed
+        # by the intentionally conservative proper-name detector.
         self.pii_patterns = {
             "email": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
             "phone": r"\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b",
             "ssn": r"\b\d{3}-?\d{2}-?\d{4}\b",
             "credit_card": r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b",
             "ip_address": r"\b\d{1,3}(?:\.\d{1,3}){3}\b",
+            "address": (
+                r"\b\d{1,6}\s+(?:[A-Za-z0-9.'-]+\s+){0,5}"
+                r"(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Court|Ct|Way)\b"
+            ),
+            "name": r"\b[A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?(?:\s+[A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?){1,2}\b",
         }
+
+    @staticmethod
+    def _flags(pii_type: str) -> int:
+        return 0 if pii_type == "name" else re.IGNORECASE
 
     def detect_pii(self, value: str) -> Dict[str, List[str]]:
         found: Dict[str, List[str]] = {}
         for pii_type, pattern in self.pii_patterns.items():
-            matches = re.findall(pattern, value or "", re.IGNORECASE)
+            matches = re.findall(pattern, value or "", self._flags(pii_type))
             if matches:
                 found[pii_type] = list(matches)
         return found
@@ -109,7 +120,7 @@ class PIIDetector:
                 pattern,
                 f"[{pii_type.upper()}_ANONYMIZED]",
                 result,
-                flags=re.IGNORECASE,
+                flags=self._flags(pii_type),
             )
         return result
 
@@ -418,32 +429,35 @@ class DataEraser:
             )
         return list(dict.fromkeys(requested))
 
-    async def erase_user_data(
+    @staticmethod
+    def _validate_erasure_type(erasure_type: ErasureType) -> None:
+        if erasure_type != ErasureType.HARD_DELETE:
+            raise ValueError(
+                "Only hard_delete is implemented. soft_delete and anonymize fail closed until canonical support exists."
+            )
+
+    async def erase_user_data_in_session(
         self,
+        session: Any,
+        *,
         user_id: str,
         tenant_id: str,
         erasure_type: ErasureType,
         data_types: Optional[List[str]] = None,
         correlation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        if erasure_type != ErasureType.HARD_DELETE:
-            raise ValueError(
-                "Only hard_delete is implemented. soft_delete and anonymize fail closed until canonical support exists."
-            )
+        """Execute erasure without committing so lifecycle state can share the transaction."""
+        self._validate_erasure_type(erasure_type)
         selected = self.normalize_data_types(data_types)
         results: Dict[str, Any] = {}
-        async with self.db_client.get_async_session() as session:
-            await _set_request_scope(session, tenant_id=tenant_id, user_id=user_id)
-            if "memories" in selected:
-                results["memories"] = await self._erase_memories(
-                    session, user_id=user_id, tenant_id=tenant_id
-                )
-            if "conversations" in selected:
-                results["conversations"] = await self._erase_conversations(
-                    session, user_id=user_id, tenant_id=tenant_id
-                )
-            await session.commit()
-
+        if "memories" in selected:
+            results["memories"] = await self._erase_memories(
+                session, user_id=user_id, tenant_id=tenant_id
+            )
+        if "conversations" in selected:
+            results["conversations"] = await self._erase_conversations(
+                session, user_id=user_id, tenant_id=tenant_id
+            )
         return {
             "user_id": user_id,
             "tenant_id": tenant_id,
@@ -457,6 +471,28 @@ class DataEraser:
                 "cache": "not claimed erased because no canonical user-wide cache ownership contract exists",
             },
         }
+
+    async def erase_user_data(
+        self,
+        user_id: str,
+        tenant_id: str,
+        erasure_type: ErasureType,
+        data_types: Optional[List[str]] = None,
+        correlation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Standalone erasure entry point for callers without lifecycle state."""
+        async with self.db_client.get_async_session() as session:
+            await _set_request_scope(session, tenant_id=tenant_id, user_id=user_id)
+            result = await self.erase_user_data_in_session(
+                session,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                erasure_type=erasure_type,
+                data_types=data_types,
+                correlation_id=correlation_id,
+            )
+            await session.commit()
+            return result
 
     async def _erase_memories(
         self, session: Any, *, user_id: str, tenant_id: str
@@ -591,10 +627,7 @@ class PrivacyComplianceService:
             selected = self.data_eraser.normalize_data_types(data_types)
             selected_export_format = None
             selected_erasure_type = erasure_type or ErasureType.HARD_DELETE
-            if selected_erasure_type != ErasureType.HARD_DELETE:
-                raise ValueError(
-                    "Only hard_delete erasure is currently implemented; unsupported modes fail closed"
-                )
+            self.data_eraser._validate_erasure_type(selected_erasure_type)
 
         request_id = str(uuid.uuid4())
         verification_token = secrets.token_urlsafe(32)
@@ -692,6 +725,14 @@ class PrivacyComplianceService:
         if request.status != PrivacyRequestStatus.PENDING:
             raise RuntimeError(f"Privacy request is not pending: {request.status.value}")
 
+        if request.request_type == "erasure":
+            return await self._process_erasure_atomically(
+                request=request,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                correlation_id=correlation_id,
+            )
+
         claimed = await self._claim_request(
             request_id=request_id,
             user_id=user_id,
@@ -702,39 +743,23 @@ class PrivacyComplianceService:
             raise RuntimeError("Privacy request was already claimed or is no longer pending")
 
         try:
-            if request.request_type == "export":
-                result = await self.data_exporter.export_user_data(
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    data_types=request.data_types,
-                    export_format=request.export_format or DataExportFormat.JSON,
-                    include_pii=include_pii,
-                )
-                result_metadata = {
-                    "export_format": (request.export_format or DataExportFormat.JSON).value,
-                    "data_types": request.data_types or [],
-                    "record_counts": {
-                        key: _count_export_section(value)
-                        for key, value in result.get("data", {}).items()
-                    },
-                }
-            elif request.request_type == "erasure":
-                result = await self.data_eraser.erase_user_data(
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    erasure_type=request.erasure_type or ErasureType.HARD_DELETE,
-                    data_types=request.data_types,
-                    correlation_id=correlation_id,
-                )
-                result_metadata = {
-                    "erasure_type": (request.erasure_type or ErasureType.HARD_DELETE).value,
-                    "data_types": request.data_types or [],
-                    "results": result.get("results", {}),
-                    "retained": result.get("retained", {}),
-                }
-            else:
+            if request.request_type != "export":
                 raise ValueError(f"Unsupported privacy request type: {request.request_type}")
-
+            result = await self.data_exporter.export_user_data(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                data_types=request.data_types,
+                export_format=request.export_format or DataExportFormat.JSON,
+                include_pii=include_pii,
+            )
+            result_metadata = {
+                "export_format": (request.export_format or DataExportFormat.JSON).value,
+                "data_types": request.data_types or [],
+                "record_counts": {
+                    key: _count_export_section(value)
+                    for key, value in result.get("data", {}).items()
+                },
+            }
             await self._complete_request(
                 request_id=request_id,
                 user_id=user_id,
@@ -757,6 +782,84 @@ class PrivacyComplianceService:
                 error_message=str(exc),
             )
             raise
+
+    async def _process_erasure_atomically(
+        self,
+        *,
+        request: PrivacyRequest,
+        user_id: str,
+        tenant_id: str,
+        correlation_id: Optional[str],
+    ) -> Dict[str, Any]:
+        """Claim, erase, and persist completion in one PostgreSQL transaction."""
+        try:
+            async with self.db_client.get_async_session() as session:
+                await _set_request_scope(session, tenant_id=tenant_id, user_id=user_id)
+                claim_result = await session.execute(
+                    text(
+                        "UPDATE privacy_requests SET status = 'in_progress', verification_used_at = now(), "
+                        "updated_at = now(), correlation_id = COALESCE(:correlation_id, correlation_id) "
+                        "WHERE request_id = CAST(:request_id AS uuid) "
+                        "AND tenant_id = CAST(:tenant_id AS uuid) "
+                        "AND user_id = CAST(:user_id AS uuid) AND status = 'pending'"
+                    ),
+                    {
+                        "request_id": request.request_id,
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                if _row_count(claim_result) != 1:
+                    raise RuntimeError(
+                        "Privacy request was already claimed or is no longer pending"
+                    )
+
+                result = await self.data_eraser.erase_user_data_in_session(
+                    session,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    erasure_type=request.erasure_type or ErasureType.HARD_DELETE,
+                    data_types=request.data_types,
+                    correlation_id=correlation_id,
+                )
+                result_metadata = {
+                    "erasure_type": (
+                        request.erasure_type or ErasureType.HARD_DELETE
+                    ).value,
+                    "data_types": request.data_types or [],
+                    "results": result.get("results", {}),
+                    "retained": result.get("retained", {}),
+                }
+                await self._complete_request_in_session(
+                    session,
+                    request_id=request.request_id,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    result_metadata=result_metadata,
+                )
+                await session.commit()
+        except Exception as exc:
+            # The destructive transaction rolls back before this separate failure
+            # transition. If commit actually succeeded but acknowledgement was lost,
+            # the completed status prevents this pending-only update from lying.
+            await self._fail_request(
+                request_id=request.request_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                error_message=str(exc),
+                include_pending=True,
+            )
+            self._audit(
+                outcome="failure",
+                request=request,
+                correlation_id=correlation_id,
+                error_message=str(exc),
+            )
+            raise
+
+        self._audit(outcome="success", request=request, correlation_id=correlation_id)
+        return result
 
     async def process_data_export_request(
         self,
@@ -843,6 +946,33 @@ class PrivacyComplianceService:
             await session.commit()
             return _row_count(result) == 1
 
+    async def _complete_request_in_session(
+        self,
+        session: Any,
+        *,
+        request_id: str,
+        user_id: str,
+        tenant_id: str,
+        result_metadata: Dict[str, Any],
+    ) -> None:
+        result = await session.execute(
+            text(
+                "UPDATE privacy_requests SET status = 'completed', completed_at = now(), updated_at = now(), "
+                "result_metadata = CAST(:result_metadata AS jsonb), error_message = NULL "
+                "WHERE request_id = CAST(:request_id AS uuid) "
+                "AND tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid) AND status = 'in_progress'"
+            ),
+            {
+                "request_id": request_id,
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "result_metadata": json.dumps(_jsonable(result_metadata)),
+            },
+        )
+        if _row_count(result) != 1:
+            raise RuntimeError("Failed to persist completed privacy request state")
+
     async def _complete_request(
         self,
         *,
@@ -853,23 +983,13 @@ class PrivacyComplianceService:
     ) -> None:
         async with self.db_client.get_async_session() as session:
             await _set_request_scope(session, tenant_id=tenant_id, user_id=user_id)
-            result = await session.execute(
-                text(
-                    "UPDATE privacy_requests SET status = 'completed', completed_at = now(), updated_at = now(), "
-                    "result_metadata = CAST(:result_metadata AS jsonb), error_message = NULL "
-                    "WHERE request_id = CAST(:request_id AS uuid) "
-                    "AND tenant_id = CAST(:tenant_id AS uuid) "
-                    "AND user_id = CAST(:user_id AS uuid) AND status = 'in_progress'"
-                ),
-                {
-                    "request_id": request_id,
-                    "tenant_id": tenant_id,
-                    "user_id": user_id,
-                    "result_metadata": json.dumps(_jsonable(result_metadata)),
-                },
+            await self._complete_request_in_session(
+                session,
+                request_id=request_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                result_metadata=result_metadata,
             )
-            if _row_count(result) != 1:
-                raise RuntimeError("Failed to persist completed privacy request state")
             await session.commit()
 
     async def _fail_request(
@@ -879,8 +999,14 @@ class PrivacyComplianceService:
         user_id: str,
         tenant_id: str,
         error_message: str,
+        include_pending: bool = False,
     ) -> None:
         safe_error = (error_message or "privacy processing failed")[:1000]
+        status_predicate = (
+            "status IN ('pending', 'in_progress')"
+            if include_pending
+            else "status = 'in_progress'"
+        )
         async with self.db_client.get_async_session() as session:
             await _set_request_scope(session, tenant_id=tenant_id, user_id=user_id)
             await session.execute(
@@ -888,7 +1014,8 @@ class PrivacyComplianceService:
                     "UPDATE privacy_requests SET status = 'failed', completed_at = now(), updated_at = now(), "
                     "error_message = :error_message WHERE request_id = CAST(:request_id AS uuid) "
                     "AND tenant_id = CAST(:tenant_id AS uuid) "
-                    "AND user_id = CAST(:user_id AS uuid) AND status = 'in_progress'"
+                    "AND user_id = CAST(:user_id AS uuid) AND "
+                    + status_predicate
                 ),
                 {
                     "request_id": request_id,
