@@ -21,6 +21,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.logging.middleware import RuntimeLoggingMiddleware
+from ai_karen_engine.middleware.client_identity import configure_client_identity
 from ai_karen_engine.middleware.intelligent_error_handler import (
     IntelligentErrorHandlerMiddleware,
 )
@@ -251,6 +252,10 @@ def configure_middleware(
     """Register canonical transport middleware in deterministic order."""
     environment = str(getattr(settings, "environment", "") or "").lower()
     production = environment == "production"
+
+    # Transport identity is required by auth/audit independently of whether the
+    # global rate limiter is enabled, so configure it at the HTTP boundary.
+    configure_client_identity()
 
     app.add_middleware(
         RequestSizeLimitMiddleware,
