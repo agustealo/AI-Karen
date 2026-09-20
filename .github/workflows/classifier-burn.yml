@@ -29,8 +29,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: python -m pip install pytest pytest-asyncio numpy
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+      - run: python -m pip install -r requirements/ci/classifier-lite.txt
       - run: pytest "tests/core/intelligence/test_intent_classifier_burn.py::test_heuristic_burn_routes_specific_intents_before_generic_request_cues[${{ matrix.case }}]" -q
 
   predictor-contracts:
@@ -48,8 +50,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: python -m pip install pytest pytest-asyncio numpy
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+      - run: python -m pip install -r requirements/ci/classifier-lite.txt
       - name: Noise rejection
         if: matrix.group == 'noise'
         run: pytest tests/core/intelligence/test_intent_classifier_burn.py -q -k unknown_noise
@@ -72,13 +76,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: |
-          python -m pip install \
-            pytest pytest-asyncio numpy sqlalchemy asyncpg psycopg psycopg2-binary \
-            PyJWT bcrypt argon2-cffi structlog cryptography PyYAML \
-            pydantic pydantic-settings python-dotenv prometheus_client \
-            fastapi httpx requests tenacity redis fakeredis
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+      - run: python -m pip install -r requirements/ci/runtime-contract.txt
       - name: Predictor truth
         if: matrix.case == 'predictor_truth'
         run: pytest tests/core/intelligence/test_intelligence_runtime_classify_burn.py::test_public_classify_returns_registered_predictor_truth -q
