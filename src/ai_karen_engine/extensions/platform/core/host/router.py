@@ -1,113 +1,118 @@
-import logging
-import asyncio
-from typing import Dict, List, Optional, Any, Callable
-from pathlib import Path
-from datetime import datetime
+"""Compatibility router that delegates to the canonical PluginService.
 
-from ai_karen_engine.extensions.platform.core.manifest import (
-    ExtensionRecord,
-    ExtensionStatus,
-    ExtensionManifest,
-    HookPoint,
-    HookContext,
-)
-from ..registry.plugin_registry import get_registry
-from .loader import ExtensionLoader
-from .runner import ExtensionRunner
+This module intentionally owns no loader, runner, registry, or authorization
+logic. It preserves the historical dispatch surface while forcing all plugin
+execution through RuntimePolicy, ActionExecutionGate, and
+ExtensionExecutionService.
+
+Canonical service imports stay lazy because PluginKernel imports platform host
+modules during its own initialization.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.services.plugin_service import PluginService
 
 logger = logging.getLogger("kari.plugin_router")
 
 
+def get_plugin_service() -> "PluginService":
+    from ai_karen_engine.services.plugin_service import get_plugin_service as _get
+
+    return _get()
+
+
 class PluginRouter:
-    """
-    Ruthless Prompt-First Plugin Orchestrator.
-    Back-ends into ExtensionLoader for loading and ExtensionRunner for execution.
-    """
+    """Legacy routing surface backed by the single canonical plugin runtime."""
 
-    def __init__(self, extensions_dir: str = "src/ai_karen_engine/extensions/plugins"):
-        self.registry = get_registry()
-        self.loader = ExtensionLoader(extensions_dir)
-        # ExtensionRunner needs an ExtensionRegistry (legacy type).
-        # For now, we'll pass our unified registry and refine the interface if needed.
-        self.runner = ExtensionRunner(self.registry)
+    def __init__(
+        self,
+        extensions_dir: str = "src/ai_karen_engine/extensions/plugins",
+    ) -> None:
+        self.extensions_dir = extensions_dir
 
-    async def reload(self):
-        """Discovers and reloads all extensions."""
-        await self.registry.refresh()
-        discovered = self.registry.list_discovered()
-        for ext_id in discovered:
-            try:
-                # Try to load via the official Loader
-                instance = self.loader.load_extension(ext_id)
-                # Register the loaded instance back to the registry for truth
-                record = ExtensionRecord(
-                    manifest=instance.manifest,
-                    instance=instance,
-                    status=ExtensionStatus.ACTIVE,
-                    directory=Path(self.loader.extensions_dir) / ext_id,
-                    loaded_at=datetime.now(),
-                )
-                self.registry.register_loaded_instance(record)
-            except Exception as e:
-                logger.error(f"Failed to load extension {ext_id}: {e}")
+    async def reload(self) -> int:
+        """Refresh catalog/runtime projection without eagerly importing plugins."""
+        return await get_plugin_service().refresh_plugins()
 
     async def dispatch(
-        self, intent: str, params: Dict[str, Any], roles: Optional[List[str]] = None
+        self,
+        intent: str,
+        params: Dict[str, Any],
+        roles: Optional[List[str]] = None,
+        *,
+        user_context: Optional[Dict[str, Any]] = None,
+        authorized_plan: Optional["AuthorizedExecutionPlan"] = None,
     ) -> Any:
-        """
-        Primary entry point for AI-triggered plugins.
-        Maps an 'intent' to an extension and executes it.
-        """
-        # 1. Find the extension providing this intent
-        # (For now, we assume extension name == primary intent if not specified)
-        extension_record = self.registry.get_extension(intent)
-        if not extension_record:
-            # Try searching by manifest metadata if not direct match
-            for rec in self.registry.list_extensions():
-                if getattr(rec.manifest, "intent", None) == intent:
-                    extension_record = rec
-                    break
+        """Execute a plugin intent through the canonical governed executor.
 
-        if not extension_record:
-            raise RuntimeError(f"No extension found for intent '{intent}'")
+        Historical callers may still pass ``roles``. Identity and tenant scope
+        are deliberately not fabricated; callers that omit them fail closed in
+        ``PluginService``.
+        """
+        from ai_karen_engine.services.plugin_service import ExecutionStatus
 
-        # 2. Execute via Runner (with full isolation, metrics, and hooks)
-        # We wrap the parameters into a HookContext
-        context = HookContext(
-            hook_point=HookPoint.PRE_INTENT_DETECTION,  # Placeholder for custom dispatch hook
-            data=params,
-            user_context={"roles": roles} if roles else {},
+        context = dict(user_context or {})
+        resolved_roles = list(context.get("roles") or roles or [])
+        permissions = list(context.get("permissions") or [])
+        plan = authorized_plan or context.get("authorized_plan")
+
+        result = await get_plugin_service().execute_plugin(
+            plugin_name=intent,
+            parameters=dict(params or {}),
+            timeout_seconds=int(context.get("timeout_seconds") or 30),
+            user_id=context.get("user_id"),
+            tenant_id=context.get("tenant_id"),
+            session_id=context.get("session_id"),
+            conversation_id=context.get("conversation_id"),
+            correlation_id=context.get("correlation_id"),
+            roles=resolved_roles,
+            permissions=permissions,
+            policy_decision_id=context.get("policy_decision_id"),
+            authorized_plan=plan,
+            allowed_capabilities=list(context.get("allowed_capabilities") or []),
+            forbidden_capabilities=list(
+                context.get("forbidden_capabilities") or []
+            ),
         )
 
-        try:
-            # We can either use runner.execute_hook for standard points,
-            # or directly call the extension instance.
-            # Here we prefer the safe execution wrapper.
-            result = await self.runner._execute_extension_with_timeout(
-                extension_record.instance,
-                HookPoint.POST_LLM_RESULT,  # Example point for execution
-                context,
-                timeout=30.0,
-            )
-            return result
-        except Exception as e:
-            logger.error(f"Dispatch error for intent {intent}: {e}")
-            raise
+        if result.status is ExecutionStatus.COMPLETED:
+            return result.result
+
+        message = result.error or "Plugin execution failed"
+        permission_errors = {
+            "permission_denied",
+            "permission_plan_mismatch",
+            "plugin_not_authorized",
+            "action_gate_denied",
+            "policy_denied",
+            "authorized_scope_mismatch",
+            "authorized_plan_required",
+            "authorized_plan_invalid",
+        }
+        if result.error_code in permission_errors:
+            raise PermissionError(message)
+        raise RuntimeError(
+            f"{result.error_code or 'plugin_execution_failed'}: {message}"
+        )
 
     def get_api_router(self) -> Any:
-        """Mounts all extensions that provide an API router."""
+        """Return an empty compatibility router.
+
+        Plugin-owned FastAPI routers are no longer imported and mounted directly,
+        because doing so bypasses the governed execution boundary. Plugin HTTP
+        ingress must use the canonical plugin API routes.
+        """
         from fastapi import APIRouter
 
-        router = APIRouter()
-        for record in self.registry.list_extensions():
-            if record.instance and hasattr(record.instance, "get_api_router"):
-                ext_router = record.instance.get_api_router()
-                if ext_router:
-                    router.include_router(ext_router)
-        return router
+        return APIRouter()
 
 
-# Singleton accessor
 _router_instance: Optional[PluginRouter] = None
 
 
