@@ -133,6 +133,23 @@ async def test_legacy_router_dispatch_fails_closed_without_identity_scope(
     assert service.calls[0]["tenant_id"] is None
 
 
+def test_retired_platform_lifecycle_authorities_stay_deleted() -> None:
+    root = (
+        Path(__file__).parents[2]
+        / "src"
+        / "ai_karen_engine"
+        / "extensions"
+        / "platform"
+        / "core"
+    )
+    retired_paths = (
+        root / "plugin_lifecycle_manager.py",
+        root / "integration" / "lifecycle_manager.py",
+    )
+    for path in retired_paths:
+        assert not path.exists(), f"retired lifecycle authority resurrected: {path}"
+
+
 def test_platform_runtime_surfaces_do_not_construct_duplicate_execution_stack() -> None:
     root = (
         Path(__file__).parents[2]
