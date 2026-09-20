@@ -236,7 +236,8 @@ jobs:
           api = config['services']['api']
           web = config['services']['web']
           assert api.get('ports', []) == [], api.get('ports')
-          assert api['environment']['RATE_LIMIT_TRUSTED_PROXY_HOSTS'] == 'web'
+          assert api['environment']['HTTP_TRUSTED_PROXY_HOSTS'] == 'web'
+          assert 'RATE_LIMIT_TRUSTED_PROXY_HOSTS' not in api['environment']
           assert web.get('ports'), 'production web ingress must remain published'
           PY
 

@@ -38,7 +38,7 @@ services:
       EXTENSION_REQUIRE_HTTPS: "true"
       ALLOW_PUBLIC_COPILOT: "false"
       KAREN_BUILTIN_VLLM_ENABLED: "false"
-      RATE_LIMIT_TRUSTED_PROXY_HOSTS: "web"
+      HTTP_TRUSTED_PROXY_HOSTS: "web"
 
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required for production}
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:?AUTH_SECRET_KEY is required for production}

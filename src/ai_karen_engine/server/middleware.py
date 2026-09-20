@@ -28,6 +28,7 @@ from ai_karen_engine.middleware.rate_limit import (
     configure_rate_limiter,
     rate_limit_middleware,
 )
+from ai_karen_engine.server.client_identity import configure_client_identity
 
 logger = get_logger(__name__)
 
@@ -251,6 +252,10 @@ def configure_middleware(
     """Register canonical transport middleware in deterministic order."""
     environment = str(getattr(settings, "environment", "") or "").lower()
     production = environment == "production"
+
+    # Transport identity is required by auth/audit independently of whether the
+    # global rate limiter is enabled, so configure it at the HTTP boundary.
+    configure_client_identity()
 
     app.add_middleware(
         RequestSizeLimitMiddleware,
