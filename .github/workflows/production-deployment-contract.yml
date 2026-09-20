@@ -73,6 +73,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          retired='src/ai_karen_engine/server/health_endpoints.py'
           test ! -e server/health_endpoints.py
-          ! grep -R --line-number --include='*.yml' --include='*.yaml' \
-            'src/ai_karen_engine/server/health_endpoints.py' .github/workflows
+          refs=$(grep -R --line-number --include='*.yml' --include='*.yaml' \
+            "$retired" .github/workflows || true)
+          refs=$(printf '%s\n' "$refs" | grep -v -F \
+            '.github/workflows/production-deployment-contract.yml:' || true)
+          test -z "$refs" || { echo "$refs"; exit 1; }

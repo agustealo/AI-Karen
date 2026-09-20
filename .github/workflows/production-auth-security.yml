@@ -4,11 +4,16 @@ on:
   push:
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
+      - "src/ai_karen_engine/middleware/rate_limit.py"
+      - "src/ai_karen_engine/server/rate_limiter.py"
       - "src/ai_karen_engine/services/auth/**"
       - "src/ai_karen_engine/services/privacy_compliance.py"
       - "src/ai_karen_engine/core/services/base.py"
       - "src/ai_karen_engine/database/models/session_security.py"
       - "src/ai_karen_engine/monitoring/**"
+      - "src/ui_launchers/Karen-AI-Theme/server.mjs"
+      - "src/ui_launchers/Karen-AI-Theme/Dockerfile.production"
+      - "deploy/compose/docker-compose.prod.yml"
       - "supabase/migrations/*.sql"
       - "tests/auth/**"
       - "tests/security/**"
@@ -19,15 +24,23 @@ on:
       - "tests/architecture/test_auth_readiness_contract.py"
       - "tests/architecture/test_authenticated_tenant_context_contract.py"
       - "tests/architecture/test_consumer_privacy_authority.py"
+      - "tests/architecture/test_rate_limit_identity_authority.py"
+      - "requirements/ci/base.txt"
+      - "requirements/ci/runtime-contract.txt"
       - ".github/workflows/production-auth-security.yml"
   pull_request:
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
+      - "src/ai_karen_engine/middleware/rate_limit.py"
+      - "src/ai_karen_engine/server/rate_limiter.py"
       - "src/ai_karen_engine/services/auth/**"
       - "src/ai_karen_engine/services/privacy_compliance.py"
       - "src/ai_karen_engine/core/services/base.py"
       - "src/ai_karen_engine/database/models/session_security.py"
       - "src/ai_karen_engine/monitoring/**"
+      - "src/ui_launchers/Karen-AI-Theme/server.mjs"
+      - "src/ui_launchers/Karen-AI-Theme/Dockerfile.production"
+      - "deploy/compose/docker-compose.prod.yml"
       - "supabase/migrations/*.sql"
       - "tests/auth/**"
       - "tests/security/**"
@@ -38,6 +51,9 @@ on:
       - "tests/architecture/test_auth_readiness_contract.py"
       - "tests/architecture/test_authenticated_tenant_context_contract.py"
       - "tests/architecture/test_consumer_privacy_authority.py"
+      - "tests/architecture/test_rate_limit_identity_authority.py"
+      - "requirements/ci/base.txt"
+      - "requirements/ci/runtime-contract.txt"
       - ".github/workflows/production-auth-security.yml"
   workflow_dispatch:
 
@@ -67,11 +83,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
 
       - name: Install proof dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-asyncio sqlalchemy asyncpg PyJWT bcrypt structlog cryptography PyYAML pydantic pydantic-settings python-dotenv prometheus_client
+          python -m pip install -r requirements/ci/runtime-contract.txt
 
       - name: Prove auth and privacy files compile
         run: |
@@ -82,6 +100,8 @@ jobs:
             src/ai_karen_engine/database/models/session_security.py \
             src/ai_karen_engine/api_routes/auth/auth.py \
             src/ai_karen_engine/api_routes/auth/privacy.py \
+            src/ai_karen_engine/middleware/rate_limit.py \
+            src/ai_karen_engine/server/rate_limiter.py \
             src/ai_karen_engine/monitoring
 
       - name: Prove first-run authority boundary
@@ -98,6 +118,11 @@ jobs:
 
       - name: Prove authenticated tenant route boundary
         run: pytest tests/architecture/test_authenticated_tenant_context_contract.py -q
+
+      - name: Prove rate-limit identity authority
+        env:
+          PYTHONPATH: src
+        run: pytest tests/architecture/test_rate_limit_identity_authority.py -q
 
       - name: Prove durable consumer privacy authority
         env:

@@ -7,6 +7,11 @@ on:
       - "Dockerfile"
       - "requirements.txt"
       - "src/ai_karen_engine/**"
+      - "src/ui_launchers/Karen-AI-Theme/Dockerfile.production"
+      - "src/ui_launchers/Karen-AI-Theme/server.mjs"
+      - "src/ui_launchers/Karen-AI-Theme/package.json"
+      - "src/ui_launchers/Karen-AI-Theme/package-lock.json"
+      - "src/ui_launchers/Karen-AI-Theme/next.config.*"
       - "supabase/migrations/**"
       - "scripts/ci/production-first-boot-smoke.sh"
       - "tests/architecture/test_first_run_system_contract.py"
@@ -21,6 +26,11 @@ on:
       - "Dockerfile"
       - "requirements.txt"
       - "src/ai_karen_engine/**"
+      - "src/ui_launchers/Karen-AI-Theme/Dockerfile.production"
+      - "src/ui_launchers/Karen-AI-Theme/server.mjs"
+      - "src/ui_launchers/Karen-AI-Theme/package.json"
+      - "src/ui_launchers/Karen-AI-Theme/package-lock.json"
+      - "src/ui_launchers/Karen-AI-Theme/next.config.*"
       - "supabase/migrations/**"
       - "scripts/ci/production-first-boot-smoke.sh"
       - "tests/architecture/test_first_run_system_contract.py"
@@ -61,7 +71,44 @@ jobs:
       - name: Build production API image
         run: docker build --target app --build-arg PROFILE=runtime -t ai-karen-api:beta .
 
+      - name: Build production web image
+        run: |
+          docker build \
+            -f src/ui_launchers/Karen-AI-Theme/Dockerfile.production \
+            -t ai-karen-web:beta \
+            src/ui_launchers/Karen-AI-Theme
+
       - name: Execute real production first boot
         env:
           KAREN_SMOKE_API_IMAGE: ai-karen-api:beta
         run: bash scripts/ci/production-first-boot-smoke.sh
+
+      - name: Execute real production web boot
+        shell: bash
+        run: |
+          set -euo pipefail
+          container="ai-karen-web-first-boot-${GITHUB_RUN_ID}"
+          cleanup() {
+            docker rm -f "$container" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run -d \
+            --name "$container" \
+            -p 127.0.0.1:18010:8010 \
+            -e KAREN_BACKEND_URL=http://127.0.0.1:9 \
+            ai-karen-web:beta >/dev/null
+
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18010/login >/dev/null; then
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' "$container")" != "true" ]; then
+              docker logs "$container" >&2 || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+          docker logs "$container" >&2 || true
+          exit 1
