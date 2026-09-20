@@ -9,6 +9,7 @@ on:
       - "src/ai_karen_engine/**"
       - "src/ui_launchers/Karen-AI-Theme/Dockerfile.production"
       - "src/ui_launchers/Karen-AI-Theme/server.mjs"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/api/_lib/backend-proxy.ts"
       - "src/ui_launchers/Karen-AI-Theme/package.json"
       - "src/ui_launchers/Karen-AI-Theme/package-lock.json"
       - "src/ui_launchers/Karen-AI-Theme/next.config.*"
@@ -28,6 +29,7 @@ on:
       - "src/ai_karen_engine/**"
       - "src/ui_launchers/Karen-AI-Theme/Dockerfile.production"
       - "src/ui_launchers/Karen-AI-Theme/server.mjs"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/api/_lib/backend-proxy.ts"
       - "src/ui_launchers/Karen-AI-Theme/package.json"
       - "src/ui_launchers/Karen-AI-Theme/package-lock.json"
       - "src/ui_launchers/Karen-AI-Theme/next.config.*"
@@ -96,6 +98,7 @@ jobs:
           docker run -d \
             --name "$container" \
             -p 127.0.0.1:18010:8010 \
+            -e WEB_PUBLIC_SCHEME=http \
             -e KAREN_BACKEND_URL=http://127.0.0.1:9 \
             ai-karen-web:beta >/dev/null
 
