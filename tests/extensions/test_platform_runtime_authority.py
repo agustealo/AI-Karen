@@ -134,7 +134,14 @@ async def test_legacy_router_dispatch_fails_closed_without_identity_scope(
 
 
 def test_platform_runtime_surfaces_do_not_construct_duplicate_execution_stack() -> None:
-    root = Path(__file__).parents[2] / "src" / "ai_karen_engine" / "extensions" / "platform" / "core"
+    root = (
+        Path(__file__).parents[2]
+        / "src"
+        / "ai_karen_engine"
+        / "extensions"
+        / "platform"
+        / "core"
+    )
     source_expectations = {
         root / "host" / "manager.py": (
             "ExtensionLoader",
@@ -146,6 +153,12 @@ def test_platform_runtime_surfaces_do_not_construct_duplicate_execution_stack() 
             "ExtensionRunner",
             "register_loaded_instance",
             "_execute_extension_with_timeout",
+        ),
+        root / "host" / "factory.py": (
+            "from ai_karen_engine.extensions.registry import ExtensionRegistry",
+            "from ai_karen_engine.plugins.router import PluginRouter",
+            "ExtensionRegistry(",
+            "PluginRouter(",
         ),
         root / "integration" / "manager.py": (
             "PermissionsManager",
@@ -162,4 +175,6 @@ def test_platform_runtime_surfaces_do_not_construct_duplicate_execution_stack() 
     for path, forbidden_fragments in source_expectations.items():
         source = path.read_text(encoding="utf-8")
         for fragment in forbidden_fragments:
-            assert fragment not in source, f"{path} still contains retired authority: {fragment}"
+            assert fragment not in source, (
+                f"{path} still contains retired authority: {fragment}"
+            )
