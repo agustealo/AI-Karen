@@ -1,8 +1,9 @@
 """Canonical HTTP client identity resolution.
 
 This module owns socket-peer normalization and trusted-proxy handling for HTTP
-transport identity. Callers such as authentication, auditing, and rate limiting
-consume the resolved identity; they must not parse forwarding headers themselves.
+transport identity. Callers such as authentication, auditing, rate limiting, and
+other transport context resolvers consume this trust boundary; they must not
+parse forwarding identity headers independently.
 """
 
 from __future__ import annotations
@@ -109,6 +110,17 @@ def _peer_is_trusted_proxy(peer_ip: str) -> bool:
     )
 
 
+def _request_peer_ip(request: Any) -> str:
+    raw_peer = request.client.host if getattr(request, "client", None) else ""
+    return _normalize_ip(raw_peer) or ""
+
+
+def is_trusted_proxy_request(request: Any) -> bool:
+    """Return whether the request socket peer is inside the configured trust boundary."""
+
+    return _peer_is_trusted_proxy(_request_peer_ip(request))
+
+
 def resolve_client_ip(request: Any) -> str:
     """Resolve canonical client IP from socket peer plus explicit proxy trust.
 
@@ -118,8 +130,7 @@ def resolve_client_ip(request: Any) -> str:
     identity rather than collapsing traffic onto the shared proxy address.
     """
 
-    raw_peer = request.client.host if getattr(request, "client", None) else ""
-    peer_ip = _normalize_ip(raw_peer) or ""
+    peer_ip = _request_peer_ip(request)
     if not _peer_is_trusted_proxy(peer_ip):
         return peer_ip
 
