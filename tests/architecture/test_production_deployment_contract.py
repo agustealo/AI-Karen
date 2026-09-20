@@ -110,7 +110,8 @@ def test_production_api_does_not_mask_attested_source_or_config() -> None:
     assert "./config:/app/config" not in api_block
     assert "KAREN_BUILTIN_VLLM_ENABLED: \"false\"" in api_block
     assert "AUTH_ENABLE_SESSION_VALIDATION: \"true\"" in api_block
-    assert 'RATE_LIMIT_TRUSTED_PROXY_HOSTS: "web"' in api_block
+    assert 'HTTP_TRUSTED_PROXY_HOSTS: "web"' in api_block
+    assert "RATE_LIMIT_TRUSTED_PROXY_HOSTS" not in api_block
 
 
 def test_production_web_uses_immutable_production_runtime() -> None:
