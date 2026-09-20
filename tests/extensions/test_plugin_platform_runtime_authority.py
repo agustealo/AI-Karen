@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+import ai_karen_engine.extensions.platform as platform_module
 from ai_karen_engine.services.plugin_service import ExecutionStatus
 from ai_karen_engine.extensions.platform.core import manager as core_manager_module
 from ai_karen_engine.extensions.platform.core.host import manager as host_manager_module
@@ -104,6 +105,14 @@ def test_exported_platform_surfaces_have_no_direct_execution_authority() -> None
 
     for source in (core_source, host_source, router_source, integration_source):
         assert "get_plugin_service" in source
+
+
+def test_platform_namespace_does_not_eagerly_star_import_core() -> None:
+    source = inspect.getsource(platform_module)
+
+    assert "from .core import *" not in source
+    assert platform_module.__all__ == []
+    assert platform_module.PluginRouter is router_module.PluginRouter
 
 
 def test_platform_facades_do_not_import_plugin_service_at_module_load() -> None:
