@@ -10,6 +10,7 @@ from typing import Any
 from ai_karen_engine.middleware.rate_limit import (
     _extract_client_info,
     _rate_limit_endpoint,
+    configure_rate_limiter,
 )
 from ai_karen_engine.server.rate_limiter import create_rate_limiter
 
@@ -19,18 +20,26 @@ RATE_LIMIT_MIDDLEWARE = ROOT / "src/ai_karen_engine/middleware/rate_limit.py"
 AUTH_ROUTES = ROOT / "src/ai_karen_engine/api_routes/auth/auth.py"
 ROUTERS = ROOT / "src/ai_karen_engine/server/routers.py"
 BASE_COMPOSE = ROOT / "docker-compose.yml"
+PROD_COMPOSE = ROOT / "deploy/compose/docker-compose.prod.yml"
+WEB_INGRESS = ROOT / "src/ui_launchers/Karen-AI-Theme/server.mjs"
+WEB_DOCKERFILE = ROOT / "src/ui_launchers/Karen-AI-Theme/Dockerfile.production"
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _request(*, state: dict[str, Any] | None = None) -> Any:
+def _request(
+    *,
+    peer: str = "198.51.100.7",
+    forwarded_for: str = "203.0.113.99",
+    state: dict[str, Any] | None = None,
+) -> Any:
     return SimpleNamespace(
-        client=SimpleNamespace(host="198.51.100.7"),
+        client=SimpleNamespace(host=peer),
         state=SimpleNamespace(**dict(state or {})),
         headers={
-            "x-forwarded-for": "203.0.113.99",
+            "x-forwarded-for": forwarded_for,
             "x-real-ip": "203.0.113.98",
             "x-user-id": "spoofed-user",
             "x-user-type": "admin",
@@ -38,7 +47,15 @@ def _request(*, state: dict[str, Any] | None = None) -> Any:
     )
 
 
-def test_client_supplied_identity_headers_cannot_select_rate_limit_buckets() -> None:
+def _configure_trust(*hosts: str) -> None:
+    configure_rate_limiter(
+        storage_type="memory",
+        trusted_proxy_hosts=list(hosts),
+    )
+
+
+def test_direct_client_cannot_spoof_rate_limit_identity_headers() -> None:
+    _configure_trust()
     ip_address, user_id, user_type = _extract_client_info(_request())
 
     assert ip_address == "198.51.100.7"
@@ -46,16 +63,47 @@ def test_client_supplied_identity_headers_cannot_select_rate_limit_buckets() -> 
     assert user_type is None
 
     source = _read(RATE_LIMIT_MIDDLEWARE).lower()
-    for untrusted_header in (
-        "x-forwarded-for",
-        "x-real-ip",
-        "x-user-id",
-        "x-user-type",
-    ):
-        assert untrusted_header not in source
+    assert 'request.headers.get("x-user-id")' not in source
+    assert 'request.headers.get("x-user-type")' not in source
+    assert 'request.headers.get("x-real-ip")' not in source
+
+
+def test_trusted_proxy_preserves_distinct_forwarded_client_bucket() -> None:
+    _configure_trust("198.51.100.7")
+
+    first, _, _ = _extract_client_info(
+        _request(peer="198.51.100.7", forwarded_for="203.0.113.10")
+    )
+    second, _, _ = _extract_client_info(
+        _request(peer="198.51.100.7", forwarded_for="203.0.113.11")
+    )
+
+    assert first == "203.0.113.10"
+    assert second == "203.0.113.11"
+    assert first != second
+
+
+def test_untrusted_peer_still_cannot_use_forwarded_client_identity() -> None:
+    _configure_trust("192.0.2.40")
+    ip_address, _, _ = _extract_client_info(
+        _request(peer="198.51.100.7", forwarded_for="203.0.113.10")
+    )
+    assert ip_address == "198.51.100.7"
+
+
+def test_trusted_proxy_rejects_forwarded_chains_instead_of_sharing_proxy_bucket() -> None:
+    _configure_trust("198.51.100.7")
+    ip_address, _, _ = _extract_client_info(
+        _request(
+            peer="198.51.100.7",
+            forwarded_for="192.0.2.99, 203.0.113.10",
+        )
+    )
+    assert ip_address == ""
 
 
 def test_authenticated_principal_is_the_only_user_bucket_identity() -> None:
+    _configure_trust()
     request = _request(
         state={
             "user": {
@@ -74,6 +122,7 @@ def test_authenticated_principal_is_the_only_user_bucket_identity() -> None:
 
 
 def test_anonymous_principal_does_not_create_a_user_bucket() -> None:
+    _configure_trust()
     request = _request(
         state={
             "user": {
@@ -116,7 +165,19 @@ def test_canonical_login_hits_the_strict_ip_rule() -> None:
     assert result.window_seconds == 60
 
 
-def test_production_stack_keeps_global_rate_limiting_enabled() -> None:
-    compose = _read(BASE_COMPOSE)
-    assert 'ENABLE_RATE_LIMITING: "true"' in compose
-    assert 'AUTH_ENABLE_RATE_LIMITING: "true"' in compose
+def test_production_stack_uses_web_as_the_only_public_proxy_authority() -> None:
+    base_compose = _read(BASE_COMPOSE)
+    prod_compose = _read(PROD_COMPOSE)
+    ingress = _read(WEB_INGRESS)
+    dockerfile = _read(WEB_DOCKERFILE)
+
+    assert 'ENABLE_RATE_LIMITING: "true"' in base_compose
+    assert 'AUTH_ENABLE_RATE_LIMITING: "true"' in base_compose
+    assert 'RATE_LIMIT_TRUSTED_PROXY_HOSTS: "web"' in prod_compose
+    assert "  api:\n    env_file: !reset []\n    ports: !reset []" in prod_compose
+
+    assert "req.socket.remoteAddress" in ingress
+    assert "req.headers['x-forwarded-for'] = clientIp" in ingress
+    assert "req.headers['x-real-ip'] = clientIp" in ingress
+    assert "COPY --from=builder --chown=nextjs:nodejs /app/server.mjs ./server.mjs" in dockerfile
+    assert 'CMD ["node", "server.mjs"]' in dockerfile
