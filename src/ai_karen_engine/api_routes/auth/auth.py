@@ -21,7 +21,7 @@ from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.rbac_middleware import get_rbac_manager
 from ai_karen_engine.auth.session import get_current_user as get_authenticated_user
 from ai_karen_engine.database.dependencies import get_async_db_session_dependency
-from ai_karen_engine.middleware.client_identity import resolve_client_ip
+from ai_karen_engine.server.client_identity import resolve_client_ip
 from ai_karen_engine.services.auth.auth_service import (
     AuthService as CoreAuthService,
     UserRole,
