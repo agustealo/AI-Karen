@@ -15,6 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.responses import StreamingResponse
+from starlette.datastructures import Headers
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.logging.middleware import RuntimeLoggingMiddleware
@@ -27,6 +30,121 @@ from ai_karen_engine.middleware.rate_limit import (
 )
 
 logger = get_logger(__name__)
+
+
+class _RequestBodyTooLarge(Exception):
+    """Internal control-flow signal raised when streamed request bytes exceed policy."""
+
+    def __init__(self, observed_size: int) -> None:
+        super().__init__("request body exceeds configured maximum")
+        self.observed_size = observed_size
+
+
+class RequestSizeLimitMiddleware:
+    """Enforce the canonical request-body size limit at the ASGI boundary.
+
+    A declared ``Content-Length`` larger than the configured maximum is rejected
+    before application code runs. The wrapped ``receive`` callable also counts
+    the actual bytes consumed by the application, closing the normal
+    chunked/missing/spoofed-``Content-Length`` bypass for body-consuming routes.
+    """
+
+    def __init__(self, app: ASGIApp, *, max_request_size: int) -> None:
+        if max_request_size <= 0:
+            raise ValueError("max_request_size must be positive")
+        self.app = app
+        self.max_request_size = max_request_size
+
+    @staticmethod
+    def _declared_content_length(scope: Scope) -> Optional[int]:
+        raw = Headers(scope=scope).get("content-length")
+        if raw is None:
+            return None
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed >= 0 else None
+
+    async def _reject(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        *,
+        declared_size: Optional[int] = None,
+        observed_size: Optional[int] = None,
+    ) -> None:
+        logger.warning(
+            "http.request.body_too_large",
+            extra={
+                "method": scope.get("method", "unknown"),
+                "path": scope.get("path", "unknown"),
+                "max_request_size": self.max_request_size,
+                "declared_size": declared_size,
+                "observed_size": observed_size,
+            },
+        )
+        response = JSONResponse(
+            status_code=413,
+            content={"detail": "Request body too large"},
+        )
+        await response(scope, receive, send)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        declared_size = self._declared_content_length(scope)
+        if declared_size is not None and declared_size > self.max_request_size:
+            await self._reject(
+                scope,
+                receive,
+                send,
+                declared_size=declared_size,
+            )
+            return
+
+        observed_size = 0
+        response_started = False
+
+        async def limited_receive() -> Message:
+            nonlocal observed_size
+            message = await receive()
+            if message["type"] == "http.request":
+                observed_size += len(message.get("body", b""))
+                if observed_size > self.max_request_size:
+                    raise _RequestBodyTooLarge(observed_size)
+            return message
+
+        async def tracked_send(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, tracked_send)
+        except _RequestBodyTooLarge as exc:
+            if response_started:
+                logger.error(
+                    "http.request.body_limit_exceeded_after_response_started",
+                    extra={
+                        "method": scope.get("method", "unknown"),
+                        "path": scope.get("path", "unknown"),
+                        "max_request_size": self.max_request_size,
+                        "observed_size": exc.observed_size,
+                    },
+                )
+                raise
+            await self._reject(
+                scope,
+                receive,
+                send,
+                declared_size=declared_size,
+                observed_size=exc.observed_size,
+            )
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -133,6 +251,11 @@ def configure_middleware(
     """Register canonical transport middleware in deterministic order."""
     environment = str(getattr(settings, "environment", "") or "").lower()
     production = environment == "production"
+
+    app.add_middleware(
+        RequestSizeLimitMiddleware,
+        max_request_size=int(getattr(settings, "max_request_size")),
+    )
 
     if getattr(settings, "https_redirect", False):
         app.add_middleware(HTTPSRedirectMiddleware)
