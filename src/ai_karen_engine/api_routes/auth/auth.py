@@ -21,6 +21,7 @@ from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.rbac_middleware import get_rbac_manager
 from ai_karen_engine.auth.session import get_current_user as get_authenticated_user
 from ai_karen_engine.database.dependencies import get_async_db_session_dependency
+from ai_karen_engine.middleware.client_identity import resolve_client_ip
 from ai_karen_engine.services.auth.auth_service import (
     AuthService as CoreAuthService,
     UserRole,
@@ -159,19 +160,6 @@ async def get_auth_service(
 
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
-
-
-def get_client_ip(request: Request) -> str:
-    """Get client IP address from trusted proxy headers or socket context."""
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip
-
-    return request.client.host if request.client else "unknown"
 
 
 def get_user_agent(request: Request) -> str:
@@ -358,7 +346,7 @@ async def first_run_setup(
         auth_user, access_token, refresh_token = await auth_svc.authenticate_user(
             request.email,
             request.password,
-            ip_address=get_client_ip(http_request),
+            ip_address=resolve_client_ip(http_request),
             user_agent=get_user_agent(http_request),
         )
 
@@ -440,7 +428,7 @@ async def login(
         user, access_token, refresh_token_or_error = await auth_svc.authenticate_user(
             login_identifier,
             request.password,
-            ip_address=get_client_ip(http_request),
+            ip_address=resolve_client_ip(http_request),
             user_agent=get_user_agent(http_request),
         )
     except Exception:
