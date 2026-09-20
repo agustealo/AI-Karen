@@ -16,7 +16,10 @@ from ai_karen_engine.server.client_identity import (
     configure_client_identity,
     resolve_client_ip,
 )
-from ai_karen_engine.server.rate_limiter import create_rate_limiter
+from ai_karen_engine.server.rate_limiter import (
+    STRICT_AUTH_ENDPOINTS,
+    create_rate_limiter,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -190,20 +193,67 @@ def test_mounted_api_path_is_normalized_to_rate_limit_rule_contract() -> None:
     assert 'RouterSpec(auth_router, "/api"' in routers
 
 
-def test_canonical_login_hits_the_strict_ip_rule() -> None:
+def test_strict_auth_registry_matches_live_public_session_minting_routes() -> None:
+    expected = (
+        "/auth/first-run/setup",
+        "/auth/login",
+        "/auth/refresh",
+    )
+    assert STRICT_AUTH_ENDPOINTS == expected
+
+    auth_routes = _read(AUTH_ROUTES)
+    for endpoint in expected:
+        route_path = endpoint.removeprefix("/auth")
+        assert f'@router.post("{route_path}")' in auth_routes
+
+    assert "/auth/register" not in STRICT_AUTH_ENDPOINTS
+    assert "/auth/reset-password" not in STRICT_AUTH_ENDPOINTS
+
+
+def test_all_canonical_public_auth_edges_hit_the_strict_ip_rule() -> None:
+    limiter = create_rate_limiter(storage_type="memory")
+
+    for endpoint in STRICT_AUTH_ENDPOINTS:
+        result = asyncio.run(
+            limiter.check_rate_limit(
+                ip_address="198.51.100.7",
+                endpoint=_rate_limit_endpoint(f"/api{endpoint}"),
+                user_id=None,
+                user_type=None,
+            )
+        )
+        assert result.rule_name == "auth_strict"
+        assert result.limit == 10
+        assert result.window_seconds == 60
+
+
+def test_retired_auth_paths_no_longer_select_the_strict_rule() -> None:
+    limiter = create_rate_limiter(storage_type="memory")
+
+    for endpoint in ("/auth/register", "/auth/reset-password"):
+        result = asyncio.run(
+            limiter.check_rate_limit(
+                ip_address="198.51.100.7",
+                endpoint=endpoint,
+                user_id=None,
+                user_type=None,
+            )
+        )
+        assert result.rule_name == "ip_general"
+
+
+def test_authenticated_auth_management_stays_on_user_policy() -> None:
     limiter = create_rate_limiter(storage_type="memory")
     result = asyncio.run(
         limiter.check_rate_limit(
             ip_address="198.51.100.7",
-            endpoint=_rate_limit_endpoint("/api/auth/login"),
-            user_id=None,
-            user_type=None,
+            endpoint="/auth/change-password",
+            user_id="canonical-user-1",
+            user_type="member",
         )
     )
 
-    assert result.rule_name == "auth_strict"
-    assert result.limit == 10
-    assert result.window_seconds == 60
+    assert result.rule_name == "user_general"
 
 
 def test_production_stack_uses_web_as_the_only_public_proxy_authority() -> None:
