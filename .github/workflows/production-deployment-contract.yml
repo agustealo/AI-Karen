@@ -48,9 +48,24 @@ jobs:
           pytest tests/architecture/test_production_deployment_contract.py -q
           pytest tests/architecture/test_operational_health_authority.py -q
 
-      - name: Prove production compose renders
+      - name: Prove request-size policy is required
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -v '^MAX_REQUEST_SIZE=' .env.production.example >/tmp/ai-karen-production-missing-request-size.env
+          if env -u MAX_REQUEST_SIZE docker compose \
+            --env-file /tmp/ai-karen-production-missing-request-size.env \
+            -f docker-compose.yml \
+            -f deploy/compose/docker-compose.prod.yml \
+            config >/tmp/ai-karen-production-should-not-render.yml 2>&1; then
+            echo "production compose rendered without MAX_REQUEST_SIZE" >&2
+            exit 1
+          fi
+
+      - name: Prove production compose renders with request-size override
         run: |
           cp .env.production.example .env.production
+          sed -i 's/^MAX_REQUEST_SIZE=.*/MAX_REQUEST_SIZE=1234567/' .env.production
           docker compose \
             --env-file .env.production \
             -f docker-compose.yml \
@@ -72,14 +87,16 @@ jobs:
           grep -q 'EXTENSION_DEV_BYPASS_ENABLED: "false"' /tmp/ai-karen-production-compose.yml
           grep -q 'KARI_DEFER_ROUTER_WIRING: "false"' /tmp/ai-karen-production-compose.yml
 
-      - name: Prove public scheme reaches canonical web ingress
+      - name: Prove deployment config reaches canonical runtime owners
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
 
           config = json.loads(Path('/tmp/ai-karen-production-compose.json').read_text())
+          api = config['services']['api']
           web = config['services']['web']
+          assert str(api['environment']['MAX_REQUEST_SIZE']) == '1234567'
           assert web['environment']['WEB_PUBLIC_SCHEME'] == 'CHANGE_ME_HTTP_OR_HTTPS'
           PY
 
