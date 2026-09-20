@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import inspect
 from types import SimpleNamespace
 from typing import Any
@@ -103,6 +104,23 @@ def test_exported_platform_surfaces_have_no_direct_execution_authority() -> None
 
     for source in (core_source, host_source, router_source, integration_source):
         assert "get_plugin_service" in source
+
+
+def test_platform_facades_do_not_import_plugin_service_at_module_load() -> None:
+    """Prevent PluginKernel -> platform -> PluginService -> PluginKernel cycles."""
+    for module in (
+        core_manager_module,
+        host_manager_module,
+        router_module,
+        integration_module,
+    ):
+        tree = ast.parse(inspect.getsource(module))
+        module_level_imports = {
+            node.module
+            for node in tree.body
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        }
+        assert "ai_karen_engine.services.plugin_service" not in module_level_imports
 
 
 def test_dynamic_plugin_fastapi_router_mounting_is_retired() -> None:
