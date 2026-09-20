@@ -34,6 +34,9 @@ from ai_karen_engine.api_routes.content.communications import router as communic
 from ai_karen_engine.api_routes.extensions.extensions import router as extensions_router
 from ai_karen_engine.api_routes.memory.memory import router as memory_router
 from ai_karen_engine.api_routes.models.llm import router as llm_router
+from ai_karen_engine.api_routes.models.model_orchestrator import (
+    get_current_user as model_orchestrator_current_user,
+)
 from ai_karen_engine.api_routes.models.model_orchestrator import router as model_orchestrator_router
 from ai_karen_engine.api_routes.models.orchestrator import router as ai_router
 from ai_karen_engine.api_routes.models.organization import router as model_organization_router
@@ -76,7 +79,7 @@ def _principal_roles(principal: Any) -> set[str]:
 
 
 async def require_runtime_admin(request: Request) -> Any:
-    """Fail closed for installation-wide runtime/model mutations and reads."""
+    """Fail closed for installation-wide runtime/model management."""
     principal = getattr(request.state, "user", None)
     if not principal:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -127,7 +130,6 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     RouterSpec(extensions_router, "/api/extensions", ("extensions",)),
     RouterSpec(ui_materialization_router, tags=("ui-materialization",)),
     RouterSpec(code_execution_router, "/api/code", ("code",)),
-    # runtime.py defines /chat and /stream itself, so the app-level prefix is /api.
     RouterSpec(chat_runtime_router, "/api", ("chat-runtime",)),
     RouterSpec(llm_router, "/api/llm", ("llm",)),
     RouterSpec(provider_router, "/api/providers", ("providers",)),
@@ -327,6 +329,7 @@ def wire_routers(app: FastAPI, settings: Any) -> None:
     """Mount canonical routers exactly once and install authentication."""
     del settings
     configure_authentication_middleware(app)
+    app.dependency_overrides[model_orchestrator_current_user] = require_runtime_admin
     _include_specs(app, CORE_ROUTERS)
     _include_optional_routers(app)
     logger.info("Canonical API routers registered")
