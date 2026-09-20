@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-
-from fastapi import Request
+from types import SimpleNamespace
+from typing import Any
 
 from ai_karen_engine.middleware.rate_limit import (
     _extract_client_info,
@@ -25,28 +25,17 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _request(*, state: dict | None = None) -> Request:
-    scope = {
-        "type": "http",
-        "asgi": {"version": "3.0", "spec_version": "2.3"},
-        "http_version": "1.1",
-        "method": "POST",
-        "scheme": "http",
-        "path": "/api/auth/login",
-        "raw_path": b"/api/auth/login",
-        "query_string": b"",
-        "root_path": "",
-        "headers": [
-            (b"x-forwarded-for", b"203.0.113.99"),
-            (b"x-real-ip", b"203.0.113.98"),
-            (b"x-user-id", b"spoofed-user"),
-            (b"x-user-type", b"admin"),
-        ],
-        "client": ("198.51.100.7", 41000),
-        "server": ("testserver", 80),
-        "state": dict(state or {}),
-    }
-    return Request(scope)
+def _request(*, state: dict[str, Any] | None = None) -> Any:
+    return SimpleNamespace(
+        client=SimpleNamespace(host="198.51.100.7"),
+        state=SimpleNamespace(**dict(state or {})),
+        headers={
+            "x-forwarded-for": "203.0.113.99",
+            "x-real-ip": "203.0.113.98",
+            "x-user-id": "spoofed-user",
+            "x-user-type": "admin",
+        },
+    )
 
 
 def test_client_supplied_identity_headers_cannot_select_rate_limit_buckets() -> None:
