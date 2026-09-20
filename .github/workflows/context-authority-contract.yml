@@ -22,6 +22,7 @@ on:
       - 'tests/architecture/test_context_memory_boundary_convergence.py'
       - 'tests/architecture/test_context_memory_recall_authority.py'
       - 'tests/architecture/test_context_memory_recall_config.py'
+      - 'requirements/ci/base.txt'
       - '.github/workflows/context-authority-contract.yml'
   push:
     branches:
@@ -46,6 +47,7 @@ on:
       - 'tests/architecture/test_context_memory_boundary_convergence.py'
       - 'tests/architecture/test_context_memory_recall_authority.py'
       - 'tests/architecture/test_context_memory_recall_config.py'
+      - 'requirements/ci/base.txt'
       - '.github/workflows/context-authority-contract.yml'
 
 permissions:
@@ -59,8 +61,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
       - name: Install focused test dependencies
-        run: python -m pip install --disable-pip-version-check pytest pytest-asyncio pydantic pydantic-settings
+        run: python -m pip install --disable-pip-version-check -r requirements/ci/base.txt
       - name: Compile application and context runtime boundary
         run: |
           python -m py_compile \
