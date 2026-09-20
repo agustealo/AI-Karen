@@ -1,12 +1,31 @@
+"""Platform workflow adapter for the canonical plugin runtime.
+
+This module intentionally owns no discovery, permission, routing, loading, or
+execution authority. Workflow callers may keep using ``PluginManager`` while all
+plugin execution is delegated to ``PluginService`` and therefore reaches the
+canonical ``PluginKernel`` / ``ExtensionExecutionService`` path.
+"""
+
+from __future__ import annotations
+
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+
+from ai_karen_engine.services.plugin_service import (
+    ExecutionStatus,
+    PluginService,
+    get_plugin_service,
+)
 
 logger = logging.getLogger("kari.plugin_manager")
 
 
 @dataclass
 class ExtensionExecutionResult:
+    """Compatibility result used by agent-action integration callers."""
+
     extension_id: str
     success: bool
     data: Optional[Dict[str, Any]] = None
@@ -15,80 +34,70 @@ class ExtensionExecutionResult:
 
 
 class PluginManager:
-    """
-    Unified Application Integration Layer for Karen AI Extensions.
-    Coordinated by:
-    - ExtensionLifecycleManager: State and Discovery
-    - PermissionsManager: RBAC and Security
-    - PluginRouter: AI Orchestration and Dispatch
-    """
+    """Thin workflow/agent adapter over the canonical ``PluginService``."""
 
     def __init__(self, extensions_dir: str = "src/ai_karen_engine/extensions/plugins"):
-        from .permissions_manager import PermissionsManager
-        from .sandbox_manager import SandboxManager
-        from ..host.router import get_plugin_router
-        from ..registry.plugin_registry import get_registry
-
         self.extensions_dir = extensions_dir
-        self.registry = get_registry()
-        self.router = get_plugin_router()
-        self.permissions = PermissionsManager()
-        self.sandbox = SandboxManager()
-        self.lifecycle = None
+        self._service: Optional[PluginService] = None
 
-    def _ensure_lifecycle_manager(self):
-        if self.lifecycle is None:
-            from .lifecycle_manager import ExtensionLifecycleManager
+    def _plugin_service(self) -> PluginService:
+        service = get_plugin_service()
+        self._service = service
+        return service
 
-            self.lifecycle = ExtensionLifecycleManager(
-                extensions_dir=self.extensions_dir,
-                app_instance=None,  # Wired during app startup
-            )
-        return self.lifecycle
-
-    async def initialize(self):
-        """Perform full system initialization."""
-        logger.info("Initializing Modular Extension Backbone...")
-        lifecycle = self._ensure_lifecycle_manager()
-        await lifecycle.initialize()
-        await self.router.reload()
-        logger.info("Modular Extension Backbone Ready.")
+    async def initialize(self) -> None:
+        """Ensure the one canonical plugin service is initialized."""
+        service = self._plugin_service()
+        if not service.initialized:
+            await service.initialize(auto_discover=True)
+        logger.info("Platform integration attached to canonical plugin runtime")
 
     async def run_plugin(
         self, name: str, params: Dict[str, Any], user_ctx: Dict[str, Any]
     ) -> Any:
-        """
-        Main execution entry point from the Engine.
-        Enforces permissions and delegates to Router for dispatch.
-        """
-        # 1. Permission Check
-        roles = user_ctx.get("roles", [])
-        if not await self.permissions.check_permission(name, roles):
-            raise PermissionError(
-                f"User roles {roles} not permitted for extension {name}"
-            )
+        """Execute a workflow plugin through the canonical governed runtime.
 
-        # 2. Dispatch
-        return await self.router.dispatch(name, params, roles=roles)
+        Identity and tenant scope are deliberately fail-closed. Permission and
+        policy decisions are not reimplemented here; they are passed to
+        ``PluginService`` so RuntimePolicy, ``AuthorizedExecutionPlan`` and
+        ``ActionExecutionGate`` remain authoritative.
+        """
+        service = self._plugin_service()
+        result = await service.execute_plugin(
+            name,
+            parameters=dict(params or {}),
+            user_id=str(user_ctx.get("user_id") or "").strip() or None,
+            tenant_id=str(user_ctx.get("tenant_id") or "").strip() or None,
+            session_id=user_ctx.get("session_id"),
+            conversation_id=user_ctx.get("conversation_id"),
+            correlation_id=user_ctx.get("correlation_id"),
+            roles=list(user_ctx.get("roles") or []),
+            permissions=list(user_ctx.get("permissions") or []),
+            policy_decision_id=user_ctx.get("policy_decision_id"),
+            authorized_plan=user_ctx.get("authorized_plan"),
+            allowed_capabilities=list(user_ctx.get("allowed_capabilities") or []),
+            forbidden_capabilities=list(user_ctx.get("forbidden_capabilities") or []),
+        )
+        if result.status is not ExecutionStatus.COMPLETED:
+            message = result.error or result.error_code or "Plugin execution failed"
+            authorization_errors = {
+                "identity_scope_missing",
+                "principal_permission_missing",
+                "policy_denied",
+                "authorized_plan_missing",
+                "authorized_scope_mismatch",
+                "plugin_not_authorized",
+                "permission_plan_mismatch",
+                "action_gate_denied",
+            }
+            if result.error_code in authorization_errors:
+                raise PermissionError(message)
+            raise RuntimeError(message)
+        return result.result
 
     async def dispatch_agent_action(self, agent_action: Any, context: Any):
-        """
-        Dispatch an agent action to the appropriate extension.
-
-        This method takes a standardized AgentAction and routes it to the
-        appropriate extension based on intent or explicit extension_id,
-        enforcing RBAC/permissions before execution.
-
-        Args:
-            agent_action: AgentAction instance with type, tool, extension_id, params
-            context: ProcessingContext with user information and metadata
-
-        Returns:
-            ExtensionExecutionResult with success status and data
-        """
-        import time
-
-        start_time = time.time()
+        """Execute an AgentAction through the same canonical plugin authority."""
+        start_time = time.monotonic()
         extension_id = agent_action.extension_id or agent_action.tool
 
         if not extension_id:
@@ -100,66 +109,84 @@ class PluginManager:
             )
 
         user_ctx = {
-            "roles": getattr(context, "user_roles", []),
-            "user_id": context.user_id,
-            "tenant_id": getattr(context, "tenant_id", "default"),
-            "correlation_id": context.correlation_id,
+            "roles": list(getattr(context, "user_roles", []) or []),
+            "permissions": list(getattr(context, "permissions", []) or []),
+            "user_id": getattr(context, "user_id", None),
+            "tenant_id": getattr(context, "tenant_id", None),
+            "session_id": getattr(context, "session_id", None),
+            "conversation_id": getattr(context, "conversation_id", None),
+            "correlation_id": getattr(context, "correlation_id", None),
+            "policy_decision_id": getattr(context, "policy_decision_id", None),
+            "authorized_plan": getattr(context, "authorized_plan", None),
+            "allowed_capabilities": list(
+                getattr(context, "allowed_capabilities", []) or []
+            ),
+            "forbidden_capabilities": list(
+                getattr(context, "forbidden_capabilities", []) or []
+            ),
         }
 
         try:
             result = await self.run_plugin(
-                name=extension_id, params=agent_action.params, user_ctx=user_ctx
+                name=extension_id,
+                params=dict(agent_action.params or {}),
+                user_ctx=user_ctx,
             )
-
-            execution_time = int((time.time() - start_time) * 1000)
-
+            duration_ms = int((time.monotonic() - start_time) * 1000)
             return ExtensionExecutionResult(
                 extension_id=extension_id,
                 success=True,
                 data={"result": result} if not isinstance(result, dict) else result,
-                execution_time_ms=execution_time,
+                execution_time_ms=duration_ms,
             )
-
-        except PermissionError as e:
-            execution_time = int((time.time() - start_time) * 1000)
-            logger.warning(f"Permission denied for extension {extension_id}: {e}")
-            return ExtensionExecutionResult(
-                extension_id=extension_id,
-                success=False,
-                error=f"Permission denied: {str(e)}",
-                execution_time_ms=execution_time,
-            )
-
-        except Exception as e:
-            execution_time = int((time.time() - start_time) * 1000)
-            logger.error(
-                f"Extension execution failed for {extension_id}: {e}", exc_info=True
+        except (PermissionError, RuntimeError) as exc:
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            logger.warning(
+                "Canonical extension execution rejected for %s: %s",
+                extension_id,
+                exc,
             )
             return ExtensionExecutionResult(
                 extension_id=extension_id,
                 success=False,
-                error=str(e),
-                execution_time_ms=execution_time,
+                error=str(exc),
+                execution_time_ms=duration_ms,
+            )
+        except Exception as exc:
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            logger.exception("Canonical extension execution failed for %s", extension_id)
+            return ExtensionExecutionResult(
+                extension_id=extension_id,
+                success=False,
+                error=str(exc),
+                execution_time_ms=duration_ms,
             )
 
     def get_health_summary(self) -> Dict[str, Any]:
-        """Summarize health across all extensions via LifecycleManager."""
-        lifecycle = self.lifecycle
-        active = lifecycle.get_active_extensions() if lifecycle else []
-        total = len(self.registry.list_discovered())
-        return {
-            "status": "healthy" if len(active) > 0 or total == 0 else "degraded",
-            "active_count": len(active),
-            "discovered_count": total,
-            "lifecycle_states": {
-                name: state.value for name, state in lifecycle.extension_states.items()
+        """Project health from the canonical plugin service only."""
+        service = self._plugin_service()
+        stats = service.get_service_stats()
+        if not stats.get("initialized"):
+            return {
+                "status": "not_initialized",
+                "authority": "PluginService",
+                "discovered_count": 0,
+                "active_count": 0,
             }
-            if lifecycle
-            else {},
+        registry = stats.get("registry_stats", {})
+        status_counts = registry.get("by_status", {})
+        enabled_states = {"registered", "enabled", "loaded", "active"}
+        return {
+            "status": "healthy",
+            "authority": "PluginService",
+            "discovered_count": int(registry.get("total_plugins", 0) or 0),
+            "active_count": sum(
+                int(status_counts.get(state, 0) or 0) for state in enabled_states
+            ),
+            "lifecycle_states": dict(status_counts),
         }
 
 
-# Singleton accessor
 _manager_instance: Optional[PluginManager] = None
 
 
