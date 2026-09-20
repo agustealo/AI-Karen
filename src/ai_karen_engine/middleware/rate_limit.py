@@ -10,7 +10,7 @@ try:
 except Exception:  # pragma: no cover - fallback for tests
     from ai_karen_engine.fastapi_stub import Request, JSONResponse
 
-from ai_karen_engine.middleware.client_identity import resolve_client_ip
+from ai_karen_engine.server.client_identity import resolve_client_ip
 from ai_karen_engine.server.rate_limiter import (
     DEFAULT_RATE_LIMIT_RULES,
     EnhancedRateLimiter,
@@ -39,8 +39,7 @@ def configure_rate_limiter(
     """Configure the global rate limiter instance.
 
     HTTP client identity and trusted-proxy configuration are owned separately by
-    ``middleware.client_identity`` so throttling is never a transport trust
-    authority.
+    ``server.client_identity`` so throttling is never a transport trust authority.
     """
 
     global _rate_limiter, _rate_limiter_config
