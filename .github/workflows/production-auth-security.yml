@@ -5,6 +5,7 @@ on:
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
       - "src/ai_karen_engine/services/auth/**"
+      - "src/ai_karen_engine/services/privacy_compliance.py"
       - "src/ai_karen_engine/core/services/base.py"
       - "src/ai_karen_engine/database/models/session_security.py"
       - "src/ai_karen_engine/monitoring/**"
@@ -17,11 +18,13 @@ on:
       - "tests/architecture/test_auth_session_validation_contract.py"
       - "tests/architecture/test_auth_readiness_contract.py"
       - "tests/architecture/test_authenticated_tenant_context_contract.py"
+      - "tests/architecture/test_consumer_privacy_authority.py"
       - ".github/workflows/production-auth-security.yml"
   pull_request:
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
       - "src/ai_karen_engine/services/auth/**"
+      - "src/ai_karen_engine/services/privacy_compliance.py"
       - "src/ai_karen_engine/core/services/base.py"
       - "src/ai_karen_engine/database/models/session_security.py"
       - "src/ai_karen_engine/monitoring/**"
@@ -34,6 +37,7 @@ on:
       - "tests/architecture/test_auth_session_validation_contract.py"
       - "tests/architecture/test_auth_readiness_contract.py"
       - "tests/architecture/test_authenticated_tenant_context_contract.py"
+      - "tests/architecture/test_consumer_privacy_authority.py"
       - ".github/workflows/production-auth-security.yml"
   workflow_dispatch:
 
@@ -69,13 +73,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pytest pytest-asyncio sqlalchemy asyncpg PyJWT bcrypt structlog cryptography PyYAML pydantic pydantic-settings python-dotenv prometheus_client
 
-      - name: Prove auth files compile
+      - name: Prove auth and privacy files compile
         run: |
           python -m compileall -q \
             src/ai_karen_engine/services/auth/auth_service.py \
+            src/ai_karen_engine/services/privacy_compliance.py \
             src/ai_karen_engine/core/services/base.py \
             src/ai_karen_engine/database/models/session_security.py \
             src/ai_karen_engine/api_routes/auth/auth.py \
+            src/ai_karen_engine/api_routes/auth/privacy.py \
             src/ai_karen_engine/monitoring
 
       - name: Prove first-run authority boundary
@@ -92,6 +98,11 @@ jobs:
 
       - name: Prove authenticated tenant route boundary
         run: pytest tests/architecture/test_authenticated_tenant_context_contract.py -q
+
+      - name: Prove durable consumer privacy authority
+        env:
+          PYTHONPATH: src
+        run: pytest tests/architecture/test_consumer_privacy_authority.py -q
 
       - name: Prove tenant isolation gauntlet
         env:
