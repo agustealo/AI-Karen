@@ -1,7 +1,7 @@
 import http from 'node:http';
 import next from 'next';
 
-const hostname = process.env.HOSTNAME || '0.0.0.0';
+const hostname = process.env.WEB_HOST || '0.0.0.0';
 const port = Number.parseInt(process.env.PORT || '8010', 10);
 
 if (!Number.isInteger(port) || port <= 0 || port > 65535) {
