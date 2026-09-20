@@ -1,21 +1,35 @@
 """Compatibility host manager backed by the canonical PluginService.
 
 The historical host manager used to import plugin modules directly and mutate a
-second loaded-instance registry.  That execution authority is retired.  This
+second loaded-instance registry. That execution authority is retired. This
 surface now exposes catalog refresh plus enable/disable state changes only;
 plugin code is imported lazily by PluginKernel after authorization succeeds.
+
+PluginService access is lazy so importing the platform host package while
+PluginKernel is initializing cannot recurse back into PluginKernel.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from ai_karen_engine.services.plugin_service import (
-    PluginService,
-    get_plugin_service,
-    initialize_plugin_service,
-)
+if TYPE_CHECKING:
+    from ai_karen_engine.services.plugin_service import PluginService
+
+
+def get_plugin_service() -> "PluginService":
+    from ai_karen_engine.services.plugin_service import get_plugin_service as _get
+
+    return _get()
+
+
+async def initialize_plugin_service(**kwargs: Any) -> "PluginService":
+    from ai_karen_engine.services.plugin_service import (
+        initialize_plugin_service as _initialize,
+    )
+
+    return await _initialize(**kwargs)
 
 
 class ExtensionManager:
@@ -34,7 +48,7 @@ class ExtensionManager:
         self.extension_root = Path(extension_root)
         self._discovery_cache: Optional[Dict[str, Any]] = None
 
-    def _service(self) -> PluginService:
+    def _service(self) -> "PluginService":
         service = get_plugin_service()
         if service.initialized:
             active_root = Path(
@@ -48,7 +62,7 @@ class ExtensionManager:
                 )
         return service
 
-    async def _ensure_service(self) -> PluginService:
+    async def _ensure_service(self) -> "PluginService":
         service = self._service()
         if service.initialized:
             return service
