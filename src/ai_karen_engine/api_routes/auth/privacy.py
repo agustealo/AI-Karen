@@ -58,6 +58,13 @@ class PrivacyProcessRequest(BaseModel):
     include_pii: bool = Field(default=False)
 
 
+class ContentSanitizeRequest(BaseModel):
+    """Sensitive content accepted in the request body, never as URL parameters."""
+
+    content: str = Field(..., min_length=1)
+    max_length: int = Field(default=100, ge=1)
+
+
 class PrivacyRequestResponse(BaseModel):
     request_id: str
     status: PrivacyRequestStatus
@@ -246,15 +253,17 @@ async def process_privacy_request(
 
 @router.post("/content/sanitize")
 async def sanitize_content(
-    content: str,
-    max_length: int = 100,
+    request_data: ContentSanitizeRequest,
     current_user: UserData = Depends(get_current_user),
     privacy_service: PrivacyComplianceService = Depends(get_privacy_service),
 ) -> Dict[str, Any]:
-    """Create a safe preview for authenticated UI surfaces."""
+    """Create a safe preview without placing sensitive content in the request URL."""
 
     _identity(current_user)
-    return privacy_service.create_safe_content_preview(content, max_length=max_length)
+    return privacy_service.create_safe_content_preview(
+        request_data.content,
+        max_length=request_data.max_length,
+    )
 
 
 @router.get("/health")
