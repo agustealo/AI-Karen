@@ -112,16 +112,27 @@ def test_trusted_proxy_rejects_forwarded_chains_instead_of_sharing_proxy_identit
     assert ip_address == ""
 
 
-def test_auth_routes_consume_canonical_client_identity_authority() -> None:
+def test_auth_and_rate_limit_consume_server_owned_client_identity_authority() -> None:
     auth_source = _read(AUTH_ROUTES)
     auth_source_lower = auth_source.lower()
     identity_source = _read(CLIENT_IDENTITY).lower()
+    rate_limit_source = _read(RATE_LIMIT_MIDDLEWARE)
     middleware_source = _read(SERVER_MIDDLEWARE)
 
-    assert (
+    canonical_resolver_import = (
         "from ai_karen_engine.server.client_identity import resolve_client_ip"
-        in auth_source
     )
+    canonical_config_import = (
+        "from ai_karen_engine.server.client_identity import configure_client_identity"
+    )
+
+    assert canonical_resolver_import in auth_source
+    assert canonical_resolver_import in rate_limit_source
+    assert canonical_config_import in middleware_source
+    assert "ai_karen_engine.middleware.client_identity" not in auth_source
+    assert "ai_karen_engine.middleware.client_identity" not in rate_limit_source
+    assert "ai_karen_engine.middleware.client_identity" not in middleware_source
+
     assert "def get_client_ip(" not in auth_source
     assert "x-forwarded-for" not in auth_source_lower
     assert "x-real-ip" not in auth_source_lower
