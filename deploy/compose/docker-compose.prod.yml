@@ -39,6 +39,7 @@ services:
       ALLOW_PUBLIC_COPILOT: "false"
       KAREN_BUILTIN_VLLM_ENABLED: "false"
       HTTP_TRUSTED_PROXY_HOSTS: "web"
+      MAX_REQUEST_SIZE: ${MAX_REQUEST_SIZE:?MAX_REQUEST_SIZE is required for production}
 
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required for production}
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:?AUTH_SECRET_KEY is required for production}
