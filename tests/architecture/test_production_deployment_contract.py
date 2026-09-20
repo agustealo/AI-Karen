@@ -4,6 +4,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROD_COMPOSE = REPO_ROOT / "deploy" / "compose" / "docker-compose.prod.yml"
 PROD_ENV_EXAMPLE = REPO_ROOT / ".env.production.example"
+SERVER_CONFIG = REPO_ROOT / "src" / "ai_karen_engine" / "server" / "config.py"
+SERVER_MIDDLEWARE = REPO_ROOT / "src" / "ai_karen_engine" / "server" / "middleware.py"
 WEB_PROD_ROOT = REPO_ROOT / "src" / "ui_launchers" / "Karen-AI-Theme"
 WEB_PROD_DOCKERFILE = WEB_PROD_ROOT / "Dockerfile.production"
 WEB_PROD_INGRESS = WEB_PROD_ROOT / "server.mjs"
@@ -59,6 +61,24 @@ def test_production_overlay_fails_closed_on_required_secrets() -> None:
         assert f"${{{variable}:?" in text, (
             f"{variable} must use Compose required-variable syntax in production"
         )
+
+
+def test_production_request_size_uses_canonical_settings_and_explicit_passthrough() -> None:
+    compose = PROD_COMPOSE.read_text(encoding="utf-8")
+    env_example = PROD_ENV_EXAMPLE.read_text(encoding="utf-8")
+    config = SERVER_CONFIG.read_text(encoding="utf-8")
+    middleware = SERVER_MIDDLEWARE.read_text(encoding="utf-8")
+    api_block = _service_block(compose, "api")
+
+    assert (
+        "MAX_REQUEST_SIZE: ${MAX_REQUEST_SIZE:?MAX_REQUEST_SIZE is required for production}"
+        in api_block
+    )
+    assert "MAX_REQUEST_SIZE:-" not in api_block
+    assert "MAX_REQUEST_SIZE=10485760" in env_example
+    assert 'validation_alias="MAX_REQUEST_SIZE"' in config
+    assert "default=10 * 1024 * 1024" in config
+    assert 'max_request_size=int(getattr(settings, "max_request_size"))' in middleware
 
 
 def test_production_overlay_disables_development_auth_paths() -> None:
@@ -152,3 +172,4 @@ def test_production_environment_template_contains_no_real_credentials() -> None:
     assert "KARI_AUTH_BYPASS=false" in text
     assert "AUTH_DEV_MODE=false" in text
     assert "WEB_PUBLIC_SCHEME=CHANGE_ME_HTTP_OR_HTTPS" in text
+    assert "MAX_REQUEST_SIZE=10485760" in text
