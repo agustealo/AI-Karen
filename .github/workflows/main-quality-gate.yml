@@ -119,6 +119,7 @@ jobs:
           pytest tests/architecture/test_chat_transport_authority_closure.py -q
           pytest tests/architecture/test_http_transport_authority.py -q
           pytest tests/architecture/test_rate_limit_identity_authority.py -q
+          pytest tests/architecture/test_public_scheme_authority.py -q
 
       - name: Runtime evidence authority proofs
         run: |
@@ -238,6 +239,7 @@ jobs:
           assert api.get('ports', []) == [], api.get('ports')
           assert api['environment']['HTTP_TRUSTED_PROXY_HOSTS'] == 'web'
           assert 'RATE_LIMIT_TRUSTED_PROXY_HOSTS' not in api['environment']
+          assert web['environment']['WEB_PUBLIC_SCHEME'] == 'CHANGE_ME_HTTP_OR_HTTPS'
           assert web.get('ports'), 'production web ingress must remain published'
           PY
 
