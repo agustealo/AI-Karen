@@ -2,8 +2,12 @@
 
 Catalog discovery remains owned by the platform registry used by ``PluginKernel``.
 This module no longer owns loading, execution, routing, or a second runtime
-registry.  Existing callers may continue to use the historical manager surface,
+registry. Existing callers may continue to use the historical manager surface,
 but all state changes are delegated to the one canonical ``PluginService``.
+
+The PluginService accessors are intentionally imported lazily. ``PluginKernel``
+loads platform catalog modules while PluginService itself imports PluginKernel,
+so an import-time dependency in this facade would create a package cycle.
 """
 
 from __future__ import annotations
@@ -11,15 +15,28 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from ai_karen_engine.services.plugin_service import (
-    PluginService,
-    get_plugin_service,
-    initialize_plugin_service,
-)
+if TYPE_CHECKING:
+    from ai_karen_engine.services.plugin_service import PluginService
 
 logger = logging.getLogger(__name__)
+
+
+def get_plugin_service() -> "PluginService":
+    """Resolve the canonical service lazily to keep platform imports acyclic."""
+    from ai_karen_engine.services.plugin_service import get_plugin_service as _get
+
+    return _get()
+
+
+async def initialize_plugin_service(**kwargs: Any) -> "PluginService":
+    """Initialize the canonical service without an import-time kernel back-edge."""
+    from ai_karen_engine.services.plugin_service import (
+        initialize_plugin_service as _initialize,
+    )
+
+    return await _initialize(**kwargs)
 
 
 @dataclass
@@ -31,7 +48,7 @@ class ExtensionCoreManager:
     def __post_init__(self) -> None:
         self._root = Path(self.extensions_dir)
 
-    def _service(self) -> PluginService:
+    def _service(self) -> "PluginService":
         service = get_plugin_service()
         if service.initialized:
             active_root = Path(
@@ -45,7 +62,7 @@ class ExtensionCoreManager:
                 )
         return service
 
-    async def _ensure_service(self) -> PluginService:
+    async def _ensure_service(self) -> "PluginService":
         service = self._service()
         if service.initialized:
             return service
