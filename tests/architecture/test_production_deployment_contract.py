@@ -4,16 +4,33 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROD_COMPOSE = REPO_ROOT / "deploy" / "compose" / "docker-compose.prod.yml"
 PROD_ENV_EXAMPLE = REPO_ROOT / ".env.production.example"
-WEB_PROD_DOCKERFILE = (
-    REPO_ROOT / "src" / "ui_launchers" / "Karen-AI-Theme" / "Dockerfile.production"
-)
+WEB_PROD_ROOT = REPO_ROOT / "src" / "ui_launchers" / "Karen-AI-Theme"
+WEB_PROD_DOCKERFILE = WEB_PROD_ROOT / "Dockerfile.production"
+WEB_PROD_INGRESS = WEB_PROD_ROOT / "server.mjs"
 
 
 def _service_block(text: str, service: str) -> str:
+    """Return one Compose service block using YAML indentation boundaries."""
+    lines = text.splitlines()
     service_marker = f"  {service}:"
-    start = text.index(service_marker)
-    next_service = text.find("\n  ", start + len(service_marker))
-    return text[start:] if next_service == -1 else text[start:next_service]
+
+    try:
+        start = next(index for index, line in enumerate(lines) if line == service_marker)
+    except StopIteration as exc:
+        raise AssertionError(f"Compose service {service!r} is missing") from exc
+
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indentation = len(line) - len(line.lstrip(" "))
+        if indentation <= 2:
+            end = index
+            break
+
+    return "\n".join(lines[start:end])
 
 
 def test_canonical_production_compose_overlay_exists() -> None:
@@ -67,7 +84,7 @@ def test_production_overlay_disables_development_auth_paths() -> None:
 def test_production_overlay_does_not_publish_internal_control_plane_ports() -> None:
     text = PROD_COMPOSE.read_text(encoding="utf-8")
 
-    for service in ("redis", "prometheus", "grafana"):
+    for service in ("redis", "api", "prometheus", "grafana"):
         block = _service_block(text, service)
         assert "ports: !reset []" in block, (
             f"{service} must not publish a host port in the production overlay"
@@ -93,6 +110,7 @@ def test_production_api_does_not_mask_attested_source_or_config() -> None:
     assert "./config:/app/config" not in api_block
     assert "KAREN_BUILTIN_VLLM_ENABLED: \"false\"" in api_block
     assert "AUTH_ENABLE_SESSION_VALIDATION: \"true\"" in api_block
+    assert 'RATE_LIMIT_TRUSTED_PROXY_HOSTS: "web"' in api_block
 
 
 def test_production_web_uses_immutable_production_runtime() -> None:
@@ -109,8 +127,13 @@ def test_production_web_uses_immutable_production_runtime() -> None:
     dockerfile = WEB_PROD_DOCKERFILE.read_text(encoding="utf-8")
     assert "RUN npm ci --no-audit --no-fund" in dockerfile
     assert "RUN npm run build" in dockerfile
-    assert 'USER nextjs' in dockerfile
-    assert 'CMD ["npm", "run", "start"' in dockerfile
+    assert "USER nextjs" in dockerfile
+    assert 'CMD ["node", "server.mjs"]' in dockerfile
+
+    assert WEB_PROD_INGRESS.is_file()
+    ingress = WEB_PROD_INGRESS.read_text(encoding="utf-8")
+    assert "req.socket.remoteAddress" in ingress
+    assert "req.headers['x-forwarded-for'] = clientIp" in ingress
 
 
 def test_production_environment_template_contains_no_real_credentials() -> None:
