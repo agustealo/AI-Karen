@@ -102,6 +102,7 @@ jobs:
 
       - name: Architecture authority contracts
         run: |
+          pytest tests/architecture/test_ci_dependency_authority.py -q
           pytest tests/architecture/test_core_ai_machine_isolation.py -q
           pytest tests/architecture/test_provider_chat_authority.py -q
           pytest tests/architecture/test_cortex_intelligence_authority.py -q
