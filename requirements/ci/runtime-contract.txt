@@ -1,0 +1,22 @@
+-r base.txt
+
+# Focused runtime/auth/memory contract surface used by CI proofs.
+numpy
+SQLAlchemy
+asyncpg
+psycopg
+psycopg2-binary
+PyJWT
+bcrypt
+argon2-cffi
+structlog
+cryptography==47.0.0
+PyYAML
+python-dotenv
+prometheus_client
+fastapi==0.136.1
+httpx==0.28.1
+requests
+tenacity
+redis
+fakeredis

@@ -29,17 +29,14 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
           cache: pip
+          cache-dependency-path: requirements/ci/*.txt
 
       - name: Install classifier proof dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install \
-            pytest pytest-asyncio numpy sqlalchemy asyncpg psycopg psycopg2-binary \
-            PyJWT bcrypt argon2-cffi structlog cryptography PyYAML \
-            pydantic pydantic-settings python-dotenv prometheus_client \
-            fastapi httpx requests tenacity redis fakeredis
+          python -m pip install -r requirements/ci/runtime-contract.txt
 
       - name: Compile classifier surfaces
         run: |
@@ -68,18 +65,14 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
           cache: pip
+          cache-dependency-path: requirements/ci/*.txt
 
       - name: Install quality and runtime contract dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install \
-            ruff mypy pytest pytest-asyncio numpy sqlalchemy asyncpg psycopg psycopg2-binary \
-            PyJWT bcrypt argon2-cffi structlog cryptography PyYAML \
-            pydantic pydantic-settings python-dotenv prometheus_client \
-            fastapi httpx requests tenacity redis fakeredis \
-            langgraph==1.1.9 langchain-core
+          python -m pip install -r requirements/ci/quality.txt
 
       - name: Compile Python sources
         run: python -m compileall -q src server scripts
@@ -109,6 +102,7 @@ jobs:
 
       - name: Architecture authority contracts
         run: |
+          pytest tests/architecture/test_ci_dependency_authority.py -q
           pytest tests/architecture/test_core_ai_machine_isolation.py -q
           pytest tests/architecture/test_provider_chat_authority.py -q
           pytest tests/architecture/test_cortex_intelligence_authority.py -q

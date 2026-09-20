@@ -1,0 +1,6 @@
+# Minimal shared test/config contract dependencies.
+pytest
+pytest-asyncio
+pytest-timeout
+pydantic
+pydantic-settings

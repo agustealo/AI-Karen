@@ -1,0 +1,7 @@
+-r base.txt
+
+PyYAML
+python-dotenv
+numpy
+scikit-learn
+SQLAlchemy
