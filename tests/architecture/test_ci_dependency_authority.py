@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+CANONICAL_WORKFLOWS = (
+    ".github/workflows/main-quality-gate.yml",
+    ".github/workflows/classifier-burn.yml",
+    ".github/workflows/chat-system-burn.yml",
+    ".github/workflows/reasoning-smoke.yml",
+    ".github/workflows/cognitive-proof-ci.yml",
+    ".github/workflows/context-authority-contract.yml",
+    ".github/workflows/agent-system-burn.yml",
+    ".github/workflows/beta-release-gate.yml",
+)
+
+ALLOWED_PIP_INSTALL_PREFIXES = (
+    "python -m pip install --upgrade pip",
+    "python -m pip install -r ",
+    "python -m pip install --disable-pip-version-check -r ",
+    "pip install -r ",
+)
+
+
+def _workflow_text(relative_path: str) -> str:
+    return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def test_canonical_python_proof_workflows_use_runtime_python_version() -> None:
+    for relative_path in CANONICAL_WORKFLOWS:
+        text = _workflow_text(relative_path)
+        assert "python-version: \"3.12\"" not in text, relative_path
+        assert "python-version: '3.12'" not in text, relative_path
+
+
+def test_canonical_python_proof_workflows_do_not_own_package_inventories() -> None:
+    for relative_path in CANONICAL_WORKFLOWS:
+        text = _workflow_text(relative_path)
+        for line in text.splitlines():
+            stripped = line.strip()
+            if "pip install" not in stripped:
+                continue
+            assert stripped.startswith(ALLOWED_PIP_INSTALL_PREFIXES), (
+                relative_path,
+                stripped,
+            )
+
+
+def test_canonical_python_proof_workflows_consume_ci_profiles() -> None:
+    for relative_path in CANONICAL_WORKFLOWS:
+        text = _workflow_text(relative_path)
+        assert "requirements/ci/" in text, relative_path
+
+
+def test_ci_dependency_profiles_have_single_documented_owner() -> None:
+    ci_requirements = ROOT / "requirements" / "ci"
+    expected_profiles = {
+        "base.txt",
+        "classifier-lite.txt",
+        "runtime-contract.txt",
+        "quality.txt",
+        "chat.txt",
+        "reasoning.txt",
+        "cognitive.txt",
+    }
+    assert (ci_requirements / "README.md").is_file()
+    assert expected_profiles <= {path.name for path in ci_requirements.glob("*.txt")}
