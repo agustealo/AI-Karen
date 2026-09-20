@@ -13,6 +13,7 @@ API_IMAGE="${KAREN_SMOKE_API_IMAGE:-ai-karen-api:beta}"
 POSTGRES_IMAGE="${KAREN_SMOKE_POSTGRES_IMAGE:-pgvector/pgvector:pg16}"
 REDIS_IMAGE="${KAREN_SMOKE_REDIS_IMAGE:-redis:7-alpine}"
 HOST_PORT="${KAREN_SMOKE_API_PORT:-18000}"
+SMOKE_MAX_REQUEST_SIZE="${KAREN_SMOKE_MAX_REQUEST_SIZE:-4096}"
 SMOKE_ID="${GITHUB_RUN_ID:-local}-$$"
 NETWORK="karen-beta-smoke-${SMOKE_ID}"
 POSTGRES_CONTAINER="karen-beta-postgres-${SMOKE_ID}"
@@ -32,9 +33,10 @@ BASE_URL="http://127.0.0.1:${HOST_PORT}"
 COOKIE_JAR="$(mktemp)"
 API_LOG="$(mktemp)"
 DUPLICATE_BODY="$(mktemp)"
+OVERSIZE_BODY="$(mktemp)"
 
 cleanup() {
-  rm -f "${COOKIE_JAR}" "${API_LOG}" "${DUPLICATE_BODY}"
+  rm -f "${COOKIE_JAR}" "${API_LOG}" "${DUPLICATE_BODY}" "${OVERSIZE_BODY}"
   docker rm -f "${API_CONTAINER}" >/dev/null 2>&1 || true
   docker rm -f "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
   docker rm -f "${POSTGRES_CONTAINER}" >/dev/null 2>&1 || true
@@ -87,6 +89,7 @@ api_env=(
   -e KARI_DEFER_ROUTER_WIRING=false
   -e KAREN_BUILTIN_VLLM_ENABLED=false
   -e WARMUP_LLM=false
+  -e MAX_REQUEST_SIZE="${SMOKE_MAX_REQUEST_SIZE}"
   -e DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${POSTGRES_CONTAINER}:5432/${DB_NAME}"
   -e POSTGRES_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${POSTGRES_CONTAINER}:5432/${DB_NAME}"
   -e AUTH_DATABASE_URL="postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@${POSTGRES_CONTAINER}:5432/${DB_NAME}"
@@ -176,6 +179,27 @@ done < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort)
 
 echo "[smoke] booting production API image"
 start_api
+
+echo "[smoke] proving production request-size override reaches canonical middleware"
+python3 - "${OVERSIZE_BODY}" "${SMOKE_MAX_REQUEST_SIZE}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+limit = int(sys.argv[2])
+assert limit > 0
+path.write_bytes(b"x" * (limit + 1))
+PY
+oversize_status="$(curl -sS \
+  -o /dev/null \
+  -w '%{http_code}' \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary @"${OVERSIZE_BODY}" \
+  "${BASE_URL}/api/auth/login")"
+if [[ "${oversize_status}" != "413" ]]; then
+  echo "expected request larger than MAX_REQUEST_SIZE=${SMOKE_MAX_REQUEST_SIZE} to return HTTP 413, got ${oversize_status}" >&2
+  fail_with_api_logs
+fi
 
 echo "[smoke] rejecting known first-boot startup wiring faults"
 startup_logs="$(docker logs "${API_CONTAINER}" 2>&1 || true)"
