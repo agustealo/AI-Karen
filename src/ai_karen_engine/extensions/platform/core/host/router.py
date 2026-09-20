@@ -1,23 +1,30 @@
 """Compatibility router that delegates to the canonical PluginService.
 
 This module intentionally owns no loader, runner, registry, or authorization
-logic.  It preserves the historical dispatch surface while forcing all plugin
+logic. It preserves the historical dispatch surface while forcing all plugin
 execution through RuntimePolicy, ActionExecutionGate, and
 ExtensionExecutionService.
+
+Canonical service imports stay lazy because PluginKernel imports platform host
+modules during its own initialization.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
-from ai_karen_engine.services.plugin_service import (
-    ExecutionStatus,
-    get_plugin_service,
-)
+if TYPE_CHECKING:
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.services.plugin_service import PluginService
 
 logger = logging.getLogger("kari.plugin_router")
+
+
+def get_plugin_service() -> "PluginService":
+    from ai_karen_engine.services.plugin_service import get_plugin_service as _get
+
+    return _get()
 
 
 class PluginRouter:
@@ -31,8 +38,7 @@ class PluginRouter:
 
     async def reload(self) -> int:
         """Refresh catalog/runtime projection without eagerly importing plugins."""
-        service = get_plugin_service()
-        return await service.refresh_plugins()
+        return await get_plugin_service().refresh_plugins()
 
     async def dispatch(
         self,
@@ -41,14 +47,16 @@ class PluginRouter:
         roles: Optional[List[str]] = None,
         *,
         user_context: Optional[Dict[str, Any]] = None,
-        authorized_plan: Optional[AuthorizedExecutionPlan] = None,
+        authorized_plan: Optional["AuthorizedExecutionPlan"] = None,
     ) -> Any:
         """Execute a plugin intent through the canonical governed executor.
 
-        Historical callers may still pass ``roles``.  Identity and tenant scope
+        Historical callers may still pass ``roles``. Identity and tenant scope
         are deliberately not fabricated; callers that omit them fail closed in
         ``PluginService``.
         """
+        from ai_karen_engine.services.plugin_service import ExecutionStatus
+
         context = dict(user_context or {})
         resolved_roles = list(context.get("roles") or roles or [])
         permissions = list(context.get("permissions") or [])
@@ -97,7 +105,7 @@ class PluginRouter:
         """Return an empty compatibility router.
 
         Plugin-owned FastAPI routers are no longer imported and mounted directly,
-        because doing so bypasses the governed execution boundary.  Plugin HTTP
+        because doing so bypasses the governed execution boundary. Plugin HTTP
         ingress must use the canonical plugin API routes.
         """
         from fastapi import APIRouter
