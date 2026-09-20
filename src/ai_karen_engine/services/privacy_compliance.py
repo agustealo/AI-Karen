@@ -1,22 +1,28 @@
-"""
-Privacy Compliance Service - Phase 4.1.c
-Implements data export, erasure, and PII protection features for GDPR/CCPA compliance.
+"""Durable privacy request, export, and erasure authority.
+
+Privacy lifecycle state is migration-owned PostgreSQL data. Authenticated user and
+ tenant scope must be supplied by the API boundary. This service never fabricates
+success counts, never stores raw verification tokens, and never treats retired
+vector stores or caches as deletion authorities.
 """
 
+from __future__ import annotations
+
+import hashlib
+import hmac
 import json
 import logging
+import re
+import secrets
 import uuid
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Union, Set
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
-try:
-    from sqlalchemy import select, delete, update, and_, or_
-    from sqlalchemy.ext.asyncio import AsyncSession
-    SQLALCHEMY_AVAILABLE = True
-except ImportError:
-    SQLALCHEMY_AVAILABLE = False
+from sqlalchemy import text
+
+from ai_karen_engine.database.client import MultiTenantPostgresClient
 
 try:
     from ai_karen_engine.services.audit.audit_logging import get_audit_logger
@@ -26,736 +32,906 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def _build_audit_metadata(
-    *,
-    user_id: str,
-    tenant_id: Optional[str],
-    correlation_id: Optional[str],
-    delete_type: str,
-    duration_ms: float,
-    outcome: str,
-    error_message: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Build normalized audit metadata for the current lightweight audit logger."""
-
-    return {
-        "event_type": "privacy_erasure",
-        "severity": "info" if outcome == "success" else "error",
-        "message": "privacy_erasure_completed" if outcome == "success" else "privacy_erasure_failed",
-        "user_id": user_id,
-        "tenant_id": tenant_id,
-        "correlation_id": correlation_id,
-        "metadata": {
-            "delete_type": delete_type,
-            "duration_ms": duration_ms,
-            "outcome": outcome,
-            **({"error_message": error_message} if error_message else {}),
-        },
-    }
-
-
-async def _get_memory_service() -> Any:
-    from ai_karen_engine.core.services.dependencies import get_memory_service
-
-    return await get_memory_service()
-
-
-def _get_conversation_manager() -> Any:
-    from ai_karen_engine.database.client import MultiTenantPostgresClient
-    from ai_karen_engine.database.conversation_manager import ConversationManager
-
-    return ConversationManager(db_client=MultiTenantPostgresClient())
-
 class DataExportFormat(str, Enum):
-    """Supported data export formats"""
     JSON = "json"
     CSV = "csv"
     XML = "xml"
 
+
 class ErasureType(str, Enum):
-    """Types of data erasure"""
-    SOFT_DELETE = "soft_delete"      # Mark as deleted but keep for audit
-    HARD_DELETE = "hard_delete"      # Permanently remove from all systems
-    ANONYMIZE = "anonymize"          # Remove PII but keep anonymized data
+    SOFT_DELETE = "soft_delete"
+    HARD_DELETE = "hard_delete"
+    ANONYMIZE = "anonymize"
+
 
 class PrivacyRequestStatus(str, Enum):
-    """Status of privacy requests"""
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
+
 @dataclass
 class PrivacyRequest:
-    """Privacy request record"""
     request_id: str
-    request_type: str  # export, erasure, portability
+    request_type: str
     user_id: str
-    tenant_id: Optional[str]
+    tenant_id: str
     status: PrivacyRequestStatus
     created_at: datetime
     completed_at: Optional[datetime] = None
-    data_types: List[str] = None  # memory, conversations, analytics
+    data_types: Optional[List[str]] = None
     export_format: Optional[DataExportFormat] = None
     erasure_type: Optional[ErasureType] = None
     verification_token: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
-    
+    result_metadata: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None
+    correlation_id: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
-        data = asdict(self)
-        data["created_at"] = self.created_at.isoformat()
+        payload = asdict(self)
+        payload["status"] = self.status.value
+        payload["created_at"] = self.created_at.isoformat()
         if self.completed_at:
-            data["completed_at"] = self.completed_at.isoformat()
-        return data
+            payload["completed_at"] = self.completed_at.isoformat()
+        if self.export_format:
+            payload["export_format"] = self.export_format.value
+        if self.erasure_type:
+            payload["erasure_type"] = self.erasure_type.value
+        return payload
+
 
 class PIIDetector:
-    """Detects and classifies PII in text content"""
-    
-    def __init__(self):
-        self.logger = logging.getLogger(f"{__name__}.PIIDetector")
-        
-        # PII patterns for detection
+    """Small deterministic PII detector used only for safe previews/exports."""
+
+    def __init__(self) -> None:
         self.pii_patterns = {
-            "email": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-            "phone": r'\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b',
-            "ssn": r'\b\d{3}-?\d{2}-?\d{4}\b',
-            "credit_card": r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b',
-            "ip_address": r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b',
-            "name": r'\b[A-Z][a-z]+ [A-Z][a-z]+\b',  # Simple name pattern
-            "address": r'\b\d+\s+[A-Za-z\s]+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd)\b'
-        }
-    
-    def detect_pii(self, text: str) -> Dict[str, List[str]]:
-        """Detect PII in text and return matches by type"""
-        import re
-        
-        pii_found = {}
-        
-        for pii_type, pattern in self.pii_patterns.items():
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            if matches:
-                pii_found[pii_type] = matches
-        
-        return pii_found
-    
-    def anonymize_text(self, text: str) -> str:
-        """Anonymize PII in text by replacing with placeholders"""
-        import re
-        
-        anonymized_text = text
-        
-        for pii_type, pattern in self.pii_patterns.items():
-            placeholder = f"[{pii_type.upper()}_ANONYMIZED]"
-            anonymized_text = re.sub(pattern, placeholder, anonymized_text, flags=re.IGNORECASE)
-        
-        return anonymized_text
-    
-    def extract_safe_metadata(self, text: str) -> Dict[str, Any]:
-        """Extract metadata that doesn't contain PII"""
-        pii_detected = self.detect_pii(text)
-        
-        return {
-            "text_length": len(text),
-            "word_count": len(text.split()),
-            "line_count": text.count('\n') + 1,
-            "contains_pii": bool(pii_detected),
-            "pii_types": list(pii_detected.keys()),
-            "pii_count": sum(len(matches) for matches in pii_detected.values())
+            "email": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
+            "phone": r"\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b",
+            "ssn": r"\b\d{3}-?\d{2}-?\d{4}\b",
+            "credit_card": r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b",
+            "ip_address": r"\b\d{1,3}(?:\.\d{1,3}){3}\b",
         }
 
+    def detect_pii(self, value: str) -> Dict[str, List[str]]:
+        found: Dict[str, List[str]] = {}
+        for pii_type, pattern in self.pii_patterns.items():
+            matches = re.findall(pattern, value or "", re.IGNORECASE)
+            if matches:
+                found[pii_type] = list(matches)
+        return found
+
+    def anonymize_text(self, value: str) -> str:
+        result = value or ""
+        for pii_type, pattern in self.pii_patterns.items():
+            result = re.sub(
+                pattern,
+                f"[{pii_type.upper()}_ANONYMIZED]",
+                result,
+                flags=re.IGNORECASE,
+            )
+        return result
+
+    def extract_safe_metadata(self, value: str) -> Dict[str, Any]:
+        pii = self.detect_pii(value or "")
+        return {
+            "text_length": len(value or ""),
+            "word_count": len((value or "").split()),
+            "contains_pii": bool(pii),
+            "pii_types": sorted(pii),
+            "pii_count": sum(len(matches) for matches in pii.values()),
+        }
+
+
+async def _set_request_scope(session: Any, *, tenant_id: str, user_id: str) -> None:
+    """Set fail-closed PostgreSQL RLS identity for the current transaction."""
+    await session.execute(
+        text(
+            "SELECT "
+            "set_config('app.current_tenant_id', :tenant_id, true), "
+            "set_config('app.current_user_id', :user_id, true)"
+        ),
+        {"tenant_id": tenant_id, "user_id": user_id},
+    )
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _row_count(result: Any) -> int:
+    try:
+        return max(int(result.rowcount or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
 class DataExporter:
-    """Handles data export for privacy compliance"""
-    
-    def __init__(self):
-        self.logger = logging.getLogger(f"{__name__}.DataExporter")
+    """Truthful PostgreSQL-backed export of the user's supported data."""
+
+    SUPPORTED_DATA_TYPES = frozenset({"memories", "conversations", "analytics", "audit_logs"})
+
+    def __init__(self, db_client: Optional[MultiTenantPostgresClient] = None) -> None:
+        self.db_client = db_client or MultiTenantPostgresClient()
         self.pii_detector = PIIDetector()
-    
+
+    @classmethod
+    def normalize_data_types(cls, data_types: Optional[List[str]]) -> List[str]:
+        requested = [str(item).strip().lower() for item in (data_types or ["all"]) if str(item).strip()]
+        if not requested or "all" in requested:
+            return ["memories", "conversations", "analytics", "audit_logs"]
+        unsupported = sorted(set(requested) - cls.SUPPORTED_DATA_TYPES)
+        if unsupported:
+            raise ValueError("Unsupported export data types: " + ", ".join(unsupported))
+        return list(dict.fromkeys(requested))
+
     async def export_user_data(
         self,
         user_id: str,
-        tenant_id: Optional[str] = None,
+        tenant_id: str,
         data_types: Optional[List[str]] = None,
         export_format: DataExportFormat = DataExportFormat.JSON,
-        include_pii: bool = True
+        include_pii: bool = False,
     ) -> Dict[str, Any]:
-        """Export all user data in specified format"""
-        try:
-            export_data = {
-                "export_metadata": {
-                    "user_id": user_id,
-                    "tenant_id": tenant_id,
-                    "export_date": datetime.utcnow().isoformat(),
-                    "export_format": export_format.value,
-                    "data_types": data_types or ["all"],
-                    "includes_pii": include_pii
-                },
-                "data": {}
-            }
-            
-            # Export memories
-            if not data_types or "memories" in data_types or "all" in data_types:
-                memories_data = await self._export_memories(user_id, tenant_id, include_pii)
-                export_data["data"]["memories"] = memories_data
-            
-            # Export conversations
-            if not data_types or "conversations" in data_types or "all" in data_types:
-                conversations_data = await self._export_conversations(user_id, tenant_id, include_pii)
-                export_data["data"]["conversations"] = conversations_data
-            
-            # Export analytics (anonymized)
-            if not data_types or "analytics" in data_types or "all" in data_types:
-                analytics_data = await self._export_analytics(user_id, tenant_id)
-                export_data["data"]["analytics"] = analytics_data
-            
-            # Export audit logs (without PII)
-            if not data_types or "audit_logs" in data_types or "all" in data_types:
-                audit_data = await self._export_audit_logs(user_id, tenant_id)
-                export_data["data"]["audit_logs"] = audit_data
-            
-            return export_data
-            
-        except Exception as e:
-            self.logger.error(f"Failed to export data for user {user_id}: {e}")
-            raise
-    
+        if export_format != DataExportFormat.JSON:
+            raise ValueError("Only JSON privacy exports are currently implemented")
+        selected = self.normalize_data_types(data_types)
+        payload: Dict[str, Any] = {
+            "export_metadata": {
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "export_date": datetime.utcnow().isoformat(),
+                "export_format": export_format.value,
+                "data_types": selected,
+                "includes_pii": include_pii,
+            },
+            "data": {},
+        }
+
+        async with self.db_client.get_async_session() as session:
+            await _set_request_scope(session, tenant_id=tenant_id, user_id=user_id)
+            if "memories" in selected:
+                payload["data"]["memories"] = await self._export_memories(
+                    session, user_id, tenant_id, include_pii
+                )
+            if "conversations" in selected:
+                payload["data"]["conversations"] = await self._export_conversations(
+                    session, user_id, tenant_id, include_pii
+                )
+            if "analytics" in selected:
+                payload["data"]["analytics"] = await self._export_analytics(
+                    session, user_id, tenant_id
+                )
+            if "audit_logs" in selected:
+                payload["data"]["audit_logs"] = await self._export_audit_logs(
+                    session, user_id, tenant_id, include_pii
+                )
+        return payload
+
     async def _export_memories(
-        self, 
-        user_id: str, 
-        tenant_id: Optional[str], 
-        include_pii: bool
+        self, session: Any, user_id: str, tenant_id: str, include_pii: bool
     ) -> List[Dict[str, Any]]:
-        """Export user memories"""
-        memories: List[Dict[str, Any]] = []
+        result = await session.execute(
+            text(
+                "SELECT memory_id, source, scope, kind, content, metadata, "
+                "created_at, updated_at, expires_at "
+                "FROM memory_items "
+                "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid) "
+                "ORDER BY created_at"
+            ),
+            {"tenant_id": tenant_id, "user_id": user_id},
+        )
+        records: List[Dict[str, Any]] = []
+        for row in result.mappings().all():
+            record = dict(row)
+            content = str(record.get("content") or "")
+            if not include_pii:
+                record["content"] = self.pii_detector.anonymize_text(content)
+            records.append(_jsonable(record))
+        return records
 
-        try:
-            memory_service = await _get_memory_service()
-            tenant_scope = tenant_id or user_id
-
-            if hasattr(memory_service, "list_memories"):
-                records = await memory_service.list_memories(
-                    tenant_scope,
-                    user_id=user_id,
-                    org_id=tenant_id,
-                    limit=250,
-                )
-            else:
-                from ai_karen_engine.database.memory_manager import MemoryQuery
-
-                records = await memory_service.base_manager.query_memories(
-                    tenant_scope,
-                    MemoryQuery(
-                        text=user_id,
-                        user_id=user_id,
-                        metadata_filter={
-                            "user_id": user_id,
-                            **({"org_id": tenant_id} if tenant_id else {}),
-                        },
-                        top_k=250,
-                        similarity_threshold=0.0,
-                        include_embeddings=False,
-                    ),
-                )
-
-            for memory in records:
-                content = getattr(memory, "text", getattr(memory, "content", ""))
-                metadata = getattr(memory, "meta", getattr(memory, "metadata", {})) or {}
-                record = {
-                    "id": str(getattr(memory, "id", "")),
-                    "content": content if include_pii else self.pii_detector.anonymize_text(content),
-                    "created_at": getattr(memory, "created_at", None) or getattr(memory, "timestamp", None),
-                    "tags": list(getattr(memory, "tags", []) or metadata.get("tags", [])),
-                    "importance_score": getattr(memory, "importance", metadata.get("importance_score", 5)),
-                    "memory_type": metadata.get("memory_type", getattr(memory, "decay_tier", "general")),
-                    "metadata": metadata if include_pii else self.pii_detector.extract_safe_metadata(content),
-                }
-                if isinstance(record["created_at"], datetime):
-                    record["created_at"] = record["created_at"].isoformat()
-                memories.append(record)
-
-        except Exception as e:
-            self.logger.error(f"Failed to export memories: {e}")
-
-        return memories
-    
     async def _export_conversations(
-        self, 
-        user_id: str, 
-        tenant_id: Optional[str], 
-        include_pii: bool
+        self, session: Any, user_id: str, tenant_id: str, include_pii: bool
     ) -> List[Dict[str, Any]]:
-        """Export user conversations"""
+        conversations_result = await session.execute(
+            text(
+                "SELECT conversation_id, title, conversation_metadata, is_active, "
+                "created_at, updated_at, session_id, summary, tags "
+                "FROM conversations "
+                "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid) "
+                "ORDER BY created_at"
+            ),
+            {"tenant_id": tenant_id, "user_id": user_id},
+        )
+        messages_result = await session.execute(
+            text(
+                "SELECT m.message_id, m.conversation_id, m.role, m.content, "
+                "m.message_metadata, m.created_at "
+                "FROM messages m "
+                "JOIN conversations c ON c.conversation_id = m.conversation_id "
+                "WHERE c.tenant_id = CAST(:tenant_id AS uuid) "
+                "AND c.user_id = CAST(:user_id AS uuid) "
+                "ORDER BY m.created_at"
+            ),
+            {"tenant_id": tenant_id, "user_id": user_id},
+        )
+        by_conversation: Dict[str, List[Dict[str, Any]]] = {}
+        for row in messages_result.mappings().all():
+            message = dict(row)
+            content = str(message.get("content") or "")
+            if not include_pii:
+                message["content"] = self.pii_detector.anonymize_text(content)
+            key = str(message.get("conversation_id"))
+            by_conversation.setdefault(key, []).append(_jsonable(message))
+
         conversations: List[Dict[str, Any]] = []
-
-        try:
-            conversation_manager = _get_conversation_manager()
-            records = await conversation_manager.list_conversations(
-                tenant_id or user_id,
-                user_id=user_id,
-                active_only=False,
-                limit=100,
-                offset=0,
-            )
-
-            for conversation in records:
-                title = conversation.title or "Untitled conversation"
-                summary = conversation.get_summary_text()
-                conversations.append(
-                    {
-                        "id": conversation.id,
-                        "title": title if include_pii else self.pii_detector.anonymize_text(title),
-                        "created_at": conversation.created_at.isoformat(),
-                        "updated_at": conversation.updated_at.isoformat(),
-                        "message_count": len(conversation.messages),
-                        "summary": summary if include_pii else self.pii_detector.anonymize_text(summary),
-                        "metadata": conversation.metadata,
-                    }
+        for row in conversations_result.mappings().all():
+            conversation = dict(row)
+            key = str(conversation.get("conversation_id"))
+            if not include_pii:
+                conversation["title"] = self.pii_detector.anonymize_text(
+                    str(conversation.get("title") or "")
                 )
-
-        except Exception as e:
-            self.logger.error(f"Failed to export conversations: {e}")
-
+                conversation["summary"] = self.pii_detector.anonymize_text(
+                    str(conversation.get("summary") or "")
+                )
+            conversation["messages"] = by_conversation.get(key, [])
+            conversations.append(_jsonable(conversation))
         return conversations
-    
+
     async def _export_analytics(
-        self, 
-        user_id: str, 
-        tenant_id: Optional[str]
-    ) -> Dict[str, Any]:
-        """Export user analytics (anonymized)"""
-        try:
-            memory_stats: Dict[str, Any] = {}
-            conversation_stats: Dict[str, Any] = {}
+        self, session: Any, user_id: str, tenant_id: str
+    ) -> Dict[str, int]:
+        result = await session.execute(
+            text(
+                "SELECT "
+                "(SELECT count(*) FROM memory_items WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                " AND user_id = CAST(:user_id AS uuid)) AS memories, "
+                "(SELECT count(*) FROM conversations WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                " AND user_id = CAST(:user_id AS uuid)) AS conversations, "
+                "(SELECT count(*) FROM messages m JOIN conversations c "
+                " ON c.conversation_id = m.conversation_id "
+                " WHERE c.tenant_id = CAST(:tenant_id AS uuid) "
+                " AND c.user_id = CAST(:user_id AS uuid)) AS messages"
+            ),
+            {"tenant_id": tenant_id, "user_id": user_id},
+        )
+        row = result.mappings().one()
+        return {key: int(value or 0) for key, value in row.items()}
 
-            try:
-                memory_service = await _get_memory_service()
-                if hasattr(memory_service, "get_memory_stats"):
-                    memory_stats = await memory_service.get_memory_stats(
-                        tenant_id or user_id,
-                        user_id=user_id,
-                        org_id=tenant_id,
-                    )
-            except Exception as exc:
-                self.logger.warning("Failed to gather memory stats for export: %s", exc)
-
-            try:
-                conversation_manager = _get_conversation_manager()
-                conversation_stats = await conversation_manager.get_conversation_stats(
-                    tenant_id or user_id,
-                    user_id=user_id,
-                )
-            except Exception as exc:
-                self.logger.warning("Failed to gather conversation stats for export: %s", exc)
-
-            return {
-                "memory_stats": memory_stats,
-                "conversation_stats": conversation_stats,
-                "privacy_note": "All analytics data has been anonymized"
-            }
-        except Exception as e:
-            self.logger.error(f"Failed to export analytics: {e}")
-            return {}
-    
     async def _export_audit_logs(
-        self, 
-        user_id: str, 
-        tenant_id: Optional[str]
+        self, session: Any, user_id: str, tenant_id: str, include_pii: bool
     ) -> List[Dict[str, Any]]:
-        """Export audit logs (without PII)"""
-        try:
-            audit_logger = get_audit_logger()
-            recent_events = []
-            if hasattr(audit_logger, "get_recent_events"):
-                recent_events = audit_logger.get_recent_events(limit=250)
+        result = await session.execute(
+            text(
+                "SELECT event_id, actor_type, action, resource_type, resource_id, "
+                "details, created_at FROM audit_log "
+                "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at"
+            ),
+            {"tenant_id": tenant_id, "user_id": user_id},
+        )
+        records: List[Dict[str, Any]] = []
+        for row in result.mappings().all():
+            record = dict(row)
+            if not include_pii:
+                record["details"] = {"redacted": True}
+            records.append(_jsonable(record))
+        return records
 
-            sanitized_events = []
-            for event in recent_events:
-                if tenant_id and event.get("tenant_id") not in {None, tenant_id}:
-                    continue
-                if user_id and event.get("user_id") not in {None, user_id}:
-                    continue
-                sanitized_events.append(
-                    {
-                        "timestamp": event.get("timestamp"),
-                        "event_type": event.get("event_type"),
-                        "outcome": event.get("outcome"),
-                        "resource_type": event.get("resource_type"),
-                        "correlation_id": event.get("correlation_id"),
-                        "note": "PII has been removed from audit logs",
-                    }
-                )
-            return sanitized_events
-        except Exception as e:
-            self.logger.error(f"Failed to export audit logs: {e}")
-            return []
 
 class DataEraser:
-    """Handles data erasure for privacy compliance"""
-    
-    def __init__(self):
-        self.logger = logging.getLogger(f"{__name__}.DataEraser")
-        self.audit_logger = get_audit_logger()
-    
+    """Hard-delete only, using canonical PostgreSQL rows and real command counts."""
+
+    SUPPORTED_DATA_TYPES = frozenset({"memories", "conversations"})
+
+    def __init__(self, db_client: Optional[MultiTenantPostgresClient] = None) -> None:
+        self.db_client = db_client or MultiTenantPostgresClient()
+
+    @classmethod
+    def normalize_data_types(cls, data_types: Optional[List[str]]) -> List[str]:
+        requested = [str(item).strip().lower() for item in (data_types or ["all"]) if str(item).strip()]
+        if not requested or "all" in requested:
+            return ["memories", "conversations"]
+        unsupported = sorted(set(requested) - cls.SUPPORTED_DATA_TYPES)
+        if unsupported:
+            raise ValueError(
+                "Unsupported erasure data types: "
+                + ", ".join(unsupported)
+                + ". Supported: memories, conversations. Cache and audit retention are not silently claimed."
+            )
+        return list(dict.fromkeys(requested))
+
     async def erase_user_data(
         self,
         user_id: str,
-        tenant_id: Optional[str] = None,
-        erasure_type: ErasureType = ErasureType.SOFT_DELETE,
+        tenant_id: str,
+        erasure_type: ErasureType,
         data_types: Optional[List[str]] = None,
-        correlation_id: Optional[str] = None
+        correlation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Erase user data according to specified type"""
-        start_time = datetime.utcnow()
-        
-        try:
-            erasure_results = {
-                "user_id": user_id,
-                "tenant_id": tenant_id,
-                "erasure_type": erasure_type.value,
-                "data_types": data_types or ["all"],
-                "started_at": start_time.isoformat(),
-                "results": {}
-            }
-            
-            # Erase memories
-            if not data_types or "memories" in data_types or "all" in data_types:
-                memory_result = await self._erase_memories(user_id, tenant_id, erasure_type)
-                erasure_results["results"]["memories"] = memory_result
-            
-            # Erase conversations
-            if not data_types or "conversations" in data_types or "all" in data_types:
-                conversation_result = await self._erase_conversations(user_id, tenant_id, erasure_type)
-                erasure_results["results"]["conversations"] = conversation_result
-            
-            # Erase vector embeddings
-            if not data_types or "embeddings" in data_types or "all" in data_types:
-                embedding_result = await self._erase_embeddings(user_id, tenant_id, erasure_type)
-                erasure_results["results"]["embeddings"] = embedding_result
-            
-            # Erase cache data
-            if not data_types or "cache" in data_types or "all" in data_types:
-                cache_result = await self._erase_cache_data(user_id, tenant_id, erasure_type)
-                erasure_results["results"]["cache"] = cache_result
-            
-            # Handle audit logs (special case - usually kept for compliance)
-            if erasure_type == ErasureType.HARD_DELETE and ("audit_logs" in (data_types or [])):
-                audit_result = await self._erase_audit_logs(user_id, tenant_id)
-                erasure_results["results"]["audit_logs"] = audit_result
-            
-            erasure_results["completed_at"] = datetime.utcnow().isoformat()
-            erasure_results["duration_ms"] = (datetime.utcnow() - start_time).total_seconds() * 1000
-            
-            # Log the erasure operation
-            self.audit_logger.log_audit_event(
-                _build_audit_metadata(
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    correlation_id=correlation_id,
-                    delete_type=erasure_type.value,
-                    duration_ms=erasure_results["duration_ms"],
-                    outcome="success",
-                )
+        if erasure_type != ErasureType.HARD_DELETE:
+            raise ValueError(
+                "Only hard_delete is implemented. soft_delete and anonymize fail closed until canonical support exists."
             )
-            
-            return erasure_results
-            
-        except Exception as e:
-            duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
-            
-            # Log failed erasure
-            self.audit_logger.log_audit_event(
-                _build_audit_metadata(
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    correlation_id=correlation_id,
-                    delete_type=erasure_type.value,
-                    duration_ms=duration_ms,
-                    outcome="failure",
-                    error_message=str(e),
+        selected = self.normalize_data_types(data_types)
+        results: Dict[str, Any] = {}
+        async with self.db_client.get_async_session() as session:
+            await _set_request_scope(session, tenant_id=tenant_id, user_id=user_id)
+            if "memories" in selected:
+                results["memories"] = await self._erase_memories(
+                    session, user_id=user_id, tenant_id=tenant_id
                 )
-            )
-            
-            self.logger.error(f"Failed to erase data for user {user_id}: {e}")
-            raise
-    
+            if "conversations" in selected:
+                results["conversations"] = await self._erase_conversations(
+                    session, user_id=user_id, tenant_id=tenant_id
+                )
+            await session.commit()
+
+        return {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "erasure_type": erasure_type.value,
+            "data_types": selected,
+            "results": results,
+            "completed_at": datetime.utcnow().isoformat(),
+            "correlation_id": correlation_id,
+            "retained": {
+                "audit_logs": "retained for security/compliance; not advertised as erased",
+                "cache": "not claimed erased because no canonical user-wide cache ownership contract exists",
+            },
+        }
+
     async def _erase_memories(
-        self, 
-        user_id: str, 
-        tenant_id: Optional[str], 
-        erasure_type: ErasureType
+        self, session: Any, *, user_id: str, tenant_id: str
     ) -> Dict[str, Any]:
-        """Erase user memories from PostgreSQL"""
-        try:
-            if erasure_type == ErasureType.SOFT_DELETE:
-                # Mark as deleted but keep for audit
-                affected_count = 5  # Placeholder
-                return {
-                    "action": "soft_delete",
-                    "affected_records": affected_count,
-                    "note": "Records marked as deleted but retained for audit"
-                }
-            elif erasure_type == ErasureType.ANONYMIZE:
-                # Remove PII but keep anonymized data
-                affected_count = 5  # Placeholder
-                return {
-                    "action": "anonymize",
-                    "affected_records": affected_count,
-                    "note": "PII removed, anonymized data retained"
-                }
-            else:  # HARD_DELETE
-                # Permanently remove
-                affected_count = 5  # Placeholder
-                return {
-                    "action": "hard_delete",
-                    "affected_records": affected_count,
-                    "note": "Records permanently removed"
-                }
-        except Exception as e:
-            self.logger.error(f"Failed to erase memories: {e}")
-            return {"error": str(e)}
-    
+        params = {"tenant_id": tenant_id, "user_id": user_id}
+        counts: Dict[str, int] = {}
+
+        for table, sql in (
+            (
+                "reinforcement_event",
+                "DELETE FROM reinforcement_event WHERE target_assertion_id IN ("
+                "SELECT assertion_id FROM memory_assertion WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid))",
+            ),
+            (
+                "contradiction_event",
+                "DELETE FROM contradiction_event WHERE source_assertion_id IN ("
+                "SELECT assertion_id FROM memory_assertion WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)) OR target_assertion_id IN ("
+                "SELECT assertion_id FROM memory_assertion WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid))",
+            ),
+            (
+                "memory_relation",
+                "DELETE FROM memory_relation WHERE source_id IN ("
+                "SELECT assertion_id FROM memory_assertion WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)) OR target_id IN ("
+                "SELECT assertion_id FROM memory_assertion WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid))",
+            ),
+            (
+                "consent_scope",
+                "DELETE FROM consent_scope WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)",
+            ),
+            (
+                "memory_items",
+                "DELETE FROM memory_items WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)",
+            ),
+            (
+                "memory_event",
+                "DELETE FROM memory_event WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)",
+            ),
+        ):
+            counts[table] = _row_count(await session.execute(text(sql), params))
+
+        return {
+            "action": "hard_delete",
+            "directly_deleted_records": sum(counts.values()),
+            "by_table": counts,
+            "note": "memory_items deletion includes canonical pgvector embeddings; memory_event cascades its projections",
+        }
+
     async def _erase_conversations(
-        self, 
-        user_id: str, 
-        tenant_id: Optional[str], 
-        erasure_type: ErasureType
+        self, session: Any, *, user_id: str, tenant_id: str
     ) -> Dict[str, Any]:
-        """Erase user conversations"""
-        try:
-            # Similar logic to memories
-            affected_count = 3  # Placeholder
-            return {
-                "action": erasure_type.value,
-                "affected_records": affected_count,
-                "note": f"Conversations processed with {erasure_type.value}"
-            }
-        except Exception as e:
-            self.logger.error(f"Failed to erase conversations: {e}")
-            return {"error": str(e)}
-    
-    async def _erase_embeddings(
-        self, 
-        user_id: str, 
-        tenant_id: Optional[str], 
-        erasure_type: ErasureType
-    ) -> Dict[str, Any]:
-        """Erase user embeddings from Milvus"""
-        try:
-            # This would connect to Milvus and delete vectors
-            affected_count = 8  # Placeholder
-            return {
-                "action": erasure_type.value,
-                "affected_vectors": affected_count,
-                "note": "Vector embeddings removed from Milvus"
-            }
-        except Exception as e:
-            self.logger.error(f"Failed to erase embeddings: {e}")
-            return {"error": str(e)}
-    
-    async def _erase_cache_data(
-        self, 
-        user_id: str, 
-        tenant_id: Optional[str], 
-        erasure_type: ErasureType
-    ) -> Dict[str, Any]:
-        """Erase user data from Redis cache"""
-        try:
-            # This would connect to Redis and delete cached data
-            affected_keys = 12  # Placeholder
-            return {
-                "action": "delete",
-                "affected_keys": affected_keys,
-                "note": "Cache data removed from Redis"
-            }
-        except Exception as e:
-            self.logger.error(f"Failed to erase cache data: {e}")
-            return {"error": str(e)}
-    
-    async def _erase_audit_logs(
-        self, 
-        user_id: str, 
-        tenant_id: Optional[str]
-    ) -> Dict[str, Any]:
-        """Erase audit logs (only for hard delete requests)"""
-        try:
-            # Note: This is usually NOT recommended for compliance
-            self.logger.warning(f"Hard deleting audit logs for user {user_id} - this may impact compliance")
-            
-            affected_count = 15  # Placeholder
-            return {
-                "action": "hard_delete",
-                "affected_records": affected_count,
-                "warning": "Audit log deletion may impact compliance requirements"
-            }
-        except Exception as e:
-            self.logger.error(f"Failed to erase audit logs: {e}")
-            return {"error": str(e)}
+        params = {"tenant_id": tenant_id, "user_id": user_id}
+        message_count_result = await session.execute(
+            text(
+                "SELECT count(*) FROM messages m JOIN conversations c "
+                "ON c.conversation_id = m.conversation_id "
+                "WHERE c.tenant_id = CAST(:tenant_id AS uuid) "
+                "AND c.user_id = CAST(:user_id AS uuid)"
+            ),
+            params,
+        )
+        message_count = int(message_count_result.scalar_one() or 0)
+        delete_result = await session.execute(
+            text(
+                "DELETE FROM conversations WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)"
+            ),
+            params,
+        )
+        conversation_count = _row_count(delete_result)
+        return {
+            "action": "hard_delete",
+            "affected_records": conversation_count,
+            "cascaded_messages": message_count,
+            "note": "messages and message_tools are removed by database cascade",
+        }
+
 
 class PrivacyComplianceService:
-    """Main privacy compliance service"""
-    
-    def __init__(self):
-        self.logger = logging.getLogger(f"{__name__}.PrivacyComplianceService")
-        self.data_exporter = DataExporter()
-        self.data_eraser = DataEraser()
+    """Canonical durable privacy lifecycle service."""
+
+    def __init__(self, db_client: Optional[MultiTenantPostgresClient] = None) -> None:
+        self.db_client = db_client or MultiTenantPostgresClient()
+        self.data_exporter = DataExporter(self.db_client)
+        self.data_eraser = DataEraser(self.db_client)
         self.pii_detector = PIIDetector()
         self.audit_logger = get_audit_logger()
-        
-        # Track privacy requests
-        self.privacy_requests: Dict[str, PrivacyRequest] = {}
-    
-    def create_privacy_request(
+
+    async def create_privacy_request(
         self,
+        *,
         request_type: str,
         user_id: str,
-        tenant_id: Optional[str] = None,
+        tenant_id: str,
         data_types: Optional[List[str]] = None,
         export_format: Optional[DataExportFormat] = None,
-        erasure_type: Optional[ErasureType] = None
+        erasure_type: Optional[ErasureType] = None,
+        correlation_id: Optional[str] = None,
     ) -> PrivacyRequest:
-        """Create a new privacy request"""
+        request_type = request_type.strip().lower()
+        if request_type not in {"export", "erasure"}:
+            raise ValueError(f"Unsupported privacy request type: {request_type}")
+
+        if request_type == "export":
+            selected = self.data_exporter.normalize_data_types(data_types)
+            selected_export_format = export_format or DataExportFormat.JSON
+            if selected_export_format != DataExportFormat.JSON:
+                raise ValueError("Only JSON privacy exports are currently implemented")
+            selected_erasure_type: Optional[ErasureType] = None
+        else:
+            selected = self.data_eraser.normalize_data_types(data_types)
+            selected_export_format = None
+            selected_erasure_type = erasure_type or ErasureType.HARD_DELETE
+            if selected_erasure_type != ErasureType.HARD_DELETE:
+                raise ValueError(
+                    "Only hard_delete erasure is currently implemented; unsupported modes fail closed"
+                )
+
         request_id = str(uuid.uuid4())
-        verification_token = str(uuid.uuid4())
-        
-        request = PrivacyRequest(
+        verification_token = secrets.token_urlsafe(32)
+        token_hash = _token_hash(verification_token)
+        created_at = datetime.utcnow()
+
+        async with self.db_client.get_async_session() as session:
+            await _set_request_scope(session, tenant_id=tenant_id, user_id=user_id)
+            await session.execute(
+                text(
+                    "INSERT INTO privacy_requests ("
+                    "request_id, tenant_id, user_id, request_type, status, data_types, "
+                    "export_format, erasure_type, verification_token_hash, correlation_id, created_at, updated_at"
+                    ") VALUES ("
+                    "CAST(:request_id AS uuid), CAST(:tenant_id AS uuid), CAST(:user_id AS uuid), "
+                    ":request_type, 'pending', CAST(:data_types AS jsonb), :export_format, :erasure_type, "
+                    ":token_hash, :correlation_id, :created_at, :created_at)"
+                ),
+                {
+                    "request_id": request_id,
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "request_type": request_type,
+                    "data_types": json.dumps(selected),
+                    "export_format": selected_export_format.value if selected_export_format else None,
+                    "erasure_type": selected_erasure_type.value if selected_erasure_type else None,
+                    "token_hash": token_hash,
+                    "correlation_id": correlation_id,
+                    "created_at": created_at,
+                },
+            )
+            await session.commit()
+
+        logger.info(
+            "privacy.request.created",
+            extra={
+                "request_id": request_id,
+                "request_type": request_type,
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "correlation_id": correlation_id,
+            },
+        )
+        return PrivacyRequest(
             request_id=request_id,
             request_type=request_type,
             user_id=user_id,
             tenant_id=tenant_id,
             status=PrivacyRequestStatus.PENDING,
-            created_at=datetime.utcnow(),
-            data_types=data_types or ["all"],
-            export_format=export_format,
-            erasure_type=erasure_type,
-            verification_token=verification_token
+            created_at=created_at,
+            data_types=selected,
+            export_format=selected_export_format,
+            erasure_type=selected_erasure_type,
+            verification_token=verification_token,
+            result_metadata={},
+            correlation_id=correlation_id,
         )
-        
-        self.privacy_requests[request_id] = request
-        
-        self.logger.info(
-            f"Created privacy request {request_id} for user {user_id}",
-            extra={
-                "request_id": request_id,
-                "request_type": request_type,
-                "user_id": user_id,
-                "tenant_id": tenant_id
-            }
+
+    async def get_privacy_request_status(
+        self, request_id: str, *, user_id: str, tenant_id: str
+    ) -> Optional[PrivacyRequest]:
+        async with self.db_client.get_async_session() as session:
+            await _set_request_scope(session, tenant_id=tenant_id, user_id=user_id)
+            result = await session.execute(
+                text(
+                    "SELECT request_id, request_type, user_id, tenant_id, status, data_types, "
+                    "export_format, erasure_type, result_metadata, error_message, correlation_id, "
+                    "created_at, completed_at FROM privacy_requests "
+                    "WHERE request_id = CAST(:request_id AS uuid) "
+                    "AND tenant_id = CAST(:tenant_id AS uuid) "
+                    "AND user_id = CAST(:user_id AS uuid)"
+                ),
+                {"request_id": request_id, "tenant_id": tenant_id, "user_id": user_id},
+            )
+            row = result.mappings().first()
+        return self._request_from_row(row) if row else None
+
+    async def process_privacy_request(
+        self,
+        request_id: str,
+        *,
+        verification_token: str,
+        user_id: str,
+        tenant_id: str,
+        correlation_id: Optional[str] = None,
+        include_pii: bool = False,
+    ) -> Dict[str, Any]:
+        request, stored_hash = await self._load_for_processing(
+            request_id=request_id, user_id=user_id, tenant_id=tenant_id
         )
-        
-        return request
-    
+        if request is None or stored_hash is None:
+            raise KeyError("Privacy request not found")
+        if not hmac.compare_digest(stored_hash, _token_hash(verification_token)):
+            raise PermissionError("Invalid verification token")
+        if request.status != PrivacyRequestStatus.PENDING:
+            raise RuntimeError(f"Privacy request is not pending: {request.status.value}")
+
+        claimed = await self._claim_request(
+            request_id=request_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+        )
+        if not claimed:
+            raise RuntimeError("Privacy request was already claimed or is no longer pending")
+
+        try:
+            if request.request_type == "export":
+                result = await self.data_exporter.export_user_data(
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    data_types=request.data_types,
+                    export_format=request.export_format or DataExportFormat.JSON,
+                    include_pii=include_pii,
+                )
+                result_metadata = {
+                    "export_format": (request.export_format or DataExportFormat.JSON).value,
+                    "data_types": request.data_types or [],
+                    "record_counts": {
+                        key: len(value) if isinstance(value, list) else value
+                        for key, value in result.get("data", {}).items()
+                        if isinstance(value, (list, int, float))
+                    },
+                }
+            elif request.request_type == "erasure":
+                result = await self.data_eraser.erase_user_data(
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    erasure_type=request.erasure_type or ErasureType.HARD_DELETE,
+                    data_types=request.data_types,
+                    correlation_id=correlation_id,
+                )
+                result_metadata = {
+                    "erasure_type": (request.erasure_type or ErasureType.HARD_DELETE).value,
+                    "data_types": request.data_types or [],
+                    "results": result.get("results", {}),
+                    "retained": result.get("retained", {}),
+                }
+            else:
+                raise ValueError(f"Unsupported privacy request type: {request.request_type}")
+
+            await self._complete_request(
+                request_id=request_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                result_metadata=result_metadata,
+            )
+            self._audit(
+                outcome="success",
+                request=request,
+                correlation_id=correlation_id,
+            )
+            return result
+        except Exception as exc:
+            await self._fail_request(
+                request_id=request_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                error_message=str(exc),
+            )
+            self._audit(
+                outcome="failure",
+                request=request,
+                correlation_id=correlation_id,
+                error_message=str(exc),
+            )
+            raise
+
     async def process_data_export_request(
         self,
         request_id: str,
-        include_pii: bool = True
+        *,
+        verification_token: str,
+        user_id: str,
+        tenant_id: str,
+        correlation_id: Optional[str] = None,
+        include_pii: bool = False,
     ) -> Dict[str, Any]:
-        """Process data export request"""
-        if request_id not in self.privacy_requests:
-            raise ValueError(f"Privacy request {request_id} not found")
-        
-        request = self.privacy_requests[request_id]
-        request.status = PrivacyRequestStatus.IN_PROGRESS
-        
-        try:
-            export_data = await self.data_exporter.export_user_data(
-                user_id=request.user_id,
-                tenant_id=request.tenant_id,
-                data_types=request.data_types,
-                export_format=request.export_format or DataExportFormat.JSON,
-                include_pii=include_pii
-            )
-            
-            request.status = PrivacyRequestStatus.COMPLETED
-            request.completed_at = datetime.utcnow()
-            
-            return export_data
-            
-        except Exception as e:
-            request.status = PrivacyRequestStatus.FAILED
-            self.logger.error(f"Failed to process export request {request_id}: {e}")
-            raise
-    
+        return await self.process_privacy_request(
+            request_id,
+            verification_token=verification_token,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+            include_pii=include_pii,
+        )
+
     async def process_data_erasure_request(
         self,
         request_id: str,
-        correlation_id: Optional[str] = None
+        *,
+        verification_token: str,
+        user_id: str,
+        tenant_id: str,
+        correlation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Process data erasure request"""
-        if request_id not in self.privacy_requests:
-            raise ValueError(f"Privacy request {request_id} not found")
-        
-        request = self.privacy_requests[request_id]
-        request.status = PrivacyRequestStatus.IN_PROGRESS
-        
-        try:
-            erasure_results = await self.data_eraser.erase_user_data(
-                user_id=request.user_id,
-                tenant_id=request.tenant_id,
-                erasure_type=request.erasure_type or ErasureType.SOFT_DELETE,
-                data_types=request.data_types,
-                correlation_id=correlation_id
+        return await self.process_privacy_request(
+            request_id,
+            verification_token=verification_token,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+        )
+
+    async def _load_for_processing(
+        self, *, request_id: str, user_id: str, tenant_id: str
+    ) -> tuple[Optional[PrivacyRequest], Optional[str]]:
+        async with self.db_client.get_async_session() as session:
+            await _set_request_scope(session, tenant_id=tenant_id, user_id=user_id)
+            result = await session.execute(
+                text(
+                    "SELECT request_id, request_type, user_id, tenant_id, status, data_types, "
+                    "export_format, erasure_type, result_metadata, error_message, correlation_id, "
+                    "created_at, completed_at, verification_token_hash FROM privacy_requests "
+                    "WHERE request_id = CAST(:request_id AS uuid) "
+                    "AND tenant_id = CAST(:tenant_id AS uuid) "
+                    "AND user_id = CAST(:user_id AS uuid)"
+                ),
+                {"request_id": request_id, "tenant_id": tenant_id, "user_id": user_id},
             )
-            
-            request.status = PrivacyRequestStatus.COMPLETED
-            request.completed_at = datetime.utcnow()
-            
-            return erasure_results
-            
-        except Exception as e:
-            request.status = PrivacyRequestStatus.FAILED
-            self.logger.error(f"Failed to process erasure request {request_id}: {e}")
-            raise
-    
-    def get_privacy_request_status(self, request_id: str) -> Optional[PrivacyRequest]:
-        """Get privacy request status"""
-        return self.privacy_requests.get(request_id)
-    
+            row = result.mappings().first()
+        if not row:
+            return None, None
+        return self._request_from_row(row), str(row["verification_token_hash"])
+
+    async def _claim_request(
+        self,
+        *,
+        request_id: str,
+        user_id: str,
+        tenant_id: str,
+        correlation_id: Optional[str],
+    ) -> bool:
+        async with self.db_client.get_async_session() as session:
+            await _set_request_scope(session, tenant_id=tenant_id, user_id=user_id)
+            result = await session.execute(
+                text(
+                    "UPDATE privacy_requests SET status = 'in_progress', verification_used_at = now(), "
+                    "updated_at = now(), correlation_id = COALESCE(:correlation_id, correlation_id) "
+                    "WHERE request_id = CAST(:request_id AS uuid) "
+                    "AND tenant_id = CAST(:tenant_id AS uuid) "
+                    "AND user_id = CAST(:user_id AS uuid) AND status = 'pending'"
+                ),
+                {
+                    "request_id": request_id,
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "correlation_id": correlation_id,
+                },
+            )
+            await session.commit()
+            return _row_count(result) == 1
+
+    async def _complete_request(
+        self,
+        *,
+        request_id: str,
+        user_id: str,
+        tenant_id: str,
+        result_metadata: Dict[str, Any],
+    ) -> None:
+        async with self.db_client.get_async_session() as session:
+            await _set_request_scope(session, tenant_id=tenant_id, user_id=user_id)
+            result = await session.execute(
+                text(
+                    "UPDATE privacy_requests SET status = 'completed', completed_at = now(), updated_at = now(), "
+                    "result_metadata = CAST(:result_metadata AS jsonb), error_message = NULL "
+                    "WHERE request_id = CAST(:request_id AS uuid) "
+                    "AND tenant_id = CAST(:tenant_id AS uuid) "
+                    "AND user_id = CAST(:user_id AS uuid) AND status = 'in_progress'"
+                ),
+                {
+                    "request_id": request_id,
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "result_metadata": json.dumps(_jsonable(result_metadata)),
+                },
+            )
+            if _row_count(result) != 1:
+                raise RuntimeError("Failed to persist completed privacy request state")
+            await session.commit()
+
+    async def _fail_request(
+        self,
+        *,
+        request_id: str,
+        user_id: str,
+        tenant_id: str,
+        error_message: str,
+    ) -> None:
+        safe_error = (error_message or "privacy processing failed")[:1000]
+        async with self.db_client.get_async_session() as session:
+            await _set_request_scope(session, tenant_id=tenant_id, user_id=user_id)
+            await session.execute(
+                text(
+                    "UPDATE privacy_requests SET status = 'failed', completed_at = now(), updated_at = now(), "
+                    "error_message = :error_message WHERE request_id = CAST(:request_id AS uuid) "
+                    "AND tenant_id = CAST(:tenant_id AS uuid) "
+                    "AND user_id = CAST(:user_id AS uuid) AND status = 'in_progress'"
+                ),
+                {
+                    "request_id": request_id,
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "error_message": safe_error,
+                },
+            )
+            await session.commit()
+
+    @staticmethod
+    def _request_from_row(row: Any) -> PrivacyRequest:
+        data_types = row.get("data_types") or []
+        if isinstance(data_types, str):
+            data_types = json.loads(data_types)
+        result_metadata = row.get("result_metadata") or {}
+        if isinstance(result_metadata, str):
+            result_metadata = json.loads(result_metadata)
+        return PrivacyRequest(
+            request_id=str(row["request_id"]),
+            request_type=str(row["request_type"]),
+            user_id=str(row["user_id"]),
+            tenant_id=str(row["tenant_id"]),
+            status=PrivacyRequestStatus(str(row["status"])),
+            created_at=row["created_at"],
+            completed_at=row.get("completed_at"),
+            data_types=list(data_types),
+            export_format=DataExportFormat(str(row["export_format"])) if row.get("export_format") else None,
+            erasure_type=ErasureType(str(row["erasure_type"])) if row.get("erasure_type") else None,
+            result_metadata=dict(result_metadata),
+            error_message=row.get("error_message"),
+            correlation_id=row.get("correlation_id"),
+        )
+
+    def _audit(
+        self,
+        *,
+        outcome: str,
+        request: PrivacyRequest,
+        correlation_id: Optional[str],
+        error_message: Optional[str] = None,
+    ) -> None:
+        payload = {
+            "event_type": "privacy_request_processed",
+            "severity": "info" if outcome == "success" else "error",
+            "message": f"privacy_{request.request_type}_{outcome}",
+            "user_id": request.user_id,
+            "tenant_id": request.tenant_id,
+            "correlation_id": correlation_id,
+            "metadata": {
+                "request_id": request.request_id,
+                "request_type": request.request_type,
+                "data_types": request.data_types,
+                "outcome": outcome,
+                **({"error_message": error_message[:500]} if error_message else {}),
+            },
+        }
+        try:
+            self.audit_logger.log_audit_event(payload)
+        except Exception:
+            logger.exception("privacy.audit.emit_failed", extra={"request_id": request.request_id})
+
+    async def health(self) -> Dict[str, Any]:
+        try:
+            async with self.db_client.get_async_session() as session:
+                await session.execute(text("SELECT 1 FROM privacy_requests LIMIT 1"))
+            database_ready = True
+        except Exception as exc:
+            logger.warning("Privacy lifecycle database preflight failed: %s", exc)
+            database_ready = False
+        return {
+            "status": "healthy" if database_ready else "unavailable",
+            "database_ready": database_ready,
+            "durable_requests": database_ready,
+            "self_service": True,
+            "supported_export_formats": [DataExportFormat.JSON.value],
+            "supported_erasure_types": [ErasureType.HARD_DELETE.value],
+            "supported_erasure_data_types": sorted(DataEraser.SUPPORTED_DATA_TYPES),
+            "cache_erasure": False,
+            "audit_log_erasure": False,
+        }
+
     def sanitize_content_for_ui(self, content: str, max_length: int = 100) -> str:
-        """Sanitize content for UI display - show only titles/excerpts, never raw PII"""
         if not content:
             return ""
-        
-        # Detect PII
-        pii_detected = self.pii_detector.detect_pii(content)
-        
-        if pii_detected:
-            # If PII detected, show only safe metadata
-            metadata = self.pii_detector.extract_safe_metadata(content)
-            return f"[Content contains PII - {metadata['word_count']} words, {metadata['text_length']} chars]"
-        
-        # If no PII, show truncated content
-        if len(content) <= max_length:
-            return content
-        
-        return content[:max_length] + "..."
-    
-    def create_safe_content_preview(self, content: str) -> Dict[str, Any]:
-        """Create safe content preview for UI without exposing PII"""
         metadata = self.pii_detector.extract_safe_metadata(content)
-        
-        preview = {
-            "safe_preview": self.sanitize_content_for_ui(content),
+        if metadata["contains_pii"]:
+            return (
+                f"[Content contains PII - {metadata['word_count']} words, "
+                f"{metadata['text_length']} chars]"
+            )
+        return content if len(content) <= max_length else content[:max_length] + "..."
+
+    def create_safe_content_preview(self, content: str, max_length: int = 100) -> Dict[str, Any]:
+        metadata = self.pii_detector.extract_safe_metadata(content)
+        return {
+            "safe_preview": self.sanitize_content_for_ui(content, max_length=max_length),
             "metadata": metadata,
             "full_content_available": True,
-            "pii_protection_applied": metadata["contains_pii"]
+            "pii_protection_applied": metadata["contains_pii"],
         }
-        
-        return preview
 
-# Global service instance
-_privacy_service = None
+
+_privacy_service: Optional[PrivacyComplianceService] = None
+
 
 def get_privacy_compliance_service() -> PrivacyComplianceService:
-    """Get or create privacy compliance service instance"""
     global _privacy_service
-    
     if _privacy_service is None:
         _privacy_service = PrivacyComplianceService()
-    
     return _privacy_service
 
-# Export public interface
+
 __all__ = [
     "PrivacyComplianceService",
     "DataExporter",
@@ -765,5 +941,5 @@ __all__ = [
     "DataExportFormat",
     "ErasureType",
     "PrivacyRequestStatus",
-    "get_privacy_compliance_service"
+    "get_privacy_compliance_service",
 ]
