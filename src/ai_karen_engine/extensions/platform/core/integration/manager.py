@@ -1,9 +1,12 @@
 """Compatibility integration manager over the canonical plugin runtime.
 
 This module no longer owns an independent permissions manager, sandbox, router,
-or lifecycle executor.  Historical callers are preserved, but execution always
+or lifecycle executor. Historical callers are preserved, but execution always
 flows through PluginService -> RuntimePolicy -> ActionExecutionGate ->
 ExtensionExecutionService.
+
+PluginService is resolved lazily so platform package imports never create a
+PluginKernel -> platform -> PluginService -> PluginKernel cycle.
 """
 
 from __future__ import annotations
@@ -11,11 +14,18 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from ai_karen_engine.services.plugin_service import ExecutionStatus, get_plugin_service
+if TYPE_CHECKING:
+    from ai_karen_engine.services.plugin_service import PluginService
 
 logger = logging.getLogger("kari.plugin_manager")
+
+
+def get_plugin_service() -> "PluginService":
+    from ai_karen_engine.services.plugin_service import get_plugin_service as _get
+
+    return _get()
 
 
 @dataclass
@@ -45,6 +55,8 @@ class PluginManager:
         self, name: str, params: Dict[str, Any], user_ctx: Dict[str, Any]
     ) -> Any:
         """Execute through the canonical governed plugin service."""
+        from ai_karen_engine.services.plugin_service import ExecutionStatus
+
         context = dict(user_ctx or {})
         result = await get_plugin_service().execute_plugin(
             plugin_name=name,
