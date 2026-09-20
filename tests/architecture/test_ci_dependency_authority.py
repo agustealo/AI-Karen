@@ -35,8 +35,9 @@ def _workflow_text(relative_path: str) -> str:
 
 def _normalized_workflow_command(line: str) -> str:
     stripped = line.strip()
-    if stripped.startswith("- run: "):
-        return stripped.removeprefix("- run: ").strip()
+    for prefix in ("- run: ", "run: "):
+        if stripped.startswith(prefix):
+            return stripped.removeprefix(prefix).strip()
     return stripped
 
 
