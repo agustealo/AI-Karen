@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import logging
-import os
 from functools import lru_cache
 from typing import Any, Dict
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from ai_karen_engine.core.security.auth_config import (
+    DevelopmentIdentityConfigurationError,
+    auth_config,
+)
 
 from .models import UserData
 
@@ -25,37 +29,17 @@ def _get_auth_middleware():
     return get_auth_middleware()
 
 
-def _configured_dev_tenant_id() -> str:
-    """Return explicit development tenant scope or fail closed."""
-    tenant_id = str(os.getenv("KAREN_DEV_TENANT_ID") or "").strip()
-    if not tenant_id or tenant_id == "default":
-        raise RuntimeError(
-            "Auth bypass requires explicit KAREN_DEV_TENANT_ID; 'default' is forbidden"
-        )
-    return tenant_id
-
-
 async def _authenticate_request(request: Request) -> Dict[str, Any]:
-    from ai_karen_engine.core.security.auth_config import auth_config
-
     if auth_config.should_bypass_auth():
         logger.debug("Auth bypass active in session helper")
-        return {
-            "user_id": "dev-user",
-            "tenant_id": _configured_dev_tenant_id(),
-            "email": "dev-user@localhost",
-            "user_type": "developer",
-            "roles": ["admin", "user"],
-            "permissions": [
-                "extension:*",
-                "chat:*",
-                "admin:*",
-                "agent:*",
-                "tasks:*",
-                "scheduler:*",
-            ],
-            "token_id": "dev-token-id",
-        }
+        try:
+            return auth_config.get_dev_user_context()
+        except DevelopmentIdentityConfigurationError as exc:
+            logger.error("auth.session.dev_identity_unconfigured")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
 
     middleware = _get_auth_middleware()
     user_data = await middleware.authenticate_request(request)

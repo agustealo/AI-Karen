@@ -1,19 +1,25 @@
 """
 Centralized Authentication Configuration for AI-Karen Production System.
 
-This module provides a single source of truth for authentication settings,
-development modes, and security configurations. All auth bypass and development
-mode checks should go through this module instead of scattered getenv() calls.
+This module is the single source of truth for authentication settings,
+development modes, and configured development identities. Authentication
+bypass may remove credential verification, but it must never manufacture a
+user or tenant identity.
 """
 
+from __future__ import annotations
+
 import os
-from typing import Dict, Any, Optional
+from typing import Any, Dict
+
+
+class DevelopmentIdentityConfigurationError(RuntimeError):
+    """Raised when auth bypass is enabled without explicit identity scope."""
 
 
 class AuthConfig:
     """Centralized authentication configuration."""
 
-    # Environment settings
     _environment: str = os.getenv(
         "ENVIRONMENT", os.getenv("KARI_ENV", "production")
     ).lower()
@@ -50,35 +56,55 @@ class AuthConfig:
 
     @classmethod
     def should_bypass_auth(cls) -> bool:
-        """Determine if authentication should be bypassed.
-
-        Always bypass if KARI_AUTH_BYPASS is explicitly enabled,
-        regardless of environment (for development and testing).
-        In production, can still bypass if KARI_AUTH_BYPASS is true.
-        """
-        # Check if KARI_AUTH_BYPASS is explicitly enabled
+        """Determine whether credential verification should be bypassed."""
         if cls.is_auth_bypass_enabled():
             return True
-
-        # In development, also allow bypass if dev mode is enabled
         if cls.is_development() and cls.is_dev_mode_enabled():
             return True
-
         return False
 
     @classmethod
     def get_dev_user_context(cls) -> Dict[str, Any]:
-        """Get the development user context for bypass scenarios."""
+        """Resolve the explicit development principal for bypass scenarios.
+
+        Bypass changes authentication mechanics only. User and tenant scope
+        remain authoritative identity and therefore must be configured rather
+        than synthesized. Values are read at call time so tests and launchers
+        can configure the principal before handling requests.
+        """
+        user_id = os.getenv("KARI_DEV_USER_ID", "").strip()
+        tenant_id = os.getenv("KARI_DEV_TENANT_ID", "").strip()
+        if not user_id or not tenant_id or tenant_id == "default":
+            raise DevelopmentIdentityConfigurationError(
+                "Authentication bypass requires explicit KARI_DEV_USER_ID and "
+                "KARI_DEV_TENANT_ID; the default tenant is forbidden"
+            )
+
+        roles = [
+            role.strip()
+            for role in os.getenv("KARI_DEV_ROLES", "user").split(",")
+            if role.strip()
+        ]
+        permissions = [
+            permission.strip()
+            for permission in os.getenv(
+                "KARI_DEV_PERMISSIONS", "chat:write"
+            ).split(",")
+            if permission.strip()
+        ]
+        email = os.getenv("KARI_DEV_EMAIL", "").strip() or None
+
         return {
-            "user_id": "dev-user",
-            "email": "dev-user@karen.ai",
-            "full_name": "Development User",
-            "roles": ["admin", "user"],
-            "is_active": True,
-            "tenant_id": "default",
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "email": email,
+            "roles": roles,
+            "permissions": permissions,
             "authenticated": True,
-            "preferences": {},
+            "auth_source": "configured_development_bypass",
             "is_dev_bypass": True,
+            "is_active": True,
+            "preferences": {},
         }
 
     @classmethod
@@ -94,5 +120,11 @@ class AuthConfig:
         }
 
 
-# Global instance
 auth_config = AuthConfig()
+
+
+__all__ = [
+    "AuthConfig",
+    "DevelopmentIdentityConfigurationError",
+    "auth_config",
+]
