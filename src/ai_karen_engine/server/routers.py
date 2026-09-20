@@ -1,10 +1,10 @@
 """Canonical FastAPI router and authentication composition for AI KAREN.
 
 This module is the single application-level router registry. Route modules own
-request schemas and thin ingress handlers; this registry owns only mounting and
-the global authenticated-request boundary. Admin endpoints are intentionally
-excluded because ``ai_karen_engine.server.admin_endpoints`` is their single
-registration owner.
+request schemas and thin ingress handlers; this registry owns mounting and the
+global authenticated-request boundary. Installation-wide model orchestration is
+additionally admin-scoped here so a normal consumer session cannot mutate the
+shared runtime.
 """
 
 from __future__ import annotations
@@ -15,13 +15,13 @@ import os
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from ai_karen_engine.api_routes.agents.integration import router as agent_integration_router
 from ai_karen_engine.api_routes.artifacts import router as artifacts_router
 from ai_karen_engine.api_routes.auth.auth import router as auth_router
 from ai_karen_engine.api_routes.auth.privacy import router as privacy_router
-from ai_karen_engine.api_routes.agents.integration import router as agent_integration_router
 from ai_karen_engine.api_routes.automation.cron import router as automation_cron_router
 from ai_karen_engine.api_routes.automation.jobs import router as automation_jobs_router
 from ai_karen_engine.api_routes.automation.scheduler import router as scheduler_router
@@ -30,12 +30,10 @@ from ai_karen_engine.api_routes.chat.conversation import router as conversation_
 from ai_karen_engine.api_routes.chat.copilot import router as copilot_router
 from ai_karen_engine.api_routes.chat.runtime import router as chat_runtime_router
 from ai_karen_engine.api_routes.chat.websocket import router as websocket_router
-from ai_karen_engine.api_routes.content.attachments import router as file_attachment_router
 from ai_karen_engine.api_routes.content.communications import router as communications_center_router
 from ai_karen_engine.api_routes.extensions.extensions import router as extensions_router
 from ai_karen_engine.api_routes.memory.memory import router as memory_router
 from ai_karen_engine.api_routes.models.llm import router as llm_router
-from ai_karen_engine.api_routes.models.management import router as model_management_router
 from ai_karen_engine.api_routes.models.model_orchestrator import router as model_orchestrator_router
 from ai_karen_engine.api_routes.models.orchestrator import router as ai_router
 from ai_karen_engine.api_routes.models.organization import router as model_organization_router
@@ -57,7 +55,6 @@ from ai_karen_engine.api_routes.system.events import router as events_router
 from ai_karen_engine.api_routes.system.settings import router as settings_router
 from ai_karen_engine.api_routes.tools.code_execution import router as code_execution_router
 from ai_karen_engine.api_routes.tools.tools import router as tool_router
-from ai_karen_engine.api_routes.users.data import router as user_data_router
 from ai_karen_engine.api_routes.users.persona import router as user_persona_router
 from ai_karen_engine.api_routes.users.profile import router as user_profile_router
 from ai_karen_engine.api_routes.users.users import router as users_router
@@ -70,6 +67,27 @@ from ai_karen_engine.extensions.platform.api_routes.ui_materialization_routes im
 logger = logging.getLogger(__name__)
 
 
+def _principal_roles(principal: Any) -> set[str]:
+    if isinstance(principal, dict):
+        raw_roles = principal.get("roles") or []
+    else:
+        raw_roles = getattr(principal, "roles", []) or []
+    return {str(role).strip().lower() for role in raw_roles if str(role).strip()}
+
+
+async def require_runtime_admin(request: Request) -> Any:
+    """Fail closed for installation-wide runtime/model mutations and reads."""
+    principal = getattr(request.state, "user", None)
+    if not principal:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not _principal_roles(principal).intersection({"admin", "super_admin"}):
+        raise HTTPException(
+            status_code=403,
+            detail="Administrator access is required for runtime model management",
+        )
+    return principal
+
+
 @dataclass(frozen=True)
 class RouterSpec:
     """Declarative router registration contract."""
@@ -77,6 +95,7 @@ class RouterSpec:
     router: APIRouter
     prefix: str = ""
     tags: tuple[str, ...] = ()
+    dependencies: tuple[Any, ...] = ()
 
 
 CORE_ROUTERS: tuple[RouterSpec, ...] = (
@@ -107,7 +126,6 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     RouterSpec(audit_router, "/api/audit", ("audit",)),
     RouterSpec(extensions_router, "/api/extensions", ("extensions",)),
     RouterSpec(ui_materialization_router, tags=("ui-materialization",)),
-    RouterSpec(file_attachment_router, "/api/files", ("files",)),
     RouterSpec(code_execution_router, "/api/code", ("code",)),
     # runtime.py defines /chat and /stream itself, so the app-level prefix is /api.
     RouterSpec(chat_runtime_router, "/api", ("chat-runtime",)),
@@ -119,14 +137,16 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     RouterSpec(users_router, "/api", ("users",)),
     RouterSpec(error_response_router, "/api", ("error-response",)),
     RouterSpec(health_router, "/api", ("health",)),
-    RouterSpec(model_management_router, tags=("model-management",)),
     RouterSpec(scheduler_router, tags=("scheduler",)),
     RouterSpec(public_router, tags=("public",)),
-    RouterSpec(model_orchestrator_router, tags=("model-orchestrator",)),
+    RouterSpec(
+        model_orchestrator_router,
+        tags=("model-orchestrator",),
+        dependencies=(Depends(require_runtime_admin),),
+    ),
     RouterSpec(validation_metrics_router, tags=("validation-metrics",)),
     RouterSpec(performance_router, tags=("performance",)),
     RouterSpec(model_organization_router, tags=("model-organization",)),
-    RouterSpec(user_data_router, "/api", ("user-data",)),
     RouterSpec(settings_router),
     RouterSpec(model_settings_router, "/api", ("model-settings",)),
 )
@@ -258,9 +278,7 @@ def configure_authentication_middleware(app: FastAPI) -> None:
                     "status_code": status_code,
                 },
             )
-            return _http_error(
-                HTTPException(status_code=status_code, detail=message)
-            )
+            return _http_error(HTTPException(status_code=status_code, detail=message))
         except Exception:
             logger.exception(
                 "Authentication service unavailable",
@@ -282,6 +300,7 @@ def _include_specs(app: FastAPI, specs: Iterable[RouterSpec]) -> None:
             spec.router,
             prefix=spec.prefix,
             tags=list(spec.tags) if spec.tags else None,
+            dependencies=list(spec.dependencies) if spec.dependencies else None,
         )
 
 
@@ -317,5 +336,6 @@ __all__ = [
     "CORE_ROUTERS",
     "RouterSpec",
     "configure_authentication_middleware",
+    "require_runtime_admin",
     "wire_routers",
 ]
