@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,17 @@ LEGACY_VALIDATION = ROOT / "src/ai_karen_engine/server/validation.py"
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _class_source(path: Path, class_name: str) -> str:
+    source = _read(path)
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            segment = ast.get_source_segment(source, node)
+            assert segment is not None
+            return segment
+    raise AssertionError(f"Class {class_name} not found in {path}")
 
 
 def _scope(*, content_length: int | None = None) -> Scope:
@@ -182,12 +194,36 @@ def test_spoofed_small_content_length_cannot_bypass_actual_byte_limit() -> None:
 
 
 def test_request_limit_logging_does_not_include_body_or_query_material() -> None:
-    middleware = _read(MIDDLEWARE)
-    request_limit_source = middleware[
-        middleware.index("class RequestSizeLimitMiddleware") : middleware.index("def _env_flag")
-    ]
+    request_limit_source = _class_source(MIDDLEWARE, "RequestSizeLimitMiddleware")
+    tree = ast.parse(request_limit_source)
 
     assert 'scope.get("path"' in request_limit_source
     assert "query_string" not in request_limit_source
-    assert "request.body" not in request_limit_source
+    assert "request.body()" not in request_limit_source
     assert 'message.get("body", b"")' in request_limit_source
+
+    log_extra_keys: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in {"warning", "error", "info"}:
+            continue
+        for keyword in node.keywords:
+            if keyword.arg != "extra" or not isinstance(keyword.value, ast.Dict):
+                continue
+            for key in keyword.value.keys:
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    log_extra_keys.add(key.value)
+
+    assert log_extra_keys == {
+        "method",
+        "path",
+        "max_request_size",
+        "declared_size",
+        "observed_size",
+    }
+    assert {"body", "content", "query", "query_string", "headers"}.isdisjoint(
+        log_extra_keys
+    )
