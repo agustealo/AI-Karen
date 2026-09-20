@@ -1,19 +1,21 @@
-"""Unified extension host manager."""
+"""Compatibility host manager backed by the canonical plugin service.
+
+This module no longer imports plugin code or stores live plugin instances. The
+platform host surface is retained only as a compatibility facade while runtime
+state, enable/disable operations and refreshes are owned by ``PluginService`` / 
+``PluginKernel``.
+"""
 
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ai_karen_engine.extensions.platform.core.host.loader import ExtensionLoader
-from ai_karen_engine.extensions.platform.core.host.models import ExtensionRecord, ExtensionStatus
-from ai_karen_engine.extensions.platform.core.registry.plugin_registry import get_registry
+from ai_karen_engine.services.plugin_service import get_plugin_service
 
 
 class ExtensionManager:
-    """Minimal runtime manager coordinating discovery and loading."""
+    """Thin compatibility facade over the canonical plugin runtime."""
 
     def __init__(
         self,
@@ -22,57 +24,39 @@ class ExtensionManager:
         db_session: Any = None,
         app_instance: Any = None,
         use_new_architecture: bool = True,
+        **_: Any,
     ) -> None:
         self.extension_root = Path(extension_root)
         self.plugin_router = plugin_router
         self.db_session = db_session
         self.app_instance = app_instance
         self.use_new_architecture = use_new_architecture
-        self.loader = ExtensionLoader(str(self.extension_root))
-        self.registry = get_registry()
-        self._discovery_lock = asyncio.Lock()
-        self._discovery_cache: Optional[Dict[str, Any]] = None
 
-    def get_extension_by_name(self, name: str) -> Optional[ExtensionRecord]:
-        """Get an extension record by its name."""
-        return self.registry.get_extension(name)
+    async def _service(self):
+        service = get_plugin_service()
+        if not service.initialized:
+            await service.initialize(auto_discover=True)
+        return service
+
+    def get_extension_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """Return canonical catalog/runtime projection if already initialized."""
+        service = get_plugin_service()
+        return service.get_plugin(name)
 
     async def discover_extensions(self, force_refresh: bool = False) -> Dict[str, Any]:
-        if not force_refresh and self._discovery_cache is not None:
-            return dict(self._discovery_cache)
+        service = await self._service()
+        return await service.discover_plugins(force_refresh=force_refresh)
 
-        async with self._discovery_lock:
-            if not force_refresh and self._discovery_cache is not None:
-                return dict(self._discovery_cache)
-
-            await self.registry.refresh()
-            manifests: Dict[str, Any] = {}
-            for extension_id in self.registry.list_discovered():
-                metadata = self.registry.get_metadata(extension_id)
-                if metadata and hasattr(metadata, "manifest_path"):
-                    manifests[extension_id] = self.loader.load_manifest(extension_id)
-
-            self._discovery_cache = dict(manifests)
-            return dict(manifests)
-
-    async def load_extension(self, extension_name: str) -> Optional[ExtensionRecord]:
-        instance = self.loader.load_extension(extension_name)
-        record = ExtensionRecord(
-            manifest=instance.manifest,
-            instance=instance,
-            status=ExtensionStatus.ACTIVE,
-            directory=self.extension_root / extension_name,
-            loaded_at=datetime.now(),
-        )
-        self.registry.register_loaded_instance(record)
-        return record
+    async def load_extension(self, extension_name: str) -> Optional[Dict[str, Any]]:
+        """Compatibility name: enable a plugin without importing it eagerly."""
+        service = await self._service()
+        if await service.get_plugin_info(extension_name) is None:
+            return None
+        if not await service.enable_plugin(extension_name):
+            return None
+        return await service.get_plugin_info(extension_name)
 
     async def unload_extension(self, extension_name: str) -> bool:
-        loaded = self.loader.get_loaded_extensions()
-        instance = loaded.get(extension_name)
-        if instance and hasattr(instance, "_shutdown"):
-            await instance._shutdown()
-        
-        # Use the public API of the registry instead of private attribute access
-        self.loader._loaded_extensions.pop(extension_name, None)
-        return self.registry.unload_extension(extension_name)
+        """Compatibility name: disable canonical execution for a plugin."""
+        service = await self._service()
+        return await service.disable_plugin(extension_name)
