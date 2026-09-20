@@ -48,6 +48,18 @@ def _parameter_annotation(path: Path, function_name: str, parameter_name: str) -
     )
 
 
+def _parameter_names(path: Path, function_name: str) -> set[str]:
+    function = _function_node(path, function_name)
+    return {
+        argument.arg
+        for argument in [
+            *function.args.posonlyargs,
+            *function.args.args,
+            *function.args.kwonlyargs,
+        ]
+    }
+
+
 def test_privacy_requests_are_migration_owned_and_self_scoped() -> None:
     migration = _source(MIGRATION)
 
@@ -90,6 +102,25 @@ def test_privacy_request_ids_are_uuid_validated_at_fastapi_ingress() -> None:
     route = _source(ROUTE)
     assert "get_privacy_request_status(\n            str(request_id)," in route
     assert "process_privacy_request(\n            str(request_id)," in route
+
+
+def test_sensitive_sanitizer_content_is_request_body_only() -> None:
+    sanitize_model = _class_source(ROUTE, "ContentSanitizeRequest")
+    parameters = _parameter_names(ROUTE, "sanitize_content")
+
+    assert "class ContentSanitizeRequest(BaseModel)" in sanitize_model
+    assert "content: str = Field(..., min_length=1)" in sanitize_model
+    assert "max_length: int = Field(default=100, ge=1)" in sanitize_model
+    assert _parameter_annotation(ROUTE, "sanitize_content", "request_data") == (
+        "ContentSanitizeRequest"
+    )
+    assert "request_data" in parameters
+    assert "content" not in parameters
+    assert "max_length" not in parameters
+
+    route = _source(ROUTE)
+    assert "request_data.content" in route
+    assert "max_length=request_data.max_length" in route
 
 
 def test_privacy_service_has_no_simulated_erasure_or_retired_vector_store() -> None:
