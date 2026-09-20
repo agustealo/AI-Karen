@@ -5,16 +5,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-CANONICAL_WORKFLOWS = (
+PROFILE_WORKFLOWS = (
     ".github/workflows/main-quality-gate.yml",
     ".github/workflows/classifier-burn.yml",
     ".github/workflows/chat-system-burn.yml",
     ".github/workflows/reasoning-smoke.yml",
     ".github/workflows/cognitive-proof-ci.yml",
     ".github/workflows/context-authority-contract.yml",
-    ".github/workflows/agent-system-burn.yml",
     ".github/workflows/beta-release-gate.yml",
 )
+
+RUNTIME_MANIFEST_WORKFLOWS = (
+    ".github/workflows/agent-system-burn.yml",
+)
+
+CANONICAL_WORKFLOWS = PROFILE_WORKFLOWS + RUNTIME_MANIFEST_WORKFLOWS
 
 ALLOWED_PIP_INSTALL_PREFIXES = (
     "python -m pip install --upgrade pip",
@@ -33,6 +38,7 @@ def test_canonical_python_proof_workflows_use_runtime_python_version() -> None:
         text = _workflow_text(relative_path)
         assert "python-version: \"3.12\"" not in text, relative_path
         assert "python-version: '3.12'" not in text, relative_path
+        assert "python-version:" not in text or "3.11" in text, relative_path
 
 
 def test_canonical_python_proof_workflows_do_not_own_package_inventories() -> None:
@@ -48,10 +54,17 @@ def test_canonical_python_proof_workflows_do_not_own_package_inventories() -> No
             )
 
 
-def test_canonical_python_proof_workflows_consume_ci_profiles() -> None:
-    for relative_path in CANONICAL_WORKFLOWS:
+def test_focused_proof_workflows_consume_ci_profiles() -> None:
+    for relative_path in PROFILE_WORKFLOWS:
         text = _workflow_text(relative_path)
         assert "requirements/ci/" in text, relative_path
+
+
+def test_full_runtime_proofs_consume_runtime_manifest_directly() -> None:
+    for relative_path in RUNTIME_MANIFEST_WORKFLOWS:
+        text = _workflow_text(relative_path)
+        assert "python -m pip install -r requirements.txt" in text, relative_path
+        assert "requirements/ci/" not in text, relative_path
 
 
 def test_ci_dependency_profiles_have_single_documented_owner() -> None:
