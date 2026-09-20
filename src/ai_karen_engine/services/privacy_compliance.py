@@ -83,7 +83,7 @@ class PrivacyRequest:
 
 
 class PIIDetector:
-    """Small deterministic PII detector used only for safe previews/exports."""
+    """Deterministic PII detector used for safe previews and redacted exports."""
 
     def __init__(self) -> None:
         self.pii_patterns = {
@@ -156,13 +156,79 @@ def _jsonable(value: Any) -> Any:
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
-    return value
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _count_export_section(value: Any) -> int:
+    if isinstance(value, list):
+        return len(value)
+    if isinstance(value, dict):
+        return sum(len(item) for item in value.values() if isinstance(item, list))
+    return 0
 
 
 class DataExporter:
     """Truthful PostgreSQL-backed export of the user's supported data."""
 
-    SUPPORTED_DATA_TYPES = frozenset({"memories", "conversations", "analytics", "audit_logs"})
+    SUPPORTED_DATA_TYPES = frozenset(
+        {"memories", "conversations", "analytics", "audit_logs"}
+    )
+
+    _MEMORY_EXPORT_QUERIES: tuple[tuple[str, str], ...] = (
+        (
+            "memory_items",
+            "SELECT memory_id, source, scope, kind, content, metadata, created_at, "
+            "updated_at, expires_at FROM memory_items WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
+            "memory_event",
+            "SELECT * FROM memory_event WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
+            "memory_assertion",
+            "SELECT * FROM memory_assertion WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
+            "memory_episode",
+            "SELECT * FROM memory_episode WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
+            "profile_fact",
+            "SELECT * FROM profile_fact WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
+            "memory_entity",
+            "SELECT * FROM memory_entity WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
+            "memory_entity_alias",
+            "SELECT * FROM memory_entity_alias WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
+            "memory_relation",
+            "SELECT * FROM memory_relation WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
+            "memory_procedure",
+            "SELECT * FROM memory_procedure WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
+            "consent_scope",
+            "SELECT * FROM consent_scope WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY granted_at",
+        ),
+    )
 
     def __init__(self, db_client: Optional[MultiTenantPostgresClient] = None) -> None:
         self.db_client = db_client or MultiTenantPostgresClient()
@@ -170,13 +236,26 @@ class DataExporter:
 
     @classmethod
     def normalize_data_types(cls, data_types: Optional[List[str]]) -> List[str]:
-        requested = [str(item).strip().lower() for item in (data_types or ["all"]) if str(item).strip()]
+        requested = [
+            str(item).strip().lower()
+            for item in (data_types or ["all"])
+            if str(item).strip()
+        ]
         if not requested or "all" in requested:
             return ["memories", "conversations", "analytics", "audit_logs"]
         unsupported = sorted(set(requested) - cls.SUPPORTED_DATA_TYPES)
         if unsupported:
             raise ValueError("Unsupported export data types: " + ", ".join(unsupported))
         return list(dict.fromkeys(requested))
+
+    def _redact(self, value: Any) -> Any:
+        if isinstance(value, str):
+            return self.pii_detector.anonymize_text(value)
+        if isinstance(value, dict):
+            return {str(key): self._redact(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._redact(item) for item in value]
+        return value
 
     async def export_user_data(
         self,
@@ -223,75 +302,54 @@ class DataExporter:
 
     async def _export_memories(
         self, session: Any, user_id: str, tenant_id: str, include_pii: bool
-    ) -> List[Dict[str, Any]]:
-        result = await session.execute(
-            text(
-                "SELECT memory_id, source, scope, kind, content, metadata, "
-                "created_at, updated_at, expires_at "
-                "FROM memory_items "
-                "WHERE tenant_id = CAST(:tenant_id AS uuid) "
-                "AND user_id = CAST(:user_id AS uuid) "
-                "ORDER BY created_at"
-            ),
-            {"tenant_id": tenant_id, "user_id": user_id},
-        )
-        records: List[Dict[str, Any]] = []
-        for row in result.mappings().all():
-            record = dict(row)
-            content = str(record.get("content") or "")
-            if not include_pii:
-                record["content"] = self.pii_detector.anonymize_text(content)
-            records.append(_jsonable(record))
-        return records
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        params = {"tenant_id": tenant_id, "user_id": user_id}
+        export: Dict[str, List[Dict[str, Any]]] = {}
+        for name, query in self._MEMORY_EXPORT_QUERIES:
+            result = await session.execute(text(query), params)
+            records = [_jsonable(dict(row)) for row in result.mappings().all()]
+            export[name] = records if include_pii else self._redact(records)
+        return export
 
     async def _export_conversations(
         self, session: Any, user_id: str, tenant_id: str, include_pii: bool
     ) -> List[Dict[str, Any]]:
+        params = {"tenant_id": tenant_id, "user_id": user_id}
         conversations_result = await session.execute(
             text(
                 "SELECT conversation_id, title, conversation_metadata, is_active, "
                 "created_at, updated_at, session_id, summary, tags "
-                "FROM conversations "
-                "WHERE tenant_id = CAST(:tenant_id AS uuid) "
-                "AND user_id = CAST(:user_id AS uuid) "
-                "ORDER BY created_at"
+                "FROM conversations WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at"
             ),
-            {"tenant_id": tenant_id, "user_id": user_id},
+            params,
         )
         messages_result = await session.execute(
             text(
                 "SELECT m.message_id, m.conversation_id, m.role, m.content, "
-                "m.message_metadata, m.created_at "
-                "FROM messages m "
+                "m.message_metadata, m.created_at FROM messages m "
                 "JOIN conversations c ON c.conversation_id = m.conversation_id "
                 "WHERE c.tenant_id = CAST(:tenant_id AS uuid) "
-                "AND c.user_id = CAST(:user_id AS uuid) "
-                "ORDER BY m.created_at"
+                "AND c.user_id = CAST(:user_id AS uuid) ORDER BY m.created_at"
             ),
-            {"tenant_id": tenant_id, "user_id": user_id},
+            params,
         )
         by_conversation: Dict[str, List[Dict[str, Any]]] = {}
         for row in messages_result.mappings().all():
-            message = dict(row)
-            content = str(message.get("content") or "")
+            message = _jsonable(dict(row))
             if not include_pii:
-                message["content"] = self.pii_detector.anonymize_text(content)
+                message = self._redact(message)
             key = str(message.get("conversation_id"))
-            by_conversation.setdefault(key, []).append(_jsonable(message))
+            by_conversation.setdefault(key, []).append(message)
 
         conversations: List[Dict[str, Any]] = []
         for row in conversations_result.mappings().all():
-            conversation = dict(row)
-            key = str(conversation.get("conversation_id"))
+            conversation = _jsonable(dict(row))
             if not include_pii:
-                conversation["title"] = self.pii_detector.anonymize_text(
-                    str(conversation.get("title") or "")
-                )
-                conversation["summary"] = self.pii_detector.anonymize_text(
-                    str(conversation.get("summary") or "")
-                )
+                conversation = self._redact(conversation)
+            key = str(conversation.get("conversation_id"))
             conversation["messages"] = by_conversation.get(key, [])
-            conversations.append(_jsonable(conversation))
+            conversations.append(conversation)
         return conversations
 
     async def _export_analytics(
@@ -301,7 +359,9 @@ class DataExporter:
             text(
                 "SELECT "
                 "(SELECT count(*) FROM memory_items WHERE tenant_id = CAST(:tenant_id AS uuid) "
-                " AND user_id = CAST(:user_id AS uuid)) AS memories, "
+                " AND user_id = CAST(:user_id AS uuid)) AS memory_items, "
+                "(SELECT count(*) FROM memory_event WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                " AND user_id = CAST(:user_id AS uuid)) AS memory_events, "
                 "(SELECT count(*) FROM conversations WHERE tenant_id = CAST(:tenant_id AS uuid) "
                 " AND user_id = CAST(:user_id AS uuid)) AS conversations, "
                 "(SELECT count(*) FROM messages m JOIN conversations c "
@@ -319,19 +379,16 @@ class DataExporter:
     ) -> List[Dict[str, Any]]:
         result = await session.execute(
             text(
-                "SELECT event_id, actor_type, action, resource_type, resource_id, "
-                "details, created_at FROM audit_log "
-                "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "SELECT event_id, actor_type, action, resource_type, resource_id, details, created_at "
+                "FROM audit_log WHERE tenant_id = CAST(:tenant_id AS uuid) "
                 "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at"
             ),
             {"tenant_id": tenant_id, "user_id": user_id},
         )
-        records: List[Dict[str, Any]] = []
-        for row in result.mappings().all():
-            record = dict(row)
-            if not include_pii:
+        records = [_jsonable(dict(row)) for row in result.mappings().all()]
+        if not include_pii:
+            for record in records:
                 record["details"] = {"redacted": True}
-            records.append(_jsonable(record))
         return records
 
 
@@ -345,7 +402,11 @@ class DataEraser:
 
     @classmethod
     def normalize_data_types(cls, data_types: Optional[List[str]]) -> List[str]:
-        requested = [str(item).strip().lower() for item in (data_types or ["all"]) if str(item).strip()]
+        requested = [
+            str(item).strip().lower()
+            for item in (data_types or ["all"])
+            if str(item).strip()
+        ]
         if not requested or "all" in requested:
             return ["memories", "conversations"]
         unsupported = sorted(set(requested) - cls.SUPPORTED_DATA_TYPES)
@@ -402,8 +463,7 @@ class DataEraser:
     ) -> Dict[str, Any]:
         params = {"tenant_id": tenant_id, "user_id": user_id}
         counts: Dict[str, int] = {}
-
-        for table, sql in (
+        operations: tuple[tuple[str, str], ...] = (
             (
                 "reinforcement_event",
                 "DELETE FROM reinforcement_event WHERE target_assertion_id IN ("
@@ -420,11 +480,18 @@ class DataEraser:
             ),
             (
                 "memory_relation",
-                "DELETE FROM memory_relation WHERE source_id IN ("
-                "SELECT assertion_id FROM memory_assertion WHERE tenant_id = CAST(:tenant_id AS uuid) "
-                "AND user_id = CAST(:user_id AS uuid)) OR target_id IN ("
-                "SELECT assertion_id FROM memory_assertion WHERE tenant_id = CAST(:tenant_id AS uuid) "
-                "AND user_id = CAST(:user_id AS uuid))",
+                "DELETE FROM memory_relation WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)",
+            ),
+            (
+                "memory_entity_alias",
+                "DELETE FROM memory_entity_alias WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)",
+            ),
+            (
+                "memory_entity",
+                "DELETE FROM memory_entity WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)",
             ),
             (
                 "consent_scope",
@@ -441,14 +508,22 @@ class DataEraser:
                 "DELETE FROM memory_event WHERE tenant_id = CAST(:tenant_id AS uuid) "
                 "AND user_id = CAST(:user_id AS uuid)",
             ),
-        ):
-            counts[table] = _row_count(await session.execute(text(sql), params))
+        )
+        for table, statement in operations:
+            counts[table] = _row_count(await session.execute(text(statement), params))
 
         return {
             "action": "hard_delete",
             "directly_deleted_records": sum(counts.values()),
             "by_table": counts,
-            "note": "memory_items deletion includes canonical pgvector embeddings; memory_event cascades its projections",
+            "cascade_includes": [
+                "memory_assertion",
+                "memory_episode",
+                "profile_fact",
+                "projection_status",
+                "memory_procedure",
+            ],
+            "note": "memory_items deletion includes canonical pgvector embeddings",
         }
 
     async def _erase_conversations(
@@ -477,7 +552,7 @@ class DataEraser:
             "action": "hard_delete",
             "affected_records": conversation_count,
             "cascaded_messages": message_count,
-            "note": "messages and message_tools are removed by database cascade",
+            "cascade_includes": ["messages", "message_tools"],
         }
 
 
@@ -639,9 +714,8 @@ class PrivacyComplianceService:
                     "export_format": (request.export_format or DataExportFormat.JSON).value,
                     "data_types": request.data_types or [],
                     "record_counts": {
-                        key: len(value) if isinstance(value, list) else value
+                        key: _count_export_section(value)
                         for key, value in result.get("data", {}).items()
-                        if isinstance(value, (list, int, float))
                     },
                 }
             elif request.request_type == "erasure":
@@ -667,11 +741,7 @@ class PrivacyComplianceService:
                 tenant_id=tenant_id,
                 result_metadata=result_metadata,
             )
-            self._audit(
-                outcome="success",
-                request=request,
-                correlation_id=correlation_id,
-            )
+            self._audit(outcome="success", request=request, correlation_id=correlation_id)
             return result
         except Exception as exc:
             await self._fail_request(
@@ -846,8 +916,16 @@ class PrivacyComplianceService:
             created_at=row["created_at"],
             completed_at=row.get("completed_at"),
             data_types=list(data_types),
-            export_format=DataExportFormat(str(row["export_format"])) if row.get("export_format") else None,
-            erasure_type=ErasureType(str(row["erasure_type"])) if row.get("erasure_type") else None,
+            export_format=(
+                DataExportFormat(str(row["export_format"]))
+                if row.get("export_format")
+                else None
+            ),
+            erasure_type=(
+                ErasureType(str(row["erasure_type"]))
+                if row.get("erasure_type")
+                else None
+            ),
             result_metadata=dict(result_metadata),
             error_message=row.get("error_message"),
             correlation_id=row.get("correlation_id"),
@@ -879,7 +957,9 @@ class PrivacyComplianceService:
         try:
             self.audit_logger.log_audit_event(payload)
         except Exception:
-            logger.exception("privacy.audit.emit_failed", extra={"request_id": request.request_id})
+            logger.exception(
+                "privacy.audit.emit_failed", extra={"request_id": request.request_id}
+            )
 
     async def health(self) -> Dict[str, Any]:
         try:
@@ -912,7 +992,9 @@ class PrivacyComplianceService:
             )
         return content if len(content) <= max_length else content[:max_length] + "..."
 
-    def create_safe_content_preview(self, content: str, max_length: int = 100) -> Dict[str, Any]:
+    def create_safe_content_preview(
+        self, content: str, max_length: int = 100
+    ) -> Dict[str, Any]:
         metadata = self.pii_detector.extract_safe_metadata(content)
         return {
             "safe_preview": self.sanitize_content_for_ui(content, max_length=max_length),
