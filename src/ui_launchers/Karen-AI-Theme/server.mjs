@@ -3,9 +3,16 @@ import next from 'next';
 
 const hostname = process.env.WEB_HOST || '0.0.0.0';
 const port = Number.parseInt(process.env.PORT || '8010', 10);
+const publicScheme = String(process.env.WEB_PUBLIC_SCHEME || '').trim().toLowerCase();
 
 if (!Number.isInteger(port) || port <= 0 || port > 65535) {
   throw new Error(`Invalid PORT: ${process.env.PORT ?? ''}`);
+}
+
+if (publicScheme !== 'http' && publicScheme !== 'https') {
+  throw new Error(
+    'WEB_PUBLIC_SCHEME must be explicitly configured as "http" or "https"',
+  );
 }
 
 function normalizeRemoteAddress(value) {
@@ -25,8 +32,9 @@ const server = http.createServer((req, res) => {
   const clientIp = normalizeRemoteAddress(req.socket.remoteAddress);
 
   // This process is the canonical public HTTP ingress for the production web
-  // container. Always overwrite forwarding identity from the actual socket so
-  // browser-supplied X-Forwarded-For/X-Real-IP values cannot become authority.
+  // container. Always overwrite forwarding transport context from canonical
+  // server configuration / socket state so browser-supplied values cannot
+  // become backend authority.
   if (clientIp) {
     req.headers['x-forwarded-for'] = clientIp;
     req.headers['x-real-ip'] = clientIp;
@@ -34,6 +42,7 @@ const server = http.createServer((req, res) => {
     delete req.headers['x-forwarded-for'];
     delete req.headers['x-real-ip'];
   }
+  req.headers['x-forwarded-proto'] = publicScheme;
 
   handle(req, res).catch((error) => {
     console.error('[web-ingress] request handling failed', error);
@@ -51,7 +60,9 @@ server.on('clientError', (_error, socket) => {
 });
 
 server.listen(port, hostname, () => {
-  console.log(`[web-ingress] listening on http://${hostname}:${port}`);
+  console.log(
+    `[web-ingress] listening on http://${hostname}:${port} (public scheme: ${publicScheme})`,
+  );
 });
 
 function shutdown(signal) {

@@ -22,6 +22,7 @@ from ai_karen_engine.auth.rbac_middleware import get_rbac_manager
 from ai_karen_engine.auth.session import get_current_user as get_authenticated_user
 from ai_karen_engine.database.dependencies import get_async_db_session_dependency
 from ai_karen_engine.server.client_identity import resolve_client_ip
+from ai_karen_engine.server.public_origin import should_use_secure_cookie
 from ai_karen_engine.services.auth.auth_service import (
     AuthService as CoreAuthService,
     UserRole,
@@ -386,7 +387,7 @@ async def first_run_setup(
             value=access_token,
             max_age=auth_svc.config.access_token_expire_minutes * 60,
             httponly=True,
-            secure=http_request.url.scheme == "https",
+            secure=should_use_secure_cookie(http_request),
             samesite="lax",
             path="/",
         )
@@ -482,7 +483,7 @@ async def login(
         value=access_token,
         max_age=auth_svc.config.access_token_expire_minutes * 60,
         httponly=True,
-        secure=http_request.url.scheme == "https",
+        secure=should_use_secure_cookie(http_request),
         samesite="lax",
         path="/",
     )
@@ -526,7 +527,7 @@ async def refresh_token(
         value=access_token,
         max_age=auth_svc.config.access_token_expire_minutes * 60,
         httponly=True,
-        secure=http_request.url.scheme == "https",
+        secure=should_use_secure_cookie(http_request),
         samesite="lax",
         path="/",
     )

@@ -88,6 +88,7 @@ services:
     environment:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: "1"
+      WEB_PUBLIC_SCHEME: ${WEB_PUBLIC_SCHEME:?WEB_PUBLIC_SCHEME must be http or https in production}
       KAREN_BACKEND_URL: http://api:8000
       KAREN_DOCKER: "true"
       NEXT_PUBLIC_API_PROXY_TIMEOUT_MS: "30000"

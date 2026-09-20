@@ -56,7 +56,13 @@ jobs:
             -f docker-compose.yml \
             -f deploy/compose/docker-compose.prod.yml \
             config >/tmp/ai-karen-production-compose.yml
+          docker compose \
+            --env-file .env.production \
+            -f docker-compose.yml \
+            -f deploy/compose/docker-compose.prod.yml \
+            config --format json >/tmp/ai-karen-production-compose.json
           test -s /tmp/ai-karen-production-compose.yml
+          test -s /tmp/ai-karen-production-compose.json
 
       - name: Prove development auth bypass is disabled in rendered config
         run: |
@@ -65,6 +71,17 @@ jobs:
           grep -q 'AUTH_ALLOW_DEV_LOGIN: "false"' /tmp/ai-karen-production-compose.yml
           grep -q 'EXTENSION_DEV_BYPASS_ENABLED: "false"' /tmp/ai-karen-production-compose.yml
           grep -q 'KARI_DEFER_ROUTER_WIRING: "false"' /tmp/ai-karen-production-compose.yml
+
+      - name: Prove public scheme reaches canonical web ingress
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(Path('/tmp/ai-karen-production-compose.json').read_text())
+          web = config['services']['web']
+          assert web['environment']['WEB_PUBLIC_SCHEME'] == 'CHANGE_ME_HTTP_OR_HTTPS'
+          PY
 
       - name: Prove production liveness probe is canonical
         run: grep -q 'http://localhost:8000/health/live' /tmp/ai-karen-production-compose.yml

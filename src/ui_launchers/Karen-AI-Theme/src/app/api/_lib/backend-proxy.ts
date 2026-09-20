@@ -36,7 +36,8 @@ const IS_DOCKER =
   process.env.HOSTNAME?.includes('web') ||
   runningInContainer;
 
-let DEFAULT_BACKEND_URL = EXPLICIT_BACKEND_URL || (IS_DOCKER ? 'http://api:8000' : 'http://localhost:8000');
+let DEFAULT_BACKEND_URL =
+  EXPLICIT_BACKEND_URL || (IS_DOCKER ? 'http://api:8000' : 'http://localhost:8000');
 
 // Hardening: If we are in Docker and the backend URL is still pointing to localhost/127.0.0.1,
 // we must rewrite it to 'api' (the service name) so containers can communicate.
@@ -48,7 +49,10 @@ if (IS_DOCKER) {
   }
 }
 
-const DEFAULT_TIMEOUT_MS = Number.parseInt(process.env.NEXT_PUBLIC_API_PROXY_TIMEOUT_MS || '30000', 10);
+const DEFAULT_TIMEOUT_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_API_PROXY_TIMEOUT_MS || '30000',
+  10,
+);
 const LONG_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_API_PROXY_LONG_TIMEOUT_MS || '120000',
   10,
@@ -65,9 +69,17 @@ function getBackendBaseUrl(): string {
   return DEFAULT_BACKEND_URL.replace(/\/$/, '');
 }
 
+function normalizeForwardedProto(value: string | null): 'http' | 'https' | null {
+  const candidate = (value || '').trim().toLowerCase();
+  if (candidate === 'http' || candidate === 'https') {
+    return candidate;
+  }
+  return null;
+}
+
 function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
   const nextHeaders = new Headers();
-  
+
   headers.forEach((value, key) => {
     const k = key.toLowerCase();
     const skipHeaders = [
@@ -81,9 +93,12 @@ function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
       'te',
       'trailers',
       'transfer-encoding',
-      'upgrade'
+      'upgrade',
+      // Forwarded scheme is normalized below. In production the canonical
+      // server.mjs ingress overwrites it before Next handles the request.
+      'x-forwarded-proto',
     ];
-    
+
     if (!skipHeaders.includes(k)) {
       nextHeaders.set(key, value);
     }
@@ -91,17 +106,22 @@ function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
 
   const auth = headers.get('authorization');
   if (auth) nextHeaders.set('Authorization', auth);
-  
+
   const cookie = headers.get('cookie');
   if (cookie) nextHeaders.set('Cookie', cookie);
 
   const backendHost = new URL(backendBaseUrl).host;
   nextHeaders.set('x-forwarded-host', headers.get('host') || backendHost);
-  nextHeaders.set('x-forwarded-proto', 'http');
+
+  const forwardedProto = normalizeForwardedProto(headers.get('x-forwarded-proto'));
+  if (forwardedProto) {
+    nextHeaders.set('x-forwarded-proto', forwardedProto);
+  }
+
   return nextHeaders;
 }
 
-export { getBackendBaseUrl, sanitizeHeaders };
+export { getBackendBaseUrl, normalizeForwardedProto, sanitizeHeaders };
 
 async function buildInit(
   request: NextRequest,
@@ -113,9 +133,7 @@ async function buildInit(
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   const body =
-    request.method === 'GET' || request.method === 'HEAD'
-      ? undefined
-      : overrideBody;
+    request.method === 'GET' || request.method === 'HEAD' ? undefined : overrideBody;
 
   const init: RequestInit & { __timeout?: ReturnType<typeof setTimeout> } = {
     method: request.method,
@@ -202,14 +220,13 @@ export async function proxyToBackend(
 
   // Read the body once to avoid "Body has already been read" error on retries/redirects.
   // This is passed to buildInit to ensure it's reused.
-  const capturedBody = options?.rawBody ?? (request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.text());
+  const capturedBody =
+    options?.rawBody ??
+    (request.method === 'GET' || request.method === 'HEAD'
+      ? undefined
+      : await request.text());
 
-  let init = await buildInit(
-    request,
-    backendBaseUrl,
-    timeoutMs,
-    capturedBody
-  );
+  let init = await buildInit(request, backendBaseUrl, timeoutMs, capturedBody);
 
   try {
     let upstream: Response | undefined;
@@ -274,11 +291,11 @@ export async function proxyToBackend(
         redirectUrl = `${backendBaseUrl}${locationHeader}`;
       }
 
-       const redirectInit = await buildInit(
+      const redirectInit = await buildInit(
         request,
         backendBaseUrl,
         timeoutMs,
-        capturedBody
+        capturedBody,
       );
       upstream = await fetch(redirectUrl, redirectInit);
       clearInitTimeout(redirectInit);
@@ -300,7 +317,6 @@ export async function proxyToBackend(
       status: upstream.status,
       headers,
     });
-
   } catch (error) {
     clearInitTimeout(init);
 

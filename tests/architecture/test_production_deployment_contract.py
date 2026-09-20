@@ -120,6 +120,10 @@ def test_production_web_uses_immutable_production_runtime() -> None:
 
     assert "dockerfile: Dockerfile.production" in web_block
     assert "NODE_ENV: production" in web_block
+    assert (
+        "WEB_PUBLIC_SCHEME: ${WEB_PUBLIC_SCHEME:?WEB_PUBLIC_SCHEME must be http or https in production}"
+        in web_block
+    )
     assert "volumes: !reset []" in web_block
     assert "command: !reset null" in web_block
     assert "npm run dev" not in web_block
@@ -135,6 +139,8 @@ def test_production_web_uses_immutable_production_runtime() -> None:
     ingress = WEB_PROD_INGRESS.read_text(encoding="utf-8")
     assert "req.socket.remoteAddress" in ingress
     assert "req.headers['x-forwarded-for'] = clientIp" in ingress
+    assert "process.env.WEB_PUBLIC_SCHEME" in ingress
+    assert "req.headers['x-forwarded-proto'] = publicScheme" in ingress
 
 
 def test_production_environment_template_contains_no_real_credentials() -> None:
@@ -145,3 +151,4 @@ def test_production_environment_template_contains_no_real_credentials() -> None:
     assert "CHANGE_ME" in text
     assert "KARI_AUTH_BYPASS=false" in text
     assert "AUTH_DEV_MODE=false" in text
+    assert "WEB_PUBLIC_SCHEME=CHANGE_ME_HTTP_OR_HTTPS" in text

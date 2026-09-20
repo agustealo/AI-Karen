@@ -5,6 +5,7 @@ on:
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
       - "src/ai_karen_engine/server/client_identity.py"
+      - "src/ai_karen_engine/server/public_origin.py"
       - "src/ai_karen_engine/middleware/rate_limit.py"
       - "src/ai_karen_engine/server/rate_limiter.py"
       - "src/ai_karen_engine/services/auth/**"
@@ -13,8 +14,10 @@ on:
       - "src/ai_karen_engine/database/models/session_security.py"
       - "src/ai_karen_engine/monitoring/**"
       - "src/ui_launchers/Karen-AI-Theme/server.mjs"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/api/_lib/backend-proxy.ts"
       - "src/ui_launchers/Karen-AI-Theme/Dockerfile.production"
       - "deploy/compose/docker-compose.prod.yml"
+      - ".env.production.example"
       - "supabase/migrations/*.sql"
       - "tests/auth/**"
       - "tests/security/**"
@@ -26,6 +29,7 @@ on:
       - "tests/architecture/test_authenticated_tenant_context_contract.py"
       - "tests/architecture/test_consumer_privacy_authority.py"
       - "tests/architecture/test_rate_limit_identity_authority.py"
+      - "tests/architecture/test_public_scheme_authority.py"
       - "requirements/ci/base.txt"
       - "requirements/ci/runtime-contract.txt"
       - ".github/workflows/production-auth-security.yml"
@@ -33,6 +37,7 @@ on:
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
       - "src/ai_karen_engine/server/client_identity.py"
+      - "src/ai_karen_engine/server/public_origin.py"
       - "src/ai_karen_engine/middleware/rate_limit.py"
       - "src/ai_karen_engine/server/rate_limiter.py"
       - "src/ai_karen_engine/services/auth/**"
@@ -41,8 +46,10 @@ on:
       - "src/ai_karen_engine/database/models/session_security.py"
       - "src/ai_karen_engine/monitoring/**"
       - "src/ui_launchers/Karen-AI-Theme/server.mjs"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/api/_lib/backend-proxy.ts"
       - "src/ui_launchers/Karen-AI-Theme/Dockerfile.production"
       - "deploy/compose/docker-compose.prod.yml"
+      - ".env.production.example"
       - "supabase/migrations/*.sql"
       - "tests/auth/**"
       - "tests/security/**"
@@ -54,6 +61,7 @@ on:
       - "tests/architecture/test_authenticated_tenant_context_contract.py"
       - "tests/architecture/test_consumer_privacy_authority.py"
       - "tests/architecture/test_rate_limit_identity_authority.py"
+      - "tests/architecture/test_public_scheme_authority.py"
       - "requirements/ci/base.txt"
       - "requirements/ci/runtime-contract.txt"
       - ".github/workflows/production-auth-security.yml"
@@ -103,6 +111,7 @@ jobs:
             src/ai_karen_engine/api_routes/auth/auth.py \
             src/ai_karen_engine/api_routes/auth/privacy.py \
             src/ai_karen_engine/server/client_identity.py \
+            src/ai_karen_engine/server/public_origin.py \
             src/ai_karen_engine/middleware/rate_limit.py \
             src/ai_karen_engine/server/rate_limiter.py \
             src/ai_karen_engine/monitoring
@@ -126,6 +135,11 @@ jobs:
         env:
           PYTHONPATH: src
         run: pytest tests/architecture/test_rate_limit_identity_authority.py -q
+
+      - name: Prove public-scheme and secure-cookie authority
+        env:
+          PYTHONPATH: src
+        run: pytest tests/architecture/test_public_scheme_authority.py -q
 
       - name: Prove durable consumer privacy authority
         env:
