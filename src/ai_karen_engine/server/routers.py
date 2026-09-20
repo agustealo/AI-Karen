@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-import os
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -62,7 +61,10 @@ from ai_karen_engine.api_routes.users.persona import router as user_persona_rout
 from ai_karen_engine.api_routes.users.profile import router as user_profile_router
 from ai_karen_engine.api_routes.users.users import router as users_router
 from ai_karen_engine.auth.auth_middleware import AuthenticationError, get_auth_middleware
-from ai_karen_engine.core.security.auth_config import auth_config
+from ai_karen_engine.core.security.auth_config import (
+    DevelopmentIdentityConfigurationError,
+    auth_config,
+)
 from ai_karen_engine.extensions.platform.api_routes.ui_materialization_routes import (
     router as ui_materialization_router,
 )
@@ -191,39 +193,6 @@ def _http_error(exc: HTTPException) -> JSONResponse:
     )
 
 
-def _configured_development_identity() -> dict[str, Any]:
-    """Resolve explicit local bypass identity without synthesizing tenant scope."""
-    user_id = os.getenv("KARI_DEV_USER_ID", "").strip()
-    tenant_id = os.getenv("KARI_DEV_TENANT_ID", "").strip()
-    if not user_id or not tenant_id:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Authentication bypass requires explicit KARI_DEV_USER_ID and "
-                "KARI_DEV_TENANT_ID configuration"
-            ),
-        )
-
-    roles = [
-        role.strip()
-        for role in os.getenv("KARI_DEV_ROLES", "user").split(",")
-        if role.strip()
-    ]
-    permissions = [
-        permission.strip()
-        for permission in os.getenv("KARI_DEV_PERMISSIONS", "chat:write").split(",")
-        if permission.strip()
-    ]
-    return {
-        "user_id": user_id,
-        "tenant_id": tenant_id,
-        "roles": roles,
-        "permissions": permissions,
-        "authenticated": True,
-        "auth_source": "configured_development_bypass",
-    }
-
-
 def configure_authentication_middleware(app: FastAPI) -> None:
     """Install the fail-closed global authenticated-request boundary."""
     auth_middleware = get_auth_middleware()
@@ -234,9 +203,11 @@ def configure_authentication_middleware(app: FastAPI) -> None:
 
         if auth_config.should_bypass_auth():
             try:
-                request.state.user = _configured_development_identity()
-            except HTTPException as exc:
-                return _http_error(exc)
+                request.state.user = auth_config.get_dev_user_context()
+            except DevelopmentIdentityConfigurationError as exc:
+                return _http_error(
+                    HTTPException(status_code=503, detail=str(exc))
+                )
             return await call_next(request)
 
         if (
