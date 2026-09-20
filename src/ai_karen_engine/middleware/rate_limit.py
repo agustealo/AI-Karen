@@ -1,6 +1,9 @@
 """Enhanced rate limiting middleware with configurable rules and optimizations."""
 
+import ipaddress
 import logging
+import os
+import socket
 import time
 from typing import Any, Optional
 
@@ -11,12 +14,12 @@ except Exception:  # pragma: no cover - fallback for tests
     from ai_karen_engine.fastapi_stub import Request, JSONResponse
 
 from ai_karen_engine.server.rate_limiter import (
+    DEFAULT_RATE_LIMIT_RULES,
     EnhancedRateLimiter,
-    create_rate_limiter,
+    RateLimitAlgorithm,
     RateLimitRule,
     RateLimitScope,
-    RateLimitAlgorithm,
-    DEFAULT_RATE_LIMIT_RULES,
+    create_rate_limiter,
 )
 from ai_karen_engine.services.usage.service import UsageService
 
@@ -24,26 +27,44 @@ logger = logging.getLogger(__name__)
 
 # Global rate limiter instance
 _rate_limiter: Optional[EnhancedRateLimiter] = None
-_rate_limiter_config = {
-    "storage_type": "memory",  # Can be configured to "redis"
+_rate_limiter_config: dict[str, Any] = {
+    "storage_type": "memory",
     "redis_url": None,
+    "trusted_proxy_hosts": (),
 }
+_proxy_address_cache: dict[str, tuple[float, frozenset[str]]] = {}
+_PROXY_ADDRESS_CACHE_TTL_SECONDS = 30.0
+
+
+def _csv_values(value: Optional[str]) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def configure_rate_limiter(
     storage_type: str = "memory",
     redis_url: Optional[str] = None,
     custom_rules: Optional[list] = None,
+    trusted_proxy_hosts: Optional[list[str]] = None,
 ) -> None:
-    """Configure the global rate limiter instance."""
+    """Configure the global rate limiter instance and transport trust boundary."""
     global _rate_limiter, _rate_limiter_config
+
+    configured_proxy_hosts = trusted_proxy_hosts
+    if configured_proxy_hosts is None:
+        configured_proxy_hosts = _csv_values(
+            os.getenv("RATE_LIMIT_TRUSTED_PROXY_HOSTS", "")
+        )
 
     _rate_limiter_config.update(
         {
             "storage_type": storage_type,
             "redis_url": redis_url,
+            "trusted_proxy_hosts": tuple(configured_proxy_hosts),
         }
     )
+    _proxy_address_cache.clear()
 
     try:
         _rate_limiter = create_rate_limiter(
@@ -51,7 +72,11 @@ def configure_rate_limiter(
             redis_url=redis_url,
             custom_rules=custom_rules,
         )
-        logger.info("Rate limiter configured with %s storage", storage_type)
+        logger.info(
+            "Rate limiter configured with %s storage and %d trusted proxy host(s)",
+            storage_type,
+            len(configured_proxy_hosts),
+        )
     except Exception as exc:
         logger.error("Failed to configure rate limiter: %s", exc)
         # Fallback to memory storage. This keeps the limiter active rather than
@@ -68,6 +93,57 @@ def get_rate_limiter() -> EnhancedRateLimiter:
         configure_rate_limiter()
 
     return _rate_limiter
+
+
+def _normalize_ip(value: Any) -> Optional[str]:
+    """Normalize one IP literal without accepting hostnames or header chains."""
+    candidate = str(value or "").strip().strip("[]")
+    if not candidate or "," in candidate:
+        return None
+    if "%" in candidate:
+        candidate = candidate.split("%", 1)[0]
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        return str(address.ipv4_mapped)
+    return address.compressed
+
+
+def _resolve_proxy_host(host: str) -> frozenset[str]:
+    """Resolve a configured proxy hostname with a short cache for container churn."""
+    literal = _normalize_ip(host)
+    if literal:
+        return frozenset({literal})
+
+    now = time.monotonic()
+    cached = _proxy_address_cache.get(host)
+    if cached and now - cached[0] < _PROXY_ADDRESS_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    resolved: set[str] = set()
+    try:
+        for info in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM):
+            normalized = _normalize_ip(info[4][0])
+            if normalized:
+                resolved.add(normalized)
+    except OSError:
+        logger.warning("Unable to resolve configured rate-limit proxy host %s", host)
+
+    result = frozenset(resolved)
+    _proxy_address_cache[host] = (now, result)
+    return result
+
+
+def _peer_is_trusted_proxy(peer_ip: str) -> bool:
+    normalized_peer = _normalize_ip(peer_ip)
+    if not normalized_peer:
+        return False
+    for host in _rate_limiter_config.get("trusted_proxy_hosts", ()):
+        if normalized_peer in _resolve_proxy_host(str(host)):
+            return True
+    return False
 
 
 def _principal_value(principal: Any, key: str) -> Any:
@@ -104,16 +180,29 @@ def _canonical_user_type(principal: Any) -> Optional[str]:
 
 
 def _extract_client_info(request: Request) -> tuple[str, Optional[str], Optional[str]]:
-    """Extract non-spoofable transport and authenticated principal identity.
+    """Extract trusted transport identity plus canonical authenticated identity.
 
-    Forwarding and user identity headers are deliberately not trusted here. The
-    canonical deployment currently exposes the API socket directly and the
-    authentication boundary stores validated identity on ``request.state.user``.
-    Proxy-aware client IP support must be introduced through an explicit trusted
-    proxy contract rather than by accepting client-controlled headers.
+    Direct clients are identified by the ASGI socket peer and cannot override
+    that identity with forwarding headers. When the peer resolves to an
+    explicitly configured trusted proxy host, exactly one valid
+    ``X-Forwarded-For`` address is accepted. The canonical production web
+    ingress overwrites that header from its own socket before Next.js handles
+    the request, so browser-supplied forwarding headers never become authority.
     """
 
-    ip_address = request.client.host if request.client else "unknown"
+    raw_peer = request.client.host if request.client else ""
+    peer_ip = _normalize_ip(raw_peer) or ""
+    trusted_proxy = _peer_is_trusted_proxy(peer_ip)
+
+    if trusted_proxy:
+        forwarded_ip = _normalize_ip(request.headers.get("x-forwarded-for"))
+        # Fail away from a shared proxy-wide IP bucket when the trusted ingress
+        # contract is missing or malformed. Auth's credential-failure limiter
+        # still applies while the global limiter falls through to non-IP rules.
+        ip_address = forwarded_ip or ""
+    else:
+        ip_address = peer_ip
+
     principal = getattr(request.state, "user", None)
     user_id = _canonical_user_id(principal)
     user_type = _canonical_user_type(principal)
@@ -171,7 +260,7 @@ async def rate_limit_middleware(request: Request, call_next):
         ip_address, user_id, user_type = _extract_client_info(request)
         logger.debug(
             "Rate limit middleware: Extracted canonical client info - IP: %s, User: %s, Type: %s",
-            ip_address,
+            ip_address or "unavailable",
             user_id,
             user_type,
         )
@@ -197,7 +286,7 @@ async def rate_limit_middleware(request: Request, call_next):
             try:
                 UsageService.increment(
                     "rate_limit_exceeded",
-                    user_id=user_id or ip_address,
+                    user_id=user_id or ip_address or "anonymous",
                 )
             except Exception:
                 pass
@@ -206,7 +295,7 @@ async def rate_limit_middleware(request: Request, call_next):
                 "Rate limit exceeded for client on %s",
                 request_path,
                 extra={
-                    "ip_address": ip_address,
+                    "ip_address": ip_address or None,
                     "user_id": user_id,
                     "endpoint": request_path,
                     "rule_name": result.rule_name,
@@ -273,7 +362,7 @@ async def rate_limit_middleware(request: Request, call_next):
                 request_path,
                 processing_time,
                 extra={
-                    "ip_address": ip_address,
+                    "ip_address": ip_address or None,
                     "user_id": user_id,
                     "endpoint": request_path,
                     "processing_time": processing_time,
