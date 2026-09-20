@@ -7,20 +7,20 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from ai_karen_engine.middleware.client_identity import (
-    configure_client_identity,
-    resolve_client_ip,
-)
 from ai_karen_engine.middleware.rate_limit import (
     _extract_client_info,
     _rate_limit_endpoint,
     configure_rate_limiter,
 )
+from ai_karen_engine.server.client_identity import (
+    configure_client_identity,
+    resolve_client_ip,
+)
 from ai_karen_engine.server.rate_limiter import create_rate_limiter
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CLIENT_IDENTITY = ROOT / "src/ai_karen_engine/middleware/client_identity.py"
+CLIENT_IDENTITY = ROOT / "src/ai_karen_engine/server/client_identity.py"
 RATE_LIMIT_MIDDLEWARE = ROOT / "src/ai_karen_engine/middleware/rate_limit.py"
 SERVER_MIDDLEWARE = ROOT / "src/ai_karen_engine/server/middleware.py"
 AUTH_ROUTES = ROOT / "src/ai_karen_engine/api_routes/auth/auth.py"
@@ -119,7 +119,7 @@ def test_auth_routes_consume_canonical_client_identity_authority() -> None:
     middleware_source = _read(SERVER_MIDDLEWARE)
 
     assert (
-        "from ai_karen_engine.middleware.client_identity import resolve_client_ip"
+        "from ai_karen_engine.server.client_identity import resolve_client_ip"
         in auth_source
     )
     assert "def get_client_ip(" not in auth_source
