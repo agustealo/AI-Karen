@@ -183,6 +183,9 @@ jobs:
       - name: Typecheck frontend
         run: npm run typecheck
 
+      - name: Validate production web ingress
+        run: node --check server.mjs
+
       - name: Run frontend unit tests
         run: npx vitest run --passWithNoTests
 
@@ -211,7 +214,13 @@ jobs:
             -f docker-compose.yml \
             -f deploy/compose/docker-compose.prod.yml \
             config > /tmp/ai-karen-production-compose.yml
+          docker compose \
+            --env-file .env.production \
+            -f docker-compose.yml \
+            -f deploy/compose/docker-compose.prod.yml \
+            config --format json > /tmp/ai-karen-production-compose.json
           test -s /tmp/ai-karen-production-compose.yml
+          test -s /tmp/ai-karen-production-compose.json
           grep -q 'AUTH_DEV_MODE: "false"' /tmp/ai-karen-production-compose.yml
           grep -q 'KARI_AUTH_BYPASS: "false"' /tmp/ai-karen-production-compose.yml
           grep -q 'AUTH_ALLOW_DEV_LOGIN: "false"' /tmp/ai-karen-production-compose.yml
@@ -219,6 +228,17 @@ jobs:
           grep -q 'KAREN_BUILTIN_VLLM_ENABLED: "false"' /tmp/ai-karen-production-compose.yml
           grep -q 'NODE_ENV: production' /tmp/ai-karen-production-compose.yml
           ! grep -q 'npm run dev' /tmp/ai-karen-production-compose.yml
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(Path('/tmp/ai-karen-production-compose.json').read_text())
+          api = config['services']['api']
+          web = config['services']['web']
+          assert api.get('ports', []) == [], api.get('ports')
+          assert api['environment']['RATE_LIMIT_TRUSTED_PROXY_HOSTS'] == 'web'
+          assert web.get('ports'), 'production web ingress must remain published'
+          PY
 
   main-quality-gate:
     name: main-quality-gate
