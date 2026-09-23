@@ -1,21 +1,26 @@
-"""
-API Routes for Agent Task Management.
+"""API routes for saved task definitions.
 
-This module provides REST API endpoints for defining, viewing, and executing
-task definitions backed by live agent runtime execution.
+Routes own authenticated HTTP ingress only. AI execution is delegated to the
+canonical ChatRuntime through the runtime-owned task-definition adapter.
 """
 
+from __future__ import annotations
+
+import asyncio
 from datetime import datetime
-from typing import Any, Dict, List, Optional
 import logging
 import uuid
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from ai_karen_engine.agents import get_agent_integration_service
+from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
-from ai_karen_engine.agents import AgentExecutionMode, get_agent_integration_service
-from ai_karen_engine.agents.internal.agent_schemas import AgentTask
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionStatus
+from ai_karen_engine.core.runtime.task_execution import execute_task_definition
+from ai_karen_engine.middleware.correlation_middleware import get_request_correlation_id
 
 logger = logging.getLogger(__name__)
 
@@ -38,44 +43,32 @@ class TaskDefinitionRequest(BaseModel):
     taskType: Optional[str] = Field(
         None, description="Optional runtime task type used for execution routing"
     )
-    subAgents: List[SubAgentConfig] = Field(default_factory=list, description="Delegated sub-agents and instructions")
+    subAgents: List[SubAgentConfig] = Field(
+        default_factory=list,
+        description="Delegated sub-agents and instructions",
+    )
 
 
 class TaskDefinitionResponse(TaskDefinitionRequest):
     id: str = Field(..., description="Unique task identifier")
     lastRun: Optional[str] = Field(None, description="When the task was last executed")
-    status: str = Field("Pending", description="Status of the task (e.g., Success, Failed, Pending, Running)")
+    status: str = Field(
+        "Pending",
+        description="Status of the task (e.g., Success, Failed, Pending, Running)",
+    )
     created_at: datetime = Field(..., description="Task creation timestamp")
     updated_at: datetime = Field(..., description="Task update timestamp")
     lastError: Optional[str] = Field(None, description="Last execution error, if any")
     runCount: int = Field(0, description="Number of executions for this task")
-    runtimeTaskId: Optional[str] = Field(None, description="Last live runtime task identifier")
+    runtimeTaskId: Optional[str] = Field(
+        None, description="Last canonical runtime correlation identifier"
+    )
 
 
-# Live task registry for the running backend process.
-# Tasks are created from the UI and executed against the real agent runtime.
+# Transitional definition registry. Execution no longer uses the legacy agent
+# integration executor. This registry remains intentionally isolated so the
+# next persistence slice can replace it without changing the HTTP contract.
 _tasks_db: Dict[str, Dict[str, Any]] = {}
-
-
-def get_tasks_summary() -> Dict[str, Any]:
-    """Get a summary of tasks for statistics."""
-    tasks = list(_tasks_db.values())
-    now = datetime.utcnow()
-    today_start = datetime(now.year, now.month, now.day)
-    
-    tasks_today = 0
-    for t in tasks:
-        # Check if it was updated/run today
-        updated_at = t.get("updated_at")
-        if isinstance(updated_at, datetime) and updated_at >= today_start:
-            tasks_today += t.get("runCount", 0)
-            
-    return {
-        "total_definitions": len(tasks),
-        "tasks_run_today": tasks_today,
-        "active_tasks": len([t for t in tasks if t.get("status") == "Running"]),
-        "failed_tasks": len([t for t in tasks if t.get("status") == "Failed"])
-    }
 
 
 def _slugify_task_type(name: str) -> str:
@@ -91,17 +84,53 @@ def _normalize_task_record(task_record: Dict[str, Any]) -> TaskDefinitionRespons
     record.setdefault("lastError", None)
     record.setdefault("runCount", 0)
     record.setdefault("runtimeTaskId", None)
-    record.setdefault("taskType", record.get("taskType") or _slugify_task_type(record["name"]))
+    record.setdefault(
+        "taskType",
+        record.get("taskType") or _slugify_task_type(record["name"]),
+    )
     return TaskDefinitionResponse(**record)
+
+
+def _task_for_user(task_id: str, user: UserData) -> Dict[str, Any]:
+    """Return a task only when it belongs to the authenticated tenant."""
+    task = _tasks_db.get(task_id)
+    if task is None or str(task.get("tenant_id") or "") != str(user.tenant_id):
+        # Hide cross-tenant existence rather than exposing an authorization oracle.
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+def get_tasks_summary(tenant_id: Optional[str] = None) -> Dict[str, Any]:
+    """Return task statistics, optionally restricted to one tenant."""
+    tasks = list(_tasks_db.values())
+    if tenant_id is not None:
+        tasks = [t for t in tasks if str(t.get("tenant_id") or "") == tenant_id]
+
+    now = datetime.utcnow()
+    today_start = datetime(now.year, now.month, now.day)
+    tasks_today = 0
+    for task in tasks:
+        updated_at = task.get("updated_at")
+        if isinstance(updated_at, datetime) and updated_at >= today_start:
+            tasks_today += int(task.get("runCount", 0))
+
+    return {
+        "total_definitions": len(tasks),
+        "tasks_run_today": tasks_today,
+        "active_tasks": len([t for t in tasks if t.get("status") == "Running"]),
+        "failed_tasks": len([t for t in tasks if t.get("status") == "Failed"]),
+    }
 
 
 @router.post("/", response_model=TaskDefinitionResponse)
 async def create_task(
     request: TaskDefinitionRequest,
-    user: Dict[str, Any] = Depends(get_current_user)
+    user: UserData = Depends(get_current_user),
 ):
-    """Create a new task definition."""
+    """Create a task definition in the authenticated tenant."""
     try:
+        # Agent existence validation is compatibility-only. It does not execute
+        # the task or choose an AI runtime/provider.
         integration_service = get_agent_integration_service()
         await integration_service.initialize()
 
@@ -114,9 +143,7 @@ async def create_task(
 
         for sub_agent in request.subAgents:
             if sub_agent.agentId:
-                sub_agent_info = await integration_service.get_agent_info(
-                    sub_agent.agentId
-                )
+                sub_agent_info = await integration_service.get_agent_info(sub_agent.agentId)
                 if not sub_agent_info:
                     raise HTTPException(
                         status_code=404,
@@ -125,15 +152,13 @@ async def create_task(
 
         task_id = f"task_{uuid.uuid4().hex[:8]}"
         now = datetime.utcnow()
-        task_type = request.taskType or _slugify_task_type(request.name)
-        
         task_record = {
             "id": task_id,
             "name": request.name,
             "description": request.description,
             "primaryAgent": request.primaryAgent,
             "primaryAgentInstructions": request.primaryAgentInstructions,
-            "taskType": task_type,
+            "taskType": request.taskType or _slugify_task_type(request.name),
             "subAgents": [sa.dict() for sa in request.subAgents],
             "lastRun": None,
             "status": "Pending",
@@ -142,149 +167,145 @@ async def create_task(
             "lastError": None,
             "runCount": 0,
             "runtimeTaskId": None,
-            "created_by": user.get("user_id") or user.get("id"),
+            "created_by": user.user_id,
+            "tenant_id": user.tenant_id,
         }
-        
         _tasks_db[task_id] = task_record
         return _normalize_task_record(task_record)
-        
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error creating task: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create task: {str(e)}")
+    except Exception as exc:
+        logger.exception(
+            "tasks.create.failed",
+            extra={"user_id": user.user_id, "tenant_id": user.tenant_id},
+        )
+        raise HTTPException(status_code=500, detail="Failed to create task") from exc
 
 
 @router.get("/", response_model=List[TaskDefinitionResponse])
 async def list_tasks(
     status: Optional[str] = Query(None, description="Filter by task status"),
     agent_name: Optional[str] = Query(None, description="Filter by primary agent name"),
-    user: Dict[str, Any] = Depends(get_current_user)
+    user: UserData = Depends(get_current_user),
 ):
-    """List all configured tasks."""
-    try:
-        tasks = list(_tasks_db.values())
-        
-        if status:
-            tasks = [t for t in tasks if t["status"] == status]
-            
-        if agent_name:
-            tasks = [t for t in tasks if t["primaryAgent"] == agent_name]
-            
-        # Sort by creation date (newest first)
-        tasks.sort(key=lambda x: x["created_at"], reverse=True)
-        
-        return [_normalize_task_record(t) for t in tasks]
-        
-    except Exception as e:
-        logger.error(f"Error listing tasks: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list tasks: {str(e)}")
+    """List task definitions in the authenticated tenant only."""
+    tasks = [
+        task
+        for task in _tasks_db.values()
+        if str(task.get("tenant_id") or "") == str(user.tenant_id)
+    ]
+    if status:
+        tasks = [task for task in tasks if task["status"] == status]
+    if agent_name:
+        tasks = [task for task in tasks if task["primaryAgent"] == agent_name]
+    tasks.sort(key=lambda item: item["created_at"], reverse=True)
+    return [_normalize_task_record(task) for task in tasks]
 
 
 @router.get("/{task_id}", response_model=TaskDefinitionResponse)
 async def get_task(
     task_id: str,
-    user: Dict[str, Any] = Depends(get_current_user)
+    user: UserData = Depends(get_current_user),
 ):
-    """Get a specific task definition."""
-    try:
-        if task_id not in _tasks_db:
-            raise HTTPException(status_code=404, detail="Task not found")
-        
-        return _normalize_task_record(_tasks_db[task_id])
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get task: {str(e)}")
+    """Get one task definition from the authenticated tenant."""
+    return _normalize_task_record(_task_for_user(task_id, user))
 
 
 @router.delete("/{task_id}")
 async def delete_task(
     task_id: str,
-    user: Dict[str, Any] = Depends(get_current_user)
+    user: UserData = Depends(get_current_user),
 ):
-    """Delete a task."""
-    try:
-        if task_id not in _tasks_db:
-            raise HTTPException(status_code=404, detail="Task not found")
-            
-        del _tasks_db[task_id]
-        return {"message": f"Task {task_id} deleted successfully"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete task: {str(e)}")
+    """Delete a task definition from the authenticated tenant."""
+    _task_for_user(task_id, user)
+    del _tasks_db[task_id]
+    return {"message": f"Task {task_id} deleted successfully"}
 
 
 @router.post("/{task_id}/execute")
 async def execute_task(
     task_id: str,
-    user: Dict[str, Any] = Depends(get_current_user)
+    request: Request,
+    user: UserData = Depends(get_current_user),
 ):
-    """Trigger the execution of a task."""
+    """Execute a task through canonical ChatRuntime authority."""
+    task = _task_for_user(task_id, user)
+    now = datetime.utcnow()
+    task["status"] = "Running"
+    task["lastRun"] = now.strftime("%Y-%m-%d %H:%M UTC")
+    task["updated_at"] = now
+    task["lastError"] = None
+    task["runCount"] = int(task.get("runCount", 0)) + 1
+
+    correlation_id = get_request_correlation_id(request)
+    request_id = str(getattr(request.state, "request_id", correlation_id))
+
     try:
-        if task_id not in _tasks_db:
-            raise HTTPException(status_code=404, detail="Task not found")
-            
-        task = _tasks_db[task_id]
-        task["status"] = "Running"
-        task["lastRun"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        execution = await execute_task_definition(
+            task,
+            user=user,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+    except asyncio.CancelledError:
+        task["status"] = "Failed"
         task["updated_at"] = datetime.utcnow()
-        task["lastError"] = None
-        task["runCount"] = int(task.get("runCount", 0)) + 1
-
-        integration_service = get_agent_integration_service()
-        await integration_service.initialize()
-
-        runtime_task = AgentTask(
-            task_id=f"runtime_{task_id}_{uuid.uuid4().hex[:8]}",
-            agent_id=str(task.get("primaryAgent") or ""),
-            task_type=str(task.get("taskType") or _slugify_task_type(task.get("name", "task"))),
-            description=str(task.get("description") or ""),
-            input_data={
+        task["lastError"] = "Task execution cancelled"
+        logger.warning(
+            "tasks.execute.cancelled",
+            extra={
                 "task_id": task_id,
-                "task_name": task.get("name"),
-                "task_description": task.get("description"),
-                "primary_agent_instructions": task.get("primaryAgentInstructions"),
-                "sub_agents": task.get("subAgents", []),
-            },
-            metadata={
-                "source": "api_tasks",
-                "created_by": user.get("user_id") or user.get("id"),
-                "task_definition_id": task_id,
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "user_id": user.user_id,
+                "tenant_id": user.tenant_id,
             },
         )
-
-        execution_response = await integration_service.execute_task(
-            runtime_task, execution_mode=AgentExecutionMode.LANGGRAPH
-        )
-
-        task["runtimeTaskId"] = runtime_task.task_id
-        task["updated_at"] = datetime.utcnow()
-        task["status"] = "Success" if execution_response.success else "Failed"
-        task["lastError"] = execution_response.error
-
-        if not execution_response.success:
-            raise HTTPException(
-                status_code=500,
-                detail=execution_response.error or "Task execution failed",
-            )
-
-        return {
-            "message": f"Task {task_id} executed successfully",
-            "task_id": task_id,
-            "runtime_task_id": runtime_task.task_id,
-            "status": task["status"],
-            "agent_id": task.get("primaryAgent"),
-            "response": execution_response.data,
-        }
-        
-    except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error executing task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to execute task: {str(e)}")
+    except Exception as exc:
+        task["status"] = "Failed"
+        task["updated_at"] = datetime.utcnow()
+        task["lastError"] = type(exc).__name__
+        logger.exception(
+            "tasks.execute.failed",
+            extra={
+                "task_id": task_id,
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "user_id": user.user_id,
+                "tenant_id": user.tenant_id,
+            },
+        )
+        raise HTTPException(status_code=500, detail="Task execution failed") from exc
+
+    runtime_correlation_id = execution.metadata.correlation_id
+    task["runtimeTaskId"] = runtime_correlation_id
+    task["updated_at"] = datetime.utcnow()
+
+    successful = execution.status in {
+        ChatExecutionStatus.OK,
+        ChatExecutionStatus.DEGRADED,
+    } and bool(execution.answer)
+    if successful:
+        task["status"] = "Success"
+        task["lastError"] = None
+    else:
+        task["status"] = "Failed"
+        task["lastError"] = (
+            "runtime_gate"
+            if execution.status == ChatExecutionStatus.GATE
+            else "runtime_execution_failed"
+        )
+
+    if not successful:
+        raise HTTPException(status_code=503, detail="Task execution was not completed")
+
+    return {
+        "message": f"Task {task_id} executed successfully",
+        "task_id": task_id,
+        "runtime_task_id": runtime_correlation_id,
+        "status": task["status"],
+        "agent_id": task.get("primaryAgent"),
+        "response": execution.answer,
+        "runtime_metadata": execution.metadata.to_dict(),
+    }

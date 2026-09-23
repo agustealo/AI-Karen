@@ -287,6 +287,9 @@ class RuntimePolicyEnforcer:
         topology_plugins = request.execution_topology.get("plugin_candidates", []) or []
         if not isinstance(topology_plugins, list):
             topology_plugins = []
+        topology_agents = request.execution_topology.get("requested_agents", []) or []
+        if not isinstance(topology_agents, list):
+            topology_agents = []
 
         risk_score = float(request.risk_signals.get("score", 0.0) or 0.0)
         risk_categories = request.risk_signals.get("categories", []) or []
@@ -361,6 +364,13 @@ class RuntimePolicyEnforcer:
             if normalized and normalized not in allowed_tools:
                 allowed_tools.append(normalized)
 
+        allowed_agents: List[str] = []
+        if bool(request.execution_topology.get("agent_delegation", False)):
+            for candidate in topology_agents:
+                normalized = str(candidate or "").strip()
+                if normalized and normalized not in allowed_agents:
+                    allowed_agents.append(normalized)
+
         runtime_constraints = self._build_runtime_constraints(request.runtime_level)
         runtime_constraints.update(
             {
@@ -376,6 +386,7 @@ class RuntimePolicyEnforcer:
                 ),
                 "allowed_plugins": allowed_plugins,
                 "allowed_tools": allowed_tools,
+                "allowed_agents": allowed_agents,
                 "authorized_user_id": request.user_id,
                 "authorized_tenant_id": request.tenant_id,
                 "authorized_session_id": request.session_id,
