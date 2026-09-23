@@ -1,123 +1,157 @@
-"""
-API Routes for Automation Jobs (formerly Sequences)
+"""Thin HTTP ingress for durable automation jobs."""
 
-This module provides REST API endpoints for defining, viewing, and executing
-multi-step job sequences, backed by the persistent JobService.
-"""
+from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
-from datetime import datetime
 import logging
+from datetime import datetime
+from typing import List, Optional
 
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
+from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
-from ai_karen_engine.services.job_service import get_job_service, JobService
+from ai_karen_engine.services.job_service import (
+    JobExecutionError,
+    JobNotFoundError,
+    JobService,
+    get_job_service,
+)
 
 logger = logging.getLogger(__name__)
 
-# Note: frontend expects /api/automation/jobs
 router = APIRouter(prefix="/automation/jobs", tags=["automation-jobs"])
 
 
 class JobTask(BaseModel):
     name: str = Field(..., description="Name of the task")
     agent: str = Field(..., description="Agent assigned to the task")
-    instructions: Optional[str] = Field(None, description="Specific instructions for this step")
+    instructions: Optional[str] = Field(
+        None, description="Specific instructions for this step"
+    )
 
 
 class JobDefinitionRequest(BaseModel):
     name: str = Field(..., description="Job name")
     description: str = Field(..., description="Description of the job")
-    tasks: List[JobTask] = Field(default_factory=list, description="Chain of tasks")
+    tasks: List[JobTask] = Field(
+        default_factory=list, description="Chain of tasks"
+    )
     trigger: str = Field("Manual Run", description="How this job is triggered")
 
 
 class JobDefinitionResponse(JobDefinitionRequest):
-    id: str = Field(..., description="Unique job identifier")
-    created_at: datetime = Field(..., description="Creation timestamp")
-    status: str = Field("Pending", description="Current status of the job")
+    id: str
+    created_at: datetime
+    status: str = "Pending"
 
 
 @router.post("/", response_model=JobDefinitionResponse)
 async def create_job(
     request: JobDefinitionRequest,
-    user: Dict[str, Any] = Depends(get_current_user),
-    job_service: JobService = Depends(get_job_service)
+    user: UserData = Depends(get_current_user),
+    job_service: JobService = Depends(get_job_service),
 ):
-    """Create a new job sequence definition."""
     try:
-        job_record = await job_service.create_job(request.dict())
-        return JobDefinitionResponse(**job_record)
-    except Exception as e:
-        logger.error(f"Error creating job: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create job: {str(e)}")
+        record = await job_service.create_job(
+            request.dict(),
+            user_context=user,
+        )
+        return JobDefinitionResponse(**record)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception(
+            "automation.jobs.create.failed",
+            extra={"user_id": user.user_id, "tenant_id": user.tenant_id},
+        )
+        raise HTTPException(status_code=500, detail="Failed to create job") from exc
 
 
 @router.get("/", response_model=List[JobDefinitionResponse])
 async def list_jobs(
-    user: Dict[str, Any] = Depends(get_current_user),
-    job_service: JobService = Depends(get_job_service)
+    user: UserData = Depends(get_current_user),
+    job_service: JobService = Depends(get_job_service),
 ):
-    """List all configured jobs."""
     try:
-        jobs = await job_service.list_jobs()
-        return [JobDefinitionResponse(**j) for j in jobs]
-    except Exception as e:
-        logger.error(f"Error listing jobs: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list jobs: {str(e)}")
+        records = await job_service.list_jobs(user)
+        return [JobDefinitionResponse(**record) for record in records]
+    except Exception as exc:
+        logger.exception(
+            "automation.jobs.list.failed",
+            extra={"user_id": user.user_id, "tenant_id": user.tenant_id},
+        )
+        raise HTTPException(status_code=500, detail="Failed to list jobs") from exc
 
 
 @router.get("/{job_id}", response_model=JobDefinitionResponse)
 async def get_job(
     job_id: str,
-    user: Dict[str, Any] = Depends(get_current_user),
-    job_service: JobService = Depends(get_job_service)
+    user: UserData = Depends(get_current_user),
+    job_service: JobService = Depends(get_job_service),
 ):
-    """Get a specific job definition."""
     try:
-        job = await job_service.get_job(job_id)
-        if not job:
+        record = await job_service.get_job(job_id, user)
+        if record is None:
             raise HTTPException(status_code=404, detail="Job not found")
-        return JobDefinitionResponse(**job)
+        return JobDefinitionResponse(**record)
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error getting job {job_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get job: {str(e)}")
+    except Exception as exc:
+        logger.exception(
+            "automation.jobs.get.failed",
+            extra={
+                "job_id": job_id,
+                "user_id": user.user_id,
+                "tenant_id": user.tenant_id,
+            },
+        )
+        raise HTTPException(status_code=500, detail="Failed to get job") from exc
 
 
 @router.delete("/{job_id}")
 async def delete_job(
     job_id: str,
-    user: Dict[str, Any] = Depends(get_current_user),
-    job_service: JobService = Depends(get_job_service)
+    user: UserData = Depends(get_current_user),
+    job_service: JobService = Depends(get_job_service),
 ):
-    """Delete a job."""
     try:
-        success = await job_service.delete_job(job_id)
-        if not success:
+        if not await job_service.delete_job(job_id, user_context=user):
             raise HTTPException(status_code=404, detail="Job not found")
         return {"message": f"Job {job_id} deleted successfully"}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error deleting job {job_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
+    except Exception as exc:
+        logger.exception(
+            "automation.jobs.delete.failed",
+            extra={
+                "job_id": job_id,
+                "user_id": user.user_id,
+                "tenant_id": user.tenant_id,
+            },
+        )
+        raise HTTPException(status_code=500, detail="Failed to delete job") from exc
 
 
 @router.post("/{job_id}/execute")
 async def execute_job(
     job_id: str,
-    user: Dict[str, Any] = Depends(get_current_user),
-    job_service: JobService = Depends(get_job_service)
+    user: UserData = Depends(get_current_user),
+    job_service: JobService = Depends(get_job_service),
 ):
-    """Trigger the execution of a job."""
     try:
-        result = await job_service.execute_job(job_id, user_context=user)
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error executing job {job_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to execute job: {str(e)}")
+        return await job_service.execute_job(job_id, user_context=user)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except JobExecutionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception(
+            "automation.jobs.execute.failed",
+            extra={
+                "job_id": job_id,
+                "user_id": user.user_id,
+                "tenant_id": user.tenant_id,
+            },
+        )
+        raise HTTPException(status_code=500, detail="Failed to execute job") from exc

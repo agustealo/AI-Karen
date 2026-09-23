@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import HTTPException, Request
@@ -13,10 +13,12 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionStatus,
     ChatRuntimeMetadata,
 )
+from ai_karen_engine.services.automation.definitions import AutomationNotFoundError
+from ai_karen_engine.services.automation.execution import SavedTaskExecution
 
 
-def _task(task_id: str, tenant_id: str) -> dict:
-    now = datetime.utcnow()
+def _record(task_id: str = "task-a") -> dict:
+    now = datetime.now(timezone.utc)
     return {
         "id": task_id,
         "name": "Saved task",
@@ -32,134 +34,106 @@ def _task(task_id: str, tenant_id: str) -> dict:
         "lastError": None,
         "runCount": 0,
         "runtimeTaskId": None,
-        "created_by": f"owner-{tenant_id}",
-        "tenant_id": tenant_id,
     }
 
 
-def _request(
-    *,
-    request_id: str = "request-ingress-1",
-    correlation_id: str = "correlation-ingress-1",
-) -> Request:
+def _request() -> Request:
     request = Request({"type": "http"})
-    request.state.request_id = request_id
-    request.state.correlation_id = correlation_id
+    request.state.request_id = "request-ingress-1"
+    request.state.correlation_id = "correlation-ingress-1"
     return request
 
 
-@pytest.fixture(autouse=True)
-def isolate_task_registry():
-    tasks._tasks_db.clear()
-    yield
-    tasks._tasks_db.clear()
+class FakeDefinitions:
+    async def get_task(self, task_id, *, user):
+        if user.tenant_id != "tenant-a" or task_id != "task-a":
+            raise AutomationNotFoundError("Task not found")
+        return _record(task_id)
+
+    async def list_tasks(self, *, user, status=None, agent_name=None):
+        if user.tenant_id == "tenant-a":
+            return [_record()]
+        return []
+
+    async def delete_task(self, task_id, *, user):
+        if user.tenant_id != "tenant-a":
+            raise AutomationNotFoundError("Task not found")
 
 
 @pytest.mark.asyncio
-async def test_list_tasks_is_tenant_scoped():
-    tasks._tasks_db["task-a"] = _task("task-a", "tenant-a")
-    tasks._tasks_db["task-b"] = _task("task-b", "tenant-b")
-
+async def test_list_tasks_delegates_tenant_scope_to_definition_authority(monkeypatch):
+    monkeypatch.setattr(
+        tasks,
+        "get_automation_definition_service",
+        lambda: FakeDefinitions(),
+    )
     result = await tasks.list_tasks(
         status=None,
         agent_name=None,
         user=UserData(user_id="user-a", tenant_id="tenant-a"),
     )
-
     assert [task.id for task in result] == ["task-a"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["get", "delete", "execute"])
-async def test_cross_tenant_task_access_is_hidden(operation, monkeypatch):
-    tasks._tasks_db["task-b"] = _task("task-b", "tenant-b")
-    user = UserData(user_id="user-a", tenant_id="tenant-a")
-
-    if operation == "get":
-        call = lambda: tasks.get_task("task-b", user=user)
-    elif operation == "delete":
-        call = lambda: tasks.delete_task("task-b", user=user)
-    else:
-        async def must_not_execute(*args, **kwargs):
-            raise AssertionError("cross-tenant execution reached runtime")
-
-        monkeypatch.setattr(tasks, "execute_task_definition", must_not_execute)
-        call = lambda: tasks.execute_task("task-b", request=_request(), user=user)
+@pytest.mark.parametrize("operation", ["get", "delete"])
+async def test_cross_tenant_definition_access_is_hidden(operation, monkeypatch):
+    monkeypatch.setattr(
+        tasks,
+        "get_automation_definition_service",
+        lambda: FakeDefinitions(),
+    )
+    user = UserData(user_id="user-b", tenant_id="tenant-b")
 
     with pytest.raises(HTTPException) as exc_info:
-        await call()
+        if operation == "get":
+            await tasks.get_task("task-a", user=user)
+        else:
+            await tasks.delete_task("task-a", user=user)
 
     assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_execute_task_preserves_ingress_identity_in_runtime(monkeypatch):
-    tasks._tasks_db["task-a"] = _task("task-a", "tenant-a")
-    user = UserData(user_id="user-a", tenant_id="tenant-a")
-
-    async def execute(
-        task,
-        *,
-        user,
-        request_id=None,
-        correlation_id=None,
-    ):
-        assert task["tenant_id"] == "tenant-a"
+async def test_execute_task_preserves_ingress_identity(monkeypatch):
+    async def execute(task_id, *, user, request_id=None, correlation_id=None):
+        assert task_id == "task-a"
         assert user.tenant_id == "tenant-a"
         assert request_id == "request-ingress-1"
         assert correlation_id == "correlation-ingress-1"
-        return ChatExecutionResult(
+        result = ChatExecutionResult(
             answer="real runtime result",
             status=ChatExecutionStatus.OK,
             metadata=ChatRuntimeMetadata(correlation_id=correlation_id),
         )
+        record = _record(task_id)
+        record["status"] = "Success"
+        record["runtimeTaskId"] = correlation_id
+        return SavedTaskExecution(task=record, result=result)
 
-    monkeypatch.setattr(tasks, "execute_task_definition", execute)
+    monkeypatch.setattr(tasks, "execute_saved_task", execute)
 
-    response = await tasks.execute_task("task-a", request=_request(), user=user)
+    response = await tasks.execute_task(
+        "task-a",
+        request=_request(),
+        user=UserData(user_id="user-a", tenant_id="tenant-a"),
+    )
 
-    task = tasks._tasks_db["task-a"]
     assert response["runtime_task_id"] == "correlation-ingress-1"
     assert response["response"] == "real runtime result"
-    assert task["status"] == "Success"
-    assert task["runCount"] == 1
-    assert task["runtimeTaskId"] == "correlation-ingress-1"
+    assert response["status"] == "Success"
 
 
 @pytest.mark.asyncio
-async def test_execute_exception_never_leaves_task_running(monkeypatch):
-    tasks._tasks_db["task-a"] = _task("task-a", "tenant-a")
-    user = UserData(user_id="user-a", tenant_id="tenant-a")
-
-    async def explode(*args, **kwargs):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(tasks, "execute_task_definition", explode)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await tasks.execute_task("task-a", request=_request(), user=user)
-
-    assert exc_info.value.status_code == 500
-    task = tasks._tasks_db["task-a"]
-    assert task["status"] == "Failed"
-    assert task["lastError"] == "RuntimeError"
-    assert task["runCount"] == 1
-
-
-@pytest.mark.asyncio
-async def test_execute_cancellation_never_leaves_task_running(monkeypatch):
-    tasks._tasks_db["task-a"] = _task("task-a", "tenant-a")
-    user = UserData(user_id="user-a", tenant_id="tenant-a")
-
+async def test_execute_task_propagates_cancellation(monkeypatch):
     async def cancel(*args, **kwargs):
         raise asyncio.CancelledError()
 
-    monkeypatch.setattr(tasks, "execute_task_definition", cancel)
+    monkeypatch.setattr(tasks, "execute_saved_task", cancel)
 
     with pytest.raises(asyncio.CancelledError):
-        await tasks.execute_task("task-a", request=_request(), user=user)
-
-    task = tasks._tasks_db["task-a"]
-    assert task["status"] == "Failed"
-    assert task["lastError"] == "Task execution cancelled"
-    assert task["runCount"] == 1
+        await tasks.execute_task(
+            "task-a",
+            request=_request(),
+            user=UserData(user_id="user-a", tenant_id="tenant-a"),
+        )

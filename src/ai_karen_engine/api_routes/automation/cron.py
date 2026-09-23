@@ -1,374 +1,350 @@
-"""
-API Routes for Cron Jobs
+"""Thin API ingress plus durable scheduler workers for automation cron jobs."""
 
-Provides REST API endpoints for tracking and managing Cron-based task orchestrations.
-"""
+from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+import asyncio
 import logging
 import uuid
-import asyncio
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-try:
-    from croniter import croniter
-    CRONITER_AVAILABLE = True
-except ImportError:
-    CRONITER_AVAILABLE = False
-
+from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
-from ai_karen_engine.agents import get_agent_integration_service, AgentExecutionMode
-from ai_karen_engine.agents.internal.agent_schemas import AgentTask
-from ai_karen_engine.services.job_service import get_job_service
+from ai_karen_engine.persistence.repositories.automation_repository import (
+    get_automation_repository,
+)
+from ai_karen_engine.services.automation.definitions import (
+    AutomationDefinitionError,
+    AutomationNotFoundError,
+    get_automation_definition_service,
+    next_cron_run,
+)
+from ai_karen_engine.services.automation.execution import (
+    execute_automation_target,
+    resolve_scheduled_principal,
+)
+from ai_karen_engine.services.database.repositories.queue_accessor import (
+    enqueue,
+    get_queue_client,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/automation/cron", tags=["automation-cron"])
 
+_AUTOMATION_QUEUE = "automation"
+_CRON_POLL_SECONDS = 10
+_QUEUE_POLL_SECONDS = 5
+
+_cron_executor_task: Optional[asyncio.Task] = None
+_queue_worker_task: Optional[asyncio.Task] = None
+
 
 class CronJobRequest(BaseModel):
     taskName: str = Field(..., description="Task or Sequence Name")
     schedule: str = Field(..., description="Cron expression")
-    type: str = Field(..., description="'Task' or 'Sequence'")
-    targetId: str = Field(..., description="The ID of the Task or Sequence to trigger")
+    type: str = Field(..., description="'Task', 'Job', or 'Sequence'")
+    targetId: str = Field(
+        ..., description="The ID of the Task or Job to trigger"
+    )
     enabled: bool = Field(True, description="Whether this cron job is active")
     action: str = Field("execute", description="'execute' or 'enqueue'")
 
 
 class CronJobResponse(CronJobRequest):
-    id: str = Field(..., description="Unique cron job identifier")
-    nextRun: str = Field(..., description="Next calculated run time")
-    created_at: datetime = Field(..., description="Task creation timestamp")
+    id: str
+    nextRun: str
+    created_at: datetime
 
 
-# In-memory storage for demo and runtime
-_cron_db: Dict[str, Dict[str, Any]] = {}
-_cron_executor_task: Optional[asyncio.Task] = None
-_queue_worker_task: Optional[asyncio.Task] = None
-
-
-def get_cron_summary() -> Dict[str, Any]:
-    """Get a summary of cron jobs for statistics."""
-    jobs = list(_cron_db.values())
-    enabled_jobs = [j for j in jobs if j.get("enabled")]
-    
-    next_job = None
-    next_job_time = None
-    
-    if enabled_jobs:
-        # Find the one that runs soonest
-        # nextRun is a string like "2026-04-24 09:00 UTC"
-        sorted_jobs = []
-        for j in enabled_jobs:
-            nr = get_next_run(j["schedule"])
-            if nr and nr != "Unknown" and "Invalid" not in nr:
-                try:
-                    dt = datetime.strptime(nr, "%Y-%m-%d %H:%M UTC")
-                    sorted_jobs.append((j, dt))
-                except:
-                    pass
-        
-        if sorted_jobs:
-            sorted_jobs.sort(key=lambda x: x[1])
-            next_job = sorted_jobs[0][0]["taskName"]
-            next_job_time = sorted_jobs[0][1].strftime("%Y-%m-%d %H:%M UTC")
-
-    return {
-        "total_cron_jobs": len(jobs),
-        "enabled_cron_jobs": len(enabled_jobs),
-        "next_job": next_job,
-        "next_job_time": next_job_time
-    }
-
-
-def get_next_run(schedule: str) -> str:
-    """Calculate the next run time from a cron expression."""
-    if not CRONITER_AVAILABLE:
-        return "N/A"
-    try:
-        now = datetime.utcnow()
-        cron = croniter(schedule, now)
-        return cron.get_next(datetime).isoformat()
-    except Exception:
-        return "Invalid Schedule"
+async def get_cron_summary(tenant_id: str) -> Dict[str, Any]:
+    """Tenant-scoped cron statistics for the automation dashboard."""
+    return await get_automation_definition_service().cron_summary(
+        tenant_id=tenant_id
+    )
 
 
 @router.post("", response_model=CronJobResponse)
 async def create_cron_job(
     request: CronJobRequest,
-    user: Dict[str, Any] = Depends(get_current_user),
+    user: UserData = Depends(get_current_user),
 ):
-    """Create a new cron job definition."""
     try:
-        cron_id = f"cron_{uuid.uuid4().hex[:8]}"
-        
-        if CRONITER_AVAILABLE and not croniter.is_valid(request.schedule):
-            raise HTTPException(status_code=400, detail="Invalid cron expression")
-
-        cron_record = {
-            "id": cron_id,
-            "taskName": request.taskName,
-            "schedule": request.schedule,
-            "type": request.type,
-            "targetId": request.targetId,
-            "enabled": request.enabled,
-            "nextRun": get_next_run(request.schedule),
-            "created_at": datetime.utcnow(),
-            "last_eval": datetime.utcnow().isoformat()
-        }
-
-        _cron_db[cron_id] = cron_record
-        return CronJobResponse(**cron_record)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error creating cron job: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create cron job: {str(e)}")
+        record = await get_automation_definition_service().create_cron(
+            request.dict(),
+            user=user,
+        )
+        return CronJobResponse(**record)
+    except AutomationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AutomationDefinitionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception(
+            "automation.cron.create.failed",
+            extra={"user_id": user.user_id, "tenant_id": user.tenant_id},
+        )
+        raise HTTPException(
+            status_code=500, detail="Failed to create cron job"
+        ) from exc
 
 
 @router.get("", response_model=List[CronJobResponse])
 async def list_cron_jobs(
-    user: Dict[str, Any] = Depends(get_current_user),
+    user: UserData = Depends(get_current_user),
 ):
-    """List all configured cron jobs."""
     try:
-        jobs = list(_cron_db.values())
-        
-        # Update next runs dynamically
-        for job in jobs:
-            if job.get("enabled"):
-                job["nextRun"] = get_next_run(job["schedule"])
-            else:
-                job["nextRun"] = "Disabled"
-
-        # Sort by creation date (newest first)
-        jobs.sort(key=lambda x: x["created_at"], reverse=True)
-        
-        return [CronJobResponse(**j) for j in jobs]
-        
-    except Exception as e:
-        logger.error(f"Error listing cron jobs: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list cron jobs: {str(e)}")
+        records = await get_automation_definition_service().list_cron(user=user)
+        return [CronJobResponse(**record) for record in records]
+    except Exception as exc:
+        logger.exception(
+            "automation.cron.list.failed",
+            extra={"user_id": user.user_id, "tenant_id": user.tenant_id},
+        )
+        raise HTTPException(
+            status_code=500, detail="Failed to list cron jobs"
+        ) from exc
 
 
 @router.delete("/{cron_id}")
 async def delete_cron_job(
     cron_id: str,
-    user: Dict[str, Any] = Depends(get_current_user),
+    user: UserData = Depends(get_current_user),
 ):
-    """Delete a cron job."""
     try:
-        if cron_id not in _cron_db:
-            raise HTTPException(status_code=404, detail="Cron job not found")
-            
-        del _cron_db[cron_id]
+        await get_automation_definition_service().delete_cron(
+            cron_id, user=user
+        )
         return {"message": f"Cron job {cron_id} deleted successfully"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting cron job {cron_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete cron job: {str(e)}")
+    except AutomationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Cron job not found") from exc
 
 
 @router.put("/{cron_id}/toggle", response_model=CronJobResponse)
 async def toggle_cron_job(
     cron_id: str,
-    user: Dict[str, Any] = Depends(get_current_user),
+    user: UserData = Depends(get_current_user),
 ):
-    """Toggle a cron job enablement."""
     try:
-        if cron_id not in _cron_db:
-            raise HTTPException(status_code=404, detail="Cron job not found")
-            
-        record = _cron_db[cron_id]
-        record["enabled"] = not record["enabled"]
-        record["nextRun"] = get_next_run(record["schedule"]) if record["enabled"] else "Disabled"
-        
+        record = await get_automation_definition_service().toggle_cron(
+            cron_id, user=user
+        )
         return CronJobResponse(**record)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error toggling cron job {cron_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to toggle cron job: {str(e)}")
+    except AutomationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Cron job not found") from exc
 
-async def _run_cron_task(job: Dict[str, Any]):
-    """Internal helper to execute or enqueue a cron job task."""
-    target_id = job.get("targetId")
-    job_type = job.get("type")
-    cron_id = job.get("id")
-    action = job.get("action", "execute")
 
-    if action == "enqueue":
-        try:
-            from ai_karen_engine.services.database.repositories.queue_accessor import enqueue
-            queue_name = f"cron:{job_type.lower()}:{target_id}"
-            payload = {
+async def _dispatch_claimed_cron(job: Dict[str, Any]) -> Optional[str]:
+    """Execute or durably enqueue one claimed cron occurrence."""
+    tenant_id = str(job["tenant_id"])
+    created_by = str(job["created_by"])
+    cron_id = str(job["id"])
+    job_type = str(job["type"])
+    target_id = str(job["targetId"])
+
+    if job["action"] == "enqueue":
+        item_id = await enqueue(
+            _AUTOMATION_QUEUE,
+            {
                 "cron_id": cron_id,
                 "target_id": target_id,
                 "job_type": job_type,
+                "tenant_id": tenant_id,
+                "created_by": created_by,
                 "trigger": "cron",
-            }
-            item_id = await enqueue(queue_name, payload)
-            if item_id:
-                logger.info("Enqueued cron job %s as queue item %s", cron_id, item_id)
-            else:
-                logger.warning("Queue enqueue returned no item_id for cron job %s", cron_id)
-        except Exception as qe:
-            logger.error(f"Failed to enqueue cron job {cron_id}: {qe}")
-        return
+            },
+            tenant_id=tenant_id,
+        )
+        if not item_id:
+            raise RuntimeError("Durable queue enqueue failed")
+        logger.info(
+            "automation.cron.enqueued",
+            extra={
+                "cron_id": cron_id,
+                "queue_item_id": item_id,
+                "tenant_id": tenant_id,
+            },
+        )
+        return item_id
 
-    if job_type == "Task":
-        try:
-            integration_service = get_agent_integration_service()
-            await integration_service.initialize()
-            from ai_karen_engine.api_routes.automation.tasks import _tasks_db
-            task_def = _tasks_db.get(target_id)
-            if task_def:
-                runtime_task = AgentTask(
-                    task_id=f"cron_{cron_id}_{uuid.uuid4().hex[:4]}",
-                    agent_id=str(task_def.get("primaryAgent") or ""),
-                    task_type=str(task_def.get("taskType") or "cron_task"),
-                    description=str(task_def.get("description") or ""),
-                    input_data={"task_id": target_id, "trigger": "cron", "cron_id": cron_id},
-                    metadata={"source": "cron", "cron_id": cron_id}
-                )
-                await integration_service.execute_task(runtime_task, execution_mode=AgentExecutionMode.LANGGRAPH)
-        except Exception as te:
-            logger.error(f"Failed to trigger cron task {target_id}: {te}")
-    elif job_type in ["Sequence", "Job"]:
-        try:
-            job_service = get_job_service()
-            cron_user = {"user_id": "system-cron", "roles": ["admin"]}
-            await job_service.execute_job(target_id, user_context=cron_user)
-        except Exception as je:
-            logger.error(f"Failed to trigger cron job sequence {target_id}: {je}")
+    principal = await resolve_scheduled_principal(
+        user_id=created_by,
+        tenant_id=tenant_id,
+    )
+    await execute_automation_target(
+        job_type=job_type,
+        target_id=target_id,
+        user=principal,
+        source_id=cron_id,
+    )
+    return None
 
-async def _cron_executor_loop():
-    """Background task to evaluate and run cron jobs."""
-    if not CRONITER_AVAILABLE:
-        logger.warning("[CRON] croniter not available - background executor disabled")
-        return
 
-    logger.info("[CRON] Background executor loop started")
+async def _cron_executor_loop() -> None:
+    """Claim due schedules with leases and dispatch them without duplicate scans."""
+    worker_id = f"cron-scheduler-{uuid.uuid4().hex[:12]}"
+    repository = get_automation_repository()
+    logger.info(
+        "automation.cron.worker.started",
+        extra={"worker_id": worker_id},
+    )
     while True:
         try:
-            now = datetime.utcnow()
-            for job_id, job in list(_cron_db.items()):
-                if not job.get("enabled"):
-                    continue
-                
-                last_eval_str = job.get("last_eval")
-                if not last_eval_str:
-                    last_eval = now
-                else:
-                    try:
-                        last_eval = datetime.fromisoformat(last_eval_str)
-                    except ValueError:
-                        last_eval = now
+            claimed = await repository.claim_due_cron_jobs(worker_id)
+            if not claimed:
+                await asyncio.sleep(_CRON_POLL_SECONDS)
+                continue
 
+            for job in claimed:
+                claim_token = str(job.get("claim_token") or "")
+                error: Optional[str] = None
                 try:
-                    cron = croniter(job["schedule"], last_eval)
-                    next_run = cron.get_next(datetime)
-                except Exception as cron_error:
-                    logger.error(f"Invalid cron schedule for {job_id}: {cron_error}")
-                    continue
+                    await _dispatch_claimed_cron(job)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"[:4000]
+                    logger.exception(
+                        "automation.cron.dispatch.failed",
+                        extra={
+                            "cron_id": job["id"],
+                            "tenant_id": job["tenant_id"],
+                            "worker_id": worker_id,
+                        },
+                    )
+                finally:
+                    next_run_at = next_cron_run(
+                        str(job["schedule"]),
+                        now=datetime.now(timezone.utc),
+                    )
+                    completed = await repository.complete_cron_claim(
+                        str(job["id"]),
+                        claim_token,
+                        next_run_at=next_run_at,
+                        last_error=error,
+                    )
+                    if not completed:
+                        logger.error(
+                            "automation.cron.claim_completion_failed",
+                            extra={
+                                "cron_id": job["id"],
+                                "claim_token": claim_token,
+                                "worker_id": worker_id,
+                            },
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "automation.cron.worker.failed",
+                extra={"worker_id": worker_id},
+            )
+            await asyncio.sleep(_CRON_POLL_SECONDS)
 
-                if next_run > now:
-                    continue
 
-                await _run_cron_task(job)
-                job["last_eval"] = now.isoformat()
-                job["nextRun"] = get_next_run(job["schedule"])
-            
-            await asyncio.sleep(10)  # 10s precision
-        except Exception as e:
-            logger.error(f"Cron executor error: {e}")
-            await asyncio.sleep(10)
-
-
-async def _queue_worker_loop():
-    """Background task to dequeue and execute queued cron work items."""
-    logger.info("[QUEUE] Background worker loop started")
-    worker_id = f"cron-worker-{uuid.uuid4().hex[:8]}"
+async def _queue_worker_loop() -> None:
+    """Process the one canonical durable automation queue."""
+    worker_id = f"automation-worker-{uuid.uuid4().hex[:12]}"
+    client = get_queue_client()
+    logger.info(
+        "automation.queue.worker.started",
+        extra={"worker_id": worker_id, "queue": _AUTOMATION_QUEUE},
+    )
     while True:
         try:
-            from ai_karen_engine.services.database.repositories.queue_accessor import get_queue_client
-            client = get_queue_client()
-            if client is None:
-                await asyncio.sleep(10)
+            result = await client.dequeue(_AUTOMATION_QUEUE, worker_id)
+            if not result.success:
+                logger.error(
+                    "automation.queue.dequeue.failed",
+                    extra={
+                        "worker_id": worker_id,
+                        "error": result.error,
+                    },
+                )
+                await asyncio.sleep(_QUEUE_POLL_SECONDS)
                 continue
-
-            result = await client.dequeue("cron", worker_id)
-            if not result.success or not result.data:
-                await asyncio.sleep(5)
-                continue
-
             item = result.data
-            logger.info("[QUEUE] Dequeued item %s from queue %s", item.id, item.queue)
+            if item is None:
+                await asyncio.sleep(_QUEUE_POLL_SECONDS)
+                continue
+
+            payload = dict(item.payload or {})
             try:
-                payload = item.payload or {}
-                target_id = payload.get("target_id")
-                job_type = payload.get("job_type")
-                cron_id = payload.get("cron_id")
+                tenant_id = str(payload["tenant_id"])
+                created_by = str(payload["created_by"])
+                if item.tenant_id and str(item.tenant_id) != tenant_id:
+                    raise RuntimeError("Queue tenant metadata mismatch")
 
-                if job_type == "Task":
-                    integration_service = get_agent_integration_service()
-                    await integration_service.initialize()
-                    from ai_karen_engine.api_routes.automation.tasks import _tasks_db
-                    task_def = _tasks_db.get(target_id)
-                    if task_def:
-                        from ai_karen_engine.agents.internal.agent_schemas import AgentTask
-                        runtime_task = AgentTask(
-                            task_id=f"queue_{item.id}",
-                            agent_id=str(task_def.get("primaryAgent") or ""),
-                            task_type=str(task_def.get("taskType") or "cron_task"),
-                            description=str(task_def.get("description") or ""),
-                            input_data={"task_id": target_id, "trigger": "queue", "queue_item_id": item.id},
-                            metadata={"source": "queue", "cron_id": cron_id}
-                        )
-                        await integration_service.execute_task(runtime_task, execution_mode=AgentExecutionMode.LANGGRAPH)
-                elif job_type in ["Sequence", "Job"]:
-                    job_service = get_job_service()
-                    cron_user = {"user_id": "system-cron", "roles": ["admin"]}
-                    await job_service.execute_job(target_id, user_context=cron_user)
-
-                await client.ack(item.queue, item.id)
-                logger.info("[QUEUE] Acknowledged item %s", item.id)
-            except Exception as e:
-                logger.error(f"[QUEUE] Failed to process item {item.id}: {e}")
-                await client.nack(item.queue, item.id, str(e))
-
-        except Exception as e:
-            logger.error(f"[QUEUE] Worker error: {e}")
-            await asyncio.sleep(10)
+                principal = await resolve_scheduled_principal(
+                    user_id=created_by,
+                    tenant_id=tenant_id,
+                )
+                await execute_automation_target(
+                    job_type=str(payload["job_type"]),
+                    target_id=str(payload["target_id"]),
+                    user=principal,
+                    source_id=str(payload.get("cron_id") or item.id),
+                )
+                ack = await client.ack(
+                    item.queue,
+                    item.id,
+                    claim_token=item.claim_token,
+                )
+                if not ack.success or not ack.data:
+                    raise RuntimeError(
+                        ack.error or "Queue acknowledgement claim was lost"
+                    )
+                logger.info(
+                    "automation.queue.completed",
+                    extra={
+                        "queue_item_id": item.id,
+                        "tenant_id": tenant_id,
+                        "worker_id": worker_id,
+                    },
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                nack = await client.nack(
+                    item.queue,
+                    item.id,
+                    str(exc),
+                    claim_token=item.claim_token,
+                )
+                logger.exception(
+                    "automation.queue.processing.failed",
+                    extra={
+                        "queue_item_id": item.id,
+                        "worker_id": worker_id,
+                        "nack_success": bool(nack.success and nack.data),
+                    },
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "automation.queue.worker.failed",
+                extra={"worker_id": worker_id},
+            )
+            await asyncio.sleep(_QUEUE_POLL_SECONDS)
 
 
 @router.on_event("startup")
 async def _start_cron_executor() -> None:
-    """Start the background cron executor once the application event loop is running."""
     global _cron_executor_task
-
     if _cron_executor_task and not _cron_executor_task.done():
         return
-
     _cron_executor_task = asyncio.create_task(_cron_executor_loop())
-    logger.info("Cron executor background task started")
 
 
 @router.on_event("shutdown")
 async def _stop_cron_executor() -> None:
-    """Stop the background cron executor during application shutdown."""
     global _cron_executor_task
-
     if not _cron_executor_task:
         return
-
     _cron_executor_task.cancel()
     try:
         await _cron_executor_task
@@ -380,24 +356,17 @@ async def _stop_cron_executor() -> None:
 
 @router.on_event("startup")
 async def _start_queue_worker() -> None:
-    """Start the background queue worker once the application event loop is running."""
     global _queue_worker_task
-
     if _queue_worker_task and not _queue_worker_task.done():
         return
-
     _queue_worker_task = asyncio.create_task(_queue_worker_loop())
-    logger.info("Queue worker background task started")
 
 
 @router.on_event("shutdown")
 async def _stop_queue_worker() -> None:
-    """Stop the background queue worker during application shutdown."""
     global _queue_worker_task
-
     if not _queue_worker_task:
         return
-
     _queue_worker_task.cancel()
     try:
         await _queue_worker_task
