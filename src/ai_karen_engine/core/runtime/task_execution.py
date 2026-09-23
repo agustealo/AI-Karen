@@ -30,6 +30,8 @@ def _task_message(task: Mapping[str, Any]) -> str:
     parts = [
         "Execute the following saved task definition.",
         f"Task name: {str(task.get('name') or '').strip()}",
+        f"Task type: {str(task.get('taskType') or 'saved_task').strip()}",
+        f"Requested primary agent: {str(task.get('primaryAgent') or '').strip()}",
         f"Task description: {str(task.get('description') or '').strip()}",
     ]
 
