@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from ai_karen_engine.api_routes.automation import tasks
 from ai_karen_engine.auth.models import UserData
@@ -34,6 +35,17 @@ def _task(task_id: str, tenant_id: str) -> dict:
         "created_by": f"owner-{tenant_id}",
         "tenant_id": tenant_id,
     }
+
+
+def _request(
+    *,
+    request_id: str = "request-ingress-1",
+    correlation_id: str = "correlation-ingress-1",
+) -> Request:
+    request = Request({"type": "http"})
+    request.state.request_id = request_id
+    request.state.correlation_id = correlation_id
+    return request
 
 
 @pytest.fixture(autouse=True)
@@ -72,7 +84,7 @@ async def test_cross_tenant_task_access_is_hidden(operation, monkeypatch):
             raise AssertionError("cross-tenant execution reached runtime")
 
         monkeypatch.setattr(tasks, "execute_task_definition", must_not_execute)
-        call = lambda: tasks.execute_task("task-b", user=user)
+        call = lambda: tasks.execute_task("task-b", request=_request(), user=user)
 
     with pytest.raises(HTTPException) as exc_info:
         await call()
@@ -81,29 +93,37 @@ async def test_cross_tenant_task_access_is_hidden(operation, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_execute_task_uses_canonical_runtime_result(monkeypatch):
+async def test_execute_task_preserves_ingress_identity_in_runtime(monkeypatch):
     tasks._tasks_db["task-a"] = _task("task-a", "tenant-a")
     user = UserData(user_id="user-a", tenant_id="tenant-a")
 
-    async def execute(task, *, user):
+    async def execute(
+        task,
+        *,
+        user,
+        request_id=None,
+        correlation_id=None,
+    ):
         assert task["tenant_id"] == "tenant-a"
         assert user.tenant_id == "tenant-a"
+        assert request_id == "request-ingress-1"
+        assert correlation_id == "correlation-ingress-1"
         return ChatExecutionResult(
             answer="real runtime result",
             status=ChatExecutionStatus.OK,
-            metadata=ChatRuntimeMetadata(correlation_id="corr-1"),
+            metadata=ChatRuntimeMetadata(correlation_id=correlation_id),
         )
 
     monkeypatch.setattr(tasks, "execute_task_definition", execute)
 
-    response = await tasks.execute_task("task-a", user=user)
+    response = await tasks.execute_task("task-a", request=_request(), user=user)
 
     task = tasks._tasks_db["task-a"]
-    assert response["runtime_task_id"] == "corr-1"
+    assert response["runtime_task_id"] == "correlation-ingress-1"
     assert response["response"] == "real runtime result"
     assert task["status"] == "Success"
     assert task["runCount"] == 1
-    assert task["runtimeTaskId"] == "corr-1"
+    assert task["runtimeTaskId"] == "correlation-ingress-1"
 
 
 @pytest.mark.asyncio
@@ -117,10 +137,29 @@ async def test_execute_exception_never_leaves_task_running(monkeypatch):
     monkeypatch.setattr(tasks, "execute_task_definition", explode)
 
     with pytest.raises(HTTPException) as exc_info:
-        await tasks.execute_task("task-a", user=user)
+        await tasks.execute_task("task-a", request=_request(), user=user)
 
     assert exc_info.value.status_code == 500
     task = tasks._tasks_db["task-a"]
     assert task["status"] == "Failed"
     assert task["lastError"] == "RuntimeError"
+    assert task["runCount"] == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_cancellation_never_leaves_task_running(monkeypatch):
+    tasks._tasks_db["task-a"] = _task("task-a", "tenant-a")
+    user = UserData(user_id="user-a", tenant_id="tenant-a")
+
+    async def cancel(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(tasks, "execute_task_definition", cancel)
+
+    with pytest.raises(asyncio.CancelledError):
+        await tasks.execute_task("task-a", request=_request(), user=user)
+
+    task = tasks._tasks_db["task-a"]
+    assert task["status"] == "Failed"
+    assert task["lastError"] == "Task execution cancelled"
     assert task["runCount"] == 1
