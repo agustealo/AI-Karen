@@ -169,6 +169,11 @@ class RuntimeDecisionPipeline:
         cognitive: ExecutionDecision,
     ) -> PolicyDecision:
         ctx = request.context
+        requested_agents = [
+            str(agent_id).strip()
+            for agent_id in list(request.metadata.get("requested_agents") or [])
+            if str(agent_id).strip()
+        ]
         return await self._policy.evaluate(
             PolicyEvaluationRequest(
                 user_id=ctx.user_id,
@@ -195,6 +200,7 @@ class RuntimeDecisionPipeline:
                 execution_topology={
                     "tool_requirements": list(cognitive.tool_requirements),
                     "plugin_candidates": list(cognitive.plugin_candidates),
+                    "requested_agents": requested_agents,
                     "requires_human_gate": cognitive.requires_human_gate,
                     "reasoning_modes": list(cognitive.reasoning_modes),
                     "max_model_calls": cognitive.max_model_calls,
@@ -234,6 +240,9 @@ class RuntimeDecisionPipeline:
                 reason_codes=["policy_denied", *cognitive.reason_codes],
                 policy_constraints={
                     **cognitive.policy_constraints,
+                    "allowed_tools": [],
+                    "allowed_plugins": [],
+                    "allowed_agents": [],
                     "allowed_reasoning_modes": [],
                     "denied_reasoning_modes": list(policy.denied_reasoning_modes),
                     "reasoning_denial_reasons": dict(policy.reasoning_denial_reasons),
@@ -300,6 +309,15 @@ class RuntimeDecisionPipeline:
                 "allowed_reasoning_modes": allowed_modes,
                 "denied_reasoning_modes": list(policy.denied_reasoning_modes),
                 "reasoning_denial_reasons": dict(policy.reasoning_denial_reasons),
+                "allowed_tools": list(
+                    policy.runtime_constraints.get("allowed_tools") or []
+                ),
+                "allowed_plugins": list(
+                    policy.runtime_constraints.get("allowed_plugins") or []
+                ),
+                "allowed_agents": list(
+                    policy.runtime_constraints.get("allowed_agents") or []
+                ),
             },
         )
 
