@@ -1,8 +1,9 @@
 """Durable multi-step automation job service.
 
 Job definitions live in PostgreSQL and every AI-bearing step delegates to the
-canonical ChatRuntime task adapter. No file-backed registry, direct AgentTask
-execution, or detached background coroutine exists here.
+canonical ChatRuntime task adapter. The one-time legacy JSON cutover is guarded
+explicitly so pre-existing definitions never disappear silently or leak across
+tenants.
 """
 
 from __future__ import annotations
@@ -17,6 +18,10 @@ from ai_karen_engine.core.runtime.task_execution import execute_task_definition
 from ai_karen_engine.persistence.repositories.automation_repository import (
     SqlAutomationRepository,
     get_automation_repository,
+)
+from ai_karen_engine.services.automation.legacy_job_migration import (
+    LegacyAutomationMigrationRequired,
+    assert_legacy_job_cutover_complete,
 )
 
 
@@ -43,13 +48,19 @@ class JobService:
             raise ValueError("Explicit tenant_id is required")
         return user
 
+    @staticmethod
+    def _assert_legacy_cutover() -> None:
+        assert_legacy_job_cutover_complete()
+
     async def list_jobs(self, user_context: Any) -> List[Dict[str, Any]]:
+        self._assert_legacy_cutover()
         user = self._user(user_context)
         return await self._repository.list_jobs(str(user.tenant_id))
 
     async def get_job(
         self, job_id: str, user_context: Any
     ) -> Optional[Dict[str, Any]]:
+        self._assert_legacy_cutover()
         user = self._user(user_context)
         return await self._repository.get_job(job_id, str(user.tenant_id))
 
@@ -59,6 +70,7 @@ class JobService:
         *,
         user_context: Any,
     ) -> Dict[str, Any]:
+        self._assert_legacy_cutover()
         user = self._user(user_context)
         name = str(job_data.get("name") or "").strip()
         description = str(job_data.get("description") or "").strip()
@@ -78,6 +90,7 @@ class JobService:
         )
 
     async def delete_job(self, job_id: str, *, user_context: Any) -> bool:
+        self._assert_legacy_cutover()
         user = self._user(user_context)
         return await self._repository.delete_job(job_id, str(user.tenant_id))
 
@@ -87,6 +100,7 @@ class JobService:
         user_context: Any,
     ) -> Dict[str, Any]:
         """Execute job steps serially through ChatRuntime and persist the outcome."""
+        self._assert_legacy_cutover()
         user = self._user(user_context)
         tenant_id = str(user.tenant_id)
         job = await self._repository.mark_job_running(job_id, tenant_id)
@@ -113,9 +127,7 @@ class JobService:
                     "tenant_id": tenant_id,
                     "created_by": str(user.user_id),
                 }
-                correlation_id = (
-                    f"job:{job_id}:step:{index}:{uuid.uuid4()}"
-                )
+                correlation_id = f"job:{job_id}:step:{index}:{uuid.uuid4()}"
                 runtime_result = await execute_task_definition(
                     inline_task,
                     user=user,
@@ -189,5 +201,6 @@ __all__ = [
     "JobExecutionError",
     "JobNotFoundError",
     "JobService",
+    "LegacyAutomationMigrationRequired",
     "get_job_service",
 ]

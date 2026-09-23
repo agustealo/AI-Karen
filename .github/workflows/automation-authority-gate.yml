@@ -42,14 +42,25 @@ jobs:
           python -m compileall -q \
             src/ai_karen_engine/api_routes/automation \
             src/ai_karen_engine/services/automation \
+            src/ai_karen_engine/services/auth/fresh_user_lookup.py \
             src/ai_karen_engine/services/job_service.py \
-            src/ai_karen_engine/persistence/repositories
+            src/ai_karen_engine/persistence/repositories \
+            scripts/migrate_legacy_automation_jobs.py
 
       - name: Prove automation ownership boundaries
         run: pytest tests/architecture/test_automation_authority.py -q
 
-      - name: Prove runtime task lifecycle
+      - name: Prove runtime task and fresh-principal lifecycle
         run: pytest tests/services/automation/test_execution.py -q
 
       - name: Prove queue lease heartbeat
         run: pytest tests/services/automation/test_queue_lease.py -q
+
+      - name: Prove cron lease heartbeat
+        run: pytest tests/services/automation/test_cron_lease.py -q
+
+      - name: Prove disabled schedule presentation
+        run: pytest tests/services/automation/test_automation_repository_mapping.py -q
+
+      - name: Prove legacy job cutover migration
+        run: pytest tests/services/automation/test_legacy_job_migration.py -q

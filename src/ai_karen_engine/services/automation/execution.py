@@ -24,6 +24,7 @@ from ai_karen_engine.persistence.repositories.automation_repository import (
     get_automation_repository,
 )
 from ai_karen_engine.services.auth.auth_service import UserStatus
+from ai_karen_engine.services.auth.fresh_user_lookup import get_fresh_user_by_id
 
 
 class AutomationExecutionError(RuntimeError):
@@ -45,10 +46,7 @@ class SavedTaskExecution:
 
 
 def _role_values(roles: Any) -> list[str]:
-    return [
-        str(getattr(role, "value", role))
-        for role in (roles or [])
-    ]
+    return [str(getattr(role, "value", role)) for role in (roles or [])]
 
 
 async def resolve_scheduled_principal(
@@ -56,11 +54,15 @@ async def resolve_scheduled_principal(
     user_id: str,
     tenant_id: str,
 ) -> UserData:
-    """Revalidate the durable schedule owner at execution time."""
+    """Revalidate the durable schedule owner against fresh database-backed auth state."""
     auth = await get_auth_service()
-    account = await auth.get_user_by_id(user_id)
+    account = await get_fresh_user_by_id(
+        auth,
+        user_id=user_id,
+        tenant_id=tenant_id,
+    )
     if account is None:
-        raise AutomationPrincipalUnavailable("Schedule owner no longer exists")
+        raise AutomationPrincipalUnavailable("Schedule owner no longer exists in tenant")
     if account.status != UserStatus.ACTIVE:
         raise AutomationPrincipalUnavailable("Schedule owner is not active")
     if str(account.tenant_id or "") != str(tenant_id):
@@ -173,7 +175,6 @@ async def execute_automation_target(
         }
 
     if job_type in {"Job", "Sequence"}:
-        # Imported lazily to avoid coupling the job service back into this module.
         from ai_karen_engine.services.job_service import get_job_service
 
         result = await get_job_service().execute_job(target_id, user_context=user)

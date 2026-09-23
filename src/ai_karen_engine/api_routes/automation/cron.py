@@ -16,6 +16,9 @@ from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.persistence.repositories.automation_repository import (
     get_automation_repository,
 )
+from ai_karen_engine.services.automation.cron_lease import (
+    run_with_cron_claim_heartbeat,
+)
 from ai_karen_engine.services.automation.definitions import (
     AutomationDefinitionError,
     AutomationNotFoundError,
@@ -51,9 +54,7 @@ class CronJobRequest(BaseModel):
     taskName: str = Field(..., description="Task or Sequence Name")
     schedule: str = Field(..., description="Cron expression")
     type: str = Field(..., description="'Task', 'Job', or 'Sequence'")
-    targetId: str = Field(
-        ..., description="The ID of the Task or Job to trigger"
-    )
+    targetId: str = Field(..., description="The ID of the Task or Job to trigger")
     enabled: bool = Field(True, description="Whether this cron job is active")
     action: str = Field("execute", description="'execute' or 'enqueue'")
 
@@ -66,9 +67,7 @@ class CronJobResponse(CronJobRequest):
 
 async def get_cron_summary(tenant_id: str) -> Dict[str, Any]:
     """Tenant-scoped cron statistics for the automation dashboard."""
-    return await get_automation_definition_service().cron_summary(
-        tenant_id=tenant_id
-    )
+    return await get_automation_definition_service().cron_summary(tenant_id=tenant_id)
 
 
 @router.post("", response_model=CronJobResponse)
@@ -91,9 +90,7 @@ async def create_cron_job(
             "automation.cron.create.failed",
             extra={"user_id": user.user_id, "tenant_id": user.tenant_id},
         )
-        raise HTTPException(
-            status_code=500, detail="Failed to create cron job"
-        ) from exc
+        raise HTTPException(status_code=500, detail="Failed to create cron job") from exc
 
 
 @router.get("", response_model=List[CronJobResponse])
@@ -108,9 +105,7 @@ async def list_cron_jobs(
             "automation.cron.list.failed",
             extra={"user_id": user.user_id, "tenant_id": user.tenant_id},
         )
-        raise HTTPException(
-            status_code=500, detail="Failed to list cron jobs"
-        ) from exc
+        raise HTTPException(status_code=500, detail="Failed to list cron jobs") from exc
 
 
 @router.delete("/{cron_id}")
@@ -119,9 +114,7 @@ async def delete_cron_job(
     user: UserData = Depends(get_current_user),
 ):
     try:
-        await get_automation_definition_service().delete_cron(
-            cron_id, user=user
-        )
+        await get_automation_definition_service().delete_cron(cron_id, user=user)
         return {"message": f"Cron job {cron_id} deleted successfully"}
     except AutomationNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Cron job not found") from exc
@@ -133,9 +126,7 @@ async def toggle_cron_job(
     user: UserData = Depends(get_current_user),
 ):
     try:
-        record = await get_automation_definition_service().toggle_cron(
-            cron_id, user=user
-        )
+        record = await get_automation_definition_service().toggle_cron(cron_id, user=user)
         return CronJobResponse(**record)
     except AutomationNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Cron job not found") from exc
@@ -188,64 +179,62 @@ async def _dispatch_claimed_cron(job: Dict[str, Any]) -> Optional[str]:
 
 
 async def _cron_executor_loop() -> None:
-    """Claim due schedules with leases and dispatch them without duplicate scans."""
+    """Claim one due schedule at a time and heartbeat through dispatch."""
     worker_id = f"cron-scheduler-{uuid.uuid4().hex[:12]}"
     repository = get_automation_repository()
-    logger.info(
-        "automation.cron.worker.started",
-        extra={"worker_id": worker_id},
-    )
+    logger.info("automation.cron.worker.started", extra={"worker_id": worker_id})
     while True:
         try:
-            claimed = await repository.claim_due_cron_jobs(worker_id)
+            claimed = await repository.claim_due_cron_jobs(worker_id, limit=1)
             if not claimed:
                 await asyncio.sleep(_CRON_POLL_SECONDS)
                 continue
 
-            for job in claimed:
-                claim_token = str(job.get("claim_token") or "")
-                error: Optional[str] = None
-                try:
-                    await _dispatch_claimed_cron(job)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    error = f"{type(exc).__name__}: {exc}"[:4000]
-                    logger.exception(
-                        "automation.cron.dispatch.failed",
+            job = claimed[0]
+            claim_token = str(job.get("claim_token") or "")
+            error: Optional[str] = None
+            try:
+                await run_with_cron_claim_heartbeat(
+                    repository,
+                    job,
+                    _dispatch_claimed_cron(job),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"[:4000]
+                logger.exception(
+                    "automation.cron.dispatch.failed",
+                    extra={
+                        "cron_id": job["id"],
+                        "tenant_id": job["tenant_id"],
+                        "worker_id": worker_id,
+                    },
+                )
+            finally:
+                next_run_at = next_cron_run(
+                    str(job["schedule"]),
+                    now=datetime.now(timezone.utc),
+                )
+                completed = await repository.complete_cron_claim(
+                    str(job["id"]),
+                    claim_token,
+                    next_run_at=next_run_at,
+                    last_error=error,
+                )
+                if not completed:
+                    logger.error(
+                        "automation.cron.claim_completion_failed",
                         extra={
                             "cron_id": job["id"],
-                            "tenant_id": job["tenant_id"],
+                            "claim_token": claim_token,
                             "worker_id": worker_id,
                         },
                     )
-                finally:
-                    next_run_at = next_cron_run(
-                        str(job["schedule"]),
-                        now=datetime.now(timezone.utc),
-                    )
-                    completed = await repository.complete_cron_claim(
-                        str(job["id"]),
-                        claim_token,
-                        next_run_at=next_run_at,
-                        last_error=error,
-                    )
-                    if not completed:
-                        logger.error(
-                            "automation.cron.claim_completion_failed",
-                            extra={
-                                "cron_id": job["id"],
-                                "claim_token": claim_token,
-                                "worker_id": worker_id,
-                            },
-                        )
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception(
-                "automation.cron.worker.failed",
-                extra={"worker_id": worker_id},
-            )
+            logger.exception("automation.cron.worker.failed", extra={"worker_id": worker_id})
             await asyncio.sleep(_CRON_POLL_SECONDS)
 
 
@@ -265,7 +254,7 @@ async def _execute_claimed_queue_item(item: QueueItem) -> str:
         job_type=str(payload["job_type"]),
         target_id=str(payload["target_id"]),
         user=principal,
-        source_id=str(item.id),
+        source_id=str(payload.get("cron_id") or item.id),
     )
     return tenant_id
 
@@ -284,10 +273,7 @@ async def _queue_worker_loop() -> None:
             if not result.success:
                 logger.error(
                     "automation.queue.dequeue.failed",
-                    extra={
-                        "worker_id": worker_id,
-                        "error": result.error,
-                    },
+                    extra={"worker_id": worker_id, "error": result.error},
                 )
                 await asyncio.sleep(_QUEUE_POLL_SECONDS)
                 continue
@@ -308,9 +294,7 @@ async def _queue_worker_loop() -> None:
                     claim_token=item.claim_token,
                 )
                 if not ack.success or not ack.data:
-                    raise RuntimeError(
-                        ack.error or "Queue acknowledgement claim was lost"
-                    )
+                    raise RuntimeError(ack.error or "Queue acknowledgement claim was lost")
                 logger.info(
                     "automation.queue.completed",
                     extra={
@@ -339,10 +323,7 @@ async def _queue_worker_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception(
-                "automation.queue.worker.failed",
-                extra={"worker_id": worker_id},
-            )
+            logger.exception("automation.queue.worker.failed", extra={"worker_id": worker_id})
             await asyncio.sleep(_QUEUE_POLL_SECONDS)
 
 

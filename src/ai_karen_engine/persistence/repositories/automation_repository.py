@@ -7,6 +7,7 @@ registries. Schema creation is migration-owned.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -66,6 +67,7 @@ def _job_row(row: Any) -> Dict[str, Any]:
 
 def _cron_row(row: Any) -> Dict[str, Any]:
     data = dict(row)
+    enabled = bool(data["enabled"])
     next_run = data["next_run_at"]
     return {
         "id": data["cron_id"],
@@ -73,9 +75,9 @@ def _cron_row(row: Any) -> Dict[str, Any]:
         "schedule": data["schedule"],
         "type": data["job_type"],
         "targetId": data["target_id"],
-        "enabled": bool(data["enabled"]),
+        "enabled": enabled,
         "action": data["action"],
-        "nextRun": next_run.isoformat() if next_run else "Disabled",
+        "nextRun": next_run.isoformat() if enabled and next_run else "Disabled",
         "next_run_at": next_run,
         "last_run_at": data.get("last_run_at"),
         "last_error": data.get("last_error"),
@@ -122,11 +124,10 @@ class SqlAutomationRepository:
                     "primary_agent": record["primaryAgent"],
                     "primary_agent_instructions": record.get("primaryAgentInstructions", ""),
                     "task_type": record["taskType"],
-                    "sub_agents": __import__("json").dumps(record.get("subAgents") or []),
+                    "sub_agents": json.dumps(record.get("subAgents") or []),
                 },
             )
-            row = result.mappings().one()
-            return _task_row(row)
+            return _task_row(result.mappings().one())
 
     async def get_task(self, task_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
         async with async_transaction_scope(tenant_id) as session:
@@ -265,15 +266,23 @@ class SqlAutomationRepository:
         created_by: str,
         record: Dict[str, Any],
     ) -> Dict[str, Any]:
+        status = str(record.get("status") or "Pending")
+        if status not in {"Pending", "Running", "Success", "Failed"}:
+            status = "Pending"
         async with async_transaction_scope(tenant_id) as session:
             result = await session.execute(
                 text(
                     """
                     INSERT INTO public.automation_jobs (
-                        job_id, tenant_id, created_by, name, description, tasks, trigger
+                        job_id, tenant_id, created_by, name, description, tasks,
+                        trigger, status, last_results, last_run_at, last_error,
+                        created_at, updated_at
                     ) VALUES (
                         :job_id, CAST(:tenant_id AS uuid), CAST(:created_by AS uuid),
-                        :name, :description, CAST(:tasks AS jsonb), :trigger
+                        :name, :description, CAST(:tasks AS jsonb), :trigger,
+                        :status, CAST(:last_results AS jsonb), :last_run_at,
+                        :last_error, COALESCE(:created_at, now()),
+                        COALESCE(:updated_at, now())
                     )
                     RETURNING *
                     """
@@ -284,8 +293,14 @@ class SqlAutomationRepository:
                     "created_by": created_by,
                     "name": record["name"],
                     "description": record["description"],
-                    "tasks": __import__("json").dumps(record.get("tasks") or []),
+                    "tasks": json.dumps(record.get("tasks") or []),
                     "trigger": record.get("trigger", "Manual Run"),
+                    "status": status,
+                    "last_results": json.dumps(record.get("last_results") or []),
+                    "last_run_at": record.get("last_run"),
+                    "last_error": record.get("last_error"),
+                    "created_at": record.get("created_at"),
+                    "updated_at": record.get("updated_at"),
                 },
             )
             return _job_row(result.mappings().one())
@@ -381,7 +396,7 @@ class SqlAutomationRepository:
                     "job_id": job_id,
                     "tenant_id": tenant_id,
                     "status": status,
-                    "results": __import__("json").dumps(results),
+                    "results": json.dumps(results),
                     "last_error": last_error,
                 },
             )
@@ -553,9 +568,7 @@ class SqlAutomationRepository:
     ) -> List[Dict[str, Any]]:
         claim_token = uuid.uuid4()
         async with async_transaction_scope() as session:
-            await session.execute(
-                text("SELECT set_config('app.scheduler_worker', '1', true)")
-            )
+            await session.execute(text("SELECT set_config('app.scheduler_worker', '1', true)"))
             result = await session.execute(
                 text(
                     """
@@ -564,10 +577,7 @@ class SqlAutomationRepository:
                         FROM public.automation_cron_jobs
                         WHERE enabled
                           AND next_run_at <= now()
-                          AND (
-                              claim_expires_at IS NULL
-                              OR claim_expires_at <= now()
-                          )
+                          AND (claim_expires_at IS NULL OR claim_expires_at <= now())
                         ORDER BY next_run_at ASC
                         FOR UPDATE SKIP LOCKED
                         LIMIT :limit
@@ -592,6 +602,30 @@ class SqlAutomationRepository:
             )
             return [_cron_row(row) for row in result.mappings().all()]
 
+    async def renew_cron_claim(self, cron_id: str, claim_token: str) -> bool:
+        """Extend a currently-owned cron claim without allowing expired reclaim."""
+        async with async_transaction_scope() as session:
+            await session.execute(text("SELECT set_config('app.scheduler_worker', '1', true)"))
+            result = await session.execute(
+                text(
+                    """
+                    UPDATE public.automation_cron_jobs
+                    SET claim_expires_at = now() + make_interval(secs => :lease_seconds),
+                        updated_at = now()
+                    WHERE cron_id = :cron_id
+                      AND claim_token = CAST(:claim_token AS uuid)
+                      AND claim_expires_at > now()
+                    RETURNING cron_id
+                    """
+                ),
+                {
+                    "cron_id": cron_id,
+                    "claim_token": claim_token,
+                    "lease_seconds": _CRON_LEASE_SECONDS,
+                },
+            )
+            return result.scalar_one_or_none() is not None
+
     async def complete_cron_claim(
         self,
         cron_id: str,
@@ -601,9 +635,7 @@ class SqlAutomationRepository:
         last_error: Optional[str] = None,
     ) -> bool:
         async with async_transaction_scope() as session:
-            await session.execute(
-                text("SELECT set_config('app.scheduler_worker', '1', true)")
-            )
+            await session.execute(text("SELECT set_config('app.scheduler_worker', '1', true)"))
             result = await session.execute(
                 text(
                     """

@@ -15,6 +15,7 @@ from ai_karen_engine.services.job_service import (
     JobExecutionError,
     JobNotFoundError,
     JobService,
+    LegacyAutomationMigrationRequired,
     get_job_service,
 )
 
@@ -46,6 +47,10 @@ class JobDefinitionResponse(JobDefinitionRequest):
     status: str = "Pending"
 
 
+def _migration_required(exc: LegacyAutomationMigrationRequired) -> HTTPException:
+    return HTTPException(status_code=409, detail=str(exc))
+
+
 @router.post("/", response_model=JobDefinitionResponse)
 async def create_job(
     request: JobDefinitionRequest,
@@ -53,11 +58,10 @@ async def create_job(
     job_service: JobService = Depends(get_job_service),
 ):
     try:
-        record = await job_service.create_job(
-            request.dict(),
-            user_context=user,
-        )
+        record = await job_service.create_job(request.dict(), user_context=user)
         return JobDefinitionResponse(**record)
+    except LegacyAutomationMigrationRequired as exc:
+        raise _migration_required(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -76,6 +80,8 @@ async def list_jobs(
     try:
         records = await job_service.list_jobs(user)
         return [JobDefinitionResponse(**record) for record in records]
+    except LegacyAutomationMigrationRequired as exc:
+        raise _migration_required(exc) from exc
     except Exception as exc:
         logger.exception(
             "automation.jobs.list.failed",
@@ -95,6 +101,8 @@ async def get_job(
         if record is None:
             raise HTTPException(status_code=404, detail="Job not found")
         return JobDefinitionResponse(**record)
+    except LegacyAutomationMigrationRequired as exc:
+        raise _migration_required(exc) from exc
     except HTTPException:
         raise
     except Exception as exc:
@@ -119,6 +127,8 @@ async def delete_job(
         if not await job_service.delete_job(job_id, user_context=user):
             raise HTTPException(status_code=404, detail="Job not found")
         return {"message": f"Job {job_id} deleted successfully"}
+    except LegacyAutomationMigrationRequired as exc:
+        raise _migration_required(exc) from exc
     except HTTPException:
         raise
     except Exception as exc:
@@ -141,6 +151,8 @@ async def execute_job(
 ):
     try:
         return await job_service.execute_job(job_id, user_context=user)
+    except LegacyAutomationMigrationRequired as exc:
+        raise _migration_required(exc) from exc
     except JobNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Job not found") from exc
     except JobExecutionError as exc:

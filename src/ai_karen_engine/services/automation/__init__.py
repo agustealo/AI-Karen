@@ -1,6 +1,8 @@
-"""Durable automation definition and execution services."""
+"""Durable automation services.
 
-from .definitions import get_automation_definition_service
-from .execution import execute_saved_task
+Submodules are intentionally not imported here. Execution-only consumers must
+not pull cron parsing or other optional scheduling dependencies into their
+runtime/import surface.
+"""
 
-__all__ = ["get_automation_definition_service", "execute_saved_task"]
+__all__: list[str] = []

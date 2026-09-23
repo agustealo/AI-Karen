@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatRuntimeMetadata,
 )
 from ai_karen_engine.services.automation import execution
+from ai_karen_engine.services.auth.auth_service import UserStatus
 
 
 class FakeRepository:
@@ -96,3 +98,66 @@ async def test_saved_task_cancellation_is_terminal(monkeypatch):
 
     assert repo.completed[-1]["status"] == "Failed"
     assert repo.completed[-1]["lastError"] == "Task execution cancelled"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_principal_uses_fresh_database_backed_roles(monkeypatch):
+    account = SimpleNamespace(
+        id="user-a",
+        email="user@example.com",
+        username="user-a",
+        roles=["user", "operator"],
+        tenant_id="tenant-a",
+        full_name="User A",
+        preferences={},
+        is_verified=True,
+        status=UserStatus.ACTIVE,
+    )
+
+    class FakeAuth:
+        def __init__(self):
+            self.list_calls = 0
+
+        async def list_users(self, *, tenant_id, limit, offset):
+            self.list_calls += 1
+            assert tenant_id == "tenant-a"
+            assert offset == 0
+            return [account]
+
+        async def get_user_by_id(self, user_id):
+            raise AssertionError("cache-backed lookup must not authorize schedules")
+
+    auth = FakeAuth()
+
+    async def auth_service():
+        return auth
+
+    monkeypatch.setattr(execution, "get_auth_service", auth_service)
+
+    principal = await execution.resolve_scheduled_principal(
+        user_id="user-a",
+        tenant_id="tenant-a",
+    )
+
+    assert principal.user_id == "user-a"
+    assert principal.tenant_id == "tenant-a"
+    assert principal.roles == ["user", "operator"]
+    assert auth.list_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduled_principal_fails_closed_when_fresh_user_is_absent(monkeypatch):
+    class FakeAuth:
+        async def list_users(self, *, tenant_id, limit, offset):
+            return []
+
+    async def auth_service():
+        return FakeAuth()
+
+    monkeypatch.setattr(execution, "get_auth_service", auth_service)
+
+    with pytest.raises(execution.AutomationPrincipalUnavailable):
+        await execution.resolve_scheduled_principal(
+            user_id="stale-user",
+            tenant_id="tenant-a",
+        )
