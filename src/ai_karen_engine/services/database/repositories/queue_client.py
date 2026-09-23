@@ -40,6 +40,15 @@ class QueueClient(Repository):
         """Atomically claim the next available item for processing."""
 
     @abstractmethod
+    async def renew_claim(
+        self,
+        queue: str,
+        item_id: str,
+        claim_token: Optional[str] = None,
+    ) -> RepositoryResult[bool]:
+        """Extend an owned processing lease without changing the claim token."""
+
+    @abstractmethod
     async def ack(
         self,
         queue: str,

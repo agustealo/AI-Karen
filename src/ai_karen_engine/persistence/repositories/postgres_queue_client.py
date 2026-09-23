@@ -143,6 +143,43 @@ class PostgresQueueClient(QueueClient):
         except Exception as exc:
             return RepositoryResult(success=False, error=str(exc))
 
+    async def renew_claim(
+        self,
+        queue: str,
+        item_id: str,
+        claim_token: Optional[str] = None,
+    ) -> RepositoryResult[bool]:
+        if not claim_token:
+            return RepositoryResult(success=False, error="claim_token is required")
+        try:
+            async with async_transaction_scope() as session:
+                await self._authorize_worker(session)
+                result = await session.execute(
+                    text(
+                        """
+                        UPDATE public.automation_queue_items
+                        SET claim_expires_at = now() + make_interval(secs => :lease_seconds)
+                        WHERE item_id = :item_id
+                          AND queue_name = :queue_name
+                          AND status = 'processing'
+                          AND claim_token = CAST(:claim_token AS uuid)
+                          AND claim_expires_at > now()
+                        RETURNING item_id
+                        """
+                    ),
+                    {
+                        "item_id": item_id,
+                        "queue_name": queue,
+                        "claim_token": claim_token,
+                        "lease_seconds": _QUEUE_LEASE_SECONDS,
+                    },
+                )
+                return RepositoryResult(
+                    success=True, data=result.scalar_one_or_none() is not None
+                )
+        except Exception as exc:
+            return RepositoryResult(success=False, error=str(exc))
+
     async def ack(
         self,
         queue: str,

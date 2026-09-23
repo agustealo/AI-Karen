@@ -1,0 +1,55 @@
+name: Automation Authority Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: automation-authority-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  automation-authority:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: src
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+
+      - name: Install automation proof dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/ci/quality.txt
+
+      - name: Compile automation authority surfaces
+        run: |
+          python -m compileall -q \
+            src/ai_karen_engine/api_routes/automation \
+            src/ai_karen_engine/services/automation \
+            src/ai_karen_engine/services/job_service.py \
+            src/ai_karen_engine/persistence/repositories
+
+      - name: Prove automation ownership boundaries
+        run: pytest tests/architecture/test_automation_authority.py -q
+
+      - name: Prove runtime task lifecycle
+        run: pytest tests/services/automation/test_execution.py -q
+
+      - name: Prove queue lease heartbeat
+        run: pytest tests/services/automation/test_queue_lease.py -q

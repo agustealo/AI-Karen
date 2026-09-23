@@ -31,6 +31,21 @@ class NoopQueueClient(QueueClient):
         logger.debug("NoopQueueClient.dequeue queue=%s worker=%s", queue, worker_id)
         return RepositoryResult(success=True, data=None)
 
+    @instrument_repository(operation="renew_claim", repository="NoopQueueClient")
+    async def renew_claim(
+        self,
+        queue: str,
+        item_id: str,
+        claim_token: Optional[str] = None,
+    ) -> RepositoryResult[bool]:
+        logger.debug(
+            "NoopQueueClient.renew_claim queue=%s id=%s claim=%s",
+            queue,
+            item_id,
+            claim_token,
+        )
+        return RepositoryResult(success=True, data=True)
+
     @instrument_repository(operation="ack", repository="NoopQueueClient")
     async def ack(
         self,

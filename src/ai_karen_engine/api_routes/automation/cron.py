@@ -26,10 +26,14 @@ from ai_karen_engine.services.automation.execution import (
     execute_automation_target,
     resolve_scheduled_principal,
 )
+from ai_karen_engine.services.automation.queue_lease import (
+    run_with_queue_claim_heartbeat,
+)
 from ai_karen_engine.services.database.repositories.queue_accessor import (
     enqueue,
     get_queue_client,
 )
+from ai_karen_engine.services.database.repositories.queue_client import QueueItem
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +249,27 @@ async def _cron_executor_loop() -> None:
             await asyncio.sleep(_CRON_POLL_SECONDS)
 
 
+async def _execute_claimed_queue_item(item: QueueItem) -> str:
+    """Execute one claimed queue item while preserving persisted identity."""
+    payload = dict(item.payload or {})
+    tenant_id = str(payload["tenant_id"])
+    created_by = str(payload["created_by"])
+    if item.tenant_id and str(item.tenant_id) != tenant_id:
+        raise RuntimeError("Queue tenant metadata mismatch")
+
+    principal = await resolve_scheduled_principal(
+        user_id=created_by,
+        tenant_id=tenant_id,
+    )
+    await execute_automation_target(
+        job_type=str(payload["job_type"]),
+        target_id=str(payload["target_id"]),
+        user=principal,
+        source_id=str(item.id),
+    )
+    return tenant_id
+
+
 async def _queue_worker_loop() -> None:
     """Process the one canonical durable automation queue."""
     worker_id = f"automation-worker-{uuid.uuid4().hex[:12]}"
@@ -271,22 +296,11 @@ async def _queue_worker_loop() -> None:
                 await asyncio.sleep(_QUEUE_POLL_SECONDS)
                 continue
 
-            payload = dict(item.payload or {})
             try:
-                tenant_id = str(payload["tenant_id"])
-                created_by = str(payload["created_by"])
-                if item.tenant_id and str(item.tenant_id) != tenant_id:
-                    raise RuntimeError("Queue tenant metadata mismatch")
-
-                principal = await resolve_scheduled_principal(
-                    user_id=created_by,
-                    tenant_id=tenant_id,
-                )
-                await execute_automation_target(
-                    job_type=str(payload["job_type"]),
-                    target_id=str(payload["target_id"]),
-                    user=principal,
-                    source_id=str(payload.get("cron_id") or item.id),
+                tenant_id = await run_with_queue_claim_heartbeat(
+                    client,
+                    item,
+                    _execute_claimed_queue_item(item),
                 )
                 ack = await client.ack(
                     item.queue,
