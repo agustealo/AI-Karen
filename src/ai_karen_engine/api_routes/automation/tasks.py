@@ -6,12 +6,13 @@ canonical ChatRuntime through the runtime-owned task-definition adapter.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ai_karen_engine.agents import get_agent_integration_service
@@ -19,6 +20,7 @@ from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionStatus
 from ai_karen_engine.core.runtime.task_execution import execute_task_definition
+from ai_karen_engine.middleware.correlation_middleware import get_request_correlation_id
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +225,7 @@ async def delete_task(
 @router.post("/{task_id}/execute")
 async def execute_task(
     task_id: str,
+    request: Request,
     user: UserData = Depends(get_current_user),
 ):
     """Execute a task through canonical ChatRuntime authority."""
@@ -234,8 +237,31 @@ async def execute_task(
     task["lastError"] = None
     task["runCount"] = int(task.get("runCount", 0)) + 1
 
+    correlation_id = get_request_correlation_id(request)
+    request_id = str(getattr(request.state, "request_id", correlation_id))
+
     try:
-        execution = await execute_task_definition(task, user=user)
+        execution = await execute_task_definition(
+            task,
+            user=user,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+    except asyncio.CancelledError:
+        task["status"] = "Failed"
+        task["updated_at"] = datetime.utcnow()
+        task["lastError"] = "Task execution cancelled"
+        logger.warning(
+            "tasks.execute.cancelled",
+            extra={
+                "task_id": task_id,
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "user_id": user.user_id,
+                "tenant_id": user.tenant_id,
+            },
+        )
+        raise
     except Exception as exc:
         task["status"] = "Failed"
         task["updated_at"] = datetime.utcnow()
@@ -244,14 +270,16 @@ async def execute_task(
             "tasks.execute.failed",
             extra={
                 "task_id": task_id,
+                "request_id": request_id,
+                "correlation_id": correlation_id,
                 "user_id": user.user_id,
                 "tenant_id": user.tenant_id,
             },
         )
         raise HTTPException(status_code=500, detail="Task execution failed") from exc
 
-    correlation_id = execution.metadata.correlation_id
-    task["runtimeTaskId"] = correlation_id
+    runtime_correlation_id = execution.metadata.correlation_id
+    task["runtimeTaskId"] = runtime_correlation_id
     task["updated_at"] = datetime.utcnow()
 
     successful = execution.status in {
@@ -275,7 +303,7 @@ async def execute_task(
     return {
         "message": f"Task {task_id} executed successfully",
         "task_id": task_id,
-        "runtime_task_id": correlation_id,
+        "runtime_task_id": runtime_correlation_id,
         "status": task["status"],
         "agent_id": task.get("primaryAgent"),
         "response": execution.answer,
