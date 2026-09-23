@@ -811,6 +811,20 @@ class ChatRuntime:
         allowed_caps = list(decision.required_capabilities)
         if decision.memory_write_allowed and "memory.write" not in allowed_caps:
             allowed_caps.append("memory.write")
+
+        policy_constraints = decision.policy_constraints or {}
+        allowed_tools = (
+            list(policy_constraints.get("allowed_tools") or [])
+            if "allowed_tools" in policy_constraints
+            else list(decision.tool_requirements)
+        )
+        allowed_plugins = (
+            list(policy_constraints.get("allowed_plugins") or [])
+            if "allowed_plugins" in policy_constraints
+            else list(decision.plugin_candidates)
+        )
+        allowed_agents = list(policy_constraints.get("allowed_agents") or [])
+
         return AuthorizedExecutionPlan(
             execution_id=f"exec-{ctx.request_id}",
             policy_decision_id=(
@@ -821,8 +835,9 @@ class ChatRuntime:
             authorized_session_id=ctx.session_id,
             topology=decision.topology,
             allowed_capabilities=allowed_caps,
-            allowed_tools=list(decision.tool_requirements),
-            allowed_plugins=list(decision.plugin_candidates),
+            allowed_tools=allowed_tools,
+            allowed_plugins=allowed_plugins,
+            allowed_agents=allowed_agents,
             budget=budget,
             memory_scope=decision.memory_scope,
             reasoning_modes=list(decision.reasoning_modes),
@@ -839,6 +854,7 @@ class ChatRuntime:
                 "reason_codes": decision.reason_codes,
                 "reasoning_modes": list(decision.reasoning_modes),
                 "max_model_calls": decision.max_model_calls,
+                "allowed_agents": allowed_agents,
             },
         )
 
