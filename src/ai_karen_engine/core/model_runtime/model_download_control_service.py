@@ -331,12 +331,13 @@ class ModelDownloadControlService:
         if not self.policy_path.exists():
             self._persist_policy_sync()
 
-    def _persist_policy_sync(self) -> None:
+    def _persist_policy_sync(self, policy: Optional[ModelDownloadPolicy] = None) -> None:
+        effective = policy or self._policy
         self.runtime_registry_root.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": 2,
             "updated_at": _utc_now(),
-            "policy": self._policy.to_dict(),
+            "policy": effective.to_dict(),
         }
         temp = self.policy_path.with_suffix(self.policy_path.suffix + ".tmp")
         temp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -348,6 +349,16 @@ class ModelDownloadControlService:
         async with self._initialize_lock:
             if self._initialized:
                 return
+            global_limit = await self._repository.initialize_global_concurrency_limit(
+                self._policy.max_concurrent_downloads
+            )
+            if global_limit != self._policy.max_concurrent_downloads:
+                self._policy = replace(
+                    self._policy,
+                    max_concurrent_downloads=global_limit,
+                )
+                await asyncio.to_thread(self._persist_policy_sync)
+
             if self.legacy_state_path.exists():
                 try:
                     raw = json.loads(self.legacy_state_path.read_text(encoding="utf-8"))
@@ -435,23 +446,56 @@ class ModelDownloadControlService:
         return payload
 
     async def get_policy(self) -> dict[str, Any]:
-        return self._policy.to_dict()
+        await self.initialize()
+        payload = self._policy.to_dict()
+        payload["max_concurrent_downloads"] = await self.get_global_concurrency_limit()
+        return payload
 
     async def get_global_concurrency_limit(self) -> int:
-        return max(1, int(self._policy.max_concurrent_downloads))
+        await self.initialize()
+        return await self._repository.get_global_concurrency_limit()
 
     async def update_policy(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        await self.initialize()
         async with self._policy_lock:
             updates = {key: payload[key] for key in self._policy.to_dict() if key in payload}
-            candidate = replace(self._policy, **updates)
+            current_limit = await self._repository.get_global_concurrency_limit()
+            candidate = replace(
+                self._policy,
+                **updates,
+            )
+            if "max_concurrent_downloads" not in updates:
+                candidate = replace(candidate, max_concurrent_downloads=current_limit)
             if candidate.max_concurrent_downloads < 1 or candidate.max_concurrent_downloads > 8:
                 raise ModelOrchestratorError(E_INVALID, "max_concurrent_downloads must be between 1 and 8")
+
+            limit_changed = candidate.max_concurrent_downloads != current_limit
+            if limit_changed:
+                await self._repository.set_global_concurrency_limit(
+                    candidate.max_concurrent_downloads
+                )
+            try:
+                await asyncio.to_thread(self._persist_policy_sync, candidate)
+            except BaseException:
+                if limit_changed:
+                    try:
+                        await self._repository.set_global_concurrency_limit(current_limit)
+                    except Exception:
+                        logger.exception(
+                            "model_download_policy_concurrency_rollback_failed old_limit=%s new_limit=%s",
+                            current_limit,
+                            candidate.max_concurrent_downloads,
+                        )
+                raise
+
             self._policy = candidate
-            await asyncio.to_thread(self._persist_policy_sync)
             return self._policy.to_dict()
 
     async def get_channels(self) -> dict[str, Any]:
-        return {"policy": self._policy.to_dict(), "channels": self._channel_payloads()}
+        return {
+            "policy": await self.get_policy(),
+            "channels": self._channel_payloads(),
+        }
 
     async def list_jobs(self, status: Optional[str] = None, limit: int = 100) -> list[dict[str, Any]]:
         await self.initialize()
@@ -622,7 +666,6 @@ class ModelDownloadControlService:
             return None
         return await self._repository.claim_next(
             worker_id=worker_id,
-            global_concurrency=await self.get_global_concurrency_limit(),
             lease_seconds=self._worker_settings.lease_seconds,
             retry_base_seconds=self._worker_settings.retry_base_seconds,
         )
@@ -709,6 +752,12 @@ class ModelDownloadControlService:
             "duration_seconds": max(result.duration_seconds, time.perf_counter() - started),
             "status": result.status,
         }
+
+        await self._register_promoted_model(
+            staging_orchestrator=staging_orchestrator,
+            model_id=str(claim["model_id"]),
+            final_path=final_path,
+        )
         completed = await self._repository.complete_job(
             job_id=job_id,
             lease_token=lease_token,
@@ -719,11 +768,6 @@ class ModelDownloadControlService:
             logger.error("model_download_completion_fence_rejected job_id=%s", job_id)
             return
 
-        await self._register_promoted_model(
-            staging_orchestrator=staging_orchestrator,
-            model_id=str(claim["model_id"]),
-            final_path=final_path,
-        )
         await asyncio.to_thread(self._safe_remove_tree, stage_root)
         try:
             await self._discovery_service.refresh_model_discovery()
@@ -766,8 +810,7 @@ class ModelDownloadControlService:
     ) -> None:
         entry = dict(staging_orchestrator._registry.get(model_id) or {})
         if not entry:
-            logger.warning("model_download_registry_entry_missing model_id=%s", model_id)
-            return
+            raise RuntimeError(f"Staging registry entry missing for promoted model: {model_id}")
         entry["install_path"] = str(final_path)
         self._orchestrator._registry[model_id] = entry
         await self._orchestrator._persist_registry()
