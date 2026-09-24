@@ -12,6 +12,9 @@ This manifest does **not** supersede `PROJECT_DEV_MANIFEST.md`. The root develop
 | Brand assets | `src/ui_launchers/Karen-AI-Theme/public/brand/` |
 | Web app metadata/PWA identity | `src/ui_launchers/Karen-AI-Theme/src/app/layout.tsx` and `src/app/manifest.ts` |
 | Screenshot capture | `src/ui_launchers/Karen-AI-Theme/e2e/showcase/` |
+| Screenshot provenance verification | `scripts/ci/verify_presentation_assets.py` |
+| Presentation integrity CI | `.github/workflows/presentation-contract.yml` |
+| Approved remote capture | `.github/workflows/presentation-capture.yml` |
 | Curated screenshots | `docs/assets/screenshots/` |
 | Brand rules | `docs/presentation/BRAND_SYSTEM.md` |
 | Repository presentation | root `README.md` |
@@ -52,7 +55,9 @@ A screenshot qualifies for public product presentation only when all of the foll
 4. The capture is explicitly opted in with `KAREN_SHOWCASE_ALLOW_CAPTURE=true`.
 5. No personal conversation, secret, token, provider key, private email, or production tenant data is visible.
 6. The screen represents a capability that exists at the captured commit.
-7. The image is reviewed at native resolution before it is promoted into README hero/gallery placement.
+7. The capture rail emits `capture-manifest.json` with exact git SHA, browser, viewport, account class, and no-synthetic-state policy.
+8. `python scripts/ci/verify_presentation_assets.py --require-assets` passes.
+9. The image is reviewed at native resolution before it is promoted into README hero/gallery placement.
 
 The capture rail writes these canonical files:
 
@@ -62,10 +67,20 @@ docs/assets/screenshots/
 ├── 02-agents-overview.png
 ├── 03-plugin-ecosystem.png
 ├── 04-comms-center.png
-└── 05-settings-and-models.png
+├── 05-settings-and-models.png
+└── capture-manifest.json
 ```
 
 No generated or hand-composited substitute may use these filenames.
+
+## Capture environments
+
+Two capture paths are supported, and both use the same Playwright owner:
+
+- **Local approved demo installation:** invoke `npm run showcase:capture` with an explicitly sanitized account.
+- **Approved remote demo deployment:** invoke `.github/workflows/presentation-capture.yml`, which reads the HTTPS origin and sanitized credentials from repository secrets.
+
+Presentation code must not change the production first-boot smoke harness merely to make media capture easier. Authentication/bootstrap remains owned by the canonical auth/first-run system.
 
 ## Current media status
 
@@ -80,7 +95,13 @@ The raw E2E proof image is intentionally not treated as a marketing hero. It dem
 
 ## Release gate
 
-A presentation release is green only when:
+Structural presentation contract:
+
+```bash
+python scripts/ci/verify_presentation_assets.py
+```
+
+Real gallery capture and proof:
 
 ```bash
 cd src/ui_launchers/Karen-AI-Theme
@@ -90,7 +111,10 @@ KAREN_SHOWCASE_ALLOW_CAPTURE=true \
 KAREN_SHOWCASE_ACCOUNT_KIND=sanitized-demo \
 KAREN_SHOWCASE_EMAIL='<sanitized-demo-email>' \
 KAREN_SHOWCASE_PASSWORD='<sanitized-demo-password>' \
+KAREN_SHOWCASE_BASE_URL='http://localhost:8010' \
 npm run showcase:capture
+cd ../../..
+python scripts/ci/verify_presentation_assets.py --require-assets
 ```
 
 Then manually review all five PNGs for visual polish, privacy, stale errors, debug overlays, broken loading states, and accurate feature representation.
