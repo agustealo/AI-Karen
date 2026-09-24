@@ -64,7 +64,8 @@ jobs:
             src/ai_karen_engine/core/model_runtime/model_download_worker.py \
             src/ai_karen_engine/api_routes/models/model_orchestrator.py \
             src/ai_karen_engine/server/application_runtime.py \
-            tests/integration/test_model_download_requested_state_leases.py
+            tests/integration/test_model_download_requested_state_leases.py \
+            tests/integration/test_model_download_target_exclusivity.py
 
       - name: Ruff durable worker correctness
         run: |
@@ -78,6 +79,7 @@ jobs:
             tests/core/model_runtime/test_model_download_durable_worker.py \
             tests/core/model_runtime/test_model_download_worker_cancellation.py \
             tests/integration/test_model_download_requested_state_leases.py \
+            tests/integration/test_model_download_target_exclusivity.py \
             tests/architecture/test_model_download_durable_worker_authority.py
 
       - name: Prove durable authority boundaries
@@ -99,3 +101,6 @@ jobs:
 
       - name: Prove requested-state lease accounting in PostgreSQL
         run: pytest tests/integration/test_model_download_requested_state_leases.py -q
+
+      - name: Prove install-target exclusivity in PostgreSQL
+        run: pytest tests/integration/test_model_download_target_exclusivity.py -q

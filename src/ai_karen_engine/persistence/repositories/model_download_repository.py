@@ -27,8 +27,18 @@ def _mapping(row: Any) -> Optional[dict[str, Any]]:
     return dict(row)
 
 
+async def _lock_install_target(session: Any, install_path: Optional[str]) -> None:
+    """Serialize durable mutations for one canonical installation target."""
+    if not install_path:
+        return
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:install_path, 0))"),
+        {"install_path": install_path},
+    )
+
+
 class ModelDownloadRepository:
-    """Own durable job state, runtime cap, and lease fencing for model downloads."""
+    """Own durable job state, runtime cap, target exclusivity, and lease fencing."""
 
     async def initialize_global_concurrency_limit(self, default_limit: int) -> int:
         async with async_transaction_scope() as session:
@@ -89,6 +99,13 @@ class ModelDownloadRepository:
             return int(updated)
 
     async def create_job(self, payload: Mapping[str, Any], *, max_attempts: int) -> dict[str, Any]:
+        """Create one durable job per canonical install target.
+
+        Concurrent requests for a target already owned by nonterminal durable
+        work reuse that job instead of creating a second filesystem mutator.
+        The target-scoped advisory lock makes the check/insert atomic across
+        API processes without introducing process-local authority.
+        """
         statement = text(
             """
             INSERT INTO public.model_download_jobs (
@@ -132,8 +149,44 @@ class ModelDownloadRepository:
             "max_attempts": max_attempts,
         }
         async with async_transaction_scope() as session:
+            install_path = str(params["install_path"] or "").strip() or None
+            await _lock_install_target(session, install_path)
+            if install_path is not None:
+                existing_result = await session.execute(
+                    text(
+                        """
+                        SELECT *
+                        FROM public.model_download_jobs
+                        WHERE install_path = :install_path
+                          AND status IN (
+                              'queued', 'running', 'promoting', 'paused', 'pause_requested'
+                          )
+                        ORDER BY
+                            CASE
+                                WHEN lease_token IS NOT NULL
+                                 AND lease_expires_at > now() THEN 0
+                                WHEN status = 'queued' THEN 1
+                                WHEN status = 'paused' THEN 2
+                                ELSE 3
+                            END,
+                            created_at ASC,
+                            job_id ASC
+                        FOR UPDATE
+                        LIMIT 1
+                        """
+                    ),
+                    {"install_path": install_path},
+                )
+                existing = _mapping(existing_result.mappings().first())
+                if existing is not None:
+                    existing["_target_reused"] = True
+                    existing["_requested_job_id"] = str(payload["job_id"])
+                    return existing
+
             result = await session.execute(statement, params)
-            return dict(result.mappings().one())
+            created = dict(result.mappings().one())
+            created["_target_reused"] = False
+            return created
 
     async def list_jobs(self, *, status: Optional[str] = None, limit: int = 100) -> list[dict[str, Any]]:
         sql = "SELECT * FROM public.model_download_jobs"
@@ -331,15 +384,63 @@ class ModelDownloadRepository:
                 text(
                     """
                     WITH candidate AS (
-                        SELECT job_id
-                        FROM public.model_download_jobs
-                        WHERE status = 'queued'
-                          AND cancel_requested = false
-                          AND pause_requested = false
-                          AND available_at <= now()
-                        ORDER BY created_at ASC
-                        FOR UPDATE SKIP LOCKED
+                        SELECT jobs.job_id, jobs.install_path
+                        FROM public.model_download_jobs AS jobs
+                        WHERE jobs.status = 'queued'
+                          AND jobs.cancel_requested = false
+                          AND jobs.pause_requested = false
+                          AND jobs.available_at <= now()
+                          AND (
+                              jobs.install_path IS NULL
+                              OR NOT EXISTS (
+                                  SELECT 1
+                                  FROM public.model_download_jobs AS blocker
+                                  WHERE blocker.job_id <> jobs.job_id
+                                    AND blocker.install_path = jobs.install_path
+                                    AND (
+                                        (
+                                            blocker.status IN (
+                                                'running', 'promoting', 'pause_requested'
+                                            )
+                                            AND blocker.lease_token IS NOT NULL
+                                            AND blocker.lease_expires_at > now()
+                                        )
+                                        OR (
+                                            blocker.status IN ('queued', 'paused')
+                                            AND blocker.lease_token IS NULL
+                                            AND (
+                                                blocker.created_at < jobs.created_at
+                                                OR (
+                                                    blocker.created_at = jobs.created_at
+                                                    AND blocker.job_id < jobs.job_id
+                                                )
+                                            )
+                                        )
+                                    )
+                              )
+                          )
+                        ORDER BY jobs.created_at ASC, jobs.job_id ASC
+                        FOR UPDATE OF jobs SKIP LOCKED
                         LIMIT 1
+                    ),
+                    superseded AS (
+                        UPDATE public.model_download_jobs AS duplicate
+                        SET status = 'cancelled',
+                            cancel_requested = true,
+                            pause_requested = false,
+                            message = 'Superseded by canonical job for the same install target',
+                            completed_at = now(),
+                            lease_owner = NULL,
+                            lease_token = NULL,
+                            lease_expires_at = NULL,
+                            heartbeat_at = NULL
+                        FROM candidate
+                        WHERE candidate.install_path IS NOT NULL
+                          AND duplicate.install_path = candidate.install_path
+                          AND duplicate.job_id <> candidate.job_id
+                          AND duplicate.status IN ('queued', 'paused')
+                          AND duplicate.lease_token IS NULL
+                        RETURNING duplicate.job_id
                     )
                     UPDATE public.model_download_jobs AS jobs
                     SET status = 'running',
@@ -384,13 +485,12 @@ class ModelDownloadRepository:
             return result.first() is not None
 
     async def lease_is_valid(self, *, job_id: str, lease_token: str) -> bool:
-        """Finalize requested control states or atomically reserve promotion.
+        """Finalize requested states or atomically reserve one target for promotion.
 
-        Pause/cancel requests keep their execution lease until the blocking
-        download returns. The same transaction then converts those requested
-        states to durable ``paused``/``cancelled`` truth before any new work can
-        consume the freed global slot. Otherwise the valid holder moves from
-        ``running`` to ``promoting`` and becomes mutation-fenced.
+        The target-scoped advisory lock is the final filesystem-mutation fence.
+        Even if legacy data already contains two valid leases for one target,
+        exactly one holder can transition to ``promoting``. A later holder is
+        durably cancelled before shared artifacts or registry state are touched.
         """
         async with async_transaction_scope() as session:
             requested = await session.execute(
@@ -418,6 +518,72 @@ class ModelDownloadRepository:
             )
             if requested.first() is not None:
                 return False
+
+            current_result = await session.execute(
+                text(
+                    """
+                    SELECT install_path, created_at
+                    FROM public.model_download_jobs
+                    WHERE job_id = :job_id
+                      AND status = 'running'
+                      AND cancel_requested = false
+                      AND pause_requested = false
+                      AND lease_token = CAST(:lease_token AS uuid)
+                      AND lease_expires_at > now()
+                    """
+                ),
+                {"job_id": job_id, "lease_token": lease_token},
+            )
+            current = current_result.mappings().first()
+            if current is None:
+                return False
+
+            install_path = str(current.get("install_path") or "").strip() or None
+            await _lock_install_target(session, install_path)
+            if install_path is not None:
+                fenced = await session.execute(
+                    text(
+                        """
+                        UPDATE public.model_download_jobs AS jobs
+                        SET status = 'cancelled',
+                            cancel_requested = true,
+                            message = 'Superseded before promotion by canonical install-target owner',
+                            completed_at = now(),
+                            lease_owner = NULL,
+                            lease_token = NULL,
+                            lease_expires_at = NULL,
+                            heartbeat_at = NULL
+                        WHERE jobs.job_id = :job_id
+                          AND jobs.status = 'running'
+                          AND jobs.cancel_requested = false
+                          AND jobs.pause_requested = false
+                          AND jobs.lease_token = CAST(:lease_token AS uuid)
+                          AND jobs.lease_expires_at > now()
+                          AND EXISTS (
+                              SELECT 1
+                              FROM public.model_download_jobs AS sibling
+                              WHERE sibling.job_id <> jobs.job_id
+                                AND sibling.install_path = jobs.install_path
+                                AND (
+                                    (
+                                        sibling.status = 'promoting'
+                                        AND sibling.lease_token IS NOT NULL
+                                        AND sibling.lease_expires_at > now()
+                                    )
+                                    OR (
+                                        sibling.status = 'completed'
+                                        AND sibling.completed_at IS NOT NULL
+                                        AND sibling.completed_at >= jobs.created_at
+                                    )
+                                )
+                          )
+                        RETURNING jobs.job_id
+                        """
+                    ),
+                    {"job_id": job_id, "lease_token": lease_token},
+                )
+                if fenced.first() is not None:
+                    return False
 
             result = await session.execute(
                 text(
@@ -448,6 +614,7 @@ class ModelDownloadRepository:
         install_path: str,
     ) -> Optional[dict[str, Any]]:
         async with async_transaction_scope() as session:
+            await _lock_install_target(session, install_path)
             result = await session.execute(
                 text(
                     """
@@ -473,7 +640,47 @@ class ModelDownloadRepository:
                     "install_path": install_path,
                 },
             )
-            return _mapping(result.mappings().first())
+            completed = _mapping(result.mappings().first())
+            if completed is None:
+                return None
+
+            await session.execute(
+                text(
+                    """
+                    UPDATE public.model_download_jobs
+                    SET status = 'cancelled',
+                        cancel_requested = true,
+                        pause_requested = false,
+                        message = 'Superseded by completed canonical job for the same install target',
+                        completed_at = now(),
+                        lease_owner = NULL,
+                        lease_token = NULL,
+                        lease_expires_at = NULL,
+                        heartbeat_at = NULL
+                    WHERE job_id <> :job_id
+                      AND install_path = :install_path
+                      AND status IN ('queued', 'paused')
+                      AND lease_token IS NULL
+                    """
+                ),
+                {"job_id": job_id, "install_path": install_path},
+            )
+            await session.execute(
+                text(
+                    """
+                    UPDATE public.model_download_jobs
+                    SET cancel_requested = true,
+                        message = 'Cancellation requested because the install target completed elsewhere'
+                    WHERE job_id <> :job_id
+                      AND install_path = :install_path
+                      AND status IN ('running', 'pause_requested')
+                      AND lease_token IS NOT NULL
+                      AND lease_expires_at > now()
+                    """
+                ),
+                {"job_id": job_id, "install_path": install_path},
+            )
+            return completed
 
     async def fail_or_retry(
         self,
