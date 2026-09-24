@@ -115,16 +115,18 @@ async function assertAgentsReady(page: Page): Promise<void> {
   await expect(
     page.getByRole("heading", { name: "Dashboard", exact: true }),
   ).toBeVisible();
-  await expect
-    .poll(
-      async () => (await visibleBodyText(page)).includes("..."),
-      {
-        timeout: 30_000,
-        message:
-          "Agents Overview still contains loading placeholders. Real runtime metrics must finish loading before capture.",
-      },
-    )
-    .toBe(false);
+
+  const readyState = page.locator('[data-showcase-state="ready"]');
+  const unavailableState = page.locator('[data-showcase-state="unavailable"]');
+  await expect(readyState).toBeVisible({ timeout: 30_000 });
+  await expect(unavailableState).toHaveCount(0);
+  await expect(
+    page.getByText("Automation Metrics Unavailable", { exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText("Live Runtime Connected", { exact: true }),
+  ).toBeVisible();
+
   await assertCanonicalVisibleBrand(page);
 }
 
