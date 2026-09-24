@@ -64,7 +64,7 @@ def test_claim_transaction_counts_all_live_execution_leases_before_claim() -> No
     settings_table = claim.index("model_download_runtime_settings", settings_select)
     settings_lock = claim.index("FOR UPDATE", settings_table)
     active_count = claim.index("SELECT count(*)", settings_lock)
-    skip_locked = claim.index("FOR UPDATE SKIP LOCKED", active_count)
+    skip_locked = claim.index("FOR UPDATE OF jobs SKIP LOCKED", active_count)
     active_slice = claim[active_count:skip_locked]
 
     assert advisory < settings_select < settings_table < settings_lock < active_count < skip_locked
@@ -75,6 +75,36 @@ def test_claim_transaction_counts_all_live_execution_leases_before_claim() -> No
 
     service_claim = _method_body(_read(SERVICE), "claim_next_job")
     assert "global_concurrency=" not in service_claim
+
+
+def test_install_target_exclusivity_is_database_owned_at_create_claim_and_promotion() -> None:
+    repository = _read(REPOSITORY)
+    create = _method_body(repository, "create_job")
+    claim = _method_body(repository, "claim_next")
+    reserve = _method_body(repository, "lease_is_valid")
+    complete = _method_body(repository, "complete_job")
+
+    assert "hashtextextended(:install_path, 0)" in repository
+    assert "await _lock_install_target(session, install_path)" in create
+    assert "status IN (" in create
+    for status in ("'queued'", "'running'", "'promoting'", "'paused'", "'pause_requested'"):
+        assert status in create
+    assert 'existing["_target_reused"] = True' in create
+
+    assert "blocker.install_path = jobs.install_path" in claim
+    assert "blocker.lease_expires_at > now()" in claim
+    assert "superseded AS" in claim
+    assert "Superseded by canonical job for the same install target" in claim
+
+    target_lock = reserve.index("await _lock_install_target(session, install_path)")
+    promotion = reserve.index("SET status = 'promoting'", target_lock)
+    assert target_lock < promotion
+    assert "sibling.install_path = jobs.install_path" in reserve
+    assert "sibling.status = 'promoting'" in reserve
+    assert "Superseded before promotion by canonical install-target owner" in reserve
+
+    assert "await _lock_install_target(session, install_path)" in complete
+    assert "Superseded by completed canonical job for the same install target" in complete
 
 
 def test_requested_control_states_retain_lease_until_execution_boundary() -> None:
