@@ -530,7 +530,6 @@ class ModelDownloadRepository:
                       AND pause_requested = false
                       AND lease_token = CAST(:lease_token AS uuid)
                       AND lease_expires_at > now()
-                    FOR UPDATE
                     """
                 ),
                 {"job_id": job_id, "lease_token": lease_token},
