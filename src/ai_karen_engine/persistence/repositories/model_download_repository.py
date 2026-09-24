@@ -155,19 +155,33 @@ class ModelDownloadRepository:
             return _mapping(result.mappings().first())
 
     async def cancel_job(self, job_id: str) -> Optional[dict[str, Any]]:
+        """Request cancellation without releasing a live execution lease.
+
+        Blocking downloads run in ``asyncio.to_thread`` and cannot be stopped by
+        cancelling the asyncio task. A leased job therefore keeps its lease and
+        remains counted as active until the real I/O returns, fails, or its
+        lease expires. Unclaimed work can be cancelled immediately.
+        """
         async with async_transaction_scope() as session:
             result = await session.execute(
                 text(
                     """
                     UPDATE public.model_download_jobs
                     SET cancel_requested = true,
-                        status = 'cancelled',
-                        message = 'Cancelled by user',
-                        lease_owner = NULL,
-                        lease_token = NULL,
-                        lease_expires_at = NULL,
-                        heartbeat_at = NULL,
-                        completed_at = now()
+                        status = CASE
+                            WHEN lease_token IS NOT NULL THEN status
+                            ELSE 'cancelled'
+                        END,
+                        message = CASE
+                            WHEN lease_token IS NOT NULL
+                                THEN 'Cancellation requested; active staging will not be promoted'
+                            ELSE 'Cancelled by user'
+                        END,
+                        lease_owner = CASE WHEN lease_token IS NOT NULL THEN lease_owner ELSE NULL END,
+                        lease_token = CASE WHEN lease_token IS NOT NULL THEN lease_token ELSE NULL END,
+                        lease_expires_at = CASE WHEN lease_token IS NOT NULL THEN lease_expires_at ELSE NULL END,
+                        heartbeat_at = CASE WHEN lease_token IS NOT NULL THEN heartbeat_at ELSE NULL END,
+                        completed_at = CASE WHEN lease_token IS NOT NULL THEN completed_at ELSE now() END
                     WHERE job_id = :job_id
                       AND status NOT IN ('promoting', 'completed', 'failed', 'cancelled')
                     RETURNING *
@@ -178,22 +192,20 @@ class ModelDownloadRepository:
             return _mapping(result.mappings().first())
 
     async def pause_job(self, job_id: str) -> Optional[dict[str, Any]]:
+        """Pause queued work immediately or fence active work after its I/O ends."""
         async with async_transaction_scope() as session:
             result = await session.execute(
                 text(
                     """
                     UPDATE public.model_download_jobs
                     SET pause_requested = true,
-                        status = CASE WHEN status = 'running' THEN 'pause_requested' ELSE 'paused' END,
-                        message = CASE WHEN status = 'running'
+                        status = CASE WHEN lease_token IS NOT NULL THEN 'pause_requested' ELSE 'paused' END,
+                        message = CASE WHEN lease_token IS NOT NULL
                             THEN 'Pause requested; active staging will not be promoted'
-                            ELSE 'Paused before execution' END,
-                        lease_owner = CASE WHEN status = 'running' THEN NULL ELSE lease_owner END,
-                        lease_token = CASE WHEN status = 'running' THEN NULL ELSE lease_token END,
-                        lease_expires_at = CASE WHEN status = 'running' THEN NULL ELSE lease_expires_at END,
-                        heartbeat_at = CASE WHEN status = 'running' THEN NULL ELSE heartbeat_at END
+                            ELSE 'Paused before execution' END
                     WHERE job_id = :job_id
-                      AND status NOT IN ('promoting', 'completed', 'failed', 'cancelled', 'paused', 'pause_requested')
+                      AND status IN ('queued', 'running')
+                      AND cancel_requested = false
                     RETURNING *
                     """
                 ),
@@ -202,6 +214,7 @@ class ModelDownloadRepository:
             return _mapping(result.mappings().first())
 
     async def resume_job(self, job_id: str) -> Optional[dict[str, Any]]:
+        """Resume only fully paused work, never a still-leased pause request."""
         async with async_transaction_scope() as session:
             result = await session.execute(
                 text(
@@ -216,7 +229,8 @@ class ModelDownloadRepository:
                         lease_expires_at = NULL,
                         heartbeat_at = NULL
                     WHERE job_id = :job_id
-                      AND status IN ('paused', 'pause_requested')
+                      AND status = 'paused'
+                      AND lease_token IS NULL
                     RETURNING *
                     """
                 ),
@@ -241,20 +255,44 @@ class ModelDownloadRepository:
                 text(
                     """
                     UPDATE public.model_download_jobs
-                    SET status = CASE WHEN attempt_count >= max_attempts THEN 'failed' ELSE 'queued' END,
-                        message = CASE WHEN attempt_count >= max_attempts
-                            THEN 'Download failed after maximum retry attempts'
-                            ELSE 'Lease expired; queued for retry' END,
-                        error = COALESCE(error, 'Worker lease expired'),
-                        available_at = CASE WHEN attempt_count >= max_attempts
-                            THEN available_at
-                            ELSE now() + (:retry_base_seconds * GREATEST(attempt_count, 1)) * interval '1 second' END,
-                        dead_lettered_at = CASE WHEN attempt_count >= max_attempts THEN now() ELSE dead_lettered_at END,
+                    SET status = CASE
+                            WHEN cancel_requested THEN 'cancelled'
+                            WHEN pause_requested THEN 'paused'
+                            WHEN attempt_count >= max_attempts THEN 'failed'
+                            ELSE 'queued'
+                        END,
+                        message = CASE
+                            WHEN cancel_requested THEN 'Cancelled after worker lease expired'
+                            WHEN pause_requested THEN 'Paused after worker lease expired'
+                            WHEN attempt_count >= max_attempts
+                                THEN 'Download failed after maximum retry attempts'
+                            ELSE 'Lease expired; queued for retry'
+                        END,
+                        error = CASE
+                            WHEN cancel_requested OR pause_requested THEN error
+                            ELSE COALESCE(error, 'Worker lease expired')
+                        END,
+                        available_at = CASE
+                            WHEN cancel_requested OR pause_requested OR attempt_count >= max_attempts
+                                THEN available_at
+                            ELSE now() + (:retry_base_seconds * GREATEST(attempt_count, 1)) * interval '1 second'
+                        END,
+                        dead_lettered_at = CASE
+                            WHEN cancel_requested OR pause_requested THEN NULL
+                            WHEN attempt_count >= max_attempts THEN now()
+                            ELSE dead_lettered_at
+                        END,
+                        completed_at = CASE
+                            WHEN cancel_requested THEN now()
+                            WHEN pause_requested THEN NULL
+                            WHEN attempt_count >= max_attempts THEN now()
+                            ELSE NULL
+                        END,
                         lease_owner = NULL,
                         lease_token = NULL,
                         lease_expires_at = NULL,
                         heartbeat_at = NULL
-                    WHERE status IN ('running', 'promoting')
+                    WHERE status IN ('running', 'promoting', 'pause_requested')
                       AND lease_token IS NOT NULL
                       AND lease_expires_at <= now()
                     """
@@ -280,7 +318,7 @@ class ModelDownloadRepository:
                     """
                     SELECT count(*)
                     FROM public.model_download_jobs
-                    WHERE status IN ('running', 'promoting')
+                    WHERE status IN ('running', 'promoting', 'pause_requested')
                       AND lease_token IS NOT NULL
                       AND lease_expires_at > now()
                     """
@@ -335,7 +373,7 @@ class ModelDownloadRepository:
                     SET heartbeat_at = now(),
                         lease_expires_at = now() + :lease_seconds * interval '1 second'
                     WHERE job_id = :job_id
-                      AND status IN ('running', 'promoting')
+                      AND status IN ('running', 'promoting', 'pause_requested')
                       AND lease_token = CAST(:lease_token AS uuid)
                       AND lease_expires_at > now()
                     RETURNING job_id
@@ -346,13 +384,41 @@ class ModelDownloadRepository:
             return result.first() is not None
 
     async def lease_is_valid(self, *, job_id: str, lease_token: str) -> bool:
-        """Atomically reserve promotion for the current valid lease.
+        """Finalize requested control states or atomically reserve promotion.
 
-        The state transition closes the check-then-promote race: once a lease
-        holder moves from ``running`` to ``promoting``, cancel/pause mutations
-        are fenced out until completion, failure, or expiry.
+        Pause/cancel requests keep their execution lease until the blocking
+        download returns. The same transaction then converts those requested
+        states to durable ``paused``/``cancelled`` truth before any new work can
+        consume the freed global slot. Otherwise the valid holder moves from
+        ``running`` to ``promoting`` and becomes mutation-fenced.
         """
         async with async_transaction_scope() as session:
+            requested = await session.execute(
+                text(
+                    """
+                    UPDATE public.model_download_jobs
+                    SET status = CASE WHEN cancel_requested THEN 'cancelled' ELSE 'paused' END,
+                        message = CASE WHEN cancel_requested
+                            THEN 'Cancelled after active staging stopped'
+                            ELSE 'Paused after active staging stopped' END,
+                        completed_at = CASE WHEN cancel_requested THEN now() ELSE NULL END,
+                        lease_owner = NULL,
+                        lease_token = NULL,
+                        lease_expires_at = NULL,
+                        heartbeat_at = NULL
+                    WHERE job_id = :job_id
+                      AND status IN ('running', 'pause_requested')
+                      AND (cancel_requested = true OR pause_requested = true)
+                      AND lease_token = CAST(:lease_token AS uuid)
+                      AND lease_expires_at > now()
+                    RETURNING status
+                    """
+                ),
+                {"job_id": job_id, "lease_token": lease_token},
+            )
+            if requested.first() is not None:
+                return False
+
             result = await session.execute(
                 text(
                     """
@@ -422,20 +488,45 @@ class ModelDownloadRepository:
                 text(
                     """
                     UPDATE public.model_download_jobs
-                    SET status = CASE WHEN attempt_count >= max_attempts THEN 'failed' ELSE 'queued' END,
-                        message = CASE WHEN attempt_count >= max_attempts
-                            THEN 'Download failed after maximum retry attempts'
-                            ELSE 'Download failed; queued for retry' END,
-                        error = :error,
-                        available_at = CASE WHEN attempt_count >= max_attempts
-                            THEN available_at
-                            ELSE now() + (:retry_base_seconds * GREATEST(attempt_count, 1)) * interval '1 second' END,
-                        dead_lettered_at = CASE WHEN attempt_count >= max_attempts THEN now() ELSE NULL END,
-                        completed_at = CASE WHEN attempt_count >= max_attempts THEN now() ELSE NULL END,
-                        lease_owner = NULL, lease_token = NULL,
-                        lease_expires_at = NULL, heartbeat_at = NULL
+                    SET status = CASE
+                            WHEN cancel_requested THEN 'cancelled'
+                            WHEN pause_requested THEN 'paused'
+                            WHEN attempt_count >= max_attempts THEN 'failed'
+                            ELSE 'queued'
+                        END,
+                        message = CASE
+                            WHEN cancel_requested THEN 'Cancelled after active download stopped'
+                            WHEN pause_requested THEN 'Paused after active download stopped'
+                            WHEN attempt_count >= max_attempts
+                                THEN 'Download failed after maximum retry attempts'
+                            ELSE 'Download failed; queued for retry'
+                        END,
+                        error = CASE
+                            WHEN cancel_requested OR pause_requested THEN error
+                            ELSE :error
+                        END,
+                        available_at = CASE
+                            WHEN cancel_requested OR pause_requested OR attempt_count >= max_attempts
+                                THEN available_at
+                            ELSE now() + (:retry_base_seconds * GREATEST(attempt_count, 1)) * interval '1 second'
+                        END,
+                        dead_lettered_at = CASE
+                            WHEN cancel_requested OR pause_requested THEN NULL
+                            WHEN attempt_count >= max_attempts THEN now()
+                            ELSE NULL
+                        END,
+                        completed_at = CASE
+                            WHEN cancel_requested THEN now()
+                            WHEN pause_requested THEN NULL
+                            WHEN attempt_count >= max_attempts THEN now()
+                            ELSE NULL
+                        END,
+                        lease_owner = NULL,
+                        lease_token = NULL,
+                        lease_expires_at = NULL,
+                        heartbeat_at = NULL
                     WHERE job_id = :job_id
-                      AND status IN ('running', 'promoting')
+                      AND status IN ('running', 'promoting', 'pause_requested')
                       AND lease_token = CAST(:lease_token AS uuid)
                     RETURNING *
                     """
@@ -461,12 +552,27 @@ class ModelDownloadRepository:
                 text(
                     """
                     UPDATE public.model_download_jobs
-                    SET status = 'queued', message = 'Worker stopped; queued for retry',
-                        available_at = now() + :retry_delay_seconds * interval '1 second',
-                        lease_owner = NULL, lease_token = NULL,
-                        lease_expires_at = NULL, heartbeat_at = NULL
+                    SET status = CASE
+                            WHEN cancel_requested THEN 'cancelled'
+                            WHEN pause_requested THEN 'paused'
+                            ELSE 'queued'
+                        END,
+                        message = CASE
+                            WHEN cancel_requested THEN 'Cancelled while worker stopped'
+                            WHEN pause_requested THEN 'Paused while worker stopped'
+                            ELSE 'Worker stopped; queued for retry'
+                        END,
+                        available_at = CASE
+                            WHEN cancel_requested OR pause_requested THEN available_at
+                            ELSE now() + :retry_delay_seconds * interval '1 second'
+                        END,
+                        completed_at = CASE WHEN cancel_requested THEN now() ELSE completed_at END,
+                        lease_owner = NULL,
+                        lease_token = NULL,
+                        lease_expires_at = NULL,
+                        heartbeat_at = NULL
                     WHERE job_id = :job_id
-                      AND status = 'running'
+                      AND status IN ('running', 'pause_requested')
                       AND lease_token = CAST(:lease_token AS uuid)
                     RETURNING job_id
                     """
