@@ -9,6 +9,9 @@ WORKER = ROOT / "src/ai_karen_engine/core/model_runtime/model_download_worker.py
 ROUTES = ROOT / "src/ai_karen_engine/api_routes/models/model_orchestrator.py"
 LIFECYCLE = ROOT / "src/ai_karen_engine/server/application_runtime.py"
 MIGRATION = ROOT / "supabase/migrations/20260924010000_17_model_download_job_authority.sql"
+REQUESTED_STATE_MIGRATION = (
+    ROOT / "supabase/migrations/20260924195000_18_model_download_requested_state_leases.sql"
+)
 
 
 def _read(path: Path) -> str:
@@ -52,7 +55,7 @@ def test_model_download_migration_owns_updated_at_trigger_helper() -> None:
     assert "REVOKE ALL ON FUNCTION public.set_model_download_updated_at() FROM PUBLIC;" in migration
 
 
-def test_claim_transaction_reads_db_global_cap_before_skip_locked_claim() -> None:
+def test_claim_transaction_counts_all_live_execution_leases_before_claim() -> None:
     repository = _read(REPOSITORY)
     claim = _method_body(repository, "claim_next")
 
@@ -62,14 +65,59 @@ def test_claim_transaction_reads_db_global_cap_before_skip_locked_claim() -> Non
     settings_lock = claim.index("FOR UPDATE", settings_table)
     active_count = claim.index("SELECT count(*)", settings_lock)
     skip_locked = claim.index("FOR UPDATE SKIP LOCKED", active_count)
+    active_slice = claim[active_count:skip_locked]
 
     assert advisory < settings_select < settings_table < settings_lock < active_count < skip_locked
-    assert "lease_expires_at > now()" in claim[active_count:skip_locked]
-    assert "status IN ('running', 'promoting')" in claim[active_count:skip_locked]
+    assert "lease_expires_at > now()" in active_slice
+    assert "status IN ('running', 'promoting', 'pause_requested')" in active_slice
+    assert "lease_token IS NOT NULL" in active_slice
     assert "global_concurrency" not in claim.split("async def claim_next", 1)[1].split(") ->", 1)[0]
 
     service_claim = _method_body(_read(SERVICE), "claim_next_job")
     assert "global_concurrency=" not in service_claim
+
+
+def test_requested_control_states_retain_lease_until_execution_boundary() -> None:
+    repository = _read(REPOSITORY)
+    cancel = _method_body(repository, "cancel_job")
+    pause = _method_body(repository, "pause_job")
+    resume = _method_body(repository, "resume_job")
+    heartbeat = _method_body(repository, "heartbeat")
+    reserve = _method_body(repository, "lease_is_valid")
+    failure = _method_body(repository, "fail_or_retry")
+    shutdown_release = _method_body(repository, "release_for_shutdown")
+
+    assert "cancel_requested = true" in cancel
+    assert "WHEN lease_token IS NOT NULL THEN status" in cancel
+    assert "Cancellation requested; active staging will not be promoted" in cancel
+
+    assert "pause_requested = true" in pause
+    assert "WHEN lease_token IS NOT NULL THEN 'pause_requested'" in pause
+    assert "status IN ('queued', 'running')" in pause
+
+    assert "status = 'paused'" in resume
+    assert "lease_token IS NULL" in resume
+    assert "'pause_requested'" not in resume
+
+    assert "status IN ('running', 'promoting', 'pause_requested')" in heartbeat
+    assert "cancel_requested = true OR pause_requested = true" in reserve
+    assert "WHEN cancel_requested THEN 'cancelled' ELSE 'paused'" in reserve
+    assert "lease_token = NULL" in reserve
+
+    assert "WHEN cancel_requested THEN 'cancelled'" in failure
+    assert "WHEN pause_requested THEN 'paused'" in failure
+    assert "status IN ('running', 'promoting', 'pause_requested')" in failure
+
+    assert "WHEN cancel_requested THEN 'cancelled'" in shutdown_release
+    assert "WHEN pause_requested THEN 'paused'" in shutdown_release
+    assert "status IN ('running', 'pause_requested')" in shutdown_release
+
+
+def test_requested_state_active_lease_index_matches_runtime_accounting() -> None:
+    migration = _read(REQUESTED_STATE_MIGRATION)
+    assert "DROP INDEX IF EXISTS public.idx_model_download_jobs_active_lease" in migration
+    assert "status IN ('running', 'promoting', 'pause_requested')" in migration
+    assert "lease_token IS NOT NULL" in migration
 
 
 def test_lease_mutations_are_token_fenced() -> None:
@@ -91,22 +139,26 @@ def test_promotion_is_reserved_before_filesystem_mutation() -> None:
     heartbeat = _method_body(repository, "heartbeat")
     shutdown_release = _method_body(repository, "release_for_shutdown")
 
-    assert "SET status = 'promoting'" in reserve
-    assert "status = 'running'" in reserve
+    requested_finalize = reserve.index("cancel_requested = true OR pause_requested = true")
+    promotion = reserve.index("SET status = 'promoting'", requested_finalize)
+    assert requested_finalize < promotion
+    assert "status = 'running'" in reserve[promotion:]
+    assert "cancel_requested = false" in reserve[promotion:]
+    assert "pause_requested = false" in reserve[promotion:]
+
     assert "'promoting'" in cancel
-    assert "'promoting'" in pause
+    assert "status IN ('queued', 'running')" in pause
     assert "status = 'promoting'" in complete
-    assert "status IN ('running', 'promoting')" in heartbeat
-    assert "AND status = 'running'" in shutdown_release
-    assert "status IN ('running', 'promoting')" not in shutdown_release
+    assert "status IN ('running', 'promoting', 'pause_requested')" in heartbeat
+    assert "status IN ('running', 'pause_requested')" in shutdown_release
     assert "'promoting'" in migration
 
     staging = service.index('self.models_root / ".staging" / "model-downloads"')
     reservation = service.index("lease_is_valid", staging)
-    promotion = service.index("_promote_staged_directory", reservation)
-    registry = service.index("_register_promoted_model", promotion)
+    filesystem_promotion = service.index("_promote_staged_directory", reservation)
+    registry = service.index("_register_promoted_model", filesystem_promotion)
     completion = service.index("complete_job", registry)
-    assert staging < reservation < promotion < registry < completion
+    assert staging < reservation < filesystem_promotion < registry < completion
 
 
 def test_registry_publication_precedes_terminal_completion() -> None:
