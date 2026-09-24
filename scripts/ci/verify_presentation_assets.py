@@ -42,6 +42,7 @@ REQUIRED_PRESENTATION_FILES = (
     SCREENSHOT_ROOT / "README.md",
     UI_ROOT / "e2e" / "playwright.showcase.config.ts",
     UI_ROOT / "e2e" / "showcase" / "capture-product.showcase.ts",
+    UI_ROOT / "src" / "app" / "dashboard" / "page.tsx",
     UI_ROOT / "src" / "app" / "manifest.ts",
 )
 
@@ -55,7 +56,9 @@ class PresentationContractError(RuntimeError):
 
 def require_file(path: Path) -> None:
     if not path.is_file():
-        raise PresentationContractError(f"missing required presentation file: {path.relative_to(REPO_ROOT)}")
+        raise PresentationContractError(
+            f"missing required presentation file: {path.relative_to(REPO_ROOT)}"
+        )
 
 
 def read_text(path: Path) -> str:
@@ -66,7 +69,9 @@ def read_text(path: Path) -> str:
 def png_dimensions(path: Path) -> tuple[int, int]:
     data = path.read_bytes()
     if len(data) < 24 or data[:8] != PNG_SIGNATURE:
-        raise PresentationContractError(f"not a valid PNG: {path.relative_to(REPO_ROOT)}")
+        raise PresentationContractError(
+            f"not a valid PNG: {path.relative_to(REPO_ROOT)}"
+        )
     return struct.unpack(">II", data[16:24])
 
 
@@ -98,12 +103,30 @@ def verify_brand_contract() -> None:
 
     layout = read_text(UI_ROOT / "src" / "app" / "layout.tsx")
     manifest = read_text(UI_ROOT / "src" / "app" / "manifest.ts")
+    dashboard = read_text(UI_ROOT / "src" / "app" / "dashboard" / "page.tsx")
+
     if "/brand/karen-mark.svg" not in layout or "/brand/karen-banner.svg" not in layout:
-        raise PresentationContractError("web metadata must use canonical KAREN mark and banner")
+        raise PresentationContractError(
+            "web metadata must use canonical KAREN mark and banner"
+        )
     if "/brand/karen-mark.svg" not in manifest:
         raise PresentationContractError("install manifest must use canonical KAREN mark")
+    if dashboard.count('/brand/karen-mark.svg') < 2:
+        raise PresentationContractError(
+            "authenticated shell must use the canonical KAREN mark in header and footer"
+        )
+    if "Karen AI" in dashboard:
+        raise PresentationContractError(
+            "authenticated shell still contains the retired split-brand 'Karen AI' label"
+        )
+    if '"Initializing KAREN"' not in dashboard:
+        raise PresentationContractError(
+            "authenticated startup state must use canonical KAREN naming"
+        )
 
-    capture_spec = read_text(UI_ROOT / "e2e" / "showcase" / "capture-product.showcase.ts")
+    capture_spec = read_text(
+        UI_ROOT / "e2e" / "showcase" / "capture-product.showcase.ts"
+    )
     forbidden_capture_primitives = (
         "page.route(",
         "context.route(",
@@ -119,6 +142,8 @@ def verify_brand_contract() -> None:
     required_capture_guards = (
         'KAREN_SHOWCASE_ALLOW_CAPTURE !== "true"',
         'KAREN_SHOWCASE_ACCOUNT_KIND !== "sanitized-demo"',
+        'page.getByRole("heading", { name: "KAREN", exact: true })',
+        'page.locator(\'img[src="/brand/karen-mark.svg"]\').first()',
         'source: "real-running-application"',
         'mocked_responses: false',
         'generated_ui: false',
@@ -126,7 +151,9 @@ def verify_brand_contract() -> None:
     )
     for guard in required_capture_guards:
         if guard not in capture_spec:
-            raise PresentationContractError(f"showcase capture is missing guard/provenance marker: {guard}")
+            raise PresentationContractError(
+                f"showcase capture is missing guard/provenance marker: {guard}"
+            )
 
 
 def verify_gallery(require_assets: bool) -> bool:
@@ -151,11 +178,17 @@ def verify_gallery(require_assets: bool) -> bool:
     payload = json.loads(CAPTURE_MANIFEST.read_text(encoding="utf-8"))
 
     if payload.get("source") != "real-running-application":
-        raise PresentationContractError("capture provenance must identify a real running application")
+        raise PresentationContractError(
+            "capture provenance must identify a real running application"
+        )
     if payload.get("authenticated") is not True:
-        raise PresentationContractError("curated screenshots must come from an authenticated product session")
+        raise PresentationContractError(
+            "curated screenshots must come from an authenticated product session"
+        )
     if payload.get("account_kind") != "sanitized-demo":
-        raise PresentationContractError("curated screenshots must use an approved sanitized demo account")
+        raise PresentationContractError(
+            "curated screenshots must use an approved sanitized demo account"
+        )
 
     policy = payload.get("policy")
     expected_policy = {
@@ -215,7 +248,9 @@ def main() -> int:
     if gallery_ready:
         print("presentation contract green: canonical brand + provenanced real-product gallery")
     else:
-        print("presentation contract green: brand/capture rail valid; curated real-product gallery still pending")
+        print(
+            "presentation contract green: brand/capture rail valid; curated real-product gallery still pending"
+        )
     return 0
 
 
