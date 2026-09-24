@@ -18,6 +18,12 @@ const GALLERY_FILES = [
 ] as const;
 
 const FULL_SHA = /^[0-9a-f]{40}$/i;
+const RETIRED_VISIBLE_BRAND = /\bKaren AI\b/i;
+const COMMS_DEGRADED_TITLES = [
+  "Sign In Required",
+  "Observability Access Restricted",
+  "Observability Fallback",
+] as const;
 
 const requiredEnvironment = () => {
   if (process.env.KAREN_SHOWCASE_ALLOW_CAPTURE !== "true") {
@@ -69,11 +75,113 @@ function currentGitSha(): string {
   return sha.toLowerCase();
 }
 
+async function visibleBodyText(page: Page): Promise<string> {
+  return page.locator("body").innerText();
+}
+
+async function assertCanonicalVisibleBrand(page: Page): Promise<void> {
+  await expect
+    .poll(
+      async () => RETIRED_VISIBLE_BRAND.test(await visibleBodyText(page)),
+      {
+        timeout: 10_000,
+        message:
+          'Presentation target still renders the retired visible brand "Karen AI". Converge the product copy to canonical KAREN before capture.',
+      },
+    )
+    .toBe(false);
+}
+
+async function assertChatReady(page: Page): Promise<void> {
+  const log = page.getByRole("log", { name: "Chat messages" });
+  await expect(log).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(
+      async () => (await log.innerText()).trim().length,
+      {
+        timeout: 30_000,
+        message:
+          "The sanitized showcase account must contain a real non-sensitive conversation before the Chat screenshot can be promoted as product evidence.",
+      },
+    )
+    .toBeGreaterThan(24);
+  await assertCanonicalVisibleBrand(page);
+}
+
+async function assertAgentsReady(page: Page): Promise<void> {
+  await expect(
+    page.getByRole("heading", { name: "Agents Overview", exact: true }),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(
+    page.getByRole("heading", { name: "Dashboard", exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(
+      async () => (await visibleBodyText(page)).includes("..."),
+      {
+        timeout: 30_000,
+        message:
+          "Agents Overview still contains loading placeholders. Real runtime metrics must finish loading before capture.",
+      },
+    )
+    .toBe(false);
+  await assertCanonicalVisibleBrand(page);
+}
+
+async function assertPluginOverviewReady(page: Page): Promise<void> {
+  await expect(
+    page.getByRole("heading", {
+      name: /Plugins(?:\s*&\s*Tools)? Overview/i,
+    }),
+  ).toBeVisible({ timeout: 30_000 });
+
+  await expect
+    .poll(
+      async () => {
+        const statuses = page.getByRole("status");
+        const count = await statuses.count();
+        for (let index = 0; index < count; index += 1) {
+          if (await statuses.nth(index).isVisible()) {
+            return true;
+          }
+        }
+        return false;
+      },
+      {
+        timeout: 30_000,
+        message:
+          "Plugin Overview is still loading. Registry/backend lifecycle state must settle before capture.",
+      },
+    )
+    .toBe(false);
+
+  await assertCanonicalVisibleBrand(page);
+}
+
+async function assertCommsReady(page: Page): Promise<void> {
+  await expect(
+    page.getByRole("heading", {
+      name: "Communications Center",
+      exact: true,
+    }),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Writeback Queue", { exact: true })).toBeVisible();
+  await expect(page.getByText("Audit Events", { exact: true })).toBeVisible();
+  await expect(page.getByText("Training Signals", { exact: true })).toBeVisible();
+
+  for (const title of COMMS_DEGRADED_TITLES) {
+    await expect(page.getByText(title, { exact: true })).toHaveCount(0);
+  }
+
+  await assertCanonicalVisibleBrand(page);
+}
+
 async function capture(
   page: Page,
   filename: string,
   email: string,
 ): Promise<void> {
+  await assertCanonicalVisibleBrand(page);
   await page.addStyleTag({
     content: `
       *, *::before, *::after {
@@ -98,7 +206,6 @@ async function openSurface(page: Page, label: string): Promise<void> {
   const control = page.getByRole("button", { name: label, exact: true });
   await expect(control).toBeVisible();
   await control.click();
-  await page.waitForTimeout(450);
 }
 
 test("capture premium KAREN product surfaces from a real runtime", async ({
@@ -130,15 +237,19 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
     page.locator('header img[src*="karen-mark.svg"]').first(),
   ).toBeVisible();
 
+  await assertChatReady(page);
   await capture(page, GALLERY_FILES[0], email);
 
   await openSurface(page, "Agents Overview");
+  await assertAgentsReady(page);
   await capture(page, GALLERY_FILES[1], email);
 
   await openSurface(page, "Plugin Overview");
+  await assertPluginOverviewReady(page);
   await capture(page, GALLERY_FILES[2], email);
 
   await openSurface(page, "Comms Center");
+  await assertCommsReady(page);
   await capture(page, GALLERY_FILES[3], email);
 
   await openSurface(page, "Application Settings");
@@ -157,8 +268,8 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
   await providersSection.click();
   await expect(
     page.getByRole("heading", { name: "Providers", exact: true }),
-  ).toBeVisible();
-  await page.waitForTimeout(450);
+  ).toBeVisible({ timeout: 30_000 });
+  await assertCanonicalVisibleBrand(page);
   await capture(page, GALLERY_FILES[4], email);
 
   const manifest = {
@@ -178,6 +289,8 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
       generated_ui: false,
       fixture_only_state: false,
       production_or_personal_data: false,
+      presentation_ready_state_required: true,
+      retired_visible_brand_forbidden: true,
     },
     files: [...GALLERY_FILES],
   };
