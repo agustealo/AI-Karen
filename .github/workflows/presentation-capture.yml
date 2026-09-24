@@ -7,8 +7,13 @@ on:
         description: "Full 40-character git SHA deployed at the approved demo target"
         required: true
         type: string
+      destination_branch:
+        description: "Existing non-default branch that will receive validated gallery assets"
+        required: true
+        default: "docs/premium-brand-showcase"
+        type: string
       commit_assets:
-        description: "Commit validated screenshots back to this non-default branch"
+        description: "Commit validated screenshots to the destination branch"
         required: true
         default: false
         type: boolean
@@ -17,12 +22,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: karen-presentation-capture-${{ github.ref }}
+  group: karen-presentation-capture-${{ inputs.destination_branch }}
   cancel-in-progress: false
 
 jobs:
   capture:
-    name: real-product-capture
+    name: trusted-real-product-capture
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -30,23 +35,41 @@ jobs:
         working-directory: src/ui_launchers/Karen-AI-Theme
 
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Attest exact checkout
-        shell: bash
-        working-directory: .
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-
-      - name: Validate approved capture target
+      - name: Enforce default-branch workflow authority
         shell: bash
         working-directory: .
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" != "$DEFAULT_BRANCH" ]]; then
+            echo "KAREN Presentation Capture must be dispatched from the default branch so secret-bearing code is repository-trusted." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Attest exact trusted checkout
+        shell: bash
+        working-directory: .
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"
+
+      - name: Validate capture target and destination
+        shell: bash
+        working-directory: .
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DESTINATION_BRANCH: ${{ inputs.destination_branch }}
           CAPTURE_URL: ${{ secrets.KAREN_PRESENTATION_BASE_URL }}
           CAPTURE_EMAIL: ${{ secrets.KAREN_PRESENTATION_EMAIL }}
           CAPTURE_PASSWORD: ${{ secrets.KAREN_PRESENTATION_PASSWORD }}
@@ -82,13 +105,23 @@ jobs:
             exit 1
           fi
 
-          if ! git merge-base --is-ancestor "$TARGET_REVISION" HEAD; then
-            echo "target_revision must belong to the current repository line" >&2
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "$TARGET_REVISION"; then
+            echo "target_revision must include the exact trusted main capture baseline $GITHUB_SHA" >&2
             exit 1
           fi
 
-          if [[ "${{ inputs.commit_assets }}" == "true" && "$GITHUB_REF_NAME" == "$DEFAULT_BRANCH" ]]; then
-            echo "Presentation assets may not be committed directly to the default branch" >&2
+          if [[ -z "$DESTINATION_BRANCH" || "$DESTINATION_BRANCH" == "$DEFAULT_BRANCH" ]]; then
+            echo "destination_branch must be an existing non-default branch" >&2
+            exit 1
+          fi
+
+          if [[ ! "$DESTINATION_BRANCH" =~ ^[A-Za-z0-9._/-]+$ || "$DESTINATION_BRANCH" == -* || "$DESTINATION_BRANCH" == */..* || "$DESTINATION_BRANCH" == *..* ]]; then
+            echo "destination_branch contains unsafe ref syntax" >&2
+            exit 1
+          fi
+
+          if ! git ls-remote --exit-code --heads origin "refs/heads/$DESTINATION_BRANCH" >/dev/null; then
+            echo "destination_branch does not exist: $DESTINATION_BRANCH" >&2
             exit 1
           fi
 
@@ -113,7 +146,7 @@ jobs:
           curl --fail --silent --show-error --location --max-time 20 \
             "${CAPTURE_URL%/}/login" >/dev/null
 
-      - name: Capture real KAREN product surfaces
+      - name: Capture real KAREN product surfaces with trusted harness
         env:
           KAREN_SHOWCASE_ALLOW_CAPTURE: "true"
           KAREN_SHOWCASE_ACCOUNT_KIND: sanitized-demo
@@ -121,17 +154,22 @@ jobs:
           KAREN_SHOWCASE_EMAIL: ${{ secrets.KAREN_PRESENTATION_EMAIL }}
           KAREN_SHOWCASE_PASSWORD: ${{ secrets.KAREN_PRESENTATION_PASSWORD }}
           KAREN_SHOWCASE_TARGET_REVISION: ${{ inputs.target_revision }}
-        run: npm run showcase:capture
+        run: npx playwright test --config=e2e/playwright.showcase.config.ts
 
-      - name: Verify screenshot provenance and premium media contract
+      - name: Verify screenshot provenance with trusted gallery contract
         shell: bash
         working-directory: .
-        run: python scripts/ci/verify_presentation_assets.py --require-assets
+        run: |
+          set -euo pipefail
+          python scripts/ci/presentation_gallery_contract.py \
+            --require-assets \
+            --expected-harness-sha "$GITHUB_SHA" \
+            --require-target-descendant-of-harness
 
       - name: Upload immutable presentation evidence
         uses: actions/upload-artifact@v7
         with:
-          name: karen-presentation-${{ github.sha }}
+          name: karen-presentation-${{ github.sha }}-${{ inputs.target_revision }}
           path: |
             docs/assets/screenshots/01-chat-runtime.png
             docs/assets/screenshots/02-agents-overview.png
@@ -154,32 +192,41 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.destination_branch }}
           fetch-depth: 0
 
-      - name: Attest exact checkout and non-default branch
+      - name: Attest destination branch without capture secrets
         shell: bash
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DESTINATION_BRANCH: ${{ inputs.destination_branch }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          if [[ "$GITHUB_REF_NAME" == "$DEFAULT_BRANCH" ]]; then
-            echo "Presentation assets may not be committed directly to the default branch" >&2
+          if [[ -z "$DESTINATION_BRANCH" || "$DESTINATION_BRANCH" == "$DEFAULT_BRANCH" ]]; then
+            echo "destination_branch must be an existing non-default branch" >&2
             exit 1
           fi
+          test "$(git rev-parse --abbrev-ref HEAD)" = "$DESTINATION_BRANCH"
 
       - name: Download validated presentation evidence
         uses: actions/download-artifact@v8
         with:
-          name: karen-presentation-${{ github.sha }}
+          name: karen-presentation-${{ github.sha }}-${{ inputs.target_revision }}
           path: docs/assets/screenshots
 
       - name: Re-verify downloaded gallery before repository write
         shell: bash
-        run: python scripts/ci/verify_presentation_assets.py --require-assets
+        run: |
+          set -euo pipefail
+          python scripts/ci/presentation_gallery_contract.py \
+            --require-assets \
+            --expected-harness-sha "$GITHUB_SHA" \
+            --require-target-descendant-of-harness
 
-      - name: Commit validated gallery to selected branch
+      - name: Commit validated gallery to destination branch
         shell: bash
+        env:
+          DESTINATION_BRANCH: ${{ inputs.destination_branch }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -198,4 +245,4 @@ jobs:
           fi
 
           git commit -m "docs: refresh real KAREN product screenshots"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:$DESTINATION_BRANCH"
