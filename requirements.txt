@@ -62,7 +62,7 @@ bs4
 plotly
 seaborn
 SQLAlchemy
-psycopg
+psycopg[binary]
 psycopg2-binary
 asyncpg
 redis

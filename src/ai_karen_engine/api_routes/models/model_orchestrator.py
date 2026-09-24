@@ -551,7 +551,7 @@ async def list_download_jobs(
     current_user: Any = Depends(get_current_user),
 ):
     del current_user
-    jobs = _control_service().list_jobs(status=status, limit=limit)
+    jobs = await _control_service().list_jobs(status=status, limit=limit)
     return [_serialize_download_job(job) for job in jobs]
 
 
@@ -561,7 +561,7 @@ async def get_download_job(
     current_user: Any = Depends(get_current_user),
 ):
     del current_user
-    return _serialize_download_job(_control_service().get_job(job_id))
+    return _serialize_download_job(await _control_service().get_job(job_id))
 
 
 @router.post("/download/jobs/{job_id}/cancel", response_model=DownloadJobResponse)

@@ -2,9 +2,9 @@
 
 # Focused runtime/auth/memory contract surface used by CI proofs.
 numpy
-SQLAlchemy
+SQLAlchemy[asyncio]
 asyncpg
-psycopg
+psycopg[binary]
 psycopg2-binary
 PyJWT
 bcrypt
