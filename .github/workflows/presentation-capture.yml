@@ -1,0 +1,163 @@
+name: KAREN Presentation Capture
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Reachable KAREN web origin to capture, for example https://staging.example.com"
+        required: true
+        type: string
+      identity_mode:
+        description: "Credential identity stored in repository secrets"
+        required: true
+        default: email
+        type: choice
+        options:
+          - email
+          - username
+      commit_assets:
+        description: "Commit validated screenshots back to the selected non-default branch"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: karen-presentation-capture-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    name: real-product-capture
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: src/ui_launchers/Karen-AI-Theme
+    env:
+      KAREN_BASE_URL: ${{ inputs.base_url }}
+      KAREN_CAPTURE_PASSWORD: ${{ secrets.KAREN_PRESENTATION_PASSWORD }}
+      KAREN_CAPTURE_EMAIL: ${{ inputs.identity_mode == 'email' && secrets.KAREN_PRESENTATION_EMAIL || '' }}
+      KAREN_CAPTURE_USERNAME: ${{ inputs.identity_mode == 'username' && secrets.KAREN_PRESENTATION_USERNAME || '' }}
+
+    steps:
+      - name: Validate capture request
+        shell: bash
+        working-directory: .
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          case "$KAREN_BASE_URL" in
+            http://*|https://*) ;;
+            *)
+              echo "base_url must be an explicit http:// or https:// origin" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ "$KAREN_BASE_URL" == *"@"* ]]; then
+            echo "base_url must not contain embedded credentials" >&2
+            exit 1
+          fi
+
+          if [[ -z "$KAREN_CAPTURE_PASSWORD" ]]; then
+            echo "KAREN_PRESENTATION_PASSWORD secret is required" >&2
+            exit 1
+          fi
+
+          if [[ "${{ inputs.identity_mode }}" == "email" && -z "$KAREN_CAPTURE_EMAIL" ]]; then
+            echo "KAREN_PRESENTATION_EMAIL secret is required for email capture" >&2
+            exit 1
+          fi
+
+          if [[ "${{ inputs.identity_mode }}" == "username" && -z "$KAREN_CAPTURE_USERNAME" ]]; then
+            echo "KAREN_PRESENTATION_USERNAME secret is required for username capture" >&2
+            exit 1
+          fi
+
+          if [[ "${{ inputs.commit_assets }}" == "true" && "$GITHUB_REF_NAME" == "$DEFAULT_BRANCH" ]]; then
+            echo "Presentation assets may not be committed directly to the default branch" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Attest exact checkout
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install frontend dependencies reproducibly
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify target is reachable
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --max-time 20 \
+            "${KAREN_BASE_URL%/}/login" >/dev/null
+
+      - name: Capture real KAREN product surfaces
+        run: npm run capture:presentation
+
+      - name: Verify capture provenance and image contract
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check pytest
+          pytest tests/architecture/test_presentation_contract.py -q
+
+      - name: Upload immutable presentation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: karen-presentation-${{ github.sha }}
+          path: docs/assets/screenshots/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit validated screenshots to selected branch
+        if: ${{ inputs.commit_assets }}
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/assets/screenshots/01-login.png \
+            docs/assets/screenshots/02-chat-runtime.png \
+            docs/assets/screenshots/03-comms-center.png \
+            docs/assets/screenshots/04-agents-overview.png \
+            docs/assets/screenshots/05-plugin-overview.png \
+            docs/assets/screenshots/06-settings.png \
+            docs/assets/screenshots/capture-manifest.json
+
+          if git diff --cached --quiet; then
+            echo "Capture matches the committed screenshot set; nothing to commit."
+            exit 0
+          fi
+
+          git commit -m "docs: refresh real KAREN product screenshots"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
