@@ -21,6 +21,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 
 if TYPE_CHECKING:
     from pydantic import BaseModel, ConfigDict, Field, field_validator
+    from ai_karen_engine.core.langgraph_orchestrator import LangGraphOrchestrator as AIOrchestrator
+else:
+    AIOrchestrator = Any
 
 try:
     from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -30,7 +33,6 @@ except ImportError:  # pragma: no cover
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.core.automation.contracts import FlowType
-from ai_karen_engine.core.langgraph_orchestrator import LangGraphOrchestrator as AIOrchestrator
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.services.dependencies import get_langgraph_orchestrator_service
 from ai_karen_engine.services.error_response_schemas import (
