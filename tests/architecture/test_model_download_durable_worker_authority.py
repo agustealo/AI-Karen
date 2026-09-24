@@ -32,22 +32,29 @@ def test_postgres_is_the_only_download_job_lifecycle_authority() -> None:
     assert "self._tasks" not in service
     assert "asyncio.create_task(self._run_download_job" not in service
     assert "model_download_jobs" in repository
+    assert "model_download_runtime_settings" in repository
     assert "CREATE TABLE IF NOT EXISTS public.model_download_jobs" in migration
+    assert "CREATE TABLE IF NOT EXISTS public.model_download_runtime_settings" in migration
     assert "model_download_control.json" in service
     assert "model_download_policy.json" in service
     assert '"jobs":' not in service, "service must never rewrite JSON-backed job truth"
 
 
-def test_claim_transaction_enforces_global_concurrency_before_skip_locked_claim() -> None:
+def test_claim_transaction_reads_db_global_cap_before_skip_locked_claim() -> None:
     repository = _read(REPOSITORY)
     advisory = repository.index("pg_advisory_xact_lock")
-    active_count = repository.index("SELECT count(*)", advisory)
+    settings = repository.index("model_download_runtime_settings", advisory)
+    active_count = repository.index("SELECT count(*)", settings)
     skip_locked = repository.index("FOR UPDATE SKIP LOCKED", active_count)
 
-    assert advisory < active_count < skip_locked
+    assert advisory < settings < active_count < skip_locked
+    assert "max_concurrent_downloads" in repository[settings:active_count]
+    assert "FOR UPDATE" in repository[settings:active_count]
     assert "lease_expires_at > now()" in repository[active_count:skip_locked]
-    assert "global_concurrency" in repository[active_count:skip_locked]
     assert "status IN ('running', 'promoting')" in repository[active_count:skip_locked]
+
+    service_claim = _method_body(_read(SERVICE), "claim_next_job")
+    assert "global_concurrency=" not in service_claim
 
 
 def test_lease_mutations_are_token_fenced() -> None:
@@ -67,6 +74,7 @@ def test_promotion_is_reserved_before_filesystem_mutation() -> None:
     pause = _method_body(repository, "pause_job")
     complete = _method_body(repository, "complete_job")
     heartbeat = _method_body(repository, "heartbeat")
+    shutdown_release = _method_body(repository, "release_for_shutdown")
 
     assert "SET status = 'promoting'" in reserve
     assert "status = 'running'" in reserve
@@ -74,13 +82,25 @@ def test_promotion_is_reserved_before_filesystem_mutation() -> None:
     assert "'promoting'" in pause
     assert "status = 'promoting'" in complete
     assert "status IN ('running', 'promoting')" in heartbeat
+    assert "AND status = 'running'" in shutdown_release
+    assert "status IN ('running', 'promoting')" not in shutdown_release
     assert "'promoting'" in migration
 
     staging = service.index('self.models_root / ".staging" / "model-downloads"')
     reservation = service.index("lease_is_valid", staging)
     promotion = service.index("_promote_staged_directory", reservation)
-    completion = service.index("complete_job", promotion)
-    assert staging < reservation < promotion < completion
+    registry = service.index("_register_promoted_model", promotion)
+    completion = service.index("complete_job", registry)
+    assert staging < reservation < promotion < registry < completion
+
+
+def test_registry_publication_precedes_terminal_completion() -> None:
+    service = _read(SERVICE)
+    execute = _method_body(service, "execute_claimed_job")
+    register = execute.index("_register_promoted_model")
+    complete = execute.index("complete_job", register)
+    assert register < complete
+    assert "Staging registry entry missing for promoted model" in service
 
 
 def test_routes_keep_existing_contract_and_await_durable_reads() -> None:
@@ -114,6 +134,7 @@ def test_download_executor_stages_before_final_promotion() -> None:
     staging = service.index('self.models_root / ".staging" / "model-downloads"')
     lease_check = service.index("lease_is_valid", staging)
     promotion = service.index("_promote_staged_directory", lease_check)
-    completion = service.index("complete_job", promotion)
-    assert staging < lease_check < promotion < completion
+    registry = service.index("_register_promoted_model", promotion)
+    completion = service.index("complete_job", registry)
+    assert staging < lease_check < promotion < registry < completion
     assert "os.replace(staged_path, final_path)" in service
