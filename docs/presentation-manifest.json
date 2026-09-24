@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "product": "KAREN",
+  "product_category": "local-first cognitive runtime",
+  "brand": {
+    "mark": "docs/assets/brand/karen-mark.svg",
+    "banner": "docs/assets/brand/karen-banner.svg",
+    "ui_mark": "src/ui_launchers/Karen-AI-Theme/public/brand/karen-mark.svg",
+    "ui_banner": "src/ui_launchers/Karen-AI-Theme/public/brand/karen-banner.svg",
+    "brand_contract": "docs/BRAND_PRESENTATION.md"
+  },
+  "product_photography": {
+    "source": "real-running-application",
+    "capture_spec": "src/ui_launchers/Karen-AI-Theme/e2e/presentation.capture.spec.ts",
+    "capture_command": "npm run capture:presentation",
+    "output_directory": "docs/assets/screenshots",
+    "provenance_manifest": "docs/assets/screenshots/capture-manifest.json",
+    "required_files": [
+      "01-login.png",
+      "02-chat-runtime.png",
+      "03-comms-center.png",
+      "04-agents-overview.png",
+      "05-plugin-overview.png",
+      "06-settings.png"
+    ],
+    "forbid": [
+      "generated-ui",
+      "mocked-api-state",
+      "fixture-only-provider-state",
+      "fake-conversations",
+      "edited-product-values",
+      "screenshots-without-git-provenance"
+    ]
+  },
+  "documentation": {
+    "public_readme": "README.md",
+    "developer_manifest": "PROJECT_DEV_MANIFEST.md",
+    "architecture_authority": "docs/development/ARCHITECTURE_AUTHORITY.md"
+  }
+}
