@@ -74,10 +74,26 @@ FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 ALTER TABLE public.model_download_runtime_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.model_download_jobs ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE public.model_download_runtime_settings FROM anon, authenticated;
-REVOKE ALL ON TABLE public.model_download_jobs FROM anon, authenticated;
-GRANT SELECT, INSERT, UPDATE ON TABLE public.model_download_runtime_settings TO service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.model_download_jobs TO service_role;
+-- Supabase installations define anon/authenticated/service_role, while the
+-- canonical local-first and first-boot paths may run against plain PostgreSQL.
+-- PostgreSQL grants no table privileges to PUBLIC by default, so missing
+-- Supabase roles must not make this otherwise portable migration fail.
+DO $acl$
+BEGIN
+    IF to_regrole('anon') IS NOT NULL THEN
+        EXECUTE 'REVOKE ALL ON TABLE public.model_download_runtime_settings FROM anon';
+        EXECUTE 'REVOKE ALL ON TABLE public.model_download_jobs FROM anon';
+    END IF;
+    IF to_regrole('authenticated') IS NOT NULL THEN
+        EXECUTE 'REVOKE ALL ON TABLE public.model_download_runtime_settings FROM authenticated';
+        EXECUTE 'REVOKE ALL ON TABLE public.model_download_jobs FROM authenticated';
+    END IF;
+    IF to_regrole('service_role') IS NOT NULL THEN
+        EXECUTE 'GRANT SELECT, INSERT, UPDATE ON TABLE public.model_download_runtime_settings TO service_role';
+        EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.model_download_jobs TO service_role';
+    END IF;
+END
+$acl$;
 
 COMMENT ON TABLE public.model_download_runtime_settings IS
     'Installation-wide durable runtime settings for model-download workers. The singleton row is initialized by the canonical runtime and updated by the model-download policy authority.';
