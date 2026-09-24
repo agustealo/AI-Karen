@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from typing import Any
 
 import pytest
@@ -109,3 +110,60 @@ async def test_job_control_transitions_persist_without_reentrant_lock_deadlock(
 
     release_executor.set()
     await asyncio.wait_for(service._tasks[job_id], timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_persist_holds_lock_until_writer_thread_stops(
+    tmp_path,
+    monkeypatch,
+):
+    service = _service(tmp_path)
+    original_persist = service._persist_state_sync
+    writer_entered = threading.Event()
+    release_writer = threading.Event()
+    writer_finished = threading.Event()
+
+    def blocked_persist() -> None:
+        writer_entered.set()
+        if not release_writer.wait(timeout=2.0):
+            raise RuntimeError("timed out waiting to release persistence writer")
+        try:
+            original_persist()
+        finally:
+            writer_finished.set()
+
+    monkeypatch.setattr(service, "_persist_state_sync", blocked_persist)
+
+    first_mutation = asyncio.create_task(
+        service.update_policy({"block_new_downloads": True})
+    )
+    entered = await asyncio.wait_for(
+        asyncio.to_thread(writer_entered.wait, 1.0),
+        timeout=1.5,
+    )
+    assert entered is True
+
+    first_mutation.cancel()
+    await asyncio.sleep(0)
+    assert service._lock.locked() is True
+    assert first_mutation.done() is False
+
+    second_mutation = asyncio.create_task(
+        service.update_policy({"master_enabled": False})
+    )
+    await asyncio.sleep(0)
+    assert second_mutation.done() is False
+    assert service._lock.locked() is True
+
+    release_writer.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(first_mutation, timeout=1.0)
+
+    second_policy = await asyncio.wait_for(second_mutation, timeout=1.0)
+    assert writer_finished.is_set() is True
+    assert second_policy["block_new_downloads"] is True
+    assert second_policy["master_enabled"] is False
+
+    persisted = _read_state(service)
+    assert persisted["policy"]["block_new_downloads"] is True
+    assert persisted["policy"]["master_enabled"] is False
