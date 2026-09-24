@@ -1,0 +1,45 @@
+name: Model Download Control Locking Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-download-control-locking-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  model-download-control-locking:
+    name: model-download-control-locking
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: src
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+
+      - name: Install runtime proof dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/ci/quality.txt
+
+      - name: Compile model download control authority
+        run: python -m compileall -q src/ai_karen_engine/core/model_runtime/model_download_control_service.py
+
+      - name: Prove lock-safe state persistence
+        run: pytest tests/core/model_runtime/test_model_download_control_locking.py -q
