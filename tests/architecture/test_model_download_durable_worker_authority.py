@@ -42,16 +42,19 @@ def test_postgres_is_the_only_download_job_lifecycle_authority() -> None:
 
 def test_claim_transaction_reads_db_global_cap_before_skip_locked_claim() -> None:
     repository = _read(REPOSITORY)
-    advisory = repository.index("pg_advisory_xact_lock")
-    settings = repository.index("model_download_runtime_settings", advisory)
-    active_count = repository.index("SELECT count(*)", settings)
-    skip_locked = repository.index("FOR UPDATE SKIP LOCKED", active_count)
+    claim = _method_body(repository, "claim_next")
 
-    assert advisory < settings < active_count < skip_locked
-    assert "max_concurrent_downloads" in repository[settings:active_count]
-    assert "FOR UPDATE" in repository[settings:active_count]
-    assert "lease_expires_at > now()" in repository[active_count:skip_locked]
-    assert "status IN ('running', 'promoting')" in repository[active_count:skip_locked]
+    advisory = claim.index("pg_advisory_xact_lock")
+    settings_select = claim.index("SELECT max_concurrent_downloads", advisory)
+    settings_table = claim.index("model_download_runtime_settings", settings_select)
+    settings_lock = claim.index("FOR UPDATE", settings_table)
+    active_count = claim.index("SELECT count(*)", settings_lock)
+    skip_locked = claim.index("FOR UPDATE SKIP LOCKED", active_count)
+
+    assert advisory < settings_select < settings_table < settings_lock < active_count < skip_locked
+    assert "lease_expires_at > now()" in claim[active_count:skip_locked]
+    assert "status IN ('running', 'promoting')" in claim[active_count:skip_locked]
+    assert "global_concurrency" not in claim.split("async def claim_next", 1)[1].split(") ->", 1)[0]
 
     service_claim = _method_body(_read(SERVICE), "claim_next_job")
     assert "global_concurrency=" not in service_claim
