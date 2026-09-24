@@ -125,7 +125,10 @@ async def test_graceful_shutdown_keeps_active_execution_lease_renewed() -> None:
     await asyncio.wait_for(service.execution_started.wait(), timeout=0.2)
 
     stop_task = asyncio.create_task(worker.stop())
-    assert worker._stop.is_set() or not stop_task.done()
+    await asyncio.sleep(0)
+
+    assert worker._stop.is_set()
+    assert not stop_task.done()
 
     await asyncio.wait_for(service.heartbeat_seen.wait(), timeout=1.5)
 
