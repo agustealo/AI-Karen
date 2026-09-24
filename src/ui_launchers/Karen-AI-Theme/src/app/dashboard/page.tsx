@@ -276,7 +276,7 @@ export default function DashboardPage() {
     () => ({
       chat: (
         <SessionProvider>
-          <ChatInterface isActive={activeMainView === "chat"} />
+          <ChatInterface isActive={activeMainView === 'chat'} />
         </SessionProvider>
       ),
       settings: <SettingsDialogComponent />,
@@ -289,7 +289,7 @@ export default function DashboardPage() {
       commsCenter: <CommsCenterPage />,
       account: <AccountPage />,
     }),
-    [activeMainView],
+    [],
   );
 
   const currentViewContent = useMemo(() => {
