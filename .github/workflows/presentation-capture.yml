@@ -162,7 +162,7 @@ jobs:
             --expected-harness-sha "$GITHUB_SHA" \
             --require-target-descendant-of-harness
 
-      - name: Upload immutable presentation evidence
+      - name: Upload immutable presentation evidence and verifier
         uses: actions/upload-artifact@v7
         with:
           name: karen-presentation-${{ github.sha }}-${{ inputs.target_revision }}
@@ -173,6 +173,7 @@ jobs:
             docs/assets/screenshots/04-comms-center.png
             docs/assets/screenshots/05-settings-and-models.png
             docs/assets/screenshots/capture-manifest.json
+            scripts/ci/presentation_gallery_contract.py
           if-no-files-found: error
           retention-days: 30
 
@@ -204,17 +205,43 @@ jobs:
           fi
           test "$(git rev-parse HEAD)" = "$(git rev-parse origin/$DESTINATION_BRANCH)"
 
-      - name: Download validated presentation evidence
+      - name: Download trusted presentation evidence bundle
         uses: actions/download-artifact@v8
         with:
           name: karen-presentation-${{ github.sha }}-${{ inputs.target_revision }}
-          path: docs/assets/screenshots
+          path: ${{ runner.temp }}/karen-presentation-evidence
 
-      - name: Re-verify downloaded gallery before repository write
+      - name: Stage only canonical gallery files
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/ci/presentation_gallery_contract.py \
+          for path in docs docs/assets docs/assets/screenshots; do
+            if [[ -L "$path" ]]; then
+              echo "Refusing gallery write through symlinked destination path: $path" >&2
+              exit 1
+            fi
+          done
+          mkdir -p docs/assets/screenshots
+          for file in \
+            01-chat-runtime.png \
+            02-agents-overview.png \
+            03-plugin-ecosystem.png \
+            04-comms-center.png \
+            05-settings-and-models.png \
+            capture-manifest.json
+          do
+            install -m 0644 \
+              "$RUNNER_TEMP/karen-presentation-evidence/docs/assets/screenshots/$file" \
+              "docs/assets/screenshots/$file"
+          done
+
+      - name: Re-verify with trusted artifact code before repository write
+        shell: bash
+        env:
+          KAREN_PRESENTATION_REPO_ROOT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/karen-presentation-evidence/scripts/ci/presentation_gallery_contract.py" \
             --require-assets \
             --expected-harness-sha "$GITHUB_SHA" \
             --require-target-descendant-of-harness
