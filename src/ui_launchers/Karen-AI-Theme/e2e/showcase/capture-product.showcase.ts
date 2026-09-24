@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const SCREENSHOT_DIR = path.resolve(
@@ -7,6 +8,14 @@ const SCREENSHOT_DIR = path.resolve(
   "../../..",
   "docs/assets/screenshots",
 );
+
+const GALLERY_FILES = [
+  "01-chat-runtime.png",
+  "02-agents-overview.png",
+  "03-plugin-ecosystem.png",
+  "04-comms-center.png",
+  "05-settings-and-models.png",
+] as const;
 
 const requiredEnvironment = () => {
   if (process.env.KAREN_SHOWCASE_ALLOW_CAPTURE !== "true") {
@@ -32,6 +41,24 @@ const requiredEnvironment = () => {
 
   return { email, password };
 };
+
+function currentGitSha(): string {
+  const configuredSha = process.env.GITHUB_SHA?.trim();
+  if (configuredSha && /^[0-9a-f]{40}$/i.test(configuredSha)) {
+    return configuredSha.toLowerCase();
+  }
+
+  const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: path.resolve(process.cwd(), "../../.."),
+    encoding: "utf8",
+  }).trim();
+
+  if (!/^[0-9a-f]{40}$/i.test(sha)) {
+    throw new Error(`Unable to establish exact capture git SHA: ${sha}`);
+  }
+
+  return sha.toLowerCase();
+}
 
 async function capture(
   page: Page,
@@ -67,6 +94,7 @@ async function openSurface(page: Page, label: string): Promise<void> {
 
 test("capture premium KAREN product surfaces from a real runtime", async ({
   page,
+  browser,
 }) => {
   const { email, password } = requiredEnvironment();
   await mkdir(SCREENSHOT_DIR, { recursive: true });
@@ -90,16 +118,16 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
     page.getByRole("heading", { name: "Karen AI", exact: true }),
   ).toBeVisible({ timeout: 45_000 });
 
-  await capture(page, "01-chat-runtime.png", email);
+  await capture(page, GALLERY_FILES[0], email);
 
   await openSurface(page, "Agents Overview");
-  await capture(page, "02-agents-overview.png", email);
+  await capture(page, GALLERY_FILES[1], email);
 
   await openSurface(page, "Plugin Overview");
-  await capture(page, "03-plugin-ecosystem.png", email);
+  await capture(page, GALLERY_FILES[2], email);
 
   await openSurface(page, "Comms Center");
-  await capture(page, "04-comms-center.png", email);
+  await capture(page, GALLERY_FILES[3], email);
 
   await openSurface(page, "Application Settings");
   const runtimeCategory = page.getByRole("tab", {
@@ -119,5 +147,30 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
     page.getByRole("heading", { name: "Providers", exact: true }),
   ).toBeVisible();
   await page.waitForTimeout(450);
-  await capture(page, "05-settings-and-models.png", email);
+  await capture(page, GALLERY_FILES[4], email);
+
+  const manifest = {
+    schema_version: 1,
+    source: "real-running-application",
+    authenticated: true,
+    account_kind: "sanitized-demo",
+    git_sha: currentGitSha(),
+    captured_at: new Date().toISOString(),
+    browser: `chromium ${browser.version()}`,
+    viewport: { width: 1600, height: 1000 },
+    color_scheme: "dark",
+    policy: {
+      mocked_responses: false,
+      generated_ui: false,
+      fixture_only_state: false,
+      production_or_personal_data: false,
+    },
+    files: [...GALLERY_FILES],
+  };
+
+  await writeFile(
+    path.join(SCREENSHOT_DIR, "capture-manifest.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8",
+  );
 });
