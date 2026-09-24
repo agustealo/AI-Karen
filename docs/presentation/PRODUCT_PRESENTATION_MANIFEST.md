@@ -11,6 +11,7 @@ This manifest does **not** supersede `PROJECT_DEV_MANIFEST.md`. The root develop
 | Architecture and runtime claims | `PROJECT_DEV_MANIFEST.md` plus canonical architecture docs |
 | Brand assets | `src/ui_launchers/Karen-AI-Theme/public/brand/` |
 | Web app metadata/PWA identity | `src/ui_launchers/Karen-AI-Theme/src/app/layout.tsx` and `src/app/manifest.ts` |
+| Authenticated shell identity | `src/ui_launchers/Karen-AI-Theme/src/app/dashboard/page.tsx` using canonical `/brand/` assets |
 | Screenshot capture | `src/ui_launchers/Karen-AI-Theme/e2e/showcase/` |
 | Screenshot provenance verification | `scripts/ci/verify_presentation_assets.py` |
 | Presentation integrity CI | `.github/workflows/presentation-contract.yml` |
@@ -55,9 +56,10 @@ A screenshot qualifies for public product presentation only when all of the foll
 4. The capture is explicitly opted in with `KAREN_SHOWCASE_ALLOW_CAPTURE=true`.
 5. No personal conversation, secret, token, provider key, private email, or production tenant data is visible.
 6. The screen represents a capability that exists at the captured commit.
-7. The capture rail emits `capture-manifest.json` with exact git SHA, browser, viewport, account class, and no-synthetic-state policy.
-8. `python scripts/ci/verify_presentation_assets.py --require-assets` passes.
-9. The image is reviewed at native resolution before it is promoted into README hero/gallery placement.
+7. The authenticated shell visibly uses the canonical KAREN mark and name before capture begins.
+8. The capture rail emits `capture-manifest.json` with exact git SHA, browser, viewport, account class, and no-synthetic-state policy.
+9. `python scripts/ci/verify_presentation_assets.py --require-assets` passes.
+10. The image is reviewed at native resolution before it is promoted into README hero/gallery placement.
 
 The capture rail writes these canonical files:
 
@@ -88,6 +90,7 @@ Presentation code must not change the production first-boot smoke harness merely
 - Canonical wordmark: ready
 - Repository/social banner: ready
 - Web metadata and install manifest: wired
+- Authenticated application shell: wired to canonical KAREN mark/name
 - Real browser screenshot provenance: preserved in `e2e-current-browser-proof.png`
 - Curated five-screen gallery: must be regenerated from an approved sanitized live stack before this slice is considered presentation-complete
 
