@@ -25,6 +25,7 @@ class FakeModelDownloadRepository:
         self.import_calls = 0
         self.complete_calls = 0
         self.promotion_reservations = 0
+        self.global_concurrency_limit: Optional[int] = None
 
     @staticmethod
     def _stamp(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -33,6 +34,20 @@ class FakeModelDownloadRepository:
         result.setdefault("created_at", now)
         result["updated_at"] = now
         return result
+
+    async def initialize_global_concurrency_limit(self, default_limit: int) -> int:
+        if self.global_concurrency_limit is None:
+            self.global_concurrency_limit = default_limit
+        return self.global_concurrency_limit
+
+    async def get_global_concurrency_limit(self) -> int:
+        if self.global_concurrency_limit is None:
+            raise RuntimeError("not initialized")
+        return self.global_concurrency_limit
+
+    async def set_global_concurrency_limit(self, value: int) -> int:
+        self.global_concurrency_limit = value
+        return value
 
     async def create_job(self, payload: Mapping[str, Any], *, max_attempts: int) -> dict[str, Any]:
         job = self._stamp(payload)
@@ -201,6 +216,21 @@ async def test_jobs_are_repository_backed_without_process_local_lifecycle_author
 
 
 @pytest.mark.asyncio
+async def test_global_concurrency_policy_is_repository_backed(tmp_path: Path) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+
+    await service.initialize()
+    assert await service.get_global_concurrency_limit() == 1
+
+    updated = await service.update_policy({"max_concurrent_downloads": 2})
+
+    assert updated["max_concurrent_downloads"] == 2
+    assert repository.global_concurrency_limit == 2
+    assert await service.get_policy() == updated
+
+
+@pytest.mark.asyncio
 async def test_legacy_json_cutover_is_imported_then_archived(tmp_path: Path) -> None:
     runtime_root = tmp_path / "runtime-registry"
     runtime_root.mkdir(parents=True)
@@ -309,6 +339,48 @@ async def test_promotion_reservation_fences_cancel_and_pause(tmp_path: Path) -> 
     assert repository.jobs[job_id]["status"] == "promoting"
     assert repository.jobs[job_id].get("cancel_requested") is not True
     assert repository.jobs[job_id].get("pause_requested") is not True
+
+
+@pytest.mark.asyncio
+async def test_registry_failure_cannot_publish_false_completed_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    monkeypatch.setattr(ModelOrchestratorService, "download_model", _fake_staged_download)
+    job_id = "mdl-registry-fail"
+    token = "00000000-0000-0000-0000-000000000007"
+    repository.valid_leases.add((job_id, token))
+    repository.jobs[job_id] = {
+        "job_id": job_id,
+        "model_id": "test-owner/test-model",
+        "status": "running",
+    }
+    final_path = tmp_path / "models" / "transformers" / "test-owner--test-model" / "main"
+
+    async def fail_registry(**_: Any) -> None:
+        raise RuntimeError("registry unavailable")
+
+    monkeypatch.setattr(service, "_register_promoted_model", fail_registry)
+
+    with pytest.raises(RuntimeError, match="registry unavailable"):
+        await service.execute_claimed_job(
+            {
+                "job_id": job_id,
+                "lease_token": token,
+                "model_id": "test-owner/test-model",
+                "revision": None,
+                "channel_id": "core_runtime_transformers",
+                "storage_key": "transformers",
+                "install_path": str(final_path),
+            }
+        )
+
+    assert final_path.exists() is True
+    assert repository.promotion_reservations == 1
+    assert repository.complete_calls == 0
+    assert repository.jobs[job_id]["status"] == "promoting"
 
 
 @pytest.mark.asyncio
