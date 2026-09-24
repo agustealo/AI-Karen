@@ -38,8 +38,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements/ci/quality.txt
 
-      - name: Compile deep-flow route
-        run: python -m compileall -q src/ai_karen_engine/api_routes/models/orchestrator.py
+      - name: Compile model route boundaries
+        run: |
+          python -m compileall -q src/ai_karen_engine/api_routes/models/orchestrator.py
+          python -m compileall -q src/ai_karen_engine/api_routes/models/model_orchestrator.py
 
       - name: Prove model-flow route authority
-        run: pytest tests/architecture/test_model_flow_route_authority.py -q
+        run: |
+          pytest tests/architecture/test_model_flow_route_authority.py -q
+          pytest tests/architecture/test_model_orchestrator_route_authority.py -q
