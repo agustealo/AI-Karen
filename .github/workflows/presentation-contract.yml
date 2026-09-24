@@ -1,0 +1,71 @@
+name: KAREN Presentation Contract
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "README.md"
+      - "docs/BRAND_PRESENTATION.md"
+      - "docs/presentation-manifest.json"
+      - "docs/assets/brand/**"
+      - "docs/assets/screenshots/**"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/presentation.capture.spec.ts"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/playwright.config.ts"
+      - "src/ui_launchers/Karen-AI-Theme/public/brand/**"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/layout.tsx"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/login/page.tsx"
+      - "tests/architecture/test_presentation_contract.py"
+      - ".github/workflows/presentation-capture.yml"
+      - ".github/workflows/presentation-contract.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "README.md"
+      - "docs/BRAND_PRESENTATION.md"
+      - "docs/presentation-manifest.json"
+      - "docs/assets/brand/**"
+      - "docs/assets/screenshots/**"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/presentation.capture.spec.ts"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/playwright.config.ts"
+      - "src/ui_launchers/Karen-AI-Theme/public/brand/**"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/layout.tsx"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/login/page.tsx"
+      - "tests/architecture/test_presentation_contract.py"
+      - ".github/workflows/presentation-capture.yml"
+      - ".github/workflows/presentation-contract.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: karen-presentation-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  presentation-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Attest exact worker SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install contract dependency
+        run: python -m pip install --disable-pip-version-check pytest
+
+      - name: Prove premium presentation assets and real product photography
+        run: pytest tests/architecture/test_presentation_contract.py -q
