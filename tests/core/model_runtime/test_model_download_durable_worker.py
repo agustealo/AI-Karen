@@ -10,6 +10,7 @@ import pytest
 from ai_karen_engine.config.model_download import ModelDownloadWorkerSettings
 from ai_karen_engine.core.model_runtime.management.model_orchestrator_service import (
     DownloadResult,
+    ModelOrchestratorError,
     ModelOrchestratorService,
 )
 from ai_karen_engine.core.model_runtime.model_download_control_service import (
@@ -23,6 +24,7 @@ class FakeModelDownloadRepository:
         self.valid_leases: set[tuple[str, str]] = set()
         self.import_calls = 0
         self.complete_calls = 0
+        self.promotion_reservations = 0
 
     @staticmethod
     def _stamp(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -50,14 +52,21 @@ class FakeModelDownloadRepository:
 
     async def cancel_job(self, job_id: str) -> Optional[dict[str, Any]]:
         row = self.jobs.get(job_id)
-        if row is None or row.get("status") in {"completed", "failed", "cancelled"}:
+        if row is None or row.get("status") in {"promoting", "completed", "failed", "cancelled"}:
             return None
         row.update(status="cancelled", cancel_requested=True, message="Cancelled by user")
         return self._stamp(row)
 
     async def pause_job(self, job_id: str) -> Optional[dict[str, Any]]:
         row = self.jobs.get(job_id)
-        if row is None or row.get("status") in {"completed", "failed", "cancelled", "paused", "pause_requested"}:
+        if row is None or row.get("status") in {
+            "promoting",
+            "completed",
+            "failed",
+            "cancelled",
+            "paused",
+            "pause_requested",
+        }:
             return None
         row.update(
             status="pause_requested" if row.get("status") == "running" else "paused",
@@ -79,7 +88,14 @@ class FakeModelDownloadRepository:
         return True
 
     async def lease_is_valid(self, *, job_id: str, lease_token: str) -> bool:
-        return (job_id, lease_token) in self.valid_leases
+        if (job_id, lease_token) not in self.valid_leases:
+            return False
+        row = self.jobs.get(job_id)
+        if row is None or row.get("status") != "running":
+            return False
+        row.update(status="promoting", message="Promoting staged artifacts")
+        self.promotion_reservations += 1
+        return True
 
     async def complete_job(
         self,
@@ -90,9 +106,13 @@ class FakeModelDownloadRepository:
         install_path: str,
     ) -> Optional[dict[str, Any]]:
         self.complete_calls += 1
-        if (job_id, lease_token) not in self.valid_leases:
+        row = self.jobs.get(job_id)
+        if (
+            (job_id, lease_token) not in self.valid_leases
+            or row is None
+            or row.get("status") != "promoting"
+        ):
             return None
-        row = self.jobs.setdefault(job_id, {"job_id": job_id})
         row.update(
             status="completed",
             progress=1.0,
@@ -260,7 +280,35 @@ async def test_stale_lease_cannot_promote_staged_artifact(tmp_path: Path, monkey
     )
 
     assert final_path.exists() is False
+    assert repository.promotion_reservations == 0
     assert repository.complete_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_promotion_reservation_fences_cancel_and_pause(tmp_path: Path) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    job_id = "mdl-promoting"
+    token = "00000000-0000-0000-0000-000000000009"
+    repository.jobs[job_id] = {
+        "job_id": job_id,
+        "model_id": "test-owner/test-model",
+        "channel_id": "core_runtime_transformers",
+        "status": "running",
+    }
+    repository.valid_leases.add((job_id, token))
+
+    assert await repository.lease_is_valid(job_id=job_id, lease_token=token) is True
+    assert repository.jobs[job_id]["status"] == "promoting"
+
+    with pytest.raises(ModelOrchestratorError, match="cannot be cancelled"):
+        await service.cancel_job(job_id)
+    with pytest.raises(ModelOrchestratorError, match="cannot be paused"):
+        await service.pause_job(job_id)
+
+    assert repository.jobs[job_id]["status"] == "promoting"
+    assert repository.jobs[job_id].get("cancel_requested") is not True
+    assert repository.jobs[job_id].get("pause_requested") is not True
 
 
 @pytest.mark.asyncio
@@ -296,5 +344,6 @@ async def test_valid_lease_promotes_only_complete_staged_directory(tmp_path: Pat
     )
 
     assert (final_path / "weights.bin").read_bytes() == b"durable-model"
+    assert repository.promotion_reservations == 1
     assert repository.complete_calls == 1
     assert repository.jobs[job_id]["status"] == "completed"
