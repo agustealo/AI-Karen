@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS public.model_download_jobs (
     channel_id text NOT NULL,
     storage_key text,
     status text NOT NULL DEFAULT 'queued'
-        CHECK (status IN ('queued', 'running', 'paused', 'pause_requested', 'completed', 'failed', 'cancelled')),
+        CHECK (status IN ('queued', 'running', 'promoting', 'paused', 'pause_requested', 'completed', 'failed', 'cancelled')),
     progress double precision NOT NULL DEFAULT 0
         CHECK (progress >= 0 AND progress <= 1),
     message text NOT NULL DEFAULT 'Queued',
@@ -49,7 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_model_download_jobs_claim
 
 CREATE INDEX IF NOT EXISTS idx_model_download_jobs_active_lease
     ON public.model_download_jobs (lease_expires_at)
-    WHERE status = 'running' AND lease_token IS NOT NULL;
+    WHERE status IN ('running', 'promoting') AND lease_token IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_model_download_jobs_updated
     ON public.model_download_jobs (updated_at DESC);
@@ -65,4 +65,4 @@ REVOKE ALL ON TABLE public.model_download_jobs FROM anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.model_download_jobs TO service_role;
 
 COMMENT ON TABLE public.model_download_jobs IS
-    'Installation-wide durable lifecycle authority for model download jobs. Claims are lease-fenced and globally concurrency-limited by repository transactions.';
+    'Installation-wide durable lifecycle authority for model download jobs. Claims and final promotion are lease-fenced and globally concurrency-limited by repository transactions.';
