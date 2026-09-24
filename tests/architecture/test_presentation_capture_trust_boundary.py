@@ -69,3 +69,9 @@ def test_trusted_capture_harness_is_repository_owned_and_real_runtime_only() -> 
         'data-showcase-state="ready"',
     ):
         assert required in spec
+
+
+if __name__ == "__main__":
+    test_secret_bearing_capture_is_default_branch_owned()
+    test_trusted_capture_harness_is_repository_owned_and_real_runtime_only()
+    print("presentation capture trust boundary green")
