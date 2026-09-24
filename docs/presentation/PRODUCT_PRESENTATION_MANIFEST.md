@@ -55,11 +55,12 @@ A screenshot qualifies for public product presentation only when all of the foll
 3. Authentication uses a dedicated sanitized demo account.
 4. The capture is explicitly opted in with `KAREN_SHOWCASE_ALLOW_CAPTURE=true`.
 5. No personal conversation, secret, token, provider key, private email, or production tenant data is visible.
-6. The screen represents a capability that exists at the captured commit.
+6. The screen represents a capability that exists in the repository line identified by the operator-attested target revision.
 7. The authenticated shell visibly uses the canonical KAREN mark and name before capture begins.
-8. The capture rail emits `capture-manifest.json` with exact git SHA, browser, viewport, account class, and no-synthetic-state policy.
-9. `python scripts/ci/verify_presentation_assets.py --require-assets` passes.
-10. The image is reviewed at native resolution before it is promoted into README hero/gallery placement.
+8. The capture rail emits `capture-manifest.json` with capture-harness SHA, target revision, browser, viewport, account class, and no-synthetic-state policy.
+9. The target revision is a known commit and an ancestor of the presentation branch head.
+10. `python scripts/ci/verify_presentation_assets.py --require-assets` passes.
+11. The image is reviewed at native resolution before it is promoted into README hero/gallery placement.
 
 The capture rail writes these canonical files:
 
@@ -75,12 +76,22 @@ docs/assets/screenshots/
 
 No generated or hand-composited substitute may use these filenames.
 
+### Revision provenance
+
+The capture harness checkout and the running application are separate facts. `capture-manifest.json` therefore records:
+
+- `capture_harness_git_sha`: the exact repository checkout that ran Playwright;
+- `target_revision`: the full application revision the capture operator attests is deployed at the target;
+- `target_revision_attestation: operator-supplied`.
+
+The workflow proves both SHAs are known on the repository line, but KAREN does not currently expose a canonical runtime endpoint that self-attests deployment revision. Public documentation must not describe `target_revision` as self-verified until such a runtime/deployment contract exists.
+
 ## Capture environments
 
 Two capture paths are supported, and both use the same Playwright owner:
 
-- **Local approved demo installation:** invoke `npm run showcase:capture` with an explicitly sanitized account.
-- **Approved remote demo deployment:** invoke `.github/workflows/presentation-capture.yml`, which reads the HTTPS origin and sanitized credentials from repository secrets.
+- **Local approved demo installation:** invoke `npm run showcase:capture` with an explicitly sanitized account and `KAREN_SHOWCASE_TARGET_REVISION=<full deployed SHA>`.
+- **Approved remote demo deployment:** invoke `.github/workflows/presentation-capture.yml`, which reads the HTTPS origin and sanitized credentials from repository secrets and requires a full `target_revision` workflow input.
 
 Presentation code must not change the production first-boot smoke harness merely to make media capture easier. Authentication/bootstrap remains owned by the canonical auth/first-run system.
 
@@ -114,6 +125,7 @@ KAREN_SHOWCASE_ALLOW_CAPTURE=true \
 KAREN_SHOWCASE_ACCOUNT_KIND=sanitized-demo \
 KAREN_SHOWCASE_EMAIL='<sanitized-demo-email>' \
 KAREN_SHOWCASE_PASSWORD='<sanitized-demo-password>' \
+KAREN_SHOWCASE_TARGET_REVISION='<full-40-character-deployed-sha>' \
 KAREN_SHOWCASE_BASE_URL='http://localhost:8010' \
 npm run showcase:capture
 cd ../../..
@@ -122,4 +134,4 @@ python scripts/ci/verify_presentation_assets.py --require-assets
 
 Then manually review all five PNGs for visual polish, privacy, stale errors, debug overlays, broken loading states, and accurate feature representation.
 
-The screenshot gate is intentionally fail-closed. Missing approval or credentials is an error, not permission to create fake media.
+The screenshot gate is intentionally fail-closed. Missing approval, target revision, or credentials is an error, not permission to create fake media.
