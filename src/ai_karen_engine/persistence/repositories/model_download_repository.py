@@ -28,7 +28,65 @@ def _mapping(row: Any) -> Optional[dict[str, Any]]:
 
 
 class ModelDownloadRepository:
-    """Own durable job state and lease fencing for model downloads."""
+    """Own durable job state, runtime cap, and lease fencing for model downloads."""
+
+    async def initialize_global_concurrency_limit(self, default_limit: int) -> int:
+        async with async_transaction_scope() as session:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO public.model_download_runtime_settings (
+                        singleton, max_concurrent_downloads
+                    ) VALUES (true, :default_limit)
+                    ON CONFLICT (singleton) DO NOTHING
+                    """
+                ),
+                {"default_limit": default_limit},
+            )
+            result = await session.execute(
+                text(
+                    """
+                    SELECT max_concurrent_downloads
+                    FROM public.model_download_runtime_settings
+                    WHERE singleton = true
+                    """
+                )
+            )
+            return int(result.scalar_one())
+
+    async def get_global_concurrency_limit(self) -> int:
+        async with async_transaction_scope() as session:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT max_concurrent_downloads
+                    FROM public.model_download_runtime_settings
+                    WHERE singleton = true
+                    """
+                )
+            )
+            value = result.scalar_one_or_none()
+            if value is None:
+                raise RuntimeError("model download runtime settings are not initialized")
+            return int(value)
+
+    async def set_global_concurrency_limit(self, value: int) -> int:
+        async with async_transaction_scope() as session:
+            result = await session.execute(
+                text(
+                    """
+                    UPDATE public.model_download_runtime_settings
+                    SET max_concurrent_downloads = :value
+                    WHERE singleton = true
+                    RETURNING max_concurrent_downloads
+                    """
+                ),
+                {"value": value},
+            )
+            updated = result.scalar_one_or_none()
+            if updated is None:
+                raise RuntimeError("model download runtime settings are not initialized")
+            return int(updated)
 
     async def create_job(self, payload: Mapping[str, Any], *, max_attempts: int) -> dict[str, Any]:
         statement = text(
@@ -170,7 +228,6 @@ class ModelDownloadRepository:
         self,
         *,
         worker_id: str,
-        global_concurrency: int,
         lease_seconds: int,
         retry_base_seconds: int,
     ) -> Optional[dict[str, Any]]:
@@ -204,6 +261,20 @@ class ModelDownloadRepository:
                 ),
                 {"retry_base_seconds": retry_base_seconds},
             )
+            limit_result = await session.execute(
+                text(
+                    """
+                    SELECT max_concurrent_downloads
+                    FROM public.model_download_runtime_settings
+                    WHERE singleton = true
+                    FOR UPDATE
+                    """
+                )
+            )
+            global_concurrency = limit_result.scalar_one_or_none()
+            if global_concurrency is None:
+                raise RuntimeError("model download runtime settings are not initialized")
+
             active_result = await session.execute(
                 text(
                     """
@@ -215,7 +286,7 @@ class ModelDownloadRepository:
                     """
                 )
             )
-            if int(active_result.scalar_one()) >= global_concurrency:
+            if int(active_result.scalar_one()) >= int(global_concurrency):
                 return None
 
             result = await session.execute(
@@ -279,7 +350,7 @@ class ModelDownloadRepository:
 
         The state transition closes the check-then-promote race: once a lease
         holder moves from ``running`` to ``promoting``, cancel/pause mutations
-        are fenced out until completion, failure, shutdown release, or expiry.
+        are fenced out until completion, failure, or expiry.
         """
         async with async_transaction_scope() as session:
             result = await session.execute(
@@ -395,7 +466,7 @@ class ModelDownloadRepository:
                         lease_owner = NULL, lease_token = NULL,
                         lease_expires_at = NULL, heartbeat_at = NULL
                     WHERE job_id = :job_id
-                      AND status IN ('running', 'promoting')
+                      AND status = 'running'
                       AND lease_token = CAST(:lease_token AS uuid)
                     RETURNING job_id
                     """
