@@ -1,9 +1,10 @@
 "use client";
 
+import Image from "next/image";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Brain, Loader2, LockKeyhole, ShieldCheck } from "lucide-react";
+import { Loader2, LockKeyhole, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -17,6 +18,20 @@ import { Label } from "@/components/ui/label";
 import { PublicWrapper } from "@/components/PublicWrapper";
 import { useAuth } from "@/lib/useAuth";
 import { setupService } from "@/lib/setup";
+
+function BrandMark({ compact = false }: { compact?: boolean }) {
+  const size = compact ? 44 : 48;
+  return (
+    <Image
+      src="/brand/karen-mark.svg"
+      alt="KAREN"
+      width={size}
+      height={size}
+      priority
+      className={compact ? "h-11 w-11 rounded-2xl" : "h-12 w-12 rounded-2xl"}
+    />
+  );
+}
 
 function LoginForm() {
   const router = useRouter();
@@ -103,17 +118,18 @@ function LoginForm() {
         <div className="mx-auto grid min-h-[calc(100vh-6rem)] w-full max-w-5xl items-center gap-8 lg:grid-cols-[1fr_420px]">
           <section className="hidden rounded-3xl border bg-muted/30 p-10 lg:block">
             <div className="mb-12 flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl border bg-background shadow-sm">
-                <Brain className="h-6 w-6 text-primary" />
-              </div>
+              <BrandMark />
               <div>
-                <p className="font-semibold">Karen AI</p>
-                <p className="text-sm text-muted-foreground">Governed local-first intelligence</p>
+                <p className="font-semibold tracking-tight">KAREN</p>
+                <p className="text-sm text-muted-foreground">Local-first cognitive runtime</p>
               </div>
             </div>
             <h1 className="max-w-xl text-4xl font-semibold tracking-tight">
               Your runtime, memory, tools, and models stay behind one trusted identity boundary.
             </h1>
+            <p className="mt-5 max-w-xl text-sm leading-6 text-muted-foreground">
+              Memory. Models. Tools. Reasoning. Governance. One runtime with explicit authority and observable execution.
+            </p>
             <div className="mt-10 grid gap-4 text-sm text-muted-foreground">
               <div className="flex items-center gap-3">
                 <ShieldCheck className="h-4 w-4 text-foreground" />
@@ -128,11 +144,11 @@ function LoginForm() {
 
           <Card className="w-full border shadow-sm">
             <CardHeader className="space-y-2">
-              <div className="mb-2 flex h-11 w-11 items-center justify-center rounded-2xl border bg-muted lg:hidden">
-                <Brain className="h-6 w-6 text-primary" />
+              <div className="mb-2 lg:hidden">
+                <BrandMark compact />
               </div>
               <CardTitle className="text-2xl">Welcome back</CardTitle>
-              <CardDescription>Sign in to continue to Karen.</CardDescription>
+              <CardDescription>Sign in to continue to KAREN.</CardDescription>
             </CardHeader>
             <CardContent>
               {(error || setupError) && (
@@ -203,7 +219,7 @@ function LoginForm() {
               </form>
 
               <p className="mt-5 text-center text-xs leading-5 text-muted-foreground">
-                New installation? Karen automatically opens secure first-run setup before this screen.
+                New installation? KAREN automatically opens secure first-run setup before this screen.
               </p>
             </CardContent>
           </Card>
