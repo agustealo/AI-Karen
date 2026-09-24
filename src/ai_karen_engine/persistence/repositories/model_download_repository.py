@@ -15,7 +15,6 @@ from ai_karen_engine.persistence.postgres.transactions import async_transaction_
 # worker process observes one installation-wide concurrency ceiling.
 _MODEL_DOWNLOAD_CLAIM_LOCK = 0x4B4152454E4D444C
 _MODEL_DOWNLOAD_IMPORT_LOCK = 0x4B4152454E4D494D
-_TERMINAL = ("completed", "failed", "cancelled")
 
 
 def _json(value: Any) -> Optional[str]:
@@ -112,7 +111,7 @@ class ModelDownloadRepository:
                         heartbeat_at = NULL,
                         completed_at = now()
                     WHERE job_id = :job_id
-                      AND status NOT IN ('completed', 'failed', 'cancelled')
+                      AND status NOT IN ('promoting', 'completed', 'failed', 'cancelled')
                     RETURNING *
                     """
                 ),
@@ -136,7 +135,7 @@ class ModelDownloadRepository:
                         lease_expires_at = CASE WHEN status = 'running' THEN NULL ELSE lease_expires_at END,
                         heartbeat_at = CASE WHEN status = 'running' THEN NULL ELSE heartbeat_at END
                     WHERE job_id = :job_id
-                      AND status NOT IN ('completed', 'failed', 'cancelled', 'paused', 'pause_requested')
+                      AND status NOT IN ('promoting', 'completed', 'failed', 'cancelled', 'paused', 'pause_requested')
                     RETURNING *
                     """
                 ),
@@ -198,7 +197,7 @@ class ModelDownloadRepository:
                         lease_token = NULL,
                         lease_expires_at = NULL,
                         heartbeat_at = NULL
-                    WHERE status = 'running'
+                    WHERE status IN ('running', 'promoting')
                       AND lease_token IS NOT NULL
                       AND lease_expires_at <= now()
                     """
@@ -210,7 +209,7 @@ class ModelDownloadRepository:
                     """
                     SELECT count(*)
                     FROM public.model_download_jobs
-                    WHERE status = 'running'
+                    WHERE status IN ('running', 'promoting')
                       AND lease_token IS NOT NULL
                       AND lease_expires_at > now()
                     """
@@ -265,7 +264,7 @@ class ModelDownloadRepository:
                     SET heartbeat_at = now(),
                         lease_expires_at = now() + :lease_seconds * interval '1 second'
                     WHERE job_id = :job_id
-                      AND status = 'running'
+                      AND status IN ('running', 'promoting')
                       AND lease_token = CAST(:lease_token AS uuid)
                       AND lease_expires_at > now()
                     RETURNING job_id
@@ -276,18 +275,27 @@ class ModelDownloadRepository:
             return result.first() is not None
 
     async def lease_is_valid(self, *, job_id: str, lease_token: str) -> bool:
+        """Atomically reserve promotion for the current valid lease.
+
+        The state transition closes the check-then-promote race: once a lease
+        holder moves from ``running`` to ``promoting``, cancel/pause mutations
+        are fenced out until completion, failure, shutdown release, or expiry.
+        """
         async with async_transaction_scope() as session:
             result = await session.execute(
                 text(
                     """
-                    SELECT 1
-                    FROM public.model_download_jobs
+                    UPDATE public.model_download_jobs
+                    SET status = 'promoting',
+                        message = 'Promoting staged artifacts',
+                        heartbeat_at = now()
                     WHERE job_id = :job_id
                       AND status = 'running'
                       AND cancel_requested = false
                       AND pause_requested = false
                       AND lease_token = CAST(:lease_token AS uuid)
                       AND lease_expires_at > now()
+                    RETURNING job_id
                     """
                 ),
                 {"job_id": job_id, "lease_token": lease_token},
@@ -313,7 +321,7 @@ class ModelDownloadRepository:
                         completed_at = now(), lease_owner = NULL, lease_token = NULL,
                         lease_expires_at = NULL, heartbeat_at = NULL
                     WHERE job_id = :job_id
-                      AND status = 'running'
+                      AND status = 'promoting'
                       AND cancel_requested = false
                       AND pause_requested = false
                       AND lease_token = CAST(:lease_token AS uuid)
@@ -356,7 +364,7 @@ class ModelDownloadRepository:
                         lease_owner = NULL, lease_token = NULL,
                         lease_expires_at = NULL, heartbeat_at = NULL
                     WHERE job_id = :job_id
-                      AND status = 'running'
+                      AND status IN ('running', 'promoting')
                       AND lease_token = CAST(:lease_token AS uuid)
                     RETURNING *
                     """
@@ -387,7 +395,7 @@ class ModelDownloadRepository:
                         lease_owner = NULL, lease_token = NULL,
                         lease_expires_at = NULL, heartbeat_at = NULL
                     WHERE job_id = :job_id
-                      AND status = 'running'
+                      AND status IN ('running', 'promoting')
                       AND lease_token = CAST(:lease_token AS uuid)
                     RETURNING job_id
                     """
