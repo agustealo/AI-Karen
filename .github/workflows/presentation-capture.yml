@@ -3,12 +3,21 @@ name: KAREN Presentation Capture
 on:
   workflow_dispatch:
     inputs:
-      base_url:
-        description: "Reachable KAREN web origin to capture, for example https://staging.example.com"
+      source_mode:
+        description: "Capture from a fresh production install or an existing reachable KAREN instance"
         required: true
+        default: fresh-production
+        type: choice
+        options:
+          - fresh-production
+          - remote
+      base_url:
+        description: "Remote KAREN web origin when source_mode=remote"
+        required: false
+        default: ""
         type: string
       identity_mode:
-        description: "Credential identity stored in repository secrets"
+        description: "Remote credential identity stored in repository secrets"
         required: true
         default: email
         type: choice
@@ -32,58 +41,12 @@ jobs:
   capture:
     name: real-product-capture
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: src/ui_launchers/Karen-AI-Theme
-    env:
-      KAREN_BASE_URL: ${{ inputs.base_url }}
-      KAREN_CAPTURE_PASSWORD: ${{ secrets.KAREN_PRESENTATION_PASSWORD }}
-      KAREN_CAPTURE_EMAIL: ${{ inputs.identity_mode == 'email' && secrets.KAREN_PRESENTATION_EMAIL || '' }}
-      KAREN_CAPTURE_USERNAME: ${{ inputs.identity_mode == 'username' && secrets.KAREN_PRESENTATION_USERNAME || '' }}
 
     steps:
-      - name: Validate capture request
-        shell: bash
-        working-directory: .
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-
-          case "$KAREN_BASE_URL" in
-            http://*|https://*) ;;
-            *)
-              echo "base_url must be an explicit http:// or https:// origin" >&2
-              exit 1
-              ;;
-          esac
-
-          if [[ "$KAREN_BASE_URL" == *"@"* ]]; then
-            echo "base_url must not contain embedded credentials" >&2
-            exit 1
-          fi
-
-          if [[ -z "$KAREN_CAPTURE_PASSWORD" ]]; then
-            echo "KAREN_PRESENTATION_PASSWORD secret is required" >&2
-            exit 1
-          fi
-
-          if [[ "${{ inputs.identity_mode }}" == "email" && -z "$KAREN_CAPTURE_EMAIL" ]]; then
-            echo "KAREN_PRESENTATION_EMAIL secret is required for email capture" >&2
-            exit 1
-          fi
-
-          if [[ "${{ inputs.identity_mode }}" == "username" && -z "$KAREN_CAPTURE_USERNAME" ]]; then
-            echo "KAREN_PRESENTATION_USERNAME secret is required for username capture" >&2
-            exit 1
-          fi
-
-          if [[ "${{ inputs.commit_assets }}" == "true" && "$GITHUB_REF_NAME" == "$DEFAULT_BRANCH" ]]; then
-            echo "Presentation assets may not be committed directly to the default branch" >&2
-            exit 1
-          fi
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -94,6 +57,55 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Validate capture request
+        shell: bash
+        working-directory: .
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REQUESTED_BASE_URL: ${{ inputs.base_url }}
+          REMOTE_PASSWORD: ${{ secrets.KAREN_PRESENTATION_PASSWORD }}
+          REMOTE_EMAIL: ${{ secrets.KAREN_PRESENTATION_EMAIL }}
+          REMOTE_USERNAME: ${{ secrets.KAREN_PRESENTATION_USERNAME }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ inputs.commit_assets }}" == "true" && "$GITHUB_REF_NAME" == "$DEFAULT_BRANCH" ]]; then
+            echo "Presentation assets may not be committed directly to the default branch" >&2
+            exit 1
+          fi
+
+          if [[ "${{ inputs.source_mode }}" != "remote" ]]; then
+            exit 0
+          fi
+
+          case "$REQUESTED_BASE_URL" in
+            http://*|https://*) ;;
+            *)
+              echo "base_url must be an explicit http:// or https:// origin for remote capture" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ "$REQUESTED_BASE_URL" == *"@"* ]]; then
+            echo "base_url must not contain embedded credentials" >&2
+            exit 1
+          fi
+
+          if [[ -z "$REMOTE_PASSWORD" ]]; then
+            echo "KAREN_PRESENTATION_PASSWORD secret is required for remote capture" >&2
+            exit 1
+          fi
+
+          if [[ "${{ inputs.identity_mode }}" == "email" && -z "$REMOTE_EMAIL" ]]; then
+            echo "KAREN_PRESENTATION_EMAIL secret is required for email capture" >&2
+            exit 1
+          fi
+
+          if [[ "${{ inputs.identity_mode }}" == "username" && -z "$REMOTE_USERNAME" ]]; then
+            echo "KAREN_PRESENTATION_USERNAME secret is required for username capture" >&2
+            exit 1
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -110,6 +122,113 @@ jobs:
 
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
+
+      - name: Configure remote capture target
+        if: ${{ inputs.source_mode == 'remote' }}
+        shell: bash
+        working-directory: .
+        env:
+          REQUESTED_BASE_URL: ${{ inputs.base_url }}
+          REMOTE_PASSWORD: ${{ secrets.KAREN_PRESENTATION_PASSWORD }}
+          REMOTE_EMAIL: ${{ secrets.KAREN_PRESENTATION_EMAIL }}
+          REMOTE_USERNAME: ${{ secrets.KAREN_PRESENTATION_USERNAME }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$REMOTE_PASSWORD"
+          [[ -n "$REMOTE_EMAIL" ]] && echo "::add-mask::$REMOTE_EMAIL"
+          [[ -n "$REMOTE_USERNAME" ]] && echo "::add-mask::$REMOTE_USERNAME"
+          echo "KAREN_BASE_URL=${REQUESTED_BASE_URL%/}" >> "$GITHUB_ENV"
+          echo "KAREN_CAPTURE_PASSWORD=$REMOTE_PASSWORD" >> "$GITHUB_ENV"
+          if [[ "${{ inputs.identity_mode }}" == "email" ]]; then
+            echo "KAREN_CAPTURE_EMAIL=$REMOTE_EMAIL" >> "$GITHUB_ENV"
+            echo "KAREN_CAPTURE_USERNAME=" >> "$GITHUB_ENV"
+          else
+            echo "KAREN_CAPTURE_EMAIL=" >> "$GITHUB_ENV"
+            echo "KAREN_CAPTURE_USERNAME=$REMOTE_USERNAME" >> "$GITHUB_ENV"
+          fi
+
+      - name: Configure fresh-install capture identity
+        if: ${{ inputs.source_mode == 'fresh-production' }}
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          password="Presentation!$(openssl rand -hex 12)Aa9"
+          echo "::add-mask::$password"
+          echo "KAREN_CAPTURE_EMAIL=presentation-owner@example.invalid" >> "$GITHUB_ENV"
+          echo "KAREN_CAPTURE_USERNAME=" >> "$GITHUB_ENV"
+          echo "KAREN_CAPTURE_PASSWORD=$password" >> "$GITHUB_ENV"
+          echo "KAREN_BASE_URL=http://127.0.0.1:18010" >> "$GITHUB_ENV"
+          echo "KAREN_PRESENTATION_SMOKE_ID=presentation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+          echo "KAREN_PRESENTATION_WEB_CONTAINER=karen-presentation-web-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
+      - name: Validate canonical first-boot harness
+        if: ${{ inputs.source_mode == 'fresh-production' }}
+        shell: bash
+        working-directory: .
+        run: bash -n scripts/ci/production-first-boot-smoke.sh
+
+      - name: Build exact-head production API image
+        if: ${{ inputs.source_mode == 'fresh-production' }}
+        shell: bash
+        working-directory: .
+        run: docker build --target app --build-arg PROFILE=runtime -t ai-karen-api:presentation .
+
+      - name: Build exact-head production web image
+        if: ${{ inputs.source_mode == 'fresh-production' }}
+        shell: bash
+        working-directory: .
+        run: |
+          docker build \
+            -f src/ui_launchers/Karen-AI-Theme/Dockerfile.production \
+            -t ai-karen-web:presentation \
+            src/ui_launchers/Karen-AI-Theme
+
+      - name: Bootstrap and prove fresh production installation
+        if: ${{ inputs.source_mode == 'fresh-production' }}
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          KAREN_SMOKE_API_IMAGE=ai-karen-api:presentation \
+          KAREN_SMOKE_ID="$KAREN_PRESENTATION_SMOKE_ID" \
+          KAREN_SMOKE_API_PORT=18000 \
+          KAREN_SMOKE_KEEP_RUNNING=true \
+          KAREN_SMOKE_ADMIN_EMAIL="$KAREN_CAPTURE_EMAIL" \
+          KAREN_SMOKE_ADMIN_PASSWORD="$KAREN_CAPTURE_PASSWORD" \
+          KAREN_SMOKE_ADMIN_NAME="KAREN Presentation Owner" \
+            bash scripts/ci/production-first-boot-smoke.sh
+
+      - name: Start exact-head production web against verified installation
+        if: ${{ inputs.source_mode == 'fresh-production' }}
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          network="karen-beta-smoke-${KAREN_PRESENTATION_SMOKE_ID}"
+
+          docker run -d \
+            --name "$KAREN_PRESENTATION_WEB_CONTAINER" \
+            --network "$network" \
+            -p 127.0.0.1:18010:8010 \
+            -e WEB_PUBLIC_SCHEME=http \
+            -e KAREN_BACKEND_URL=http://api:8000 \
+            ai-karen-web:presentation >/dev/null
+
+          for _ in $(seq 1 90); do
+            if curl -fsS "${KAREN_BASE_URL%/}/login" >/dev/null; then
+              exit 0
+            fi
+            if [[ "$(docker inspect -f '{{.State.Running}}' "$KAREN_PRESENTATION_WEB_CONTAINER" 2>/dev/null || echo false)" != "true" ]]; then
+              docker logs "$KAREN_PRESENTATION_WEB_CONTAINER" >&2 || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+          docker logs "$KAREN_PRESENTATION_WEB_CONTAINER" >&2 || true
+          echo "timed out waiting for exact-head production web" >&2
+          exit 1
 
       - name: Verify target is reachable
         shell: bash
@@ -161,3 +280,17 @@ jobs:
 
           git commit -m "docs: refresh real KAREN product screenshots"
           git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Tear down fresh presentation installation
+        if: ${{ always() && inputs.source_mode == 'fresh-production' }}
+        shell: bash
+        working-directory: .
+        run: |
+          set +e
+          smoke_id="${KAREN_PRESENTATION_SMOKE_ID:-presentation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
+          web_container="${KAREN_PRESENTATION_WEB_CONTAINER:-karen-presentation-web-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
+          docker rm -f "$web_container" >/dev/null 2>&1 || true
+          docker rm -f "karen-beta-api-${smoke_id}" >/dev/null 2>&1 || true
+          docker rm -f "karen-beta-redis-${smoke_id}" >/dev/null 2>&1 || true
+          docker rm -f "karen-beta-postgres-${smoke_id}" >/dev/null 2>&1 || true
+          docker network rm "karen-beta-smoke-${smoke_id}" >/dev/null 2>&1 || true
