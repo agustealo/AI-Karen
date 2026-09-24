@@ -1,4 +1,4 @@
-name: Model Download Control Locking Gate
+name: Model Download Durable Worker Gate
 
 on:
   pull_request:
@@ -13,14 +13,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: model-download-control-locking-${{ github.workflow }}-${{ github.ref }}
+  group: model-download-durable-worker-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  model-download-control-locking:
-    name: model-download-control-locking
+  model-download-durable-worker:
+    name: model-download-durable-worker
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       PYTHONPATH: src
 
@@ -38,8 +38,35 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements/ci/quality.txt
 
-      - name: Compile model download control authority
-        run: python -m compileall -q src/ai_karen_engine/core/model_runtime/model_download_control_service.py
+      - name: Compile durable model download authority
+        run: |
+          python -m compileall -q \
+            src/ai_karen_engine/config/model_download.py \
+            src/ai_karen_engine/persistence/repositories/model_download_repository.py \
+            src/ai_karen_engine/core/model_runtime/model_download_control_service.py \
+            src/ai_karen_engine/core/model_runtime/model_download_worker.py \
+            src/ai_karen_engine/api_routes/models/model_orchestrator.py \
+            src/ai_karen_engine/server/application_runtime.py
 
-      - name: Prove lock-safe state persistence
-        run: pytest tests/core/model_runtime/test_model_download_control_locking.py -q
+      - name: Ruff durable worker correctness
+        run: |
+          ruff check --select E9,F63,F7 \
+            src/ai_karen_engine/config/model_download.py \
+            src/ai_karen_engine/persistence/repositories/model_download_repository.py \
+            src/ai_karen_engine/core/model_runtime/model_download_control_service.py \
+            src/ai_karen_engine/core/model_runtime/model_download_worker.py \
+            src/ai_karen_engine/api_routes/models/model_orchestrator.py \
+            src/ai_karen_engine/server/application_runtime.py \
+            tests/core/model_runtime/test_model_download_durable_worker.py \
+            tests/core/model_runtime/test_model_download_worker_cancellation.py \
+            tests/architecture/test_model_download_durable_worker_authority.py
+
+      - name: Prove durable authority boundaries
+        run: pytest tests/architecture/test_model_download_durable_worker_authority.py -q
+
+      - name: Prove durable lifecycle and staged promotion
+        run: |
+          pytest \
+            tests/core/model_runtime/test_model_download_durable_worker.py \
+            tests/core/model_runtime/test_model_download_worker_cancellation.py \
+            -q
