@@ -1,6 +1,18 @@
 -- Durable installation-wide model download lifecycle authority.
--- PostgreSQL is the sole job-state authority. Model artifacts remain on the
--- shared installation filesystem and are promoted only by a lease holder.
+-- PostgreSQL is the sole job-state and global-concurrency authority. Model
+-- artifacts remain on the shared installation filesystem and are promoted only
+-- by a valid lease holder.
+
+CREATE TABLE IF NOT EXISTS public.model_download_runtime_settings (
+    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton = true),
+    max_concurrent_downloads integer NOT NULL CHECK (max_concurrent_downloads BETWEEN 1 AND 8),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+DROP TRIGGER IF EXISTS trg_model_download_runtime_settings_updated_at ON public.model_download_runtime_settings;
+CREATE TRIGGER trg_model_download_runtime_settings_updated_at
+BEFORE UPDATE ON public.model_download_runtime_settings
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 CREATE TABLE IF NOT EXISTS public.model_download_jobs (
     job_id text PRIMARY KEY,
@@ -59,10 +71,16 @@ CREATE TRIGGER trg_model_download_jobs_updated_at
 BEFORE UPDATE ON public.model_download_jobs
 FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
+ALTER TABLE public.model_download_runtime_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.model_download_jobs ENABLE ROW LEVEL SECURITY;
 
+REVOKE ALL ON TABLE public.model_download_runtime_settings FROM anon, authenticated;
 REVOKE ALL ON TABLE public.model_download_jobs FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE ON TABLE public.model_download_runtime_settings TO service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.model_download_jobs TO service_role;
 
+COMMENT ON TABLE public.model_download_runtime_settings IS
+    'Installation-wide durable runtime settings for model-download workers. The singleton row is initialized by the canonical runtime and updated by the model-download policy authority.';
+
 COMMENT ON TABLE public.model_download_jobs IS
-    'Installation-wide durable lifecycle authority for model download jobs. Claims and final promotion are lease-fenced and globally concurrency-limited by repository transactions.';
+    'Installation-wide durable lifecycle authority for model download jobs. Claims and final promotion are lease-fenced and concurrency-limited by the PostgreSQL runtime-settings row.';
