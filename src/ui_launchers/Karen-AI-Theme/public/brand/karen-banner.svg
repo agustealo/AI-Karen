@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="title desc">
+  <title id="title">Karen AI premium banner</title>
+  <desc id="desc">A polished dark banner for Karen AI with a geometric brand mark and local-first cognitive runtime positioning.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="420" gradientUnits="userSpaceOnUse"><stop stop-color="#090D16"/><stop offset=".48" stop-color="#111827"/><stop offset="1" stop-color="#0A1020"/></linearGradient>
+    <radialGradient id="aura" cx="0" cy="0" r="1" gradientTransform="translate(1245 144) rotate(148) scale(560 350)" gradientUnits="userSpaceOnUse"><stop stop-color="#5DBBFF" stop-opacity=".28"/><stop offset=".5" stop-color="#8C7CFF" stop-opacity=".13"/><stop offset="1" stop-color="#8C7CFF" stop-opacity="0"/></radialGradient>
+    <linearGradient id="signal" x1="1070" y1="88" x2="1327" y2="330" gradientUnits="userSpaceOnUse"><stop stop-color="#84E8D5"/><stop offset=".5" stop-color="#64BAFF"/><stop offset="1" stop-color="#9B8CFF"/></linearGradient>
+  </defs>
+  <rect width="1600" height="420" rx="30" fill="url(#bg)"/><rect width="1600" height="420" rx="30" fill="url(#aura)"/>
+  <g opacity=".22" stroke="#FFFFFF"><path d="M0 336C240 260 455 394 684 296S1125 126 1600 200" fill="none"/><path d="M0 372C264 286 466 414 705 319S1152 157 1600 228" fill="none"/></g>
+  <g transform="translate(1040 58)"><rect width="304" height="304" rx="76" fill="#0B1220" stroke="#FFFFFF" stroke-opacity=".10" stroke-width="2"/><path d="M92 83v139" stroke="url(#signal)" stroke-width="27" stroke-linecap="round"/><path d="M108 152l66-67" stroke="url(#signal)" stroke-width="27" stroke-linecap="round"/><path d="M108 152l74 72" stroke="url(#signal)" stroke-width="27" stroke-linecap="round"/><path d="M175 86c17 5 28 16 34 31" fill="none" stroke="#E8FDFF" stroke-opacity=".82" stroke-width="6" stroke-linecap="round"/><circle cx="210" cy="123" r="5" fill="#E8FDFF"/></g>
+  <text x="96" y="136" font-family="Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="78" font-weight="700" letter-spacing="-3" fill="#F7FAFF">KAREN</text>
+  <text x="100" y="188" font-family="Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="22" font-weight="600" letter-spacing="5" fill="#83D7F9">LOCAL-FIRST COGNITIVE RUNTIME</text>
+  <text x="100" y="257" font-family="Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="30" font-weight="450" fill="#C9D3E4">Memory. Models. Tools. Reasoning. Governance.</text>
+  <text x="100" y="306" font-family="Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="20" fill="#8190A6">One runtime. One identity boundary. Built to remember what matters and prove what happened.</text>
+  <rect x="1" y="1" width="1598" height="418" rx="29" fill="none" stroke="#FFFFFF" stroke-opacity=".08" stroke-width="2"/>
+</svg>
