@@ -40,6 +40,18 @@ def test_postgres_is_the_only_download_job_lifecycle_authority() -> None:
     assert '"jobs":' not in service, "service must never rewrite JSON-backed job truth"
 
 
+def test_model_download_migration_owns_updated_at_trigger_helper() -> None:
+    migration = _read(MIGRATION)
+    function = migration.index("CREATE OR REPLACE FUNCTION public.set_model_download_updated_at()")
+    settings_trigger = migration.index("CREATE TRIGGER trg_model_download_runtime_settings_updated_at")
+    jobs_trigger = migration.index("CREATE TRIGGER trg_model_download_jobs_updated_at")
+
+    assert function < settings_trigger < jobs_trigger
+    assert "EXECUTE FUNCTION public.set_updated_at()" not in migration
+    assert migration.count("EXECUTE FUNCTION public.set_model_download_updated_at()") == 2
+    assert "REVOKE ALL ON FUNCTION public.set_model_download_updated_at() FROM PUBLIC;" in migration
+
+
 def test_claim_transaction_reads_db_global_cap_before_skip_locked_claim() -> None:
     repository = _read(REPOSITORY)
     claim = _method_body(repository, "claim_next")
