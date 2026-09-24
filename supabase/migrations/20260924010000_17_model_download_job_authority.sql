@@ -3,6 +3,18 @@
 -- artifacts remain on the shared installation filesystem and are promoted only
 -- by a valid lease holder.
 
+CREATE OR REPLACE FUNCTION public.set_model_download_updated_at()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $function$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION public.set_model_download_updated_at() FROM PUBLIC;
+
 CREATE TABLE IF NOT EXISTS public.model_download_runtime_settings (
     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton = true),
     max_concurrent_downloads integer NOT NULL CHECK (max_concurrent_downloads BETWEEN 1 AND 8),
@@ -12,7 +24,7 @@ CREATE TABLE IF NOT EXISTS public.model_download_runtime_settings (
 DROP TRIGGER IF EXISTS trg_model_download_runtime_settings_updated_at ON public.model_download_runtime_settings;
 CREATE TRIGGER trg_model_download_runtime_settings_updated_at
 BEFORE UPDATE ON public.model_download_runtime_settings
-FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+FOR EACH ROW EXECUTE FUNCTION public.set_model_download_updated_at();
 
 CREATE TABLE IF NOT EXISTS public.model_download_jobs (
     job_id text PRIMARY KEY,
@@ -69,7 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_model_download_jobs_updated
 DROP TRIGGER IF EXISTS trg_model_download_jobs_updated_at ON public.model_download_jobs;
 CREATE TRIGGER trg_model_download_jobs_updated_at
 BEFORE UPDATE ON public.model_download_jobs
-FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+FOR EACH ROW EXECUTE FUNCTION public.set_model_download_updated_at();
 
 ALTER TABLE public.model_download_runtime_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.model_download_jobs ENABLE ROW LEVEL SECURITY;
@@ -94,6 +106,9 @@ BEGIN
     END IF;
 END
 $acl$;
+
+COMMENT ON FUNCTION public.set_model_download_updated_at() IS
+    'Keeps durable model-download authority timestamps current without depending on optional Supabase helpers.';
 
 COMMENT ON TABLE public.model_download_runtime_settings IS
     'Installation-wide durable runtime settings for model-download workers. The singleton row is initialized by the canonical runtime and updated by the model-download policy authority.';
