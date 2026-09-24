@@ -190,3 +190,51 @@ async def test_promotion_lock_allows_exactly_one_legacy_same_target_lease() -> N
     assert loser["cancel_requested"] is True
     assert loser["lease_token"] is None
     assert loser["completed_at"] is not None
+
+
+async def test_completion_does_not_mutate_legacy_promoting_sibling() -> None:
+    assert DATABASE_URL is not None
+    install_path = "/tmp/models/transformers/test-owner--promotion-boundary/main"
+    token_a = str(uuid.uuid4())
+    token_b = str(uuid.uuid4())
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        connection.execute(
+            """
+            INSERT INTO public.model_download_jobs (
+                job_id, model_id, channel_id, storage_key, status, message,
+                install_path, max_attempts, attempt_count, lease_owner, lease_token,
+                lease_expires_at, heartbeat_at, started_at, created_at, available_at
+            ) VALUES
+                (
+                    'mdl-boundary-a', 'test-owner/promotion-boundary',
+                    'core_runtime_transformers', 'transformers', 'promoting',
+                    'Promoting staged artifacts', %s, 3, 1, 'worker-a', %s::uuid,
+                    now() + interval '30 seconds', now(), now(), now() - interval '2 seconds', now()
+                ),
+                (
+                    'mdl-boundary-b', 'test-owner/promotion-boundary',
+                    'core_runtime_transformers', 'transformers', 'promoting',
+                    'Promoting staged artifacts', %s, 3, 1, 'worker-b', %s::uuid,
+                    now() + interval '30 seconds', now(), now(), now() - interval '1 second', now()
+                )
+            """,
+            (install_path, token_a, install_path, token_b),
+        )
+
+    repository = ModelDownloadRepository()
+    completed = await repository.complete_job(
+        job_id="mdl-boundary-a",
+        lease_token=token_a,
+        result_payload={"artifact_path": install_path},
+        install_path=install_path,
+    )
+
+    assert completed is not None
+    assert completed["status"] == "completed"
+
+    sibling = await repository.get_job("mdl-boundary-b")
+    assert sibling is not None
+    assert sibling["status"] == "promoting"
+    assert sibling["cancel_requested"] is False
+    assert str(sibling["lease_token"]) == token_b
+    assert sibling["message"] == "Promoting staged artifacts"
