@@ -58,10 +58,15 @@ jobs:
             src/ai_karen_engine/api_routes/models/model_orchestrator.py \
             src/ai_karen_engine/server/application_runtime.py \
             tests/core/model_runtime/test_model_download_durable_worker.py \
+            tests/core/model_runtime/test_model_download_worker_cancellation.py \
             tests/architecture/test_model_download_durable_worker_authority.py
 
       - name: Prove durable authority boundaries
         run: pytest tests/architecture/test_model_download_durable_worker_authority.py -q
 
       - name: Prove durable lifecycle and staged promotion
-        run: pytest tests/core/model_runtime/test_model_download_durable_worker.py -q
+        run: |
+          pytest \
+            tests/core/model_runtime/test_model_download_durable_worker.py \
+            tests/core/model_runtime/test_model_download_worker_cancellation.py \
+            -q
