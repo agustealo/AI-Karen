@@ -36,6 +36,13 @@ GALLERY_FILES = (
     "05-settings-and-models.png",
 )
 
+PRESENTATION_SURFACES = (
+    UI_ROOT / "src" / "app" / "dashboard" / "page.tsx",
+    UI_ROOT / "src" / "components" / "automation" / "AgentsOverviewPage.tsx",
+    UI_ROOT / "src" / "components" / "plugins" / "PluginOverviewPage.tsx",
+    UI_ROOT / "src" / "components" / "comms" / "CommsCenterPage.tsx",
+)
+
 REQUIRED_PRESENTATION_FILES = (
     REPO_ROOT / "docs" / "presentation" / "BRAND_SYSTEM.md",
     REPO_ROOT / "docs" / "presentation" / "PRODUCT_PRESENTATION_MANIFEST.md",
@@ -90,7 +97,7 @@ def assert_known_revision_is_ancestor(label: str, revision: str) -> None:
 
 
 def verify_brand_contract() -> None:
-    for path in BRAND_ASSETS + REQUIRED_PRESENTATION_FILES:
+    for path in BRAND_ASSETS + REQUIRED_PRESENTATION_FILES + PRESENTATION_SURFACES:
         require_file(path)
 
     readme = read_text(REPO_ROOT / "README.md")
@@ -115,14 +122,18 @@ def verify_brand_contract() -> None:
         raise PresentationContractError(
             "authenticated shell must use the canonical KAREN mark in header and footer"
         )
-    if "Karen AI" in dashboard:
-        raise PresentationContractError(
-            "authenticated shell still contains the retired split-brand 'Karen AI' label"
-        )
     if '"Initializing KAREN"' not in dashboard:
         raise PresentationContractError(
             "authenticated startup state must use canonical KAREN naming"
         )
+
+    for surface in PRESENTATION_SURFACES:
+        surface_text = read_text(surface)
+        if "Karen AI" in surface_text:
+            raise PresentationContractError(
+                "curated presentation surface still contains the retired split-brand "
+                f"'Karen AI' label: {surface.relative_to(REPO_ROOT)}"
+            )
 
     capture_spec = read_text(
         UI_ROOT / "e2e" / "showcase" / "capture-product.showcase.ts"
@@ -152,6 +163,14 @@ def verify_brand_contract() -> None:
         'mocked_responses: false',
         'generated_ui: false',
         'fixture_only_state: false',
+        'production_or_personal_data: false',
+        'presentation_ready_state_required: true',
+        'retired_visible_brand_forbidden: true',
+        "assertChatReady(page)",
+        "assertAgentsReady(page)",
+        "assertPluginOverviewReady(page)",
+        "assertCommsReady(page)",
+        "RETIRED_VISIBLE_BRAND",
     )
     for guard in required_capture_guards:
         if guard not in capture_spec:
@@ -200,6 +219,8 @@ def verify_gallery(require_assets: bool) -> bool:
         "generated_ui": False,
         "fixture_only_state": False,
         "production_or_personal_data": False,
+        "presentation_ready_state_required": True,
+        "retired_visible_brand_forbidden": True,
     }
     if policy != expected_policy:
         raise PresentationContractError(f"invalid capture policy provenance: {policy!r}")
