@@ -118,7 +118,7 @@ class ModelDownloadWorker:
         try:
             await self._service.execute_claimed_job(claim)
         except asyncio.CancelledError:
-            await self._service.release_claim_for_shutdown(job_id, lease_token)
+            await self._release_cancelled_claim(job_id, lease_token)
             raise
         except Exception as exc:
             logger.exception("model_download_claim_execution_error job_id=%s", job_id)
@@ -127,6 +127,43 @@ class ModelDownloadWorker:
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
+
+    async def _release_cancelled_claim(self, job_id: str, lease_token: str) -> None:
+        """Release only work that has not entered final filesystem promotion.
+
+        ``asyncio.to_thread`` cannot stop an already-running rename operation.
+        If cancellation lands after the repository reserved ``promoting``, the
+        safest ownership rule is to keep the lease fenced and let it expire.
+        A subsequent worker can then reclaim and retry from durable truth.
+        """
+        try:
+            job = await asyncio.shield(self._service.get_job(job_id))
+        except Exception:
+            logger.exception(
+                "model_download_cancel_state_unavailable job_id=%s worker_id=%s",
+                job_id,
+                self.worker_id,
+            )
+            return
+
+        if job is not None and job.get("status") == "promoting":
+            logger.warning(
+                "model_download_promotion_cancel_deferred job_id=%s worker_id=%s",
+                job_id,
+                self.worker_id,
+            )
+            return
+
+        try:
+            await asyncio.shield(
+                self._service.release_claim_for_shutdown(job_id, lease_token)
+            )
+        except Exception:
+            logger.exception(
+                "model_download_cancel_release_failed job_id=%s worker_id=%s",
+                job_id,
+                self.worker_id,
+            )
 
     async def _heartbeat(self, job_id: str, lease_token: str) -> None:
         try:
