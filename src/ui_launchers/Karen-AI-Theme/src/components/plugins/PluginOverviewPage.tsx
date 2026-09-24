@@ -2,7 +2,7 @@
 
 /**
  * @file PluginOverviewPage.tsx
- * @description Displays Karen AI plugin health, backend lifecycle state,
+ * @description Displays KAREN plugin health, backend lifecycle state,
  * frontend mount/registration state, and governed UI install controls.
  *
  * Architecture boundary:
@@ -947,11 +947,11 @@ export default function PluginOverviewPage() {
 
         <div>
           <h2 className="text-2xl font-semibold tracking-tight">
-            Karen AI - Plugins & Tools Overview
+            Plugins & Tools Overview
           </h2>
 
           <p className="text-sm text-muted-foreground">
-            Understanding Karen AI&apos;s capabilities and how she integrates new features.
+            Inspect KAREN&apos;s governed plugin capabilities and live integration state.
           </p>
         </div>
       </div>
@@ -960,7 +960,7 @@ export default function PluginOverviewPage() {
         <CardHeader>
           <CardTitle className="text-lg">Current Plugin & Tool Integration</CardTitle>
           <CardDescription>
-            Karen AI uses a &quot;prompt-first&quot; framework. Her core AI is
+            KAREN uses a &quot;prompt-first&quot; framework. The runtime is
             instructed on how to use available tools and capabilities based on
             your conversational requests.
           </CardDescription>
@@ -968,16 +968,16 @@ export default function PluginOverviewPage() {
 
         <CardContent className="space-y-4">
           <p className="text-sm">
-            When you interact with Karen, her central AI decision-making flow
-            determines whether a specialized tool is needed. If so, the governed
-            runtime invokes the tool and crafts a response from the tool output.
+            When you interact with KAREN, the canonical decision flow determines
+            whether a specialized tool is needed. If so, the governed runtime
+            invokes the tool and crafts a response from the tool output.
           </p>
 
           <Alert>
             <MessageSquare className="h-4 w-4" aria-hidden={true} />
             <AlertTitle>Interaction Method</AlertTitle>
             <AlertDescription>
-              Most tools are used by Karen when you ask relevant questions or
+              Most tools are used by KAREN when you ask relevant questions or
               make requests directly in the chat interface.
             </AlertDescription>
           </Alert>
@@ -1035,14 +1035,14 @@ export default function PluginOverviewPage() {
             Vision for Advanced Plugin Architecture
           </CardTitle>
           <CardDescription>
-            The long-term goal for Karen AI is to support a more dynamic plugin
+            The long-term goal for KAREN is to support a more dynamic plugin
             system.
           </CardDescription>
         </CardHeader>
 
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Karen&apos;s plugin layer should remain prompt-first, schema-driven,
+            KAREN&apos;s plugin layer should remain prompt-first, schema-driven,
             permission-aware, observable, and governed by the backend runtime.
             New capabilities should register their contracts without requiring
             frontend routing hacks.
@@ -1052,7 +1052,7 @@ export default function PluginOverviewPage() {
             <li>Standardized plugin schemas describing inputs, outputs, and purpose.</li>
             <li>Manifest-declared frontend surfaces with scoped permissions.</li>
             <li>Backend-owned lifecycle state, RBAC checks, and audit logging.</li>
-            <li>Prompt contracts that let Karen understand when and how a plugin applies.</li>
+            <li>Prompt contracts that let KAREN understand when and how a plugin applies.</li>
           </ul>
 
           <Alert variant="default" className="bg-background">
