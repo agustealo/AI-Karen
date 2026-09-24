@@ -1,39 +1,34 @@
 #!/usr/bin/env python3
-"""Verify KAREN presentation assets and real screenshot provenance.
+"""Verify KAREN presentation integration on top of canonical gallery truth.
 
-This gate owns presentation integrity only. It does not infer runtime capability or
-replace the canonical architecture/developer manifests.
+Gallery provenance belongs to ``presentation_gallery_contract.py``. This gate owns
+only KAREN brand/presentation integration and attribution to the current branch.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import re
-import struct
 import subprocess
 import sys
 from pathlib import Path
+
+from presentation_gallery_contract import (
+    CAPTURE_MANIFEST,
+    GalleryContractError,
+    verify_gallery as verify_gallery_contract,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 UI_ROOT = REPO_ROOT / "src" / "ui_launchers" / "Karen-AI-Theme"
 BRAND_ROOT = UI_ROOT / "public" / "brand"
 SCREENSHOT_ROOT = REPO_ROOT / "docs" / "assets" / "screenshots"
-CAPTURE_MANIFEST = SCREENSHOT_ROOT / "capture-manifest.json"
 
 BRAND_ASSETS = (
     BRAND_ROOT / "karen-mark.svg",
     BRAND_ROOT / "karen-wordmark.svg",
     BRAND_ROOT / "karen-banner.svg",
-)
-
-GALLERY_FILES = (
-    "01-chat-runtime.png",
-    "02-agents-overview.png",
-    "03-plugin-ecosystem.png",
-    "04-comms-center.png",
-    "05-settings-and-models.png",
 )
 
 PRESENTATION_SURFACES = (
@@ -47,18 +42,16 @@ REQUIRED_PRESENTATION_FILES = (
     REPO_ROOT / "docs" / "presentation" / "BRAND_SYSTEM.md",
     REPO_ROOT / "docs" / "presentation" / "PRODUCT_PRESENTATION_MANIFEST.md",
     SCREENSHOT_ROOT / "README.md",
+    REPO_ROOT / "scripts" / "ci" / "presentation_gallery_contract.py",
     UI_ROOT / "e2e" / "playwright.showcase.config.ts",
     UI_ROOT / "e2e" / "showcase" / "capture-product.showcase.ts",
     UI_ROOT / "src" / "app" / "dashboard" / "page.tsx",
     UI_ROOT / "src" / "app" / "manifest.ts",
 )
 
-PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-
 
 class PresentationContractError(RuntimeError):
-    """Raised when presentation truth is incomplete or unsafe."""
+    """Raised when presentation integration is incomplete or unsafe."""
 
 
 def require_file(path: Path) -> None:
@@ -73,16 +66,7 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def png_dimensions(path: Path) -> tuple[int, int]:
-    data = path.read_bytes()
-    if len(data) < 24 or data[:8] != PNG_SIGNATURE:
-        raise PresentationContractError(
-            f"not a valid PNG: {path.relative_to(REPO_ROOT)}"
-        )
-    return struct.unpack(">II", data[16:24])
-
-
-def assert_known_revision_is_ancestor(label: str, revision: str) -> None:
+def assert_revision_is_ancestor_of_head(label: str, revision: str) -> None:
     result = subprocess.run(
         ["git", "merge-base", "--is-ancestor", revision, "HEAD"],
         cwd=REPO_ROOT,
@@ -92,7 +76,8 @@ def assert_known_revision_is_ancestor(label: str, revision: str) -> None:
     )
     if result.returncode != 0:
         raise PresentationContractError(
-            f"{label} {revision} is not an ancestor of current HEAD; the gallery cannot be attributed to this repository line"
+            f"{label} {revision} is not an ancestor of current HEAD; "
+            "the gallery cannot be attributed to this presentation line"
         )
 
 
@@ -138,13 +123,12 @@ def verify_brand_contract() -> None:
     capture_spec = read_text(
         UI_ROOT / "e2e" / "showcase" / "capture-product.showcase.ts"
     )
-    forbidden_capture_primitives = (
+    for primitive in (
         "page.route(",
         "context.route(",
         "route.fulfill(",
         "page.setContent(",
-    )
-    for primitive in forbidden_capture_primitives:
+    ):
         if primitive in capture_spec:
             raise PresentationContractError(
                 f"showcase capture may not synthesize product state via {primitive}"
@@ -166,6 +150,7 @@ def verify_brand_contract() -> None:
         'production_or_personal_data: false',
         'presentation_ready_state_required: true',
         'retired_visible_brand_forbidden: true',
+        'data-showcase-state="ready"',
         "assertChatReady(page)",
         "assertAgentsReady(page)",
         "assertPluginOverviewReady(page)",
@@ -179,91 +164,23 @@ def verify_brand_contract() -> None:
             )
 
 
-def verify_gallery(require_assets: bool) -> bool:
-    gallery_paths = [SCREENSHOT_ROOT / filename for filename in GALLERY_FILES]
-    present = [path for path in gallery_paths if path.is_file()]
-    manifest_present = CAPTURE_MANIFEST.is_file()
-
-    if not present and not manifest_present:
-        if require_assets:
-            raise PresentationContractError(
-                "curated real-product gallery is missing; capture it from an approved sanitized running KAREN installation"
-            )
+def verify_presentation_gallery(require_assets: bool) -> bool:
+    gallery_ready = verify_gallery_contract(
+        require_assets=require_assets,
+        require_target_descendant_of_harness=True,
+    )
+    if not gallery_ready:
         return False
 
-    if len(present) != len(gallery_paths):
-        missing = [path.name for path in gallery_paths if not path.is_file()]
-        raise PresentationContractError(
-            "partial screenshot galleries are prohibited; missing: " + ", ".join(missing)
-        )
-
-    require_file(CAPTURE_MANIFEST)
     payload = json.loads(CAPTURE_MANIFEST.read_text(encoding="utf-8"))
-
-    if payload.get("source") != "real-running-application":
-        raise PresentationContractError(
-            "capture provenance must identify a real running application"
-        )
-    if payload.get("authenticated") is not True:
-        raise PresentationContractError(
-            "curated screenshots must come from an authenticated product session"
-        )
-    if payload.get("account_kind") != "sanitized-demo":
-        raise PresentationContractError(
-            "curated screenshots must use an approved sanitized demo account"
-        )
-
-    policy = payload.get("policy")
-    expected_policy = {
-        "mocked_responses": False,
-        "generated_ui": False,
-        "fixture_only_state": False,
-        "production_or_personal_data": False,
-        "presentation_ready_state_required": True,
-        "retired_visible_brand_forbidden": True,
-    }
-    if policy != expected_policy:
-        raise PresentationContractError(f"invalid capture policy provenance: {policy!r}")
-
-    harness_sha = str(payload.get("capture_harness_git_sha", "")).lower()
-    if not SHA_RE.fullmatch(harness_sha):
-        raise PresentationContractError(
-            f"invalid capture_harness_git_sha: {harness_sha!r}"
-        )
-    assert_known_revision_is_ancestor("capture harness revision", harness_sha)
-
-    target_revision = str(payload.get("target_revision", "")).lower()
-    if not SHA_RE.fullmatch(target_revision):
-        raise PresentationContractError(
-            f"invalid target_revision: {target_revision!r}"
-        )
-    if payload.get("target_revision_attestation") != "operator-supplied":
-        raise PresentationContractError(
-            "target revision must be explicitly recorded as operator-supplied until KAREN exposes a canonical deployment revision attestation"
-        )
-    assert_known_revision_is_ancestor("target application revision", target_revision)
-
-    files = payload.get("files")
-    if files != list(GALLERY_FILES):
-        raise PresentationContractError(
-            f"capture manifest file set does not match canonical gallery: {files!r}"
-        )
-
-    viewport = payload.get("viewport")
-    if viewport != {"width": 1600, "height": 1000}:
-        raise PresentationContractError(f"unexpected capture viewport: {viewport!r}")
-
-    for path in gallery_paths:
-        width, height = png_dimensions(path)
-        if width < 1400 or height < 800:
-            raise PresentationContractError(
-                f"{path.name} is below premium capture resolution: {width}x{height}"
-            )
-        if path.stat().st_size < 10_000:
-            raise PresentationContractError(
-                f"{path.name} is suspiciously small ({path.stat().st_size} bytes); verify it is a real rendered product view"
-            )
-
+    assert_revision_is_ancestor_of_head(
+        "capture harness revision",
+        str(payload["capture_harness_git_sha"]).lower(),
+    )
+    assert_revision_is_ancestor_of_head(
+        "target application revision",
+        str(payload["target_revision"]).lower(),
+    )
     return True
 
 
@@ -278,8 +195,8 @@ def main() -> int:
 
     try:
         verify_brand_contract()
-        gallery_ready = verify_gallery(require_assets=args.require_assets)
-    except (PresentationContractError, json.JSONDecodeError) as exc:
+        gallery_ready = verify_presentation_gallery(require_assets=args.require_assets)
+    except (PresentationContractError, GalleryContractError, json.JSONDecodeError) as exc:
         print(f"presentation contract failed: {exc}", file=sys.stderr)
         return 1
 
@@ -287,7 +204,8 @@ def main() -> int:
         print("presentation contract green: canonical brand + provenanced real-product gallery")
     else:
         print(
-            "presentation contract green: brand/capture rail valid; curated real-product gallery still pending"
+            "presentation contract green: brand/capture rail valid; "
+            "curated real-product gallery still pending"
         )
     return 0
 
