@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Karen AI mark</title>
+  <desc id="desc">A geometric K formed from a signal spine and two intelligent facets inside a rounded square.</desc>
+  <defs>
+    <linearGradient id="bg" x1="32" y1="24" x2="226" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#101826"/>
+      <stop offset="0.55" stop-color="#151B2F"/>
+      <stop offset="1" stop-color="#0B0F1A"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="66" y1="48" x2="194" y2="208" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#84E8D5"/>
+      <stop offset="0.48" stop-color="#65B8FF"/>
+      <stop offset="1" stop-color="#9E8CFF"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feColorMatrix in="blur" values="1 0 0 0 0.29 0 1 0 0 0.72 0 0 1 0 0.95 0 0 0 .28 0"/>
+      <feBlend in="SourceGraphic"/>
+    </filter>
+  </defs>
+  <rect x="12" y="12" width="232" height="232" rx="58" fill="url(#bg)"/>
+  <rect x="12.75" y="12.75" width="230.5" height="230.5" rx="57.25" fill="none" stroke="#FFFFFF" stroke-opacity=".10" stroke-width="1.5"/>
+  <path d="M78 55v146" stroke="url(#signal)" stroke-width="23" stroke-linecap="round" filter="url(#glow)"/>
+  <path d="M91 128l68-70" stroke="url(#signal)" stroke-width="23" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M91 128l76 74" stroke="url(#signal)" stroke-width="23" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M155 58c17 5 28 16 34 32" fill="none" stroke="#E8FDFF" stroke-opacity=".78" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="190" cy="96" r="5" fill="#E8FDFF"/>
+</svg>
