@@ -673,7 +673,7 @@ class ModelDownloadRepository:
                         message = 'Cancellation requested because the install target completed elsewhere'
                     WHERE job_id <> :job_id
                       AND install_path = :install_path
-                      AND status IN ('running', 'pause_requested', 'promoting')
+                      AND status IN ('running', 'pause_requested')
                       AND lease_token IS NOT NULL
                       AND lease_expires_at > now()
                     """
