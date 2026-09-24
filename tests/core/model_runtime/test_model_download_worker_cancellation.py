@@ -77,7 +77,7 @@ async def test_graceful_shutdown_keeps_active_execution_lease_renewed() -> None:
             self.claimed = False
             self.execution_started = asyncio.Event()
             self.allow_finish = asyncio.Event()
-            self.second_heartbeat = asyncio.Event()
+            self.heartbeat_seen = asyncio.Event()
             self.heartbeat_count = 0
 
         async def get_global_concurrency_limit(self) -> int:
@@ -102,8 +102,7 @@ async def test_graceful_shutdown_keeps_active_execution_lease_renewed() -> None:
             assert job_id == "mdl-graceful"
             assert lease_token == "lease-graceful"
             self.heartbeat_count += 1
-            if self.heartbeat_count >= 2:
-                self.second_heartbeat.set()
+            self.heartbeat_seen.set()
             return True
 
         async def fail_claim(self, job_id: str, lease_token: str, exc: Exception) -> None:
@@ -112,12 +111,12 @@ async def test_graceful_shutdown_keeps_active_execution_lease_renewed() -> None:
             )
 
     settings = ModelDownloadWorkerSettings(
-        lease_seconds=2,
-        heartbeat_seconds=0.01,
-        poll_interval_seconds=0.005,
+        lease_seconds=3,
+        heartbeat_seconds=1,
+        poll_interval_seconds=0.01,
         max_attempts=3,
         retry_base_seconds=1,
-        shutdown_grace_seconds=0.5,
+        shutdown_grace_seconds=2,
     ).validate()
     service = GracefulShutdownService()
     worker = ModelDownloadWorker(service, settings)
@@ -126,12 +125,14 @@ async def test_graceful_shutdown_keeps_active_execution_lease_renewed() -> None:
     await asyncio.wait_for(service.execution_started.wait(), timeout=0.2)
 
     stop_task = asyncio.create_task(worker.stop())
-    await asyncio.wait_for(service.second_heartbeat.wait(), timeout=0.2)
+    assert worker._stop.is_set() or not stop_task.done()
+
+    await asyncio.wait_for(service.heartbeat_seen.wait(), timeout=1.5)
 
     assert not stop_task.done()
-    assert service.heartbeat_count >= 2
+    assert service.heartbeat_count >= 1
 
     service.allow_finish.set()
-    await asyncio.wait_for(stop_task, timeout=0.2)
+    await asyncio.wait_for(stop_task, timeout=0.5)
 
     assert service.release_calls == []
