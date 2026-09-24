@@ -6,7 +6,11 @@ This directory contains public-facing product captures. Images here are evidence
 
 Only real browser captures of the real KAREN UI may be committed as product screenshots. Do not place generated dashboards, design mockups, edited feature composites, or static test substitutes here and present them as application truth.
 
+The curated gallery is valid only when its five PNG files are accompanied by `capture-manifest.json` from the canonical Playwright capture rail. A screenshot without provenance is not product proof.
+
 ## Canonical capture
+
+### Local approved demo installation
 
 From the active UI package:
 
@@ -25,6 +29,18 @@ npm run showcase:capture
 
 The rail refuses to run unless the account is explicitly declared `sanitized-demo`. This is deliberate. Do not capture a personal or production account for convenience.
 
+### GitHub capture from the approved demo deployment
+
+The repository also provides `.github/workflows/presentation-capture.yml`. It reads the target and credentials only from these repository secrets:
+
+```text
+KAREN_PRESENTATION_BASE_URL
+KAREN_PRESENTATION_EMAIL
+KAREN_PRESENTATION_PASSWORD
+```
+
+The workflow requires an HTTPS target, authenticates through the real UI, captures the exact checked-out SHA, verifies the resulting gallery, and can optionally commit the validated media back to the selected non-default branch. It does not modify, wrap, or weaken the production first-boot smoke path.
+
 ## Expected curated set
 
 ```text
@@ -33,9 +49,12 @@ The rail refuses to run unless the account is explicitly declared `sanitized-dem
 03-plugin-ecosystem.png
 04-comms-center.png
 05-settings-and-models.png
+capture-manifest.json
 ```
 
-Before committing a capture, inspect it at full resolution and verify:
+`capture-manifest.json` records the exact git SHA, browser version, viewport, sanitized-account declaration, and the policy assertion that mocked responses, generated UI, fixture-only state, and production/personal data were not used.
+
+Before committing a capture, inspect every PNG at full resolution and verify:
 
 - no PII, private conversations, private tenant data, tokens, credentials, or provider keys;
 - no console/debug overlays, stack traces, failed health state, or loading skeleton frozen mid-transition;
@@ -43,6 +62,22 @@ Before committing a capture, inspect it at full resolution and verify:
 - navigation and labels match the captured commit;
 - typography, spacing, clipping, responsive layout, and contrast are presentation quality;
 - the screenshot still demonstrates a capability that is active in the repository.
+
+## Automated integrity gate
+
+Structural presentation integrity is checked with:
+
+```bash
+python scripts/ci/verify_presentation_assets.py
+```
+
+Once the curated gallery exists, release/presentation proof must use the stricter form:
+
+```bash
+python scripts/ci/verify_presentation_assets.py --require-assets
+```
+
+The verifier rejects partial galleries, invalid PNGs, stale/non-ancestor capture SHAs, missing provenance, unexpected viewport dimensions, synthetic capture primitives, and non-sanitized account provenance.
 
 ## Existing E2E proof
 
