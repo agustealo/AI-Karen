@@ -29,6 +29,29 @@ on:
         required: true
         default: false
         type: boolean
+  workflow_call:
+    inputs:
+      source_mode:
+        required: true
+        type: string
+      base_url:
+        required: false
+        default: ""
+        type: string
+      identity_mode:
+        required: false
+        default: email
+        type: string
+      commit_assets:
+        required: true
+        type: boolean
+    secrets:
+      KAREN_PRESENTATION_PASSWORD:
+        required: false
+      KAREN_PRESENTATION_EMAIL:
+        required: false
+      KAREN_PRESENTATION_USERNAME:
+        required: false
 
 permissions:
   contents: write
@@ -69,6 +92,11 @@ jobs:
           REMOTE_USERNAME: ${{ secrets.KAREN_PRESENTATION_USERNAME }}
         run: |
           set -euo pipefail
+
+          if [[ "${{ inputs.source_mode }}" != "fresh-production" && "${{ inputs.source_mode }}" != "remote" ]]; then
+            echo "source_mode must be fresh-production or remote" >&2
+            exit 1
+          fi
 
           if [[ "${{ inputs.commit_assets }}" == "true" && "$GITHUB_REF_NAME" == "$DEFAULT_BRANCH" ]]; then
             echo "Presentation assets may not be committed directly to the default branch" >&2
