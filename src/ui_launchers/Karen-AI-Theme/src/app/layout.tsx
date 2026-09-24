@@ -1,15 +1,24 @@
-
 import type { Metadata } from 'next';
 import './globals.css';
-import { Toaster } from "@/components/ui/toaster";
+import { Toaster } from '@/components/ui/toaster';
 import { ThemeProvider } from '@/providers/theme-provider';
 import { PluginRegistryProvider } from '@/plugin_host/registry';
 import { MessageInjectionProvider } from '@/providers/MessageInjectionProvider';
 import SessionWarning from '@/components/SessionWarning';
 
 export const metadata: Metadata = {
-  title: 'Karen AI',
-  description: 'Intelligent Assistant Application by Agustealo Studio',
+  applicationName: 'KAREN',
+  title: {
+    default: 'KAREN | Local-first cognitive runtime',
+    template: '%s | KAREN',
+  },
+  description:
+    'KAREN is a local-first cognitive runtime for governed AI, durable memory, model orchestration, reasoning, automation, extensions, and observable execution.',
+  category: 'technology',
+  icons: {
+    icon: '/brand/karen-mark.svg',
+    shortcut: '/favicon.ico',
+  },
 };
 
 export default function RootLayout({
