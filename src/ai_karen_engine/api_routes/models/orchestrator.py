@@ -2,53 +2,39 @@
 FastAPI routes for LangGraph/AI flow orchestration.
 
 Boundary contract:
-- This router is a thin API ingress for explicit AI flow operations.
-- Normal user chat should use the canonical chat runtime route, not this router.
-- LangGraph is used here for deep/structured flows only.
-- Provider routing, prompt construction, memory recall, tool execution, and fallback
-  policy must remain inside runtime/orchestrator services, not inside routes.
+- This router is thin ingress for explicit deep/structured AI flows.
+- Normal chat uses the canonical chat runtime route.
+- Authenticated session identity is authoritative for user and tenant scope.
+- Provider routing, prompts, memory, tools, fallbacks, and execution state remain
+  inside runtime/orchestrator services.
 """
-
-# Import pydantic with fallback to stub for type checking
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import inspect
 import uuid
 from datetime import datetime, timezone
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
 if TYPE_CHECKING:
     from pydantic import BaseModel, ConfigDict, Field, field_validator
+    from ai_karen_engine.core.langgraph_orchestrator import LangGraphOrchestrator as AIOrchestrator
+else:
+    AIOrchestrator = Any
 
 try:
-    from pydantic import (
-        BaseModel,
-        ConfigDict,
-        Field,
-        field_validator,
-    )
-except ImportError:  # pragma: no cover - runtime fallback for pydantic_stub envs
-    from ai_karen_engine.pydantic_stub import (
-        BaseModel,
-        ConfigDict,
-        Field,
-        field_validator,
-    )
+    from pydantic import BaseModel, ConfigDict, Field, field_validator
+except ImportError:  # pragma: no cover
+    from ai_karen_engine.pydantic_stub import BaseModel, ConfigDict, Field, field_validator
 
-from ai_karen_engine.core.langgraph_orchestrator import (
-    LangGraphOrchestrator as AIOrchestrator,
-)
-from ai_karen_engine.core.logging import get_logger
-from ai_karen_engine.core.services.dependencies import (
-    get_langgraph_orchestrator_service,
-)
+from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.core.automation.contracts import FlowType
+from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.services.dependencies import get_langgraph_orchestrator_service
 from ai_karen_engine.services.error_response_schemas import (
     WebAPIErrorCode,
     create_service_error_response,
@@ -62,7 +48,6 @@ logger = get_logger(__name__)
 MAX_PROMPT_LENGTH = 10_000
 MAX_HISTORY_ITEMS = 200
 MAX_BATCH_SIZE = 50
-FLOW_STATUS_TTL_SECONDS = 3_600
 
 
 def _utc_now() -> datetime:
@@ -76,82 +61,48 @@ def _iso_now() -> str:
 def _safe_request_id(request: Request | None = None) -> str:
     if request is None:
         return str(uuid.uuid4())
-
     for header_name in ("x-request-id", "x-correlation-id", "traceparent"):
         header_value = request.headers.get(header_name)
         if header_value:
             return header_value[:128]
-
     return str(uuid.uuid4())
 
 
 def _safe_correlation_id(request: Request | None = None) -> str:
     if request is None:
         return str(uuid.uuid4())
-
     header_value = request.headers.get("x-correlation-id")
     if header_value:
         return header_value[:128]
-
     request_id = request.headers.get("x-request-id")
     if request_id:
         return request_id[:128]
-
     return str(uuid.uuid4())
-
-
-def _hash_prompt(prompt: str) -> str:
-    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
 
 
 def _normalize_prompt(value: str) -> str:
     if value is None:
         raise ValueError("Prompt is required")
-
     cleaned = value.strip()
     if not cleaned:
         raise ValueError("Prompt cannot be empty or whitespace only")
-
     if len(cleaned) > MAX_PROMPT_LENGTH:
         raise ValueError(f"Prompt cannot exceed {MAX_PROMPT_LENGTH} characters")
-
     return cleaned
 
 
 def _normalize_context(value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    if not value:
-        return {}
-
-    return dict(value)
+    return dict(value or {})
 
 
-def _get_actor_user_id(request_body_user_id: Optional[str], http_request: Request) -> str:
-    """
-    Temporary compatibility resolver.
-
-    Replace with canonical auth dependency when the route is wired to the central
-    auth/session context. Do not use this to authorize privileged actions.
-    """
-    if request_body_user_id and request_body_user_id.strip():
-        return request_body_user_id.strip()
-
-    header_user = http_request.headers.get("x-user-id")
-    if header_user and header_user.strip():
-        return header_user.strip()[:128]
-
-    return "anonymous"
-
-
-def _get_actor_tenant_id(context: Mapping[str, Any], http_request: Request) -> Optional[str]:
-    header_tenant = http_request.headers.get("x-tenant-id")
-    if header_tenant and header_tenant.strip():
-        return header_tenant.strip()[:128]
-
-    tenant_from_context = context.get("tenant_id")
-    if isinstance(tenant_from_context, str) and tenant_from_context.strip():
-        return tenant_from_context.strip()[:128]
-
-    return None
+def _trusted_identity(user: UserData) -> tuple[str, str]:
+    user_id = str(user.user_id or "").strip()
+    tenant_id = str(user.tenant_id or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authenticated user is required")
+    if not tenant_id or tenant_id == "default":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Explicit tenant scope is required")
+    return user_id, tenant_id
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -160,39 +111,17 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
-def _public_error(
-    *,
-    service_name: str,
-    error: Exception,
-    error_code: WebAPIErrorCode,
-    user_message: str,
-    correlation_id: str,
-) -> HTTPException:
+def _public_error(*, service_name: str, error: Exception, error_code: WebAPIErrorCode, user_message: str, correlation_id: str) -> HTTPException:
     error_response = create_service_error_response(
         service_name=service_name,
         error=error,
         error_code=error_code,
         user_message=user_message,
     )
-
     detail = error_response.model_dump(mode="json")
     if isinstance(detail, dict):
         detail.setdefault("correlation_id", correlation_id)
-
-    return HTTPException(
-        status_code=get_http_status_for_error_code(error_code),
-        detail=detail,
-    )
-
-
-def _model_dump(value: Any) -> Dict[str, Any]:
-    if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json")
-    if hasattr(value, "dict"):
-        return value.dict()
-    if isinstance(value, dict):
-        return value
-    return {}
+    return HTTPException(status_code=get_http_status_for_error_code(error_code), detail=detail)
 
 
 def _set_extra_field(model: Any, key: str, value: Any) -> None:
@@ -203,68 +132,47 @@ def _set_extra_field(model: Any, key: str, value: Any) -> None:
 
 
 class _PromptValidatedModel(BaseModel):
-    """Base model with prompt validation if field_validator is available."""
     model_config = ConfigDict(extra="forbid")
-
     if field_validator is not None:
-        # Only add the validator if field_validator is available
         _validate_prompt = field_validator("prompt", check_fields=False)(_normalize_prompt)
 
 
 class ProcessFlowRequest(_PromptValidatedModel):
-    """Request model for processing explicit AI flows."""
-
     flow_type: FlowType = Field(..., description="Type of flow to process")
     prompt: str = Field(..., min_length=1, max_length=MAX_PROMPT_LENGTH)
     conversation_history: List[Dict[str, Any]] = Field(default_factory=list)
     user_settings: Dict[str, Any] = Field(default_factory=dict)
     context: Optional[Dict[str, Any]] = Field(default_factory=dict)
     session_id: Optional[str] = None
-    user_id: Optional[str] = None
+    user_id: Optional[str] = Field(default=None, description="Deprecated compatibility field; authenticated identity is authoritative")
 
 
 class DecideActionRequest(_PromptValidatedModel):
-    """Request model for decision-only flow."""
-
     prompt: str = Field(..., min_length=1, max_length=MAX_PROMPT_LENGTH)
     conversation_history: List[Dict[str, Any]] = Field(default_factory=list)
     user_settings: Dict[str, Any] = Field(default_factory=dict)
     context: Optional[Dict[str, Any]] = Field(default_factory=dict)
     session_id: Optional[str] = None
-    user_id: Optional[str] = None
+    user_id: Optional[str] = Field(default=None, description="Deprecated compatibility field; authenticated identity is authoritative")
 
 
 class ConversationProcessingRequest(_PromptValidatedModel):
-    """
-    Legacy/deep conversation flow request.
-
-    Normal chat should prefer the canonical chat runtime endpoints. This endpoint
-    remains for explicit LangGraph conversation-processing flows.
-    """
-
     prompt: str = Field(..., min_length=1, max_length=MAX_PROMPT_LENGTH)
     conversation_history: List[Dict[str, Any]] = Field(default_factory=list)
     user_settings: Dict[str, Any] = Field(default_factory=dict)
     context: Optional[Dict[str, Any]] = Field(default_factory=dict)
     session_id: Optional[str] = None
-    user_id: Optional[str] = None
+    user_id: Optional[str] = Field(default=None, description="Deprecated compatibility field; authenticated identity is authoritative")
     include_memories: bool = True
     include_insights: bool = True
     llm_preferences: Optional[Dict[str, str]] = None
     stream_response: bool = False
-    max_tokens: Optional[int] = Field(
-        None,
-        ge=1,
-        description="Requested tokens to generate; provider/model caps are enforced downstream.",
-    )
+    max_tokens: Optional[int] = Field(None, ge=1)
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
 
 
 class FlowResponse(BaseModel):
-    """Response model for AI flow processing."""
-
     model_config = ConfigDict(extra="allow")
-
     response: str = Field(..., description="Generated response text")
     requires_plugin: bool = False
     plugin_to_execute: Optional[str] = None
@@ -305,13 +213,7 @@ class FlowMetricsResponse(BaseModel):
 
 class BatchProcessRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-    requests: List[ProcessFlowRequest] = Field(
-        ...,
-        min_items=1,
-        max_items=MAX_BATCH_SIZE,
-        description="Batch of flow requests",
-    )
+    requests: List[ProcessFlowRequest] = Field(..., min_items=1, max_items=MAX_BATCH_SIZE)
     parallel: bool = False
     fail_fast: bool = False
 
@@ -327,109 +229,33 @@ class BatchProcessResponse(BaseModel):
     correlation_id: Optional[str] = None
 
 
-class CancelFlowRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    flow_id: str = Field(..., min_length=1, max_length=256)
-    session_id: Optional[str] = None
-
-
-class FlowStatus(str, Enum):
-    PENDING = "pending"
-    PROCESSING = "processing"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-
-
-class FlowStatusResponse(BaseModel):
-    flow_id: str
-    status: FlowStatus
-    started_at: datetime
-    completed_at: Optional[datetime] = None
-    result: Optional[FlowResponse] = None
-    error: Optional[str] = None
-    progress: Optional[float] = Field(None, ge=0.0, le=1.0)
-    request_id: Optional[str] = None
-    correlation_id: Optional[str] = None
-
-
-# Compatibility-only local status cache.
-# Production tracking belongs in the runtime/job service with Redis/Postgres TTL.
-_flow_status_store: Dict[str, FlowStatusResponse] = {}
-
-
-def _create_flow_id(prompt: str, request_id: str) -> str:
-    return f"flow_{int(_utc_now().timestamp() * 1000)}_{_hash_prompt(prompt)}_{request_id[:8]}"
-
-
-def _cleanup_old_flow_status() -> None:
-    now = _utc_now()
-    expired: List[str] = []
-
-    for flow_id, flow_status in _flow_status_store.items():
-        completed_at = flow_status.completed_at
-        if completed_at is None:
-            continue
-
-        if completed_at.tzinfo is None:
-            completed_at = completed_at.replace(tzinfo=timezone.utc)
-
-        if (now - completed_at).total_seconds() > FLOW_STATUS_TTL_SECONDS:
-            expired.append(flow_id)
-
-    for flow_id in expired:
-        _flow_status_store.pop(flow_id, None)
-
-
-def _build_common_context(
-    *,
-    request_context: Optional[Dict[str, Any]],
-    http_request: Request,
-    request_id: str,
-    correlation_id: str,
-    user_id: str,
-    tenant_id: Optional[str],
-) -> Dict[str, Any]:
+def _build_common_context(*, request_context: Optional[Dict[str, Any]], request_id: str, correlation_id: str, user_id: str, tenant_id: str) -> Dict[str, Any]:
     context = _normalize_context(request_context)
+    context.pop("user_id", None)
+    context.pop("tenant_id", None)
     context.update(
         {
             "request_id": request_id,
             "correlation_id": correlation_id,
             "user_id": user_id,
+            "tenant_id": tenant_id,
         }
     )
-
-    if tenant_id:
-        context["tenant_id"] = tenant_id
-
     return context
 
 
-def _build_flow_input_from_request(
-    *,
-    request_body: ProcessFlowRequest | DecideActionRequest | ConversationProcessingRequest,
-    http_request: Request,
-    request_id: str,
-    correlation_id: str,
-    extra_context: Optional[Dict[str, Any]] = None,
-):
+def _build_flow_input_from_request(*, request_body: ProcessFlowRequest | DecideActionRequest | ConversationProcessingRequest, user: UserData, request_id: str, correlation_id: str, extra_context: Optional[Dict[str, Any]] = None):
+    user_id, tenant_id = _trusted_identity(user)
     context = _normalize_context(request_body.context)
     if extra_context:
         context.update(extra_context)
-
-    user_id = _get_actor_user_id(getattr(request_body, "user_id", None), http_request)
-    tenant_id = _get_actor_tenant_id(context, http_request)
-
     context = _build_common_context(
         request_context=context,
-        http_request=http_request,
         request_id=request_id,
         correlation_id=correlation_id,
         user_id=user_id,
         tenant_id=tenant_id,
     )
-
     return build_flow_input(
         prompt=_normalize_prompt(request_body.prompt),
         conversation_history=list(request_body.conversation_history or [])[:MAX_HISTORY_ITEMS],
@@ -444,7 +270,6 @@ def _apply_legacy_user_settings(flow_input: Any, user_settings: Mapping[str, Any
     personality_tone = user_settings.get("personality_tone")
     personality_verbosity = user_settings.get("personality_verbosity")
     memory_depth = user_settings.get("memory_depth")
-
     tone_mapping = {
         "friendly": "friendly",
         "professional": "formal",
@@ -453,7 +278,6 @@ def _apply_legacy_user_settings(flow_input: Any, user_settings: Mapping[str, Any
         "formal": "formal",
         "humorous": "humorous",
     }
-
     depth_mapping = {
         "minimal": "short",
         "medium": "medium",
@@ -461,47 +285,25 @@ def _apply_legacy_user_settings(flow_input: Any, user_settings: Mapping[str, Any
         "short": "short",
         "long": "long",
     }
-
     if personality_tone:
-        _set_extra_field(
-            flow_input,
-            "personality_tone",
-            tone_mapping.get(str(personality_tone), personality_tone),
-        )
-
+        _set_extra_field(flow_input, "personality_tone", tone_mapping.get(str(personality_tone), personality_tone))
     if personality_verbosity:
         _set_extra_field(flow_input, "personality_verbosity", personality_verbosity)
-
     if memory_depth:
-        _set_extra_field(
-            flow_input,
-            "memory_depth",
-            depth_mapping.get(str(memory_depth), memory_depth),
-        )
+        _set_extra_field(flow_input, "memory_depth", depth_mapping.get(str(memory_depth), memory_depth))
 
 
-def _build_flow_response(
-    *,
-    result: Any,
-    processing_time_ms: int,
-    request_id: str,
-    correlation_id: str,
-) -> FlowResponse:
+def _build_flow_response(*, result: Any, processing_time_ms: int, request_id: str, correlation_id: str) -> FlowResponse:
     payload = format_flow_response(result, processing_time_ms)
     response = FlowResponse(**payload)
-
     response.request_id = request_id
     response.correlation_id = correlation_id
-
     if hasattr(result, "token_usage") and getattr(result, "token_usage"):
         response.token_usage = getattr(result, "token_usage")
-
     if hasattr(result, "fallback_chain") and getattr(result, "fallback_chain"):
         response.fallback_chain_used = getattr(result, "fallback_chain")
-
     if hasattr(result, "runtime_metadata") and getattr(result, "runtime_metadata"):
         response.runtime_metadata = getattr(result, "runtime_metadata")
-
     return response
 
 
@@ -509,66 +311,38 @@ def _build_flow_response(
 async def process_flow(
     http_request: Request,
     request: ProcessFlowRequest,
+    user: UserData = Depends(get_current_user),
     langgraph_orchestrator: AIOrchestrator = Depends(get_langgraph_orchestrator_service),
 ):
-    """Process an explicit AI flow through the LangGraph/deep-flow orchestrator."""
     request_id = _safe_request_id(http_request)
     correlation_id = _safe_correlation_id(http_request)
-    flow_id = _create_flow_id(request.prompt, request_id)
-
-    _flow_status_store[flow_id] = FlowStatusResponse(
-        flow_id=flow_id,
-        status=FlowStatus.PROCESSING,
-        started_at=_utc_now(),
-        progress=0.0,
-        request_id=request_id,
-        correlation_id=correlation_id,
-    )
-
     try:
         flow_input = _build_flow_input_from_request(
             request_body=request,
-            http_request=http_request,
+            user=user,
             request_id=request_id,
             correlation_id=correlation_id,
         )
-
-        _flow_status_store[flow_id].progress = 0.35
-
         start_time = _utc_now()
         result = await langgraph_orchestrator.process_flow(request.flow_type, flow_input)
         processing_time_ms = int((_utc_now() - start_time).total_seconds() * 1000)
-
-        response = _build_flow_response(
+        return _build_flow_response(
             result=result,
             processing_time_ms=processing_time_ms,
             request_id=request_id,
             correlation_id=correlation_id,
         )
-
-        _flow_status_store[flow_id].status = FlowStatus.COMPLETED
-        _flow_status_store[flow_id].completed_at = _utc_now()
-        _flow_status_store[flow_id].progress = 1.0
-        _flow_status_store[flow_id].result = response
-        _cleanup_old_flow_status()
-
-        return response
-
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception(
             "Failed to process AI flow",
             error=str(exc),
-            flow_id=flow_id,
             request_id=request_id,
             correlation_id=correlation_id,
+            user_id=user.user_id,
+            tenant_id=user.tenant_id,
         )
-
-        flow_status = _flow_status_store.get(flow_id)
-        if flow_status:
-            flow_status.status = FlowStatus.FAILED
-            flow_status.completed_at = _utc_now()
-            flow_status.error = "AI flow processing failed"
-
         raise _public_error(
             service_name="langgraph_orchestrator",
             error=exc,
@@ -582,37 +356,37 @@ async def process_flow(
 async def decide_action(
     http_request: Request,
     request: DecideActionRequest,
+    user: UserData = Depends(get_current_user),
     langgraph_orchestrator: AIOrchestrator = Depends(get_langgraph_orchestrator_service),
 ):
-    """Run the decision-only flow."""
     request_id = _safe_request_id(http_request)
     correlation_id = _safe_correlation_id(http_request)
-
     try:
         flow_input = _build_flow_input_from_request(
             request_body=request,
-            http_request=http_request,
+            user=user,
             request_id=request_id,
             correlation_id=correlation_id,
         )
-
         start_time = _utc_now()
         result = await langgraph_orchestrator.decide_action(flow_input)
         processing_time_ms = int((_utc_now() - start_time).total_seconds() * 1000)
-
         return _build_flow_response(
             result=result,
             processing_time_ms=processing_time_ms,
             request_id=request_id,
             correlation_id=correlation_id,
         )
-
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception(
             "Failed to process decide action",
             error=str(exc),
             request_id=request_id,
             correlation_id=correlation_id,
+            user_id=user.user_id,
+            tenant_id=user.tenant_id,
         )
         raise _public_error(
             service_name="langgraph_orchestrator",
@@ -625,7 +399,6 @@ async def decide_action(
 
 @router.head("/conversation-processing")
 async def conversation_processing_head() -> Response:
-    """Compatibility HEAD endpoint for conversation-processing availability checks."""
     return Response(status_code=status.HTTP_200_OK)
 
 
@@ -633,17 +406,11 @@ async def conversation_processing_head() -> Response:
 async def conversation_processing(
     http_request: Request,
     request: ConversationProcessingRequest,
+    user: UserData = Depends(get_current_user),
     langgraph_orchestrator: AIOrchestrator = Depends(get_langgraph_orchestrator_service),
 ):
-    """
-    Process a legacy/deep conversation flow.
-
-    Normal chat should go through the canonical chat runtime. This endpoint remains
-    for explicit LangGraph conversation-processing callers.
-    """
     request_id = _safe_request_id(http_request)
     correlation_id = _safe_correlation_id(http_request)
-
     try:
         extra_context: Dict[str, Any] = {
             "include_memories": request.include_memories,
@@ -651,43 +418,39 @@ async def conversation_processing(
             "stream_response": request.stream_response,
             "route_scope": "langgraph_conversation_processing",
         }
-
         if request.llm_preferences:
             extra_context["llm_preferences"] = dict(request.llm_preferences)
-
         if request.max_tokens is not None:
             extra_context["max_tokens"] = request.max_tokens
-
         if request.temperature is not None:
             extra_context["temperature"] = request.temperature
-
         flow_input = _build_flow_input_from_request(
             request_body=request,
-            http_request=http_request,
+            user=user,
             request_id=request_id,
             correlation_id=correlation_id,
             extra_context=extra_context,
         )
-
         _apply_legacy_user_settings(flow_input, request.user_settings or {})
-
         start_time = _utc_now()
         result = await langgraph_orchestrator.conversation_processing_flow(flow_input)
         processing_time_ms = int((_utc_now() - start_time).total_seconds() * 1000)
-
         return _build_flow_response(
             result=result,
             processing_time_ms=processing_time_ms,
             request_id=request_id,
             correlation_id=correlation_id,
         )
-
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception(
             "Failed to process conversation flow",
             error=str(exc),
             request_id=request_id,
             correlation_id=correlation_id,
+            user_id=user.user_id,
+            tenant_id=user.tenant_id,
         )
         raise _public_error(
             service_name="langgraph_orchestrator",
@@ -704,17 +467,13 @@ async def get_available_flows(
     flow_type_filter: Optional[FlowType] = Query(None, description="Filter by flow type"),
     langgraph_orchestrator: AIOrchestrator = Depends(get_langgraph_orchestrator_service),
 ):
-    """Get available explicit AI flow types."""
     request_id = _safe_request_id(http_request)
     correlation_id = _safe_correlation_id(http_request)
-
     try:
         flows: List[Dict[str, Any]] = []
-
         for flow_type in FlowType:
             if flow_type_filter and flow_type != flow_type_filter:
                 continue
-
             flows.append(
                 {
                     "type": flow_type.value,
@@ -725,21 +484,14 @@ async def get_available_flows(
                     "estimated_time_ms": _get_estimated_processing_time(flow_type),
                 }
             )
-
         return AvailableFlowsResponse(
             flows=flows,
             total_count=len(flows),
             request_id=request_id,
             correlation_id=correlation_id,
         )
-
     except Exception as exc:
-        logger.exception(
-            "Failed to get available flows",
-            error=str(exc),
-            request_id=request_id,
-            correlation_id=correlation_id,
-        )
+        logger.exception("Failed to get available flows", error=str(exc), request_id=request_id, correlation_id=correlation_id)
         raise _public_error(
             service_name="langgraph_orchestrator",
             error=exc,
@@ -755,15 +507,10 @@ async def get_flow_metrics(
     time_range_hours: int = Query(24, ge=1, le=168),
     langgraph_orchestrator: AIOrchestrator = Depends(get_langgraph_orchestrator_service),
 ):
-    """Get AI flow metrics."""
     request_id = _safe_request_id(http_request)
     correlation_id = _safe_correlation_id(http_request)
-
     try:
-        metrics = await _maybe_await(
-            langgraph_orchestrator.get_metrics(time_range_hours=time_range_hours)
-        )
-
+        metrics = await _maybe_await(langgraph_orchestrator.get_metrics(time_range_hours=time_range_hours))
         return FlowMetricsResponse(
             total_flows_processed=metrics.get("total_flows_processed", 0),
             flows_by_type=metrics.get("flows_by_type", {}),
@@ -776,14 +523,8 @@ async def get_flow_metrics(
             request_id=request_id,
             correlation_id=correlation_id,
         )
-
     except Exception as exc:
-        logger.exception(
-            "Failed to get AI flow metrics",
-            error=str(exc),
-            request_id=request_id,
-            correlation_id=correlation_id,
-        )
+        logger.exception("Failed to get AI flow metrics", error=str(exc), request_id=request_id, correlation_id=correlation_id)
         raise _public_error(
             service_name="langgraph_orchestrator",
             error=exc,
@@ -797,21 +538,20 @@ async def get_flow_metrics(
 async def batch_process_flows(
     http_request: Request,
     request: BatchProcessRequest,
+    user: UserData = Depends(get_current_user),
     langgraph_orchestrator: AIOrchestrator = Depends(get_langgraph_orchestrator_service),
 ):
-    """Process multiple explicit flow requests."""
     request_id = _safe_request_id(http_request)
     correlation_id = _safe_correlation_id(http_request)
     start_time = _utc_now()
-
     results: List[FlowResponse] = []
     errors: List[Dict[str, Any]] = []
 
     async def run_single(index: int, req: ProcessFlowRequest) -> FlowResponse:
         return await _process_single_flow(
             request=req,
+            user=user,
             orchestrator=langgraph_orchestrator,
-            http_request=http_request,
             request_id=f"{request_id}:{index}",
             correlation_id=correlation_id,
         )
@@ -820,7 +560,6 @@ async def batch_process_flows(
         if request.parallel:
             tasks = [run_single(index, req) for index, req in enumerate(request.requests)]
             batch_results = await asyncio.gather(*tasks, return_exceptions=not request.fail_fast)
-
             for index, item in enumerate(batch_results):
                 if isinstance(item, Exception):
                     errors.append({"index": index, "error": "Flow processing failed"})
@@ -836,9 +575,7 @@ async def batch_process_flows(
                     errors.append({"index": index, "error": "Flow processing failed"})
                     if request.fail_fast:
                         raise exc
-
         total_time_ms = int((_utc_now() - start_time).total_seconds() * 1000)
-
         return BatchProcessResponse(
             results=results,
             errors=errors,
@@ -849,99 +586,13 @@ async def batch_process_flows(
             request_id=request_id,
             correlation_id=correlation_id,
         )
-
     except Exception as exc:
-        logger.exception(
-            "Batch processing failed",
-            error=str(exc),
-            request_id=request_id,
-            correlation_id=correlation_id,
-        )
+        logger.exception("Batch processing failed", error=str(exc), request_id=request_id, correlation_id=correlation_id)
         raise _public_error(
             service_name="langgraph_orchestrator",
             error=exc,
             error_code=WebAPIErrorCode.AI_ORCHESTRATOR_ERROR,
             user_message="Batch processing failed. Please try again.",
-            correlation_id=correlation_id,
-        )
-
-
-@router.get("/flow-status/{flow_id}", response_model=FlowStatusResponse)
-async def get_flow_status(flow_id: str):
-    """
-    Get compatibility status for a flow execution.
-
-    Production status should be migrated to runtime/job persistence with TTL.
-    """
-    _cleanup_old_flow_status()
-
-    flow_status = _flow_status_store.get(flow_id)
-    if not flow_status:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flow not found")
-
-    return flow_status
-
-
-@router.post("/cancel-flow")
-async def cancel_flow(
-    http_request: Request,
-    request: CancelFlowRequest,
-    langgraph_orchestrator: AIOrchestrator = Depends(get_langgraph_orchestrator_service),
-):
-    """Cancel a running flow if the orchestrator supports cancellation."""
-    request_id = _safe_request_id(http_request)
-    correlation_id = _safe_correlation_id(http_request)
-
-    try:
-        flow_status = _flow_status_store.get(request.flow_id)
-        if not flow_status:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flow not found")
-
-        if flow_status.status not in {FlowStatus.PENDING, FlowStatus.PROCESSING}:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Flow cannot be cancelled in its current state",
-            )
-
-        if not hasattr(langgraph_orchestrator, "cancel_flow"):
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Flow cancellation is not supported by this orchestrator",
-            )
-
-        cancelled = await langgraph_orchestrator.cancel_flow(request.flow_id, request.session_id)
-
-        if not cancelled:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to cancel flow",
-            )
-
-        flow_status.status = FlowStatus.CANCELLED
-        flow_status.completed_at = _utc_now()
-        flow_status.progress = 1.0
-
-        return {
-            "status": "cancelled",
-            "flow_id": request.flow_id,
-            "request_id": request_id,
-            "correlation_id": correlation_id,
-        }
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception(
-            "Failed to cancel flow",
-            error=str(exc),
-            request_id=request_id,
-            correlation_id=correlation_id,
-        )
-        raise _public_error(
-            service_name="langgraph_orchestrator",
-            error=exc,
-            error_code=WebAPIErrorCode.AI_ORCHESTRATOR_ERROR,
-            user_message="Failed to cancel flow. Please try again.",
             correlation_id=correlation_id,
         )
 
@@ -976,28 +627,18 @@ async def _generate_starter_prompts(assistant_type: Optional[str] = None) -> Dic
             "Compare recent model-serving options",
         ],
     }
-
     normalized_type = (assistant_type or "general").strip().lower()
     prompts = starter_prompts_by_type.get(normalized_type, starter_prompts_by_type["general"])
-
-    return {
-        "prompts": prompts,
-        "assistant_type": normalized_type,
-        "timestamp": _iso_now(),
-    }
+    return {"prompts": prompts, "assistant_type": normalized_type, "timestamp": _iso_now()}
 
 
 @router.get("/generate-starter")
-async def generate_starter_prompts_get(
-    assistant_type: Optional[str] = Query(None, description="Type of assistant"),
-):
-    """Generate starter prompts for the web UI."""
+async def generate_starter_prompts_get(assistant_type: Optional[str] = Query(None, description="Type of assistant")):
     return await _generate_starter_prompts(assistant_type)
 
 
 @router.post("/generate-starter")
 async def generate_starter_prompts_post(body: Optional[Dict[str, Any]] = None):
-    """Generate starter prompts for the web UI."""
     assistant_type = None
     if body:
         assistant_type = body.get("assistant_type") or body.get("assistantType")
@@ -1009,10 +650,8 @@ async def health_check(
     http_request: Request,
     langgraph_orchestrator: AIOrchestrator = Depends(get_langgraph_orchestrator_service),
 ):
-    """Health check for the LangGraph/deep-flow orchestrator."""
     request_id = _safe_request_id(http_request)
     correlation_id = _safe_correlation_id(http_request)
-
     try:
         if hasattr(langgraph_orchestrator, "health_check"):
             health_result = await langgraph_orchestrator.health_check()
@@ -1020,12 +659,10 @@ async def health_check(
                 health_result.setdefault("request_id", request_id)
                 health_result.setdefault("correlation_id", correlation_id)
             return health_result
-
         if hasattr(langgraph_orchestrator, "test_connectivity"):
             connected = await langgraph_orchestrator.test_connectivity()
         else:
             connected = True
-
         return {
             "status": "healthy" if connected else "degraded",
             "service": "langgraph_orchestrator",
@@ -1038,14 +675,8 @@ async def health_check(
             "request_id": request_id,
             "correlation_id": correlation_id,
         }
-
     except Exception as exc:
-        logger.exception(
-            "AI orchestrator health check failed",
-            error=str(exc),
-            request_id=request_id,
-            correlation_id=correlation_id,
-        )
+        logger.exception("AI orchestrator health check failed", error=str(exc), request_id=request_id, correlation_id=correlation_id)
         return {
             "status": "unhealthy",
             "service": "langgraph_orchestrator",
@@ -1061,14 +692,8 @@ async def get_available_models(
     http_request: Request,
     langgraph_orchestrator: AIOrchestrator = Depends(get_langgraph_orchestrator_service),
 ):
-    """
-    Get models exposed by the LangGraph orchestrator compatibility surface.
-
-    Provider/model registry remains the canonical owner for model availability.
-    """
     request_id = _safe_request_id(http_request)
     correlation_id = _safe_correlation_id(http_request)
-
     try:
         if not hasattr(langgraph_orchestrator, "get_available_models"):
             return {
@@ -1079,12 +704,10 @@ async def get_available_models(
                 "request_id": request_id,
                 "correlation_id": correlation_id,
             }
-
         models = await _maybe_await(langgraph_orchestrator.get_available_models())
         default_model = None
         if hasattr(langgraph_orchestrator, "get_default_model"):
             default_model = await _maybe_await(langgraph_orchestrator.get_default_model())
-
         return {
             "models": models,
             "default_model": default_model,
@@ -1092,14 +715,8 @@ async def get_available_models(
             "request_id": request_id,
             "correlation_id": correlation_id,
         }
-
     except Exception as exc:
-        logger.exception(
-            "Failed to get available models",
-            error=str(exc),
-            request_id=request_id,
-            correlation_id=correlation_id,
-        )
+        logger.exception("Failed to get available models", error=str(exc), request_id=request_id, correlation_id=correlation_id)
         raise _public_error(
             service_name="langgraph_orchestrator",
             error=exc,
@@ -1115,26 +732,15 @@ async def clear_cache(
     cache_type: Optional[str] = Query(None, description="Type of cache to clear"),
     langgraph_orchestrator: AIOrchestrator = Depends(get_langgraph_orchestrator_service),
 ):
-    """Clear orchestrator cache if supported."""
     request_id = _safe_request_id(http_request)
     correlation_id = _safe_correlation_id(http_request)
-
     try:
         cache_type_value = (cache_type or "all").strip().lower()
         if cache_type_value not in {"model", "memory", "flow", "all"}:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="cache_type must be one of: model, memory, flow, all",
-            )
-
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="cache_type must be one of: model, memory, flow, all")
         if not hasattr(langgraph_orchestrator, "clear_cache"):
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Cache clearing is not supported by this orchestrator",
-            )
-
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Cache clearing is not supported by this orchestrator")
         result = await langgraph_orchestrator.clear_cache(cache_type_value)
-
         return {
             "status": "success",
             "cache_type_cleared": cache_type_value,
@@ -1142,16 +748,10 @@ async def clear_cache(
             "request_id": request_id,
             "correlation_id": correlation_id,
         }
-
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception(
-            "Failed to clear orchestrator cache",
-            error=str(exc),
-            request_id=request_id,
-            correlation_id=correlation_id,
-        )
+        logger.exception("Failed to clear orchestrator cache", error=str(exc), request_id=request_id, correlation_id=correlation_id)
         raise _public_error(
             service_name="langgraph_orchestrator",
             error=exc,
@@ -1161,25 +761,16 @@ async def clear_cache(
         )
 
 
-async def _process_single_flow(
-    *,
-    request: ProcessFlowRequest,
-    orchestrator: AIOrchestrator,
-    http_request: Request,
-    request_id: str,
-    correlation_id: str,
-) -> FlowResponse:
+async def _process_single_flow(*, request: ProcessFlowRequest, user: UserData, orchestrator: AIOrchestrator, request_id: str, correlation_id: str) -> FlowResponse:
     flow_input = _build_flow_input_from_request(
         request_body=request,
-        http_request=http_request,
+        user=user,
         request_id=request_id,
         correlation_id=correlation_id,
     )
-
     start_time = _utc_now()
     result = await orchestrator.process_flow(request.flow_type, flow_input)
     processing_time_ms = int((_utc_now() - start_time).total_seconds() * 1000)
-
     return _build_flow_response(
         result=result,
         processing_time_ms=processing_time_ms,
@@ -1224,14 +815,8 @@ async def _check_plugin_system(orchestrator: AIOrchestrator) -> Dict[str, Any]:
 
 def _get_flow_description(flow_type: FlowType) -> str:
     descriptions = {
-        FlowType.DECIDE_ACTION: (
-            "Analyzes user input and decides what action to take, including "
-            "tool/plugin execution eligibility."
-        ),
-        FlowType.CONVERSATION_PROCESSING: (
-            "Runs explicit LangGraph conversation-processing with memory/context options. "
-            "Normal chat should use the canonical chat runtime."
-        ),
+        FlowType.DECIDE_ACTION: "Analyzes user input and decides what action to take, including tool/plugin execution eligibility.",
+        FlowType.CONVERSATION_PROCESSING: "Runs explicit LangGraph conversation-processing with memory/context options. Normal chat should use the canonical chat runtime.",
         FlowType.CONVERSATION_SUMMARY: "Generates summaries of conversation history.",
         FlowType.GENERATE_FINAL_RESPONSE: "Produces the final response payload for delivery.",
     }
@@ -1240,76 +825,23 @@ def _get_flow_description(flow_type: FlowType) -> str:
 
 def _get_flow_parameters(flow_type: FlowType) -> Dict[str, Any]:
     base_params: Dict[str, Any] = {
-        "prompt": {
-            "type": "string",
-            "required": True,
-            "description": "User input prompt",
-            "max_length": MAX_PROMPT_LENGTH,
-        },
-        "conversation_history": {
-            "type": "array",
-            "required": False,
-            "description": "Previous conversation messages",
-            "max_items": MAX_HISTORY_ITEMS,
-        },
-        "user_settings": {
-            "type": "object",
-            "required": False,
-            "description": "User preferences and settings",
-        },
-        "context": {
-            "type": "object",
-            "required": False,
-            "description": "Additional context data",
-        },
-        "session_id": {
-            "type": "string",
-            "required": False,
-            "description": "Session identifier",
-        },
-        "user_id": {
-            "type": "string",
-            "required": False,
-            "description": "User identifier. Prefer authenticated session context.",
-        },
+        "prompt": {"type": "string", "required": True, "description": "User input prompt", "max_length": MAX_PROMPT_LENGTH},
+        "conversation_history": {"type": "array", "required": False, "description": "Previous conversation messages", "max_items": MAX_HISTORY_ITEMS},
+        "user_settings": {"type": "object", "required": False, "description": "User preferences and settings"},
+        "context": {"type": "object", "required": False, "description": "Additional context data; identity fields are ignored"},
+        "session_id": {"type": "string", "required": False, "description": "Session identifier"},
+        "user_id": {"type": "string", "required": False, "description": "Deprecated compatibility field; authenticated identity is authoritative"},
     }
-
     if flow_type == FlowType.CONVERSATION_PROCESSING:
         base_params.update(
             {
-                "include_memories": {
-                    "type": "boolean",
-                    "required": False,
-                    "description": "Include memory integration",
-                    "default": True,
-                },
-                "include_insights": {
-                    "type": "boolean",
-                    "required": False,
-                    "description": "Include AI insights",
-                    "default": True,
-                },
-                "stream_response": {
-                    "type": "boolean",
-                    "required": False,
-                    "description": "Stream response if supported",
-                    "default": False,
-                },
-                "max_tokens": {
-                    "type": "integer",
-                    "required": False,
-                    "minimum": 1,
-                    "maximum": 4096,
-                },
-                "temperature": {
-                    "type": "number",
-                    "required": False,
-                    "minimum": 0.0,
-                    "maximum": 2.0,
-                },
+                "include_memories": {"type": "boolean", "required": False, "description": "Include memory integration", "default": True},
+                "include_insights": {"type": "boolean", "required": False, "description": "Include AI insights", "default": True},
+                "stream_response": {"type": "boolean", "required": False, "description": "Stream response if supported", "default": False},
+                "max_tokens": {"type": "integer", "required": False, "minimum": 1, "maximum": 4096},
+                "temperature": {"type": "number", "required": False, "minimum": 0.0, "maximum": 2.0},
             }
         )
-
     elif flow_type == FlowType.GENERATE_FINAL_RESPONSE:
         base_params.update(
             {
@@ -1321,5 +853,4 @@ def _get_flow_parameters(flow_type: FlowType) -> Dict[str, Any]:
                 }
             }
         )
-
     return base_params
