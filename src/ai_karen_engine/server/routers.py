@@ -32,7 +32,6 @@ from ai_karen_engine.api_routes.chat.websocket import router as websocket_router
 from ai_karen_engine.api_routes.content.communications import router as communications_center_router
 from ai_karen_engine.api_routes.extensions.extensions import router as extensions_router
 from ai_karen_engine.api_routes.memory.memory import router as memory_router
-from ai_karen_engine.api_routes.models.llm import router as llm_router
 from ai_karen_engine.api_routes.models.model_orchestrator import (
     get_current_user as model_orchestrator_current_user,
 )
@@ -133,7 +132,6 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     RouterSpec(ui_materialization_router, tags=("ui-materialization",)),
     RouterSpec(code_execution_router, "/api/code", ("code",)),
     RouterSpec(chat_runtime_router, "/api", ("chat-runtime",)),
-    RouterSpec(llm_router, "/api/llm", ("llm",)),
     RouterSpec(provider_router, "/api/providers", ("providers",)),
     RouterSpec(runtime_catalog_router, "/api", ("runtime",)),
     RouterSpec(provider_public_router, "/api/public/providers", ("public-providers",)),
