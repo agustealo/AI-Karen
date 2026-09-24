@@ -17,6 +17,8 @@ const GALLERY_FILES = [
   "05-settings-and-models.png",
 ] as const;
 
+const FULL_SHA = /^[0-9a-f]{40}$/i;
+
 const requiredEnvironment = () => {
   if (process.env.KAREN_SHOWCASE_ALLOW_CAPTURE !== "true") {
     throw new Error(
@@ -32,6 +34,7 @@ const requiredEnvironment = () => {
 
   const email = process.env.KAREN_SHOWCASE_EMAIL;
   const password = process.env.KAREN_SHOWCASE_PASSWORD;
+  const targetRevision = process.env.KAREN_SHOWCASE_TARGET_REVISION?.trim();
 
   if (!email || !password) {
     throw new Error(
@@ -39,12 +42,18 @@ const requiredEnvironment = () => {
     );
   }
 
-  return { email, password };
+  if (!targetRevision || !FULL_SHA.test(targetRevision)) {
+    throw new Error(
+      "KAREN_SHOWCASE_TARGET_REVISION must be the full 40-character git SHA that the capture operator attests is deployed at the target installation.",
+    );
+  }
+
+  return { email, password, targetRevision: targetRevision.toLowerCase() };
 };
 
 function currentGitSha(): string {
   const configuredSha = process.env.GITHUB_SHA?.trim();
-  if (configuredSha && /^[0-9a-f]{40}$/i.test(configuredSha)) {
+  if (configuredSha && FULL_SHA.test(configuredSha)) {
     return configuredSha.toLowerCase();
   }
 
@@ -53,8 +62,8 @@ function currentGitSha(): string {
     encoding: "utf8",
   }).trim();
 
-  if (!/^[0-9a-f]{40}$/i.test(sha)) {
-    throw new Error(`Unable to establish exact capture git SHA: ${sha}`);
+  if (!FULL_SHA.test(sha)) {
+    throw new Error(`Unable to establish exact capture harness git SHA: ${sha}`);
   }
 
   return sha.toLowerCase();
@@ -96,7 +105,7 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
   page,
   browser,
 }) => {
-  const { email, password } = requiredEnvironment();
+  const { email, password, targetRevision } = requiredEnvironment();
   await mkdir(SCREENSHOT_DIR, { recursive: true });
 
   await page.goto("/login", { waitUntil: "domcontentloaded" });
@@ -117,7 +126,9 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
   await expect(
     page.getByRole("heading", { name: "KAREN", exact: true }),
   ).toBeVisible({ timeout: 45_000 });
-  await expect(page.locator('img[src="/brand/karen-mark.svg"]').first()).toBeVisible();
+  await expect(
+    page.locator('header img[src*="karen-mark.svg"]').first(),
+  ).toBeVisible();
 
   await capture(page, GALLERY_FILES[0], email);
 
@@ -155,7 +166,9 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
     source: "real-running-application",
     authenticated: true,
     account_kind: "sanitized-demo",
-    git_sha: currentGitSha(),
+    capture_harness_git_sha: currentGitSha(),
+    target_revision: targetRevision,
+    target_revision_attestation: "operator-supplied",
     captured_at: new Date().toISOString(),
     browser: `chromium ${browser.version()}`,
     viewport: { width: 1600, height: 1000 },
