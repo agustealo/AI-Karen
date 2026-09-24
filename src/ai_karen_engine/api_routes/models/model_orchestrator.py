@@ -225,11 +225,11 @@ def _principal_payload(principal: Any) -> Dict[str, Any]:
     return payload
 
 
-def _model_dump(model: Any) -> Dict[str, Any]:
+def _model_dump(model: Any, *, exclude_none: bool = False) -> Dict[str, Any]:
     if hasattr(model, "model_dump"):
-        return dict(model.model_dump())
+        return dict(model.model_dump(exclude_none=exclude_none))
     if hasattr(model, "dict"):
-        return dict(model.dict())
+        return dict(model.dict(exclude_none=exclude_none))
     raise TypeError(f"Unsupported request model: {type(model)!r}")
 
 
@@ -519,7 +519,7 @@ async def update_download_policy(
     current_user: Any = Depends(get_current_user),
 ):
     del current_user
-    policy = await _control_service().update_policy(_model_dump(request))
+    policy = await _control_service().update_policy(_model_dump(request, exclude_none=True))
     return DownloadPolicyResponse(**policy)
 
 
