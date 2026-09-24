@@ -56,13 +56,9 @@ jobs:
       - name: Attest exact trusted checkout
         shell: bash
         working-directory: .
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          git fetch --no-tags origin "$DEFAULT_BRANCH"
-          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"
 
       - name: Validate capture target and destination
         shell: bash
@@ -115,13 +111,13 @@ jobs:
             exit 1
           fi
 
-          if [[ ! "$DESTINATION_BRANCH" =~ ^[A-Za-z0-9._/-]+$ || "$DESTINATION_BRANCH" == -* || "$DESTINATION_BRANCH" == */..* || "$DESTINATION_BRANCH" == *..* ]]; then
+          if [[ ! "$DESTINATION_BRANCH" =~ ^[A-Za-z0-9._/-]+$ || "$DESTINATION_BRANCH" == -* || "$DESTINATION_BRANCH" == *..* ]]; then
             echo "destination_branch contains unsafe ref syntax" >&2
             exit 1
           fi
 
-          if ! git ls-remote --exit-code --heads origin "refs/heads/$DESTINATION_BRANCH" >/dev/null; then
-            echo "destination_branch does not exist: $DESTINATION_BRANCH" >&2
+          if ! git show-ref --verify --quiet "refs/remotes/origin/$DESTINATION_BRANCH"; then
+            echo "destination_branch does not exist in the trusted checkout: $DESTINATION_BRANCH" >&2
             exit 1
           fi
 
@@ -206,7 +202,7 @@ jobs:
             echo "destination_branch must be an existing non-default branch" >&2
             exit 1
           fi
-          test "$(git rev-parse --abbrev-ref HEAD)" = "$DESTINATION_BRANCH"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/$DESTINATION_BRANCH)"
 
       - name: Download validated presentation evidence
         uses: actions/download-artifact@v8
