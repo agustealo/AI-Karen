@@ -30,7 +30,7 @@ jobs:
         working-directory: src/ui_launchers/Karen-AI-Theme
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -92,7 +92,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
@@ -129,7 +129,7 @@ jobs:
         run: python scripts/ci/verify_presentation_assets.py --require-assets
 
       - name: Upload immutable presentation evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: karen-presentation-${{ github.sha }}
           path: |
@@ -152,7 +152,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -169,7 +169,7 @@ jobs:
           fi
 
       - name: Download validated presentation evidence
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: karen-presentation-${{ github.sha }}
           path: docs/assets/screenshots
