@@ -167,7 +167,13 @@ class ModelDownloadWorker:
 
     async def _heartbeat(self, job_id: str, lease_token: str) -> None:
         try:
-            while not self._stop.is_set():
+            # Shutdown stops new claims first, but executions are allowed to run
+            # through the configured grace period. Their lease must remain live
+            # for that entire period or another worker could reclaim the same
+            # durable job while the original execution is still active. The
+            # execution owner cancels this heartbeat in ``_execute_claim`` once
+            # the execution completes or is cancelled after the grace timeout.
+            while True:
                 await asyncio.sleep(self._settings.heartbeat_seconds)
                 renewed = await self._service.heartbeat_claim(job_id, lease_token)
                 if not renewed:
