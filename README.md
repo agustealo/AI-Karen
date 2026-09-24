@@ -391,7 +391,22 @@ Prometheus is the canonical numeric metrics backend. High-cardinality request/us
 
 ## Verification
 
-Core gates:
+The live merge contract is encoded in `.github/workflows/main-quality-gate.yml` and the focused authority workflows. The workflow files, not README prose, are the source of truth for the exact gate set.
+
+The current Main Quality frontend job runs these checks from `src/ui_launchers/Karen-AI-Theme`:
+
+```bash
+npm ci --no-audit --no-fund
+npm run ci:forbid-mocks
+npm run typecheck
+node --check server.mjs
+npx vitest run --passWithNoTests
+npm run build
+```
+
+The current backend quality job compiles production Python, runs the correctness-focused Ruff baseline, type-checks the canonical authority contracts, then executes the architecture/runtime/classifier/chat/personalization/memory/tenant proof suites. See the workflow for the exact file and test list.
+
+Useful broad local audits remain:
 
 ```bash
 python -m compileall src
@@ -401,14 +416,7 @@ mypy src
 docker compose config
 ```
 
-Frontend gates from the active UI package:
-
-```bash
-npm run lint
-npm run typecheck
-npm test
-npm run build
-```
+Those broad commands intentionally surface repository-wide debt beyond the narrower merge-gate baseline. Do not replace an exact-head workflow verdict with a partial local run, and do not describe a broad audit as green unless it actually passed.
 
 First-run architecture contract:
 
