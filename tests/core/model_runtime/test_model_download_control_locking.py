@@ -167,3 +167,5 @@ async def test_cancelled_persist_holds_lock_until_writer_thread_stops(
     persisted = _read_state(service)
     assert persisted["policy"]["block_new_downloads"] is True
     assert persisted["policy"]["master_enabled"] is False
+    temp_state_path = service.state_path.with_suffix(service.state_path.suffix + ".tmp")
+    assert temp_state_path.exists() is False
