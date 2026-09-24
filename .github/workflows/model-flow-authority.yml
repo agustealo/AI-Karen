@@ -1,0 +1,45 @@
+name: Model Flow Authority Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-flow-authority-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  model-flow-authority:
+    name: model-flow-authority
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: src
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+
+      - name: Install model-flow proof dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/ci/quality.txt
+
+      - name: Compile deep-flow route
+        run: python -m compileall -q src/ai_karen_engine/api_routes/models/orchestrator.py
+
+      - name: Prove model-flow route authority
+        run: pytest tests/architecture/test_model_flow_route_authority.py -q
