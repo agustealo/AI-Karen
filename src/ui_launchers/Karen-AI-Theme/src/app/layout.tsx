@@ -6,7 +6,17 @@ import { PluginRegistryProvider } from '@/plugin_host/registry';
 import { MessageInjectionProvider } from '@/providers/MessageInjectionProvider';
 import SessionWarning from '@/components/SessionWarning';
 
+const configuredPublicAppUrl =
+  process.env.KAREN_APP_URL ??
+  process.env.NEXT_PUBLIC_APP_URL ??
+  process.env.APP_URL;
+
+const metadataBase = configuredPublicAppUrl
+  ? new URL(configuredPublicAppUrl)
+  : undefined;
+
 export const metadata: Metadata = {
+  metadataBase,
   title: {
     default: 'KAREN | Local-first cognitive runtime',
     template: '%s | KAREN',
