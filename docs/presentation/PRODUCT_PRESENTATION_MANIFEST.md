@@ -28,6 +28,8 @@ This manifest does **not** supersede `PROJECT_DEV_MANIFEST.md`. The root develop
 
 The brand deliberately converts the cultural "Karen" escalation trope into a systems-operator idea. KAREN is the layer that knows the owner, applies the policy, routes the work, and preserves execution truth. The reference must remain subtle and abstract so the identity survives the meme cycle.
 
+The public product name is **KAREN**. `Karen AI` is a retired split-brand label and must not appear on curated product surfaces. Compatibility identifiers may remain internally where changing them would alter contracts, but they are not presentation copy.
+
 ## Claims allowed in public presentation
 
 The following claims map to live repository surfaces or canonical architecture and may be used without inventing product capability:
@@ -59,8 +61,14 @@ A screenshot qualifies for public product presentation only when all of the foll
 7. The authenticated shell visibly uses the canonical KAREN mark and name before capture begins.
 8. The capture rail emits `capture-manifest.json` with capture-harness SHA, target revision, browser, viewport, account class, and no-synthetic-state policy.
 9. The target revision is a known commit and an ancestor of the presentation branch head.
-10. `python scripts/ci/verify_presentation_assets.py --require-assets` passes.
-11. The image is reviewed at native resolution before it is promoted into README hero/gallery placement.
+10. Every curated surface is in a presentation-ready state, not merely mounted.
+11. Chat contains a real non-sensitive conversation from the sanitized demo account.
+12. Agents Overview has finished loading real backend metrics and no placeholder `...` values remain.
+13. Plugin Overview has finished resolving registry/backend lifecycle state.
+14. Comms Center is showing live observability rather than authentication, authorization, or fallback warnings.
+15. No curated surface visibly renders the retired `Karen AI` split brand.
+16. `python scripts/ci/verify_presentation_assets.py --require-assets` passes.
+17. The image is reviewed at native resolution before it is promoted into README hero/gallery placement.
 
 The capture rail writes these canonical files:
 
@@ -102,6 +110,8 @@ Presentation code must not change the production first-boot smoke harness merely
 - Repository/social banner: ready
 - Web metadata and install manifest: wired
 - Authenticated application shell: wired to canonical KAREN mark/name
+- Agents Overview presentation copy: converged to KAREN
+- Plugin Overview presentation copy: converged to KAREN
 - Real browser screenshot provenance: preserved in `e2e-current-browser-proof.png`
 - Curated five-screen gallery: must be regenerated from an approved sanitized live stack before this slice is considered presentation-complete
 
@@ -132,6 +142,6 @@ cd ../../..
 python scripts/ci/verify_presentation_assets.py --require-assets
 ```
 
-Then manually review all five PNGs for visual polish, privacy, stale errors, debug overlays, broken loading states, and accurate feature representation.
+Then manually review all five PNGs for visual polish, privacy, stale errors, debug overlays, broken loading states, canonical naming, and accurate feature representation.
 
-The screenshot gate is intentionally fail-closed. Missing approval, target revision, or credentials is an error, not permission to create fake media.
+The screenshot gate is intentionally fail-closed. Missing approval, target revision, credentials, real chat evidence, healthy feature state, or canonical branding is an error, not permission to create fake media.
