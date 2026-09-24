@@ -347,8 +347,24 @@ class ModelDownloadControlService:
         tmp.replace(self.state_path)
 
     async def _persist_state(self) -> None:
-        async with self._lock:
-            await asyncio.to_thread(self._persist_state_sync)
+        """Persist state without allowing cancellation to outlive the mutation lock."""
+        if not self._lock.locked():
+            raise RuntimeError("Model download state persistence requires the mutation lock")
+
+        writer = asyncio.create_task(asyncio.to_thread(self._persist_state_sync))
+        cancelled = False
+        while not writer.done():
+            try:
+                await asyncio.shield(writer)
+            except asyncio.CancelledError:
+                # The surrounding mutation still owns ``self._lock``. Defer
+                # cancellation until the writer thread has stopped so no second
+                # mutation can race the snapshot or shared temporary file.
+                cancelled = True
+
+        writer.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     def _channel_locked(self, channel: ModelDownloadChannel) -> bool:
         if not self._policy.master_enabled:
@@ -783,4 +799,3 @@ __all__ = [
     "get_model_download_control_service",
     "initialize_model_download_control_service",
 ]
-
