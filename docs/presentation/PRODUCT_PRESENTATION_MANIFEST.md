@@ -12,10 +12,12 @@ This manifest does **not** supersede `PROJECT_DEV_MANIFEST.md`. The root develop
 | Brand assets | `src/ui_launchers/Karen-AI-Theme/public/brand/` |
 | Web app metadata/PWA identity | `src/ui_launchers/Karen-AI-Theme/src/app/layout.tsx` and `src/app/manifest.ts` |
 | Authenticated shell identity | `src/ui_launchers/Karen-AI-Theme/src/app/dashboard/page.tsx` using canonical `/brand/` assets |
-| Screenshot capture | `src/ui_launchers/Karen-AI-Theme/e2e/showcase/` |
-| Screenshot provenance verification | `scripts/ci/verify_presentation_assets.py` |
+| Trusted screenshot capture harness | `main`: `src/ui_launchers/Karen-AI-Theme/e2e/showcase/` |
+| Reusable screenshot provenance | `main`: `scripts/ci/presentation_gallery_contract.py` |
+| KAREN presentation integration | `scripts/ci/verify_presentation_assets.py` |
 | Presentation integrity CI | `.github/workflows/presentation-contract.yml` |
-| Approved remote capture | `.github/workflows/presentation-capture.yml` |
+| Approved remote capture/credential boundary | `main`: `.github/workflows/presentation-capture.yml` |
+| Capture trust-boundary proof | `main`: `.github/workflows/presentation-capture-trust-boundary.yml` and `tests/architecture/test_presentation_capture_trust_boundary.py` |
 | Curated screenshots | `docs/assets/screenshots/` |
 | Brand rules | `docs/presentation/BRAND_SYSTEM.md` |
 | Repository presentation | root `README.md` |
@@ -60,15 +62,16 @@ A screenshot qualifies for public product presentation only when all of the foll
 6. The screen represents a capability that exists in the repository line identified by the operator-attested target revision.
 7. The authenticated shell visibly uses the canonical KAREN mark and name before capture begins.
 8. The capture rail emits `capture-manifest.json` with capture-harness SHA, target revision, browser, viewport, account class, and no-synthetic-state policy.
-9. The target revision is a known commit and an ancestor of the presentation branch head.
-10. Every curated surface is in a presentation-ready state, not merely mounted.
-11. Chat contains a real non-sensitive conversation from the sanitized demo account.
-12. Agents Overview has finished loading real backend metrics and no placeholder `...` values remain.
-13. Plugin Overview has finished resolving registry/backend lifecycle state.
-14. Comms Center is showing live observability rather than authentication, authorization, or fallback warnings.
-15. No curated surface visibly renders the retired `Karen AI` split brand.
-16. `python scripts/ci/verify_presentation_assets.py --require-assets` passes.
-17. The image is reviewed at native resolution before it is promoted into README hero/gallery placement.
+9. Remote capture is dispatched from the default branch and the target revision contains the exact trusted `main` capture baseline for that run.
+10. The destination is an existing non-default branch; the secret-bearing job does not execute destination-branch code.
+11. Every curated surface is in a presentation-ready state, not merely mounted.
+12. Chat contains a real non-sensitive conversation from the sanitized demo account.
+13. Agents Overview has entered its explicit verified `ready` state from validated backend statistics; unavailable/defaulted metrics are prohibited.
+14. Plugin Overview has finished resolving registry/backend lifecycle state.
+15. Comms Center is showing live observability rather than authentication, authorization, or fallback warnings.
+16. No curated surface visibly renders the retired `Karen AI` split brand.
+17. `python scripts/ci/verify_presentation_assets.py --require-assets` passes.
+18. The image is reviewed at native resolution before it is promoted into README hero/gallery placement.
 
 The capture rail writes these canonical files:
 
@@ -88,18 +91,51 @@ No generated or hand-composited substitute may use these filenames.
 
 The capture harness checkout and the running application are separate facts. `capture-manifest.json` therefore records:
 
-- `capture_harness_git_sha`: the exact repository checkout that ran Playwright;
+- `capture_harness_git_sha`: the exact trusted repository checkout that ran Playwright;
 - `target_revision`: the full application revision the capture operator attests is deployed at the target;
 - `target_revision_attestation: operator-supplied`.
 
-The workflow proves both SHAs are known on the repository line, but KAREN does not currently expose a canonical runtime endpoint that self-attests deployment revision. Public documentation must not describe `target_revision` as self-verified until such a runtime/deployment contract exists.
+The remote workflow requires `target_revision` to be a known commit descended from the exact trusted `main` harness SHA. The presentation integration gate additionally requires both recorded revisions to belong to the current presentation branch line before the gallery may be promoted.
+
+KAREN does not currently expose a canonical runtime endpoint that self-attests deployment revision. Public documentation must not describe `target_revision` as self-verified until such a runtime/deployment contract exists.
+
+## Capture trust boundary
+
+Remote media capture intentionally separates secret access from repository write authority:
+
+```text
+main-owned workflow + harness
+        │
+        │ read-only repo + sanitized demo credentials
+        ▼
+real live KAREN capture
+        │
+        ▼
+trusted gallery verifier
+        │
+        ▼
+immutable evidence artifact
+        │
+        │ no capture credentials
+        ▼
+write-scoped destination job
+        │
+        ├─ stages six fixed gallery files only
+        ├─ rejects symlinked destination paths
+        ├─ runs verifier shipped in trusted artifact
+        └─ commits gallery to non-default branch
+```
+
+The write-scoped job must not execute Python or Node code from the destination branch. Presentation convenience does not outrank credential isolation.
 
 ## Capture environments
 
 Two capture paths are supported, and both use the same Playwright owner:
 
 - **Local approved demo installation:** invoke `npm run showcase:capture` with an explicitly sanitized account and `KAREN_SHOWCASE_TARGET_REVISION=<full deployed SHA>`.
-- **Approved remote demo deployment:** invoke `.github/workflows/presentation-capture.yml`, which reads the HTTPS origin and sanitized credentials from repository secrets and requires a full `target_revision` workflow input.
+- **Approved remote demo deployment:** open **KAREN Presentation Capture**, run it from workflow ref **`main`**, provide `target_revision=<full deployed SHA>`, `destination_branch=docs/premium-brand-showcase`, and `commit_assets=true`. The HTTPS origin and sanitized credentials come only from repository secrets.
+
+Do not select the presentation branch as the workflow ref for remote capture. The workflow intentionally rejects non-default-branch dispatch so secret-bearing code stays default-branch-owned.
 
 Presentation code must not change the production first-boot smoke harness merely to make media capture easier. Authentication/bootstrap remains owned by the canonical auth/first-run system.
 
@@ -110,8 +146,9 @@ Presentation code must not change the production first-boot smoke harness merely
 - Repository/social banner: ready
 - Web metadata and install manifest: wired
 - Authenticated application shell: wired to canonical KAREN mark/name
-- Agents Overview presentation copy: converged to KAREN
+- Agents Overview: fail-closed on unavailable/malformed backend statistics
 - Plugin Overview presentation copy: converged to KAREN
+- Remote capture trust boundary: production-owned and CI-proven on `main`
 - Real browser screenshot provenance: preserved in `e2e-current-browser-proof.png`
 - Curated five-screen gallery: must be regenerated from an approved sanitized live stack before this slice is considered presentation-complete
 
@@ -125,7 +162,7 @@ Structural presentation contract:
 python scripts/ci/verify_presentation_assets.py
 ```
 
-Real gallery capture and proof:
+Real gallery capture and proof for a local approved deployment:
 
 ```bash
 cd src/ui_launchers/Karen-AI-Theme
