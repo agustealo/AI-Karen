@@ -2,20 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
+import shutil
 import time
+import uuid
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
-from ai_karen_engine.config.config_asset_loaders import (
-    load_model_runtime_discovery_config,
+from ai_karen_engine.config.config_asset_loaders import load_model_runtime_discovery_config
+from ai_karen_engine.config.model_download import (
+    ModelDownloadWorkerSettings,
+    load_model_download_worker_settings,
 )
-from ai_karen_engine.core.model_runtime.model_discovery_service import (
-    get_model_discovery_service,
-)
+from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.model_runtime.management.model_orchestrator_service import (
     DownloadRequest,
     E_INVALID,
@@ -24,8 +25,11 @@ from ai_karen_engine.core.model_runtime.management.model_orchestrator_service im
     ModelOrchestratorError,
     ModelOrchestratorService,
 )
+from ai_karen_engine.core.model_runtime.model_discovery_service import get_model_discovery_service
+from ai_karen_engine.persistence.repositories.model_download_repository import (
+    ModelDownloadRepository,
+)
 
-from ai_karen_engine.core.logging import get_logger
 logger = get_logger(__name__)
 
 
@@ -33,23 +37,15 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _json_default(value: Any) -> Any:
-    if isinstance(value, datetime):
-        return value.isoformat()
-    raise TypeError(f"Unserializable value: {type(value)!r}")
-
-
 def _load_orchestrator_settings() -> dict[str, Any]:
     settings_path = Path("config_assets/settings.json")
     if not settings_path.exists():
         return {}
-
     try:
         raw = json.loads(settings_path.read_text(encoding="utf-8"))
-    except Exception as exc:  # pragma: no cover - config load is best effort
+    except Exception as exc:  # pragma: no cover - best effort config recovery
         logger.warning("Failed to load model settings config: %s", exc)
         return {}
-
     plugins = raw.get("plugins") or {}
     return dict(plugins.get("model_orchestrator") or {})
 
@@ -97,6 +93,12 @@ class ModelDownloadChannel:
 
 @dataclass
 class ModelDownloadJob:
+    """Public model-download job contract.
+
+    Durable lifecycle metadata such as attempts and leases intentionally stays
+    repository-internal so the existing HTTP schema remains stable.
+    """
+
     job_id: str
     model_id: str
     revision: Optional[str] = None
@@ -124,8 +126,7 @@ class ModelDownloadJob:
     install_path: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
-        return payload
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -152,9 +153,15 @@ class ModelDownloadValidation:
 
 
 class ModelDownloadControlService:
-    """Core model-download policy, queue, and discovery authority."""
+    """Model-download policy and execution authority over durable job truth."""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+        *,
+        repository: Optional[ModelDownloadRepository] = None,
+        worker_settings: Optional[ModelDownloadWorkerSettings] = None,
+    ):
         base_config = dict(config or {})
         discovery_config = dict(load_model_runtime_discovery_config() or {})
         orchestrator_config = _load_orchestrator_settings()
@@ -170,7 +177,9 @@ class ModelDownloadControlService:
             or orchestrator_config.get("runtime_registry_root")
             or self.models_root / ".runtime_registry"
         )
-        self.state_path = self.runtime_registry_root / "model_download_control.json"
+        self.legacy_state_path = self.runtime_registry_root / "model_download_control.json"
+        self.policy_path = self.runtime_registry_root / "model_download_policy.json"
+        self.legacy_archive_path = self.runtime_registry_root / "model_download_control.json.migrated"
 
         self._discovery_config = discovery_config
         self._discovery_service = get_model_discovery_service()
@@ -194,19 +203,20 @@ class ModelDownloadControlService:
                 ),
             }
         )
-
-        self._lock = asyncio.Lock()
-        self._jobs: dict[str, ModelDownloadJob] = {}
-        self._tasks: dict[str, asyncio.Task[Any]] = {}
+        self._repository = repository or ModelDownloadRepository()
+        self._worker_settings = worker_settings or load_model_download_worker_settings()
+        self._policy_lock = asyncio.Lock()
+        self._initialize_lock = asyncio.Lock()
+        self._initialized = False
         self._policy = ModelDownloadPolicy(
             max_concurrent_downloads=int(
                 base_config.get("max_concurrent_downloads")
                 or orchestrator_config.get("max_concurrent_downloads")
-                or 2
+                or self._worker_settings.global_concurrency_default
             )
         )
         self._channels = self._build_channels()
-        self._load_state()
+        self._load_policy_state()
 
     @staticmethod
     def _resolve_root(value: Any) -> Path:
@@ -302,69 +312,67 @@ class ModelDownloadControlService:
             ),
         }
 
-    def _load_state(self) -> None:
-        if not self.state_path.exists():
-            self._persist_state_sync()
+    def _load_policy_state(self) -> None:
+        source = self.policy_path if self.policy_path.exists() else self.legacy_state_path
+        if not source.exists():
+            self._persist_policy_sync()
             return
-
         try:
-            raw = json.loads(self.state_path.read_text(encoding="utf-8"))
-        except Exception as exc:  # pragma: no cover - best effort recoverability
-            logger.warning("Failed to load model download control state: %s", exc)
-            self._persist_state_sync()
-            return
+            raw = json.loads(source.read_text(encoding="utf-8"))
+            policy_payload = raw.get("policy") if isinstance(raw.get("policy"), dict) else raw
+            updates = {
+                key: value
+                for key, value in dict(policy_payload or {}).items()
+                if key in self._policy.to_dict()
+            }
+            self._policy = replace(self._policy, **updates)
+        except Exception as exc:  # pragma: no cover - recovery path
+            logger.warning("Invalid model download policy state ignored: %s", exc)
+        if not self.policy_path.exists():
+            self._persist_policy_sync()
 
-        policy_payload = raw.get("policy") or {}
-        try:
-            self._policy = replace(
-                self._policy,
-                **{k: v for k, v in policy_payload.items() if hasattr(self._policy, k)}
-            )
-        except Exception as exc:  # pragma: no cover - invalid config fallback
-            logger.warning("Invalid model download policy payload ignored: %s", exc)
-
-        self._jobs.clear()
-        for job_payload in raw.get("jobs") or []:
-            try:
-                if "storage_key" not in job_payload and "library_override" in job_payload:
-                    job_payload = dict(job_payload)
-                    job_payload["storage_key"] = job_payload.pop("library_override")
-                job = ModelDownloadJob(**job_payload)
-                self._jobs[job.job_id] = job
-            except Exception as exc:  # pragma: no cover - ignore corrupt jobs
-                logger.debug("Skipping corrupt download job payload: %s", exc)
-
-    def _persist_state_sync(self) -> None:
+    def _persist_policy_sync(self) -> None:
         self.runtime_registry_root.mkdir(parents=True, exist_ok=True)
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "updated_at": _utc_now(),
             "policy": self._policy.to_dict(),
-            "jobs": [job.to_dict() for job in self._jobs.values()],
         }
-        tmp = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=_json_default), encoding="utf-8")
-        tmp.replace(self.state_path)
+        temp = self.policy_path.with_suffix(self.policy_path.suffix + ".tmp")
+        temp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        temp.replace(self.policy_path)
 
-    async def _persist_state(self) -> None:
-        """Persist state without allowing cancellation to outlive the mutation lock."""
-        if not self._lock.locked():
-            raise RuntimeError("Model download state persistence requires the mutation lock")
+    async def initialize(self) -> None:
+        if self._initialized:
+            return
+        async with self._initialize_lock:
+            if self._initialized:
+                return
+            if self.legacy_state_path.exists():
+                try:
+                    raw = json.loads(self.legacy_state_path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    raise RuntimeError("Legacy model download state is unreadable; refusing silent loss") from exc
+                jobs = raw.get("jobs") or []
+                if not isinstance(jobs, list):
+                    raise RuntimeError("Legacy model download jobs payload is invalid")
+                imported = await self._repository.import_legacy_jobs(
+                    [item for item in jobs if isinstance(item, Mapping)],
+                    max_attempts=self._worker_settings.max_attempts,
+                )
+                await asyncio.to_thread(self._archive_legacy_state)
+                logger.info(
+                    "model_download_legacy_cutover_complete imported=%s source_jobs=%s",
+                    imported,
+                    len(jobs),
+                )
+            self._initialized = True
 
-        writer = asyncio.create_task(asyncio.to_thread(self._persist_state_sync))
-        cancelled = False
-        while not writer.done():
-            try:
-                await asyncio.shield(writer)
-            except asyncio.CancelledError:
-                # The surrounding mutation still owns ``self._lock``. Defer
-                # cancellation until the writer thread has stopped so no second
-                # mutation can race the snapshot or shared temporary file.
-                cancelled = True
-
-        writer.result()
-        if cancelled:
-            raise asyncio.CancelledError
+    def _archive_legacy_state(self) -> None:
+        if not self.legacy_state_path.exists():
+            return
+        self.runtime_registry_root.mkdir(parents=True, exist_ok=True)
+        os.replace(self.legacy_state_path, self.legacy_archive_path)
 
     def _channel_locked(self, channel: ModelDownloadChannel) -> bool:
         if not self._policy.master_enabled:
@@ -389,17 +397,11 @@ class ModelDownloadControlService:
             for channel in self._channels.values()
         ]
 
-    def _resolve_channel(self, channel_id: Optional[str], metadata: Optional[Mapping[str, Any]] = None) -> ModelDownloadChannel:
-        if channel_id and channel_id in self._channels:
-            return self._channels[channel_id]
-        return self._infer_channel(metadata or {})
-
     def _infer_channel(self, metadata: Mapping[str, Any]) -> ModelDownloadChannel:
         source_family = str(metadata.get("library") or metadata.get("library_name") or "").lower()
         tags = {str(tag).lower() for tag in (metadata.get("tags") or []) if str(tag).strip()}
         model_format = str(metadata.get("model_format") or "").lower()
         capabilities = {str(cap).lower() for cap in (metadata.get("capabilities") or []) if str(cap).strip()}
-
         if model_format == "gguf" or "gguf" in tags:
             return self._channels["core_gguf_external"]
         if source_family in {"diffusers", "stable-diffusion", "flux"} or {"image-generation", "text-to-image"} & tags:
@@ -418,49 +420,48 @@ class ModelDownloadControlService:
 
     def _build_install_path(self, channel: ModelDownloadChannel, model_id: str, revision: Optional[str]) -> Path:
         owner, repo = model_id.split("/", 1)
-        revision_name = revision or "main"
-        return self.models_root / channel.storage_key / f"{owner}--{repo}" / revision_name
+        return self.models_root / channel.storage_key / f"{owner}--{repo}" / (revision or "main")
 
-    def _job_payload(self, job: ModelDownloadJob) -> dict[str, Any]:
-        payload = job.to_dict()
-        payload["channel"] = self._channels.get(job.channel_id).to_dict(
-            locked_by_master=self._channel_locked(self._channels[job.channel_id])
-        ) if job.channel_id in self._channels else None
+    def _job_payload(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        payload = dict(row)
+        for key in ("created_at", "updated_at"):
+            value = payload.get(key)
+            if isinstance(value, datetime):
+                payload[key] = value.isoformat()
+        channel = self._channels.get(str(payload.get("channel_id") or ""))
+        payload["channel"] = channel.to_dict(
+            locked_by_master=self._channel_locked(channel)
+        ) if channel is not None else None
         return payload
-
-    def _get_job(self, job_id: str) -> Optional[ModelDownloadJob]:
-        return self._jobs.get(job_id)
 
     async def get_policy(self) -> dict[str, Any]:
         return self._policy.to_dict()
 
+    async def get_global_concurrency_limit(self) -> int:
+        return max(1, int(self._policy.max_concurrent_downloads))
+
     async def update_policy(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        async with self._lock:
-            updates = {
-                key: payload[key]
-                for key in self._policy.to_dict().keys()
-                if key in payload
-            }
-            self._policy = replace(self._policy, **updates)
-            await self._persist_state()
+        async with self._policy_lock:
+            updates = {key: payload[key] for key in self._policy.to_dict() if key in payload}
+            candidate = replace(self._policy, **updates)
+            if candidate.max_concurrent_downloads < 1 or candidate.max_concurrent_downloads > 8:
+                raise ModelOrchestratorError(E_INVALID, "max_concurrent_downloads must be between 1 and 8")
+            self._policy = candidate
+            await asyncio.to_thread(self._persist_policy_sync)
             return self._policy.to_dict()
 
     async def get_channels(self) -> dict[str, Any]:
-        return {
-            "policy": self._policy.to_dict(),
-            "channels": self._channel_payloads(),
-        }
+        return {"policy": self._policy.to_dict(), "channels": self._channel_payloads()}
 
-    def list_jobs(self, status: Optional[str] = None, limit: int = 100) -> list[dict[str, Any]]:
-        jobs = list(self._jobs.values())
-        if status:
-            jobs = [job for job in jobs if job.status == status]
-        jobs.sort(key=lambda item: item.created_at, reverse=True)
-        return [self._job_payload(job) for job in jobs[:limit]]
+    async def list_jobs(self, status: Optional[str] = None, limit: int = 100) -> list[dict[str, Any]]:
+        await self.initialize()
+        rows = await self._repository.list_jobs(status=status, limit=limit)
+        return [self._job_payload(row) for row in rows]
 
-    def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
-        job = self._get_job(job_id)
-        return self._job_payload(job) if job else None
+    async def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
+        await self.initialize()
+        row = await self._repository.get_job(job_id)
+        return self._job_payload(row) if row is not None else None
 
     async def validate_download(
         self,
@@ -481,7 +482,6 @@ class ModelDownloadControlService:
         metadata: dict[str, Any] = {}
         warnings: list[str] = []
         blocking: list[str] = []
-
         if channel is None:
             try:
                 info = await self._orchestrator.get_model_info(model_id, revision)
@@ -518,7 +518,6 @@ class ModelDownloadControlService:
             "transformers_direct" if channel.id in {"core_embeddings", "core_rerankers", "core_onnx"} else "vllm"
         )
         detected_modality = next(iter(channel.modalities), "text")
-
         return ModelDownloadValidation(
             allowed=not blocking,
             channel_id=channel.id,
@@ -536,25 +535,24 @@ class ModelDownloadControlService:
         )
 
     async def start_download(self, request: Mapping[str, Any], user: Mapping[str, Any]) -> dict[str, Any]:
+        await self.initialize()
         if not self._policy.master_enabled or self._policy.block_new_downloads:
             raise ModelOrchestratorError(
                 E_PERM,
                 "Downloads are blocked by policy",
-                {"master_enabled": self._policy.master_enabled, "block_new_downloads": self._policy.block_new_downloads},
+                {
+                    "master_enabled": self._policy.master_enabled,
+                    "block_new_downloads": self._policy.block_new_downloads,
+                },
             )
-
         model_id = str(request.get("model_id") or "").strip()
         revision = request.get("revision")
-        channel_id = request.get("channel_id")
-        trust_remote_code = bool(request.get("trust_remote_code", False))
-        accept_license = bool(request.get("accept_license", False))
-
         validation = await self.validate_download(
             model_id=model_id,
             revision=revision,
-            channel_id=channel_id,
-            trust_remote_code=trust_remote_code,
-            accept_license=accept_license,
+            channel_id=request.get("channel_id"),
+            trust_remote_code=bool(request.get("trust_remote_code", False)),
+            accept_license=bool(request.get("accept_license", False)),
             include_patterns=request.get("include_patterns"),
             exclude_patterns=request.get("exclude_patterns"),
         )
@@ -564,17 +562,15 @@ class ModelDownloadControlService:
                 "; ".join(validation.blocking_reasons),
                 validation.to_dict(),
             )
-
-        job_id = f"mdl-{int(time.time() * 1000)}-{os.getpid()}"
         job = ModelDownloadJob(
-            job_id=job_id,
+            job_id=f"mdl-{uuid.uuid4()}",
             model_id=model_id,
             revision=revision,
             channel_id=validation.channel_id,
             storage_key=validation.storage_key,
             requested_by=str(user.get("user_id") or user.get("username") or "unknown"),
-            trust_remote_code=trust_remote_code,
-            license_accepted=accept_license,
+            trust_remote_code=bool(request.get("trust_remote_code", False)),
+            license_accepted=bool(request.get("accept_license", False)),
             include_patterns=list(request.get("include_patterns") or []) or None,
             exclude_patterns=list(request.get("exclude_patterns") or []) or None,
             pin=bool(request.get("pin", False)),
@@ -584,162 +580,197 @@ class ModelDownloadControlService:
             install_path=validation.install_path,
             message="Queued for download",
         )
+        row = await self._repository.create_job(
+            job.to_dict(),
+            max_attempts=self._worker_settings.max_attempts,
+        )
+        logger.info("model_download_job_queued job_id=%s model_id=%s", job.job_id, model_id)
+        return self._job_payload(row)
 
-        async with self._lock:
-            self._jobs[job_id] = job
-            await self._persist_state()
-
-        self._tasks[job_id] = asyncio.create_task(self._run_download_job(job_id))
-        return self._job_payload(job)
-
-    async def _run_download_job(self, job_id: str) -> None:
-        try:
-            while True:
-                async with self._lock:
-                    job = self._jobs.get(job_id)
-                    if job is None:
-                        return
-                    if job.cancel_requested:
-                        job.status = "cancelled"
-                        job.message = "Cancelled before execution"
-                        job.updated_at = _utc_now()
-                        await self._persist_state()
-                        return
-                    if self._policy.pause_active_downloads:
-                        job.status = "paused"
-                        job.message = "Paused by policy"
-                        job.updated_at = _utc_now()
-                        await self._persist_state()
-                        return
-                    running = len([candidate for candidate in self._jobs.values() if candidate.status == "running"])
-                    if running < self._policy.max_concurrent_downloads:
-                        job.status = "running"
-                        job.message = "Downloading"
-                        job.updated_at = _utc_now()
-                        await self._persist_state()
-                        break
-                await asyncio.sleep(0.25)
-
-            async with self._lock:
-                job = self._jobs.get(job_id)
-                if job is None:
-                    return
-                request = DownloadRequest(
-                    model_id=job.model_id,
-                    revision=job.revision,
-                    include_patterns=job.include_patterns,
-                    exclude_patterns=job.exclude_patterns,
-                    pin=job.pin,
-                    force_redownload=job.force_redownload,
-                    storage_key=job.storage_key,
-                )
-
-            result = await self._orchestrator.download_model(request)
-
-            async with self._lock:
-                job = self._jobs.get(job_id)
-                if job is None:
-                    return
-                if job.cancel_requested:
-                    job.status = "cancelled"
-                    job.message = "Cancelled after executor completed"
-                    job.result = None
-                    job.updated_at = _utc_now()
-                elif result.status == "success":
-                    job.status = "completed"
-                    job.progress = 1.0
-                    job.message = "Download completed"
-                    job.result = {
-                        "model_id": result.model_id,
-                        "install_path": result.install_path,
-                        "total_size": result.total_size,
-                        "files_downloaded": result.files_downloaded,
-                        "duration_seconds": result.duration_seconds,
-                        "status": result.status,
-                    }
-                    job.install_path = result.install_path
-                    job.updated_at = _utc_now()
-                else:
-                    job.status = "failed"
-                    job.error = result.error_message or "Download failed"
-                    job.message = "Download failed"
-                    job.updated_at = _utc_now()
-                await self._persist_state()
-
-            try:
-                await self._discovery_service.refresh_model_discovery()
-            except Exception as exc:  # pragma: no cover - refresh is best-effort
-                logger.debug("Model discovery refresh failed after download: %s", exc)
-        except ModelOrchestratorError as exc:
-            async with self._lock:
-                job = self._jobs.get(job_id)
-                if job is None:
-                    return
-                job.status = "failed"
-                job.error = f"{exc.code}: {exc.message}"
-                job.message = "Download failed"
-                job.updated_at = _utc_now()
-                await self._persist_state()
-        except Exception as exc:  # pragma: no cover - unexpected executor failure
-            async with self._lock:
-                job = self._jobs.get(job_id)
-                if job is None:
-                    return
-                job.status = "failed"
-                job.error = str(exc)
-                job.message = "Download failed"
-                job.updated_at = _utc_now()
-                await self._persist_state()
-        finally:
-            self._tasks.pop(job_id, None)
+    async def _require_mutable_job(self, job_id: str, action: str) -> dict[str, Any]:
+        row = await self._repository.get_job(job_id)
+        if row is None:
+            raise ModelOrchestratorError(E_INVALID, "Job not found", {"job_id": job_id})
+        raise ModelOrchestratorError(
+            E_PERM,
+            f"Job cannot be {action}",
+            {"job_id": job_id, "status": row.get("status")},
+        )
 
     async def cancel_job(self, job_id: str) -> dict[str, Any]:
-        async with self._lock:
-            job = self._jobs.get(job_id)
-            if job is None:
-                raise ModelOrchestratorError(E_INVALID, "Job not found", {"job_id": job_id})
-            if job.status in {"completed", "failed", "cancelled"}:
-                raise ModelOrchestratorError(E_PERM, "Job cannot be cancelled", {"job_id": job_id, "status": job.status})
-            job.cancel_requested = True
-            job.status = "cancelled"
-            job.message = "Cancelled by user"
-            job.updated_at = _utc_now()
-            await self._persist_state()
-            return self._job_payload(job)
+        await self.initialize()
+        row = await self._repository.cancel_job(job_id)
+        return self._job_payload(row) if row is not None else await self._require_mutable_job(job_id, "cancelled")
 
     async def pause_job(self, job_id: str) -> dict[str, Any]:
-        async with self._lock:
-            job = self._jobs.get(job_id)
-            if job is None:
-                raise ModelOrchestratorError(E_INVALID, "Job not found", {"job_id": job_id})
-            if job.status in {"completed", "failed", "cancelled"}:
-                raise ModelOrchestratorError(E_PERM, "Job cannot be paused", {"job_id": job_id, "status": job.status})
-            job.pause_requested = True
-            if job.status == "queued":
-                job.status = "paused"
-                job.message = "Paused before execution"
-            elif job.status == "running":
-                job.status = "pause_requested"
-                job.message = "Pause requested; running downloads are best-effort only"
-            else:
-                job.message = "Pause requested"
-            job.updated_at = _utc_now()
-            await self._persist_state()
-            return self._job_payload(job)
+        await self.initialize()
+        row = await self._repository.pause_job(job_id)
+        return self._job_payload(row) if row is not None else await self._require_mutable_job(job_id, "paused")
 
     async def resume_job(self, job_id: str) -> dict[str, Any]:
-        async with self._lock:
-            job = self._jobs.get(job_id)
-            if job is None:
-                raise ModelOrchestratorError(E_INVALID, "Job not found", {"job_id": job_id})
-            if job.status not in {"paused", "pause_requested"}:
-                raise ModelOrchestratorError(E_PERM, "Job cannot be resumed", {"job_id": job_id, "status": job.status})
-            job.pause_requested = False
-            job.status = "queued"
-            job.message = "Resumed and waiting for execution slot"
-            job.updated_at = _utc_now()
-            await self._persist_state()
-            return self._job_payload(job)
+        await self.initialize()
+        row = await self._repository.resume_job(job_id)
+        return self._job_payload(row) if row is not None else await self._require_mutable_job(job_id, "resumed")
+
+    async def claim_next_job(self, worker_id: str) -> Optional[dict[str, Any]]:
+        await self.initialize()
+        if (
+            not self._policy.master_enabled
+            or self._policy.block_new_downloads
+            or self._policy.pause_active_downloads
+        ):
+            return None
+        return await self._repository.claim_next(
+            worker_id=worker_id,
+            global_concurrency=await self.get_global_concurrency_limit(),
+            lease_seconds=self._worker_settings.lease_seconds,
+            retry_base_seconds=self._worker_settings.retry_base_seconds,
+        )
+
+    async def heartbeat_claim(self, job_id: str, lease_token: str) -> bool:
+        return await self._repository.heartbeat(
+            job_id=job_id,
+            lease_token=lease_token,
+            lease_seconds=self._worker_settings.lease_seconds,
+        )
+
+    async def release_claim_for_shutdown(self, job_id: str, lease_token: str) -> None:
+        await self._repository.release_for_shutdown(
+            job_id=job_id,
+            lease_token=lease_token,
+            retry_delay_seconds=self._worker_settings.retry_base_seconds,
+        )
+
+    async def fail_claim(self, job_id: str, lease_token: str, error: BaseException) -> None:
+        await self._repository.fail_or_retry(
+            job_id=job_id,
+            lease_token=lease_token,
+            error=f"{type(error).__name__}: {error}",
+            retry_base_seconds=self._worker_settings.retry_base_seconds,
+        )
+
+    async def execute_claimed_job(self, claim: Mapping[str, Any]) -> None:
+        job_id = str(claim["job_id"])
+        lease_token = str(claim["lease_token"])
+        stage_root = self.models_root / ".staging" / "model-downloads" / job_id / lease_token
+        stage_models_root = stage_root / "models"
+        stage_registry = stage_root / "llm_registry.json"
+        await asyncio.to_thread(stage_models_root.mkdir, parents=True, exist_ok=True)
+
+        staging_orchestrator = ModelOrchestratorService(
+            {
+                "models_root": str(stage_models_root),
+                "registry_path": str(stage_registry),
+                "max_concurrent_downloads": 1,
+                "enable_license_tracking": True,
+            }
+        )
+        request = DownloadRequest(
+            model_id=str(claim["model_id"]),
+            revision=claim.get("revision"),
+            include_patterns=claim.get("include_patterns"),
+            exclude_patterns=claim.get("exclude_patterns"),
+            pin=bool(claim.get("pin", False)),
+            force_redownload=bool(claim.get("force_redownload", False)),
+            storage_key=claim.get("storage_key"),
+        )
+        started = time.perf_counter()
+        try:
+            result = await staging_orchestrator.download_model(request)
+        except asyncio.CancelledError:
+            logger.warning("model_download_execution_cancelled job_id=%s", job_id)
+            raise
+        except Exception:
+            await asyncio.to_thread(self._safe_remove_tree, stage_root)
+            raise
+
+        if not await self._repository.lease_is_valid(job_id=job_id, lease_token=lease_token):
+            await asyncio.to_thread(self._safe_remove_tree, stage_root)
+            logger.warning("model_download_promotion_fenced job_id=%s", job_id)
+            return
+
+        staged_path = Path(result.install_path)
+        final_path = Path(str(claim.get("install_path") or ""))
+        if not str(claim.get("install_path") or "").strip():
+            channel = self._channels[str(claim["channel_id"])]
+            final_path = self._build_install_path(channel, str(claim["model_id"]), claim.get("revision"))
+
+        await asyncio.to_thread(
+            self._promote_staged_directory,
+            staged_path,
+            final_path,
+            lease_token,
+        )
+        result_payload = {
+            "model_id": result.model_id,
+            "install_path": str(final_path),
+            "total_size": result.total_size,
+            "files_downloaded": result.files_downloaded,
+            "duration_seconds": max(result.duration_seconds, time.perf_counter() - started),
+            "status": result.status,
+        }
+        completed = await self._repository.complete_job(
+            job_id=job_id,
+            lease_token=lease_token,
+            result_payload=result_payload,
+            install_path=str(final_path),
+        )
+        if completed is None:
+            logger.error("model_download_completion_fence_rejected job_id=%s", job_id)
+            return
+
+        await self._register_promoted_model(
+            staging_orchestrator=staging_orchestrator,
+            model_id=str(claim["model_id"]),
+            final_path=final_path,
+        )
+        await asyncio.to_thread(self._safe_remove_tree, stage_root)
+        try:
+            await self._discovery_service.refresh_model_discovery()
+        except Exception as exc:  # pragma: no cover - cache refresh only
+            logger.warning("model_download_discovery_refresh_failed job_id=%s error=%s", job_id, exc)
+        logger.info("model_download_job_completed job_id=%s install_path=%s", job_id, final_path)
+
+    @staticmethod
+    def _safe_remove_tree(path: Path) -> None:
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+
+    @staticmethod
+    def _promote_staged_directory(staged_path: Path, final_path: Path, lease_token: str) -> None:
+        if not staged_path.exists():
+            raise RuntimeError(f"Staged model artifact is missing: {staged_path}")
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        if not final_path.exists():
+            os.replace(staged_path, final_path)
+            return
+
+        backup = final_path.with_name(f"{final_path.name}.previous-{lease_token}")
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+        os.replace(final_path, backup)
+        try:
+            os.replace(staged_path, final_path)
+        except BaseException:
+            if not final_path.exists() and backup.exists():
+                os.replace(backup, final_path)
+            raise
+        shutil.rmtree(backup, ignore_errors=True)
+
+    async def _register_promoted_model(
+        self,
+        *,
+        staging_orchestrator: ModelOrchestratorService,
+        model_id: str,
+        final_path: Path,
+    ) -> None:
+        entry = dict(staging_orchestrator._registry.get(model_id) or {})
+        if not entry:
+            logger.warning("model_download_registry_entry_missing model_id=%s", model_id)
+            return
+        entry["install_path"] = str(final_path)
+        self._orchestrator._registry[model_id] = entry
+        await self._orchestrator._persist_registry()
 
     async def get_installed_models(self, force_refresh: bool = False) -> dict[str, Any]:
         models = await self._discovery_service.discover_all_models(force_refresh=force_refresh)
@@ -758,18 +789,8 @@ class ModelDownloadControlService:
         }
 
     async def cleanup_finished_jobs(self, max_age_seconds: int = 86400) -> int:
-        cutoff = time.time() - max_age_seconds
-        async with self._lock:
-            removable = [
-                job_id
-                for job_id, job in self._jobs.items()
-                if job.status in {"completed", "failed", "cancelled"} and datetime.fromisoformat(job.updated_at).timestamp() < cutoff
-            ]
-            for job_id in removable:
-                self._jobs.pop(job_id, None)
-            if removable:
-                await self._persist_state()
-            return len(removable)
+        await self.initialize()
+        return await self._repository.cleanup_finished_jobs(max_age_seconds=max_age_seconds)
 
 
 _MODEL_DOWNLOAD_CONTROL_SERVICE: Optional[ModelDownloadControlService] = None
