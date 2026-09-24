@@ -65,5 +65,5 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Verify canonical brand and screenshot provenance contract
-        run: python scripts/ci/verify_presentation_assets.py
+      - name: Verify canonical brand and required real-product screenshot provenance
+        run: python scripts/ci/verify_presentation_assets.py --require-assets
