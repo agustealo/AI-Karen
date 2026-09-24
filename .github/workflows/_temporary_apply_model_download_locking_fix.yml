@@ -1,0 +1,61 @@
+name: Temporary Apply Model Download Locking Fix
+
+on:
+  push:
+    branches:
+      - fix/model-download-control-locking
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/model-download-control-locking
+          fetch-depth: 0
+
+      - name: Apply cancellation-safe persistence correction
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          service_path = Path('src/ai_karen_engine/core/model_runtime/model_download_control_service.py')
+          service = service_path.read_text(encoding='utf-8')
+          old = '''    async def _persist_state(self) -> None:\n        \"\"\"Persist a state snapshot while the caller owns the mutation lock.\"\"\"\n        if not self._lock.locked():\n            raise RuntimeError(\"Model download state persistence requires the mutation lock\")\n        await asyncio.to_thread(self._persist_state_sync)\n'''
+          new = '''    async def _persist_state(self) -> None:\n        \"\"\"Persist state without allowing cancellation to outlive the mutation lock.\"\"\"\n        if not self._lock.locked():\n            raise RuntimeError(\"Model download state persistence requires the mutation lock\")\n\n        writer = asyncio.create_task(asyncio.to_thread(self._persist_state_sync))\n        cancelled = False\n        while not writer.done():\n            try:\n                await asyncio.shield(writer)\n            except asyncio.CancelledError:\n                # The surrounding mutation still owns ``self._lock``. Defer\n                # cancellation until the writer thread has stopped so no second\n                # mutation can race the snapshot or shared temporary file.\n                cancelled = True\n\n        writer.result()\n        if cancelled:\n            raise asyncio.CancelledError\n'''
+          if old not in service:
+              raise SystemExit('expected _persist_state implementation not found')
+          service_path.write_text(service.replace(old, new, 1), encoding='utf-8')
+
+          test_path = Path('tests/core/model_runtime/test_model_download_control_locking.py')
+          tests = test_path.read_text(encoding='utf-8')
+          if 'import threading\n' not in tests:
+              tests = tests.replace('import json\n', 'import json\nimport threading\n', 1)
+
+          test_name = 'test_cancelled_persist_holds_lock_until_writer_thread_stops'
+          if test_name not in tests:
+              tests += '''\n\n@pytest.mark.asyncio\nasync def test_cancelled_persist_holds_lock_until_writer_thread_stops(\n    tmp_path,\n    monkeypatch,\n):\n    service = _service(tmp_path)\n    original_persist = service._persist_state_sync\n    writer_entered = threading.Event()\n    release_writer = threading.Event()\n    writer_finished = threading.Event()\n\n    def blocked_persist() -> None:\n        writer_entered.set()\n        if not release_writer.wait(timeout=2.0):\n            raise RuntimeError(\"timed out waiting to release persistence writer\")\n        try:\n            original_persist()\n        finally:\n            writer_finished.set()\n\n    monkeypatch.setattr(service, \"_persist_state_sync\", blocked_persist)\n\n    first_mutation = asyncio.create_task(\n        service.update_policy({\"block_new_downloads\": True})\n    )\n    entered = await asyncio.wait_for(\n        asyncio.to_thread(writer_entered.wait, 1.0),\n        timeout=1.5,\n    )\n    assert entered is True\n\n    first_mutation.cancel()\n    await asyncio.sleep(0)\n    assert service._lock.locked() is True\n    assert first_mutation.done() is False\n\n    second_mutation = asyncio.create_task(\n        service.update_policy({\"master_enabled\": False})\n    )\n    await asyncio.sleep(0)\n    assert second_mutation.done() is False\n    assert service._lock.locked() is True\n\n    release_writer.set()\n    with pytest.raises(asyncio.CancelledError):\n        await asyncio.wait_for(first_mutation, timeout=1.0)\n\n    second_policy = await asyncio.wait_for(second_mutation, timeout=1.0)\n    assert writer_finished.is_set() is True\n    assert second_policy[\"block_new_downloads\"] is True\n    assert second_policy[\"master_enabled\"] is False\n\n    persisted = _read_state(service)\n    assert persisted[\"policy\"][\"block_new_downloads\"] is True\n    assert persisted[\"policy\"][\"master_enabled\"] is False\n'''
+          test_path.write_text(tests, encoding='utf-8')
+
+          workflow_path = Path('.github/workflows/_temporary_apply_model_download_locking_fix.yml')
+          workflow_path.unlink()
+          PY
+
+          python -m py_compile \
+            src/ai_karen_engine/core/model_runtime/model_download_control_service.py \
+            tests/core/model_runtime/test_model_download_control_locking.py
+
+      - name: Commit corrected exact head
+        shell: bash
+        run: |
+          git config user.name "AI KAREN CI Repair"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Keep model persistence lock through cancellation"
+          git push origin HEAD:fix/model-download-control-locking
