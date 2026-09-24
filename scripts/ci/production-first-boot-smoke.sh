@@ -8,12 +8,17 @@ set -euo pipefail
 # and password-protected Redis rather than importing application services directly.
 # The beta workflow and ad-hoc CI can call this same script without creating a
 # second bootstrap implementation.
+#
+# A presentation/release consumer may opt into KAREN_SMOKE_KEEP_RUNNING=true after
+# the full smoke passes. Failure always tears the stack down. This lets downstream
+# proof reuse the exact verified installation without duplicating bootstrap logic.
 
 API_IMAGE="${KAREN_SMOKE_API_IMAGE:-ai-karen-api:beta}"
 POSTGRES_IMAGE="${KAREN_SMOKE_POSTGRES_IMAGE:-pgvector/pgvector:pg16}"
 REDIS_IMAGE="${KAREN_SMOKE_REDIS_IMAGE:-redis:7-alpine}"
 HOST_PORT="${KAREN_SMOKE_API_PORT:-18000}"
-SMOKE_ID="${GITHUB_RUN_ID:-local}-$$"
+KEEP_RUNNING="${KAREN_SMOKE_KEEP_RUNNING:-false}"
+SMOKE_ID="${KAREN_SMOKE_ID:-${GITHUB_RUN_ID:-local}-$$}"
 NETWORK="karen-beta-smoke-${SMOKE_ID}"
 POSTGRES_CONTAINER="karen-beta-postgres-${SMOKE_ID}"
 REDIS_CONTAINER="karen-beta-redis-${SMOKE_ID}"
@@ -25,16 +30,24 @@ REDIS_PASSWORD="BetaSmokeRedis_51d8a3c4"
 JWT_SECRET="beta-smoke-jwt-7a94c120f6dd4a9cab3bb6c1c2f58a1d"
 APP_SECRET="beta-smoke-app-72f3c8d9442e4c87a28a915bd63fc2cc"
 EXTENSION_SECRET="beta-smoke-ext-9f3c1ad483204d30a4fa6ef531b6f42d"
-ADMIN_EMAIL="beta-smoke-admin@example.invalid"
-ADMIN_PASSWORD="BetaSmoke!Pass9Z"
-ADMIN_NAME="Beta Smoke Owner"
+ADMIN_EMAIL="${KAREN_SMOKE_ADMIN_EMAIL:-beta-smoke-admin@example.invalid}"
+ADMIN_PASSWORD="${KAREN_SMOKE_ADMIN_PASSWORD:-BetaSmoke!Pass9Z}"
+ADMIN_NAME="${KAREN_SMOKE_ADMIN_NAME:-Beta Smoke Owner}"
 BASE_URL="http://127.0.0.1:${HOST_PORT}"
 COOKIE_JAR="$(mktemp)"
 API_LOG="$(mktemp)"
 DUPLICATE_BODY="$(mktemp)"
 
 cleanup() {
+  local status=$?
   rm -f "${COOKIE_JAR}" "${API_LOG}" "${DUPLICATE_BODY}"
+
+  if [[ "${status}" -eq 0 && "${KEEP_RUNNING}" == "true" ]]; then
+    echo "[smoke] verified stack retained for downstream proof"
+    echo "[smoke] network=${NETWORK} api_container=${API_CONTAINER} base_url=${BASE_URL}"
+    return
+  fi
+
   docker rm -f "${API_CONTAINER}" >/dev/null 2>&1 || true
   docker rm -f "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
   docker rm -f "${POSTGRES_CONTAINER}" >/dev/null 2>&1 || true
@@ -114,6 +127,7 @@ start_api() {
   docker run -d \
     --name "${API_CONTAINER}" \
     --network "${NETWORK}" \
+    --network-alias api \
     -p "127.0.0.1:${HOST_PORT}:8000" \
     "${api_env[@]}" \
     "${API_IMAGE}" >/dev/null
