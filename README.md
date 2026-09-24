@@ -49,11 +49,12 @@ KAREN_SHOWCASE_ALLOW_CAPTURE=true \
 KAREN_SHOWCASE_ACCOUNT_KIND=sanitized-demo \
 KAREN_SHOWCASE_EMAIL='<sanitized-demo-email>' \
 KAREN_SHOWCASE_PASSWORD='<sanitized-demo-password>' \
+KAREN_SHOWCASE_TARGET_REVISION='<full-40-character-deployed-sha>' \
 KAREN_SHOWCASE_BASE_URL='http://localhost:8010' \
 npm run showcase:capture
 ```
 
-The capture rail is intentionally fail-closed. It will not silently substitute fake media when a real sanitized environment is unavailable.
+The capture rail is intentionally fail-closed. It records the capture-harness checkout separately from the operator-attested deployed revision, and it will not silently substitute fake media when a real sanitized environment is unavailable.
 
 <details>
 <summary><strong>Existing real-browser E2E image provenance</strong></summary>
