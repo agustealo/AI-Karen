@@ -16,6 +16,13 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _method_body(source: str, method: str) -> str:
+    marker = f"async def {method}"
+    start = source.index(marker)
+    next_method = source.find("\n    async def ", start + len(marker))
+    return source[start:] if next_method == -1 else source[start:next_method]
+
+
 def test_postgres_is_the_only_download_job_lifecycle_authority() -> None:
     service = _read(SERVICE)
     repository = _read(REPOSITORY)
@@ -40,16 +47,40 @@ def test_claim_transaction_enforces_global_concurrency_before_skip_locked_claim(
     assert advisory < active_count < skip_locked
     assert "lease_expires_at > now()" in repository[active_count:skip_locked]
     assert "global_concurrency" in repository[active_count:skip_locked]
+    assert "status IN ('running', 'promoting')" in repository[active_count:skip_locked]
 
 
 def test_lease_mutations_are_token_fenced() -> None:
     repository = _read(REPOSITORY)
     for method in ("heartbeat", "lease_is_valid", "complete_job", "fail_or_retry", "release_for_shutdown"):
-        marker = f"async def {method}"
-        start = repository.index(marker)
-        next_method = repository.find("\n    async def ", start + len(marker))
-        body = repository[start:] if next_method == -1 else repository[start:next_method]
+        body = _method_body(repository, method)
         assert "lease_token" in body, f"{method} must be lease-token fenced"
+
+
+def test_promotion_is_reserved_before_filesystem_mutation() -> None:
+    repository = _read(REPOSITORY)
+    migration = _read(MIGRATION)
+    service = _read(SERVICE)
+
+    reserve = _method_body(repository, "lease_is_valid")
+    cancel = _method_body(repository, "cancel_job")
+    pause = _method_body(repository, "pause_job")
+    complete = _method_body(repository, "complete_job")
+    heartbeat = _method_body(repository, "heartbeat")
+
+    assert "SET status = 'promoting'" in reserve
+    assert "status = 'running'" in reserve
+    assert "'promoting'" in cancel
+    assert "'promoting'" in pause
+    assert "status = 'promoting'" in complete
+    assert "status IN ('running', 'promoting')" in heartbeat
+    assert "'promoting'" in migration
+
+    staging = service.index('self.models_root / ".staging" / "model-downloads"')
+    reservation = service.index("lease_is_valid", staging)
+    promotion = service.index("_promote_staged_directory", reservation)
+    completion = service.index("complete_job", promotion)
+    assert staging < reservation < promotion < completion
 
 
 def test_routes_keep_existing_contract_and_await_durable_reads() -> None:
