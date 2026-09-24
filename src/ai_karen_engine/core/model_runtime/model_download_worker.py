@@ -63,11 +63,12 @@ class ModelDownloadWorker:
                 task.cancel()
             if still_pending:
                 await asyncio.gather(*still_pending, return_exceptions=True)
+        self._prune_finished()
         logger.info("model_download_worker_stopped worker_id=%s", self.worker_id)
 
     async def _run(self) -> None:
-        try:
-            while not self._stop.is_set():
+        while not self._stop.is_set():
+            try:
                 self._prune_finished()
                 local_limit = max(1, await self._service.get_global_concurrency_limit())
                 while len(self._executions) < local_limit and not self._stop.is_set():
@@ -79,12 +80,24 @@ class ModelDownloadWorker:
                         name=f"model-download:{claim['job_id']}",
                     )
                     self._executions.add(task)
-                await asyncio.sleep(self._settings.poll_interval_seconds)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("model_download_worker_loop_failed worker_id=%s", self.worker_id)
-            raise
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # A transient database outage must degrade queue throughput, not
+                # permanently kill the application-owned worker. The next poll
+                # retries against durable truth without inventing local state.
+                logger.exception(
+                    "model_download_worker_poll_failed worker_id=%s",
+                    self.worker_id,
+                )
+
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(),
+                    timeout=self._settings.poll_interval_seconds,
+                )
+            except TimeoutError:
+                pass
 
     def _prune_finished(self) -> None:
         finished = {task for task in self._executions if task.done()}
@@ -121,10 +134,23 @@ class ModelDownloadWorker:
                 await asyncio.sleep(self._settings.heartbeat_seconds)
                 renewed = await self._service.heartbeat_claim(job_id, lease_token)
                 if not renewed:
-                    logger.warning("model_download_lease_lost job_id=%s worker_id=%s", job_id, self.worker_id)
+                    logger.warning(
+                        "model_download_lease_lost job_id=%s worker_id=%s",
+                        job_id,
+                        self.worker_id,
+                    )
                     return
         except asyncio.CancelledError:
             raise
+        except Exception:
+            # A failed heartbeat is not equivalent to a lost lease. Stop
+            # renewing and let the lease expire naturally; promotion remains
+            # transaction-fenced by the repository.
+            logger.exception(
+                "model_download_heartbeat_failed job_id=%s worker_id=%s",
+                job_id,
+                self.worker_id,
+            )
 
 
 __all__ = ["ModelDownloadWorker"]
