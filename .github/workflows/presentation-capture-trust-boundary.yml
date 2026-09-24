@@ -1,0 +1,63 @@
+name: Presentation Capture Trust Boundary
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/presentation-capture.yml"
+      - ".github/workflows/presentation-capture-trust-boundary.yml"
+      - "scripts/ci/presentation_gallery_contract.py"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/playwright.showcase.config.ts"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/showcase/capture-product.showcase.ts"
+      - "tests/architecture/test_presentation_capture_trust_boundary.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/presentation-capture.yml"
+      - ".github/workflows/presentation-capture-trust-boundary.yml"
+      - "scripts/ci/presentation_gallery_contract.py"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/playwright.showcase.config.ts"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/showcase/capture-product.showcase.ts"
+      - "tests/architecture/test_presentation_capture_trust_boundary.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trust-boundary:
+    name: trust-boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Compile gallery provenance contract
+        run: python -m compileall -q scripts/ci/presentation_gallery_contract.py
+
+      - name: Prove secret and destination branch isolation
+        run: python tests/architecture/test_presentation_capture_trust_boundary.py
+
+      - name: Prove gallery verifier handles the pre-capture state
+        run: python scripts/ci/presentation_gallery_contract.py
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
+
+      - name: Install frontend dependencies reproducibly
+        working-directory: src/ui_launchers/Karen-AI-Theme
+        run: npm ci --no-audit --no-fund
+
+      - name: Compile and enumerate trusted Playwright capture harness
+        working-directory: src/ui_launchers/Karen-AI-Theme
+        run: npx playwright test --list --config=e2e/playwright.showcase.config.ts
