@@ -13,7 +13,6 @@ import {
   Bell,
   Binary,
   Bot as BotIcon,
-  Brain,
   LayoutGrid,
   Loader2,
   MessageSquare,
@@ -220,7 +219,7 @@ export default function DashboardPage() {
 
     setBackendStatus("failed");
     setBackendErrorMessage(
-      "Karen AI could not connect to backend services after multiple attempts.",
+      "KAREN could not connect to backend services after multiple attempts.",
     );
   }, [clearRetryTimeout]);
 
@@ -277,7 +276,7 @@ export default function DashboardPage() {
     () => ({
       chat: (
         <SessionProvider>
-          <ChatInterface isActive={activeMainView === 'chat'} />
+          <ChatInterface isActive={activeMainView === "chat"} />
         </SessionProvider>
       ),
       settings: <SettingsDialogComponent />,
@@ -290,7 +289,7 @@ export default function DashboardPage() {
       commsCenter: <CommsCenterPage />,
       account: <AccountPage />,
     }),
-    [],
+    [activeMainView],
   );
 
   const currentViewContent = useMemo(() => {
@@ -343,7 +342,7 @@ export default function DashboardPage() {
               <h2 className="text-lg font-semibold text-foreground">
                 {backendStatus === "failed"
                   ? "Backend Connection Failed"
-                  : "Initializing Karen AI"}
+                  : "Initializing KAREN"}
               </h2>
 
               <p className="mt-1 text-sm text-muted-foreground">
@@ -384,10 +383,22 @@ export default function DashboardPage() {
           <header className="sticky top-0 z-30 flex items-center justify-between border-b border-border bg-background/90 p-3 shadow-sm backdrop-blur-md md:p-4">
             <div className="flex items-center space-x-3">
               <AppSidebarTrigger className="mr-1 md:mr-2" />
-              <Brain className="h-7 w-7 shrink-0 text-primary md:h-8 md:w-8" />
-              <h1 className="text-xl font-semibold tracking-tight md:text-2xl">
-                Karen AI
-              </h1>
+              <Image
+                src="/brand/karen-mark.svg"
+                alt=""
+                width={32}
+                height={32}
+                className="h-7 w-7 shrink-0 md:h-8 md:w-8"
+                priority
+              />
+              <div className="flex items-baseline gap-2">
+                <h1 className="text-xl font-semibold tracking-[0.14em] md:text-2xl">
+                  KAREN
+                </h1>
+                <span className="hidden text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground/70 sm:inline">
+                  Local-first runtime
+                </span>
+              </div>
             </div>
 
             <Sheet>
@@ -547,10 +558,16 @@ export default function DashboardPage() {
               </AppSidebarContent>
 
               <AppSidebarFooter className="relative overflow-visible border-t bg-muted/20 p-4">
-                <div className="flex flex-col items-center gap-1">
-                  <Brain className="h-4 w-4 text-primary/50" />
-                  <p className="text-[10px] font-medium uppercase tracking-tighter text-muted-foreground/60">
-                    Karen AI Unified Platform
+                <div className="flex flex-col items-center gap-1.5 text-center">
+                  <Image
+                    src="/brand/karen-mark.svg"
+                    alt=""
+                    width={18}
+                    height={18}
+                    className="h-[18px] w-[18px] opacity-70"
+                  />
+                  <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/60">
+                    KAREN · Local-first runtime
                   </p>
                 </div>
               </AppSidebarFooter>
