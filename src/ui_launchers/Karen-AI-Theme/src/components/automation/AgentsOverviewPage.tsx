@@ -91,7 +91,7 @@ export default function AutomationOverviewPage() {
         <Info className="h-4 w-4" />
         <AlertTitle>System Operational</AlertTitle>
         <AlertDescription>
-          The Agents & Workflows section of Karen AI is connected to the live backend. All metrics below represent real-time activity across your agents and scheduled jobs.
+          KAREN Agents & Workflows is connected to the live backend. All metrics below represent real-time activity across your agents and scheduled jobs.
         </AlertDescription>
       </Alert>
 
