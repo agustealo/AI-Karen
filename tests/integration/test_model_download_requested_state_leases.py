@@ -13,7 +13,7 @@ from ai_karen_engine.persistence.repositories.model_download_repository import (
 
 DATABASE_URL = os.environ.get("MODEL_DOWNLOAD_TEST_DATABASE_URL")
 pytestmark = [
-    pytest.mark.asyncio,
+    pytest.mark.asyncio(loop_scope="module"),
     pytest.mark.skipif(
         not DATABASE_URL,
         reason="MODEL_DOWNLOAD_TEST_DATABASE_URL is required for PostgreSQL lease proofs",
