@@ -24,6 +24,19 @@ The canonical identity is deliberately abstract. There is no literal meme face o
 - [Product presentation manifest](docs/presentation/PRODUCT_PRESENTATION_MANIFEST.md)
 - [Screenshot provenance and capture contract](docs/assets/screenshots/README.md)
 
+## Core principles
+
+- **Local-first:** prefer healthy local inference and local infrastructure when suitable.
+- **Prompt-first:** prompts are explicit, versioned, testable execution contracts rather than scattered string construction.
+- **Runtime-authoritative:** routes, UI, providers, agents, and extensions do not become alternate chat runtimes.
+- **CORTEX decides, Runtime executes:** cognitive classification, routing, and policy recommendations remain separate from execution.
+- **RuntimePolicy authorizes:** decision components do not authorize their own actions.
+- **One responsibility, one owner:** duplicate orchestrators, registries, loaders, persistence paths, and fallbacks are collapsed into canonical owners.
+- **Secure by enforcement:** RBAC, tenant isolation, session validation, audit, secret handling, and action permissions are backend responsibilities.
+- **Observable by default:** provider, model, memory, reasoning, agent, extension, fallback, and degradation paths should be traceable.
+- **Honest degradation:** unavailable capability returns explicit degraded or unavailable state rather than fabricated model output or UI truth.
+- **Test-proven architecture:** routing, fallbacks, memory, RBAC, first-run, API contracts, UI contracts, and deployment paths require executable proof.
+
 ## Product surfaces
 
 The current web application exposes real product surfaces rather than marketing-only mockups:
@@ -173,12 +186,16 @@ POST /api/auth/first-run/setup
   -> normal authentication/session issuance
 ```
 
+The auth route does not create tenant/user records directly. The UI must not infer first-run state from local storage or failed login attempts. Production runtime does not create missing auth tables as a convenience fallback.
+
 The executable production proof is:
 
 ```text
 scripts/ci/production-first-boot-smoke.sh
 .github/workflows/production-first-boot-smoke.yml
 ```
+
+The production smoke starts fresh PostgreSQL/pgvector and password-protected Redis, applies canonical migrations, boots the real production image, creates the first owner, proves duplicate setup is denied, verifies durable bootstrap state, restarts the exact image, and proves the owner plus completed first-run state survive restart.
 
 See `docs/architecture/FIRST_RUN_SYSTEM.md` for the full authority, security, UI, observability, and proof contract.
 
@@ -251,6 +268,8 @@ CUDA overlay:
 docker compose -f docker-compose.yml -f deploy/compose/docker-compose.cuda.yml up
 ```
 
+Optional services are enabled through their Compose profiles when required by the deployment.
+
 ### 3. Verify liveness and auth readiness
 
 ```bash
@@ -288,7 +307,7 @@ curl -X POST http://localhost:8000/api/auth/first-run/setup \
   }'
 ```
 
-The canonical auth service creates the installation tenant and verified first owner, then authenticates through the normal session path. Bootstrap is transaction-serialized across workers.
+The canonical auth service creates the installation tenant and verified first owner, then authenticates through the normal session path. Bootstrap is transaction-serialized across workers. Once durable user state exists, later first-run setup attempts are rejected.
 
 ### 6. Open the UI
 
@@ -297,6 +316,43 @@ http://localhost:8010
 ```
 
 Log in with the identity created during first run.
+
+### 7. Verify installation readiness after login
+
+Identity bootstrap does not take ownership of unrelated subsystems. Verify backend truth for the capabilities your deployment requires:
+
+1. **Provider availability:** at least one intended provider is enabled and healthy.
+2. **Model configuration:** the intended local/default model is discoverable and eligible through the canonical model control plane.
+3. **Memory services:** durable memory dependencies are healthy when enabled.
+4. **Extensions:** only governed, validated extensions required for the deployment are enabled.
+5. **Observability:** metrics, logs, and tracing required by the environment are reachable.
+6. **Secrets and security:** production JWT, database, Redis, extension, provider, and dashboard secrets are non-example values.
+7. **First real chat:** submit a request through the canonical chat runtime and verify response provenance/degradation metadata reflects the provider/model that actually executed.
+
+A typed installation-readiness view may aggregate these subsystem signals, but it must not become a second provider, memory, extension, or observability authority.
+
+## Production deployment
+
+Production uses the validated production environment file and Compose overlay:
+
+```bash
+cp .env.production.example .env.production
+# Replace all CHANGE_ME/example values and choose the real public HTTP/HTTPS scheme.
+
+docker compose \
+  --env-file .env.production \
+  -f docker-compose.yml \
+  -f deploy/compose/docker-compose.prod.yml \
+  config
+
+docker compose \
+  --env-file .env.production \
+  -f docker-compose.yml \
+  -f deploy/compose/docker-compose.prod.yml \
+  up -d
+```
+
+Production/staging authentication validates configuration and fails closed. Canonical migrations remain authoritative for production schema, and the API must not invent missing tables or bootstrap state at runtime.
 
 ## Default development endpoints
 
@@ -310,6 +366,16 @@ Log in with the identity created during first run.
 | Grafana | http://localhost:3001 |
 
 Optional services are available only when their corresponding profiles are enabled.
+
+## Configuration
+
+Canonical application configuration lives under:
+
+```text
+src/ai_karen_engine/config/
+```
+
+Environment-specific values and secrets enter through validated configuration adapters and deployment files. Subsystems should not scatter direct environment reads when a canonical configuration contract already exists. Remaining configuration-convergence debt belongs in `PROJECT_DEV_MANIFEST.md`, not in parallel helpers or UI fallbacks.
 
 ## Security
 
@@ -359,6 +425,22 @@ KAREN_SMOKE_API_IMAGE=ai-karen-api:beta bash scripts/ci/production-first-boot-sm
 ```
 
 Do not report a release path green unless the exact-head CI/proof actually passed.
+
+## Development rules
+
+Before adding or changing a service, registry, orchestrator, helper, route, provider, configuration path, setup flow, or fallback:
+
+1. Identify the current owner of the responsibility.
+2. Search for a stronger existing implementation before creating another one.
+3. Extend or merge into the canonical owner rather than preserving a parallel path.
+4. Preserve RBAC, tenant scope, audit, credential handling, correlation identity, and telemetry.
+5. Keep API routes thin and orchestration in the runtime/service owner.
+6. Keep provider/model decisions out of the UI. The UI renders backend truth.
+7. Keep CORTEX decision-only and Runtime execution-authoritative.
+8. Keep schema creation and evolution migration-owned in production.
+9. Prefer central config/registry contracts over scattered hardcoded values.
+10. Prove the boundary with executable tests, burns, and exact-head CI.
+11. Delete dead or duplicate code only after reference audit and replacement proof.
 
 ## Architecture documentation
 
