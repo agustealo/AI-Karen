@@ -169,7 +169,7 @@ export default function CommsCenterPage() {
         <div>
             <h2 className="text-2xl font-semibold tracking-tight">Communications Center</h2>
             <p className="text-sm text-muted-foreground">
-            A central hub for updates from Karen, automation logs, system alerts, and generated notes.
+            A central hub for updates from KAREN, automation logs, system alerts, and generated notes.
             </p>
         </div>
         <Separator />
@@ -236,7 +236,7 @@ export default function CommsCenterPage() {
                                  <Alert variant="default" className="bg-primary/5 border-primary/20 mb-4">
                                     <Lightbulb className="h-4 w-4 !text-primary/80" />
                                     <AlertDescription className="text-xs text-primary/90">
-                                    Karen has identified new information. Go to <strong>Settings &gt; Facts</strong> to confirm or dismiss these.
+                                    KAREN has identified new information. Go to <strong>Settings &gt; Facts</strong> to confirm or dismiss these.
                                     </AlertDescription>
                                 </Alert>
                                 <ScrollArea className="h-48">
@@ -248,7 +248,7 @@ export default function CommsCenterPage() {
                                 </ScrollArea>
                                 </>
                            ) : (
-                               <p className="text-sm text-muted-foreground text-center py-10">No new facts suggested by Karen recently.</p>
+                               <p className="text-sm text-muted-foreground text-center py-10">No new facts suggested by KAREN recently.</p>
                            )}
                         </CardContent>
                     </Card>
@@ -506,7 +506,7 @@ export default function CommsCenterPage() {
                 <Card>
                     <CardHeader>
                         <CardTitle>Generated Notes & Summaries</CardTitle>
-                        <CardDescription>A collection of notes and summaries created by Karen from conversations or tasks.</CardDescription>
+                        <CardDescription>A collection of notes and summaries created by KAREN from conversations or tasks.</CardDescription>
                     </CardHeader>
                     <CardContent>
                        <ScrollArea className="h-96">
@@ -528,7 +528,7 @@ export default function CommsCenterPage() {
                 <Card>
                     <CardHeader>
                         <CardTitle>System Alerts & Notifications</CardTitle>
-                        <CardDescription>Important updates and information about the Karen AI system.</CardDescription>
+                        <CardDescription>Important updates and information about the KAREN system.</CardDescription>
                     </CardHeader>
                     <CardContent>
                         <ScrollArea className="h-96">
