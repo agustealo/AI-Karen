@@ -115,8 +115,9 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
 
   await page.waitForURL(/\/dashboard(?:$|[/?#])/);
   await expect(
-    page.getByRole("heading", { name: "Karen AI", exact: true }),
+    page.getByRole("heading", { name: "KAREN", exact: true }),
   ).toBeVisible({ timeout: 45_000 });
+  await expect(page.locator('img[src="/brand/karen-mark.svg"]').first()).toBeVisible();
 
   await capture(page, GALLERY_FILES[0], email);
 
