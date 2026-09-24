@@ -347,8 +347,10 @@ class ModelDownloadControlService:
         tmp.replace(self.state_path)
 
     async def _persist_state(self) -> None:
-        async with self._lock:
-            await asyncio.to_thread(self._persist_state_sync)
+        """Persist a state snapshot while the caller owns the mutation lock."""
+        if not self._lock.locked():
+            raise RuntimeError("Model download state persistence requires the mutation lock")
+        await asyncio.to_thread(self._persist_state_sync)
 
     def _channel_locked(self, channel: ModelDownloadChannel) -> bool:
         if not self._policy.master_enabled:
@@ -783,4 +785,3 @@ __all__ = [
     "get_model_download_control_service",
     "initialize_model_download_control_service",
 ]
-
