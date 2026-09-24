@@ -75,9 +75,9 @@ def png_dimensions(path: Path) -> tuple[int, int]:
     return struct.unpack(">II", data[16:24])
 
 
-def assert_capture_sha_is_ancestor(capture_sha: str) -> None:
+def assert_known_revision_is_ancestor(label: str, revision: str) -> None:
     result = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", capture_sha, "HEAD"],
+        ["git", "merge-base", "--is-ancestor", revision, "HEAD"],
         cwd=REPO_ROOT,
         check=False,
         capture_output=True,
@@ -85,7 +85,7 @@ def assert_capture_sha_is_ancestor(capture_sha: str) -> None:
     )
     if result.returncode != 0:
         raise PresentationContractError(
-            f"capture SHA {capture_sha} is not an ancestor of current HEAD; regenerate screenshots from the branch being presented"
+            f"{label} {revision} is not an ancestor of current HEAD; the gallery cannot be attributed to this repository line"
         )
 
 
@@ -142,9 +142,13 @@ def verify_brand_contract() -> None:
     required_capture_guards = (
         'KAREN_SHOWCASE_ALLOW_CAPTURE !== "true"',
         'KAREN_SHOWCASE_ACCOUNT_KIND !== "sanitized-demo"',
+        "KAREN_SHOWCASE_TARGET_REVISION",
         'page.getByRole("heading", { name: "KAREN", exact: true })',
-        'page.locator(\'img[src="/brand/karen-mark.svg"]\').first()',
+        'header img[src*="karen-mark.svg"]',
         'source: "real-running-application"',
+        'capture_harness_git_sha: currentGitSha()',
+        'target_revision: targetRevision',
+        'target_revision_attestation: "operator-supplied"',
         'mocked_responses: false',
         'generated_ui: false',
         'fixture_only_state: false',
@@ -200,10 +204,23 @@ def verify_gallery(require_assets: bool) -> bool:
     if policy != expected_policy:
         raise PresentationContractError(f"invalid capture policy provenance: {policy!r}")
 
-    capture_sha = str(payload.get("git_sha", "")).lower()
-    if not SHA_RE.fullmatch(capture_sha):
-        raise PresentationContractError(f"invalid capture git_sha: {capture_sha!r}")
-    assert_capture_sha_is_ancestor(capture_sha)
+    harness_sha = str(payload.get("capture_harness_git_sha", "")).lower()
+    if not SHA_RE.fullmatch(harness_sha):
+        raise PresentationContractError(
+            f"invalid capture_harness_git_sha: {harness_sha!r}"
+        )
+    assert_known_revision_is_ancestor("capture harness revision", harness_sha)
+
+    target_revision = str(payload.get("target_revision", "")).lower()
+    if not SHA_RE.fullmatch(target_revision):
+        raise PresentationContractError(
+            f"invalid target_revision: {target_revision!r}"
+        )
+    if payload.get("target_revision_attestation") != "operator-supplied":
+        raise PresentationContractError(
+            "target revision must be explicitly recorded as operator-supplied until KAREN exposes a canonical deployment revision attestation"
+        )
+    assert_known_revision_is_ancestor("target application revision", target_revision)
 
     files = payload.get("files")
     if files != list(GALLERY_FILES):
