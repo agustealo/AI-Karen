@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import struct
 import subprocess
@@ -16,7 +17,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(
+    os.environ.get(
+        "KAREN_PRESENTATION_REPO_ROOT",
+        str(Path(__file__).resolve().parents[2]),
+    )
+).resolve()
 SCREENSHOT_ROOT = REPO_ROOT / "docs" / "assets" / "screenshots"
 CAPTURE_MANIFEST = SCREENSHOT_ROOT / "capture-manifest.json"
 GALLERY_FILES = (
