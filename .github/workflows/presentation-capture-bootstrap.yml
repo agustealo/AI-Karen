@@ -1,0 +1,21 @@
+name: KAREN Presentation Capture Bootstrap
+
+on:
+  push:
+    branches:
+      - feat/premium-brand-presentation
+    paths:
+      - ".github/workflows/presentation-capture-bootstrap.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  capture:
+    uses: ./.github/workflows/presentation-capture.yml
+    with:
+      source_mode: fresh-production
+      base_url: ""
+      identity_mode: email
+      commit_assets: true
+    secrets: inherit
