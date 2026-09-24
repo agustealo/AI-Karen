@@ -1,194 +1,206 @@
-"""
-Job Service for AI Karen Engine.
+"""Durable multi-step automation job service.
 
-Manages persistent multi-step job sequences and their execution.
+Job definitions live in PostgreSQL and every AI-bearing step delegates to the
+canonical ChatRuntime task adapter. The one-time legacy JSON cutover is guarded
+explicitly so pre-existing definitions never disappear silently or leak across
+tenants.
 """
+
+from __future__ import annotations
 
 import asyncio
-import json
-import logging
-import os
 import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from ai_karen_engine.agents import get_agent_integration_service, AgentExecutionMode
-from ai_karen_engine.agents.internal.agent_schemas import AgentTask
+from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionStatus
+from ai_karen_engine.core.runtime.task_execution import execute_task_definition
+from ai_karen_engine.persistence.repositories.automation_repository import (
+    SqlAutomationRepository,
+    get_automation_repository,
+)
+from ai_karen_engine.services.automation.legacy_job_migration import (
+    LegacyAutomationMigrationRequired,
+    assert_legacy_job_cutover_complete,
+)
 
-logger = logging.getLogger(__name__)
+
+class JobNotFoundError(LookupError):
+    """Tenant-scoped job definition does not exist."""
+
+
+class JobExecutionError(RuntimeError):
+    """Job execution failed."""
+
 
 class JobService:
-    """Service for managing multi-step job sequences."""
+    """Canonical product-level owner for durable multi-step automation jobs."""
 
-    def __init__(self, storage_path: str = "data/automation_jobs.json"):
-        self.storage_path = storage_path
-        self._jobs: Dict[str, Dict[str, Any]] = {}
-        self._load_jobs()
+    def __init__(self, repository: Optional[SqlAutomationRepository] = None) -> None:
+        self._repository = repository or get_automation_repository()
 
-    def _load_jobs(self):
-        """Load jobs from persistent storage."""
-        try:
-            if os.path.exists(self.storage_path):
-                with open(self.storage_path, "r") as f:
-                    self._jobs = json.load(f)
-                logger.info(f"Loaded {len(self._jobs)} jobs from {self.storage_path}")
-            else:
-                # Create directory if it doesn't exist
-                os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
-                self._jobs = {}
-                self._save_jobs()
-        except Exception as e:
-            logger.error(f"Error loading jobs: {e}")
-            self._jobs = {}
+    @staticmethod
+    def _user(user_context: Any) -> UserData:
+        user = UserData.ensure(user_context)
+        if not str(user.user_id or "").strip():
+            raise ValueError("Authenticated user_id is required")
+        if not str(user.tenant_id or "").strip() or str(user.tenant_id) == "default":
+            raise ValueError("Explicit tenant_id is required")
+        return user
 
-    def _save_jobs(self):
-        """Save jobs to persistent storage."""
-        try:
-            os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
-            with open(self.storage_path, "w") as f:
-                json.dump(self._jobs, f, indent=2, default=str)
-        except Exception as e:
-            logger.error(f"Error saving jobs: {e}")
+    @staticmethod
+    def _assert_legacy_cutover() -> None:
+        assert_legacy_job_cutover_complete()
 
-    async def list_jobs(self) -> List[Dict[str, Any]]:
-        """List all defined jobs."""
-        jobs = list(self._jobs.values())
-        # Sort by creation date (newest first)
-        jobs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-        return jobs
+    async def list_jobs(self, user_context: Any) -> List[Dict[str, Any]]:
+        self._assert_legacy_cutover()
+        user = self._user(user_context)
+        return await self._repository.list_jobs(str(user.tenant_id))
 
-    async def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
-        """Get a specific job definition."""
-        return self._jobs.get(job_id)
+    async def get_job(
+        self, job_id: str, user_context: Any
+    ) -> Optional[Dict[str, Any]]:
+        self._assert_legacy_cutover()
+        user = self._user(user_context)
+        return await self._repository.get_job(job_id, str(user.tenant_id))
 
-    async def create_job(self, job_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new job sequence definition."""
-        job_id = f"job_{uuid.uuid4().hex[:8]}"
-        now = datetime.utcnow().isoformat()
-        
-        job_record = {
-            "id": job_id,
-            "name": job_data["name"],
-            "description": job_data["description"],
-            "tasks": job_data.get("tasks", []),
-            "trigger": job_data.get("trigger", "Manual Run"),
-            "created_at": now,
-            "updated_at": now,
-            "status": "Pending",
+    async def create_job(
+        self,
+        job_data: Dict[str, Any],
+        *,
+        user_context: Any,
+    ) -> Dict[str, Any]:
+        self._assert_legacy_cutover()
+        user = self._user(user_context)
+        name = str(job_data.get("name") or "").strip()
+        description = str(job_data.get("description") or "").strip()
+        if not name or not description:
+            raise ValueError("Job name and description are required")
+        record = {
+            "id": f"job_{uuid.uuid4().hex[:12]}",
+            "name": name,
+            "description": description,
+            "tasks": list(job_data.get("tasks") or []),
+            "trigger": str(job_data.get("trigger") or "Manual Run"),
         }
-        
-        self._jobs[job_id] = job_record
-        self._save_jobs()
-        return job_record
+        return await self._repository.create_job(
+            tenant_id=str(user.tenant_id),
+            created_by=str(user.user_id),
+            record=record,
+        )
 
-    async def delete_job(self, job_id: str) -> bool:
-        """Delete a job definition."""
-        if job_id in self._jobs:
-            del self._jobs[job_id]
-            self._save_jobs()
-            return True
-        return False
+    async def delete_job(self, job_id: str, *, user_context: Any) -> bool:
+        self._assert_legacy_cutover()
+        user = self._user(user_context)
+        return await self._repository.delete_job(job_id, str(user.tenant_id))
 
-    async def execute_job(self, job_id: str, user_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Trigger the execution of a multi-step job."""
-        if job_id not in self._jobs:
-            raise ValueError(f"Job {job_id} not found")
-        
-        job = self._jobs[job_id]
-        job["status"] = "Running"
-        job["updated_at"] = datetime.utcnow().isoformat()
-        self._save_jobs()
-        
-        # Start execution in the background
-        asyncio.create_task(self._run_job_sequence(job_id, user_context))
-        
-        return {
-            "message": f"Job {job_id} queued for execution",
-            "job_id": job_id,
-            "status": "Running"
-        }
+    async def execute_job(
+        self,
+        job_id: str,
+        user_context: Any,
+    ) -> Dict[str, Any]:
+        """Execute job steps serially through ChatRuntime and persist the outcome."""
+        self._assert_legacy_cutover()
+        user = self._user(user_context)
+        tenant_id = str(user.tenant_id)
+        job = await self._repository.mark_job_running(job_id, tenant_id)
+        if job is None:
+            raise JobNotFoundError(f"Job {job_id} not found")
 
-    async def _run_job_sequence(self, job_id: str, user_context: Optional[Dict[str, Any]] = None):
-        """Execute the task sequence for a job."""
+        results: List[Dict[str, Any]] = []
         try:
-            job = self._jobs[job_id]
-            tasks = job.get("tasks", [])
-            
-            integration_service = get_agent_integration_service()
-            await integration_service.initialize()
-            
-            job_results = []
-            job_success = True
-            
-            for i, task_def in enumerate(tasks):
-                logger.info(f"Executing step {i+1}/{len(tasks)} for job {job_id}: {task_def.get('name')}")
-                
-                runtime_task = AgentTask(
-                    task_id=f"job_{job_id}_step_{i}_{uuid.uuid4().hex[:4]}",
-                    agent_id=str(task_def.get("agent") or "default_agent"),
-                    task_type="automation_step",
-                    description=str(task_def.get("name") or f"Step {i+1}"),
-                    input_data={
-                        "instructions": task_def.get("instructions"),
-                        "job_id": job_id,
-                        "step_index": i,
-                        "previous_results": job_results
-                    },
-                    metadata={
-                        "source": "job_service",
-                        "job_id": job_id,
-                        "user_id": user_context.get("user_id") if user_context else "system"
+            for index, step in enumerate(job.get("tasks") or []):
+                step_name = str(step.get("name") or f"Step {index + 1}")
+                agent = str(step.get("agent") or "").strip()
+                if not agent:
+                    raise JobExecutionError(
+                        f"Job {job_id} step {index + 1} has no assigned agent"
+                    )
+                inline_task = {
+                    "id": f"{job_id}:step:{index}",
+                    "name": step_name,
+                    "description": str(step.get("instructions") or step_name),
+                    "primaryAgent": agent,
+                    "primaryAgentInstructions": str(step.get("instructions") or ""),
+                    "taskType": "automation_step",
+                    "subAgents": [],
+                    "tenant_id": tenant_id,
+                    "created_by": str(user.user_id),
+                }
+                correlation_id = f"job:{job_id}:step:{index}:{uuid.uuid4()}"
+                runtime_result = await execute_task_definition(
+                    inline_task,
+                    user=user,
+                    request_id=correlation_id,
+                    correlation_id=correlation_id,
+                )
+                success = runtime_result.status in {
+                    ChatExecutionStatus.OK,
+                    ChatExecutionStatus.DEGRADED,
+                } and bool(runtime_result.answer)
+                results.append(
+                    {
+                        "step": step_name,
+                        "success": success,
+                        "runtime_task_id": runtime_result.metadata.correlation_id,
+                        "status": runtime_result.status.value,
+                        "response": runtime_result.answer if success else None,
                     }
                 )
-                
-                try:
-                    execution_response = await integration_service.execute_task(
-                        runtime_task, execution_mode=AgentExecutionMode.LANGGRAPH
+                if not success:
+                    raise JobExecutionError(
+                        f"Job {job_id} step {index + 1} did not complete"
                     )
-                    
-                    job_results.append({
-                        "step": task_def.get("name"),
-                        "success": execution_response.success,
-                        "data": execution_response.data,
-                        "error": execution_response.error
-                    })
-                    
-                    if not execution_response.success:
-                        logger.error(f"Step {i+1} failed for job {job_id}: {execution_response.error}")
-                        job_success = False
-                        break
-                        
-                except Exception as step_err:
-                    logger.error(f"Exception in job {job_id} step {i+1}: {step_err}")
-                    job_results.append({
-                        "step": task_def.get("name"),
-                        "success": False,
-                        "error": str(step_err)
-                    })
-                    job_success = False
-                    break
-            
-            # Update final job status
-            job["status"] = "Success" if job_success else "Failed"
-            job["last_results"] = job_results
-            job["last_run"] = datetime.utcnow().isoformat()
-            job["updated_at"] = datetime.utcnow().isoformat()
-            self._save_jobs()
-            
-            logger.info(f"Job {job_id} execution finished with status: {job['status']}")
-            
-        except Exception as e:
-            logger.error(f"Critical error in job sequence {job_id}: {e}")
-            if job_id in self._jobs:
-                self._jobs[job_id]["status"] = "Failed"
-                self._jobs[job_id]["error"] = str(e)
-                self._save_jobs()
+        except asyncio.CancelledError:
+            await self._repository.complete_job(
+                job_id,
+                tenant_id,
+                status="Failed",
+                results=results,
+                last_error="Job execution cancelled",
+            )
+            raise
+        except Exception as exc:
+            await self._repository.complete_job(
+                job_id,
+                tenant_id,
+                status="Failed",
+                results=results,
+                last_error=type(exc).__name__,
+            )
+            raise
 
-# Factory function
-_job_service = None
+        completed = await self._repository.complete_job(
+            job_id,
+            tenant_id,
+            status="Success",
+            results=results,
+            last_error=None,
+        )
+        if completed is None:
+            raise JobExecutionError("Job lifecycle update failed")
+        return {
+            "message": f"Job {job_id} executed successfully",
+            "job_id": job_id,
+            "status": "Success",
+            "results": results,
+        }
+
+
+_job_service: Optional[JobService] = None
+
 
 def get_job_service() -> JobService:
     global _job_service
     if _job_service is None:
         _job_service = JobService()
     return _job_service
+
+
+__all__ = [
+    "JobExecutionError",
+    "JobNotFoundError",
+    "JobService",
+    "LegacyAutomationMigrationRequired",
+    "get_job_service",
+]
