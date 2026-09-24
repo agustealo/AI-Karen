@@ -1,0 +1,67 @@
+name: KAREN Presentation Contract
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "README.md"
+      - "docs/presentation/**"
+      - "docs/assets/screenshots/**"
+      - "scripts/ci/verify_presentation_assets.py"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/playwright.showcase.config.ts"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/showcase/**"
+      - "src/ui_launchers/Karen-AI-Theme/public/brand/**"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/layout.tsx"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/login/page.tsx"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/manifest.ts"
+      - ".github/workflows/presentation-contract.yml"
+      - ".github/workflows/presentation-capture.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "README.md"
+      - "docs/presentation/**"
+      - "docs/assets/screenshots/**"
+      - "scripts/ci/verify_presentation_assets.py"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/playwright.showcase.config.ts"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/showcase/**"
+      - "src/ui_launchers/Karen-AI-Theme/public/brand/**"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/layout.tsx"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/login/page.tsx"
+      - "src/ui_launchers/Karen-AI-Theme/src/app/manifest.ts"
+      - ".github/workflows/presentation-contract.yml"
+      - ".github/workflows/presentation-capture.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: karen-presentation-contract-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  presentation-contract:
+    name: presentation-integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Attest exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify canonical brand and screenshot provenance contract
+        run: python scripts/ci/verify_presentation_assets.py
