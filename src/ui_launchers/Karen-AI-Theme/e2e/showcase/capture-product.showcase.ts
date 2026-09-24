@@ -102,5 +102,22 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
   await capture(page, "04-comms-center.png", email);
 
   await openSurface(page, "Application Settings");
+  const runtimeCategory = page.getByRole("tab", {
+    name: "Models & Runtime",
+    exact: true,
+  });
+  await expect(runtimeCategory).toBeVisible();
+  await runtimeCategory.click();
+
+  const providersSection = page.getByRole("button", {
+    name: "Providers",
+    exact: true,
+  });
+  await expect(providersSection).toBeVisible();
+  await providersSection.click();
+  await expect(
+    page.getByRole("heading", { name: "Providers", exact: true }),
+  ).toBeVisible();
+  await page.waitForTimeout(450);
   await capture(page, "05-settings-and-models.png", email);
 });
