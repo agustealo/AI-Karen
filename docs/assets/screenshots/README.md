@@ -8,6 +8,18 @@ Only real browser captures of the real KAREN UI may be committed as product scre
 
 The curated gallery is valid only when its five PNG files are accompanied by `capture-manifest.json` from the canonical Playwright capture rail. A screenshot without provenance is not product proof.
 
+## Canonical ownership
+
+The executable remote-capture authority lives on the default branch:
+
+- `.github/workflows/presentation-capture.yml` owns dispatch and credential isolation;
+- `src/ui_launchers/Karen-AI-Theme/e2e/showcase/` owns the real-browser capture harness;
+- `scripts/ci/presentation_gallery_contract.py` owns reusable gallery provenance validation;
+- `scripts/ci/verify_presentation_assets.py` adds KAREN brand/presentation integration and current-branch attribution;
+- this directory owns only the resulting curated evidence.
+
+A presentation branch must not replace the main-owned capture authority merely to obtain screenshots.
+
 ## Canonical capture
 
 ### Local approved demo installation
@@ -34,7 +46,17 @@ The rail refuses to run unless the account is explicitly declared `sanitized-dem
 
 ### GitHub capture from the approved demo deployment
 
-The repository also provides `.github/workflows/presentation-capture.yml`. It reads the target and credentials only from these repository secrets:
+The registered workflow is `.github/workflows/presentation-capture.yml`. The **workflow ref must be `main`** so every secret-bearing command executes code owned by the trusted default branch.
+
+Use these inputs:
+
+```text
+target_revision=<full 40-character SHA actually deployed>
+destination_branch=docs/premium-brand-showcase
+commit_assets=true
+```
+
+Repository secrets must provide:
 
 ```text
 KAREN_PRESENTATION_BASE_URL
@@ -42,9 +64,11 @@ KAREN_PRESENTATION_EMAIL
 KAREN_PRESENTATION_PASSWORD
 ```
 
-The workflow also requires a `target_revision` input containing the full deployed 40-character SHA. It verifies that the attested revision is a known commit and belongs to the current repository line before capture proceeds.
+The target revision must be a known commit descended from the exact trusted `main` capture baseline used by that workflow run. The destination must be an existing non-default branch.
 
-The workflow requires an HTTPS target, authenticates through the real UI, records the exact capture-harness checkout, records the separately attested target revision, verifies the resulting gallery, and can optionally commit the validated media back to the selected non-default branch. It does not modify, wrap, or weaken the production first-boot smoke path.
+The workflow requires HTTPS, authenticates through the real UI, records the exact trusted capture-harness checkout, records the separately attested target revision, validates the gallery, and uploads immutable evidence. The capture job is read-only and has the demo credentials. The later repository-write job receives **no capture URL, email, or password**, stages only the six canonical gallery files, rejects symlinked destination paths, and re-validates the evidence with the trusted verifier shipped inside the capture artifact. It does not execute destination-branch Python or Node code under write permission.
+
+Do not dispatch the credential-bearing workflow from a feature/presentation branch. That path is intentionally rejected.
 
 ## Expected curated set
 
@@ -77,9 +101,15 @@ Before committing a capture, inspect every PNG at full resolution and verify:
 - typography, spacing, clipping, responsive layout, and contrast are presentation quality;
 - the screenshot still demonstrates a capability that is active in the repository.
 
-## Automated integrity gate
+## Automated integrity gates
 
-Structural presentation integrity is checked with:
+Reusable gallery provenance is checked with:
+
+```bash
+python scripts/ci/presentation_gallery_contract.py
+```
+
+Presentation integration is checked with:
 
 ```bash
 python scripts/ci/verify_presentation_assets.py
@@ -91,7 +121,7 @@ Once the curated gallery exists, release/presentation proof must use the stricte
 python scripts/ci/verify_presentation_assets.py --require-assets
 ```
 
-The verifier rejects partial galleries, invalid PNGs, unknown/non-ancestor harness or target revisions, missing provenance, unexpected viewport dimensions, synthetic capture primitives, and non-sanitized account provenance.
+The shared gallery contract rejects partial galleries, invalid PNGs, invalid or unknown revisions, bad provenance, unexpected viewport dimensions, and non-sanitized account provenance. The presentation verifier delegates those checks to that canonical owner, then enforces KAREN brand/capture integration and requires both harness and target revisions to belong to the current presentation line.
 
 ## Existing E2E proof
 
