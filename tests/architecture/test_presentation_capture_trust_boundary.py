@@ -44,6 +44,20 @@ def test_secret_bearing_capture_is_default_branch_owned() -> None:
     assert "KAREN_PRESENTATION_BASE_URL" not in commit_gallery
 
 
+def test_write_scoped_job_executes_only_trusted_artifact_code() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    _, commit_gallery = workflow.split("  commit-gallery:", maxsplit=1)
+
+    assert "python scripts/ci/presentation_gallery_contract.py" not in commit_gallery
+    assert (
+        'python "$RUNNER_TEMP/karen-presentation-evidence/scripts/ci/'
+        'presentation_gallery_contract.py"' in commit_gallery
+    )
+    assert "KAREN_PRESENTATION_REPO_ROOT: ${{ github.workspace }}" in commit_gallery
+    assert "Stage only canonical gallery files" in commit_gallery
+    assert "Refusing gallery write through symlinked destination path" in commit_gallery
+
+
 def test_trusted_capture_harness_is_repository_owned_and_real_runtime_only() -> None:
     assert CAPTURE_SPEC.is_file()
     assert CAPTURE_CONFIG.is_file()
@@ -73,5 +87,6 @@ def test_trusted_capture_harness_is_repository_owned_and_real_runtime_only() -> 
 
 if __name__ == "__main__":
     test_secret_bearing_capture_is_default_branch_owned()
+    test_write_scoped_job_executes_only_trusted_artifact_code()
     test_trusted_capture_harness_is_repository_owned_and_real_runtime_only()
     print("presentation capture trust boundary green")
