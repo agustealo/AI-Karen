@@ -14,7 +14,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: karen-presentation-capture-${{ github.ref }}
@@ -33,6 +33,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Attest exact checkout
         shell: bash
@@ -141,10 +142,44 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Commit validated gallery to selected branch
-        if: ${{ inputs.commit_assets }}
+  commit-gallery:
+    name: commit-validated-gallery
+    if: ${{ inputs.commit_assets }}
+    needs: capture
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Attest exact checkout and non-default branch
         shell: bash
-        working-directory: .
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if [[ "$GITHUB_REF_NAME" == "$DEFAULT_BRANCH" ]]; then
+            echo "Presentation assets may not be committed directly to the default branch" >&2
+            exit 1
+          fi
+
+      - name: Download validated presentation evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: karen-presentation-${{ github.sha }}
+          path: docs/assets/screenshots
+
+      - name: Re-verify downloaded gallery before repository write
+        shell: bash
+        run: python scripts/ci/verify_presentation_assets.py --require-assets
+
+      - name: Commit validated gallery to selected branch
+        shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
