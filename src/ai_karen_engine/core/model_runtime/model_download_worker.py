@@ -167,11 +167,24 @@ class ModelDownloadWorker:
         except asyncio.CancelledError:
             await self._release_cancelled_claim(job_id, lease_token)
             raise
-        except Exception:
-            # Recovery failures are never converted to generic queue retries.
-            # Keep durable ``promoting`` intent intact, stop heartbeating, and
-            # let this recovery lease expire so another worker can reconcile it.
+        except Exception as exc:
+            # Recovery failures stay ``promoting`` but must not hold the global
+            # execution slot until lease expiry. PostgreSQL preserves the
+            # original receipt identity, clears only this recovery lease, and
+            # schedules a bounded retry. If that release fails, the live lease
+            # naturally expires and the same durable recovery lane remains safe.
             logger.exception("model_download_publication_recovery_failed job_id=%s", job_id)
+            try:
+                await self._service.defer_publication_recovery_retry(
+                    job_id,
+                    lease_token,
+                    exc,
+                )
+            except Exception:
+                logger.exception(
+                    "model_download_publication_recovery_defer_failed job_id=%s",
+                    job_id,
+                )
         finally:
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
