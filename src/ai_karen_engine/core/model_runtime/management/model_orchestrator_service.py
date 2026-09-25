@@ -11,6 +11,7 @@ import asyncio
 import copy
 import json
 import logging
+import os
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -185,17 +186,56 @@ class ModelOrchestratorService:
             return converted
         return {}
 
-    def _write_registry_unlocked(self) -> None:
-        tmp = self.registry_path.with_suffix(self.registry_path.suffix + ".tmp")
-        tmp.write_text(
-            json.dumps(self._registry, indent=2, default=self._json_default),
-            encoding="utf-8",
+    def _write_registry_unlocked(self, registry: Mapping[str, Mapping[str, Any]]) -> None:
+        """Durably replace the registry file without exposing a partial candidate."""
+        payload = json.dumps(registry, indent=2, default=self._json_default)
+        tmp = self.registry_path.with_name(
+            f".{self.registry_path.name}.{os.getpid()}.{time.time_ns()}.tmp"
         )
-        tmp.replace(self.registry_path)
+        canonical_replaced = False
+        try:
+            with tmp.open("w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, self.registry_path)
+            canonical_replaced = True
+            self._fsync_registry_directory()
+        except OSError as exc:
+            raise ModelOrchestratorError(
+                E_DISK,
+                "Failed to persist model registry",
+                {
+                    "registry_path": str(self.registry_path),
+                    "error": str(exc),
+                    "canonical_replaced": canonical_replaced,
+                },
+            ) from exc
+        finally:
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    logger.warning("Failed to clean temporary model registry file: %s", tmp)
+
+    def _fsync_registry_directory(self) -> None:
+        """Persist the registry rename on POSIX filesystems.
+
+        Windows does not support opening a directory with ``os.open`` using the
+        same portable contract. The registry file itself is still flushed before
+        the atomic replace there.
+        """
+        if os.name == "nt":
+            return
+        directory_fd = os.open(self.registry_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     async def _persist_registry(self) -> None:
         async with self._registry_lock:
-            self._write_registry_unlocked()
+            self._write_registry_unlocked(self._registry)
 
     async def snapshot_registry_entry(self, model_id: str) -> Optional[Dict[str, Any]]:
         """Return a detached registry snapshot under the canonical registry lock."""
@@ -208,13 +248,24 @@ class ModelOrchestratorService:
         model_id: str,
         entry: Optional[Mapping[str, Any]],
     ) -> None:
-        """Atomically replace one in-memory registry entry and its persisted file."""
+        """Durably replace one registry entry before publishing it in memory."""
         async with self._registry_lock:
+            candidate = copy.deepcopy(self._registry)
             if entry is None:
-                self._registry.pop(model_id, None)
+                candidate.pop(model_id, None)
             else:
-                self._registry[model_id] = copy.deepcopy(dict(entry))
-            self._write_registry_unlocked()
+                candidate[model_id] = copy.deepcopy(dict(entry))
+            try:
+                self._write_registry_unlocked(candidate)
+            except ModelOrchestratorError as exc:
+                if exc.details.get("canonical_replaced"):
+                    # The rename reached the canonical path before directory
+                    # durability failed. Keep in-memory truth aligned with the
+                    # path the process can now observe so publication
+                    # compensation can restore the previous entry safely.
+                    self._registry = candidate
+                raise
+            self._registry = candidate
 
     @staticmethod
     def _json_default(value: Any) -> Any:
