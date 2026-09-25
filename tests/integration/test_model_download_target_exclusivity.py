@@ -238,3 +238,54 @@ async def test_completion_does_not_mutate_legacy_promoting_sibling() -> None:
     assert sibling["cancel_requested"] is False
     assert str(sibling["lease_token"]) == token_b
     assert sibling["message"] == "Promoting staged artifacts"
+
+
+async def test_publication_guard_blocks_expired_reclaim_until_terminal_commit() -> None:
+    assert DATABASE_URL is not None
+    install_path = "/tmp/models/transformers/test-owner--publication-guard/main"
+    token = str(uuid.uuid4())
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        connection.execute(
+            """
+            INSERT INTO public.model_download_jobs (
+                job_id, model_id, channel_id, storage_key, status, message,
+                install_path, max_attempts, attempt_count, lease_owner, lease_token,
+                lease_expires_at, heartbeat_at, started_at, created_at, available_at
+            ) VALUES (
+                'mdl-publication-guard', 'test-owner/publication-guard',
+                'core_runtime_transformers', 'transformers', 'promoting',
+                'Promoting staged artifacts', %s, 3, 1, 'worker-a', %s::uuid,
+                now() - interval '1 second', now() - interval '31 seconds', now(), now(), now()
+            )
+            """,
+            (install_path, token),
+        )
+
+    repository = ModelDownloadRepository()
+    reclaim_task: asyncio.Task[dict[str, Any] | None]
+    async with repository.publication_guard(
+        job_id="mdl-publication-guard",
+        lease_token=token,
+        install_path=install_path,
+    ) as publication:
+        assert publication is not None
+        reclaim_task = asyncio.create_task(
+            ModelDownloadRepository().claim_next(
+                worker_id="reclaim-worker",
+                lease_seconds=30,
+                retry_base_seconds=0,
+            )
+        )
+        await asyncio.sleep(0.1)
+        assert reclaim_task.done() is False
+        completed = await publication.complete({"artifact_path": install_path})
+        assert completed["status"] == "completed"
+
+    reclaimed = await asyncio.wait_for(reclaim_task, timeout=2.0)
+    assert reclaimed is None
+
+    durable = await repository.get_job("mdl-publication-guard")
+    assert durable is not None
+    assert durable["status"] == "completed"
+    assert durable["lease_token"] is None
+    assert durable["result"] == {"artifact_path": install_path}
