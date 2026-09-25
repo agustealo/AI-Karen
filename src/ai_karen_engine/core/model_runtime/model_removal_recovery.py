@@ -93,8 +93,6 @@ class ModelRemovalRecoveryStore:
         registry_entry: Mapping[str, Any],
     ) -> ModelRemovalJournal:
         target = self._validated_install_target(install_path, require_exists=True)
-        if target.is_symlink():
-            raise ValueError("Model removal refuses symbolic-link install targets")
         if str(registry_entry.get("install_path") or "") != install_path:
             raise ValueError("Model removal registry entry does not match its install target")
 
@@ -105,7 +103,7 @@ class ModelRemovalRecoveryStore:
             schema_version=REMOVAL_SCHEMA_VERSION,
             operation_id=operation_id,
             model_id=model_id,
-            install_path=install_path,
+            install_path=str(target),
             tombstone_path=str(tombstone),
             registry_entry=dict(registry_entry),
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -190,10 +188,14 @@ class ModelRemovalRecoveryStore:
         target = Path(install_path)
         if not target.is_absolute():
             raise ValueError("Model install path must be absolute before removal")
+        if target.exists() and target.is_symlink():
+            raise ValueError("Model removal refuses symbolic-link install targets")
         resolved = target.resolve(strict=require_exists)
         if resolved == self.models_root or self.models_root not in resolved.parents:
             raise ValueError("Model removal target escapes the configured models root")
-        return target
+        if str(resolved) != install_path:
+            raise ValueError("Model removal target must use its canonical resolved path")
+        return resolved
 
     def _validated_paths(
         self,
