@@ -112,6 +112,7 @@ async def _fail_or_retry_in_session(
                     WHEN attempt_count >= max_attempts THEN now()
                     ELSE NULL
                 END,
+                publication_source_lease_token = NULL,
                 lease_owner = NULL,
                 lease_token = NULL,
                 lease_expires_at = NULL,
@@ -160,7 +161,8 @@ class _ModelDownloadPublication:
                 SET status = 'completed', progress = 1.0,
                     message = 'Download completed', error = NULL,
                     result = CAST(:result_payload AS jsonb), install_path = :install_path,
-                    completed_at = now(), lease_owner = NULL, lease_token = NULL,
+                    completed_at = now(), publication_source_lease_token = NULL,
+                    lease_owner = NULL, lease_token = NULL,
                     lease_expires_at = NULL, heartbeat_at = NULL
                 WHERE job_id = :job_id
                   AND status = 'promoting'
@@ -505,11 +507,11 @@ class ModelDownloadRepository:
         worker_id: str,
         lease_seconds: int,
     ) -> Optional[dict[str, Any]]:
-        """Claim one interrupted promotion before ordinary queue work can advance.
+        """Claim one interrupted promotion without losing receipt identity.
 
-        The original expired lease token is returned only as ephemeral recovery
-        evidence so the runtime can locate the matching publication receipt.
-        Durable lifecycle ownership immediately moves to the new recovery lease.
+        ``publication_source_lease_token`` is evidence identity only. Recovery
+        execution authority rotates through ``lease_token`` and can be released
+        independently without changing which staging receipt must be reconciled.
         """
         recovery_token = str(uuid.uuid4())
         async with async_transaction_scope() as session:
@@ -523,24 +525,40 @@ class ModelDownloadRepository:
                 text(
                     """
                     WITH candidate AS (
-                        SELECT job_id, lease_token AS interrupted_lease_token
+                        SELECT
+                            job_id,
+                            COALESCE(publication_source_lease_token, lease_token) AS source_lease_token
                         FROM public.model_download_jobs
                         WHERE status = 'promoting'
-                          AND lease_token IS NOT NULL
-                          AND lease_expires_at <= clock_timestamp()
+                          AND (
+                              (
+                                  publication_source_lease_token IS NULL
+                                  AND lease_token IS NOT NULL
+                                  AND lease_expires_at <= clock_timestamp()
+                              )
+                              OR (
+                                  publication_source_lease_token IS NOT NULL
+                                  AND available_at <= clock_timestamp()
+                                  AND (
+                                      lease_token IS NULL
+                                      OR lease_expires_at <= clock_timestamp()
+                                  )
+                              )
+                          )
                         ORDER BY updated_at ASC, job_id ASC
                         FOR UPDATE SKIP LOCKED
                         LIMIT 1
                     )
                     UPDATE public.model_download_jobs AS jobs
-                    SET lease_owner = :worker_id,
+                    SET publication_source_lease_token = candidate.source_lease_token,
+                        lease_owner = :worker_id,
                         lease_token = CAST(:recovery_token AS uuid),
                         lease_expires_at = clock_timestamp() + :lease_seconds * interval '1 second',
                         heartbeat_at = clock_timestamp(),
                         message = 'Recovering interrupted publication'
                     FROM candidate
                     WHERE jobs.job_id = candidate.job_id
-                    RETURNING jobs.*, candidate.interrupted_lease_token::text AS interrupted_lease_token
+                    RETURNING jobs.*, jobs.publication_source_lease_token::text AS interrupted_lease_token
                     """
                 ),
                 {
@@ -932,19 +950,21 @@ class ModelDownloadRepository:
         lease_token: str,
         error: str,
     ) -> bool:
-        """Make an interrupted publication immediately eligible for recovery.
-
-        The source lease token is intentionally retained as receipt identity,
-        but its lease is expired so it no longer grants execution authority.
-        """
+        """Separate receipt identity from execution authority after uncertainty."""
         async with async_transaction_scope() as session:
             result = await session.execute(
                 text(
                     """
                     UPDATE public.model_download_jobs
-                    SET lease_owner = NULL,
-                        lease_expires_at = clock_timestamp(),
+                    SET publication_source_lease_token = COALESCE(
+                            publication_source_lease_token,
+                            lease_token
+                        ),
+                        lease_owner = NULL,
+                        lease_token = NULL,
+                        lease_expires_at = NULL,
                         heartbeat_at = NULL,
+                        available_at = clock_timestamp(),
                         message = 'Publication interrupted; awaiting recovery',
                         error = :error
                     WHERE job_id = :job_id
@@ -954,6 +974,44 @@ class ModelDownloadRepository:
                     """
                 ),
                 {"job_id": job_id, "lease_token": lease_token, "error": error},
+            )
+            return result.first() is not None
+
+    async def defer_publication_recovery_retry(
+        self,
+        *,
+        job_id: str,
+        lease_token: str,
+        error: str,
+        retry_base_seconds: int,
+    ) -> bool:
+        """Release one failed recovery lease while preserving receipt identity."""
+        async with async_transaction_scope() as session:
+            result = await session.execute(
+                text(
+                    """
+                    UPDATE public.model_download_jobs
+                    SET lease_owner = NULL,
+                        lease_token = NULL,
+                        lease_expires_at = NULL,
+                        heartbeat_at = NULL,
+                        available_at = clock_timestamp()
+                            + GREATEST(:retry_base_seconds, 1) * interval '1 second',
+                        message = 'Publication recovery deferred; retry scheduled',
+                        error = :error
+                    WHERE job_id = :job_id
+                      AND status = 'promoting'
+                      AND publication_source_lease_token IS NOT NULL
+                      AND lease_token = CAST(:lease_token AS uuid)
+                    RETURNING job_id
+                    """
+                ),
+                {
+                    "job_id": job_id,
+                    "lease_token": lease_token,
+                    "error": error,
+                    "retry_base_seconds": retry_base_seconds,
+                },
             )
             return result.first() is not None
 
