@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "presentation-capture.yml"
+SELF_CONTAINED_CAPTURE = ROOT / "scripts" / "ci" / "presentation-self-contained-capture.sh"
 CAPTURE_SPEC = (
     ROOT
     / "src"
@@ -25,23 +26,75 @@ CAPTURE_CONFIG = (
 GALLERY_CONTRACT = ROOT / "scripts" / "ci" / "presentation_gallery_contract.py"
 
 
-def test_secret_bearing_capture_is_default_branch_owned() -> None:
+def test_capture_is_default_branch_owned_and_has_no_long_lived_demo_secrets() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     capture, commit_gallery = workflow.split("  commit-gallery:", maxsplit=1)
 
     assert "Enforce default-branch workflow authority" in capture
     assert 'if [[ "$GITHUB_REF_NAME" != "$DEFAULT_BRANCH" ]]' in capture
+    assert "Checkout trusted capture authority" in capture
     assert "ref: ${{ github.sha }}" in capture
     assert "persist-credentials: false" in capture
-    assert "npx playwright test --config=e2e/playwright.showcase.config.ts" in capture
+    assert "trusted-self-contained-real-product-capture" in capture
+    assert "presentation-self-contained-capture.sh" in capture
     assert "--expected-harness-sha \"$GITHUB_SHA\"" in capture
     assert "--require-target-descendant-of-harness" in capture
 
+    for retired_secret in (
+        "KAREN_PRESENTATION_BASE_URL",
+        "KAREN_PRESENTATION_EMAIL",
+        "KAREN_PRESENTATION_PASSWORD",
+    ):
+        assert retired_secret not in workflow
+
+    assert "${{ secrets." not in workflow
     assert "ref: ${{ needs.prepare.outputs.destination_branch }}" in commit_gallery
-    assert "${{ secrets." not in commit_gallery
-    assert "KAREN_PRESENTATION_PASSWORD" not in commit_gallery
-    assert "KAREN_PRESENTATION_EMAIL" not in commit_gallery
-    assert "KAREN_PRESENTATION_BASE_URL" not in commit_gallery
+
+
+def test_exact_candidate_is_built_separately_from_trusted_harness() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "path: .presentation-target" in workflow
+    assert "ref: ${{ needs.prepare.outputs.target_revision }}" in workflow
+    assert 'git -C .presentation-target rev-parse HEAD' in workflow
+    assert 'git merge-base --is-ancestor "$GITHUB_SHA" "$TARGET_REVISION"' in workflow
+    assert "working-directory: .presentation-target" in workflow
+    assert "ai-karen-presentation-api:candidate" in workflow
+    assert "ai-karen-presentation-web:candidate" in workflow
+    assert "KAREN_PRESENTATION_TRUSTED_ROOT: ${{ github.workspace }}" in workflow
+    assert "KAREN_PRESENTATION_TARGET_ROOT: ${{ github.workspace }}/.presentation-target" in workflow
+
+
+def test_self_contained_runtime_uses_canonical_first_run_and_public_automation_apis() -> None:
+    assert SELF_CONTAINED_CAPTURE.is_file()
+    runner = SELF_CONTAINED_CAPTURE.read_text(encoding="utf-8")
+
+    for required in (
+        "pgvector/pgvector:pg16",
+        "redis:7-alpine",
+        "supabase/migrations",
+        "/api/auth/first-run/setup",
+        "/api/auth/me",
+        "/api/automation/jobs/",
+        "/api/automation/cron",
+        "/api/automation/stats/",
+        "KAREN_SHOWCASE_ACCOUNT_KIND=sanitized-demo",
+        "npx playwright test --config=e2e/playwright.showcase.config.ts",
+    ):
+        assert required in runner
+
+    for forbidden in (
+        "INSERT INTO auth_users",
+        "INSERT INTO tenants",
+        "KARI_AUTH_BYPASS=true",
+        "AUTH_DEV_MODE=true",
+        "AUTH_ALLOW_DEV_LOGIN=true",
+    ):
+        assert forbidden not in runner
+
+    assert "trap cleanup EXIT" in runner
+    assert "docker network rm" in runner
+    assert "random_token" in runner
 
 
 def test_owner_only_pr_comment_is_bound_to_current_pr_head() -> None:
@@ -58,7 +111,6 @@ def test_owner_only_pr_comment_is_bound_to_current_pr_head() -> None:
     assert 'if [[ "$CURRENT_PR_HEAD" != "$TARGET_REVISION" ]]' in prepare
     assert 'destination = "docs/premium-brand-showcase"' in prepare
     assert 'commit_assets = "true"' in prepare
-    assert "${{ secrets." not in prepare
 
 
 def test_write_scoped_job_executes_only_trusted_artifact_code() -> None:
@@ -103,7 +155,9 @@ def test_trusted_capture_harness_is_repository_owned_and_real_runtime_only() -> 
 
 
 if __name__ == "__main__":
-    test_secret_bearing_capture_is_default_branch_owned()
+    test_capture_is_default_branch_owned_and_has_no_long_lived_demo_secrets()
+    test_exact_candidate_is_built_separately_from_trusted_harness()
+    test_self_contained_runtime_uses_canonical_first_run_and_public_automation_apis()
     test_owner_only_pr_comment_is_bound_to_current_pr_head()
     test_write_scoped_job_executes_only_trusted_artifact_code()
     test_trusted_capture_harness_is_repository_owned_and_real_runtime_only()

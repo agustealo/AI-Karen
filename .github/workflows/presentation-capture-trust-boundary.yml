@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/presentation-capture.yml"
       - ".github/workflows/presentation-capture-trust-boundary.yml"
+      - "scripts/ci/presentation-self-contained-capture.sh"
       - "scripts/ci/presentation_gallery_contract.py"
       - "src/ui_launchers/Karen-AI-Theme/e2e/playwright.showcase.config.ts"
       - "src/ui_launchers/Karen-AI-Theme/e2e/showcase/capture-product.showcase.ts"
@@ -17,6 +18,7 @@ on:
     paths:
       - ".github/workflows/presentation-capture.yml"
       - ".github/workflows/presentation-capture-trust-boundary.yml"
+      - "scripts/ci/presentation-self-contained-capture.sh"
       - "scripts/ci/presentation_gallery_contract.py"
       - "src/ui_launchers/Karen-AI-Theme/e2e/playwright.showcase.config.ts"
       - "src/ui_launchers/Karen-AI-Theme/e2e/showcase/capture-product.showcase.ts"
@@ -41,6 +43,9 @@ jobs:
 
       - name: Compile gallery provenance contract
         run: python -m compileall -q scripts/ci/presentation_gallery_contract.py
+
+      - name: Validate self-contained capture runner shell
+        run: bash -n scripts/ci/presentation-self-contained-capture.sh
 
       - name: Prove secret and destination branch isolation
         run: python tests/architecture/test_presentation_capture_trust_boundary.py
