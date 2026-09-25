@@ -738,12 +738,6 @@ class ModelDownloadControlService:
             channel = self._channels[str(claim["channel_id"])]
             final_path = self._build_install_path(channel, str(claim["model_id"]), claim.get("revision"))
 
-        await asyncio.to_thread(
-            self._promote_staged_directory,
-            staged_path,
-            final_path,
-            lease_token,
-        )
         result_payload = {
             "model_id": result.model_id,
             "install_path": str(final_path),
@@ -753,20 +747,28 @@ class ModelDownloadControlService:
             "status": result.status,
         }
 
-        await self._register_promoted_model(
-            staging_orchestrator=staging_orchestrator,
-            model_id=str(claim["model_id"]),
-            final_path=final_path,
-        )
-        completed = await self._repository.complete_job(
+        async with self._repository.publication_guard(
             job_id=job_id,
             lease_token=lease_token,
-            result_payload=result_payload,
             install_path=str(final_path),
-        )
-        if completed is None:
-            logger.error("model_download_completion_fence_rejected job_id=%s", job_id)
-            return
+        ) as publication:
+            if publication is None:
+                await asyncio.to_thread(self._safe_remove_tree, stage_root)
+                logger.warning("model_download_publication_fenced job_id=%s", job_id)
+                return
+
+            await asyncio.to_thread(
+                self._promote_staged_directory,
+                staged_path,
+                final_path,
+                lease_token,
+            )
+            await self._register_promoted_model(
+                staging_orchestrator=staging_orchestrator,
+                model_id=str(claim["model_id"]),
+                final_path=final_path,
+            )
+            await publication.complete(result_payload)
 
         await asyncio.to_thread(self._safe_remove_tree, stage_root)
         try:
