@@ -90,6 +90,38 @@ def test_publication_rollback_restores_previous_install(tmp_path: Path) -> None:
     assert not Path(journal.backup_path).exists()
 
 
+def test_publication_rollback_preserves_final_if_expected_backup_is_missing(tmp_path: Path) -> None:
+    store = ModelDownloadPublicationRecoveryStore()
+    stage_root = tmp_path / "stage"
+    staged_path = stage_root / "models" / "transformers" / "test-owner--test-model" / "main"
+    final_path = tmp_path / "models" / "transformers" / "test-owner--test-model" / "main"
+    staged_path.mkdir(parents=True)
+    final_path.mkdir(parents=True)
+    (staged_path / "weights.bin").write_bytes(b"new-model")
+    (final_path / "weights.bin").write_bytes(b"old-model")
+
+    journal = store.create_journal(
+        stage_root=stage_root,
+        staged_path=staged_path,
+        final_path=final_path,
+        job_id="mdl-missing-backup",
+        source_lease_token="00000000-0000-0000-0000-000000000004",
+        model_id="test-owner/test-model",
+        result_payload={"status": "success", "install_path": str(final_path)},
+        prior_registry_entry={"model_id": "test-owner/test-model", "revision": "old"},
+        base_registry_entry=_base_registry_entry(staged_path),
+    )
+    store.promote(journal=journal, staged_path=staged_path)
+    assert journal.backup_path is not None
+    backup = Path(journal.backup_path)
+    store._remove_path(backup)
+
+    assert store.rollback_filesystem(journal=journal, stage_root=stage_root) is False
+    assert (final_path / "weights.bin").read_bytes() == b"new-model"
+    assert (final_path / MARKER_NAME).exists()
+    assert stage_root.exists()
+
+
 def test_publication_rollback_refuses_to_destroy_unowned_final_path(tmp_path: Path) -> None:
     store = ModelDownloadPublicationRecoveryStore()
     stage_root = tmp_path / "stage"
