@@ -6,6 +6,7 @@ including permission checking, role-based access control, and security policies.
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional, Set
 
 from .models import (
@@ -21,7 +22,9 @@ logger = logging.getLogger(__name__)
 class AgentPermission:
     """Agent system permissions."""
     
-    # Agent management permissions
+    # Agent management permissions. The legacy registry is installation-wide,
+    # so catalog/management permissions are control-plane permissions and are
+    # granted only to the admin role below.
     CREATE_AGENT = "create_agent"
     DELETE_AGENT = "delete_agent"
     TERMINATE_AGENT = "terminate_agent"
@@ -33,7 +36,8 @@ class AgentPermission:
     EXECUTE_STREAM = "execute_stream"
     CANCEL_REQUEST = "cancel_request"
     
-    # Monitoring permissions
+    # Monitoring permissions. Legacy agent metrics/lifecycle state are also
+    # installation-wide control-plane data.
     VIEW_METRICS = "view_metrics"
     VIEW_SYSTEM_METRICS = "view_system_metrics"
     VIEW_LIFECYCLE_EVENTS = "view_lifecycle_events"
@@ -46,32 +50,25 @@ class AgentPermission:
 class AgentRole:
     """Agent system roles with associated permissions."""
     
-    # Predefined roles with their permissions
+    # Predefined roles with their permissions. Non-admin roles may execute
+    # agents according to execution/capability policy, but they do not receive
+    # installation-wide catalog, configuration, metrics, or mutation access.
     ROLES = {
         "viewer": {
-            AgentPermission.VIEW_AGENT,
             AgentPermission.EXECUTE_AGENT,
-            AgentPermission.VIEW_METRICS,
             AgentPermission.VIEW_ROUTING_RECOMMENDATIONS
         },
         "user": {
-            AgentPermission.VIEW_AGENT,
             AgentPermission.EXECUTE_AGENT,
             AgentPermission.EXECUTE_STREAM,
             AgentPermission.CANCEL_REQUEST,
-            AgentPermission.VIEW_METRICS,
             AgentPermission.VIEW_ROUTING_RECOMMENDATIONS
         },
         "developer": {
-            AgentPermission.VIEW_AGENT,
             AgentPermission.EXECUTE_AGENT,
             AgentPermission.EXECUTE_STREAM,
             AgentPermission.CANCEL_REQUEST,
-            AgentPermission.CREATE_AGENT,
-            AgentPermission.MODIFY_AGENT,
-            AgentPermission.VIEW_METRICS,
-            AgentPermission.VIEW_ROUTING_RECOMMENDATIONS,
-            AgentPermission.VIEW_LIFECYCLE_EVENTS
+            AgentPermission.VIEW_ROUTING_RECOMMENDATIONS
         },
         "admin": {
             # All permissions
