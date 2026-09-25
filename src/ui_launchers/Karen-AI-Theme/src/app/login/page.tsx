@@ -2,8 +2,9 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Brain, Loader2, LockKeyhole, ShieldCheck } from "lucide-react";
+import { Loader2, LockKeyhole, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -103,12 +104,17 @@ function LoginForm() {
         <div className="mx-auto grid min-h-[calc(100vh-6rem)] w-full max-w-5xl items-center gap-8 lg:grid-cols-[1fr_420px]">
           <section className="hidden rounded-3xl border bg-muted/30 p-10 lg:block">
             <div className="mb-12 flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl border bg-background shadow-sm">
-                <Brain className="h-6 w-6 text-primary" />
-              </div>
+              <Image
+                src="/brand/karen-mark.svg"
+                alt=""
+                width={44}
+                height={44}
+                className="h-11 w-11 rounded-2xl shadow-sm"
+                priority
+              />
               <div>
-                <p className="font-semibold">Karen AI</p>
-                <p className="text-sm text-muted-foreground">Governed local-first intelligence</p>
+                <p className="font-semibold">KAREN</p>
+                <p className="text-sm text-muted-foreground">Local by default. Governed by design.</p>
               </div>
             </div>
             <h1 className="max-w-xl text-4xl font-semibold tracking-tight">
@@ -128,11 +134,16 @@ function LoginForm() {
 
           <Card className="w-full border shadow-sm">
             <CardHeader className="space-y-2">
-              <div className="mb-2 flex h-11 w-11 items-center justify-center rounded-2xl border bg-muted lg:hidden">
-                <Brain className="h-6 w-6 text-primary" />
-              </div>
+              <Image
+                src="/brand/karen-mark.svg"
+                alt="KAREN"
+                width={44}
+                height={44}
+                className="mb-2 h-11 w-11 rounded-2xl shadow-sm lg:hidden"
+                priority
+              />
               <CardTitle className="text-2xl">Welcome back</CardTitle>
-              <CardDescription>Sign in to continue to Karen.</CardDescription>
+              <CardDescription>Sign in to continue to KAREN.</CardDescription>
             </CardHeader>
             <CardContent>
               {(error || setupError) && (
@@ -203,7 +214,7 @@ function LoginForm() {
               </form>
 
               <p className="mt-5 text-center text-xs leading-5 text-muted-foreground">
-                New installation? Karen automatically opens secure first-run setup before this screen.
+                New installation? KAREN automatically opens secure first-run setup before this screen.
               </p>
             </CardContent>
           </Card>

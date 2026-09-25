@@ -1,29 +1,92 @@
-# AI Karen
+<p align="center">
+  <img src="src/ui_launchers/Karen-AI-Theme/public/brand/karen-banner.svg" alt="KAREN. Local by default. Governed by design." width="100%" />
+</p>
 
-**AI Karen is a local-first, prompt-first AI runtime for governed chat execution, durable memory, provider/model orchestration, reasoning, multi-agent workflows, extensions, RBAC, and observable system behavior.**
+<p align="center">
+  <strong>Local-first · Prompt-first · Runtime-authoritative · Governed memory · Provider orchestration · RBAC · Observable execution</strong>
+</p>
 
-The project is in active architecture convergence. The objective is not to collect more frameworks. Every major responsibility should have one clear owner, one runtime path, one registry/config source where applicable, and executable proof that the boundary holds.
+# KAREN
 
-## Core Principles
+KAREN is a local-first, prompt-first AI runtime for governed chat execution, durable memory, provider/model orchestration, agents, workflows, extensions, and observable automation.
+
+It is built around a simple rule: **one responsibility → one owner → one runtime path → executable proof.** KAREN is not a pile of interchangeable AI frameworks. The system separates cognition, authorization, execution, state, infrastructure, and presentation so each can evolve without becoming a second authority.
+
+> **Local by default. Governed by design.**
+
+## Why the name works
+
+The familiar "Karen" meme is about escalation and asking for the manager. KAREN flips that idea without turning the product into a joke: it is the composed systems operator that knows who owns the responsibility, routes work to the correct authority, applies policy, and preserves execution truth.
+
+The canonical identity is deliberately abstract. There is no literal meme face or novelty mascot. The K-shaped mark encodes a stable runtime spine, routed branches, and a governed handoff node. The subtle arc is the only wink to the cultural reference, keeping the identity recognizable without dating it to the meme cycle.
+
+- [Brand system](docs/presentation/BRAND_SYSTEM.md)
+- [Product presentation manifest](docs/presentation/PRODUCT_PRESENTATION_MANIFEST.md)
+- [Screenshot provenance and capture contract](docs/assets/screenshots/README.md)
+
+## Core principles
 
 - **Local-first:** prefer healthy local inference and local infrastructure when suitable.
-- **Prompt-first:** prompts are explicit, versioned, testable execution contracts.
+- **Prompt-first:** prompts are explicit, versioned, testable execution contracts rather than scattered string construction.
 - **Runtime-authoritative:** routes, UI, providers, agents, and extensions do not become alternate chat runtimes.
-- **CORTEX decides, Runtime executes:** cognition and execution remain separate authorities.
-- **RuntimePolicy authorizes:** CORTEX does not authorize itself.
-- **One responsibility, one owner:** duplicate orchestrators, registries, loaders, and fallback paths are collapsed rather than preserved indefinitely.
-- **Secure by enforcement:** RBAC, tenant isolation, session validation, audit, secrets, and action permissions are backend responsibilities.
+- **CORTEX decides, Runtime executes:** cognitive classification, routing, and policy recommendations remain separate from execution.
+- **RuntimePolicy authorizes:** decision components do not authorize their own actions.
+- **One responsibility, one owner:** duplicate orchestrators, registries, loaders, persistence paths, and fallbacks are collapsed into canonical owners.
+- **Secure by enforcement:** RBAC, tenant isolation, session validation, audit, secret handling, and action permissions are backend responsibilities.
 - **Observable by default:** provider, model, memory, reasoning, agent, extension, fallback, and degradation paths should be traceable.
-- **Honest degradation:** unavailable capability returns explicit degraded/unavailable state rather than fabricated model output.
-- **Test-proven architecture:** imports, routing, fallbacks, memory, RBAC, first-run, API contracts, UI contracts, and deployment paths should have executable proof.
+- **Honest degradation:** unavailable capability returns explicit degraded or unavailable state rather than fabricated model output or UI truth.
+- **Test-proven architecture:** routing, fallbacks, memory, RBAC, first-run, API contracts, UI contracts, and deployment paths require executable proof.
 
-## Canonical Architecture
+## Product surfaces
 
-Karen's core follows a six-layer model:
+The current web application exposes real product surfaces rather than marketing-only mockups:
+
+| Surface | What it represents |
+|---|---|
+| **Chat** | Canonical conversation runtime and model execution path |
+| **Comms Center** | Communication-oriented workspace inside the authenticated application |
+| **Agents Overview** | Governed agent and workflow visibility |
+| **Agents / Tasks / Jobs / Cron Jobs** | Operational workflow surfaces backed by application runtime state |
+| **Plugin Overview** | Governed extension/plugin surface |
+| **Application Settings** | User-facing configuration that must reflect backend truth |
+| **My Account** | Authenticated identity/account surface |
+
+### Real screenshots only
+
+KAREN does not use generated dashboards or design mockups as product evidence. A dedicated Playwright showcase rail captures the real authenticated UI against a real running stack and writes the canonical gallery to `docs/assets/screenshots/`.
+
+```bash
+cd src/ui_launchers/Karen-AI-Theme
+
+KAREN_SHOWCASE_ALLOW_CAPTURE=true \
+KAREN_SHOWCASE_ACCOUNT_KIND=sanitized-demo \
+KAREN_SHOWCASE_EMAIL='<sanitized-demo-email>' \
+KAREN_SHOWCASE_PASSWORD='<sanitized-demo-password>' \
+KAREN_SHOWCASE_TARGET_REVISION='<full-40-character-deployed-sha>' \
+KAREN_SHOWCASE_BASE_URL='http://localhost:8010' \
+npm run showcase:capture
+```
+
+The capture rail is intentionally fail-closed. It records the capture-harness checkout separately from the operator-attested deployed revision, and it will not silently substitute fake media when a real sanitized environment is unavailable.
+
+<details>
+<summary><strong>Existing real-browser E2E image provenance</strong></summary>
+
+<br />
+
+<img src="docs/assets/screenshots/e2e-current-browser-proof.png" alt="Existing KAREN Playwright browser capture retained as provenance" width="960" />
+
+This PNG is copied byte-for-byte from the repository's committed Playwright report. It proves real browser media exists in project history, but it is deliberately treated as uncurated evidence rather than a premium marketing hero.
+
+</details>
+
+## Canonical architecture
+
+KAREN's core follows a six-layer model:
 
 ```text
 1. Intelligence         senses   -> What is this request?
-2. Decision             decides  -> What should Karen do?
+2. Decision             decides  -> What should KAREN do?
 3. Execution            acts     -> Execute the authorized decision
 4. Specialist Engines   serve    -> Models, reasoning, agents, tools, workflows
 5. State                retains  -> Memory, recall, persistence, governance
@@ -69,7 +132,7 @@ LangGraph is reserved for real graph semantics such as branching plans, checkpoi
 
 ## Memory
 
-Karen separates memory responsibilities:
+KAREN separates memory responsibilities:
 
 - **STM:** recent conversation/session state.
 - **Episodic:** meaningful interactions, decisions, and outcomes.
@@ -77,7 +140,7 @@ Karen separates memory responsibilities:
 - **NeuroRecall:** retrieval strategy, ranking, and recall signals.
 - **MemoryFormation + NeuroVault:** governed durable mutation, lifecycle, recovery, and deletion semantics.
 
-Memory access and persistence must remain tenant-aware, policy-governed, and auditable.
+Memory access and persistence remain tenant-aware, policy-governed, and auditable.
 
 ## Extensions
 
@@ -97,9 +160,7 @@ manifest
 
 Manifest declaration is not authorization.
 
-## First Run Is a Production Contract
-
-KAREN treats first run as an installation lifecycle, not a welcome screen.
+## First run is a production contract
 
 A fresh installation is only correctly bootstrapped when the migration-owned auth schema is ready, a durable installation tenant exists, exactly one first owner can be created through the canonical auth authority, bootstrap cannot be re-entered after completion, authenticated identity works, and that state survives process restart.
 
@@ -134,11 +195,11 @@ scripts/ci/production-first-boot-smoke.sh
 .github/workflows/production-first-boot-smoke.yml
 ```
 
-That smoke starts fresh PostgreSQL/pgvector and password-protected Redis, applies canonical migrations, boots the real production image, creates the first owner, proves duplicate setup is denied, verifies exactly one durable bootstrap user, restarts the exact image, and proves the owner plus completed first-run state survive restart.
+The production smoke starts fresh PostgreSQL/pgvector and password-protected Redis, applies canonical migrations, boots the real production image, creates the first owner, proves duplicate setup is denied, verifies durable bootstrap state, restarts the exact image, and proves the owner plus completed first-run state survive restart.
 
 See `docs/architecture/FIRST_RUN_SYSTEM.md` for the full authority, security, UI, observability, and proof contract.
 
-## Repository Layout
+## Repository layout
 
 Canonical application code lives under `src/`.
 
@@ -153,13 +214,10 @@ AI-Karen/
 │   │   │   ├── model_runtime/
 │   │   │   ├── reasoning/
 │   │   │   ├── memory/
-│   │   │   ├── cognitive/
-│   │   │   ├── context/
 │   │   │   └── personalization/
 │   │   ├── agent_medusa/
 │   │   ├── api_routes/
 │   │   ├── config/
-│   │   ├── services/
 │   │   └── platform/
 │   └── ui_launchers/
 │       └── Karen-AI-Theme/
@@ -168,14 +226,11 @@ AI-Karen/
 ├── scripts/
 ├── deploy/
 ├── config_assets/
-├── supabase/
-├── Dockerfile
-├── docker-compose.yml
 ├── PROJECT_DEV_MANIFEST.md
 └── README.md
 ```
 
-## Quick Start
+## Quick start
 
 ### Requirements
 
@@ -252,7 +307,7 @@ curl -X POST http://localhost:8000/api/auth/first-run/setup \
   }'
 ```
 
-The canonical auth service creates the installation tenant and verified first owner with `admin` and `user` roles, then authenticates through the normal session path. Bootstrap is transaction-serialized across workers. Once a durable user exists, later first-run setup attempts are rejected.
+The canonical auth service creates the installation tenant and verified first owner, then authenticates through the normal session path. Bootstrap is transaction-serialized across workers. Once durable user state exists, later first-run setup attempts are rejected.
 
 ### 6. Open the UI
 
@@ -260,36 +315,46 @@ The canonical auth service creates the installation tenant and verified first ow
 http://localhost:8010
 ```
 
-Log in with the email or generated username plus the password created during first run.
+Log in with the identity created during first run.
 
 ### 7. Verify installation readiness after login
 
 Identity bootstrap does not take ownership of unrelated subsystems. Verify backend truth for the capabilities your deployment requires:
 
 1. **Provider availability:** at least one intended provider is enabled and healthy.
-2. **Model configuration:** the desired local/default model is discoverable and eligible.
+2. **Model configuration:** the intended local/default model is discoverable and eligible through the canonical model control plane.
 3. **Memory services:** durable memory dependencies are healthy when enabled.
 4. **Extensions:** only governed, validated extensions required for the deployment are enabled.
-5. **Observability:** metrics/logging/tracing required by the environment are reachable.
-6. **Secrets/security:** production JWT, database, Redis, extension, provider, and dashboard secrets are non-example values.
-7. **First real chat:** submit a request through the canonical `/api/chat` runtime and verify the response provenance/degradation metadata reflects the provider/model that actually executed.
+5. **Observability:** metrics, logs, and tracing required by the environment are reachable.
+6. **Secrets and security:** production JWT, database, Redis, extension, provider, and dashboard secrets are non-example values.
+7. **First real chat:** submit a request through the canonical chat runtime and verify response provenance/degradation metadata reflects the provider/model that actually executed.
 
-A future typed installation-readiness view may aggregate those subsystem health signals, but it must not become a second provider, memory, extension, or observability authority.
+A typed installation-readiness view may aggregate these subsystem signals, but it must not become a second provider, memory, extension, or observability authority.
 
-## Production Deployment
+## Production deployment
 
-Example production Compose startup:
+Production uses the validated production environment file and Compose overlay:
 
 ```bash
-cp .env.example .env
-# Edit .env with production values first.
+cp .env.production.example .env.production
+# Replace all CHANGE_ME/example values and choose the real public HTTP/HTTPS scheme.
 
-docker compose -f docker-compose.yml -f deploy/compose/docker-compose.prod.yml up -d
+docker compose \
+  --env-file .env.production \
+  -f docker-compose.yml \
+  -f deploy/compose/docker-compose.prod.yml \
+  config
+
+docker compose \
+  --env-file .env.production \
+  -f docker-compose.yml \
+  -f deploy/compose/docker-compose.prod.yml \
+  up -d
 ```
 
-Production/staging auth configuration validates secrets and fails closed. Migration-owned schema must be applied before first-run owner creation.
+Production/staging authentication validates configuration and fails closed. Canonical migrations remain authoritative for production schema, and the API must not invent missing tables or bootstrap state at runtime.
 
-## Default Development Endpoints
+## Default development endpoints
 
 | Service | Address |
 |---|---|
@@ -304,30 +369,17 @@ Optional services are available only when their corresponding profiles are enabl
 
 ## Configuration
 
-Canonical configuration code lives under:
+Canonical application configuration lives under:
 
 ```text
 src/ai_karen_engine/config/
 ```
 
-Deployment-specific overrides and secrets come from validated environment/config adapters. Application subsystems should not scatter direct environment reads when a canonical configuration contract exists.
-
-Known cleanup debt is tracked in `PROJECT_DEV_MANIFEST.md`, including remaining direct configuration reads that have not yet been migrated.
+Environment-specific values and secrets enter through validated configuration adapters and deployment files. Subsystems should not scatter direct environment reads when a canonical configuration contract already exists. Remaining configuration-convergence debt belongs in `PROJECT_DEV_MANIFEST.md`, not in parallel helpers or UI fallbacks.
 
 ## Security
 
-KAREN's protected execution paths preserve:
-
-- authentication and session validation;
-- RBAC;
-- durable tenant isolation;
-- least privilege;
-- secret redaction;
-- tool/extension permission gates;
-- audit logging;
-- safe error translation;
-- request/correlation identity;
-- fail-closed production behavior.
+KAREN's protected execution paths preserve authentication/session validation, RBAC, durable tenant isolation, least privilege, secret redaction, extension permission gates, audit logging, safe error translation, request/correlation identity, and fail-closed production behavior.
 
 Frontend checks are presentation only. Privileged authority is backend-owned.
 
@@ -335,11 +387,26 @@ Frontend checks are presentation only. Privileged authority is backend-owned.
 
 Runtime events should make it possible to determine what actually happened, including request/correlation identity, tenant/user/session/conversation scope, intent/topology, provider/model/runtime engine, fallback/degradation, memory/extension/agent participation, latency, status, and error reason.
 
-Prometheus is the canonical numeric metrics backend. Grafana is optional through the observability profile. High-cardinality request/user identifiers belong in structured logs/traces rather than Prometheus labels.
+Prometheus is the canonical numeric metrics backend. High-cardinality request/user identifiers belong in structured logs/traces rather than Prometheus labels.
 
 ## Verification
 
-Core gates:
+The live merge contract is encoded in `.github/workflows/main-quality-gate.yml` and the focused authority workflows. The workflow files, not README prose, are the source of truth for the exact gate set.
+
+The current Main Quality frontend job runs these checks from `src/ui_launchers/Karen-AI-Theme`:
+
+```bash
+npm ci --no-audit --no-fund
+npm run ci:forbid-mocks
+npm run typecheck
+node --check server.mjs
+npx vitest run --passWithNoTests
+npm run build
+```
+
+The current backend quality job compiles production Python, runs the correctness-focused Ruff baseline, type-checks the canonical authority contracts, then executes the architecture/runtime/classifier/chat/personalization/memory/tenant proof suites. See the workflow for the exact file and test list.
+
+Useful broad local audits remain:
 
 ```bash
 python -m compileall src
@@ -349,14 +416,7 @@ mypy src
 docker compose config
 ```
 
-Frontend gates from the active UI package:
-
-```bash
-npm run lint
-npm run typecheck
-npm test
-npm run build
-```
+Those broad commands intentionally surface repository-wide debt beyond the narrower merge-gate baseline. Do not replace an exact-head workflow verdict with a partial local run, and do not describe a broad audit as green unless it actually passed.
 
 First-run architecture contract:
 
@@ -374,23 +434,23 @@ KAREN_SMOKE_API_IMAGE=ai-karen-api:beta bash scripts/ci/production-first-boot-sm
 
 Do not report a release path green unless the exact-head CI/proof actually passed.
 
-## Development Rules
+## Development rules
 
-Before adding a service, registry, orchestrator, helper, route, provider, config path, setup wizard, or fallback:
+Before adding or changing a service, registry, orchestrator, helper, route, provider, configuration path, setup flow, or fallback:
 
-1. Identify the current owner.
-2. Search for a stronger existing implementation.
-3. Extend the canonical owner rather than creating a parallel path.
-4. Preserve RBAC, tenant scope, audit, credentials, and telemetry.
-5. Keep API routes thin.
-6. Keep provider/model decisions out of UI.
-7. Keep CORTEX decision-only.
-8. Keep Runtime execution-authoritative.
-9. Keep migrations authoritative for production schema.
-10. Prove the boundary with executable tests/burns.
-11. Delete dead/duplicate code only after reference and replacement audit.
+1. Identify the current owner of the responsibility.
+2. Search for a stronger existing implementation before creating another one.
+3. Extend or merge into the canonical owner rather than preserving a parallel path.
+4. Preserve RBAC, tenant scope, audit, credential handling, correlation identity, and telemetry.
+5. Keep API routes thin and orchestration in the runtime/service owner.
+6. Keep provider/model decisions out of the UI. The UI renders backend truth.
+7. Keep CORTEX decision-only and Runtime execution-authoritative.
+8. Keep schema creation and evolution migration-owned in production.
+9. Prefer central config/registry contracts over scattered hardcoded values.
+10. Prove the boundary with executable tests, burns, and exact-head CI.
+11. Delete dead or duplicate code only after reference audit and replacement proof.
 
-## Architecture Documentation
+## Architecture documentation
 
 Read these first:
 
@@ -400,6 +460,8 @@ Read these first:
 - `src/ai_karen_engine/core/ARCHITECTURE.md` for core authority boundaries.
 - `src/ai_karen_engine/core/README.md` for core-domain ownership.
 - `src/ai_karen_engine/config/README.md` for configuration ownership.
+- `docs/presentation/BRAND_SYSTEM.md` for visual identity.
+- `docs/presentation/PRODUCT_PRESENTATION_MANIFEST.md` for public presentation truth.
 
 Historical sprint sheets are implementation history, not architecture authority.
 
