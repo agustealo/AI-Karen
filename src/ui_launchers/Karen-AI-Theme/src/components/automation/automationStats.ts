@@ -12,7 +12,9 @@ const hasNonEmptyString = (
 ): boolean => typeof value[key] === "string" && value[key].trim().length > 0;
 
 const NON_NEGATIVE_INTEGER = /^\d+$/;
-const UNAVAILABLE_VALUES = new Set(["unavailable", "unknown", "n/a"]);
+const UNAVAILABLE_VALUES = new Set(["unavailable", "unknown"]);
+const NO_SCHEDULE = "none scheduled";
+const NOT_APPLICABLE = "n/a";
 
 const normalized = (value: string): string => value.trim().toLowerCase();
 
@@ -48,8 +50,11 @@ export function parseAutomationStats(value: unknown): AutomationStats | null {
 }
 
 /**
- * Return a reason when a structurally valid response is not complete enough to
- * be presented as verified tenant-scoped runtime truth.
+ * Return a reason when a structurally valid response is not trustworthy enough
+ * to be presented as live tenant-scoped runtime truth.
+ *
+ * An empty schedule is a valid operational state. The showcase capture applies
+ * a stricter presentation-readiness policy and requires a populated demo.
  */
 export function automationStatsReadinessIssue(
   stats: AutomationStats,
@@ -70,6 +75,15 @@ export function automationStatsReadinessIssue(
 
   if (!NON_NEGATIVE_INTEGER.test(stats.definedSequences.trim())) {
     return "Automation sequence metrics are not backed by the canonical count contract.";
+  }
+
+  const nextJob = normalized(stats.nextJob);
+  const nextJobTime = normalized(stats.nextJobTime);
+  if (nextJob === NO_SCHEDULE && nextJobTime !== NOT_APPLICABLE) {
+    return "No-schedule state is inconsistent with its schedule-time contract.";
+  }
+  if (nextJob !== NO_SCHEDULE && nextJobTime === NOT_APPLICABLE) {
+    return "Scheduled automation is missing its next-run time.";
   }
 
   return null;
