@@ -138,8 +138,18 @@ class ModelDownloadWorker:
             # boundary and could let a new download overwrite live side effects.
             logger.exception("model_download_publication_recovery_required job_id=%s", job_id)
         except Exception as exc:
-            logger.exception("model_download_claim_execution_error job_id=%s", job_id)
-            await self._service.fail_claim(job_id, lease_token, exc)
+            if await self._durable_job_is_promoting(job_id):
+                # Any exception that escapes after PostgreSQL reserved
+                # ``promoting`` is publication uncertainty unless the runtime
+                # already proved compensation and moved the row out of that
+                # state. Fail closed and let the recovery lease path reconcile.
+                logger.exception(
+                    "model_download_unresolved_promotion_preserved job_id=%s",
+                    job_id,
+                )
+            else:
+                logger.exception("model_download_claim_execution_error job_id=%s", job_id)
+                await self._service.fail_claim(job_id, lease_token, exc)
         finally:
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -166,6 +176,20 @@ class ModelDownloadWorker:
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
+
+    async def _durable_job_is_promoting(self, job_id: str) -> bool:
+        try:
+            job = await asyncio.shield(self._service.get_job(job_id))
+        except Exception:
+            # Unknown durable state is not permission to destroy publication
+            # intent. The active lease will naturally expire and be recovered.
+            logger.exception(
+                "model_download_failure_state_unavailable job_id=%s worker_id=%s",
+                job_id,
+                self.worker_id,
+            )
+            return True
+        return bool(job is not None and job.get("status") == "promoting")
 
     async def _release_cancelled_claim(self, job_id: str, lease_token: str) -> None:
         """Release only work that has not entered final filesystem promotion.
