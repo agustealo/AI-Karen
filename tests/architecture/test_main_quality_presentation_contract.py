@@ -7,6 +7,18 @@ PRESENTATION_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/presentation-contra
 AUTOMATION_STATS_ROUTE = (
     REPOSITORY_ROOT / "src/ai_karen_engine/api_routes/automation/stats.py"
 )
+AUTOMATION_STATS_UI = (
+    REPOSITORY_ROOT
+    / "src/ui_launchers/Karen-AI-Theme/src/components/automation/automationStats.ts"
+)
+AGENTS_OVERVIEW_UI = (
+    REPOSITORY_ROOT
+    / "src/ui_launchers/Karen-AI-Theme/src/components/automation/AgentsOverviewPage.tsx"
+)
+SHOWCASE_CAPTURE = (
+    REPOSITORY_ROOT
+    / "src/ui_launchers/Karen-AI-Theme/e2e/showcase/capture-product.showcase.ts"
+)
 CANONICAL_VERIFIER_COMMAND = (
     "python scripts/ci/verify_presentation_assets.py --require-assets"
 )
@@ -48,3 +60,22 @@ def test_automation_stats_do_not_present_global_agents_as_tenant_truth() -> None
     assert "get_tasks_summary(tenant_id)" in source
     assert "get_cron_summary(tenant_id)" in source
     assert "job_service.list_jobs(user)" in source
+
+
+def test_unavailable_agent_truth_cannot_become_showcase_ready() -> None:
+    stats_ui = AUTOMATION_STATS_UI.read_text(encoding="utf-8")
+    overview = AGENTS_OVERVIEW_UI.read_text(encoding="utf-8")
+    showcase = SHOWCASE_CAPTURE.read_text(encoding="utf-8")
+
+    assert "automationStatsReadinessIssue" in stats_ui
+    assert '"unavailable", "unknown", "n/a"' in stats_ui
+    assert "ACTIVE_AGENT_COUNT" in stats_ui
+
+    assert "automationStatsReadinessIssue(parsed)" in overview
+    assert 'setStatsState("unavailable")' in overview
+    assert 'data-automation-metric="active-agents"' in overview
+
+    assert "SHOWCASE_METRIC_SENTINELS" in showcase
+    assert '"none scheduled"' in showcase
+    assert 'page.locator(`[data-automation-metric="${metricName}"]`)' in showcase
+    assert "ACTIVE_AGENT_COUNT" in showcase
