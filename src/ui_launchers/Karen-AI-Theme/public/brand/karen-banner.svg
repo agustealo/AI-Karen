@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 500" role="img" aria-labelledby="title desc">
+  <title id="title">KAREN premium banner</title>
+  <desc id="desc">KAREN, local by default and governed by design, with abstract orchestration lines.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="500" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#121215"/>
+      <stop offset="0.52" stop-color="#18181B"/>
+      <stop offset="1" stop-color="#21172A"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="120" y1="90" x2="460" y2="390" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E7D8FF"/>
+      <stop offset="0.48" stop-color="#CF75FF"/>
+      <stop offset="1" stop-color="#9B5CFF"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(1350 70) rotate(140) scale(520 420)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#CF75FF" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#CF75FF" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse">
+      <path d="M42 0H0v42" fill="none" stroke="#FFFFFF" stroke-opacity=".035"/>
+    </pattern>
+  </defs>
+  <rect width="1600" height="500" rx="38" fill="url(#bg)"/>
+  <rect width="1600" height="500" rx="38" fill="url(#glow)"/>
+  <rect width="1600" height="500" rx="38" fill="url(#grid)"/>
+  <rect x="1" y="1" width="1598" height="498" rx="37" fill="none" stroke="#FFFFFF" stroke-opacity=".08" stroke-width="2"/>
+
+  <g opacity=".42" fill="none" stroke="#CF75FF" stroke-width="2">
+    <path d="M1115 116h120l68 68h185"/>
+    <path d="M1055 250h156l86-86"/>
+    <path d="M1152 374h138l76-76h130"/>
+    <path d="M1322 97v88l76 76v111"/>
+  </g>
+  <g fill="#E7D8FF">
+    <circle cx="1115" cy="116" r="5"/>
+    <circle cx="1303" cy="184" r="5"/>
+    <circle cx="1211" cy="250" r="5"/>
+    <circle cx="1290" cy="374" r="5"/>
+    <circle cx="1398" cy="261" r="5"/>
+  </g>
+
+  <g transform="translate(92 74)">
+    <rect width="352" height="352" rx="92" fill="#18181B"/>
+    <rect x="1" y="1" width="350" height="350" rx="91" fill="none" stroke="#3B3542" stroke-width="2"/>
+    <path d="M95 89v176" fill="none" stroke="#F8F7FB" stroke-width="30" stroke-linecap="round"/>
+    <path d="m116 173 128-95" fill="none" stroke="url(#accent)" stroke-width="30" stroke-linecap="round"/>
+    <path d="m117 181 132 93" fill="none" stroke="url(#accent)" stroke-width="30" stroke-linecap="round"/>
+    <circle cx="118" cy="178" r="19" fill="#18181B" stroke="#CF75FF" stroke-width="8"/>
+    <path d="M78 76c47-40 147-44 200 0" fill="none" stroke="url(#accent)" stroke-width="11" stroke-linecap="round" opacity=".92"/>
+  </g>
+
+  <text x="520" y="202" fill="#F8F7FB" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="108" font-weight="780" letter-spacing="16">KAREN</text>
+  <text x="527" y="265" fill="#E7D8FF" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="30" font-weight="600" letter-spacing="1.5">Local by default. Governed by design.</text>
+  <text x="529" y="322" fill="#A9A5B2" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="500" letter-spacing="3">PROMPT-FIRST  •  DURABLE MEMORY  •  PROVIDER ORCHESTRATION  •  OBSERVABLE</text>
+</svg>
