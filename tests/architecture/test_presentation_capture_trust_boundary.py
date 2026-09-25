@@ -37,11 +37,28 @@ def test_secret_bearing_capture_is_default_branch_owned() -> None:
     assert "--expected-harness-sha \"$GITHUB_SHA\"" in capture
     assert "--require-target-descendant-of-harness" in capture
 
-    assert "ref: ${{ inputs.destination_branch }}" in commit_gallery
+    assert "ref: ${{ needs.prepare.outputs.destination_branch }}" in commit_gallery
     assert "${{ secrets." not in commit_gallery
     assert "KAREN_PRESENTATION_PASSWORD" not in commit_gallery
     assert "KAREN_PRESENTATION_EMAIL" not in commit_gallery
     assert "KAREN_PRESENTATION_BASE_URL" not in commit_gallery
+
+
+def test_owner_only_pr_comment_is_bound_to_current_pr_head() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    prepare, _ = workflow.split("  capture:", maxsplit=1)
+
+    assert "issue_comment:" in workflow
+    assert "types: [created]" in workflow
+    assert "github.actor == github.repository_owner" in prepare
+    assert "github.event.comment.author_association == 'OWNER'" in prepare
+    assert "startsWith(github.event.comment.body, '/capture-presentation ')" in prepare
+    assert r"/capture-presentation\s+([0-9a-fA-F]{40})" in prepare
+    assert "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/presentation-request-head" in prepare
+    assert 'if [[ "$CURRENT_PR_HEAD" != "$TARGET_REVISION" ]]' in prepare
+    assert 'destination = "docs/premium-brand-showcase"' in prepare
+    assert 'commit_assets = "true"' in prepare
+    assert "${{ secrets." not in prepare
 
 
 def test_write_scoped_job_executes_only_trusted_artifact_code() -> None:
@@ -87,6 +104,7 @@ def test_trusted_capture_harness_is_repository_owned_and_real_runtime_only() -> 
 
 if __name__ == "__main__":
     test_secret_bearing_capture_is_default_branch_owned()
+    test_owner_only_pr_comment_is_bound_to_current_pr_head()
     test_write_scoped_job_executes_only_trusted_artifact_code()
     test_trusted_capture_harness_is_repository_owned_and_real_runtime_only()
     print("presentation capture trust boundary green")
