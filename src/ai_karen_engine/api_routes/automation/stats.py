@@ -25,11 +25,9 @@ async def get_automation_stats(
 ) -> Dict[str, Any]:
     """Return dashboard truth only for the authenticated tenant.
 
-    The current agent authorities do not carry a tenant identifier on their
-    registry/lifecycle records. Agent counts therefore fail closed instead of
-    reading the legacy installation-wide inventory and presenting it as tenant
-    truth. Task, schedule, and job metrics remain tenant-scoped through their
-    canonical owners.
+    Agent catalog/lifecycle data is intentionally absent because the legacy
+    agent registry is installation-wide control-plane state. This tenant
+    dashboard exposes only metrics owned by tenant-scoped automation sources.
     """
     try:
         tenant_id = str(user.tenant_id)
@@ -38,20 +36,15 @@ async def get_automation_stats(
         jobs = await job_service.list_jobs(user)
 
         return {
-            "activeAgents": "Unavailable",
+            "activeTasks": str(tasks_summary["active_tasks"]),
             "tasksToday": str(tasks_summary["tasks_run_today"]),
-            "activeSequences": str(len(jobs)),
+            "definedSequences": str(len(jobs)),
             "nextJob": cron_summary["next_job"] or "None Scheduled",
             "nextJobTime": cron_summary["next_job_time"] or "N/A",
             "details": {
                 "tasks": tasks_summary,
                 "cron": cron_summary,
                 "total_sequences": len(jobs),
-                "agents": {
-                    "status": "unavailable",
-                    "scope": "tenant",
-                    "reason": "canonical_tenant_agent_inventory_unavailable",
-                },
             },
         }
     except Exception as exc:
