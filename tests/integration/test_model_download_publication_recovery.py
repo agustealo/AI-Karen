@@ -93,6 +93,7 @@ async def test_concurrent_recovery_claims_issue_exactly_one_new_lease() -> None:
     assert claim["job_id"] == "mdl-recovery-race"
     assert claim["status"] == "promoting"
     assert claim["interrupted_lease_token"] == source_token
+    assert str(claim["publication_source_lease_token"]) == source_token
     assert str(claim["lease_token"]) != source_token
     assert claim["lease_owner"] in {"recovery-a", "recovery-b"}
 
@@ -151,9 +152,10 @@ async def test_generic_claim_cannot_requeue_or_bypass_expired_promotion_target()
     assert recovery is not None
     assert recovery["job_id"] == "mdl-interrupted"
     assert recovery["interrupted_lease_token"] == source_token
+    assert str(recovery["publication_source_lease_token"]) == source_token
 
 
-async def test_release_for_recovery_expires_authority_without_erasing_receipt_identity() -> None:
+async def test_release_for_recovery_separates_receipt_identity_from_execution_authority() -> None:
     install_path = "/tmp/models/transformers/test-owner--recovery-target/main"
     source_token = str(uuid.uuid4())
     assert DATABASE_URL is not None
@@ -183,10 +185,147 @@ async def test_release_for_recovery_expires_authority_without_erasing_receipt_id
     )
     assert released is True
 
+    durable = await repository.get_job("mdl-release-recovery")
+    assert durable is not None
+    assert durable["status"] == "promoting"
+    assert durable["lease_token"] is None
+    assert durable["lease_owner"] is None
+    assert str(durable["publication_source_lease_token"]) == source_token
+
     claimed = await repository.claim_expired_promotion_for_recovery(
         worker_id="recovery-worker",
         lease_seconds=30,
     )
     assert claimed is not None
     assert claimed["interrupted_lease_token"] == source_token
+    assert str(claimed["publication_source_lease_token"]) == source_token
     assert str(claimed["lease_token"]) != source_token
+
+
+async def test_source_identity_survives_multiple_recovery_leases() -> None:
+    assert DATABASE_URL is not None
+    install_path = "/tmp/models/transformers/test-owner--recovery-target/main"
+    source_token = str(uuid.uuid4())
+    _insert_expired_promotion(
+        job_id="mdl-recovery-rotation",
+        install_path=install_path,
+        lease_token=source_token,
+    )
+
+    repository = ModelDownloadRepository()
+    first = await repository.claim_expired_promotion_for_recovery(
+        worker_id="recovery-a",
+        lease_seconds=30,
+    )
+    assert first is not None
+    first_recovery_token = str(first["lease_token"])
+    assert first["interrupted_lease_token"] == source_token
+    assert first_recovery_token != source_token
+
+    deferred = await repository.defer_publication_recovery_retry(
+        job_id="mdl-recovery-rotation",
+        lease_token=first_recovery_token,
+        error="receipt temporarily unreadable",
+        retry_base_seconds=0,
+    )
+    assert deferred is True
+
+    durable = await repository.get_job("mdl-recovery-rotation")
+    assert durable is not None
+    assert durable["status"] == "promoting"
+    assert durable["lease_token"] is None
+    assert str(durable["publication_source_lease_token"]) == source_token
+    assert durable["message"] == "Publication recovery deferred; retry scheduled"
+
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        connection.execute(
+            """
+            UPDATE public.model_download_jobs
+            SET available_at = clock_timestamp() - interval '1 second'
+            WHERE job_id = 'mdl-recovery-rotation'
+            """
+        )
+
+    second = await repository.claim_expired_promotion_for_recovery(
+        worker_id="recovery-b",
+        lease_seconds=30,
+    )
+    assert second is not None
+    assert second["interrupted_lease_token"] == source_token
+    assert str(second["publication_source_lease_token"]) == source_token
+    assert str(second["lease_token"]) not in {source_token, first_recovery_token}
+
+
+async def test_deferred_recovery_frees_global_slot_but_keeps_same_target_blocked() -> None:
+    assert DATABASE_URL is not None
+    blocked_path = "/tmp/models/transformers/test-owner--recovery-target/main"
+    other_path = "/tmp/models/transformers/test-owner--capacity/main"
+    source_token = str(uuid.uuid4())
+    _insert_expired_promotion(
+        job_id="mdl-recovery-capacity",
+        install_path=blocked_path,
+        lease_token=source_token,
+    )
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        connection.execute(
+            """
+            UPDATE public.model_download_runtime_settings
+            SET max_concurrent_downloads = 1
+            WHERE singleton = true
+            """
+        )
+
+    repository = ModelDownloadRepository()
+    recovery = await repository.claim_expired_promotion_for_recovery(
+        worker_id="recovery-worker",
+        lease_seconds=30,
+    )
+    assert recovery is not None
+    recovery_token = str(recovery["lease_token"])
+
+    deferred = await repository.defer_publication_recovery_retry(
+        job_id="mdl-recovery-capacity",
+        lease_token=recovery_token,
+        error="unsafe recovery evidence",
+        retry_base_seconds=5,
+    )
+    assert deferred is True
+
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        connection.execute(
+            """
+            INSERT INTO public.model_download_jobs (
+                job_id, model_id, channel_id, storage_key, status, message,
+                install_path, max_attempts, created_at, available_at
+            ) VALUES
+                (
+                    'mdl-capacity-blocked', 'test-owner/recovery-target',
+                    'core_runtime_transformers', 'transformers', 'queued', 'Queued',
+                    %s, 3, clock_timestamp() - interval '2 seconds', clock_timestamp()
+                ),
+                (
+                    'mdl-capacity-unrelated', 'test-owner/capacity',
+                    'core_runtime_transformers', 'transformers', 'queued', 'Queued',
+                    %s, 3, clock_timestamp() - interval '1 second', clock_timestamp()
+                )
+            """,
+            (blocked_path, other_path),
+        )
+
+    normal = await repository.claim_next(
+        worker_id="normal-worker",
+        lease_seconds=30,
+        retry_base_seconds=0,
+    )
+    assert normal is not None
+    assert normal["job_id"] == "mdl-capacity-unrelated"
+
+    interrupted = await repository.get_job("mdl-recovery-capacity")
+    blocked = await repository.get_job("mdl-capacity-blocked")
+    assert interrupted is not None
+    assert interrupted["status"] == "promoting"
+    assert interrupted["lease_token"] is None
+    assert str(interrupted["publication_source_lease_token"]) == source_token
+    assert blocked is not None
+    assert blocked["status"] == "queued"
+    assert blocked["lease_token"] is None
