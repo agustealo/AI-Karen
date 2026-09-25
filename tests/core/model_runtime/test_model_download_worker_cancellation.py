@@ -13,6 +13,7 @@ class CancellationService:
     def __init__(self, status: Optional[str]) -> None:
         self.status = status
         self.release_calls: list[tuple[str, str]] = []
+        self.fail_calls: list[tuple[str, str, str]] = []
 
     async def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
         if self.status is None:
@@ -21,6 +22,13 @@ class CancellationService:
 
     async def release_claim_for_shutdown(self, job_id: str, lease_token: str) -> None:
         self.release_calls.append((job_id, lease_token))
+
+    async def fail_claim(self, job_id: str, lease_token: str, exc: Exception) -> None:
+        self.fail_calls.append((job_id, lease_token, str(exc)))
+
+    async def claim_publication_recovery(self, worker_id: str) -> Optional[dict[str, Any]]:
+        del worker_id
+        return None
 
 
 def _settings() -> ModelDownloadWorkerSettings:
@@ -67,6 +75,50 @@ async def test_unknown_cancel_state_fails_closed_without_releasing_claim() -> No
     await worker._release_cancelled_claim("mdl-unknown", "lease-unknown")
 
     assert service.release_calls == []
+
+
+@pytest.mark.asyncio
+async def test_execution_error_after_promotion_never_uses_generic_retry() -> None:
+    class FailingExecutionService(CancellationService):
+        async def execute_claimed_job(self, claim: dict[str, Any]) -> None:
+            del claim
+            raise RuntimeError("publication side effect uncertain")
+
+        async def heartbeat_claim(self, job_id: str, lease_token: str) -> bool:
+            del job_id, lease_token
+            return True
+
+    service = FailingExecutionService("promoting")
+    worker = ModelDownloadWorker(service, _settings())
+
+    await worker._execute_claim(
+        {"job_id": "mdl-promoting-error", "lease_token": "lease-promoting-error"}
+    )
+
+    assert service.fail_calls == []
+
+
+@pytest.mark.asyncio
+async def test_execution_error_before_promotion_uses_generic_retry() -> None:
+    class FailingExecutionService(CancellationService):
+        async def execute_claimed_job(self, claim: dict[str, Any]) -> None:
+            del claim
+            raise RuntimeError("download failed")
+
+        async def heartbeat_claim(self, job_id: str, lease_token: str) -> bool:
+            del job_id, lease_token
+            return True
+
+    service = FailingExecutionService("running")
+    worker = ModelDownloadWorker(service, _settings())
+
+    await worker._execute_claim(
+        {"job_id": "mdl-running-error", "lease_token": "lease-running-error"}
+    )
+
+    assert service.fail_calls == [
+        ("mdl-running-error", "lease-running-error", "download failed")
+    ]
 
 
 @pytest.mark.asyncio
