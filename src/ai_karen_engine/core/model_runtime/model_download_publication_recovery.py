@@ -243,11 +243,13 @@ class ModelDownloadPublicationRecoveryStore:
 
         try:
             if marker_matches:
+                # Never remove the only surviving final artifact before proving
+                # that a previous installation can actually be restored.
+                if journal.had_previous_install and (backup is None or not backup.exists()):
+                    return False
                 self._remove_path(final_path)
                 if backup is not None and backup.exists():
                     os.replace(backup, final_path)
-                elif journal.had_previous_install:
-                    return False
             elif backup is not None and backup.exists() and not final_path.exists():
                 os.replace(backup, final_path)
             elif backup is not None and backup.exists():
