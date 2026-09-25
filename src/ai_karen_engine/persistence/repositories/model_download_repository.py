@@ -707,11 +707,12 @@ class ModelDownloadRepository:
     ) -> AsyncIterator[Optional[_ModelDownloadPublication]]:
         """Hold durable ownership across final filesystem and registry publication.
 
-        Publication authority must still have a live lease when this transaction
-        wins the target and row locks. Once validated under those locks, the short
-        irreversible publication window stays owned by this transaction even if
-        wall-clock lease expiry occurs before commit; reclaim remains blocked on
-        the job row until terminal durable state is committed.
+        Publication authority must still have a live lease after this transaction
+        wins the target and job-row locks. That wall-clock check happens only after
+        the row is held so time spent waiting for either lock cannot resurrect an
+        expired worker. Once validated, the short irreversible publication window
+        remains owned by this transaction even if the lease later reaches its
+        deadline; reclaim stays blocked until terminal durable state commits.
         """
         async with async_transaction_scope() as session:
             await _lock_install_target(session, install_path)
@@ -726,7 +727,6 @@ class ModelDownloadRepository:
                       AND cancel_requested = false
                       AND pause_requested = false
                       AND lease_token = CAST(:lease_token AS uuid)
-                      AND lease_expires_at > now()
                     FOR UPDATE
                     """
                 ),
@@ -737,6 +737,21 @@ class ModelDownloadRepository:
                 },
             )
             if result.first() is None:
+                yield None
+                return
+
+            lease_live_result = await session.execute(
+                text(
+                    """
+                    SELECT lease_expires_at > clock_timestamp()
+                    FROM public.model_download_jobs
+                    WHERE job_id = :job_id
+                      AND lease_token = CAST(:lease_token AS uuid)
+                    """
+                ),
+                {"job_id": job_id, "lease_token": lease_token},
+            )
+            if lease_live_result.scalar_one_or_none() is not True:
                 yield None
                 return
 
