@@ -13,6 +13,7 @@ from ai_karen_engine.core.model_runtime.model_download_control_service import (
 from ai_karen_engine.core.model_runtime.model_download_publication_recovery import (
     ModelDownloadPublicationRecoveryRequired,
 )
+from ai_karen_engine.core.model_runtime.model_download_worker import ModelDownloadWorker
 
 
 class _RecoveryPublication:
@@ -177,3 +178,45 @@ async def test_failed_recovery_compensation_keeps_promoting_instead_of_requeuein
     assert repository.guard_calls == 1
     assert repository.publication.abort_calls == 0
     assert repository.publication.complete_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_defers_failed_recovery_lease_without_generic_retry() -> None:
+    class RecoveryWorkerService:
+        def __init__(self) -> None:
+            self.defer_calls: list[tuple[str, str, BaseException]] = []
+
+        async def recover_interrupted_publication(self, claim: Mapping[str, Any]) -> None:
+            del claim
+            raise ModelDownloadPublicationRecoveryRequired("receipt still ambiguous")
+
+        async def defer_publication_recovery_retry(
+            self,
+            job_id: str,
+            lease_token: str,
+            error: BaseException,
+        ) -> None:
+            self.defer_calls.append((job_id, lease_token, error))
+
+        async def heartbeat_claim(self, job_id: str, lease_token: str) -> bool:
+            del job_id, lease_token
+            return True
+
+        async def fail_claim(self, *_: Any, **__: Any) -> None:
+            raise AssertionError("recovery must never enter generic fail/retry")
+
+    service = RecoveryWorkerService()
+    worker = ModelDownloadWorker(service, _settings())
+    claim = {
+        "job_id": "mdl-worker-recovery",
+        "lease_token": "00000000-0000-0000-0000-000000000021",
+        "interrupted_lease_token": "00000000-0000-0000-0000-000000000020",
+    }
+
+    await worker._execute_recovery_claim(claim)
+
+    assert len(service.defer_calls) == 1
+    job_id, lease_token, error = service.defer_calls[0]
+    assert job_id == claim["job_id"]
+    assert lease_token == claim["lease_token"]
+    assert isinstance(error, ModelDownloadPublicationRecoveryRequired)
