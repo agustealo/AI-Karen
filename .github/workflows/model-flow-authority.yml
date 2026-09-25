@@ -38,12 +38,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements/ci/quality.txt
 
-      - name: Compile model route boundaries
+      - name: Compile model route and registry boundaries
         run: |
           python -m compileall -q src/ai_karen_engine/api_routes/models/orchestrator.py
           python -m compileall -q src/ai_karen_engine/api_routes/models/model_orchestrator.py
+          python -m compileall -q src/ai_karen_engine/core/model_runtime/management/model_orchestrator_service.py
+          python -m compileall -q tests/core/model_runtime/test_model_orchestrator_remote_listing.py
 
-      - name: Prove model-flow route authority
+      - name: Prove model-flow route and registry authority
         run: |
           pytest tests/architecture/test_model_flow_route_authority.py -q
           pytest tests/architecture/test_model_orchestrator_route_authority.py -q
+          pytest tests/core/model_runtime/test_model_orchestrator_remote_listing.py -q
