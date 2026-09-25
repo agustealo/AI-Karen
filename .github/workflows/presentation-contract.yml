@@ -83,5 +83,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Prove lightweight presentation authority contracts
+        run: |
+          python -m py_compile src/ai_karen_engine/api_routes/automation/stats.py
+          python - <<'PY'
+          import runpy
+
+          namespace = runpy.run_path(
+              "tests/architecture/test_main_quality_presentation_contract.py"
+          )
+          for name, value in sorted(namespace.items()):
+              if name.startswith("test_") and callable(value):
+                  value()
+          PY
+
       - name: Verify canonical brand and required real-product screenshot provenance
         run: python scripts/ci/verify_presentation_assets.py --require-assets
