@@ -19,7 +19,6 @@ const GALLERY_FILES = [
 
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 const RETIRED_VISIBLE_BRAND = /\bKaren AI\b/i;
-const ACTIVE_AGENT_COUNT = /^(\d+)\s*\/\s*(\d+)$/;
 const NON_NEGATIVE_INTEGER = /^\d+$/;
 const SHOWCASE_METRIC_SENTINELS = new Set([
   "unavailable",
@@ -137,9 +136,9 @@ async function assertAgentsReady(page: Page): Promise<void> {
   ).toBeVisible();
 
   const metricSelectors = [
-    "active-agents",
+    "active-tasks",
     "tasks-today",
-    "active-sequences",
+    "defined-sequences",
     "next-job",
     "next-job-time",
   ] as const;
@@ -157,20 +156,11 @@ async function assertAgentsReady(page: Page): Promise<void> {
     metricValues.set(metricName, value);
   }
 
-  const activeAgents = metricValues.get("active-agents") ?? "";
-  const activeMatch = activeAgents.match(ACTIVE_AGENT_COUNT);
-  if (!activeMatch) {
-    throw new Error(
-      `Agents Overview is not presentation-ready: active-agents does not match the canonical active/total count contract: ${JSON.stringify(activeAgents)}.`,
-    );
-  }
-  if (Number.parseInt(activeMatch[1], 10) > Number.parseInt(activeMatch[2], 10)) {
-    throw new Error(
-      `Agents Overview is not presentation-ready: active agent count exceeds total agent count: ${JSON.stringify(activeAgents)}.`,
-    );
-  }
-
-  for (const metricName of ["tasks-today", "active-sequences"] as const) {
+  for (const metricName of [
+    "active-tasks",
+    "tasks-today",
+    "defined-sequences",
+  ] as const) {
     const value = metricValues.get(metricName) ?? "";
     if (!NON_NEGATIVE_INTEGER.test(value)) {
       throw new Error(
