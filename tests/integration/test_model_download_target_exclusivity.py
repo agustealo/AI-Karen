@@ -240,7 +240,7 @@ async def test_completion_does_not_mutate_legacy_promoting_sibling() -> None:
     assert sibling["message"] == "Promoting staged artifacts"
 
 
-async def test_publication_guard_blocks_expired_reclaim_until_terminal_commit() -> None:
+async def test_publication_guard_blocks_reclaim_after_lease_expires_inside_guard() -> None:
     assert DATABASE_URL is not None
     install_path = "/tmp/models/transformers/test-owner--publication-guard/main"
     token = str(uuid.uuid4())
@@ -255,7 +255,7 @@ async def test_publication_guard_blocks_expired_reclaim_until_terminal_commit() 
                 'mdl-publication-guard', 'test-owner/publication-guard',
                 'core_runtime_transformers', 'transformers', 'promoting',
                 'Promoting staged artifacts', %s, 3, 1, 'worker-a', %s::uuid,
-                now() - interval '1 second', now() - interval '31 seconds', now(), now(), now()
+                now() + interval '1 second', now(), now(), now(), now()
             )
             """,
             (install_path, token),
@@ -269,6 +269,7 @@ async def test_publication_guard_blocks_expired_reclaim_until_terminal_commit() 
         install_path=install_path,
     ) as publication:
         assert publication is not None
+        await asyncio.sleep(1.2)
         reclaim_task = asyncio.create_task(
             ModelDownloadRepository().claim_next(
                 worker_id="reclaim-worker",
