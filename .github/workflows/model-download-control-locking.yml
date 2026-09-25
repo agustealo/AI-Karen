@@ -116,6 +116,8 @@ jobs:
             -f supabase/migrations/20260924010000_17_model_download_job_authority.sql
           psql "$MODEL_DOWNLOAD_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 \
             -f supabase/migrations/20260924195000_18_model_download_requested_state_leases.sql
+          psql "$MODEL_DOWNLOAD_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20260925013000_19_model_download_publication_recovery_identity.sql
 
       - name: Prove requested-state lease accounting in PostgreSQL
         run: pytest tests/integration/test_model_download_requested_state_leases.py -q
