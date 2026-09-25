@@ -26,6 +26,21 @@ class ModelDownloadPublicationRecoveryRequired(RuntimeError):
     """Signal that generic retry is unsafe until publication is reconciled."""
 
 
+def _normalize_source_lease_token(value: str) -> str:
+    try:
+        return str(uuid.UUID(str(value)))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("Model publication source lease token is invalid") from exc
+
+
+def _canonical_backup_path(install_path: str | Path, source_lease_token: str) -> Path:
+    final_path = Path(install_path)
+    if not final_path.is_absolute():
+        raise ValueError("Model publication install path must be absolute")
+    source_token = _normalize_source_lease_token(source_lease_token)
+    return final_path.with_name(f"{final_path.name}.previous-{source_token}")
+
+
 @dataclass(frozen=True)
 class ModelDownloadPublicationJournal:
     schema_version: int
@@ -82,24 +97,51 @@ class ModelDownloadPublicationJournal:
             raise ValueError("Model publication journal contains invalid mapping fields")
         if prior_registry_entry is not None and not isinstance(prior_registry_entry, Mapping):
             raise ValueError("Model publication journal prior registry entry is invalid")
+
+        source_lease_token = _normalize_source_lease_token(str(payload["source_lease_token"]))
+        install_path = str(payload["install_path"])
+        had_previous_install = bool(payload.get("had_previous_install", False))
+        backup_path = str(payload["backup_path"]) if payload.get("backup_path") else None
+        expected_backup = str(_canonical_backup_path(install_path, source_lease_token))
+        if had_previous_install:
+            if backup_path != expected_backup:
+                raise ValueError("Model publication journal backup path is not canonical")
+        elif backup_path is not None:
+            raise ValueError("Model publication journal has an unexpected backup path")
+
         return cls(
             schema_version=schema_version,
             publication_id=str(payload["publication_id"]),
             job_id=str(payload["job_id"]),
-            source_lease_token=str(payload["source_lease_token"]),
+            source_lease_token=source_lease_token,
             model_id=str(payload["model_id"]),
-            install_path=str(payload["install_path"]),
+            install_path=install_path,
             result_payload=dict(result_payload),
             prior_registry_entry=dict(prior_registry_entry) if prior_registry_entry is not None else None,
             expected_registry_entry=dict(expected_registry_entry),
-            had_previous_install=bool(payload.get("had_previous_install", False)),
-            backup_path=str(payload["backup_path"]) if payload.get("backup_path") else None,
+            had_previous_install=had_previous_install,
+            backup_path=backup_path,
             created_at=str(payload["created_at"]),
         )
 
 
 class ModelDownloadPublicationRecoveryStore:
     """Own publication receipts and reversible filesystem promotion mechanics."""
+
+    @staticmethod
+    def _validated_publication_paths(
+        journal: ModelDownloadPublicationJournal,
+    ) -> tuple[Path, Optional[Path]]:
+        source_token = _normalize_source_lease_token(journal.source_lease_token)
+        final_path = Path(journal.install_path)
+        expected_backup = _canonical_backup_path(final_path, source_token)
+        if journal.had_previous_install:
+            if journal.backup_path != str(expected_backup):
+                raise ValueError("Model publication journal backup path is not canonical")
+            return final_path, expected_backup
+        if journal.backup_path is not None:
+            raise ValueError("Model publication journal has an unexpected backup path")
+        return final_path, None
 
     def create_journal(
         self,
@@ -116,10 +158,13 @@ class ModelDownloadPublicationRecoveryStore:
     ) -> ModelDownloadPublicationJournal:
         if not staged_path.exists():
             raise RuntimeError(f"Staged model artifact is missing: {staged_path}")
+        if not final_path.is_absolute():
+            raise ValueError("Model publication install path must be absolute")
+        source_lease_token = _normalize_source_lease_token(source_lease_token)
         publication_id = str(uuid.uuid4())
         had_previous = final_path.exists()
         backup_path = (
-            final_path.with_name(f"{final_path.name}.previous-{source_lease_token}")
+            _canonical_backup_path(final_path, source_lease_token)
             if had_previous
             else None
         )
@@ -160,7 +205,9 @@ class ModelDownloadPublicationRecoveryStore:
         raw = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(raw, Mapping):
             raise ValueError(f"Invalid model publication journal: {path}")
-        return ModelDownloadPublicationJournal.from_mapping(raw)
+        journal = ModelDownloadPublicationJournal.from_mapping(raw)
+        self._validated_publication_paths(journal)
+        return journal
 
     def promote(
         self,
@@ -168,11 +215,10 @@ class ModelDownloadPublicationRecoveryStore:
         journal: ModelDownloadPublicationJournal,
         staged_path: Path,
     ) -> None:
-        final_path = Path(journal.install_path)
+        final_path, backup = self._validated_publication_paths(journal)
         if not self.marker_matches_path(staged_path, journal):
             raise RuntimeError("Staged model publication marker does not match recovery journal")
         final_path.parent.mkdir(parents=True, exist_ok=True)
-        backup = Path(journal.backup_path) if journal.backup_path else None
 
         if journal.had_previous_install:
             if not final_path.exists():
@@ -193,7 +239,8 @@ class ModelDownloadPublicationRecoveryStore:
             raise
 
     def marker_matches_final(self, journal: ModelDownloadPublicationJournal) -> bool:
-        return self.marker_matches_path(Path(journal.install_path), journal)
+        final_path, _ = self._validated_publication_paths(journal)
+        return self.marker_matches_path(final_path, journal)
 
     def marker_matches_path(
         self,
@@ -237,8 +284,7 @@ class ModelDownloadPublicationRecoveryStore:
         journal: ModelDownloadPublicationJournal,
         stage_root: Path,
     ) -> bool:
-        final_path = Path(journal.install_path)
-        backup = Path(journal.backup_path) if journal.backup_path else None
+        final_path, backup = self._validated_publication_paths(journal)
         marker_matches = self.marker_matches_final(journal)
 
         try:
@@ -262,19 +308,69 @@ class ModelDownloadPublicationRecoveryStore:
         except Exception:
             return False
 
+    def cleanup_completed_residue(
+        self,
+        *,
+        job_id: str,
+        source_lease_token: str,
+        model_id: str,
+        install_path: str,
+        stage_root: Path,
+    ) -> bool:
+        """Remove only residue derivable from durable completed-job identity.
+
+        The receipt is intentionally not trusted for destructive paths here.
+        This makes cleanup restart-safe even when the journal is missing after a
+        partial cleanup, and prevents a tampered backup path from escaping the
+        canonical install target's parent directory.
+        """
+        try:
+            source_token = _normalize_source_lease_token(source_lease_token)
+            final_path = Path(install_path)
+            backup = _canonical_backup_path(final_path, source_token)
+            marker_path = final_path / MARKER_NAME
+
+            if marker_path.exists():
+                try:
+                    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+                except Exception:
+                    return False
+                if not isinstance(marker, Mapping):
+                    return False
+                marker_job_id = str(marker.get("job_id") or "")
+                if marker_job_id == job_id:
+                    if (
+                        marker.get("schema_version") != JOURNAL_SCHEMA_VERSION
+                        or str(marker.get("model_id") or "") != model_id
+                        or str(marker.get("install_path") or "") != install_path
+                    ):
+                        return False
+                    marker_path.unlink()
+
+            self._remove_path(backup)
+            self._remove_path(stage_root)
+            return True
+        except Exception:
+            return False
+
     def cleanup_committed(
         self,
         *,
         journal: ModelDownloadPublicationJournal,
         stage_root: Path,
     ) -> None:
-        backup = Path(journal.backup_path) if journal.backup_path else None
-        if backup is not None:
-            self._remove_path(backup)
-        final_marker = Path(journal.install_path) / MARKER_NAME
-        if final_marker.exists():
-            final_marker.unlink()
-        self._remove_path(stage_root)
+        self._validated_publication_paths(journal)
+        cleaned = self.cleanup_completed_residue(
+            job_id=journal.job_id,
+            source_lease_token=journal.source_lease_token,
+            model_id=journal.model_id,
+            install_path=journal.install_path,
+            stage_root=stage_root,
+        )
+        if not cleaned:
+            raise RuntimeError(
+                f"Model publication committed residue could not be cleaned safely: {journal.job_id}"
+            )
 
     @staticmethod
     def _remove_path(path: Path) -> None:
