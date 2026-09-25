@@ -67,7 +67,19 @@ describe("automationStatsReadinessIssue", () => {
     ).toBeNull();
   });
 
-  it.each(["Unavailable", " unavailable ", "Unknown", "N/A"])(
+  it("accepts an empty schedule as valid operational truth", () => {
+    expect(
+      automationStatsReadinessIssue({
+        activeTasks: "0",
+        tasksToday: "0",
+        definedSequences: "0",
+        nextJob: "None Scheduled",
+        nextJobTime: "N/A",
+      }),
+    ).toBeNull();
+  });
+
+  it.each(["Unavailable", " unavailable ", "Unknown"])(
     "rejects unavailable canonical metrics: %s",
     (activeTasks) => {
       expect(
@@ -110,6 +122,28 @@ describe("automationStatsReadinessIssue", () => {
         definedSequences: "several",
         nextJob: "Nightly Research",
         nextJobTime: "2026-09-25T02:00:00Z",
+      }),
+    ).not.toBeNull();
+  });
+
+  it("rejects inconsistent schedule name/time pairs", () => {
+    expect(
+      automationStatsReadinessIssue({
+        activeTasks: "2",
+        tasksToday: "7",
+        definedSequences: "4",
+        nextJob: "None Scheduled",
+        nextJobTime: "2026-09-25T02:00:00Z",
+      }),
+    ).not.toBeNull();
+
+    expect(
+      automationStatsReadinessIssue({
+        activeTasks: "2",
+        tasksToday: "7",
+        definedSequences: "4",
+        nextJob: "Nightly Research",
+        nextJobTime: "N/A",
       }),
     ).not.toBeNull();
   });
