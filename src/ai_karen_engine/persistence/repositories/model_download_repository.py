@@ -28,6 +28,16 @@ def _mapping(row: Any) -> Optional[dict[str, Any]]:
     return dict(row)
 
 
+async def _lock_model_registry_key(session: Any, model_id: Optional[str]) -> None:
+    """Serialize canonical registry mutations for one logical model id."""
+    if not model_id:
+        return
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:registry_key, 0))"),
+        {"registry_key": f"model-registry:{model_id}"},
+    )
+
+
 async def _lock_install_target(session: Any, install_path: Optional[str]) -> None:
     """Serialize durable mutations for one canonical installation target."""
     if not install_path:
@@ -134,7 +144,7 @@ async def _fail_or_retry_in_session(
 
 
 class _ModelDownloadPublication:
-    """Finalize one promotion while its durable row and target locks stay held."""
+    """Finalize one promotion while its durable row and registry/target locks stay held."""
 
     def __init__(
         self,
@@ -248,7 +258,7 @@ class _ModelDownloadPublication:
 
 
 class ModelDownloadRepository:
-    """Own durable job state, runtime cap, target exclusivity, and lease fencing."""
+    """Own durable job state, runtime cap, registry/target exclusivity, and lease fencing."""
 
     async def initialize_global_concurrency_limit(self, default_limit: int) -> int:
         async with async_transaction_scope() as session:
@@ -311,10 +321,9 @@ class ModelDownloadRepository:
     async def create_job(self, payload: Mapping[str, Any], *, max_attempts: int) -> dict[str, Any]:
         """Create one durable job per canonical install target.
 
-        Concurrent requests for a target already owned by nonterminal durable
-        work reuse that job instead of creating a second filesystem mutator.
-        The target-scoped advisory lock makes the check/insert atomic across
-        API processes without introducing process-local authority.
+        Registry-key locking prevents a concurrent removal from crossing job
+        creation for another revision of the same model. Target locking then
+        preserves the existing one-mutator-per-install-path contract.
         """
         statement = text(
             """
@@ -359,7 +368,9 @@ class ModelDownloadRepository:
             "max_attempts": max_attempts,
         }
         async with async_transaction_scope() as session:
+            model_id = str(params["model_id"] or "").strip() or None
             install_path = str(params["install_path"] or "").strip() or None
+            await _lock_model_registry_key(session, model_id)
             await _lock_install_target(session, install_path)
             if install_path is not None:
                 existing_result = await session.execute(
@@ -416,6 +427,39 @@ class ModelDownloadRepository:
                 {"job_id": job_id},
             )
             return _mapping(result.mappings().first())
+
+    @asynccontextmanager
+    async def model_removal_guard(
+        self,
+        *,
+        model_id: str,
+        install_path: Optional[str],
+    ) -> AsyncIterator[bool]:
+        """Hold model-key then target ownership across one removal mutation.
+
+        The yielded boolean reports whether any nonterminal durable download for
+        the logical model already exists. Callers may ignore it during startup
+        recovery, but interactive removal must reject while it is true.
+        """
+        async with async_transaction_scope() as session:
+            await _lock_model_registry_key(session, model_id)
+            await _lock_install_target(session, install_path)
+            active_result = await session.execute(
+                text(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM public.model_download_jobs
+                        WHERE model_id = :model_id
+                          AND status IN (
+                              'queued', 'running', 'promoting', 'paused', 'pause_requested'
+                          )
+                    )
+                    """
+                ),
+                {"model_id": model_id},
+            )
+            yield bool(active_result.scalar_one())
 
     async def cancel_job(self, job_id: str) -> Optional[dict[str, Any]]:
         """Request cancellation without releasing a live execution lease.
@@ -870,14 +914,19 @@ class ModelDownloadRepository:
     ) -> AsyncIterator[Optional[_ModelDownloadPublication]]:
         """Hold durable ownership across final filesystem and registry publication.
 
-        Publication authority must still have a live lease after this transaction
-        wins the target and job-row locks. That wall-clock check happens only after
-        the row is held so time spent waiting for either lock cannot resurrect an
-        expired worker. Once validated, the short irreversible publication window
-        remains owned by this transaction even if the lease later reaches its
-        deadline; reclaim stays blocked until terminal durable state commits.
+        Registry-key locking is acquired before target locking so publication,
+        job creation, and removal share one deterministic cross-process order.
         """
         async with async_transaction_scope() as session:
+            model_result = await session.execute(
+                text("SELECT model_id FROM public.model_download_jobs WHERE job_id = :job_id"),
+                {"job_id": job_id},
+            )
+            model_id = model_result.scalar_one_or_none()
+            if model_id is None:
+                yield None
+                return
+            await _lock_model_registry_key(session, str(model_id))
             await _lock_install_target(session, install_path)
             result = await session.execute(
                 text(
