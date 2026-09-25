@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-"""Verify KAREN presentation integration on top of canonical gallery truth.
+"""Verify KAREN presentation activation and real-gallery provenance.
 
-Gallery provenance belongs to ``presentation_gallery_contract.py``. This gate owns
-only KAREN brand/presentation integration and attribution to the current branch.
+The presentation layer has two valid repository states:
+
+* dormant: no premium presentation identity is active and no curated gallery exists;
+* active: the complete brand/presentation contract is present and the real gallery
+  satisfies the canonical provenance contract.
+
+This prevents an incomplete presentation layer from becoming production truth while
+allowing KAREN's underlying runtime to remain green until real presentation evidence
+is ready. Gallery provenance itself remains owned by presentation_gallery_contract.py.
 """
 
 from __future__ import annotations
@@ -31,6 +38,11 @@ BRAND_ASSETS = (
     BRAND_ROOT / "karen-banner.svg",
 )
 
+PRESENTATION_DOCS = (
+    REPO_ROOT / "docs" / "presentation" / "BRAND_SYSTEM.md",
+    REPO_ROOT / "docs" / "presentation" / "PRODUCT_PRESENTATION_MANIFEST.md",
+)
+
 PRESENTATION_SURFACES = (
     UI_ROOT / "src" / "app" / "dashboard" / "page.tsx",
     UI_ROOT / "src" / "components" / "automation" / "AgentsOverviewPage.tsx",
@@ -39,8 +51,7 @@ PRESENTATION_SURFACES = (
 )
 
 REQUIRED_PRESENTATION_FILES = (
-    REPO_ROOT / "docs" / "presentation" / "BRAND_SYSTEM.md",
-    REPO_ROOT / "docs" / "presentation" / "PRODUCT_PRESENTATION_MANIFEST.md",
+    *PRESENTATION_DOCS,
     SCREENSHOT_ROOT / "README.md",
     REPO_ROOT / "scripts" / "ci" / "presentation_gallery_contract.py",
     UI_ROOT / "e2e" / "playwright.showcase.config.ts",
@@ -48,6 +59,8 @@ REQUIRED_PRESENTATION_FILES = (
     UI_ROOT / "src" / "app" / "dashboard" / "page.tsx",
     UI_ROOT / "src" / "app" / "manifest.ts",
 )
+
+README_BANNER = "src/ui_launchers/Karen-AI-Theme/public/brand/karen-banner.svg"
 
 
 class PresentationContractError(RuntimeError):
@@ -66,6 +79,18 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def presentation_is_active() -> bool:
+    """Return true only when repository presentation identity has been activated.
+
+    Capture infrastructure on main is deliberately not an activation signal. It may
+    exist while the premium presentation layer is dormant and awaiting real evidence.
+    """
+    if any(path.exists() for path in BRAND_ASSETS + PRESENTATION_DOCS):
+        return True
+    readme = REPO_ROOT / "README.md"
+    return readme.is_file() and README_BANNER in readme.read_text(encoding="utf-8")
+
+
 def assert_revision_is_ancestor_of_head(label: str, revision: str) -> None:
     result = subprocess.run(
         ["git", "merge-base", "--is-ancestor", revision, "HEAD"],
@@ -81,12 +106,23 @@ def assert_revision_is_ancestor_of_head(label: str, revision: str) -> None:
         )
 
 
+def verify_dormant_contract() -> None:
+    gallery_ready = verify_gallery_contract(
+        require_assets=False,
+        require_target_descendant_of_harness=True,
+    )
+    if gallery_ready:
+        raise PresentationContractError(
+            "curated gallery exists while the premium presentation layer is dormant"
+        )
+
+
 def verify_brand_contract() -> None:
     for path in BRAND_ASSETS + REQUIRED_PRESENTATION_FILES + PRESENTATION_SURFACES:
         require_file(path)
 
     readme = read_text(REPO_ROOT / "README.md")
-    if "src/ui_launchers/Karen-AI-Theme/public/brand/karen-banner.svg" not in readme:
+    if README_BANNER not in readme:
         raise PresentationContractError("README must use the canonical KAREN banner")
     if "docs/presentation/BRAND_SYSTEM.md" not in readme:
         raise PresentationContractError("README must link the canonical brand system")
@@ -189,11 +225,19 @@ def main() -> int:
     parser.add_argument(
         "--require-assets",
         action="store_true",
-        help="fail when the curated real-product screenshot set has not been captured yet",
+        help="require real gallery evidence whenever presentation identity is active",
     )
     args = parser.parse_args()
 
     try:
+        if not presentation_is_active():
+            verify_dormant_contract()
+            print(
+                "presentation contract green: premium presentation dormant; "
+                "no curated gallery published"
+            )
+            return 0
+
         verify_brand_contract()
         gallery_ready = verify_presentation_gallery(require_assets=args.require_assets)
     except (PresentationContractError, GalleryContractError, json.JSONDecodeError) as exc:
