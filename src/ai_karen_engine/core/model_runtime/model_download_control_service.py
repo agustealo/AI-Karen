@@ -662,6 +662,57 @@ class ModelDownloadControlService:
         row = await self._repository.resume_job(job_id)
         return self._job_payload(row) if row is not None else await self._require_mutable_job(job_id, "resumed")
 
+    async def cleanup_completed_publication_residue(self, limit: int = 1) -> int:
+        """Retry cleanup for terminal publications whose external residue remains."""
+        await self.initialize()
+        rows = await self._repository.list_completed_publication_cleanup_candidates(limit=limit)
+        cleaned = 0
+        for row in rows:
+            job_id = str(row.get("job_id") or "")
+            source_lease = str(row.get("publication_source_lease_token") or "")
+            model_id = str(row.get("model_id") or "")
+            install_path = str(row.get("install_path") or "")
+            if not job_id or not source_lease or not model_id or not install_path:
+                logger.error(
+                    "model_download_publication_cleanup_identity_invalid job_id=%s",
+                    job_id,
+                )
+                continue
+            stage_root = self._stage_root(job_id, source_lease)
+            cleaned_files = await asyncio.to_thread(
+                self._publication_recovery.cleanup_completed_residue,
+                job_id=job_id,
+                source_lease_token=source_lease,
+                model_id=model_id,
+                install_path=install_path,
+                stage_root=stage_root,
+            )
+            if not cleaned_files:
+                logger.warning(
+                    "model_download_publication_cleanup_deferred job_id=%s source_lease=%s",
+                    job_id,
+                    source_lease,
+                )
+                continue
+            acknowledged = await self._repository.acknowledge_publication_cleanup(
+                job_id=job_id,
+                source_lease_token=source_lease,
+            )
+            if not acknowledged:
+                logger.warning(
+                    "model_download_publication_cleanup_ack_rejected job_id=%s source_lease=%s",
+                    job_id,
+                    source_lease,
+                )
+                continue
+            cleaned += 1
+            logger.info(
+                "model_download_publication_cleanup_complete job_id=%s source_lease=%s",
+                job_id,
+                source_lease,
+            )
+        return cleaned
+
     async def claim_publication_recovery(self, worker_id: str) -> Optional[dict[str, Any]]:
         """Claim interrupted publication work regardless of new-download policy switches."""
         await self.initialize()
@@ -997,6 +1048,18 @@ class ModelDownloadControlService:
                 "model_download_publication_cleanup_degraded job_id=%s error=%s",
                 journal.job_id,
                 exc,
+            )
+            return
+
+        acknowledged = await self._repository.acknowledge_publication_cleanup(
+            job_id=journal.job_id,
+            source_lease_token=journal.source_lease_token,
+        )
+        if not acknowledged:
+            logger.warning(
+                "model_download_publication_cleanup_ack_rejected job_id=%s source_lease=%s",
+                journal.job_id,
+                journal.source_lease_token,
             )
 
     async def _defer_publication_recovery(
