@@ -83,6 +83,27 @@ if [[ ! -d "${TARGET_ROOT}/supabase/migrations" ]]; then
   echo "candidate checkout is missing canonical migrations" >&2
   exit 1
 fi
+if [[ "$(git -C "${TARGET_ROOT}" rev-parse HEAD)" != "${TARGET_REVISION}" ]]; then
+  echo "candidate checkout no longer matches KAREN_SHOWCASE_TARGET_REVISION" >&2
+  exit 1
+fi
+
+mapfile -t untracked_migrations < <(
+  git -C "${TARGET_ROOT}" ls-files --others --exclude-standard -- 'supabase/migrations/*.sql' | sort
+)
+if (( ${#untracked_migrations[@]} > 0 )); then
+  printf 'refusing untracked migration files in exact candidate checkout:\n' >&2
+  printf '  %s\n' "${untracked_migrations[@]}" >&2
+  exit 1
+fi
+
+mapfile -t tracked_migrations < <(
+  git -C "${TARGET_ROOT}" ls-files -- 'supabase/migrations/*.sql' | sort
+)
+if (( ${#tracked_migrations[@]} == 0 )); then
+  echo "candidate checkout has no Git-tracked canonical migrations" >&2
+  exit 1
+fi
 
 echo "[presentation] creating isolated network"
 docker network create "${NETWORK}" >/dev/null
@@ -104,11 +125,17 @@ docker run -d \
   "${REDIS_IMAGE}" redis-server --requirepass "${REDIS_PASSWORD}" >/dev/null
 wait_for Redis 30 docker exec "${REDIS_CONTAINER}" redis-cli -a "${REDIS_PASSWORD}" ping
 
-echo "[presentation] applying candidate canonical migrations"
-while IFS= read -r migration; do
+echo "[presentation] applying Git-tracked candidate canonical migrations"
+for relative_migration in "${tracked_migrations[@]}"; do
+  migration="${TARGET_ROOT}/${relative_migration}"
+  if [[ ! -f "${migration}" || -L "${migration}" ]]; then
+    echo "refusing missing, non-regular, or symlinked tracked migration: ${relative_migration}" >&2
+    exit 1
+  fi
+  echo "[presentation] migration ${relative_migration}"
   docker exec -i "${POSTGRES_CONTAINER}" \
     psql -v ON_ERROR_STOP=1 -U "${DB_USER}" -d "${DB_NAME}" <"${migration}"
-done < <(find "${TARGET_ROOT}/supabase/migrations" -maxdepth 1 -type f -name '*.sql' | sort)
+done
 
 api_env=(
   -e ENVIRONMENT=production
