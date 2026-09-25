@@ -247,6 +247,45 @@ class _ModelDownloadPublication:
         return row
 
 
+class _ModelDownloadTerminalCleanup:
+    """Delete one terminal job only after external evidence is reconciled."""
+
+    def __init__(
+        self,
+        *,
+        session: Any,
+        job_id: str,
+        expected_updated_at: datetime,
+    ) -> None:
+        self._session = session
+        self._job_id = job_id
+        self._expected_updated_at = expected_updated_at
+        self._finished = False
+
+    async def delete(self) -> bool:
+        if self._finished:
+            raise RuntimeError(f"Model download cleanup already finalized: {self._job_id}")
+        result = await self._session.execute(
+            text(
+                """
+                DELETE FROM public.model_download_jobs
+                WHERE job_id = :job_id
+                  AND status IN ('completed', 'failed', 'cancelled')
+                  AND lease_token IS NULL
+                  AND publication_source_lease_token IS NULL
+                  AND updated_at = :expected_updated_at
+                RETURNING job_id
+                """
+            ),
+            {
+                "job_id": self._job_id,
+                "expected_updated_at": self._expected_updated_at,
+            },
+        )
+        self._finished = True
+        return result.first() is not None
+
+
 class ModelDownloadRepository:
     """Own durable job state, runtime cap, target exclusivity, and lease fencing."""
 
@@ -1077,20 +1116,73 @@ class ModelDownloadRepository:
             )
             return result.first() is not None
 
-    async def cleanup_finished_jobs(self, *, max_age_seconds: int) -> int:
+    async def list_finished_jobs_for_cleanup(
+        self,
+        *,
+        max_age_seconds: int,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Return bounded terminal cleanup candidates without taking ownership."""
         async with async_transaction_scope() as session:
             result = await session.execute(
                 text(
                     """
-                    DELETE FROM public.model_download_jobs
+                    SELECT *
+                    FROM public.model_download_jobs
                     WHERE status IN ('completed', 'failed', 'cancelled')
+                      AND lease_token IS NULL
+                      AND publication_source_lease_token IS NULL
                       AND updated_at < now() - :max_age_seconds * interval '1 second'
-                    RETURNING job_id
+                    ORDER BY updated_at ASC, job_id ASC
+                    LIMIT :limit
                     """
                 ),
-                {"max_age_seconds": max_age_seconds},
+                {"max_age_seconds": max_age_seconds, "limit": limit},
             )
-            return len(result.all())
+            return [dict(row) for row in result.mappings().all()]
+
+    @asynccontextmanager
+    async def terminal_cleanup_guard(
+        self,
+        *,
+        job_id: str,
+        install_path: Optional[str],
+        expected_updated_at: datetime,
+        max_age_seconds: int,
+    ) -> AsyncIterator[Optional[_ModelDownloadTerminalCleanup]]:
+        """Lock one terminal row and target while runtime evidence is reconciled."""
+        async with async_transaction_scope() as session:
+            await _lock_install_target(session, install_path)
+            result = await session.execute(
+                text(
+                    """
+                    SELECT job_id
+                    FROM public.model_download_jobs
+                    WHERE job_id = :job_id
+                      AND install_path IS NOT DISTINCT FROM :install_path
+                      AND status IN ('completed', 'failed', 'cancelled')
+                      AND lease_token IS NULL
+                      AND publication_source_lease_token IS NULL
+                      AND updated_at = :expected_updated_at
+                      AND updated_at < now() - :max_age_seconds * interval '1 second'
+                    FOR UPDATE
+                    """
+                ),
+                {
+                    "job_id": job_id,
+                    "install_path": install_path,
+                    "expected_updated_at": expected_updated_at,
+                    "max_age_seconds": max_age_seconds,
+                },
+            )
+            if result.first() is None:
+                yield None
+                return
+            yield _ModelDownloadTerminalCleanup(
+                session=session,
+                job_id=job_id,
+                expected_updated_at=expected_updated_at,
+            )
 
     async def import_legacy_jobs(
         self,
