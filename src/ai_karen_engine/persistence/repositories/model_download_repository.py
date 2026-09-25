@@ -38,8 +38,102 @@ async def _lock_install_target(session: Any, install_path: Optional[str]) -> Non
     )
 
 
+async def _global_capacity_available(session: Any) -> bool:
+    limit_result = await session.execute(
+        text(
+            """
+            SELECT max_concurrent_downloads
+            FROM public.model_download_runtime_settings
+            WHERE singleton = true
+            FOR UPDATE
+            """
+        )
+    )
+    global_concurrency = limit_result.scalar_one_or_none()
+    if global_concurrency is None:
+        raise RuntimeError("model download runtime settings are not initialized")
+
+    active_result = await session.execute(
+        text(
+            """
+            SELECT count(*)
+            FROM public.model_download_jobs
+            WHERE status IN ('running', 'promoting', 'pause_requested')
+              AND lease_token IS NOT NULL
+              AND lease_expires_at > clock_timestamp()
+            """
+        )
+    )
+    return int(active_result.scalar_one()) < int(global_concurrency)
+
+
+async def _fail_or_retry_in_session(
+    session: Any,
+    *,
+    job_id: str,
+    lease_token: str,
+    error: str,
+    retry_base_seconds: int,
+) -> Optional[dict[str, Any]]:
+    result = await session.execute(
+        text(
+            """
+            UPDATE public.model_download_jobs
+            SET status = CASE
+                    WHEN cancel_requested THEN 'cancelled'
+                    WHEN pause_requested THEN 'paused'
+                    WHEN attempt_count >= max_attempts THEN 'failed'
+                    ELSE 'queued'
+                END,
+                message = CASE
+                    WHEN cancel_requested THEN 'Cancelled after active download stopped'
+                    WHEN pause_requested THEN 'Paused after active download stopped'
+                    WHEN attempt_count >= max_attempts
+                        THEN 'Download failed after maximum retry attempts'
+                    ELSE 'Download failed; queued for retry'
+                END,
+                error = CASE
+                    WHEN cancel_requested OR pause_requested THEN error
+                    ELSE :error
+                END,
+                available_at = CASE
+                    WHEN cancel_requested OR pause_requested OR attempt_count >= max_attempts
+                        THEN available_at
+                    ELSE now() + (:retry_base_seconds * GREATEST(attempt_count, 1)) * interval '1 second'
+                END,
+                dead_lettered_at = CASE
+                    WHEN cancel_requested OR pause_requested THEN NULL
+                    WHEN attempt_count >= max_attempts THEN now()
+                    ELSE NULL
+                END,
+                completed_at = CASE
+                    WHEN cancel_requested THEN now()
+                    WHEN pause_requested THEN NULL
+                    WHEN attempt_count >= max_attempts THEN now()
+                    ELSE NULL
+                END,
+                lease_owner = NULL,
+                lease_token = NULL,
+                lease_expires_at = NULL,
+                heartbeat_at = NULL
+            WHERE job_id = :job_id
+              AND status IN ('running', 'promoting', 'pause_requested')
+              AND lease_token = CAST(:lease_token AS uuid)
+            RETURNING *
+            """
+        ),
+        {
+            "job_id": job_id,
+            "lease_token": lease_token,
+            "error": error,
+            "retry_base_seconds": retry_base_seconds,
+        },
+    )
+    return _mapping(result.mappings().first())
+
+
 class _ModelDownloadPublication:
-    """Complete one promotion while its durable row and target locks stay held."""
+    """Finalize one promotion while its durable row and target locks stay held."""
 
     def __init__(
         self,
@@ -53,11 +147,11 @@ class _ModelDownloadPublication:
         self._job_id = job_id
         self._lease_token = lease_token
         self._install_path = install_path
-        self._completed = False
+        self._finished = False
 
     async def complete(self, result_payload: Mapping[str, Any]) -> dict[str, Any]:
-        if self._completed:
-            raise RuntimeError(f"Model download publication already completed: {self._job_id}")
+        if self._finished:
+            raise RuntimeError(f"Model download publication already finalized: {self._job_id}")
 
         result = await self._session.execute(
             text(
@@ -125,8 +219,30 @@ class _ModelDownloadPublication:
             ),
             {"job_id": self._job_id, "install_path": self._install_path},
         )
-        self._completed = True
+        self._finished = True
         return completed
+
+    async def abort_for_retry(
+        self,
+        *,
+        error: str,
+        retry_base_seconds: int,
+    ) -> dict[str, Any]:
+        if self._finished:
+            raise RuntimeError(f"Model download publication already finalized: {self._job_id}")
+        row = await _fail_or_retry_in_session(
+            self._session,
+            job_id=self._job_id,
+            lease_token=self._lease_token,
+            error=error,
+            retry_base_seconds=retry_base_seconds,
+        )
+        if row is None:
+            raise RuntimeError(
+                f"Model download publication ownership changed while aborting: {self._job_id}"
+            )
+        self._finished = True
+        return row
 
 
 class ModelDownloadRepository:
@@ -383,6 +499,58 @@ class ModelDownloadRepository:
             )
             return _mapping(result.mappings().first())
 
+    async def claim_expired_promotion_for_recovery(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> Optional[dict[str, Any]]:
+        """Claim one interrupted promotion before ordinary queue work can advance.
+
+        The original expired lease token is returned only as ephemeral recovery
+        evidence so the runtime can locate the matching publication receipt.
+        Durable lifecycle ownership immediately moves to the new recovery lease.
+        """
+        recovery_token = str(uuid.uuid4())
+        async with async_transaction_scope() as session:
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                {"lock_key": _MODEL_DOWNLOAD_CLAIM_LOCK},
+            )
+            if not await _global_capacity_available(session):
+                return None
+            result = await session.execute(
+                text(
+                    """
+                    WITH candidate AS (
+                        SELECT job_id, lease_token AS interrupted_lease_token
+                        FROM public.model_download_jobs
+                        WHERE status = 'promoting'
+                          AND lease_token IS NOT NULL
+                          AND lease_expires_at <= clock_timestamp()
+                        ORDER BY updated_at ASC, job_id ASC
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT 1
+                    )
+                    UPDATE public.model_download_jobs AS jobs
+                    SET lease_owner = :worker_id,
+                        lease_token = CAST(:recovery_token AS uuid),
+                        lease_expires_at = clock_timestamp() + :lease_seconds * interval '1 second',
+                        heartbeat_at = clock_timestamp(),
+                        message = 'Recovering interrupted publication'
+                    FROM candidate
+                    WHERE jobs.job_id = candidate.job_id
+                    RETURNING jobs.*, candidate.interrupted_lease_token::text AS interrupted_lease_token
+                    """
+                ),
+                {
+                    "worker_id": worker_id,
+                    "recovery_token": recovery_token,
+                    "lease_seconds": lease_seconds,
+                },
+            )
+            return _mapping(result.mappings().first())
+
     async def claim_next(
         self,
         *,
@@ -396,6 +564,9 @@ class ModelDownloadRepository:
                 text("SELECT pg_advisory_xact_lock(:lock_key)"),
                 {"lock_key": _MODEL_DOWNLOAD_CLAIM_LOCK},
             )
+            # ``promoting`` is intentionally excluded. An expired promotion may
+            # already have filesystem/registry side effects and must be claimed
+            # by the recovery lane before durable state can return to the queue.
             await session.execute(
                 text(
                     """
@@ -437,39 +608,14 @@ class ModelDownloadRepository:
                         lease_token = NULL,
                         lease_expires_at = NULL,
                         heartbeat_at = NULL
-                    WHERE status IN ('running', 'promoting', 'pause_requested')
+                    WHERE status IN ('running', 'pause_requested')
                       AND lease_token IS NOT NULL
-                      AND lease_expires_at <= now()
+                      AND lease_expires_at <= clock_timestamp()
                     """
                 ),
                 {"retry_base_seconds": retry_base_seconds},
             )
-            limit_result = await session.execute(
-                text(
-                    """
-                    SELECT max_concurrent_downloads
-                    FROM public.model_download_runtime_settings
-                    WHERE singleton = true
-                    FOR UPDATE
-                    """
-                )
-            )
-            global_concurrency = limit_result.scalar_one_or_none()
-            if global_concurrency is None:
-                raise RuntimeError("model download runtime settings are not initialized")
-
-            active_result = await session.execute(
-                text(
-                    """
-                    SELECT count(*)
-                    FROM public.model_download_jobs
-                    WHERE status IN ('running', 'promoting', 'pause_requested')
-                      AND lease_token IS NOT NULL
-                      AND lease_expires_at > now()
-                    """
-                )
-            )
-            if int(active_result.scalar_one()) >= int(global_concurrency):
+            if not await _global_capacity_available(session):
                 return None
 
             result = await session.execute(
@@ -490,12 +636,11 @@ class ModelDownloadRepository:
                                   WHERE blocker.job_id <> jobs.job_id
                                     AND blocker.install_path = jobs.install_path
                                     AND (
-                                        (
-                                            blocker.status IN (
-                                                'running', 'promoting', 'pause_requested'
-                                            )
+                                        blocker.status = 'promoting'
+                                        OR (
+                                            blocker.status IN ('running', 'pause_requested')
                                             AND blocker.lease_token IS NOT NULL
-                                            AND blocker.lease_expires_at > now()
+                                            AND blocker.lease_expires_at > clock_timestamp()
                                         )
                                         OR (
                                             blocker.status IN ('queued', 'paused')
@@ -780,6 +925,38 @@ class ModelDownloadRepository:
                 return None
             return await publication.complete(result_payload)
 
+    async def release_publication_for_recovery(
+        self,
+        *,
+        job_id: str,
+        lease_token: str,
+        error: str,
+    ) -> bool:
+        """Make an interrupted publication immediately eligible for recovery.
+
+        The source lease token is intentionally retained as receipt identity,
+        but its lease is expired so it no longer grants execution authority.
+        """
+        async with async_transaction_scope() as session:
+            result = await session.execute(
+                text(
+                    """
+                    UPDATE public.model_download_jobs
+                    SET lease_owner = NULL,
+                        lease_expires_at = clock_timestamp(),
+                        heartbeat_at = NULL,
+                        message = 'Publication interrupted; awaiting recovery',
+                        error = :error
+                    WHERE job_id = :job_id
+                      AND status = 'promoting'
+                      AND lease_token = CAST(:lease_token AS uuid)
+                    RETURNING job_id
+                    """
+                ),
+                {"job_id": job_id, "lease_token": lease_token, "error": error},
+            )
+            return result.first() is not None
+
     async def fail_or_retry(
         self,
         *,
@@ -789,61 +966,13 @@ class ModelDownloadRepository:
         retry_base_seconds: int,
     ) -> Optional[dict[str, Any]]:
         async with async_transaction_scope() as session:
-            result = await session.execute(
-                text(
-                    """
-                    UPDATE public.model_download_jobs
-                    SET status = CASE
-                            WHEN cancel_requested THEN 'cancelled'
-                            WHEN pause_requested THEN 'paused'
-                            WHEN attempt_count >= max_attempts THEN 'failed'
-                            ELSE 'queued'
-                        END,
-                        message = CASE
-                            WHEN cancel_requested THEN 'Cancelled after active download stopped'
-                            WHEN pause_requested THEN 'Paused after active download stopped'
-                            WHEN attempt_count >= max_attempts
-                                THEN 'Download failed after maximum retry attempts'
-                            ELSE 'Download failed; queued for retry'
-                        END,
-                        error = CASE
-                            WHEN cancel_requested OR pause_requested THEN error
-                            ELSE :error
-                        END,
-                        available_at = CASE
-                            WHEN cancel_requested OR pause_requested OR attempt_count >= max_attempts
-                                THEN available_at
-                            ELSE now() + (:retry_base_seconds * GREATEST(attempt_count, 1)) * interval '1 second'
-                        END,
-                        dead_lettered_at = CASE
-                            WHEN cancel_requested OR pause_requested THEN NULL
-                            WHEN attempt_count >= max_attempts THEN now()
-                            ELSE NULL
-                        END,
-                        completed_at = CASE
-                            WHEN cancel_requested THEN now()
-                            WHEN pause_requested THEN NULL
-                            WHEN attempt_count >= max_attempts THEN now()
-                            ELSE NULL
-                        END,
-                        lease_owner = NULL,
-                        lease_token = NULL,
-                        lease_expires_at = NULL,
-                        heartbeat_at = NULL
-                    WHERE job_id = :job_id
-                      AND status IN ('running', 'promoting', 'pause_requested')
-                      AND lease_token = CAST(:lease_token AS uuid)
-                    RETURNING *
-                    """
-                ),
-                {
-                    "job_id": job_id,
-                    "lease_token": lease_token,
-                    "error": error,
-                    "retry_base_seconds": retry_base_seconds,
-                },
+            return await _fail_or_retry_in_session(
+                session,
+                job_id=job_id,
+                lease_token=lease_token,
+                error=error,
+                retry_base_seconds=retry_base_seconds,
             )
-            return _mapping(result.mappings().first())
 
     async def release_for_shutdown(
         self,
