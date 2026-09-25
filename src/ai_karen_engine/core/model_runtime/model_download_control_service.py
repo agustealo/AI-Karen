@@ -706,6 +706,24 @@ class ModelDownloadControlService:
             retry_base_seconds=self._worker_settings.retry_base_seconds,
         )
 
+    async def defer_publication_recovery_retry(
+        self,
+        job_id: str,
+        lease_token: str,
+        error: BaseException,
+    ) -> None:
+        released = await self._repository.defer_publication_recovery_retry(
+            job_id=job_id,
+            lease_token=lease_token,
+            error=f"{type(error).__name__}: {error}",
+            retry_base_seconds=self._worker_settings.retry_base_seconds,
+        )
+        if not released:
+            logger.warning(
+                "model_download_publication_recovery_defer_rejected job_id=%s",
+                job_id,
+            )
+
     async def execute_claimed_job(self, claim: Mapping[str, Any]) -> None:
         job_id = str(claim["job_id"])
         lease_token = str(claim["lease_token"])
