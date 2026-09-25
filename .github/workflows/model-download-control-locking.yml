@@ -66,6 +66,7 @@ jobs:
             src/ai_karen_engine/core/model_runtime/model_download_worker.py \
             src/ai_karen_engine/api_routes/models/model_orchestrator.py \
             src/ai_karen_engine/server/application_runtime.py \
+            tests/core/model_runtime/test_model_orchestrator_registry_durability.py \
             tests/core/model_runtime/test_model_download_publication_recovery.py \
             tests/core/model_runtime/test_model_download_recovery_fail_closed.py \
             tests/integration/test_model_download_requested_state_leases.py \
@@ -84,6 +85,7 @@ jobs:
             src/ai_karen_engine/core/model_runtime/model_download_worker.py \
             src/ai_karen_engine/api_routes/models/model_orchestrator.py \
             src/ai_karen_engine/server/application_runtime.py \
+            tests/core/model_runtime/test_model_orchestrator_registry_durability.py \
             tests/core/model_runtime/test_model_download_durable_worker.py \
             tests/core/model_runtime/test_model_download_worker_cancellation.py \
             tests/core/model_runtime/test_model_download_publication_recovery.py \
@@ -101,9 +103,10 @@ jobs:
             tests/architecture/test_model_download_publication_recovery_authority.py \
             -q
 
-      - name: Prove durable lifecycle staged publication and recovery receipts
+      - name: Prove durable lifecycle staged publication recovery and registry persistence
         run: |
           pytest \
+            tests/core/model_runtime/test_model_orchestrator_registry_durability.py \
             tests/core/model_runtime/test_model_download_durable_worker.py \
             tests/core/model_runtime/test_model_download_worker_cancellation.py \
             tests/core/model_runtime/test_model_download_publication_recovery.py \
