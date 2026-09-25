@@ -34,7 +34,9 @@ class ModelDownloadWorkerSettings:
 
     The control-plane policy remains the user-facing source for the global
     concurrency ceiling. ``global_concurrency_default`` is the safe fallback
-    when no policy override is present.
+    when no policy override is present. Retention scheduling is operational
+    worker configuration only; PostgreSQL remains the authority for which
+    terminal jobs are eligible for cleanup.
     """
 
     enabled: bool = True
@@ -45,6 +47,9 @@ class ModelDownloadWorkerSettings:
     max_attempts: int = 3
     retry_base_seconds: int = 5
     shutdown_grace_seconds: int = 30
+    cleanup_interval_seconds: int = 300
+    finished_job_retention_seconds: int = 86400
+    cleanup_batch_size: int = 25
 
     def validate(self) -> "ModelDownloadWorkerSettings":
         if self.global_concurrency_default < 1:
@@ -61,6 +66,12 @@ class ModelDownloadWorkerSettings:
             raise ValueError("model download retry_base_seconds cannot be negative")
         if self.shutdown_grace_seconds < 0:
             raise ValueError("model download shutdown_grace_seconds cannot be negative")
+        if self.cleanup_interval_seconds < 1:
+            raise ValueError("model download cleanup interval must be at least 1 second")
+        if self.finished_job_retention_seconds < 60:
+            raise ValueError("model download finished-job retention must be at least 60 seconds")
+        if self.cleanup_batch_size < 1 or self.cleanup_batch_size > 250:
+            raise ValueError("model download cleanup batch size must be between 1 and 250")
         return self
 
 
@@ -74,6 +85,12 @@ def load_model_download_worker_settings() -> ModelDownloadWorkerSettings:
         max_attempts=_env_int("KAREN_MODEL_DOWNLOAD_MAX_ATTEMPTS", 3),
         retry_base_seconds=_env_int("KAREN_MODEL_DOWNLOAD_RETRY_BASE_SECONDS", 5),
         shutdown_grace_seconds=_env_int("KAREN_MODEL_DOWNLOAD_SHUTDOWN_GRACE_SECONDS", 30),
+        cleanup_interval_seconds=_env_int("KAREN_MODEL_DOWNLOAD_CLEANUP_INTERVAL_SECONDS", 300),
+        finished_job_retention_seconds=_env_int(
+            "KAREN_MODEL_DOWNLOAD_FINISHED_JOB_RETENTION_SECONDS",
+            86400,
+        ),
+        cleanup_batch_size=_env_int("KAREN_MODEL_DOWNLOAD_CLEANUP_BATCH_SIZE", 25),
     ).validate()
 
 
