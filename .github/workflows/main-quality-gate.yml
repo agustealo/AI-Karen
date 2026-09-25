@@ -243,6 +243,29 @@ jobs:
           assert web.get('ports'), 'production web ingress must remain published'
           PY
 
+  presentation-integrity:
+    name: presentation-integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Attest exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Verify presentation truth through canonical contract
+        run: python scripts/ci/verify_presentation_assets.py --require-assets
+
   main-quality-gate:
     name: main-quality-gate
     runs-on: ubuntu-latest
@@ -251,6 +274,7 @@ jobs:
       - backend-quality
       - frontend-quality
       - deployment-contract
+      - presentation-integrity
     steps:
       - name: Publish merge decision
         run: |
