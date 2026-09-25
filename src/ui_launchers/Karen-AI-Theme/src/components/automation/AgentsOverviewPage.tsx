@@ -127,7 +127,7 @@ export default function AutomationOverviewPage() {
           <Info className="h-4 w-4" />
           <AlertTitle>Live Runtime Connected</AlertTitle>
           <AlertDescription>
-            KAREN Agents & Workflows is connected to the tenant-scoped backend. The dashboard metrics below are the values returned by the live automation runtime.
+            KAREN Agents & Workflows is connected to tenant-scoped automation owners. The dashboard metrics below are verified values returned by the live runtime.
           </AlertDescription>
         </Alert>
       )}
@@ -169,14 +169,14 @@ export default function AutomationOverviewPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Active Agents</CardTitle>
-              <Bot className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm font-medium">Active Tasks</CardTitle>
+              <FileText className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold" data-automation-metric="active-agents">
-                {metric(stats?.activeAgents)}
+              <div className="text-2xl font-bold" data-automation-metric="active-tasks">
+                {metric(stats?.activeTasks)}
               </div>
-              <p className="text-xs text-muted-foreground">Connected agents in active runtime states.</p>
+              <p className="text-xs text-muted-foreground">Tenant tasks currently executing.</p>
             </CardContent>
           </Card>
           <Card>
@@ -197,8 +197,8 @@ export default function AutomationOverviewPage() {
               <Workflow className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold" data-automation-metric="active-sequences">
-                {metric(stats?.activeSequences)}
+              <div className="text-2xl font-bold" data-automation-metric="defined-sequences">
+                {metric(stats?.definedSequences)}
               </div>
               <p className="text-xs text-muted-foreground">Durable automation jobs visible to this tenant.</p>
             </CardContent>
