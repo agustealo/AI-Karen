@@ -4,19 +4,21 @@ This directory contains public-facing product captures. Images here are evidence
 
 ## Hard rule
 
-Only real browser captures of the real KAREN UI may be committed as product screenshots. Do not place generated dashboards, design mockups, edited feature composites, or static test substitutes here and present them as application truth.
+Only real browser captures of the real KAREN UI may be committed as product screenshots. Do not place generated dashboards, design mockups, edited feature composites, generic Playwright reports, or static test substitutes here and present them as application truth.
 
-The curated gallery is valid only when its five PNG files are accompanied by `capture-manifest.json` from the canonical Playwright capture rail. A screenshot without provenance is not product proof.
+The curated gallery is valid only when its five canonical PNG files are accompanied by `capture-manifest.json` from the governed showcase capture rail. A screenshot without canonical provenance is not product proof.
 
 ## Canonical ownership
 
 The executable remote-capture authority lives on the default branch:
 
-- `.github/workflows/presentation-capture.yml` owns dispatch and credential isolation;
-- `src/ui_launchers/Karen-AI-Theme/e2e/showcase/` owns the real-browser capture harness;
+- `.github/workflows/presentation-capture.yml` owns trusted request ingress, credential isolation, capture execution, and validated destination writes;
+- `src/ui_launchers/Karen-AI-Theme/e2e/showcase/` owns the real-browser product capture harness;
 - `scripts/ci/presentation_gallery_contract.py` owns reusable gallery provenance validation;
 - `scripts/ci/verify_presentation_assets.py` adds KAREN brand/presentation integration and current-branch attribution;
 - this directory owns only the resulting curated evidence.
+
+The generic `src/ui_launchers/Karen-AI-Theme/e2e/` suite is browser test infrastructure, not presentation evidence. Generated Playwright reports and test-result artifacts must not be copied into this directory as release or marketing proof.
 
 A presentation branch must not replace the main-owned capture authority merely to obtain screenshots.
 
@@ -42,13 +44,21 @@ npm run showcase:capture
 
 `KAREN_SHOWCASE_TARGET_REVISION` is an operator attestation of the revision actually deployed at that target. The capture harness records its own checkout SHA separately. Until KAREN exposes a canonical deployment-revision attestation endpoint, the two values must never be collapsed into a single "captured SHA" claim.
 
-The rail refuses to run unless the account is explicitly declared `sanitized-demo`. This is deliberate. Do not capture a personal or production account for convenience.
+The rail refuses to run unless the account is explicitly declared `sanitized-demo`. Do not capture a personal or production account for convenience.
 
 ### GitHub capture from the approved demo deployment
 
-The registered workflow is `.github/workflows/presentation-capture.yml`. The **workflow ref must be `main`** so every secret-bearing command executes code owned by the trusted default branch.
+The registered workflow is `.github/workflows/presentation-capture.yml`. Secret-bearing capture code always executes from trusted default-branch `main`.
 
-Use these inputs:
+The preferred repository-owner ingress from an open pull request is an exact command:
+
+```text
+/capture-presentation <full-40-character-current-pr-head-sha>
+```
+
+The workflow accepts the comment only when it is authored by the repository owner with `OWNER` author association. It binds the requested SHA to the pull request's current head before capture secrets are exposed, fixes the write destination to `docs/premium-brand-showcase`, and enables validated asset commit for that command path.
+
+Manual `workflow_dispatch` remains available from workflow ref `main` with:
 
 ```text
 target_revision=<full 40-character SHA actually deployed>
@@ -56,7 +66,7 @@ destination_branch=docs/premium-brand-showcase
 commit_assets=true
 ```
 
-Repository secrets must provide:
+Repository Actions secrets must provide:
 
 ```text
 KAREN_PRESENTATION_BASE_URL
@@ -64,11 +74,13 @@ KAREN_PRESENTATION_EMAIL
 KAREN_PRESENTATION_PASSWORD
 ```
 
-The target revision must be a known commit descended from the exact trusted `main` capture baseline used by that workflow run. The destination must be an existing non-default branch.
+`KAREN_PRESENTATION_BASE_URL` must be the HTTPS URL of the approved sanitized running KAREN demo. The deployed application at that URL must correspond to the exact target revision supplied to the capture request.
 
-The workflow requires HTTPS, authenticates through the real UI, records the exact trusted capture-harness checkout, records the separately attested target revision, validates the gallery, and uploads immutable evidence. The capture job is read-only and has the demo credentials. The later repository-write job receives **no capture URL, email, or password**, stages only the six canonical gallery files, rejects symlinked destination paths, and re-validates the evidence with the trusted verifier shipped inside the capture artifact. It does not execute destination-branch Python or Node code under write permission.
+The target revision must be a known repository commit descended from the exact trusted `main` capture baseline used by that workflow run. The destination must be an existing non-default branch.
 
-Do not dispatch the credential-bearing workflow from a feature/presentation branch. That path is intentionally rejected.
+The capture workflow requires HTTPS, authenticates through the real UI, records the exact trusted capture-harness checkout, records the separately attested target revision, validates the gallery, and uploads immutable evidence. The capture job is read-only and receives the demo credentials. The later repository-write job receives **no capture URL, email, or password**, stages only the six canonical gallery files, rejects symlinked destination paths, and re-validates the evidence with the trusted verifier shipped inside the capture artifact. It does not execute destination-branch Python or Node code under write permission.
+
+Do not run credential-bearing capture code from a feature/presentation branch. That path is intentionally rejected.
 
 ## Expected curated set
 
@@ -123,10 +135,6 @@ python scripts/ci/verify_presentation_assets.py --require-assets
 
 The shared gallery contract rejects partial galleries, invalid PNGs, invalid or unknown revisions, bad provenance, unexpected viewport dimensions, and non-sanitized account provenance. The presentation verifier delegates those checks to that canonical owner, then enforces KAREN brand/capture integration and requires both harness and target revisions to belong to the current presentation line.
 
-## Existing E2E proof
-
-`e2e-current-browser-proof.png` is copied byte-for-byte from the repository's committed Playwright report blob. It is retained only as proof that a real browser image already exists in project history. It is uncurated and must not automatically become the README hero or product gallery.
-
 ## Curation policy
 
-The README may promote only reviewed files from the expected curated set. If a screen changes materially, regenerate the relevant image from the current product state rather than editing the old PNG.
+The README may promote only reviewed files from the expected curated set. If a screen changes materially, regenerate the relevant image from the current product state rather than editing or recycling old browser-test output.
