@@ -707,11 +707,11 @@ class ModelDownloadRepository:
     ) -> AsyncIterator[Optional[_ModelDownloadPublication]]:
         """Hold durable ownership across final filesystem and registry publication.
 
-        Lease expiry makes a promotion eligible for reclamation, but expiry alone
-        is not authority revocation. The lease token changes only when a reclaim
-        transaction wins the row lock. Holding that row lock plus the canonical
-        target advisory lock therefore makes the irreversible publication window
-        deterministic without keeping the long model download inside a DB transaction.
+        Publication authority must still have a live lease when this transaction
+        wins the target and row locks. Once validated under those locks, the short
+        irreversible publication window stays owned by this transaction even if
+        wall-clock lease expiry occurs before commit; reclaim remains blocked on
+        the job row until terminal durable state is committed.
         """
         async with async_transaction_scope() as session:
             await _lock_install_target(session, install_path)
@@ -726,6 +726,7 @@ class ModelDownloadRepository:
                       AND cancel_requested = false
                       AND pause_requested = false
                       AND lease_token = CAST(:lease_token AS uuid)
+                      AND lease_expires_at > now()
                     FOR UPDATE
                     """
                 ),
