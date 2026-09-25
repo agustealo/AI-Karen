@@ -162,7 +162,6 @@ async def _get_live_agents_from_runtime() -> List[Any]:
         return []
 
 
-
 # API Endpoints
 @router.post("/execute", response_model=AgentExecuteResponse)
 async def execute_agent(
@@ -183,10 +182,8 @@ async def execute_agent(
         Agent execution response
     """
     try:
-        # Get integration service
         integration_service = get_agent_integration_service()
 
-        # Convert capabilities from strings to enum
         capabilities = []
         for cap_str in request.capabilities_required:
             try:
@@ -194,7 +191,6 @@ async def execute_agent(
             except ValueError:
                 logger.warning(f"Unknown capability: {cap_str}")
 
-        # Create agent request
         agent_request = AgentRequest(
             message=request.message,
             execution_mode=request.execution_mode,
@@ -216,12 +212,11 @@ async def execute_agent(
         if not _AGENT_AUTH.can_execute_request(_user_payload(current_user), agent_request):
             raise HTTPException(status_code=403, detail="Agent execution permission denied")
 
-        # Execute request
         response = await integration_service.execute_request(agent_request)
-
-        # Convert to API response format
         return _convert_agent_response_to_api_response(response)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Agent execution error: {e}")
         raise HTTPException(status_code=500, detail=f"Agent execution error: {str(e)}")
@@ -244,10 +239,8 @@ async def execute_agent_stream(
         Streaming response
     """
     try:
-        # Get integration service
         integration_service = get_agent_integration_service()
 
-        # Convert capabilities from strings to enum
         capabilities = []
         for cap_str in request.capabilities_required:
             try:
@@ -255,7 +248,6 @@ async def execute_agent_stream(
             except ValueError:
                 logger.warning(f"Unknown capability: {cap_str}")
 
-        # Create agent request
         agent_request = AgentRequest(
             message=request.message,
             execution_mode=request.execution_mode,
@@ -283,7 +275,6 @@ async def execute_agent_stream(
                 async for stream_response in integration_service.execute_request_stream(
                     agent_request
                 ):
-                    # Convert to JSON and send as SSE
                     chunk_data = {
                         "request_id": stream_response.request_id,
                         "agent_id": stream_response.agent_id,
@@ -305,12 +296,9 @@ async def execute_agent_stream(
                     }
 
                     yield f"data: {json.dumps(chunk_data)}\n\n"
-
-                    # End of stream if complete
                     if stream_response.is_complete:
                         break
 
-                # Send final marker
                 yield "data: [DONE]\n\n"
 
             except Exception as e:
@@ -333,6 +321,8 @@ async def execute_agent_stream(
             },
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Agent streaming setup error: {e}")
         raise HTTPException(
@@ -352,19 +342,11 @@ async def get_all_agents(
     ),
     current_user: Dict[str, Any] = Depends(_get_authenticated_user),
 ):
-    """
-    Get all agents with optional filtering.
-
-    Args:
-        execution_mode: Filter by execution mode
-        status: Filter by status
-        capabilities: Filter by capabilities
-        current_user: Current authenticated user
-
-    Returns:
-        List of agent information
-    """
+    """Get installation-wide agent catalog data with optional filtering."""
     try:
+        if not _has_agent_permission(current_user, AgentPermission.VIEW_AGENT):
+            raise HTTPException(status_code=403, detail="View permission required")
+
         agents: List[Any] = []
         try:
             integration_service = get_agent_integration_service()
@@ -391,16 +373,13 @@ async def get_all_agents(
             )
             agents = await _get_live_agents_from_runtime()
 
-        if not _has_agent_permission(current_user, AgentPermission.VIEW_AGENT):
-            raise HTTPException(status_code=403, detail="View permission required")
-
-        # Filter by status if provided
         if status:
             agents = [agent for agent in agents if agent.status.value == status]
 
-        # Convert to response format
         return [_convert_agent_info_to_response(agent) for agent in agents]
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Get agents error: {e}")
         raise HTTPException(status_code=500, detail=f"Get agents error: {str(e)}")
@@ -412,16 +391,7 @@ async def get_agent(
     agent_id: str,
     current_user: Dict[str, Any] = Depends(_get_authenticated_user),
 ):
-    """
-    Get information about a specific agent.
-
-    Args:
-        agent_id: Agent identifier
-        current_user: Current authenticated user
-
-    Returns:
-        Agent information
-    """
+    """Get installation-wide information about a specific agent."""
     try:
         if not _has_agent_permission(current_user, AgentPermission.VIEW_AGENT):
             raise HTTPException(status_code=403, detail="View permission required")
@@ -441,7 +411,6 @@ async def get_agent(
         if not agent:
             raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
-        # Convert to response format
         return _convert_agent_info_to_response(agent)
 
     except HTTPException:
@@ -457,24 +426,12 @@ async def create_agent(
     request: AgentCreateRequest,
     current_user: Dict[str, Any] = Depends(_get_authenticated_user),
 ):
-    """
-    Create a new agent.
-
-    Args:
-        request: Agent creation request
-        current_user: Current authenticated user
-
-    Returns:
-        Created agent information
-    """
+    """Create a new installation-wide agent definition."""
     try:
         if not _has_agent_permission(current_user, AgentPermission.CREATE_AGENT):
             raise HTTPException(status_code=403, detail="Create permission required")
 
-        # Get integration service
         integration_service = get_agent_integration_service()
-
-        # Create agent
         agent = await integration_service.create_agent(
             agent_id=request.agent_id,
             name=request.name,
@@ -482,8 +439,6 @@ async def create_agent(
             execution_mode=request.execution_mode,
             config=request.config,
         )
-
-        # Convert to response format
         return _convert_agent_info_to_response(agent)
 
     except HTTPException:
@@ -499,24 +454,12 @@ async def delete_agent(
     agent_id: str,
     current_user: Dict[str, Any] = Depends(_get_authenticated_user),
 ):
-    """
-    Delete an agent.
-
-    Args:
-        agent_id: Agent identifier
-        current_user: Current authenticated user
-
-    Returns:
-        Success message
-    """
+    """Delete an installation-wide agent definition."""
     try:
         if not _has_agent_permission(current_user, AgentPermission.DELETE_AGENT):
             raise HTTPException(status_code=403, detail="Delete permission required")
 
-        # Get integration service
         integration_service = get_agent_integration_service()
-
-        # Delete agent
         success = await integration_service.delete_agent(agent_id)
 
         if not success:
@@ -537,24 +480,12 @@ async def terminate_agent(
     agent_id: str,
     current_user: Dict[str, Any] = Depends(_get_authenticated_user),
 ):
-    """
-    Terminate an agent.
-
-    Args:
-        agent_id: Agent identifier
-        current_user: Current authenticated user
-
-    Returns:
-        Success message
-    """
+    """Terminate an installation-wide agent runtime."""
     try:
         if not _has_agent_permission(current_user, AgentPermission.TERMINATE_AGENT):
             raise HTTPException(status_code=403, detail="Terminate permission required")
 
-        # Get integration service
         integration_service = get_agent_integration_service()
-
-        # Terminate agent
         success = await integration_service.terminate_agent(agent_id)
 
         if not success:
@@ -576,7 +507,7 @@ async def get_agent_events(
     limit: int = Query(100, ge=1, le=500, description="Maximum number of events"),
     current_user: Dict[str, Any] = Depends(_get_authenticated_user),
 ):
-    """Get lifecycle events for a specific agent."""
+    """Get lifecycle events for a specific installation-wide agent."""
     try:
         if not _has_agent_permission(current_user, AgentPermission.VIEW_LIFECYCLE_EVENTS):
             raise HTTPException(status_code=403, detail="Lifecycle events permission required")
@@ -598,27 +529,16 @@ async def get_system_metrics(
     http_request: Request,
     current_user: Dict[str, Any] = Depends(_get_authenticated_user),
 ):
-    """
-    Get system-wide metrics.
-
-    Args:
-        current_user: Current authenticated user
-
-    Returns:
-        System metrics
-    """
+    """Get installation-wide agent system metrics."""
     try:
         if not _has_agent_permission(current_user, AgentPermission.VIEW_SYSTEM_METRICS):
             raise HTTPException(status_code=403, detail="System metrics permission required")
 
-        # Get integration service
         integration_service = get_agent_integration_service()
+        return await integration_service.get_system_metrics()
 
-        # Get system metrics
-        metrics = await integration_service.get_system_metrics()
-
-        return metrics
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Get system metrics error: {e}")
         raise HTTPException(
@@ -632,24 +552,12 @@ async def get_agent_metrics(
     agent_id: str,
     current_user: Dict[str, Any] = Depends(_get_authenticated_user),
 ):
-    """
-    Get metrics for a specific agent.
-
-    Args:
-        agent_id: Agent identifier
-        current_user: Current authenticated user
-
-    Returns:
-        Agent metrics
-    """
+    """Get metrics for a specific installation-wide agent."""
     try:
         if not _has_agent_permission(current_user, AgentPermission.VIEW_METRICS):
             raise HTTPException(status_code=403, detail="Metrics permission required")
 
-        # Get integration service
         integration_service = get_agent_integration_service()
-
-        # Get agent metrics
         metrics = await integration_service.get_agent_metrics(agent_id)
 
         if not metrics:
@@ -672,24 +580,12 @@ async def cancel_request(
     request_id: str,
     current_user: Dict[str, Any] = Depends(_get_authenticated_user),
 ):
-    """
-    Cancel an active request.
-
-    Args:
-        request_id: Request identifier
-        current_user: Current authenticated user
-
-    Returns:
-        Success message
-    """
+    """Cancel an active request."""
     try:
         if not _has_agent_permission(current_user, AgentPermission.CANCEL_REQUEST):
             raise HTTPException(status_code=403, detail="Cancel request permission required")
 
-        # Get integration service
         integration_service = get_agent_integration_service()
-
-        # Cancel request
         success = await integration_service.cancel_request(request_id)
 
         if not success:
@@ -716,23 +612,11 @@ async def get_routing_recommendations(
     limit: int = Query(5, ge=1, le=20, description="Maximum number of recommendations"),
     current_user: Dict[str, Any] = Depends(_get_authenticated_user),
 ):
-    """
-    Get routing recommendations for given requirements.
-
-    Args:
-        capabilities: Required capabilities
-        execution_mode: Preferred execution mode
-        limit: Maximum number of recommendations
-        current_user: Current authenticated user
-
-    Returns:
-        Routing recommendations
-    """
+    """Get routing recommendations for given requirements."""
     try:
         if not _has_agent_permission(current_user, AgentPermission.VIEW_ROUTING_RECOMMENDATIONS):
             raise HTTPException(status_code=403, detail="Routing recommendations permission required")
 
-        # Convert capabilities from strings to enum
         cap_list = []
         for cap_str in capabilities:
             try:
@@ -740,20 +624,18 @@ async def get_routing_recommendations(
             except ValueError:
                 logger.warning(f"Unknown capability: {cap_str}")
 
-        # Get capability router
         from ..agents import get_capability_router
 
         router = get_capability_router()
-
-        # Get recommendations
         recommendations = await router.get_routing_recommendations(
             required_capabilities=cap_list,
             preferred_execution_mode=execution_mode,
             limit=limit,
         )
-
         return recommendations
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Get routing recommendations error: {e}")
         raise HTTPException(
@@ -768,7 +650,6 @@ async def startup_event():
     try:
         logger.info("Initializing Agent Integration API...")
 
-        # Initialize agent integration service
         from ai_karen_engine.agents import initialize_agent_integration
 
         await initialize_agent_integration()
@@ -785,7 +666,6 @@ async def shutdown_event():
     try:
         logger.info("Shutting down Agent Integration API...")
 
-        # Shutdown agent integration service
         from ..agents import shutdown_agent_integration
 
         await shutdown_agent_integration()
