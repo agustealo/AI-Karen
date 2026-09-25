@@ -1,17 +1,16 @@
 {
   "name": "karen-e2e-tests",
   "version": "1.0.0",
-  "description": "Playwright E2E tests for Karen AI - Gemini live response verification",
+  "description": "Playwright browser contracts for the KAREN web UI",
   "scripts": {
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
     "test:ui": "playwright test --ui",
-    "test:gemini": "playwright test test_gemini_live_response.spec.ts",
     "report": "playwright show-report",
     "install": "playwright install chromium"
   },
-  "keywords": ["playwright", "e2e", "testing", "karen", "gemini"],
+  "keywords": ["playwright", "browser-contract", "e2e", "karen"],
   "author": "Karen AI Team",
   "license": "MIT",
   "devDependencies": {
