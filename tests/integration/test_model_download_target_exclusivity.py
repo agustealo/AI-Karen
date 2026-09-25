@@ -290,7 +290,7 @@ async def test_publication_guard_rejects_lease_expired_while_waiting_for_target_
     assert str(durable["lease_token"]) == token
 
 
-async def test_publication_guard_blocks_reclaim_after_lease_expires_inside_guard() -> None:
+async def test_publication_guard_denies_all_reclaim_authority_until_guard_releases() -> None:
     assert DATABASE_URL is not None
     install_path = "/tmp/models/transformers/test-owner--publication-guard/main"
     token = str(uuid.uuid4())
@@ -312,7 +312,6 @@ async def test_publication_guard_blocks_reclaim_after_lease_expires_inside_guard
         )
 
     repository = ModelDownloadRepository()
-    reclaim_task: asyncio.Task[dict[str, Any] | None]
     async with repository.publication_guard(
         job_id="mdl-publication-guard",
         lease_token=token,
@@ -320,23 +319,30 @@ async def test_publication_guard_blocks_reclaim_after_lease_expires_inside_guard
     ) as publication:
         assert publication is not None
         await asyncio.sleep(1.2)
-        reclaim_task = asyncio.create_task(
-            ModelDownloadRepository().claim_next(
-                worker_id="reclaim-worker",
-                lease_seconds=30,
-                retry_base_seconds=0,
-            )
+
+        ordinary = await ModelDownloadRepository().claim_next(
+            worker_id="ordinary-worker",
+            lease_seconds=30,
+            retry_base_seconds=0,
         )
-        await asyncio.sleep(0.1)
-        assert reclaim_task.done() is False
-        completed = await publication.complete({"artifact_path": install_path})
-        assert completed["status"] == "completed"
+        recovery = await ModelDownloadRepository().claim_expired_promotion_for_recovery(
+            worker_id="recovery-worker",
+            lease_seconds=30,
+        )
 
-    reclaimed = await asyncio.wait_for(reclaim_task, timeout=2.0)
-    assert reclaimed is None
+        assert ordinary is None
+        assert recovery is None
+        durable_inside = await ModelDownloadRepository().get_job("mdl-publication-guard")
+        assert durable_inside is not None
+        assert durable_inside["status"] == "promoting"
+        assert str(durable_inside["lease_token"]) == token
 
-    durable = await repository.get_job("mdl-publication-guard")
-    assert durable is not None
-    assert durable["status"] == "completed"
-    assert durable["lease_token"] is None
-    assert durable["result"] == {"artifact_path": install_path}
+    recovered = await ModelDownloadRepository().claim_expired_promotion_for_recovery(
+        worker_id="recovery-worker",
+        lease_seconds=30,
+    )
+    assert recovered is not None
+    assert recovered["job_id"] == "mdl-publication-guard"
+    assert recovered["interrupted_lease_token"] == token
+    assert str(recovered["lease_token"]) != token
+    assert recovered["status"] == "promoting"
