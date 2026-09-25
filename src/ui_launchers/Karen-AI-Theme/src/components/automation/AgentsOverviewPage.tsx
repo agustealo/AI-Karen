@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import {
+  automationStatsReadinessIssue,
   parseAutomationStats,
   type AutomationStats,
 } from "./automationStats";
@@ -64,7 +65,15 @@ export default function AutomationOverviewPage() {
       if (!parsed) {
         throw new Error("Automation statistics response did not match the live contract");
       }
+
       setStats(parsed);
+      const readinessIssue = automationStatsReadinessIssue(parsed);
+      if (readinessIssue) {
+        setStatsState("unavailable");
+        setStatsError(readinessIssue);
+        return;
+      }
+
       setStatsState("ready");
     } catch (error) {
       console.error("Failed to fetch automation stats:", error);
@@ -164,7 +173,9 @@ export default function AutomationOverviewPage() {
               <Bot className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{metric(stats?.activeAgents)}</div>
+              <div className="text-2xl font-bold" data-automation-metric="active-agents">
+                {metric(stats?.activeAgents)}
+              </div>
               <p className="text-xs text-muted-foreground">Connected agents in active runtime states.</p>
             </CardContent>
           </Card>
@@ -174,7 +185,9 @@ export default function AutomationOverviewPage() {
               <FileText className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{metric(stats?.tasksToday)}</div>
+              <div className="text-2xl font-bold" data-automation-metric="tasks-today">
+                {metric(stats?.tasksToday)}
+              </div>
               <p className="text-xs text-muted-foreground">Task runs recorded since midnight.</p>
             </CardContent>
           </Card>
@@ -184,7 +197,9 @@ export default function AutomationOverviewPage() {
               <Workflow className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{metric(stats?.activeSequences)}</div>
+              <div className="text-2xl font-bold" data-automation-metric="active-sequences">
+                {metric(stats?.activeSequences)}
+              </div>
               <p className="text-xs text-muted-foreground">Durable automation jobs visible to this tenant.</p>
             </CardContent>
           </Card>
@@ -194,8 +209,12 @@ export default function AutomationOverviewPage() {
               <Clock className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-lg font-bold truncate">{metric(stats?.nextJob)}</div>
-              <p className="text-xs text-muted-foreground">{metric(stats?.nextJobTime)}</p>
+              <div className="text-lg font-bold truncate" data-automation-metric="next-job">
+                {metric(stats?.nextJob)}
+              </div>
+              <p className="text-xs text-muted-foreground" data-automation-metric="next-job-time">
+                {metric(stats?.nextJobTime)}
+              </p>
             </CardContent>
           </Card>
         </div>
