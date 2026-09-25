@@ -62,7 +62,7 @@ A screenshot qualifies for public product presentation only when all of the foll
 6. The screen represents a capability that exists in the repository line identified by the operator-attested target revision.
 7. The authenticated shell visibly uses the canonical KAREN mark and name before capture begins.
 8. The capture rail emits `capture-manifest.json` with capture-harness SHA, target revision, browser, viewport, account class, and no-synthetic-state policy.
-9. Remote capture is dispatched from the default branch and the target revision contains the exact trusted `main` capture baseline for that run.
+9. Remote capture executes from trusted default-branch workflow code and the target revision contains the exact trusted `main` capture baseline for that run.
 10. The destination is an existing non-default branch; the secret-bearing job does not execute destination-branch code.
 11. Every curated surface is in a presentation-ready state, not merely mounted.
 12. Chat contains a real non-sensitive conversation from the sanitized demo account.
@@ -133,9 +133,9 @@ The write-scoped job must not execute Python or Node code from the destination b
 Two capture paths are supported, and both use the same Playwright owner:
 
 - **Local approved demo installation:** invoke `npm run showcase:capture` with an explicitly sanitized account and `KAREN_SHOWCASE_TARGET_REVISION=<full deployed SHA>`.
-- **Approved remote demo deployment:** open **KAREN Presentation Capture**, run it from workflow ref **`main`**, provide `target_revision=<full deployed SHA>`, `destination_branch=docs/premium-brand-showcase`, and `commit_assets=true`. The HTTPS origin and sanitized credentials come only from repository secrets.
+- **Approved remote demo deployment:** use the trusted default-branch **KAREN Presentation Capture** workflow. The preferred repository-owner ingress from the target pull request is `/capture-presentation <full-40-character-current-pr-head-sha>`. The workflow requires repository-owner identity plus `OWNER` author association and binds the requested SHA to the pull request's current head before capture secrets are exposed. Manual `workflow_dispatch` from workflow ref `main` remains supported with `target_revision=<full deployed SHA>`, `destination_branch=docs/premium-brand-showcase`, and `commit_assets=true`. The HTTPS origin and sanitized credentials come only from repository Actions secrets.
 
-Do not select the presentation branch as the workflow ref for remote capture. The workflow intentionally rejects non-default-branch dispatch so secret-bearing code stays default-branch-owned.
+Do not execute credential-bearing capture code from the presentation branch. The workflow intentionally keeps secret-bearing execution default-branch-owned.
 
 Presentation code must not change the production first-boot smoke harness merely to make media capture easier. Authentication/bootstrap remains owned by the canonical auth/first-run system.
 
@@ -149,10 +149,8 @@ Presentation code must not change the production first-boot smoke harness merely
 - Agents Overview: fail-closed on unavailable/malformed backend statistics
 - Plugin Overview presentation copy: converged to KAREN
 - Remote capture trust boundary: production-owned and CI-proven on `main`
-- Real browser screenshot provenance: preserved in `e2e-current-browser-proof.png`
-- Curated five-screen gallery: must be regenerated from an approved sanitized live stack before this slice is considered presentation-complete
-
-The raw E2E proof image is intentionally not treated as a marketing hero. It demonstrates provenance only.
+- Generic Playwright reports/results: retired as presentation evidence; generated browser-test output is not a release-proof source
+- Curated five-screen gallery: absent and must be captured from an approved sanitized live stack before this slice is presentation-complete
 
 ## Release gate
 
