@@ -19,6 +19,15 @@ const GALLERY_FILES = [
 
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 const RETIRED_VISIBLE_BRAND = /\bKaren AI\b/i;
+const ACTIVE_AGENT_COUNT = /^(\d+)\s*\/\s*(\d+)$/;
+const NON_NEGATIVE_INTEGER = /^\d+$/;
+const SHOWCASE_METRIC_SENTINELS = new Set([
+  "unavailable",
+  "unknown",
+  "n/a",
+  "none scheduled",
+  "…",
+]);
 const COMMS_DEGRADED_TITLES = [
   "Sign In Required",
   "Observability Access Restricted",
@@ -126,6 +135,49 @@ async function assertAgentsReady(page: Page): Promise<void> {
   await expect(
     page.getByText("Live Runtime Connected", { exact: true }),
   ).toBeVisible();
+
+  const metricSelectors = [
+    "active-agents",
+    "tasks-today",
+    "active-sequences",
+    "next-job",
+    "next-job-time",
+  ] as const;
+  const metricValues = new Map<string, string>();
+
+  for (const metricName of metricSelectors) {
+    const metric = page.locator(`[data-automation-metric="${metricName}"]`);
+    await expect(metric).toBeVisible();
+    const value = (await metric.innerText()).trim();
+    if (!value || SHOWCASE_METRIC_SENTINELS.has(value.toLowerCase())) {
+      throw new Error(
+        `Agents Overview is not presentation-ready: ${metricName} resolved to ${JSON.stringify(value)}. Curated capture requires verified non-default runtime truth.`,
+      );
+    }
+    metricValues.set(metricName, value);
+  }
+
+  const activeAgents = metricValues.get("active-agents") ?? "";
+  const activeMatch = activeAgents.match(ACTIVE_AGENT_COUNT);
+  if (!activeMatch) {
+    throw new Error(
+      `Agents Overview is not presentation-ready: active-agents does not match the canonical active/total count contract: ${JSON.stringify(activeAgents)}.`,
+    );
+  }
+  if (Number.parseInt(activeMatch[1], 10) > Number.parseInt(activeMatch[2], 10)) {
+    throw new Error(
+      `Agents Overview is not presentation-ready: active agent count exceeds total agent count: ${JSON.stringify(activeAgents)}.`,
+    );
+  }
+
+  for (const metricName of ["tasks-today", "active-sequences"] as const) {
+    const value = metricValues.get(metricName) ?? "";
+    if (!NON_NEGATIVE_INTEGER.test(value)) {
+      throw new Error(
+        `Agents Overview is not presentation-ready: ${metricName} is not a canonical non-negative count: ${JSON.stringify(value)}.`,
+      );
+    }
+  }
 
   await assertCanonicalVisibleBrand(page);
 }
