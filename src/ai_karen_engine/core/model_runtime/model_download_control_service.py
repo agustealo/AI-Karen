@@ -858,23 +858,14 @@ class ModelDownloadControlService:
             try:
                 journal = await asyncio.to_thread(self._publication_recovery.load_journal, stage_root)
             except Exception as exc:
-                async with self._repository.publication_guard(
-                    job_id=job_id,
-                    lease_token=recovery_lease,
-                    install_path=install_path,
-                ) as publication:
-                    if publication is None:
-                        return
-                    await publication.abort_for_retry(
-                        error=f"Publication recovery receipt unavailable: {type(exc).__name__}: {exc}",
-                        retry_base_seconds=self._worker_settings.retry_base_seconds,
-                    )
                 logger.error(
                     "model_download_publication_recovery_receipt_missing job_id=%s source_lease=%s",
                     job_id,
                     source_lease,
                 )
-                return
+                raise ModelDownloadPublicationRecoveryRequired(
+                    f"Publication recovery receipt unavailable for {job_id}: {type(exc).__name__}: {exc}"
+                ) from exc
 
             if (
                 journal.job_id != job_id
@@ -882,19 +873,14 @@ class ModelDownloadControlService:
                 or journal.model_id != model_id
                 or journal.install_path != install_path
             ):
-                async with self._repository.publication_guard(
-                    job_id=job_id,
-                    lease_token=recovery_lease,
-                    install_path=install_path,
-                ) as publication:
-                    if publication is None:
-                        return
-                    await publication.abort_for_retry(
-                        error="Publication recovery receipt does not match durable job identity",
-                        retry_base_seconds=self._worker_settings.retry_base_seconds,
-                    )
-                logger.error("model_download_publication_recovery_identity_mismatch job_id=%s", job_id)
-                return
+                logger.error(
+                    "model_download_publication_recovery_identity_mismatch job_id=%s source_lease=%s",
+                    job_id,
+                    source_lease,
+                )
+                raise ModelDownloadPublicationRecoveryRequired(
+                    f"Publication recovery receipt does not match durable job identity: {job_id}"
+                )
 
             async with self._repository.publication_guard(
                 job_id=job_id,
@@ -917,19 +903,22 @@ class ModelDownloadControlService:
                     completed_inside_transaction = True
                 else:
                     compensated = await self._compensate_publication(journal, stage_root)
+                    if not compensated:
+                        raise ModelDownloadPublicationRecoveryRequired(
+                            f"Interrupted publication compensation is unsafe for {job_id}"
+                        )
                     await publication.abort_for_retry(
                         error=(
                             "Interrupted publication evidence was incomplete; "
-                            f"compensated={compensated}; queued for clean retry"
+                            "compensated=True; queued for clean retry"
                         ),
                         retry_base_seconds=self._worker_settings.retry_base_seconds,
                     )
                     logger.warning(
-                        "model_download_publication_recovery_requeued job_id=%s final_matches=%s registry_matches=%s compensated=%s",
+                        "model_download_publication_recovery_requeued job_id=%s final_matches=%s registry_matches=%s compensated=True",
                         job_id,
                         final_matches,
                         registry_matches,
-                        compensated,
                     )
                     return
         except BaseException as exc:
