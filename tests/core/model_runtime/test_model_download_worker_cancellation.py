@@ -26,6 +26,10 @@ class CancellationService:
     async def fail_claim(self, job_id: str, lease_token: str, exc: Exception) -> None:
         self.fail_calls.append((job_id, lease_token, str(exc)))
 
+    async def cleanup_completed_publication_residue(self, limit: int = 1) -> int:
+        del limit
+        return 0
+
     async def claim_publication_recovery(self, worker_id: str) -> Optional[dict[str, Any]]:
         del worker_id
         return None
