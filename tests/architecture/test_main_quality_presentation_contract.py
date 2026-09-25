@@ -49,33 +49,40 @@ def test_presentation_gate_tracks_backend_stats_truth_owner() -> None:
     assert presentation.count(path_filter_entry) == 2
 
 
-def test_automation_stats_do_not_present_global_agents_as_tenant_truth() -> None:
+def test_automation_stats_use_only_tenant_owned_dashboard_metrics() -> None:
     source = AUTOMATION_STATS_ROUTE.read_text(encoding="utf-8")
 
     assert "get_agent_integration_service" not in source
     assert "get_all_agents" not in source
-    assert '"activeAgents": "Unavailable"' in source
-    assert '"scope": "tenant"' in source
-    assert '"reason": "canonical_tenant_agent_inventory_unavailable"' in source
+    assert '"activeAgents"' not in source
+    assert '"activeTasks": str(tasks_summary["active_tasks"])' in source
+    assert '"tasksToday": str(tasks_summary["tasks_run_today"])' in source
+    assert '"definedSequences": str(len(jobs))' in source
     assert "get_tasks_summary(tenant_id)" in source
     assert "get_cron_summary(tenant_id)" in source
     assert "job_service.list_jobs(user)" in source
 
 
-def test_unavailable_agent_truth_cannot_become_showcase_ready() -> None:
+def test_unavailable_or_defaulted_metrics_cannot_become_showcase_ready() -> None:
     stats_ui = AUTOMATION_STATS_UI.read_text(encoding="utf-8")
     overview = AGENTS_OVERVIEW_UI.read_text(encoding="utf-8")
     showcase = SHOWCASE_CAPTURE.read_text(encoding="utf-8")
 
     assert "automationStatsReadinessIssue" in stats_ui
     assert '"unavailable", "unknown", "n/a"' in stats_ui
-    assert "ACTIVE_AGENT_COUNT" in stats_ui
+    assert "NON_NEGATIVE_INTEGER" in stats_ui
+    assert "activeAgents" not in stats_ui
+    assert "definedSequences" in stats_ui
 
     assert "automationStatsReadinessIssue(parsed)" in overview
     assert 'setStatsState("unavailable")' in overview
-    assert 'data-automation-metric="active-agents"' in overview
+    assert 'data-automation-metric="active-tasks"' in overview
+    assert 'data-automation-metric="defined-sequences"' in overview
+    assert "Active Agents" not in overview
 
     assert "SHOWCASE_METRIC_SENTINELS" in showcase
     assert '"none scheduled"' in showcase
     assert 'page.locator(`[data-automation-metric="${metricName}"]`)' in showcase
-    assert "ACTIVE_AGENT_COUNT" in showcase
+    assert '"active-tasks"' in showcase
+    assert '"defined-sequences"' in showcase
+    assert "NON_NEGATIVE_INTEGER" in showcase
