@@ -73,6 +73,8 @@ def test_self_contained_runtime_uses_canonical_first_run_and_public_automation_a
         "pgvector/pgvector:pg16",
         "redis:7-alpine",
         "supabase/migrations",
+        'git -C "${TARGET_ROOT}" ls-files --',
+        "--others --exclude-standard",
         "/api/auth/first-run/setup",
         "/api/auth/me",
         "/api/automation/jobs/",
@@ -89,9 +91,12 @@ def test_self_contained_runtime_uses_canonical_first_run_and_public_automation_a
         "KARI_AUTH_BYPASS=true",
         "AUTH_DEV_MODE=true",
         "AUTH_ALLOW_DEV_LOGIN=true",
+        'find "${TARGET_ROOT}/supabase/migrations"',
     ):
         assert forbidden not in runner
 
+    assert "refusing untracked migration files in exact candidate checkout" in runner
+    assert "candidate checkout has no Git-tracked canonical migrations" in runner
     assert "trap cleanup EXIT" in runner
     assert "docker network rm" in runner
     assert "random_token" in runner
