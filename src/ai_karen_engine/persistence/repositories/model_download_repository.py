@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, AsyncIterator, Mapping, Optional, Sequence
 
 from sqlalchemy import text
 
@@ -35,6 +36,97 @@ async def _lock_install_target(session: Any, install_path: Optional[str]) -> Non
         text("SELECT pg_advisory_xact_lock(hashtextextended(:install_path, 0))"),
         {"install_path": install_path},
     )
+
+
+class _ModelDownloadPublication:
+    """Complete one promotion while its durable row and target locks stay held."""
+
+    def __init__(
+        self,
+        *,
+        session: Any,
+        job_id: str,
+        lease_token: str,
+        install_path: str,
+    ) -> None:
+        self._session = session
+        self._job_id = job_id
+        self._lease_token = lease_token
+        self._install_path = install_path
+        self._completed = False
+
+    async def complete(self, result_payload: Mapping[str, Any]) -> dict[str, Any]:
+        if self._completed:
+            raise RuntimeError(f"Model download publication already completed: {self._job_id}")
+
+        result = await self._session.execute(
+            text(
+                """
+                UPDATE public.model_download_jobs
+                SET status = 'completed', progress = 1.0,
+                    message = 'Download completed', error = NULL,
+                    result = CAST(:result_payload AS jsonb), install_path = :install_path,
+                    completed_at = now(), lease_owner = NULL, lease_token = NULL,
+                    lease_expires_at = NULL, heartbeat_at = NULL
+                WHERE job_id = :job_id
+                  AND status = 'promoting'
+                  AND cancel_requested = false
+                  AND pause_requested = false
+                  AND lease_token = CAST(:lease_token AS uuid)
+                RETURNING *
+                """
+            ),
+            {
+                "job_id": self._job_id,
+                "lease_token": self._lease_token,
+                "result_payload": _json(dict(result_payload)),
+                "install_path": self._install_path,
+            },
+        )
+        completed = _mapping(result.mappings().first())
+        if completed is None:
+            raise RuntimeError(
+                f"Model download publication ownership changed while locked: {self._job_id}"
+            )
+
+        await self._session.execute(
+            text(
+                """
+                UPDATE public.model_download_jobs
+                SET status = 'cancelled',
+                    cancel_requested = true,
+                    pause_requested = false,
+                    message = 'Superseded by completed canonical job for the same install target',
+                    completed_at = now(),
+                    lease_owner = NULL,
+                    lease_token = NULL,
+                    lease_expires_at = NULL,
+                    heartbeat_at = NULL
+                WHERE job_id <> :job_id
+                  AND install_path = :install_path
+                  AND status IN ('queued', 'paused')
+                  AND lease_token IS NULL
+                """
+            ),
+            {"job_id": self._job_id, "install_path": self._install_path},
+        )
+        await self._session.execute(
+            text(
+                """
+                UPDATE public.model_download_jobs
+                SET cancel_requested = true,
+                    message = 'Cancellation requested because the install target completed elsewhere'
+                WHERE job_id <> :job_id
+                  AND install_path = :install_path
+                  AND status IN ('running', 'pause_requested')
+                  AND lease_token IS NOT NULL
+                  AND lease_expires_at > now()
+                """
+            ),
+            {"job_id": self._job_id, "install_path": self._install_path},
+        )
+        self._completed = True
+        return completed
 
 
 class ModelDownloadRepository:
@@ -605,6 +697,55 @@ class ModelDownloadRepository:
             )
             return result.first() is not None
 
+    @asynccontextmanager
+    async def publication_guard(
+        self,
+        *,
+        job_id: str,
+        lease_token: str,
+        install_path: str,
+    ) -> AsyncIterator[Optional[_ModelDownloadPublication]]:
+        """Hold durable ownership across final filesystem and registry publication.
+
+        Lease expiry makes a promotion eligible for reclamation, but expiry alone
+        is not authority revocation. The lease token changes only when a reclaim
+        transaction wins the row lock. Holding that row lock plus the canonical
+        target advisory lock therefore makes the irreversible publication window
+        deterministic without keeping the long model download inside a DB transaction.
+        """
+        async with async_transaction_scope() as session:
+            await _lock_install_target(session, install_path)
+            result = await session.execute(
+                text(
+                    """
+                    SELECT job_id
+                    FROM public.model_download_jobs
+                    WHERE job_id = :job_id
+                      AND install_path = :install_path
+                      AND status = 'promoting'
+                      AND cancel_requested = false
+                      AND pause_requested = false
+                      AND lease_token = CAST(:lease_token AS uuid)
+                    FOR UPDATE
+                    """
+                ),
+                {
+                    "job_id": job_id,
+                    "lease_token": lease_token,
+                    "install_path": install_path,
+                },
+            )
+            if result.first() is None:
+                yield None
+                return
+
+            yield _ModelDownloadPublication(
+                session=session,
+                job_id=job_id,
+                lease_token=lease_token,
+                install_path=install_path,
+            )
+
     async def complete_job(
         self,
         *,
@@ -613,74 +754,15 @@ class ModelDownloadRepository:
         result_payload: Mapping[str, Any],
         install_path: str,
     ) -> Optional[dict[str, Any]]:
-        async with async_transaction_scope() as session:
-            await _lock_install_target(session, install_path)
-            result = await session.execute(
-                text(
-                    """
-                    UPDATE public.model_download_jobs
-                    SET status = 'completed', progress = 1.0,
-                        message = 'Download completed', error = NULL,
-                        result = CAST(:result_payload AS jsonb), install_path = :install_path,
-                        completed_at = now(), lease_owner = NULL, lease_token = NULL,
-                        lease_expires_at = NULL, heartbeat_at = NULL
-                    WHERE job_id = :job_id
-                      AND status = 'promoting'
-                      AND cancel_requested = false
-                      AND pause_requested = false
-                      AND lease_token = CAST(:lease_token AS uuid)
-                      AND lease_expires_at > now()
-                    RETURNING *
-                    """
-                ),
-                {
-                    "job_id": job_id,
-                    "lease_token": lease_token,
-                    "result_payload": _json(dict(result_payload)),
-                    "install_path": install_path,
-                },
-            )
-            completed = _mapping(result.mappings().first())
-            if completed is None:
+        """Compatibility completion path using the same publication transaction."""
+        async with self.publication_guard(
+            job_id=job_id,
+            lease_token=lease_token,
+            install_path=install_path,
+        ) as publication:
+            if publication is None:
                 return None
-
-            await session.execute(
-                text(
-                    """
-                    UPDATE public.model_download_jobs
-                    SET status = 'cancelled',
-                        cancel_requested = true,
-                        pause_requested = false,
-                        message = 'Superseded by completed canonical job for the same install target',
-                        completed_at = now(),
-                        lease_owner = NULL,
-                        lease_token = NULL,
-                        lease_expires_at = NULL,
-                        heartbeat_at = NULL
-                    WHERE job_id <> :job_id
-                      AND install_path = :install_path
-                      AND status IN ('queued', 'paused')
-                      AND lease_token IS NULL
-                    """
-                ),
-                {"job_id": job_id, "install_path": install_path},
-            )
-            await session.execute(
-                text(
-                    """
-                    UPDATE public.model_download_jobs
-                    SET cancel_requested = true,
-                        message = 'Cancellation requested because the install target completed elsewhere'
-                    WHERE job_id <> :job_id
-                      AND install_path = :install_path
-                      AND status IN ('running', 'pause_requested')
-                      AND lease_token IS NOT NULL
-                      AND lease_expires_at > now()
-                    """
-                ),
-                {"job_id": job_id, "install_path": install_path},
-            )
-            return completed
+            return await publication.complete(result_payload)
 
     async def fail_or_retry(
         self,
