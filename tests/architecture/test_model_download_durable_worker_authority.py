@@ -108,7 +108,7 @@ def test_install_target_exclusivity_is_database_owned_at_create_claim_and_promot
     assert "FOR UPDATE" in publication
     assert "status = 'promoting'" in publication
     assert "lease_token = CAST(:lease_token AS uuid)" in publication
-    assert "lease_expires_at > now()" in publication
+    assert "lease_expires_at > clock_timestamp()" in publication
     assert "await publication.complete(result_payload)" in complete
     assert "Superseded by completed canonical job for the same install target" in repository
 
@@ -214,10 +214,9 @@ def test_publication_transaction_holds_row_and_target_locks_until_completion() -
 
     transaction = publication.index("async with async_transaction_scope() as session")
     target_lock = publication.index("await _lock_install_target(session, install_path)", transaction)
-    token_fence = publication.index("lease_token = CAST(:lease_token AS uuid)", target_lock)
-    expiry_fence = publication.index("lease_expires_at > now()", token_fence)
-    row_lock = publication.index("FOR UPDATE", expiry_fence)
-    assert transaction < target_lock < token_fence < expiry_fence < row_lock
+    row_lock = publication.index("FOR UPDATE", target_lock)
+    wall_clock_check = publication.index("lease_expires_at > clock_timestamp()", row_lock)
+    assert transaction < target_lock < row_lock < wall_clock_check
     assert "yield _ModelDownloadPublication" in publication
 
     guard = execute.index("publication_guard")
