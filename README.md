@@ -53,7 +53,7 @@ The current web application exposes real product surfaces rather than marketing-
 
 ### Real screenshots only
 
-KAREN does not use generated dashboards or design mockups as product evidence. A dedicated Playwright showcase rail captures the real authenticated UI against a real running stack and writes the canonical gallery to `docs/assets/screenshots/`.
+KAREN does not use generated dashboards, design mockups, generic Playwright reports, or browser-test failure artifacts as product evidence. A dedicated Playwright showcase rail captures the real authenticated UI against a real running stack and writes the canonical gallery to `docs/assets/screenshots/`.
 
 ```bash
 cd src/ui_launchers/Karen-AI-Theme
@@ -68,17 +68,6 @@ npm run showcase:capture
 ```
 
 The capture rail is intentionally fail-closed. It records the capture-harness checkout separately from the operator-attested deployed revision, and it will not silently substitute fake media when a real sanitized environment is unavailable.
-
-<details>
-<summary><strong>Existing real-browser E2E image provenance</strong></summary>
-
-<br />
-
-<img src="docs/assets/screenshots/e2e-current-browser-proof.png" alt="Existing KAREN Playwright browser capture retained as provenance" width="960" />
-
-This PNG is copied byte-for-byte from the repository's committed Playwright report. It proves real browser media exists in project history, but it is deliberately treated as uncurated evidence rather than a premium marketing hero.
-
-</details>
 
 ## Canonical architecture
 
