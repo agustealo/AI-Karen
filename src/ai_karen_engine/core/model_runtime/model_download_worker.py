@@ -10,6 +10,9 @@ from typing import Any, Optional
 
 from ai_karen_engine.config.model_download import ModelDownloadWorkerSettings
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.model_runtime.model_download_publication_recovery import (
+    ModelDownloadPublicationRecoveryRequired,
+)
 
 logger = get_logger(__name__)
 
@@ -72,6 +75,15 @@ class ModelDownloadWorker:
                 self._prune_finished()
                 local_limit = max(1, await self._service.get_global_concurrency_limit())
                 while len(self._executions) < local_limit and not self._stop.is_set():
+                    recovery = await self._service.claim_publication_recovery(self.worker_id)
+                    if recovery is not None:
+                        task = asyncio.create_task(
+                            self._execute_recovery_claim(recovery),
+                            name=f"model-download-recovery:{recovery['job_id']}",
+                        )
+                        self._executions.add(task)
+                        continue
+
                     claim = await self._service.claim_next_job(self.worker_id)
                     if claim is None:
                         break
@@ -120,9 +132,36 @@ class ModelDownloadWorker:
         except asyncio.CancelledError:
             await self._release_cancelled_claim(job_id, lease_token)
             raise
+        except ModelDownloadPublicationRecoveryRequired:
+            # The runtime already preserved ``promoting`` and made the lease
+            # recoverable. Generic fail/retry would discard the reconciliation
+            # boundary and could let a new download overwrite live side effects.
+            logger.exception("model_download_publication_recovery_required job_id=%s", job_id)
         except Exception as exc:
             logger.exception("model_download_claim_execution_error job_id=%s", job_id)
             await self._service.fail_claim(job_id, lease_token, exc)
+        finally:
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
+
+    async def _execute_recovery_claim(self, claim: dict[str, Any]) -> None:
+        job_id = str(claim["job_id"])
+        lease_token = str(claim["lease_token"])
+        heartbeat = asyncio.create_task(
+            self._heartbeat(job_id, lease_token),
+            name=f"model-download-recovery-heartbeat:{job_id}",
+        )
+        try:
+            await self._service.recover_interrupted_publication(claim)
+        except asyncio.CancelledError:
+            await self._release_cancelled_claim(job_id, lease_token)
+            raise
+        except Exception:
+            # Recovery failures are never converted to generic queue retries.
+            # Keep durable ``promoting`` intent intact, stop heartbeating, and
+            # let this recovery lease expire so another worker can reconcile it.
+            logger.exception("model_download_publication_recovery_failed job_id=%s", job_id)
         finally:
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -134,7 +173,7 @@ class ModelDownloadWorker:
         ``asyncio.to_thread`` cannot stop an already-running rename operation.
         If cancellation lands after the repository reserved ``promoting``, the
         safest ownership rule is to keep the lease fenced and let it expire.
-        A subsequent worker can then reclaim and retry from durable truth.
+        A subsequent worker then claims recovery before any ordinary retry.
         """
         try:
             job = await asyncio.shield(self._service.get_job(job_id))
