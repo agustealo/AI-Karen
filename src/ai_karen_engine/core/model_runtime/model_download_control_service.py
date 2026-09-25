@@ -26,6 +26,11 @@ from ai_karen_engine.core.model_runtime.management.model_orchestrator_service im
     ModelOrchestratorService,
 )
 from ai_karen_engine.core.model_runtime.model_discovery_service import get_model_discovery_service
+from ai_karen_engine.core.model_runtime.model_download_publication_recovery import (
+    ModelDownloadPublicationJournal,
+    ModelDownloadPublicationRecoveryRequired,
+    ModelDownloadPublicationRecoveryStore,
+)
 from ai_karen_engine.persistence.repositories.model_download_repository import (
     ModelDownloadRepository,
 )
@@ -205,6 +210,7 @@ class ModelDownloadControlService:
         )
         self._repository = repository or ModelDownloadRepository()
         self._worker_settings = worker_settings or load_model_download_worker_settings()
+        self._publication_recovery = ModelDownloadPublicationRecoveryStore()
         self._policy_lock = asyncio.Lock()
         self._initialize_lock = asyncio.Lock()
         self._initialized = False
@@ -656,6 +662,14 @@ class ModelDownloadControlService:
         row = await self._repository.resume_job(job_id)
         return self._job_payload(row) if row is not None else await self._require_mutable_job(job_id, "resumed")
 
+    async def claim_publication_recovery(self, worker_id: str) -> Optional[dict[str, Any]]:
+        """Claim interrupted publication work regardless of new-download policy switches."""
+        await self.initialize()
+        return await self._repository.claim_expired_promotion_for_recovery(
+            worker_id=worker_id,
+            lease_seconds=self._worker_settings.lease_seconds,
+        )
+
     async def claim_next_job(self, worker_id: str) -> Optional[dict[str, Any]]:
         await self.initialize()
         if (
@@ -695,7 +709,7 @@ class ModelDownloadControlService:
     async def execute_claimed_job(self, claim: Mapping[str, Any]) -> None:
         job_id = str(claim["job_id"])
         lease_token = str(claim["lease_token"])
-        stage_root = self.models_root / ".staging" / "model-downloads" / job_id / lease_token
+        stage_root = self._stage_root(job_id, lease_token)
         stage_models_root = stage_root / "models"
         stage_registry = stage_root / "llm_registry.json"
         await asyncio.to_thread(stage_models_root.mkdir, parents=True, exist_ok=True)
@@ -747,75 +761,268 @@ class ModelDownloadControlService:
             "status": result.status,
         }
 
-        async with self._repository.publication_guard(
-            job_id=job_id,
-            lease_token=lease_token,
-            install_path=str(final_path),
-        ) as publication:
-            if publication is None:
-                await asyncio.to_thread(self._safe_remove_tree, stage_root)
-                logger.warning("model_download_publication_fenced job_id=%s", job_id)
+        journal: Optional[ModelDownloadPublicationJournal] = None
+        completed_inside_transaction = False
+        handled_error: Optional[BaseException] = None
+        try:
+            async with self._repository.publication_guard(
+                job_id=job_id,
+                lease_token=lease_token,
+                install_path=str(final_path),
+            ) as publication:
+                if publication is None:
+                    await asyncio.to_thread(self._safe_remove_tree, stage_root)
+                    logger.warning("model_download_publication_fenced job_id=%s", job_id)
+                    return
+
+                prior_registry = await self._orchestrator.snapshot_registry_entry(str(claim["model_id"]))
+                staging_entry = await staging_orchestrator.snapshot_registry_entry(str(claim["model_id"]))
+                if not staging_entry:
+                    raise RuntimeError(
+                        f"Staging registry entry missing for promoted model: {claim['model_id']}"
+                    )
+                journal = await asyncio.to_thread(
+                    self._publication_recovery.create_journal,
+                    stage_root=stage_root,
+                    staged_path=staged_path,
+                    final_path=final_path,
+                    job_id=job_id,
+                    source_lease_token=lease_token,
+                    model_id=str(claim["model_id"]),
+                    result_payload=result_payload,
+                    prior_registry_entry=prior_registry,
+                    base_registry_entry=staging_entry,
+                )
+                try:
+                    await asyncio.to_thread(
+                        self._publication_recovery.promote,
+                        journal=journal,
+                        staged_path=staged_path,
+                    )
+                    await self._orchestrator.replace_registry_entry(
+                        journal.model_id,
+                        journal.expected_registry_entry,
+                    )
+                    await publication.complete(result_payload)
+                    completed_inside_transaction = True
+                except BaseException as exc:
+                    compensated = await self._compensate_publication(journal, stage_root)
+                    if not compensated:
+                        raise ModelDownloadPublicationRecoveryRequired(
+                            f"Publication compensation requires durable recovery for {job_id}"
+                        ) from exc
+                    await publication.abort_for_retry(
+                        error=f"{type(exc).__name__}: {exc}",
+                        retry_base_seconds=self._worker_settings.retry_base_seconds,
+                    )
+                    handled_error = exc
+        except ModelDownloadPublicationRecoveryRequired as exc:
+            await self._defer_publication_recovery(job_id, lease_token, exc)
+            raise
+        except BaseException as exc:
+            if completed_inside_transaction:
+                recovery_error = ModelDownloadPublicationRecoveryRequired(
+                    f"Publication transaction did not commit for {job_id}: {type(exc).__name__}: {exc}"
+                )
+                await self._defer_publication_recovery(job_id, lease_token, recovery_error)
+                raise recovery_error from exc
+            raise
+
+        if handled_error is not None:
+            logger.warning(
+                "model_download_publication_compensated job_id=%s error_type=%s",
+                job_id,
+                type(handled_error).__name__,
+            )
+            if isinstance(handled_error, asyncio.CancelledError):
+                raise handled_error
+            return
+
+        if journal is None:
+            raise RuntimeError(f"Publication journal missing after completed transaction: {job_id}")
+        await self._cleanup_committed_publication(journal, stage_root)
+        await self._refresh_discovery(job_id)
+        logger.info("model_download_job_completed job_id=%s install_path=%s", job_id, final_path)
+
+    async def recover_interrupted_publication(self, claim: Mapping[str, Any]) -> None:
+        job_id = str(claim["job_id"])
+        recovery_lease = str(claim["lease_token"])
+        source_lease = str(claim.get("interrupted_lease_token") or "")
+        install_path = str(claim.get("install_path") or "")
+        model_id = str(claim.get("model_id") or "")
+        stage_root = self._stage_root(job_id, source_lease)
+        completed_inside_transaction = False
+        journal: Optional[ModelDownloadPublicationJournal] = None
+
+        try:
+            try:
+                journal = await asyncio.to_thread(self._publication_recovery.load_journal, stage_root)
+            except Exception as exc:
+                async with self._repository.publication_guard(
+                    job_id=job_id,
+                    lease_token=recovery_lease,
+                    install_path=install_path,
+                ) as publication:
+                    if publication is None:
+                        return
+                    await publication.abort_for_retry(
+                        error=f"Publication recovery receipt unavailable: {type(exc).__name__}: {exc}",
+                        retry_base_seconds=self._worker_settings.retry_base_seconds,
+                    )
+                logger.error(
+                    "model_download_publication_recovery_receipt_missing job_id=%s source_lease=%s",
+                    job_id,
+                    source_lease,
+                )
                 return
 
-            await asyncio.to_thread(
-                self._promote_staged_directory,
-                staged_path,
-                final_path,
-                lease_token,
-            )
-            await self._register_promoted_model(
-                staging_orchestrator=staging_orchestrator,
-                model_id=str(claim["model_id"]),
-                final_path=final_path,
-            )
-            await publication.complete(result_payload)
+            if (
+                journal.job_id != job_id
+                or journal.source_lease_token != source_lease
+                or journal.model_id != model_id
+                or journal.install_path != install_path
+            ):
+                async with self._repository.publication_guard(
+                    job_id=job_id,
+                    lease_token=recovery_lease,
+                    install_path=install_path,
+                ) as publication:
+                    if publication is None:
+                        return
+                    await publication.abort_for_retry(
+                        error="Publication recovery receipt does not match durable job identity",
+                        retry_base_seconds=self._worker_settings.retry_base_seconds,
+                    )
+                logger.error("model_download_publication_recovery_identity_mismatch job_id=%s", job_id)
+                return
 
-        await asyncio.to_thread(self._safe_remove_tree, stage_root)
+            async with self._repository.publication_guard(
+                job_id=job_id,
+                lease_token=recovery_lease,
+                install_path=install_path,
+            ) as publication:
+                if publication is None:
+                    return
+                current_registry = await self._orchestrator.snapshot_registry_entry(model_id)
+                final_matches = await asyncio.to_thread(
+                    self._publication_recovery.marker_matches_final,
+                    journal,
+                )
+                registry_matches = self._publication_recovery.registry_entry_matches(
+                    current_registry,
+                    journal,
+                )
+                if final_matches and registry_matches:
+                    await publication.complete(journal.result_payload)
+                    completed_inside_transaction = True
+                else:
+                    compensated = await self._compensate_publication(journal, stage_root)
+                    await publication.abort_for_retry(
+                        error=(
+                            "Interrupted publication evidence was incomplete; "
+                            f"compensated={compensated}; queued for clean retry"
+                        ),
+                        retry_base_seconds=self._worker_settings.retry_base_seconds,
+                    )
+                    logger.warning(
+                        "model_download_publication_recovery_requeued job_id=%s final_matches=%s registry_matches=%s compensated=%s",
+                        job_id,
+                        final_matches,
+                        registry_matches,
+                        compensated,
+                    )
+                    return
+        except BaseException as exc:
+            if completed_inside_transaction:
+                recovery_error = ModelDownloadPublicationRecoveryRequired(
+                    f"Recovered publication transaction did not commit for {job_id}: {type(exc).__name__}: {exc}"
+                )
+                await self._defer_publication_recovery(job_id, recovery_lease, recovery_error)
+                raise recovery_error from exc
+            raise
+
+        if journal is None:
+            return
+        await self._cleanup_committed_publication(journal, stage_root)
+        await self._refresh_discovery(job_id)
+        logger.info(
+            "model_download_publication_recovered job_id=%s source_lease=%s",
+            job_id,
+            source_lease,
+        )
+
+    async def _compensate_publication(
+        self,
+        journal: ModelDownloadPublicationJournal,
+        stage_root: Path,
+    ) -> bool:
+        current_registry = await self._orchestrator.snapshot_registry_entry(journal.model_id)
+        registry_safe = False
+        if self._publication_recovery.registry_entry_matches(current_registry, journal):
+            await self._orchestrator.replace_registry_entry(
+                journal.model_id,
+                journal.prior_registry_entry,
+            )
+            registry_safe = True
+        elif current_registry == journal.prior_registry_entry:
+            registry_safe = True
+
+        filesystem_safe = await asyncio.to_thread(
+            self._publication_recovery.rollback_filesystem,
+            journal=journal,
+            stage_root=stage_root,
+        )
+        return registry_safe and filesystem_safe
+
+    async def _cleanup_committed_publication(
+        self,
+        journal: ModelDownloadPublicationJournal,
+        stage_root: Path,
+    ) -> None:
+        try:
+            await asyncio.to_thread(
+                self._publication_recovery.cleanup_committed,
+                journal=journal,
+                stage_root=stage_root,
+            )
+        except Exception as exc:
+            logger.warning(
+                "model_download_publication_cleanup_degraded job_id=%s error=%s",
+                journal.job_id,
+                exc,
+            )
+
+    async def _defer_publication_recovery(
+        self,
+        job_id: str,
+        lease_token: str,
+        error: BaseException,
+    ) -> None:
+        try:
+            released = await self._repository.release_publication_for_recovery(
+                job_id=job_id,
+                lease_token=lease_token,
+                error=f"{type(error).__name__}: {error}",
+            )
+        except Exception:
+            logger.exception("model_download_publication_recovery_release_failed job_id=%s", job_id)
+            return
+        if not released:
+            logger.warning("model_download_publication_recovery_release_rejected job_id=%s", job_id)
+
+    async def _refresh_discovery(self, job_id: str) -> None:
         try:
             await self._discovery_service.refresh_model_discovery()
         except Exception as exc:  # pragma: no cover - cache refresh only
             logger.warning("model_download_discovery_refresh_failed job_id=%s error=%s", job_id, exc)
-        logger.info("model_download_job_completed job_id=%s install_path=%s", job_id, final_path)
+
+    def _stage_root(self, job_id: str, lease_token: str) -> Path:
+        return self.models_root / ".staging" / "model-downloads" / job_id / lease_token
 
     @staticmethod
     def _safe_remove_tree(path: Path) -> None:
         if path.exists():
             shutil.rmtree(path, ignore_errors=True)
-
-    @staticmethod
-    def _promote_staged_directory(staged_path: Path, final_path: Path, lease_token: str) -> None:
-        if not staged_path.exists():
-            raise RuntimeError(f"Staged model artifact is missing: {staged_path}")
-        final_path.parent.mkdir(parents=True, exist_ok=True)
-        if not final_path.exists():
-            os.replace(staged_path, final_path)
-            return
-
-        backup = final_path.with_name(f"{final_path.name}.previous-{lease_token}")
-        if backup.exists():
-            shutil.rmtree(backup, ignore_errors=True)
-        os.replace(final_path, backup)
-        try:
-            os.replace(staged_path, final_path)
-        except BaseException:
-            if not final_path.exists() and backup.exists():
-                os.replace(backup, final_path)
-            raise
-        shutil.rmtree(backup, ignore_errors=True)
-
-    async def _register_promoted_model(
-        self,
-        *,
-        staging_orchestrator: ModelOrchestratorService,
-        model_id: str,
-        final_path: Path,
-    ) -> None:
-        entry = dict(staging_orchestrator._registry.get(model_id) or {})
-        if not entry:
-            raise RuntimeError(f"Staging registry entry missing for promoted model: {model_id}")
-        entry["install_path"] = str(final_path)
-        self._orchestrator._registry[model_id] = entry
-        await self._orchestrator._persist_registry()
 
     async def get_installed_models(self, force_refresh: bool = False) -> dict[str, Any]:
         models = await self._discovery_service.discover_all_models(force_refresh=force_refresh)
