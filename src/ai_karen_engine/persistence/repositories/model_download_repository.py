@@ -161,7 +161,7 @@ class _ModelDownloadPublication:
                 SET status = 'completed', progress = 1.0,
                     message = 'Download completed', error = NULL,
                     result = CAST(:result_payload AS jsonb), install_path = :install_path,
-                    completed_at = now(), publication_source_lease_token = NULL,
+                    completed_at = now(),
                     lease_owner = NULL, lease_token = NULL,
                     lease_expires_at = NULL, heartbeat_at = NULL
                 WHERE job_id = :job_id
@@ -846,6 +846,10 @@ class ModelDownloadRepository:
                     UPDATE public.model_download_jobs
                     SET status = 'promoting',
                         message = 'Promoting staged artifacts',
+                        publication_source_lease_token = COALESCE(
+                            publication_source_lease_token,
+                            lease_token
+                        ),
                         heartbeat_at = now()
                     WHERE job_id = :job_id
                       AND status = 'running'
@@ -1015,6 +1019,49 @@ class ModelDownloadRepository:
             )
             return result.first() is not None
 
+    async def list_completed_publication_cleanup_candidates(
+        self,
+        *,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        async with async_transaction_scope() as session:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM public.model_download_jobs
+                    WHERE status = 'completed'
+                      AND publication_source_lease_token IS NOT NULL
+                    ORDER BY completed_at ASC NULLS FIRST, updated_at ASC, job_id ASC
+                    LIMIT :limit
+                    """
+                ),
+                {"limit": limit},
+            )
+            return [dict(row) for row in result.mappings().all()]
+
+    async def acknowledge_publication_cleanup(
+        self,
+        *,
+        job_id: str,
+        source_lease_token: str,
+    ) -> bool:
+        async with async_transaction_scope() as session:
+            result = await session.execute(
+                text(
+                    """
+                    UPDATE public.model_download_jobs
+                    SET publication_source_lease_token = NULL
+                    WHERE job_id = :job_id
+                      AND status = 'completed'
+                      AND publication_source_lease_token = CAST(:source_lease_token AS uuid)
+                    RETURNING job_id
+                    """
+                ),
+                {"job_id": job_id, "source_lease_token": source_lease_token},
+            )
+            return result.first() is not None
+
     async def fail_or_retry(
         self,
         *,
@@ -1084,6 +1131,7 @@ class ModelDownloadRepository:
                     """
                     DELETE FROM public.model_download_jobs
                     WHERE status IN ('completed', 'failed', 'cancelled')
+                      AND publication_source_lease_token IS NULL
                       AND updated_at < now() - :max_age_seconds * interval '1 second'
                     RETURNING job_id
                     """
