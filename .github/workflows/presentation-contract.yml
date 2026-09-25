@@ -10,6 +10,7 @@ on:
       - "docs/assets/screenshots/**"
       - "scripts/ci/presentation_gallery_contract.py"
       - "scripts/ci/verify_presentation_assets.py"
+      - "src/ai_karen_engine/api_routes/automation/stats.py"
       - "src/ui_launchers/Karen-AI-Theme/package.json"
       - "src/ui_launchers/Karen-AI-Theme/e2e/playwright.showcase.config.ts"
       - "src/ui_launchers/Karen-AI-Theme/e2e/showcase/**"
@@ -23,6 +24,7 @@ on:
       - "src/ui_launchers/Karen-AI-Theme/src/components/automation/automationStats.test.ts"
       - "src/ui_launchers/Karen-AI-Theme/src/components/comms/CommsCenterPage.tsx"
       - "src/ui_launchers/Karen-AI-Theme/src/components/plugins/PluginOverviewPage.tsx"
+      - "tests/architecture/test_main_quality_presentation_contract.py"
       - ".github/workflows/presentation-contract.yml"
       - ".github/workflows/presentation-capture.yml"
   push:
@@ -34,6 +36,7 @@ on:
       - "docs/assets/screenshots/**"
       - "scripts/ci/presentation_gallery_contract.py"
       - "scripts/ci/verify_presentation_assets.py"
+      - "src/ai_karen_engine/api_routes/automation/stats.py"
       - "src/ui_launchers/Karen-AI-Theme/package.json"
       - "src/ui_launchers/Karen-AI-Theme/e2e/playwright.showcase.config.ts"
       - "src/ui_launchers/Karen-AI-Theme/e2e/showcase/**"
@@ -47,6 +50,7 @@ on:
       - "src/ui_launchers/Karen-AI-Theme/src/components/automation/automationStats.test.ts"
       - "src/ui_launchers/Karen-AI-Theme/src/components/comms/CommsCenterPage.tsx"
       - "src/ui_launchers/Karen-AI-Theme/src/components/plugins/PluginOverviewPage.tsx"
+      - "tests/architecture/test_main_quality_presentation_contract.py"
       - ".github/workflows/presentation-contract.yml"
       - ".github/workflows/presentation-capture.yml"
   workflow_dispatch:
