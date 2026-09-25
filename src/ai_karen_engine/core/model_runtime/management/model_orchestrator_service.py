@@ -192,18 +192,24 @@ class ModelOrchestratorService:
         tmp = self.registry_path.with_name(
             f".{self.registry_path.name}.{os.getpid()}.{time.time_ns()}.tmp"
         )
+        canonical_replaced = False
         try:
             with tmp.open("w", encoding="utf-8") as handle:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, self.registry_path)
+            canonical_replaced = True
             self._fsync_registry_directory()
         except OSError as exc:
             raise ModelOrchestratorError(
                 E_DISK,
                 "Failed to persist model registry",
-                {"registry_path": str(self.registry_path), "error": str(exc)},
+                {
+                    "registry_path": str(self.registry_path),
+                    "error": str(exc),
+                    "canonical_replaced": canonical_replaced,
+                },
             ) from exc
         finally:
             if tmp.exists():
@@ -249,7 +255,16 @@ class ModelOrchestratorService:
                 candidate.pop(model_id, None)
             else:
                 candidate[model_id] = copy.deepcopy(dict(entry))
-            self._write_registry_unlocked(candidate)
+            try:
+                self._write_registry_unlocked(candidate)
+            except ModelOrchestratorError as exc:
+                if exc.details.get("canonical_replaced"):
+                    # The rename reached the canonical path before directory
+                    # durability failed. Keep in-memory truth aligned with the
+                    # path the process can now observe so publication
+                    # compensation can restore the previous entry safely.
+                    self._registry = candidate
+                raise
             self._registry = candidate
 
     @staticmethod
