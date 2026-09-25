@@ -8,6 +8,7 @@ Production-oriented model registry + download/remove workflows used by
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import shutil
@@ -15,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -184,11 +185,36 @@ class ModelOrchestratorService:
             return converted
         return {}
 
-    async def _persist_registry(self) -> None:
+    def _write_registry_unlocked(self) -> None:
         tmp = self.registry_path.with_suffix(self.registry_path.suffix + ".tmp")
+        tmp.write_text(
+            json.dumps(self._registry, indent=2, default=self._json_default),
+            encoding="utf-8",
+        )
+        tmp.replace(self.registry_path)
+
+    async def _persist_registry(self) -> None:
         async with self._registry_lock:
-            tmp.write_text(json.dumps(self._registry, indent=2, default=self._json_default), encoding="utf-8")
-            tmp.replace(self.registry_path)
+            self._write_registry_unlocked()
+
+    async def snapshot_registry_entry(self, model_id: str) -> Optional[Dict[str, Any]]:
+        """Return a detached registry snapshot under the canonical registry lock."""
+        async with self._registry_lock:
+            entry = self._registry.get(model_id)
+            return copy.deepcopy(entry) if entry is not None else None
+
+    async def replace_registry_entry(
+        self,
+        model_id: str,
+        entry: Optional[Mapping[str, Any]],
+    ) -> None:
+        """Atomically replace one in-memory registry entry and its persisted file."""
+        async with self._registry_lock:
+            if entry is None:
+                self._registry.pop(model_id, None)
+            else:
+                self._registry[model_id] = copy.deepcopy(dict(entry))
+            self._write_registry_unlocked()
 
     @staticmethod
     def _json_default(value: Any) -> Any:
@@ -287,7 +313,7 @@ class ModelOrchestratorService:
                         last_modified=getattr(card, "last_modified", None),
                         likes=getattr(card, "likes", None),
                         downloads=getattr(card, "downloads", None),
-                        library_name=getattr(card, "library_name", None),
+                        storage_key=getattr(card, "library_name", None),
                         tags=list(getattr(card, "tags", []) or []),
                         total_size=None,
                         description=getattr(card, "description", None),
@@ -314,7 +340,7 @@ class ModelOrchestratorService:
                     last_modified=self._parse_dt(entry.get("last_modified")),
                     likes=entry.get("likes"),
                     downloads=entry.get("downloads"),
-                        storage_key=entry.get("storage_key"),
+                    storage_key=entry.get("storage_key"),
                     tags=list(entry.get("tags") or []),
                     total_size=int(entry.get("total_size") or 0),
                     description=entry.get("description"),
@@ -451,8 +477,8 @@ class ModelOrchestratorService:
 
         files, total_size = await asyncio.to_thread(self._walk_files, install_path)
         duration = time.perf_counter() - start
-
-        self._registry[req.model_id] = {
+        previous = await self.snapshot_registry_entry(req.model_id)
+        entry = {
             "model_id": req.model_id,
             "owner": owner,
             "repository": repo,
@@ -463,13 +489,13 @@ class ModelOrchestratorService:
             "total_size": total_size,
             "pinned": bool(req.pin),
             "last_modified": datetime.now(timezone.utc).isoformat(),
-            "downloads": int(self._registry.get(req.model_id, {}).get("downloads") or 0),
-            "likes": self._registry.get(req.model_id, {}).get("likes"),
-            "tags": list(self._registry.get(req.model_id, {}).get("tags") or []),
-            "license": self._registry.get(req.model_id, {}).get("license"),
-            "description": self._registry.get(req.model_id, {}).get("description"),
+            "downloads": int((previous or {}).get("downloads") or 0),
+            "likes": (previous or {}).get("likes"),
+            "tags": list((previous or {}).get("tags") or []),
+            "license": (previous or {}).get("license"),
+            "description": (previous or {}).get("description"),
         }
-        await self._persist_registry()
+        await self.replace_registry_entry(req.model_id, entry)
 
         return DownloadResult(
             model_id=req.model_id,
@@ -482,7 +508,7 @@ class ModelOrchestratorService:
         )
 
     async def remove_model(self, model_id: str, delete_files: bool = True, **_: Any) -> RemoveResult:
-        entry = self._registry.get(model_id)
+        entry = await self.snapshot_registry_entry(model_id)
         if entry is None:
             raise ModelOrchestratorError(E_NOT_FOUND, f"Model not found in local registry: {model_id}", {"model_id": model_id})
 
@@ -499,8 +525,7 @@ class ModelOrchestratorService:
                 except Exception as exc:
                     warnings.append(f"Failed to delete model files at {model_dir}: {exc}")
 
-        self._registry.pop(model_id, None)
-        await self._persist_registry()
+        await self.replace_registry_entry(model_id, None)
 
         return RemoveResult(
             model_id=model_id,
