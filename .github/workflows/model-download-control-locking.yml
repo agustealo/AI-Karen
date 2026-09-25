@@ -60,36 +60,54 @@ jobs:
           python -m compileall -q \
             src/ai_karen_engine/config/model_download.py \
             src/ai_karen_engine/persistence/repositories/model_download_repository.py \
+            src/ai_karen_engine/core/model_runtime/management/model_orchestrator_service.py \
+            src/ai_karen_engine/core/model_runtime/model_download_publication_recovery.py \
             src/ai_karen_engine/core/model_runtime/model_download_control_service.py \
             src/ai_karen_engine/core/model_runtime/model_download_worker.py \
             src/ai_karen_engine/api_routes/models/model_orchestrator.py \
             src/ai_karen_engine/server/application_runtime.py \
+            tests/core/model_runtime/test_model_download_publication_recovery.py \
+            tests/core/model_runtime/test_model_download_recovery_fail_closed.py \
             tests/integration/test_model_download_requested_state_leases.py \
-            tests/integration/test_model_download_target_exclusivity.py
+            tests/integration/test_model_download_target_exclusivity.py \
+            tests/integration/test_model_download_publication_recovery.py \
+            tests/architecture/test_model_download_publication_recovery_authority.py
 
       - name: Ruff durable worker correctness
         run: |
           ruff check --select E9,F63,F7 \
             src/ai_karen_engine/config/model_download.py \
             src/ai_karen_engine/persistence/repositories/model_download_repository.py \
+            src/ai_karen_engine/core/model_runtime/management/model_orchestrator_service.py \
+            src/ai_karen_engine/core/model_runtime/model_download_publication_recovery.py \
             src/ai_karen_engine/core/model_runtime/model_download_control_service.py \
             src/ai_karen_engine/core/model_runtime/model_download_worker.py \
             src/ai_karen_engine/api_routes/models/model_orchestrator.py \
             src/ai_karen_engine/server/application_runtime.py \
             tests/core/model_runtime/test_model_download_durable_worker.py \
             tests/core/model_runtime/test_model_download_worker_cancellation.py \
+            tests/core/model_runtime/test_model_download_publication_recovery.py \
+            tests/core/model_runtime/test_model_download_recovery_fail_closed.py \
             tests/integration/test_model_download_requested_state_leases.py \
             tests/integration/test_model_download_target_exclusivity.py \
-            tests/architecture/test_model_download_durable_worker_authority.py
+            tests/integration/test_model_download_publication_recovery.py \
+            tests/architecture/test_model_download_durable_worker_authority.py \
+            tests/architecture/test_model_download_publication_recovery_authority.py
 
       - name: Prove durable authority boundaries
-        run: pytest tests/architecture/test_model_download_durable_worker_authority.py -q
+        run: |
+          pytest \
+            tests/architecture/test_model_download_durable_worker_authority.py \
+            tests/architecture/test_model_download_publication_recovery_authority.py \
+            -q
 
-      - name: Prove durable lifecycle and staged promotion
+      - name: Prove durable lifecycle staged publication and recovery receipts
         run: |
           pytest \
             tests/core/model_runtime/test_model_download_durable_worker.py \
             tests/core/model_runtime/test_model_download_worker_cancellation.py \
+            tests/core/model_runtime/test_model_download_publication_recovery.py \
+            tests/core/model_runtime/test_model_download_recovery_fail_closed.py \
             -q
 
       - name: Apply model download authority migrations
@@ -98,9 +116,14 @@ jobs:
             -f supabase/migrations/20260924010000_17_model_download_job_authority.sql
           psql "$MODEL_DOWNLOAD_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 \
             -f supabase/migrations/20260924195000_18_model_download_requested_state_leases.sql
+          psql "$MODEL_DOWNLOAD_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20260925013000_19_model_download_publication_recovery_identity.sql
 
       - name: Prove requested-state lease accounting in PostgreSQL
         run: pytest tests/integration/test_model_download_requested_state_leases.py -q
 
       - name: Prove install-target exclusivity in PostgreSQL
         run: pytest tests/integration/test_model_download_target_exclusivity.py -q
+
+      - name: Prove interrupted publication recovery in PostgreSQL
+        run: pytest tests/integration/test_model_download_publication_recovery.py -q

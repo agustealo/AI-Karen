@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE = ROOT / "src/ai_karen_engine/core/model_runtime/model_download_control_service.py"
 REPOSITORY = ROOT / "src/ai_karen_engine/persistence/repositories/model_download_repository.py"
+RECOVERY = ROOT / "src/ai_karen_engine/core/model_runtime/model_download_publication_recovery.py"
 WORKER = ROOT / "src/ai_karen_engine/core/model_runtime/model_download_worker.py"
 ROUTES = ROOT / "src/ai_karen_engine/api_routes/models/model_orchestrator.py"
 LIFECYCLE = ROOT / "src/ai_karen_engine/server/application_runtime.py"
@@ -57,20 +58,22 @@ def test_model_download_migration_owns_updated_at_trigger_helper() -> None:
 
 def test_claim_transaction_counts_all_live_execution_leases_before_claim() -> None:
     repository = _read(REPOSITORY)
+    capacity = _method_body(repository, "_global_capacity_available")
     claim = _method_body(repository, "claim_next")
 
-    advisory = claim.index("pg_advisory_xact_lock")
-    settings_select = claim.index("SELECT max_concurrent_downloads", advisory)
-    settings_table = claim.index("model_download_runtime_settings", settings_select)
-    settings_lock = claim.index("FOR UPDATE", settings_table)
-    active_count = claim.index("SELECT count(*)", settings_lock)
-    skip_locked = claim.index("FOR UPDATE OF jobs SKIP LOCKED", active_count)
-    active_slice = claim[active_count:skip_locked]
+    settings_select = capacity.index("SELECT max_concurrent_downloads")
+    settings_table = capacity.index("model_download_runtime_settings", settings_select)
+    settings_lock = capacity.index("FOR UPDATE", settings_table)
+    active_count = capacity.index("SELECT count(*)", settings_lock)
+    assert settings_select < settings_table < settings_lock < active_count
+    assert "lease_expires_at > clock_timestamp()" in capacity[active_count:]
+    assert "status IN ('running', 'promoting', 'pause_requested')" in capacity[active_count:]
+    assert "lease_token IS NOT NULL" in capacity[active_count:]
 
-    assert advisory < settings_select < settings_table < settings_lock < active_count < skip_locked
-    assert "lease_expires_at > now()" in active_slice
-    assert "status IN ('running', 'promoting', 'pause_requested')" in active_slice
-    assert "lease_token IS NOT NULL" in active_slice
+    advisory = claim.index("pg_advisory_xact_lock")
+    capacity_check = claim.index("_global_capacity_available(session)", advisory)
+    skip_locked = claim.index("FOR UPDATE OF jobs SKIP LOCKED", capacity_check)
+    assert advisory < capacity_check < skip_locked
     assert "global_concurrency" not in claim.split("async def claim_next", 1)[1].split(") ->", 1)[0]
 
     service_claim = _method_body(_read(SERVICE), "claim_next_job")
@@ -93,7 +96,8 @@ def test_install_target_exclusivity_is_database_owned_at_create_claim_and_promot
     assert 'existing["_target_reused"] = True' in create
 
     assert "blocker.install_path = jobs.install_path" in claim
-    assert "blocker.lease_expires_at > now()" in claim
+    assert "blocker.status = 'promoting'" in claim
+    assert "blocker.lease_expires_at > clock_timestamp()" in claim
     assert "superseded AS" in claim
     assert "Superseded by canonical job for the same install target" in claim
 
@@ -121,6 +125,7 @@ def test_requested_control_states_retain_lease_until_execution_boundary() -> Non
     heartbeat = _method_body(repository, "heartbeat")
     reserve = _method_body(repository, "lease_is_valid")
     failure = _method_body(repository, "fail_or_retry")
+    failure_owner = _method_body(repository, "_fail_or_retry_in_session")
     shutdown_release = _method_body(repository, "release_for_shutdown")
 
     assert "cancel_requested = true" in cancel
@@ -140,9 +145,10 @@ def test_requested_control_states_retain_lease_until_execution_boundary() -> Non
     assert "WHEN cancel_requested THEN 'cancelled' ELSE 'paused'" in reserve
     assert "lease_token = NULL" in reserve
 
-    assert "WHEN cancel_requested THEN 'cancelled'" in failure
-    assert "WHEN pause_requested THEN 'paused'" in failure
-    assert "status IN ('running', 'promoting', 'pause_requested')" in failure
+    assert "_fail_or_retry_in_session" in failure
+    assert "WHEN cancel_requested THEN 'cancelled'" in failure_owner
+    assert "WHEN pause_requested THEN 'paused'" in failure_owner
+    assert "status IN ('running', 'promoting', 'pause_requested')" in failure_owner
 
     assert "WHEN cancel_requested THEN 'cancelled'" in shutdown_release
     assert "WHEN pause_requested THEN 'paused'" in shutdown_release
@@ -181,6 +187,7 @@ def test_promotion_is_reserved_before_filesystem_mutation() -> None:
     publication = _method_body(repository, "publication_guard")
     heartbeat = _method_body(repository, "heartbeat")
     shutdown_release = _method_body(repository, "release_for_shutdown")
+    execute = _method_body(service, "execute_claimed_job")
 
     requested_finalize = reserve.index("cancel_requested = true OR pause_requested = true")
     promotion = reserve.index("SET status = 'promoting'", requested_finalize)
@@ -196,13 +203,14 @@ def test_promotion_is_reserved_before_filesystem_mutation() -> None:
     assert "status IN ('running', 'pause_requested')" in shutdown_release
     assert "'promoting'" in migration
 
-    staging = service.index('self.models_root / ".staging" / "model-downloads"')
-    reservation = service.index("lease_is_valid", staging)
-    publication_guard = service.index("publication_guard", reservation)
-    filesystem_promotion = service.index("_promote_staged_directory", publication_guard)
-    registry = service.index("_register_promoted_model", filesystem_promotion)
-    completion = service.index("publication.complete", registry)
-    assert staging < reservation < publication_guard < filesystem_promotion < registry < completion
+    staging = execute.index("stage_root = self._stage_root")
+    reservation = execute.index("lease_is_valid", staging)
+    publication_guard = execute.index("publication_guard", reservation)
+    journal = execute.index("create_journal", publication_guard)
+    filesystem_promotion = execute.index("self._publication_recovery.promote", journal)
+    registry = execute.index("self._orchestrator.replace_registry_entry", filesystem_promotion)
+    completion = execute.index("publication.complete", registry)
+    assert staging < reservation < publication_guard < journal < filesystem_promotion < registry < completion
 
 
 def test_publication_transaction_holds_row_and_target_locks_until_completion() -> None:
@@ -220,8 +228,8 @@ def test_publication_transaction_holds_row_and_target_locks_until_completion() -
     assert "yield _ModelDownloadPublication" in publication
 
     guard = execute.index("publication_guard")
-    filesystem_promotion = execute.index("_promote_staged_directory", guard)
-    registry = execute.index("_register_promoted_model", filesystem_promotion)
+    filesystem_promotion = execute.index("self._publication_recovery.promote", guard)
+    registry = execute.index("self._orchestrator.replace_registry_entry", filesystem_promotion)
     terminal = execute.index("publication.complete", registry)
     assert guard < filesystem_promotion < registry < terminal
     assert "await publication.complete(result_payload)" in complete
@@ -230,10 +238,10 @@ def test_publication_transaction_holds_row_and_target_locks_until_completion() -
 def test_registry_publication_precedes_terminal_completion() -> None:
     service = _read(SERVICE)
     execute = _method_body(service, "execute_claimed_job")
-    register = execute.index("_register_promoted_model")
+    register = execute.index("self._orchestrator.replace_registry_entry")
     complete = execute.index("publication.complete", register)
     assert register < complete
-    assert "Staging registry entry missing for promoted model" in service
+    assert "Staging registry entry missing for promoted model" in execute
 
 
 def test_routes_keep_existing_contract_and_await_durable_reads() -> None:
@@ -264,11 +272,15 @@ def test_application_lifecycle_owns_worker_before_database_teardown() -> None:
 
 def test_download_executor_stages_before_final_promotion() -> None:
     service = _read(SERVICE)
-    staging = service.index('self.models_root / ".staging" / "model-downloads"')
-    lease_check = service.index("lease_is_valid", staging)
-    publication_guard = service.index("publication_guard", lease_check)
-    promotion = service.index("_promote_staged_directory", publication_guard)
-    registry = service.index("_register_promoted_model", promotion)
-    completion = service.index("publication.complete", registry)
-    assert staging < lease_check < publication_guard < promotion < registry < completion
-    assert "os.replace(staged_path, final_path)" in service
+    recovery = _read(RECOVERY)
+    execute = _method_body(service, "execute_claimed_job")
+
+    staging = execute.index("stage_root = self._stage_root")
+    lease_check = execute.index("lease_is_valid", staging)
+    publication_guard = execute.index("publication_guard", lease_check)
+    journal = execute.index("create_journal", publication_guard)
+    promotion = execute.index("self._publication_recovery.promote", journal)
+    registry = execute.index("self._orchestrator.replace_registry_entry", promotion)
+    completion = execute.index("publication.complete", registry)
+    assert staging < lease_check < publication_guard < journal < promotion < registry < completion
+    assert "os.replace(staged_path, final_path)" in recovery

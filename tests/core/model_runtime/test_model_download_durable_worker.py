@@ -44,6 +44,22 @@ class _FakePublication:
             raise RuntimeError("fake publication ownership changed")
         return completed
 
+    async def abort_for_retry(
+        self,
+        *,
+        error: str,
+        retry_base_seconds: int,
+    ) -> dict[str, Any]:
+        aborted = await self.repository.fail_or_retry(
+            job_id=self.job_id,
+            lease_token=self.lease_token,
+            error=error,
+            retry_base_seconds=retry_base_seconds,
+        )
+        if aborted is None:
+            raise RuntimeError("fake publication ownership changed during abort")
+        return aborted
+
 
 class FakeModelDownloadRepository:
     def __init__(self) -> None:
@@ -51,6 +67,7 @@ class FakeModelDownloadRepository:
         self.valid_leases: set[tuple[str, str]] = set()
         self.import_calls = 0
         self.complete_calls = 0
+        self.abort_calls = 0
         self.promotion_reservations = 0
         self.publication_guards = 0
         self.global_concurrency_limit: Optional[int] = None
@@ -124,6 +141,9 @@ class FakeModelDownloadRepository:
         row.update(status="queued", pause_requested=False)
         return self._stamp(row)
 
+    async def claim_expired_promotion_for_recovery(self, **_: Any) -> Optional[dict[str, Any]]:
+        return None
+
     async def claim_next(self, **_: Any) -> Optional[dict[str, Any]]:
         return None
 
@@ -186,10 +206,36 @@ class FakeModelDownloadRepository:
             result=dict(result_payload),
             install_path=install_path,
         )
+        self.valid_leases.discard((job_id, lease_token))
         return self._stamp(row)
 
-    async def fail_or_retry(self, **_: Any) -> Optional[dict[str, Any]]:
-        return None
+    async def release_publication_for_recovery(self, **_: Any) -> bool:
+        return True
+
+    async def fail_or_retry(
+        self,
+        *,
+        job_id: str,
+        lease_token: str,
+        error: str,
+        retry_base_seconds: int,
+    ) -> Optional[dict[str, Any]]:
+        del retry_base_seconds
+        self.abort_calls += 1
+        row = self.jobs.get(job_id)
+        if (
+            (job_id, lease_token) not in self.valid_leases
+            or row is None
+            or row.get("status") not in {"running", "promoting", "pause_requested"}
+        ):
+            return None
+        row.update(
+            status="queued",
+            error=error,
+            message="Download failed; queued for retry",
+        )
+        self.valid_leases.discard((job_id, lease_token))
+        return self._stamp(row)
 
     async def release_for_shutdown(self, **_: Any) -> bool:
         return True
@@ -331,6 +377,26 @@ async def _fake_staged_download(
     )
     path.mkdir(parents=True, exist_ok=True)
     (path / "weights.bin").write_bytes(b"durable-model")
+    await orchestrator.replace_registry_entry(
+        request.model_id,
+        {
+            "model_id": request.model_id,
+            "owner": owner,
+            "repository": repo,
+            "storage_key": request.storage_key or "transformers",
+            "revision": request.revision or "main",
+            "install_path": str(path),
+            "files": [{"path": "weights.bin", "size": 13}],
+            "total_size": 13,
+            "pinned": bool(request.pin),
+            "last_modified": datetime.now(timezone.utc).isoformat(),
+            "downloads": 0,
+            "likes": None,
+            "tags": [],
+            "license": None,
+            "description": None,
+        },
+    )
     return DownloadResult(
         model_id=request.model_id,
         install_path=str(path),
@@ -395,7 +461,7 @@ async def test_promotion_reservation_fences_cancel_and_pause(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_registry_failure_cannot_publish_false_completed_state(
+async def test_registry_failure_restores_previous_install_and_requeues(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -411,30 +477,40 @@ async def test_registry_failure_cannot_publish_false_completed_state(
         "status": "running",
     }
     final_path = tmp_path / "models" / "transformers" / "test-owner--test-model" / "main"
+    final_path.mkdir(parents=True)
+    (final_path / "weights.bin").write_bytes(b"previous-model")
+    previous_entry = {
+        "model_id": "test-owner/test-model",
+        "install_path": str(final_path),
+        "revision": "previous",
+    }
+    await service._orchestrator.replace_registry_entry("test-owner/test-model", previous_entry)
 
-    async def fail_registry(**_: Any) -> None:
+    async def fail_registry(model_id: str, entry: Optional[Mapping[str, Any]]) -> None:
+        del model_id, entry
         raise RuntimeError("registry unavailable")
 
-    monkeypatch.setattr(service, "_register_promoted_model", fail_registry)
+    monkeypatch.setattr(service._orchestrator, "replace_registry_entry", fail_registry)
 
-    with pytest.raises(RuntimeError, match="registry unavailable"):
-        await service.execute_claimed_job(
-            {
-                "job_id": job_id,
-                "lease_token": token,
-                "model_id": "test-owner/test-model",
-                "revision": None,
-                "channel_id": "core_runtime_transformers",
-                "storage_key": "transformers",
-                "install_path": str(final_path),
-            }
-        )
+    await service.execute_claimed_job(
+        {
+            "job_id": job_id,
+            "lease_token": token,
+            "model_id": "test-owner/test-model",
+            "revision": None,
+            "channel_id": "core_runtime_transformers",
+            "storage_key": "transformers",
+            "install_path": str(final_path),
+        }
+    )
 
-    assert final_path.exists() is True
+    assert (final_path / "weights.bin").read_bytes() == b"previous-model"
+    assert not list(final_path.parent.glob("main.previous-*"))
     assert repository.promotion_reservations == 1
     assert repository.publication_guards == 1
     assert repository.complete_calls == 0
-    assert repository.jobs[job_id]["status"] == "promoting"
+    assert repository.abort_calls == 1
+    assert repository.jobs[job_id]["status"] == "queued"
 
 
 @pytest.mark.asyncio
@@ -445,11 +521,6 @@ async def test_valid_lease_publishes_and_completes_inside_repository_guard(
     repository = FakeModelDownloadRepository()
     service = _service(tmp_path, repository)
     monkeypatch.setattr(ModelOrchestratorService, "download_model", _fake_staged_download)
-
-    async def no_op_register(**_: Any) -> None:
-        return None
-
-    monkeypatch.setattr(service, "_register_promoted_model", no_op_register)
     job_id = "mdl-valid"
     token = "00000000-0000-0000-0000-000000000002"
     repository.valid_leases.add((job_id, token))
@@ -473,6 +544,8 @@ async def test_valid_lease_publishes_and_completes_inside_repository_guard(
     )
 
     assert (final_path / "weights.bin").read_bytes() == b"durable-model"
+    assert not (final_path / ".karen-publication.json").exists()
+    assert not list(final_path.parent.glob("main.previous-*"))
     assert repository.promotion_reservations == 1
     assert repository.publication_guards == 1
     assert repository.complete_calls == 1
