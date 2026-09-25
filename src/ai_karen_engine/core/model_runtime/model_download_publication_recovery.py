@@ -57,6 +57,30 @@ class ModelDownloadPublicationJournal:
             "created_at": self.created_at,
         }
 
+    def validated_backup_path(self) -> Optional[Path]:
+        """Derive the only legal previous-install backup path from durable identity."""
+        try:
+            uuid.UUID(self.source_lease_token)
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("Model publication journal source lease token is invalid") from exc
+
+        if not self.had_previous_install:
+            if self.backup_path is not None:
+                raise ValueError(
+                    "Model publication journal cannot carry a backup path without a previous install"
+                )
+            return None
+
+        final_path = Path(self.install_path)
+        expected = final_path.with_name(
+            f"{final_path.name}.previous-{self.source_lease_token}"
+        )
+        if self.backup_path != str(expected):
+            raise ValueError(
+                "Model publication journal backup path does not match its install target and source lease"
+            )
+        return expected
+
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "ModelDownloadPublicationJournal":
         schema_version = int(payload.get("schema_version") or 0)
@@ -82,7 +106,12 @@ class ModelDownloadPublicationJournal:
             raise ValueError("Model publication journal contains invalid mapping fields")
         if prior_registry_entry is not None and not isinstance(prior_registry_entry, Mapping):
             raise ValueError("Model publication journal prior registry entry is invalid")
-        return cls(
+        try:
+            uuid.UUID(str(payload["publication_id"]))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("Model publication journal publication id is invalid") from exc
+
+        journal = cls(
             schema_version=schema_version,
             publication_id=str(payload["publication_id"]),
             job_id=str(payload["job_id"]),
@@ -96,6 +125,8 @@ class ModelDownloadPublicationJournal:
             backup_path=str(payload["backup_path"]) if payload.get("backup_path") else None,
             created_at=str(payload["created_at"]),
         )
+        journal.validated_backup_path()
+        return journal
 
 
 class ModelDownloadPublicationRecoveryStore:
@@ -144,6 +175,7 @@ class ModelDownloadPublicationRecoveryStore:
             backup_path=str(backup_path) if backup_path is not None else None,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
+        journal.validated_backup_path()
         marker = {
             "schema_version": JOURNAL_SCHEMA_VERSION,
             "publication_id": publication_id,
@@ -172,7 +204,7 @@ class ModelDownloadPublicationRecoveryStore:
         if not self.marker_matches_path(staged_path, journal):
             raise RuntimeError("Staged model publication marker does not match recovery journal")
         final_path.parent.mkdir(parents=True, exist_ok=True)
-        backup = Path(journal.backup_path) if journal.backup_path else None
+        backup = journal.validated_backup_path()
 
         if journal.had_previous_install:
             if not final_path.exists():
@@ -238,7 +270,7 @@ class ModelDownloadPublicationRecoveryStore:
         stage_root: Path,
     ) -> bool:
         final_path = Path(journal.install_path)
-        backup = Path(journal.backup_path) if journal.backup_path else None
+        backup = journal.validated_backup_path()
         marker_matches = self.marker_matches_final(journal)
 
         try:
@@ -268,7 +300,7 @@ class ModelDownloadPublicationRecoveryStore:
         journal: ModelDownloadPublicationJournal,
         stage_root: Path,
     ) -> None:
-        backup = Path(journal.backup_path) if journal.backup_path else None
+        backup = journal.validated_backup_path()
         if backup is not None:
             self._remove_path(backup)
         final_marker = Path(journal.install_path) / MARKER_NAME

@@ -10,6 +10,7 @@ from ai_karen_engine.core.model_runtime.model_download_control_service import (
     ModelDownloadControlService,
 )
 from ai_karen_engine.core.model_runtime.model_download_publication_recovery import (
+    ModelDownloadPublicationJournal,
     ModelDownloadPublicationRecoveryStore,
 )
 from ai_karen_engine.core.model_runtime.model_download_worker import ModelDownloadWorker
@@ -100,6 +101,17 @@ def test_registry_mutation_stays_owned_by_model_orchestrator() -> None:
     assert "replace_registry_entry" in service_source
     assert "async def snapshot_registry_entry" in orchestrator_source
     assert "async def replace_registry_entry" in orchestrator_source
+
+
+def test_recovery_backup_path_is_derived_not_trusted_from_receipt() -> None:
+    journal_source = inspect.getsource(ModelDownloadPublicationJournal.validated_backup_path)
+    store_source = inspect.getsource(ModelDownloadPublicationRecoveryStore)
+
+    assert "uuid.UUID(self.source_lease_token)" in journal_source
+    assert ".previous-{self.source_lease_token}" in journal_source
+    assert "self.backup_path != str(expected)" in journal_source
+    assert "journal.validated_backup_path()" in store_source
+    assert "Path(journal.backup_path)" not in store_source
 
 
 def test_recovery_store_is_evidence_only_not_lifecycle_authority() -> None:
