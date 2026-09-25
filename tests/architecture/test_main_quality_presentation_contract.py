@@ -63,13 +63,15 @@ def test_automation_stats_use_only_tenant_owned_dashboard_metrics() -> None:
     assert "job_service.list_jobs(user)" in source
 
 
-def test_unavailable_or_defaulted_metrics_cannot_become_showcase_ready() -> None:
+def test_runtime_truth_and_showcase_population_have_distinct_fail_closed_rules() -> None:
     stats_ui = AUTOMATION_STATS_UI.read_text(encoding="utf-8")
     overview = AGENTS_OVERVIEW_UI.read_text(encoding="utf-8")
     showcase = SHOWCASE_CAPTURE.read_text(encoding="utf-8")
 
     assert "automationStatsReadinessIssue" in stats_ui
-    assert '"unavailable", "unknown", "n/a"' in stats_ui
+    assert '"unavailable", "unknown"' in stats_ui
+    assert 'NO_SCHEDULE = "none scheduled"' in stats_ui
+    assert 'NOT_APPLICABLE = "n/a"' in stats_ui
     assert "NON_NEGATIVE_INTEGER" in stats_ui
     assert "activeAgents" not in stats_ui
     assert "definedSequences" in stats_ui
@@ -81,6 +83,7 @@ def test_unavailable_or_defaulted_metrics_cannot_become_showcase_ready() -> None
     assert "Active Agents" not in overview
 
     assert "SHOWCASE_METRIC_SENTINELS" in showcase
+    assert '"n/a"' in showcase
     assert '"none scheduled"' in showcase
     assert 'page.locator(`[data-automation-metric="${metricName}"]`)' in showcase
     assert '"active-tasks"' in showcase
