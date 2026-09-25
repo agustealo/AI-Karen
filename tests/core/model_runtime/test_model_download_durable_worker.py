@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, AsyncIterator, Mapping, Optional, Sequence
 
 import pytest
 
@@ -18,6 +19,32 @@ from ai_karen_engine.core.model_runtime.model_download_control_service import (
 )
 
 
+class _FakePublication:
+    def __init__(
+        self,
+        repository: "FakeModelDownloadRepository",
+        *,
+        job_id: str,
+        lease_token: str,
+        install_path: str,
+    ) -> None:
+        self.repository = repository
+        self.job_id = job_id
+        self.lease_token = lease_token
+        self.install_path = install_path
+
+    async def complete(self, result_payload: Mapping[str, Any]) -> dict[str, Any]:
+        completed = await self.repository.complete_job(
+            job_id=self.job_id,
+            lease_token=self.lease_token,
+            result_payload=result_payload,
+            install_path=self.install_path,
+        )
+        if completed is None:
+            raise RuntimeError("fake publication ownership changed")
+        return completed
+
+
 class FakeModelDownloadRepository:
     def __init__(self) -> None:
         self.jobs: dict[str, dict[str, Any]] = {}
@@ -25,6 +52,7 @@ class FakeModelDownloadRepository:
         self.import_calls = 0
         self.complete_calls = 0
         self.promotion_reservations = 0
+        self.publication_guards = 0
         self.global_concurrency_limit: Optional[int] = None
 
     @staticmethod
@@ -111,6 +139,30 @@ class FakeModelDownloadRepository:
         row.update(status="promoting", message="Promoting staged artifacts")
         self.promotion_reservations += 1
         return True
+
+    @asynccontextmanager
+    async def publication_guard(
+        self,
+        *,
+        job_id: str,
+        lease_token: str,
+        install_path: str,
+    ) -> AsyncIterator[Optional[_FakePublication]]:
+        self.publication_guards += 1
+        row = self.jobs.get(job_id)
+        if (
+            (job_id, lease_token) not in self.valid_leases
+            or row is None
+            or row.get("status") != "promoting"
+        ):
+            yield None
+            return
+        yield _FakePublication(
+            self,
+            job_id=job_id,
+            lease_token=lease_token,
+            install_path=install_path,
+        )
 
     async def complete_job(
         self,
@@ -311,6 +363,7 @@ async def test_stale_lease_cannot_promote_staged_artifact(tmp_path: Path, monkey
 
     assert final_path.exists() is False
     assert repository.promotion_reservations == 0
+    assert repository.publication_guards == 0
     assert repository.complete_calls == 0
 
 
@@ -379,12 +432,16 @@ async def test_registry_failure_cannot_publish_false_completed_state(
 
     assert final_path.exists() is True
     assert repository.promotion_reservations == 1
+    assert repository.publication_guards == 1
     assert repository.complete_calls == 0
     assert repository.jobs[job_id]["status"] == "promoting"
 
 
 @pytest.mark.asyncio
-async def test_valid_lease_promotes_only_complete_staged_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_valid_lease_publishes_and_completes_inside_repository_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     repository = FakeModelDownloadRepository()
     service = _service(tmp_path, repository)
     monkeypatch.setattr(ModelOrchestratorService, "download_model", _fake_staged_download)
@@ -417,5 +474,6 @@ async def test_valid_lease_promotes_only_complete_staged_directory(tmp_path: Pat
 
     assert (final_path / "weights.bin").read_bytes() == b"durable-model"
     assert repository.promotion_reservations == 1
+    assert repository.publication_guards == 1
     assert repository.complete_calls == 1
     assert repository.jobs[job_id]["status"] == "completed"

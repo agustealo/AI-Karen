@@ -82,6 +82,7 @@ def test_install_target_exclusivity_is_database_owned_at_create_claim_and_promot
     create = _method_body(repository, "create_job")
     claim = _method_body(repository, "claim_next")
     reserve = _method_body(repository, "lease_is_valid")
+    publication = _method_body(repository, "publication_guard")
     complete = _method_body(repository, "complete_job")
 
     assert "hashtextextended(:install_path, 0)" in repository
@@ -103,8 +104,13 @@ def test_install_target_exclusivity_is_database_owned_at_create_claim_and_promot
     assert "sibling.status = 'promoting'" in reserve
     assert "Superseded before promotion by canonical install-target owner" in reserve
 
-    assert "await _lock_install_target(session, install_path)" in complete
-    assert "Superseded by completed canonical job for the same install target" in complete
+    assert "await _lock_install_target(session, install_path)" in publication
+    assert "FOR UPDATE" in publication
+    assert "status = 'promoting'" in publication
+    assert "lease_token = CAST(:lease_token AS uuid)" in publication
+    assert "lease_expires_at > clock_timestamp()" in publication
+    assert "await publication.complete(result_payload)" in complete
+    assert "Superseded by completed canonical job for the same install target" in repository
 
 
 def test_requested_control_states_retain_lease_until_execution_boundary() -> None:
@@ -152,7 +158,14 @@ def test_requested_state_active_lease_index_matches_runtime_accounting() -> None
 
 def test_lease_mutations_are_token_fenced() -> None:
     repository = _read(REPOSITORY)
-    for method in ("heartbeat", "lease_is_valid", "complete_job", "fail_or_retry", "release_for_shutdown"):
+    for method in (
+        "heartbeat",
+        "lease_is_valid",
+        "publication_guard",
+        "complete_job",
+        "fail_or_retry",
+        "release_for_shutdown",
+    ):
         body = _method_body(repository, method)
         assert "lease_token" in body, f"{method} must be lease-token fenced"
 
@@ -165,7 +178,7 @@ def test_promotion_is_reserved_before_filesystem_mutation() -> None:
     reserve = _method_body(repository, "lease_is_valid")
     cancel = _method_body(repository, "cancel_job")
     pause = _method_body(repository, "pause_job")
-    complete = _method_body(repository, "complete_job")
+    publication = _method_body(repository, "publication_guard")
     heartbeat = _method_body(repository, "heartbeat")
     shutdown_release = _method_body(repository, "release_for_shutdown")
 
@@ -178,24 +191,47 @@ def test_promotion_is_reserved_before_filesystem_mutation() -> None:
 
     assert "'promoting'" in cancel
     assert "status IN ('queued', 'running')" in pause
-    assert "status = 'promoting'" in complete
+    assert "status = 'promoting'" in publication
     assert "status IN ('running', 'promoting', 'pause_requested')" in heartbeat
     assert "status IN ('running', 'pause_requested')" in shutdown_release
     assert "'promoting'" in migration
 
     staging = service.index('self.models_root / ".staging" / "model-downloads"')
     reservation = service.index("lease_is_valid", staging)
-    filesystem_promotion = service.index("_promote_staged_directory", reservation)
+    publication_guard = service.index("publication_guard", reservation)
+    filesystem_promotion = service.index("_promote_staged_directory", publication_guard)
     registry = service.index("_register_promoted_model", filesystem_promotion)
-    completion = service.index("complete_job", registry)
-    assert staging < reservation < filesystem_promotion < registry < completion
+    completion = service.index("publication.complete", registry)
+    assert staging < reservation < publication_guard < filesystem_promotion < registry < completion
+
+
+def test_publication_transaction_holds_row_and_target_locks_until_completion() -> None:
+    repository = _read(REPOSITORY)
+    service = _read(SERVICE)
+    publication = _method_body(repository, "publication_guard")
+    complete = _method_body(repository, "complete_job")
+    execute = _method_body(service, "execute_claimed_job")
+
+    transaction = publication.index("async with async_transaction_scope() as session")
+    target_lock = publication.index("await _lock_install_target(session, install_path)", transaction)
+    row_lock = publication.index("FOR UPDATE", target_lock)
+    wall_clock_check = publication.index("lease_expires_at > clock_timestamp()", row_lock)
+    assert transaction < target_lock < row_lock < wall_clock_check
+    assert "yield _ModelDownloadPublication" in publication
+
+    guard = execute.index("publication_guard")
+    filesystem_promotion = execute.index("_promote_staged_directory", guard)
+    registry = execute.index("_register_promoted_model", filesystem_promotion)
+    terminal = execute.index("publication.complete", registry)
+    assert guard < filesystem_promotion < registry < terminal
+    assert "await publication.complete(result_payload)" in complete
 
 
 def test_registry_publication_precedes_terminal_completion() -> None:
     service = _read(SERVICE)
     execute = _method_body(service, "execute_claimed_job")
     register = execute.index("_register_promoted_model")
-    complete = execute.index("complete_job", register)
+    complete = execute.index("publication.complete", register)
     assert register < complete
     assert "Staging registry entry missing for promoted model" in service
 
@@ -230,8 +266,9 @@ def test_download_executor_stages_before_final_promotion() -> None:
     service = _read(SERVICE)
     staging = service.index('self.models_root / ".staging" / "model-downloads"')
     lease_check = service.index("lease_is_valid", staging)
-    promotion = service.index("_promote_staged_directory", lease_check)
+    publication_guard = service.index("publication_guard", lease_check)
+    promotion = service.index("_promote_staged_directory", publication_guard)
     registry = service.index("_register_promoted_model", promotion)
-    completion = service.index("complete_job", registry)
-    assert staging < lease_check < promotion < registry < completion
+    completion = service.index("publication.complete", registry)
+    assert staging < lease_check < publication_guard < promotion < registry < completion
     assert "os.replace(staged_path, final_path)" in service
