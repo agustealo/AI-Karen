@@ -73,6 +73,7 @@ class ModelDownloadWorker:
         while not self._stop.is_set():
             try:
                 self._prune_finished()
+                await self._service.cleanup_completed_publication_residue(limit=1)
                 local_limit = max(1, await self._service.get_global_concurrency_limit())
                 while len(self._executions) < local_limit and not self._stop.is_set():
                     recovery = await self._service.claim_publication_recovery(self.worker_id)
