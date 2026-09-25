@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       target_revision:
-        description: "Full 40-character git SHA deployed at the approved demo target"
+        description: "Full 40-character git SHA to build and capture"
         required: true
         type: string
       destination_branch:
@@ -55,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$GITHUB_REF_NAME" != "$DEFAULT_BRANCH" ]]; then
-            echo "KAREN Presentation Capture must execute from the default branch so secret-bearing code is repository-trusted." >&2
+            echo "KAREN Presentation Capture must execute from the default branch so orchestration code is repository-trusted." >&2
             exit 1
           fi
 
@@ -135,91 +135,47 @@ jobs:
           fi
 
   capture:
-    name: trusted-real-product-capture
+    name: trusted-self-contained-real-product-capture
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: src/ui_launchers/Karen-AI-Theme
+    timeout-minutes: 60
+    permissions:
+      contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout trusted capture authority
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Attest exact trusted checkout
+      - name: Attest exact trusted checkout and target ancestry
         shell: bash
-        working-directory: .
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-
-      - name: Validate capture target and destination
-        shell: bash
-        working-directory: .
         env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          DESTINATION_BRANCH: ${{ needs.prepare.outputs.destination_branch }}
-          CAPTURE_URL: ${{ secrets.KAREN_PRESENTATION_BASE_URL }}
-          CAPTURE_EMAIL: ${{ secrets.KAREN_PRESENTATION_EMAIL }}
-          CAPTURE_PASSWORD: ${{ secrets.KAREN_PRESENTATION_PASSWORD }}
           TARGET_REVISION: ${{ needs.prepare.outputs.target_revision }}
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin "$TARGET_REVISION"
+          git cat-file -e "${TARGET_REVISION}^{commit}"
+          git merge-base --is-ancestor "$GITHUB_SHA" "$TARGET_REVISION"
 
-          if [[ -z "$CAPTURE_URL" || -z "$CAPTURE_EMAIL" || -z "$CAPTURE_PASSWORD" ]]; then
-            echo "KAREN_PRESENTATION_BASE_URL, KAREN_PRESENTATION_EMAIL, and KAREN_PRESENTATION_PASSWORD repository secrets are required" >&2
-            exit 1
-          fi
+      - name: Checkout exact candidate application without persisted credentials
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.target_revision }}
+          path: .presentation-target
+          fetch-depth: 0
+          persist-credentials: false
 
-          case "$CAPTURE_URL" in
-            https://*) ;;
-            *)
-              echo "KAREN_PRESENTATION_BASE_URL must use HTTPS so capture credentials are never sent over plaintext" >&2
-              exit 1
-              ;;
-          esac
-
-          if [[ "$CAPTURE_URL" == *"@"* ]]; then
-            echo "KAREN_PRESENTATION_BASE_URL must not contain embedded credentials" >&2
-            exit 1
-          fi
-
-          if [[ ! "$TARGET_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "target_revision must be a full 40-character git SHA" >&2
-            exit 1
-          fi
-
-          if ! git cat-file -e "${TARGET_REVISION}^{commit}" 2>/dev/null; then
-            git fetch --no-tags origin "$TARGET_REVISION" || true
-          fi
-          if ! git cat-file -e "${TARGET_REVISION}^{commit}" 2>/dev/null; then
-            echo "target_revision is not a known commit in this repository checkout" >&2
-            exit 1
-          fi
-
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" "$TARGET_REVISION"; then
-            echo "target_revision must include the exact trusted main capture baseline $GITHUB_SHA" >&2
-            exit 1
-          fi
-
-          if [[ -z "$DESTINATION_BRANCH" || "$DESTINATION_BRANCH" == "$DEFAULT_BRANCH" ]]; then
-            echo "destination_branch must be an existing non-default branch" >&2
-            exit 1
-          fi
-
-          if [[ ! "$DESTINATION_BRANCH" =~ ^[A-Za-z0-9._/-]+$ || "$DESTINATION_BRANCH" == -* || "$DESTINATION_BRANCH" == *..* ]]; then
-            echo "destination_branch contains unsafe ref syntax" >&2
-            exit 1
-          fi
-
-          if ! git show-ref --verify --quiet "refs/remotes/origin/$DESTINATION_BRANCH"; then
-            echo "destination_branch does not exist in the trusted checkout: $DESTINATION_BRANCH" >&2
-            exit 1
-          fi
+      - name: Attest exact candidate checkout
+        shell: bash
+        env:
+          TARGET_REVISION: ${{ needs.prepare.outputs.target_revision }}
+        run: |
+          set -euo pipefail
+          test "$(git -C .presentation-target rev-parse HEAD)" = "$TARGET_REVISION"
 
       - uses: actions/setup-node@v7
         with:
@@ -227,34 +183,40 @@ jobs:
           cache: npm
           cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
 
-      - name: Install frontend dependencies reproducibly
+      - name: Validate trusted self-contained capture runner
+        shell: bash
+        run: bash -n scripts/ci/presentation-self-contained-capture.sh
+
+      - name: Install trusted showcase dependencies reproducibly
+        working-directory: src/ui_launchers/Karen-AI-Theme
         run: npm ci --no-audit --no-fund
 
-      - name: Install Chromium
+      - name: Install Chromium for trusted showcase harness
+        working-directory: src/ui_launchers/Karen-AI-Theme
         run: npx playwright install --with-deps chromium
 
-      - name: Verify approved demo deployment is reachable
+      - name: Build exact candidate production API image
+        working-directory: .presentation-target
+        run: docker build --target app --build-arg PROFILE=runtime -t ai-karen-presentation-api:candidate .
+
+      - name: Build exact candidate production web image
+        working-directory: .presentation-target
+        run: |
+          docker build \
+            -f src/ui_launchers/Karen-AI-Theme/Dockerfile.production \
+            -t ai-karen-presentation-web:candidate \
+            src/ui_launchers/Karen-AI-Theme
+
+      - name: Capture exact candidate from disposable production stack
         shell: bash
         env:
-          CAPTURE_URL: ${{ secrets.KAREN_PRESENTATION_BASE_URL }}
-        run: |
-          set -euo pipefail
-          curl --fail --silent --show-error --location --max-time 20 \
-            "${CAPTURE_URL%/}/login" >/dev/null
-
-      - name: Capture real KAREN product surfaces with trusted harness
-        env:
-          KAREN_SHOWCASE_ALLOW_CAPTURE: "true"
-          KAREN_SHOWCASE_ACCOUNT_KIND: sanitized-demo
-          KAREN_SHOWCASE_BASE_URL: ${{ secrets.KAREN_PRESENTATION_BASE_URL }}
-          KAREN_SHOWCASE_EMAIL: ${{ secrets.KAREN_PRESENTATION_EMAIL }}
-          KAREN_SHOWCASE_PASSWORD: ${{ secrets.KAREN_PRESENTATION_PASSWORD }}
+          KAREN_PRESENTATION_TARGET_ROOT: ${{ github.workspace }}/.presentation-target
+          KAREN_PRESENTATION_TRUSTED_ROOT: ${{ github.workspace }}
           KAREN_SHOWCASE_TARGET_REVISION: ${{ needs.prepare.outputs.target_revision }}
-        run: npx playwright test --config=e2e/playwright.showcase.config.ts
+        run: bash scripts/ci/presentation-self-contained-capture.sh
 
       - name: Verify screenshot provenance with trusted gallery contract
         shell: bash
-        working-directory: .
         run: |
           set -euo pipefail
           python scripts/ci/presentation_gallery_contract.py \
@@ -294,7 +256,7 @@ jobs:
           ref: ${{ needs.prepare.outputs.destination_branch }}
           fetch-depth: 0
 
-      - name: Attest destination branch without capture secrets
+      - name: Attest destination branch without runtime credentials
         shell: bash
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
