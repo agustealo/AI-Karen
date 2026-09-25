@@ -10,6 +10,7 @@ CHAT_ROUTE = ROOT / "src/ai_karen_engine/api_routes/chat/runtime.py"
 CONVERSATION_ROUTE = ROOT / "src/ai_karen_engine/api_routes/chat/conversation.py"
 AUTH_ROUTE = ROOT / "src/ai_karen_engine/api_routes/auth/auth.py"
 AGENT_AUTH = ROOT / "src/ai_karen_engine/agents/auth.py"
+AGENT_ROUTE = ROOT / "src/ai_karen_engine/api_routes/agents/integration.py"
 
 
 def test_user_data_does_not_synthesize_default_tenant() -> None:
@@ -128,6 +129,14 @@ def _role_block(source: str, role: str, next_role: str) -> str:
     return source[start:end]
 
 
+def _agent_route_block(source: str, function_name: str) -> str:
+    start = source.index(f"async def {function_name}(")
+    end = source.find("\n\n@router.", start)
+    if end == -1:
+        end = len(source)
+    return source[start:end]
+
+
 def test_installation_agent_catalog_permissions_are_admin_control_plane_only() -> None:
     source = AGENT_AUTH.read_text(encoding="utf-8")
     viewer = _role_block(source, "viewer", "user")
@@ -178,3 +187,34 @@ def test_agent_wildcard_permission_path_has_required_regex_dependency() -> None:
     assert "import re" in source
     assert "re.escape(" in source
     assert "re.match(" in source
+
+
+def test_agent_catalog_authorizes_before_touching_global_registry() -> None:
+    source = AGENT_ROUTE.read_text(encoding="utf-8")
+    route = _agent_route_block(source, "get_all_agents")
+
+    permission = "_has_agent_permission(current_user, AgentPermission.VIEW_AGENT)"
+    assert permission in route
+    assert route.index(permission) < route.index("get_agent_integration_service()")
+    assert "except HTTPException:\n        raise" in route
+
+
+def test_agent_api_preserves_explicit_rbac_denials() -> None:
+    source = AGENT_ROUTE.read_text(encoding="utf-8")
+
+    for function_name in (
+        "execute_agent",
+        "execute_agent_stream",
+        "get_all_agents",
+        "get_agent",
+        "create_agent",
+        "delete_agent",
+        "terminate_agent",
+        "get_agent_events",
+        "get_system_metrics",
+        "get_agent_metrics",
+        "cancel_request",
+        "get_routing_recommendations",
+    ):
+        route = _agent_route_block(source, function_name)
+        assert "except HTTPException:\n        raise" in route
