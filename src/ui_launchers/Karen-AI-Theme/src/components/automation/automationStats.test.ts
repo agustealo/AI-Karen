@@ -9,17 +9,17 @@ describe("parseAutomationStats", () => {
   it("accepts the canonical tenant-scoped backend contract shape", () => {
     expect(
       parseAutomationStats({
-        activeAgents: "2 / 3",
-        tasksToday: "0",
-        activeSequences: "4",
+        activeTasks: "2",
+        tasksToday: "7",
+        definedSequences: "4",
         nextJob: "Nightly Research",
         nextJobTime: "2026-09-25T02:00:00Z",
         details: { ignoredByPresentation: true },
       }),
     ).toEqual({
-      activeAgents: "2 / 3",
-      tasksToday: "0",
-      activeSequences: "4",
+      activeTasks: "2",
+      tasksToday: "7",
+      definedSequences: "4",
       nextJob: "Nightly Research",
       nextJobTime: "2026-09-25T02:00:00Z",
     });
@@ -30,22 +30,22 @@ describe("parseAutomationStats", () => {
     [],
     {},
     {
-      activeAgents: "0 / 0",
+      activeTasks: "0",
       tasksToday: "0",
-      activeSequences: "0",
+      definedSequences: "0",
       nextJob: "None Scheduled",
     },
     {
-      activeAgents: "",
+      activeTasks: "",
       tasksToday: "0",
-      activeSequences: "0",
+      definedSequences: "0",
       nextJob: "None Scheduled",
       nextJobTime: "N/A",
     },
     {
-      activeAgents: "1 / 1",
+      activeTasks: "1",
       tasksToday: 2,
-      activeSequences: "0",
+      definedSequences: "0",
       nextJob: "None Scheduled",
       nextJobTime: "N/A",
     },
@@ -55,63 +55,39 @@ describe("parseAutomationStats", () => {
 });
 
 describe("automationStatsReadinessIssue", () => {
-  it("accepts semantically complete canonical metrics", () => {
+  it("accepts semantically complete tenant-owned metrics", () => {
     expect(
       automationStatsReadinessIssue({
-        activeAgents: "2 / 3",
+        activeTasks: "2",
         tasksToday: "7",
-        activeSequences: "4",
+        definedSequences: "4",
         nextJob: "Nightly Research",
         nextJobTime: "2026-09-25T02:00:00Z",
       }),
     ).toBeNull();
   });
 
-  it.each([
-    "Unavailable",
-    " unavailable ",
-    "Unknown",
-    "N/A",
-  ])("rejects unavailable active-agent truth: %s", (activeAgents) => {
-    expect(
-      automationStatsReadinessIssue({
-        activeAgents,
-        tasksToday: "7",
-        activeSequences: "4",
-        nextJob: "Nightly Research",
-        nextJobTime: "2026-09-25T02:00:00Z",
-      }),
-    ).not.toBeNull();
-  });
-
-  it("rejects non-canonical and inconsistent agent counts", () => {
-    expect(
-      automationStatsReadinessIssue({
-        activeAgents: "two agents",
-        tasksToday: "7",
-        activeSequences: "4",
-        nextJob: "Nightly Research",
-        nextJobTime: "2026-09-25T02:00:00Z",
-      }),
-    ).not.toBeNull();
-
-    expect(
-      automationStatsReadinessIssue({
-        activeAgents: "4 / 3",
-        tasksToday: "7",
-        activeSequences: "4",
-        nextJob: "Nightly Research",
-        nextJobTime: "2026-09-25T02:00:00Z",
-      }),
-    ).not.toBeNull();
-  });
+  it.each(["Unavailable", " unavailable ", "Unknown", "N/A"])(
+    "rejects unavailable canonical metrics: %s",
+    (activeTasks) => {
+      expect(
+        automationStatsReadinessIssue({
+          activeTasks,
+          tasksToday: "7",
+          definedSequences: "4",
+          nextJob: "Nightly Research",
+          nextJobTime: "2026-09-25T02:00:00Z",
+        }),
+      ).not.toBeNull();
+    },
+  );
 
   it("rejects non-count task and sequence metrics", () => {
     expect(
       automationStatsReadinessIssue({
-        activeAgents: "2 / 3",
-        tasksToday: "many",
-        activeSequences: "4",
+        activeTasks: "many",
+        tasksToday: "7",
+        definedSequences: "4",
         nextJob: "Nightly Research",
         nextJobTime: "2026-09-25T02:00:00Z",
       }),
@@ -119,9 +95,19 @@ describe("automationStatsReadinessIssue", () => {
 
     expect(
       automationStatsReadinessIssue({
-        activeAgents: "2 / 3",
+        activeTasks: "2",
+        tasksToday: "many",
+        definedSequences: "4",
+        nextJob: "Nightly Research",
+        nextJobTime: "2026-09-25T02:00:00Z",
+      }),
+    ).not.toBeNull();
+
+    expect(
+      automationStatsReadinessIssue({
+        activeTasks: "2",
         tasksToday: "7",
-        activeSequences: "several",
+        definedSequences: "several",
         nextJob: "Nightly Research",
         nextJobTime: "2026-09-25T02:00:00Z",
       }),
