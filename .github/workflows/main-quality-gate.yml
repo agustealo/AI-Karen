@@ -69,6 +69,9 @@ jobs:
           cache: pip
           cache-dependency-path: requirements/ci/*.txt
 
+      - name: Verify presentation activation contract
+        run: python scripts/ci/verify_presentation_assets.py --require-assets
+
       - name: Install quality and runtime contract dependencies
         run: |
           python -m pip install --upgrade pip
@@ -103,6 +106,7 @@ jobs:
       - name: Architecture authority contracts
         run: |
           pytest tests/architecture/test_ci_dependency_authority.py -q
+          pytest tests/architecture/test_main_quality_presentation_contract.py -q
           pytest tests/architecture/test_core_ai_machine_isolation.py -q
           pytest tests/architecture/test_provider_chat_authority.py -q
           pytest tests/architecture/test_cortex_intelligence_authority.py -q
