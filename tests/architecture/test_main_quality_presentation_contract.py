@@ -33,7 +33,8 @@ def test_dedicated_and_aggregate_presentation_gates_share_one_authority() -> Non
 def test_presentation_gate_tracks_backend_stats_truth_owner() -> None:
     presentation = PRESENTATION_WORKFLOW.read_text(encoding="utf-8")
 
-    assert presentation.count(AUTOMATION_STATS_PATH) == 2
+    path_filter_entry = f'- "{AUTOMATION_STATS_PATH}"'
+    assert presentation.count(path_filter_entry) == 2
 
 
 def test_automation_stats_do_not_present_global_agents_as_tenant_truth() -> None:
