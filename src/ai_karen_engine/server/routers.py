@@ -24,6 +24,7 @@ from ai_karen_engine.api_routes.auth.privacy import router as privacy_router
 from ai_karen_engine.api_routes.automation.cron import router as automation_cron_router
 from ai_karen_engine.api_routes.automation.jobs import router as automation_jobs_router
 from ai_karen_engine.api_routes.automation.scheduler import router as scheduler_router
+from ai_karen_engine.api_routes.automation.stats import router as automation_stats_router
 from ai_karen_engine.api_routes.automation.tasks import router as tasks_router
 from ai_karen_engine.api_routes.chat.conversation import router as conversation_router
 from ai_karen_engine.api_routes.chat.copilot import router as copilot_router
@@ -118,6 +119,7 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     RouterSpec(tasks_router, tags=("tasks",)),
     RouterSpec(automation_jobs_router, "/api", ("automation-jobs",)),
     RouterSpec(automation_cron_router, "/api", ("automation-cron",)),
+    RouterSpec(automation_stats_router, "/api", ("automation-stats",)),
     RouterSpec(memory_router, "/api/memory", ("memory",)),
     RouterSpec(user_persona_router, "/api/personas", ("personas",)),
     RouterSpec(copilot_router, "/api/copilot", ("copilot",)),
