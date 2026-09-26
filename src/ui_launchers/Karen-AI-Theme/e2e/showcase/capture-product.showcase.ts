@@ -19,6 +19,14 @@ const GALLERY_FILES = [
 
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 const RETIRED_VISIBLE_BRAND = /\bKaren AI\b/i;
+const NON_NEGATIVE_INTEGER = /^\d+$/;
+const SHOWCASE_METRIC_SENTINELS = new Set([
+  "unavailable",
+  "unknown",
+  "n/a",
+  "none scheduled",
+  "…",
+]);
 const ACTIVE_SESSION_STORAGE_KEY = "karen.active_session_id";
 const SHOWCASE_CHAT_MESSAGE =
   "Review the sanitized runtime signals for this presentation workspace.";
@@ -231,6 +239,40 @@ async function assertAgentsReady(page: Page): Promise<void> {
   await expect(
     page.getByText("Live Runtime Connected", { exact: true }),
   ).toBeVisible();
+
+  const metricSelectors = [
+    "active-tasks",
+    "tasks-today",
+    "defined-sequences",
+    "next-job",
+    "next-job-time",
+  ] as const;
+  const metricValues = new Map<string, string>();
+
+  for (const metricName of metricSelectors) {
+    const metric = page.locator(`[data-automation-metric="${metricName}"]`);
+    await expect(metric).toBeVisible();
+    const value = (await metric.innerText()).trim();
+    if (!value || SHOWCASE_METRIC_SENTINELS.has(value.toLowerCase())) {
+      throw new Error(
+        `Agents Overview is not presentation-ready: ${metricName} resolved to ${JSON.stringify(value)}. Curated capture requires verified non-default runtime truth.`,
+      );
+    }
+    metricValues.set(metricName, value);
+  }
+
+  for (const metricName of [
+    "active-tasks",
+    "tasks-today",
+    "defined-sequences",
+  ] as const) {
+    const value = metricValues.get(metricName) ?? "";
+    if (!NON_NEGATIVE_INTEGER.test(value)) {
+      throw new Error(
+        `Agents Overview is not presentation-ready: ${metricName} is not a canonical non-negative count: ${JSON.stringify(value)}.`,
+      );
+    }
+  }
 
   await assertCanonicalVisibleBrand(page);
 }
