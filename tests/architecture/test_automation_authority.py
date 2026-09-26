@@ -83,3 +83,15 @@ def test_legacy_job_cutover_is_explicit_and_identity_bound():
     assert "source.unlink()" in migration
     assert "--tenant-id" in script
     assert "--user-id" in script
+
+
+def test_automation_stats_route_is_registered_by_canonical_router_owner():
+    source = _read("src/ai_karen_engine/server/routers.py")
+    assert (
+        "from ai_karen_engine.api_routes.automation.stats import "
+        "router as automation_stats_router"
+    ) in source
+    assert (
+        'RouterSpec(automation_stats_router, "/api", ("automation-stats",))'
+        in source
+    )
