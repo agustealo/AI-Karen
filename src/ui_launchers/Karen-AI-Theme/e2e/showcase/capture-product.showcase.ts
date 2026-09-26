@@ -27,6 +27,9 @@ const SHOWCASE_METRIC_SENTINELS = new Set([
   "none scheduled",
   "…",
 ]);
+const ACTIVE_SESSION_STORAGE_KEY = "karen.active_session_id";
+const SHOWCASE_CHAT_MESSAGE =
+  "Review the sanitized runtime signals for this presentation workspace.";
 const COMMS_DEGRADED_TITLES = [
   "Sign In Required",
   "Observability Access Restricted",
@@ -98,6 +101,108 @@ async function assertCanonicalVisibleBrand(page: Page): Promise<void> {
       },
     )
     .toBe(false);
+}
+
+async function ensureRealChatEvidence(page: Page): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        page.evaluate((key) => window.localStorage.getItem(key)?.trim() ?? "", ACTIVE_SESSION_STORAGE_KEY),
+      {
+        timeout: 30_000,
+        message:
+          "Chat session bootstrap did not publish the active session id needed to seed real presentation evidence.",
+      },
+    )
+    .not.toBe("");
+
+  const sessionId = await page.evaluate(
+    (key) => window.localStorage.getItem(key)?.trim() ?? "",
+    ACTIVE_SESSION_STORAGE_KEY,
+  );
+
+  const result = await page.evaluate(
+    async ({ activeSessionId, content }) => {
+      const requestJson = async (url: string, init: RequestInit = {}) => {
+        const response = await fetch(url, {
+          ...init,
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            ...(init.headers ?? {}),
+          },
+        });
+        const text = await response.text();
+        let payload: unknown = null;
+        if (text) {
+          try {
+            payload = JSON.parse(text);
+          } catch {
+            payload = text;
+          }
+        }
+        if (!response.ok) {
+          throw new Error(
+            `Presentation chat evidence request failed (${response.status}) for ${url}: ${text}`,
+          );
+        }
+        return payload;
+      };
+
+      const conversation = (await requestJson(
+        `/api/conversations/ensure-session/${encodeURIComponent(activeSessionId)}`,
+        { method: "POST", body: "{}" },
+      )) as {
+        id?: unknown;
+        messages?: Array<{ content?: unknown }>;
+      };
+
+      const alreadyHasEvidence = Array.isArray(conversation.messages)
+        ? conversation.messages.some(
+            (message) =>
+              typeof message.content === "string" && message.content.trim().length > 24,
+          )
+        : false;
+
+      if (alreadyHasEvidence) {
+        return { seeded: false };
+      }
+
+      const conversationId = String(conversation.id ?? "").trim();
+      if (!conversationId) {
+        throw new Error(
+          "Canonical conversation bootstrap returned no durable conversation id.",
+        );
+      }
+
+      const addResult = (await requestJson(
+        `/api/conversations/${encodeURIComponent(conversationId)}/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            role: "user",
+            content,
+            ui_source: "web",
+            metadata: { source: "presentation-capture" },
+          }),
+        },
+      )) as { success?: unknown };
+
+      if (addResult.success !== true) {
+        throw new Error(
+          "Canonical conversation API did not confirm the real user message write.",
+        );
+      }
+
+      return { seeded: true };
+    },
+    { activeSessionId: sessionId, content: SHOWCASE_CHAT_MESSAGE },
+  );
+
+  if (result.seeded) {
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForURL(/\/dashboard(?:$|[/?#])/);
+  }
 }
 
 async function assertChatReady(page: Page): Promise<void> {
@@ -281,6 +386,7 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
     page.locator('header img[src*="karen-mark.svg"]').first(),
   ).toBeVisible();
 
+  await ensureRealChatEvidence(page);
   await assertChatReady(page);
   await capture(page, GALLERY_FILES[0], email);
 
