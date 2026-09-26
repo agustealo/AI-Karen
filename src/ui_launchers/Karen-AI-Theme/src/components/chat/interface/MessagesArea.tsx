@@ -20,7 +20,6 @@ export function MessagesArea({
     <ScrollArea
       className="flex-1 p-4 md:p-6"
       viewportRef={viewportRef}
-      aria-label="Chat messages"
     >
       {/*
        * The viewport ref belongs to ScrollArea; the container ref belongs to the
@@ -31,6 +30,7 @@ export function MessagesArea({
         ref={messagesContainerRef}
         className="w-full space-y-1 pb-4"
         role="log"
+        aria-label="Chat messages"
         aria-live="polite"
         aria-relevant="additions text"
       >
