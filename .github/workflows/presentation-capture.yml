@@ -245,6 +245,17 @@ jobs:
           KAREN_SHOWCASE_TARGET_REVISION: ${{ needs.prepare.outputs.target_revision }}
         run: bash scripts/ci/presentation-self-contained-capture.sh
 
+      - name: Preserve failed Playwright capture evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: karen-presentation-failure-${{ github.sha }}-${{ needs.prepare.outputs.target_revision }}
+          path: |
+            src/ui_launchers/Karen-AI-Theme/playwright-report/
+            src/ui_launchers/Karen-AI-Theme/test-results/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Verify screenshot provenance with trusted gallery contract
         shell: bash
         run: |
