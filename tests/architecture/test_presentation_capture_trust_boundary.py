@@ -102,7 +102,7 @@ def test_self_contained_runtime_uses_canonical_first_run_and_public_automation_a
     assert "random_token" in runner
 
 
-def test_owner_only_pr_comment_is_bound_to_current_pr_head() -> None:
+def test_owner_only_pr_comment_is_bound_to_current_same_repo_pr_head() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     prepare, _ = workflow.split("  capture:", maxsplit=1)
 
@@ -112,9 +112,18 @@ def test_owner_only_pr_comment_is_bound_to_current_pr_head() -> None:
     assert "github.event.comment.author_association == 'OWNER'" in prepare
     assert "startsWith(github.event.comment.body, '/capture-presentation ')" in prepare
     assert r"/capture-presentation\s+([0-9a-fA-F]{40})" in prepare
-    assert "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/presentation-request-head" in prepare
+    assert 'destination = ""' in prepare
+    assert 'destination = "docs/premium-brand-showcase"' not in prepare
+    assert 'PR_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"' in prepare
     assert 'if [[ "$CURRENT_PR_HEAD" != "$TARGET_REVISION" ]]' in prepare
-    assert 'destination = "docs/premium-brand-showcase"' in prepare
+    assert 'if [[ "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]]' in prepare
+    assert "owner-comment capture write-back is restricted to same-repository pull requests" in prepare
+    assert 'if [[ -z "$DESTINATION_BRANCH" || "$DESTINATION_BRANCH" == "$DEFAULT_BRANCH" ]]' in prepare
+    assert "printf 'destination_branch=%s\\n' \"$DESTINATION_BRANCH\" >> \"$GITHUB_OUTPUT\"" in prepare
+    assert (
+        "destination_branch: ${{ steps.bind.outputs.destination_branch || "
+        "steps.request.outputs.destination_branch }}" in prepare
+    )
     assert 'commit_assets = "true"' in prepare
 
 
@@ -163,7 +172,7 @@ if __name__ == "__main__":
     test_capture_is_default_branch_owned_and_has_no_long_lived_demo_secrets()
     test_exact_candidate_is_built_separately_from_trusted_harness()
     test_self_contained_runtime_uses_canonical_first_run_and_public_automation_apis()
-    test_owner_only_pr_comment_is_bound_to_current_pr_head()
+    test_owner_only_pr_comment_is_bound_to_current_same_repo_pr_head()
     test_write_scoped_job_executes_only_trusted_artifact_code()
     test_trusted_capture_harness_is_repository_owned_and_real_runtime_only()
     print("presentation capture trust boundary green")

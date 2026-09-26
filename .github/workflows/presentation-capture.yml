@@ -44,7 +44,7 @@ jobs:
       pull-requests: read
     outputs:
       target_revision: ${{ steps.request.outputs.target_revision }}
-      destination_branch: ${{ steps.request.outputs.destination_branch }}
+      destination_branch: ${{ steps.bind.outputs.destination_branch || steps.request.outputs.destination_branch }}
       commit_assets: ${{ steps.request.outputs.commit_assets }}
 
     steps:
@@ -99,13 +99,15 @@ jobs:
               if match is None:
                   raise SystemExit("owner capture command must be exactly: /capture-presentation <full-40-character-sha>")
               target = match.group(1)
-              destination = "docs/premium-brand-showcase"
+              destination = ""
               commit_assets = "true"
           else:
               raise SystemExit(f"unsupported presentation capture event: {event_name}")
 
           if re.fullmatch(r"[0-9a-fA-F]{40}", target) is None:
               raise SystemExit("target_revision must be a full 40-character git SHA")
+          if event_name == "workflow_dispatch" and not destination:
+              raise SystemExit("destination_branch is required for workflow_dispatch")
           if commit_assets not in {"true", "false"}:
               raise SystemExit("commit_assets must resolve to true or false")
 
@@ -117,22 +119,50 @@ jobs:
           PY
 
       - name: Bind owner comment to current pull-request head
+        id: bind
         if: ${{ github.event_name == 'issue_comment' }}
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.issue.number }}
           TARGET_REVISION: ${{ steps.request.outputs.target_revision }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin \
-            "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/presentation-request-head"
-          CURRENT_PR_HEAD="$(git rev-parse refs/remotes/origin/presentation-request-head)"
+
+          PR_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+          readarray -t PR_BINDING < <(
+            PR_JSON="$PR_JSON" python - <<'PY'
+          import json
+          import os
+
+          payload = json.loads(os.environ["PR_JSON"])
+          print(payload["head"]["sha"])
+          print(payload["head"]["ref"])
+          print(payload["head"]["repo"]["full_name"])
+          PY
+          )
+
+          CURRENT_PR_HEAD="${PR_BINDING[0]:-}"
+          DESTINATION_BRANCH="${PR_BINDING[1]:-}"
+          HEAD_REPOSITORY="${PR_BINDING[2]:-}"
+
           if [[ "$CURRENT_PR_HEAD" != "$TARGET_REVISION" ]]; then
             echo "owner capture command SHA must equal the current pull-request head" >&2
             echo "requested: $TARGET_REVISION" >&2
             echo "current:   $CURRENT_PR_HEAD" >&2
             exit 1
           fi
+          if [[ "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]]; then
+            echo "owner-comment capture write-back is restricted to same-repository pull requests" >&2
+            exit 1
+          fi
+          if [[ -z "$DESTINATION_BRANCH" || "$DESTINATION_BRANCH" == "$DEFAULT_BRANCH" ]]; then
+            echo "current pull-request head must resolve to a non-default destination branch" >&2
+            exit 1
+          fi
+
+          printf 'destination_branch=%s\n' "$DESTINATION_BRANCH" >> "$GITHUB_OUTPUT"
 
   capture:
     name: trusted-self-contained-real-product-capture
