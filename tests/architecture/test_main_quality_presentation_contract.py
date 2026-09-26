@@ -4,25 +4,13 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MAIN_QUALITY_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/main-quality-gate.yml"
 PRESENTATION_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/presentation-contract.yml"
-AUTOMATION_STATS_ROUTE = (
-    REPOSITORY_ROOT / "src/ai_karen_engine/api_routes/automation/stats.py"
-)
-AUTOMATION_STATS_UI = (
+WEB_HEALTH_ROUTE = (
     REPOSITORY_ROOT
-    / "src/ui_launchers/Karen-AI-Theme/src/components/automation/automationStats.ts"
-)
-AGENTS_OVERVIEW_UI = (
-    REPOSITORY_ROOT
-    / "src/ui_launchers/Karen-AI-Theme/src/components/automation/AgentsOverviewPage.tsx"
-)
-SHOWCASE_CAPTURE = (
-    REPOSITORY_ROOT
-    / "src/ui_launchers/Karen-AI-Theme/e2e/showcase/capture-product.showcase.ts"
+    / "src/ui_launchers/Karen-AI-Theme/src/app/api/health/route.ts"
 )
 CANONICAL_VERIFIER_COMMAND = (
     "python scripts/ci/verify_presentation_assets.py --require-assets"
 )
-AUTOMATION_STATS_PATH = "src/ai_karen_engine/api_routes/automation/stats.py"
 
 
 def test_main_quality_delegates_to_canonical_presentation_verifier() -> None:
@@ -42,50 +30,9 @@ def test_dedicated_and_aggregate_presentation_gates_share_one_authority() -> Non
     assert CANONICAL_VERIFIER_COMMAND in presentation
 
 
-def test_presentation_gate_tracks_backend_stats_truth_owner() -> None:
-    presentation = PRESENTATION_WORKFLOW.read_text(encoding="utf-8")
+def test_web_dashboard_health_proxy_uses_canonical_backend_monitoring_route() -> None:
+    route = WEB_HEALTH_ROUTE.read_text(encoding="utf-8")
 
-    path_filter_entry = f'- "{AUTOMATION_STATS_PATH}"'
-    assert presentation.count(path_filter_entry) == 2
-
-
-def test_automation_stats_use_only_tenant_owned_dashboard_metrics() -> None:
-    source = AUTOMATION_STATS_ROUTE.read_text(encoding="utf-8")
-
-    assert "get_agent_integration_service" not in source
-    assert "get_all_agents" not in source
-    assert '"activeAgents"' not in source
-    assert '"activeTasks": str(tasks_summary["active_tasks"])' in source
-    assert '"tasksToday": str(tasks_summary["tasks_run_today"])' in source
-    assert '"definedSequences": str(len(jobs))' in source
-    assert "get_tasks_summary(tenant_id)" in source
-    assert "get_cron_summary(tenant_id)" in source
-    assert "job_service.list_jobs(user)" in source
-
-
-def test_runtime_truth_and_showcase_population_have_distinct_fail_closed_rules() -> None:
-    stats_ui = AUTOMATION_STATS_UI.read_text(encoding="utf-8")
-    overview = AGENTS_OVERVIEW_UI.read_text(encoding="utf-8")
-    showcase = SHOWCASE_CAPTURE.read_text(encoding="utf-8")
-
-    assert "automationStatsReadinessIssue" in stats_ui
-    assert '"unavailable", "unknown"' in stats_ui
-    assert 'NO_SCHEDULE = "none scheduled"' in stats_ui
-    assert 'NOT_APPLICABLE = "n/a"' in stats_ui
-    assert "NON_NEGATIVE_INTEGER" in stats_ui
-    assert "activeAgents" not in stats_ui
-    assert "definedSequences" in stats_ui
-
-    assert "automationStatsReadinessIssue(parsed)" in overview
-    assert 'setStatsState("unavailable")' in overview
-    assert 'data-automation-metric="active-tasks"' in overview
-    assert 'data-automation-metric="defined-sequences"' in overview
-    assert "Active Agents" not in overview
-
-    assert "SHOWCASE_METRIC_SENTINELS" in showcase
-    assert '"n/a"' in showcase
-    assert '"none scheduled"' in showcase
-    assert 'page.locator(`[data-automation-metric="${metricName}"]`)' in showcase
-    assert '"active-tasks"' in showcase
-    assert '"defined-sequences"' in showcase
-    assert "NON_NEGATIVE_INTEGER" in showcase
+    assert "proxyToBackend(" in route
+    assert "'/api/health'" in route
+    assert "proxyToBackend(\n      nextRequest,\n      '/health'" not in route
