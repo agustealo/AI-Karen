@@ -20,6 +20,9 @@ class _Result:
     def fetchall(self) -> list[Any]:
         return list(self._rows)
 
+    def fetchone(self) -> Any | None:
+        return self._rows[0] if self._rows else None
+
 
 class _Session:
     def __init__(self, results: list[_Result]) -> None:
@@ -34,7 +37,11 @@ class _Session:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         return None
 
-    async def execute(self, statement: Any, params: dict[str, Any] | None = None) -> _Result:
+    async def execute(
+        self,
+        statement: Any,
+        params: dict[str, Any] | None = None,
+    ) -> _Result:
         self.executions.append((str(statement), dict(params or {})))
         if not self._results:
             raise AssertionError("unexpected execute")
@@ -70,6 +77,7 @@ async def test_add_message_is_atomically_scoped_to_parent_tenant() -> None:
 
     assert result.success is True
     assert result.data == "11111111-1111-1111-1111-111111111111"
+    assert result.metadata["idempotent_replay"] is False
     assert session.commits == 1
     assert session.rollbacks == 0
 
@@ -79,13 +87,64 @@ async def test_add_message_is_atomically_scoped_to_parent_tenant() -> None:
     assert "FROM conversations c" in normalized_sql
     assert "c.conversation_id = :conversation_id" in normalized_sql
     assert "c.tenant_id = :tenant_id" in normalized_sql
+    assert "ON CONFLICT (message_id) DO NOTHING" in normalized_sql
     assert "updated_at" not in normalized_sql
     assert params["tenant_id"] == "tenant-a"
 
 
 @pytest.mark.asyncio
+async def test_add_message_accepts_exact_retry_as_idempotent_replay() -> None:
+    existing = SimpleNamespace(role="assistant", content="durable response")
+    session = _Session(
+        [
+            _Result(rowcount=0),
+            _Result(rows=[existing]),
+        ]
+    )
+
+    result = await _repository(session).add_message(_message())
+
+    assert result.success is True
+    assert result.data == "11111111-1111-1111-1111-111111111111"
+    assert result.metadata["idempotent_replay"] is True
+    assert session.commits == 1
+    assert session.rollbacks == 0
+
+    replay_sql, replay_params = session.executions[1]
+    normalized_sql = " ".join(replay_sql.split())
+    assert "JOIN conversations c" in normalized_sql
+    assert "m.message_id = :id" in normalized_sql
+    assert "m.conversation_id = :conversation_id" in normalized_sql
+    assert "c.tenant_id = :tenant_id" in normalized_sql
+    assert replay_params["tenant_id"] == "tenant-a"
+
+
+@pytest.mark.asyncio
+async def test_add_message_rejects_idempotency_conflict() -> None:
+    conflicting = SimpleNamespace(role="assistant", content="different response")
+    session = _Session(
+        [
+            _Result(rowcount=0),
+            _Result(rows=[conflicting]),
+        ]
+    )
+
+    result = await _repository(session).add_message(_message())
+
+    assert result.success is False
+    assert result.error == "message_idempotency_conflict"
+    assert session.commits == 0
+    assert session.rollbacks == 1
+
+
+@pytest.mark.asyncio
 async def test_add_message_rejects_cross_tenant_or_missing_conversation() -> None:
-    session = _Session([_Result(rowcount=0)])
+    session = _Session(
+        [
+            _Result(rowcount=0),
+            _Result(rows=[]),
+        ]
+    )
     result = await _repository(session).add_message(_message(tenant_id="tenant-b"))
 
     assert result.success is False
