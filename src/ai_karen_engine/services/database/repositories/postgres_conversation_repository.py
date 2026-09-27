@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy import text
@@ -22,7 +21,9 @@ from ai_karen_engine.services.database.repositories.conversation_repository impo
     Message,
     RepositoryResult,
 )
-from ai_karen_engine.services.database.repositories.observability import instrument_repository
+from ai_karen_engine.services.database.repositories.observability import (
+    instrument_repository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,10 @@ logger = logging.getLogger(__name__)
 class PostgresConversationRepository(ConversationRepository):
     """PostgreSQL conversation repository.
 
-    Canonical source is the `conversations` + `messages` tables.
+    Canonical source is the migration-owned ``conversations`` + ``messages``
+    tables. Conversation ownership is always tenant-scoped. The ``messages``
+    table intentionally has no tenant column; message ownership is derived from
+    its parent conversation, matching the production RLS policy.
     """
 
     def __init__(self, session_factory):
@@ -41,7 +45,9 @@ class PostgresConversationRepository(ConversationRepository):
     async def _session(self) -> AsyncSession:
         return self._session_factory()
 
-    @instrument_repository(operation="health_check", repository="PostgresConversationRepository")
+    @instrument_repository(
+        operation="health_check", repository="PostgresConversationRepository"
+    )
     async def health_check(self) -> RepositoryResult:
         try:
             async with await self._session() as session:
@@ -51,8 +57,12 @@ class PostgresConversationRepository(ConversationRepository):
             logger.error("ConversationRepository health check failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
-    @instrument_repository(operation="create_conversation", repository="PostgresConversationRepository")
-    async def create_conversation(self, conversation: Conversation) -> RepositoryResult[str]:
+    @instrument_repository(
+        operation="create_conversation", repository="PostgresConversationRepository"
+    )
+    async def create_conversation(
+        self, conversation: Conversation
+    ) -> RepositoryResult[str]:
         start = time.perf_counter()
         try:
             async with await self._session() as session:
@@ -82,14 +92,22 @@ class PostgresConversationRepository(ConversationRepository):
                 )
                 await session.commit()
                 latency = time.perf_counter() - start
-                logger.debug("create_conversation id=%s latency_ms=%.2f", conversation.id, latency * 1000)
+                logger.debug(
+                    "create_conversation id=%s latency_ms=%.2f",
+                    conversation.id,
+                    latency * 1000,
+                )
                 return RepositoryResult(success=True, data=conversation.id)
         except Exception as exc:
             logger.error("create_conversation failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
-    @instrument_repository(operation="get_conversation", repository="PostgresConversationRepository")
-    async def get_conversation(self, conversation_id: str, tenant_id: str) -> RepositoryResult[Optional[Conversation]]:
+    @instrument_repository(
+        operation="get_conversation", repository="PostgresConversationRepository"
+    )
+    async def get_conversation(
+        self, conversation_id: str, tenant_id: str
+    ) -> RepositoryResult[Optional[Conversation]]:
         try:
             async with await self._session() as session:
                 result = await session.execute(
@@ -106,14 +124,20 @@ class PostgresConversationRepository(ConversationRepository):
                 row = result.fetchone()
                 if not row:
                     return RepositoryResult(success=True, data=None)
-                conv = self._row_to_conversation(row)
-                return RepositoryResult(success=True, data=conv)
+                return RepositoryResult(
+                    success=True,
+                    data=self._row_to_conversation(row),
+                )
         except Exception as exc:
             logger.error("get_conversation failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
-    @instrument_repository(operation="list_conversations", repository="PostgresConversationRepository")
-    async def list_conversations(self, query: ConversationQuery) -> RepositoryResult[Sequence[Conversation]]:
+    @instrument_repository(
+        operation="list_conversations", repository="PostgresConversationRepository"
+    )
+    async def list_conversations(
+        self, query: ConversationQuery
+    ) -> RepositoryResult[Sequence[Conversation]]:
         start = time.perf_counter()
         try:
             clauses = ["tenant_id = :tenant_id"]
@@ -149,18 +173,26 @@ class PostgresConversationRepository(ConversationRepository):
                 rows = result.fetchall()
                 conversations = [self._row_to_conversation(row) for row in rows]
                 latency = time.perf_counter() - start
-                logger.debug("list_conversations returned=%d latency_ms=%.2f", len(conversations), latency * 1000)
+                logger.debug(
+                    "list_conversations returned=%d latency_ms=%.2f",
+                    len(conversations),
+                    latency * 1000,
+                )
                 return RepositoryResult(success=True, data=conversations)
         except Exception as exc:
             logger.error("list_conversations failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
-    @instrument_repository(operation="update_conversation", repository="PostgresConversationRepository")
-    async def update_conversation(self, conversation: Conversation) -> RepositoryResult[bool]:
+    @instrument_repository(
+        operation="update_conversation", repository="PostgresConversationRepository"
+    )
+    async def update_conversation(
+        self, conversation: Conversation
+    ) -> RepositoryResult[bool]:
         start = time.perf_counter()
         try:
             async with await self._session() as session:
-                await session.execute(
+                result = await session.execute(
                     text(
                         f"""
                         UPDATE {self._conversation_table}
@@ -186,18 +218,26 @@ class PostgresConversationRepository(ConversationRepository):
                 )
                 await session.commit()
                 latency = time.perf_counter() - start
-                logger.debug("update_conversation id=%s latency_ms=%.2f", conversation.id, latency * 1000)
-                return RepositoryResult(success=True, data=True)
+                logger.debug(
+                    "update_conversation id=%s latency_ms=%.2f",
+                    conversation.id,
+                    latency * 1000,
+                )
+                return RepositoryResult(success=True, data=result.rowcount > 0)
         except Exception as exc:
             logger.error("update_conversation failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
-    @instrument_repository(operation="delete_conversation", repository="PostgresConversationRepository")
-    async def delete_conversation(self, conversation_id: str, tenant_id: str) -> RepositoryResult[bool]:
+    @instrument_repository(
+        operation="delete_conversation", repository="PostgresConversationRepository"
+    )
+    async def delete_conversation(
+        self, conversation_id: str, tenant_id: str
+    ) -> RepositoryResult[bool]:
         start = time.perf_counter()
         try:
             async with await self._session() as session:
-                await session.execute(
+                result = await session.execute(
                     text(
                         f"""
                         DELETE FROM {self._conversation_table}
@@ -208,49 +248,81 @@ class PostgresConversationRepository(ConversationRepository):
                 )
                 await session.commit()
                 latency = time.perf_counter() - start
-                logger.debug("delete_conversation id=%s latency_ms=%.2f", conversation_id, latency * 1000)
-                return RepositoryResult(success=True, data=True)
+                logger.debug(
+                    "delete_conversation id=%s latency_ms=%.2f",
+                    conversation_id,
+                    latency * 1000,
+                )
+                return RepositoryResult(success=True, data=result.rowcount > 0)
         except Exception as exc:
             logger.error("delete_conversation failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
-    @instrument_repository(operation="add_message", repository="PostgresConversationRepository")
+    @instrument_repository(
+        operation="add_message", repository="PostgresConversationRepository"
+    )
     async def add_message(self, message: Message) -> RepositoryResult[str]:
+        """Append a message only when its parent belongs to the same tenant.
+
+        Tenant ownership is enforced atomically in the INSERT statement rather
+        than by a separate preflight read. This mirrors the migration-owned RLS
+        policy and prevents a cross-tenant conversation UUID from becoming an
+        append oracle when database roles bypass RLS during internal work.
+        """
         start = time.perf_counter()
         try:
             async with await self._session() as session:
-                await session.execute(
+                result = await session.execute(
                     text(
                         f"""
                         INSERT INTO {self._message_table}
                             (message_id, conversation_id, role, content,
-                             message_metadata, created_at, updated_at)
-                        VALUES
-                            (:id, :conversation_id, :role, :content,
-                             :metadata, :created_at, :updated_at)
+                             message_metadata, created_at)
+                        SELECT
+                            :id, c.conversation_id, :role, :content,
+                            :metadata, :created_at
+                        FROM {self._conversation_table} c
+                        WHERE c.conversation_id = :conversation_id
+                          AND c.tenant_id = :tenant_id
                         """
                     ),
                     {
                         "id": message.id,
                         "conversation_id": message.conversation_id,
+                        "tenant_id": message.tenant_id,
                         "role": message.role,
                         "content": message.content,
                         "metadata": json.dumps(message.metadata),
                         "created_at": message.created_at,
-                        "updated_at": message.updated_at,
                     },
                 )
+                if result.rowcount != 1:
+                    await session.rollback()
+                    return RepositoryResult(
+                        success=False,
+                        error="conversation_not_found_or_tenant_mismatch",
+                    )
                 await session.commit()
                 latency = time.perf_counter() - start
-                logger.debug("add_message id=%s latency_ms=%.2f", message.id, latency * 1000)
+                logger.debug(
+                    "add_message id=%s latency_ms=%.2f",
+                    message.id,
+                    latency * 1000,
+                )
                 return RepositoryResult(success=True, data=message.id)
         except Exception as exc:
             logger.error("add_message failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
-    @instrument_repository(operation="get_messages", repository="PostgresConversationRepository")
+    @instrument_repository(
+        operation="get_messages", repository="PostgresConversationRepository"
+    )
     async def get_messages(
-        self, conversation_id: str, tenant_id: str, limit: int = 100, offset: int = 0
+        self,
+        conversation_id: str,
+        tenant_id: str,
+        limit: int = 100,
+        offset: int = 0,
     ) -> RepositoryResult[List[Message]]:
         start = time.perf_counter()
         try:
@@ -259,11 +331,13 @@ class PostgresConversationRepository(ConversationRepository):
                     text(
                         f"""
                         SELECT m.message_id, m.conversation_id, m.role, m.content,
-                               m.message_metadata, m.created_at, m.updated_at,
+                               m.message_metadata, m.created_at,
                                c.tenant_id
                         FROM {self._message_table} m
-                        JOIN {self._conversation_table} c ON m.conversation_id = c.conversation_id
-                        WHERE m.conversation_id = :conversation_id AND c.tenant_id = :tenant_id
+                        JOIN {self._conversation_table} c
+                          ON m.conversation_id = c.conversation_id
+                        WHERE m.conversation_id = :conversation_id
+                          AND c.tenant_id = :tenant_id
                         ORDER BY m.created_at ASC
                         LIMIT :limit OFFSET :offset
                         """
@@ -278,48 +352,66 @@ class PostgresConversationRepository(ConversationRepository):
                 rows = result.fetchall()
                 messages = [self._row_to_message(row) for row in rows]
                 latency = time.perf_counter() - start
-                logger.debug("get_messages conversation_id=%s returned=%d latency_ms=%.2f", conversation_id, len(messages), latency * 1000)
+                logger.debug(
+                    "get_messages conversation_id=%s returned=%d latency_ms=%.2f",
+                    conversation_id,
+                    len(messages),
+                    latency * 1000,
+                )
                 return RepositoryResult(success=True, data=messages)
         except Exception as exc:
             logger.error("get_messages failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
-    @instrument_repository(operation="update_message", repository="PostgresConversationRepository")
+    @instrument_repository(
+        operation="update_message", repository="PostgresConversationRepository"
+    )
     async def update_message(self, message: Message) -> RepositoryResult[bool]:
+        """Update a message only through a tenant-owned parent conversation."""
         start = time.perf_counter()
         try:
             async with await self._session() as session:
-                await session.execute(
+                result = await session.execute(
                     text(
                         f"""
-                        UPDATE {self._message_table}
+                        UPDATE {self._message_table} m
                         SET content = :content,
-                            message_metadata = :metadata,
-                            updated_at = :updated_at
-                        WHERE message_id = :id
+                            message_metadata = :metadata
+                        FROM {self._conversation_table} c
+                        WHERE m.message_id = :id
+                          AND m.conversation_id = c.conversation_id
+                          AND c.tenant_id = :tenant_id
                         """
                     ),
                     {
                         "id": message.id,
+                        "tenant_id": message.tenant_id,
                         "content": message.content,
                         "metadata": json.dumps(message.metadata),
-                        "updated_at": message.updated_at,
                     },
                 )
                 await session.commit()
                 latency = time.perf_counter() - start
-                logger.debug("update_message id=%s latency_ms=%.2f", message.id, latency * 1000)
-                return RepositoryResult(success=True, data=True)
+                logger.debug(
+                    "update_message id=%s latency_ms=%.2f",
+                    message.id,
+                    latency * 1000,
+                )
+                return RepositoryResult(success=True, data=result.rowcount > 0)
         except Exception as exc:
             logger.error("update_message failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
 
-    @instrument_repository(operation="delete_message", repository="PostgresConversationRepository")
-    async def delete_message(self, message_id: str, tenant_id: str) -> RepositoryResult[bool]:
+    @instrument_repository(
+        operation="delete_message", repository="PostgresConversationRepository"
+    )
+    async def delete_message(
+        self, message_id: str, tenant_id: str
+    ) -> RepositoryResult[bool]:
         start = time.perf_counter()
         try:
             async with await self._session() as session:
-                await session.execute(
+                result = await session.execute(
                     text(
                         f"""
                         DELETE FROM {self._message_table}
@@ -334,8 +426,12 @@ class PostgresConversationRepository(ConversationRepository):
                 )
                 await session.commit()
                 latency = time.perf_counter() - start
-                logger.debug("delete_message id=%s latency_ms=%.2f", message_id, latency * 1000)
-                return RepositoryResult(success=True, data=True)
+                logger.debug(
+                    "delete_message id=%s latency_ms=%.2f",
+                    message_id,
+                    latency * 1000,
+                )
+                return RepositoryResult(success=True, data=result.rowcount > 0)
         except Exception as exc:
             logger.error("delete_message failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
@@ -349,7 +445,11 @@ class PostgresConversationRepository(ConversationRepository):
             is_active=row.is_active if row.is_active is not None else True,
             summary=row.summary,
             tags=row.tags or [],
-            metadata=json.loads(row.conversation_metadata) if row.conversation_metadata else {},
+            metadata=(
+                json.loads(row.conversation_metadata)
+                if isinstance(row.conversation_metadata, str)
+                else row.conversation_metadata or {}
+            ),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -361,7 +461,13 @@ class PostgresConversationRepository(ConversationRepository):
             tenant_id=str(row.tenant_id) if row.tenant_id else "",
             role=str(row.role),
             content=str(row.content),
-            metadata=json.loads(row.message_metadata) if row.message_metadata else {},
+            metadata=(
+                json.loads(row.message_metadata)
+                if isinstance(row.message_metadata, str)
+                else row.message_metadata or {}
+            ),
             created_at=row.created_at,
-            updated_at=row.updated_at,
+            # Production ``messages`` has no updated_at column. Preserve the
+            # repository contract without inventing database state.
+            updated_at=row.created_at,
         )
