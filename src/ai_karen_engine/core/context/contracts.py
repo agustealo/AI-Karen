@@ -24,6 +24,7 @@ class EvidenceSource(str, Enum):
     """Governed evidence domains that Runtime may resolve for cognition."""
 
     MEMORY = "memory"
+    CONVERSATION = "conversation"
     SELF_MODEL = "self_model"
     USER_MODEL = "user_model"
     RELATIONSHIP_MODEL = "relationship_model"
