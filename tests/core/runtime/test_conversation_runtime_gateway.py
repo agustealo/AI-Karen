@@ -7,6 +7,7 @@ import pytest
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
     ConversationRuntimeGateway,
+    resolve_runtime_conversation_id,
 )
 from ai_karen_engine.services.database.repositories.conversation_repository import (
     Conversation,
@@ -123,15 +124,42 @@ def _context(
     tenant_id: str = "tenant-a",
     user_id: str = "user-a",
     request_id: str = "request-1",
+    session_id: str = "session-a",
+    conversation_id: Optional[str] = "22222222-2222-2222-2222-222222222222",
 ) -> ChatExecutionContext:
     return ChatExecutionContext(
         tenant_id=tenant_id,
         user_id=user_id,
-        session_id="session-a",
-        conversation_id="22222222-2222-2222-2222-222222222222",
+        session_id=session_id,
+        conversation_id=conversation_id,
         request_id=request_id,
         correlation_id="correlation-1",
     )
+
+
+def test_explicit_conversation_id_remains_authoritative() -> None:
+    context = _context()
+    assert resolve_runtime_conversation_id(context) == context.conversation_id
+
+
+def test_derived_conversation_identity_is_stable_within_tenant() -> None:
+    first = resolve_runtime_conversation_id(
+        _context(conversation_id=None, tenant_id="tenant-a", session_id="shared-session")
+    )
+    second = resolve_runtime_conversation_id(
+        _context(conversation_id=None, tenant_id="tenant-a", session_id="shared-session")
+    )
+    assert first == second
+
+
+def test_derived_conversation_identity_is_distinct_across_tenants() -> None:
+    tenant_a = resolve_runtime_conversation_id(
+        _context(conversation_id=None, tenant_id="tenant-a", session_id="shared-session")
+    )
+    tenant_b = resolve_runtime_conversation_id(
+        _context(conversation_id=None, tenant_id="tenant-b", session_id="shared-session")
+    )
+    assert tenant_a != tenant_b
 
 
 @pytest.mark.asyncio
