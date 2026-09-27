@@ -17,6 +17,8 @@ from ai_karen_engine.core.context.contracts import (
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 
+_DEFAULT_CONVERSATION_HISTORY_LIMIT = 24
+
 
 def build_context_requirements(
     request: ChatExecutionRequest,
@@ -36,6 +38,27 @@ def build_context_requirements(
                 classes=list(preliminary.memory_classes),
                 max_items=max(0, int(preliminary.memory_top_k)),
                 reason_codes=["cortex_memory_recall_requested"],
+            )
+        )
+
+    if ctx.conversation_id:
+        raw_limit = request.metadata.get(
+            "conversation_history_limit",
+            _DEFAULT_CONVERSATION_HISTORY_LIMIT,
+        )
+        try:
+            history_limit = max(0, int(raw_limit))
+        except (TypeError, ValueError):
+            history_limit = _DEFAULT_CONVERSATION_HISTORY_LIMIT
+        requirements.append(
+            ContextRequirement(
+                source=EvidenceSource.CONVERSATION,
+                capability="conversation.read",
+                required=False,
+                scopes=["conversation"],
+                classes=["transcript"],
+                max_items=history_limit,
+                reason_codes=["cortex_conversation_context_requested"],
             )
         )
 
@@ -73,6 +96,11 @@ def finalize_decision_with_context(
         for item in cognitive_context.evidence
         if item.source is EvidenceSource.MEMORY
     ]
+    conversation_evidence = [
+        item
+        for item in cognitive_context.evidence
+        if item.source is EvidenceSource.CONVERSATION
+    ]
 
     memory_recall_required = preliminary.memory_recall_required
     required_capabilities = list(preliminary.required_capabilities)
@@ -99,6 +127,22 @@ def finalize_decision_with_context(
             else:
                 reason_codes.append("context_memory_resolved_empty")
 
+    if EvidenceSource.CONVERSATION.value in denied_sources:
+        if "conversation.read" not in forbidden_capabilities:
+            forbidden_capabilities.append("conversation.read")
+        reason_codes.append("context_conversation_denied_by_policy")
+    elif EvidenceSource.CONVERSATION.value in authorized_sources:
+        if "conversation.read" not in required_capabilities:
+            required_capabilities.append("conversation.read")
+        if EvidenceSource.CONVERSATION.value in unresolved_sources:
+            reason_codes.append("context_conversation_unresolved")
+        else:
+            reason_codes.append("context_conversation_resolved")
+            if conversation_evidence:
+                reason_codes.append("context_conversation_evidence_available")
+            else:
+                reason_codes.append("context_conversation_resolved_empty")
+
     policy_constraints = dict(preliminary.policy_constraints)
     policy_constraints.update(
         {
@@ -109,6 +153,7 @@ def finalize_decision_with_context(
             "context_unresolved_sources": list(cognitive_context.unresolved_sources),
             "context_evidence_count": len(cognitive_context.evidence),
             "context_memory_evidence_count": len(memory_evidence),
+            "context_conversation_evidence_count": len(conversation_evidence),
             "context_policy_decision_id": cognitive_context.policy_decision_id,
         }
     )
