@@ -25,6 +25,37 @@ from ai_karen_engine.utils.chat_helpers import normalize_session_id
 logger = get_logger(__name__)
 
 
+def resolve_runtime_conversation_id(context: ChatExecutionContext) -> str:
+    """Return the canonical durable conversation identity for one runtime request.
+
+    Explicit conversation IDs are authoritative. When ingress supplies only a
+    session identity, derive a UUIDv5 from tenant + normalized session so equal
+    session strings in separate tenants cannot collide on the globally unique
+    ``conversations.conversation_id`` primary key.
+    """
+    explicit = str(context.conversation_id or "").strip()
+    if explicit:
+        return explicit
+
+    tenant_id = str(context.tenant_id or "").strip()
+    session_id = str(context.session_id or "").strip()
+    if not tenant_id:
+        raise ValueError("conversation_identity_incomplete:tenant_id")
+    if not session_id:
+        raise ValueError("conversation_identity_incomplete:session_id")
+
+    normalized_session_id = normalize_session_id(session_id)
+    identity = ":".join(
+        (
+            "ai-karen",
+            "conversation",
+            tenant_id,
+            normalized_session_id,
+        )
+    )
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
+
+
 @dataclass(frozen=True)
 class TranscriptPersistenceResult:
     """Truthful result of one durable transcript operation."""
@@ -70,9 +101,7 @@ class ConversationRuntimeGateway:
     ) -> str:
         """Ensure the authenticated user owns the tenant-scoped conversation."""
         self._require_identity(context)
-        conversation_id = context.conversation_id or normalize_session_id(
-            context.session_id
-        )
+        conversation_id = resolve_runtime_conversation_id(context)
 
         existing = await self._repository.get_conversation(
             conversation_id,
@@ -128,9 +157,7 @@ class ConversationRuntimeGateway:
         This method must only be called after response generation has completed.
         It deliberately performs no semantic-memory formation.
         """
-        conversation_id = context.conversation_id or normalize_session_id(
-            context.session_id
-        )
+        conversation_id = resolve_runtime_conversation_id(context)
         user_text = str(user_text or "").strip()
         assistant_text = str(assistant_text or "").strip()
 
@@ -322,4 +349,5 @@ __all__ = [
     "TranscriptPersistenceResult",
     "get_conversation_runtime_gateway",
     "reset_conversation_runtime_gateway",
+    "resolve_runtime_conversation_id",
 ]
