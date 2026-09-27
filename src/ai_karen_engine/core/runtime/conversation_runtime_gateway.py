@@ -82,6 +82,28 @@ class TranscriptPersistenceResult:
         }
 
 
+@dataclass(frozen=True)
+class TranscriptHistoryResult:
+    """Truthful result of one tenant-scoped durable transcript read."""
+
+    status: str
+    conversation_id: str
+    messages: tuple[Message, ...] = ()
+    reason: Optional[str] = None
+    error_type: Optional[str] = None
+
+    @property
+    def success(self) -> bool:
+        return self.status in {"loaded", "empty", "not_found"}
+
+    def to_metadata(self) -> Dict[str, Any]:
+        return {
+            "conversation_history_status": self.status,
+            "conversation_history_count": len(self.messages),
+            "conversation_history_reason": self.reason,
+        }
+
+
 class ConversationRuntimeGateway:
     """Runtime-facing adapter over the canonical ConversationRepository."""
 
@@ -143,6 +165,100 @@ class ConversationRuntimeGateway:
             raise RuntimeError(created.error or "conversation_create_failed")
 
         return conversation_id
+
+    async def load_history(
+        self,
+        context: ChatExecutionContext,
+        *,
+        limit: int,
+    ) -> TranscriptHistoryResult:
+        """Load authorized durable transcript rows for prompt continuity.
+
+        Reads never create conversations and never invoke semantic-memory logic.
+        Rows produced by the same request identity are excluded so a reconnect or
+        exact retry cannot feed its already-persisted turn back into itself.
+        """
+        conversation_id = resolve_runtime_conversation_id(context)
+        try:
+            self._require_identity(context)
+            existing = await self._repository.get_conversation(
+                conversation_id,
+                context.tenant_id,
+            )
+            if not existing.success:
+                return TranscriptHistoryResult(
+                    status="failed",
+                    conversation_id=conversation_id,
+                    reason=existing.error or "conversation_lookup_failed",
+                )
+            if existing.data is None:
+                return TranscriptHistoryResult(
+                    status="not_found",
+                    conversation_id=conversation_id,
+                )
+            if str(existing.data.user_id) != str(context.user_id):
+                return TranscriptHistoryResult(
+                    status="rejected",
+                    conversation_id=conversation_id,
+                    reason="conversation_user_mismatch",
+                    error_type="PermissionError",
+                )
+
+            requested_limit = max(0, int(limit))
+            if requested_limit == 0:
+                return TranscriptHistoryResult(
+                    status="empty",
+                    conversation_id=conversation_id,
+                )
+
+            result = await self._repository.get_messages(
+                conversation_id,
+                context.tenant_id,
+                limit=requested_limit,
+                offset=0,
+            )
+            if not result.success:
+                return TranscriptHistoryResult(
+                    status="failed",
+                    conversation_id=conversation_id,
+                    reason=result.error or "conversation_history_read_failed",
+                )
+
+            messages = tuple(
+                message
+                for message in list(result.data or [])
+                if str(message.metadata.get("request_id") or "")
+                != str(context.request_id or "")
+            )
+            return TranscriptHistoryResult(
+                status="loaded" if messages else "empty",
+                conversation_id=conversation_id,
+                messages=messages,
+            )
+        except PermissionError as exc:
+            return TranscriptHistoryResult(
+                status="rejected",
+                conversation_id=conversation_id,
+                reason=str(exc),
+                error_type=type(exc).__name__,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Canonical transcript history read failed",
+                extra={
+                    "conversation_id": conversation_id,
+                    "tenant_id": context.tenant_id,
+                    "user_id": context.user_id,
+                    "correlation_id": context.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return TranscriptHistoryResult(
+                status="failed",
+                conversation_id=conversation_id,
+                reason="conversation_history_read_failed",
+                error_type=type(exc).__name__,
+            )
 
     async def persist_completed_turn(
         self,
@@ -346,6 +462,7 @@ def reset_conversation_runtime_gateway() -> None:
 
 __all__ = [
     "ConversationRuntimeGateway",
+    "TranscriptHistoryResult",
     "TranscriptPersistenceResult",
     "get_conversation_runtime_gateway",
     "reset_conversation_runtime_gateway",
