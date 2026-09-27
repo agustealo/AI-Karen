@@ -8,6 +8,7 @@ authorize access, execute providers/tools/workflows, or persist state.
 
 from dataclasses import replace
 
+from ai_karen_engine.config.conversation import get_conversation_context_settings
 from ai_karen_engine.core.context.contracts import (
     CognitiveContext,
     ContextRequirement,
@@ -16,8 +17,6 @@ from ai_karen_engine.core.context.contracts import (
 )
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
-
-_DEFAULT_CONVERSATION_HISTORY_LIMIT = 24
 
 
 def build_context_requirements(
@@ -42,14 +41,7 @@ def build_context_requirements(
         )
 
     if ctx.conversation_id:
-        raw_limit = request.metadata.get(
-            "conversation_history_limit",
-            _DEFAULT_CONVERSATION_HISTORY_LIMIT,
-        )
-        try:
-            history_limit = max(0, int(raw_limit))
-        except (TypeError, ValueError):
-            history_limit = _DEFAULT_CONVERSATION_HISTORY_LIMIT
+        history_limit = get_conversation_context_settings().history_limit
         requirements.append(
             ContextRequirement(
                 source=EvidenceSource.CONVERSATION,
