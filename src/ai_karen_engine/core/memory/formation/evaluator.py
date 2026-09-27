@@ -145,12 +145,16 @@ class MemoryFormationEvaluator:
             if contains_pii
             else MemorySensitivity.INTERNAL
         )
-        consent_policy = MemoryConsentPolicy(sensitivity=sensitivity)
-        provenance = MemoryTrustProvenance(
-            origin=MemoryOrigin.USER_INPUT,
-            trust_class=MemoryTrustClass.EXPLICIT_USER,
-            confidence=1.0,
-            source_ref="chat_interaction",
+        guards = MemoryGuards(
+            trust_provenance=MemoryTrustProvenance(
+                origin=MemoryOrigin.USER_INPUT,
+                trust_class=MemoryTrustClass.EXPLICIT_USER,
+                verification_confidence=1.0,
+                source_ref="chat_interaction",
+            ),
+            consent_policy=MemoryConsentPolicy(sensitivity=sensitivity),
+            strict_mode=True,
+            metadata={"privacy": privacy_metadata},
         )
 
         admitted: list[AdmittedMemorySignal] = []
@@ -163,12 +167,7 @@ class MemoryFormationEvaluator:
                 continue
 
             score = max(0.0, min(1.0, float(worthiness.get("score") or 0.0)))
-            allowed, _reason = MemoryGuards.can_create_memory(
-                provenance=provenance,
-                consent_policy=consent_policy,
-                explicit_consent=False,
-                confidence=score,
-            )
+            allowed, _reason = guards.can_create_memory(score, signal.text)
             if not allowed:
                 continue
 
