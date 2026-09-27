@@ -6,9 +6,11 @@ CORTEX states what evidence it needs. RuntimePolicy authorizes access. This
 resolver performs the authorized retrieval exactly once and returns the same
 typed ``CognitiveContext`` that CORTEX Stage 2 and ChatRuntime consume.
 
-Memory retrieval is delegated exclusively to ``MemoryRuntimeManager`` which in
-turn delegates selection/ranking to NeuroRecall. No compatibility memory service
-or second retrieval authority is used here.
+Semantic-memory retrieval is delegated exclusively to ``MemoryRuntimeManager``
+which in turn delegates selection/ranking to NeuroRecall. Durable conversation
+history is delegated exclusively to ``ConversationRuntimeGateway`` which adapts
+the canonical ``ConversationRepository``. The two evidence domains remain
+separate and neither is allowed to impersonate the other.
 """
 
 from datetime import datetime, timezone
@@ -27,6 +29,10 @@ from ai_karen_engine.core.context.contracts import (
 )
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
+from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+    ConversationRuntimeGateway,
+    get_conversation_runtime_gateway,
+)
 from src.ai_karen_engine.platform.observability import get_observability_emitter
 from src.ai_karen_engine.platform.observability.contracts import EventType as RuntimeEventType
 
@@ -36,11 +42,19 @@ logger = get_logger(__name__)
 class RuntimeEvidenceResolver:
     """Resolve RuntimePolicy-authorized evidence into one typed context truth."""
 
-    RESOLVER_ID = "runtime.evidence.memory"
+    MEMORY_RESOLVER_ID = "runtime.evidence.memory"
+    CONVERSATION_RESOLVER_ID = "runtime.evidence.conversation"
+    RESOLVER_ID = MEMORY_RESOLVER_ID
     RESOLVER_VERSION = "1"
 
-    def __init__(self, *, memory_manager: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        memory_manager: Any | None = None,
+        conversation_gateway: ConversationRuntimeGateway | None = None,
+    ) -> None:
         self._memory_manager = memory_manager
+        self._conversation_gateway = conversation_gateway
         self._emitter = get_observability_emitter()
 
     async def resolve(
@@ -60,6 +74,12 @@ class RuntimeEvidenceResolver:
                 continue
             if requirement.source is EvidenceSource.MEMORY:
                 await self._resolve_memory(request, cognitive_context, requirement)
+            elif requirement.source is EvidenceSource.CONVERSATION:
+                await self._resolve_conversation(
+                    request,
+                    cognitive_context,
+                    requirement,
+                )
         return cognitive_context
 
     async def _resolve_memory(
@@ -74,7 +94,7 @@ class RuntimeEvidenceResolver:
             policy_decision_id=cognitive_context.policy_decision_id,
             metadata={
                 "context_id": cognitive_context.context_id,
-                "resolver_id": self.RESOLVER_ID,
+                "resolver_id": self.MEMORY_RESOLVER_ID,
             },
         )
 
@@ -108,7 +128,7 @@ class RuntimeEvidenceResolver:
                     "memory_latency_ms": 0.0,
                     "memory_degraded": True,
                     "memory_degradation_reason": str(exc),
-                    "memory_resolver_id": self.RESOLVER_ID,
+                    "memory_resolver_id": self.MEMORY_RESOLVER_ID,
                 }
             )
             self._emitter.emit(
@@ -117,7 +137,7 @@ class RuntimeEvidenceResolver:
                 memory_recall_count=0,
                 metadata={
                     "context_id": cognitive_context.context_id,
-                    "resolver_id": self.RESOLVER_ID,
+                    "resolver_id": self.MEMORY_RESOLVER_ID,
                     "status": "failed",
                     "error_type": type(exc).__name__,
                 },
@@ -150,7 +170,7 @@ class RuntimeEvidenceResolver:
                 "memory_latency_ms": float(result.get("latency_ms") or 0.0),
                 "memory_degraded": degraded,
                 "memory_degradation_reason": degradation_reason,
-                "memory_resolver_id": self.RESOLVER_ID,
+                "memory_resolver_id": self.MEMORY_RESOLVER_ID,
                 "memory_response_source": result.get("source", "neuro_recall"),
                 "memory_provenance": tuple(result.get("provenance") or ()),
             }
@@ -161,10 +181,79 @@ class RuntimeEvidenceResolver:
             memory_recall_count=len(resolved),
             metadata={
                 "context_id": cognitive_context.context_id,
-                "resolver_id": self.RESOLVER_ID,
+                "resolver_id": self.MEMORY_RESOLVER_ID,
                 "status": cognitive_context.metadata["memory_recall_status"],
                 "degraded": degraded,
             },
+        )
+
+    async def _resolve_conversation(
+        self,
+        request: ChatExecutionRequest,
+        cognitive_context: CognitiveContext,
+        requirement: ContextRequirement,
+    ) -> None:
+        ctx = request.context
+        try:
+            gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+            result = await gateway.load_history(
+                ctx,
+                limit=max(0, int(requirement.max_items or 0)),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Runtime durable conversation resolution failed: %s",
+                exc,
+                extra={
+                    "correlation_id": ctx.correlation_id,
+                    "tenant_id": ctx.tenant_id,
+                    "user_id": ctx.user_id,
+                    "conversation_id": ctx.conversation_id,
+                },
+            )
+            cognitive_context.metadata.update(
+                {
+                    "conversation_history_status": "failed",
+                    "conversation_history_count": 0,
+                    "conversation_history_degraded": True,
+                    "conversation_history_reason": str(exc),
+                    "conversation_resolver_id": self.CONVERSATION_RESOLVER_ID,
+                }
+            )
+            return
+
+        cognitive_context.metadata.update(result.to_metadata())
+        cognitive_context.metadata["conversation_resolver_id"] = (
+            self.CONVERSATION_RESOLVER_ID
+        )
+
+        if result.status in {"failed", "rejected"}:
+            cognitive_context.metadata["conversation_history_degraded"] = True
+            if result.error_type:
+                cognitive_context.metadata["conversation_history_error_type"] = (
+                    result.error_type
+                )
+            return
+
+        now = datetime.now(timezone.utc)
+        resolved = [
+            self._conversation_message_to_evidence(
+                message,
+                request=request,
+                retrieved_at=now,
+            )
+            for message in result.messages
+            if str(message.content or "").strip()
+        ]
+        cognitive_context.evidence.extend(resolved)
+        self._mark_resolved(cognitive_context, EvidenceSource.CONVERSATION)
+        cognitive_context.metadata["conversation_history_degraded"] = False
+        cognitive_context.metadata["conversation_history_count"] = len(resolved)
+
+        injected = self._materialize_conversation_history(request, result.messages)
+        cognitive_context.metadata["conversation_history_injected"] = injected
+        cognitive_context.metadata["conversation_history_injected_count"] = (
+            len(result.messages) if injected else 0
         )
 
     @classmethod
@@ -191,7 +280,7 @@ class RuntimeEvidenceResolver:
             provenance=EvidenceProvenance(
                 source_ref=evidence_id,
                 source_record_id=evidence_id,
-                resolver_id=cls.RESOLVER_ID,
+                resolver_id=cls.MEMORY_RESOLVER_ID,
                 resolver_version=cls.RESOLVER_VERSION,
                 retrieval_method="neuro_recall",
                 retrieved_at=retrieved_at,
@@ -213,6 +302,92 @@ class RuntimeEvidenceResolver:
                 "memory_metadata": item_metadata,
             },
         )
+
+    @classmethod
+    def _conversation_message_to_evidence(
+        cls,
+        message: Any,
+        *,
+        request: ChatExecutionRequest,
+        retrieved_at: datetime,
+    ) -> ContextEvidence:
+        ctx = request.context
+        evidence_id = str(message.id)
+        observed_at = cls._coerce_datetime(message.created_at)
+        return ContextEvidence(
+            evidence_id=evidence_id,
+            source=EvidenceSource.CONVERSATION,
+            content=str(message.content or ""),
+            source_ref=evidence_id,
+            relevance=1.0,
+            confidence=1.0,
+            provenance=EvidenceProvenance(
+                source_ref=evidence_id,
+                source_record_id=evidence_id,
+                resolver_id=cls.CONVERSATION_RESOLVER_ID,
+                resolver_version=cls.RESOLVER_VERSION,
+                retrieval_method="conversation_repository",
+                retrieved_at=retrieved_at,
+                reason_codes=("durable_transcript",),
+            ),
+            temporal=EvidenceTemporalContext(
+                observed_at=observed_at,
+                as_of=retrieved_at,
+            ),
+            contradiction=EvidenceContradiction(
+                status=EvidenceContradictionStatus.NONE,
+            ),
+            scope=EvidenceScope(
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                session_id=ctx.session_id,
+                conversation_id=ctx.conversation_id,
+            ),
+            metadata={
+                "role": str(message.role),
+                "message_metadata": dict(message.metadata or {}),
+            },
+        )
+
+    @staticmethod
+    def _materialize_conversation_history(
+        request: ChatExecutionRequest,
+        messages: tuple[Any, ...],
+    ) -> bool:
+        """Prepend durable history only when ingress did not already supply it."""
+        if not messages:
+            return False
+
+        supplied_roles = [
+            str(message.get("role", "")).lower()
+            for message in request.messages
+            if isinstance(message, dict)
+        ]
+        if "assistant" in supplied_roles:
+            request.metadata["conversation_history_source"] = "ingress"
+            return False
+
+        durable_messages = [
+            {
+                "role": str(message.role).lower(),
+                "content": str(message.content),
+            }
+            for message in messages
+            if str(message.role).lower() in {"user", "assistant"}
+            and str(message.content or "").strip()
+        ]
+        if not durable_messages:
+            return False
+
+        leading_system: list[dict[str, Any]] = []
+        remainder = list(request.messages)
+        while remainder and str(remainder[0].get("role", "")).lower() == "system":
+            leading_system.append(remainder.pop(0))
+
+        request.messages = [*leading_system, *durable_messages, *remainder]
+        request.metadata["conversation_history_source"] = "canonical_repository"
+        request.metadata["conversation_history_materialized"] = True
+        return True
 
     @staticmethod
     def _mark_resolved(
