@@ -24,6 +24,7 @@ from ai_karen_engine.core.cortex.context_stages import (
     finalize_decision_with_context,
 )
 from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+from ai_karen_engine.core.cortex.memory_formation import request_memory_formation
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
 from ai_karen_engine.core.runtime.evidence_resolver import RuntimeEvidenceResolver
 from ai_karen_engine.core.runtime.execution_decision import (
@@ -68,6 +69,7 @@ class RuntimeDecisionPipeline:
 
     async def decide(self, request: ChatExecutionRequest) -> ExecutionDecision:
         preliminary = await self._cortex.decide(request)
+        preliminary = request_memory_formation(request, preliminary)
         requirements = build_context_requirements(request, preliminary)
         cognitive_context = await self._authorize_context(
             request,
