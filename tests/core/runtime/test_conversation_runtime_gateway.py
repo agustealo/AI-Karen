@@ -70,8 +70,29 @@ class _Repository(ConversationRepository):
     async def add_message(self, message: Message) -> RepositoryResult[str]:
         if self.fail_add_role == message.role:
             return RepositoryResult(success=False, error=f"{message.role}_write_failed")
+
+        for existing in self.messages:
+            if existing.id != message.id:
+                continue
+            if (
+                existing.tenant_id == message.tenant_id
+                and existing.conversation_id == message.conversation_id
+                and existing.role == message.role
+                and existing.content == message.content
+            ):
+                return RepositoryResult(
+                    success=True,
+                    data=message.id,
+                    metadata={"idempotent_replay": True},
+                )
+            return RepositoryResult(success=False, error="message_idempotency_conflict")
+
         self.messages.append(message)
-        return RepositoryResult(success=True, data=message.id)
+        return RepositoryResult(
+            success=True,
+            data=message.id,
+            metadata={"idempotent_replay": False},
+        )
 
     async def get_messages(
         self,
@@ -132,6 +153,55 @@ async def test_completed_turn_persists_user_and_assistant_through_one_repository
     assert [message.role for message in repository.messages] == ["user", "assistant"]
     assert repository.messages[0].tenant_id == "tenant-a"
     assert repository.messages[1].metadata["actual_provider"] == "local"
+
+
+@pytest.mark.asyncio
+async def test_retry_of_same_completed_turn_is_already_persisted_without_duplicates() -> None:
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    context = _context()
+
+    first = await gateway.persist_completed_turn(
+        context,
+        user_text="hello",
+        assistant_text="hi",
+    )
+    retry = await gateway.persist_completed_turn(
+        context,
+        user_text="hello",
+        assistant_text="hi",
+    )
+
+    assert first.status == "persisted"
+    assert first.persisted_messages == 2
+    assert retry.status == "already_persisted"
+    assert retry.persisted_messages == 0
+    assert retry.user_message_id == first.user_message_id
+    assert retry.assistant_message_id == first.assistant_message_id
+    assert len(repository.messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_same_request_identity_with_changed_content_fails_closed() -> None:
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    context = _context()
+
+    first = await gateway.persist_completed_turn(
+        context,
+        user_text="hello",
+        assistant_text="hi",
+    )
+    conflict = await gateway.persist_completed_turn(
+        context,
+        user_text="changed user payload",
+        assistant_text="hi",
+    )
+
+    assert first.status == "persisted"
+    assert conflict.status == "failed"
+    assert conflict.reason == "message_idempotency_conflict"
+    assert len(repository.messages) == 2
 
 
 @pytest.mark.asyncio
