@@ -101,9 +101,6 @@ class ConversationRuntimeGateway:
             )
         )
         if not created.success:
-            # A concurrent request may have created the same deterministic
-            # conversation after our lookup. Resolve once more through the
-            # tenant-scoped repository before treating this as a failure.
             raced = await self._repository.get_conversation(
                 conversation_id,
                 context.tenant_id,
@@ -186,6 +183,7 @@ class ConversationRuntimeGateway:
                     persisted_messages=0,
                     reason=user_write.error or "user_message_persistence_failed",
                 )
+            user_replay = bool(user_write.metadata.get("idempotent_replay", False))
 
             assistant_write = await self._repository.add_message(
                 Message(
@@ -207,19 +205,28 @@ class ConversationRuntimeGateway:
                     conversation_id=conversation_id,
                     user_message_id=user_message_id,
                     assistant_message_id=assistant_message_id,
-                    persisted_messages=1,
+                    persisted_messages=0 if user_replay else 1,
                     reason=(
                         assistant_write.error
                         or "assistant_message_persistence_failed"
                     ),
                 )
+            assistant_replay = bool(
+                assistant_write.metadata.get("idempotent_replay", False)
+            )
 
+            newly_persisted = int(not user_replay) + int(not assistant_replay)
+            status = (
+                "already_persisted"
+                if user_replay and assistant_replay
+                else "persisted"
+            )
             return TranscriptPersistenceResult(
-                status="persisted",
+                status=status,
                 conversation_id=conversation_id,
                 user_message_id=user_message_id,
                 assistant_message_id=assistant_message_id,
-                persisted_messages=2,
+                persisted_messages=newly_persisted,
             )
         except PermissionError as exc:
             logger.warning(
