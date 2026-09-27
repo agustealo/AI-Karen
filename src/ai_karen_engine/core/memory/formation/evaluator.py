@@ -8,10 +8,24 @@ feature flags can change mutation behavior without changing memory semantics.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
+from ai_karen_engine.core.memory.guards import (
+    MemoryConsentPolicy,
+    MemoryGuards,
+    MemoryOrigin,
+    MemorySensitivity,
+    MemoryTrustClass,
+    MemoryTrustProvenance,
+)
 from ai_karen_engine.core.memory.scoring import MemoryWorthinessScorer
 from ai_karen_engine.core.memory.signals import MemorySignal, get_signal_pipeline
+
+
+class PrivacyClassifier(Protocol):
+    """Minimal privacy-classification contract consumed by formation."""
+
+    def extract_safe_metadata(self, value: str) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,16 +69,32 @@ class MemoryFormationEvaluation:
 
 
 class MemoryFormationEvaluator:
-    """Single authority for extraction and worthiness-based admission."""
+    """Single authority for extraction, privacy gating and worthiness admission."""
 
     def __init__(
         self,
         *,
         signal_pipeline: Any | None = None,
         worthiness_scorer: MemoryWorthinessScorer | None = None,
+        privacy_classifier: PrivacyClassifier | None = None,
     ) -> None:
         self._signal_pipeline = signal_pipeline or get_signal_pipeline()
         self._worthiness_scorer = worthiness_scorer or MemoryWorthinessScorer()
+        self._privacy_classifier = privacy_classifier or self._default_privacy_classifier()
+
+    @staticmethod
+    def _default_privacy_classifier() -> PrivacyClassifier:
+        """Resolve the existing privacy authority without duplicating its rules.
+
+        PIIDetector currently lives with the privacy-compliance application
+        service. Formation consumes only its narrow, deterministic classifier
+        contract. Keeping the import lazy avoids import-time database/service
+        initialization while preserving one PII rule owner until that pure
+        classifier is moved to the platform security package.
+        """
+        from ai_karen_engine.services.privacy_compliance import PIIDetector
+
+        return PIIDetector()
 
     async def evaluate(
         self,
@@ -107,6 +137,22 @@ class MemoryFormationEvaluator:
             tenant_id=resolved_tenant,
             user_id=resolved_user,
         )
+
+        privacy_metadata = self._privacy_classifier.extract_safe_metadata(normalized)
+        contains_pii = bool(privacy_metadata.get("contains_pii", False))
+        sensitivity = (
+            MemorySensitivity.PROHIBITED
+            if contains_pii
+            else MemorySensitivity.INTERNAL
+        )
+        consent_policy = MemoryConsentPolicy(sensitivity=sensitivity)
+        provenance = MemoryTrustProvenance(
+            origin=MemoryOrigin.USER_INPUT,
+            trust_class=MemoryTrustClass.EXPLICIT_USER,
+            confidence=1.0,
+            source_ref="chat_interaction",
+        )
+
         admitted: list[AdmittedMemorySignal] = []
         for signal in extraction.signals:
             worthiness = await self._worthiness_scorer.evaluate(
@@ -115,18 +161,30 @@ class MemoryFormationEvaluator:
             )
             if not worthiness.get("is_worthy"):
                 continue
+
+            score = max(0.0, min(1.0, float(worthiness.get("score") or 0.0)))
+            allowed, _reason = MemoryGuards.can_create_memory(
+                provenance=provenance,
+                consent_policy=consent_policy,
+                explicit_consent=False,
+                confidence=score,
+            )
+            if not allowed:
+                continue
+
             admitted.append(
                 AdmittedMemorySignal(
                     signal=signal,
-                    score=max(0.0, min(1.0, float(worthiness.get("score") or 0.0))),
+                    score=score,
                 )
             )
 
         status = "success" if extraction.status == "success" else "degraded"
         if extraction.status == "failed":
             status = "failed"
+        reason = "privacy_sensitive_interaction" if contains_pii and not admitted else None
         return MemoryFormationEvaluation(
-            status=status,
+            status=("rejected" if reason else status),
             normalized_text=normalized,
             tenant_id=resolved_tenant,
             user_id=resolved_user,
@@ -134,6 +192,7 @@ class MemoryFormationEvaluator:
             admitted=tuple(admitted),
             errors=tuple(str(error) for error in extraction.errors),
             processing_time_ms=extraction.processing_time_ms,
+            reason=reason,
         )
 
 
@@ -141,4 +200,5 @@ __all__ = [
     "AdmittedMemorySignal",
     "MemoryFormationEvaluation",
     "MemoryFormationEvaluator",
+    "PrivacyClassifier",
 ]
