@@ -184,6 +184,73 @@ async def test_completed_turn_persists_user_and_assistant_through_one_repository
 
 
 @pytest.mark.asyncio
+async def test_history_load_returns_previous_completed_turn_for_next_request() -> None:
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+
+    first_context = _context(request_id="request-1")
+    persisted = await gateway.persist_completed_turn(
+        first_context,
+        user_text="My workshop is on the east side.",
+        assistant_text="I will keep that conversation context.",
+    )
+    assert persisted.status == "persisted"
+
+    history = await gateway.load_history(
+        _context(request_id="request-2"),
+        limit=10,
+    )
+
+    assert history.status == "loaded"
+    assert [message.role for message in history.messages] == ["user", "assistant"]
+    assert [message.content for message in history.messages] == [
+        "My workshop is on the east side.",
+        "I will keep that conversation context.",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_history_load_filters_rows_from_same_request_identity() -> None:
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    context = _context(request_id="request-1")
+
+    persisted = await gateway.persist_completed_turn(
+        context,
+        user_text="hello",
+        assistant_text="hi",
+    )
+    assert persisted.status == "persisted"
+
+    history = await gateway.load_history(context, limit=10)
+
+    assert history.status == "empty"
+    assert history.messages == ()
+
+
+@pytest.mark.asyncio
+async def test_history_load_rejects_wrong_user_in_same_tenant() -> None:
+    repository = _Repository()
+    owner_context = _context(user_id="user-a", request_id="request-1")
+    conversation_id = owner_context.conversation_id or ""
+    repository.conversations[(owner_context.tenant_id, conversation_id)] = Conversation(
+        id=conversation_id,
+        tenant_id=owner_context.tenant_id,
+        user_id="user-a",
+    )
+    gateway = ConversationRuntimeGateway(repository=repository)
+
+    history = await gateway.load_history(
+        _context(user_id="user-b", request_id="request-2"),
+        limit=10,
+    )
+
+    assert history.status == "rejected"
+    assert history.reason == "conversation_user_mismatch"
+    assert history.messages == ()
+
+
+@pytest.mark.asyncio
 async def test_retry_of_same_completed_turn_is_already_persisted_without_duplicates() -> None:
     repository = _Repository()
     gateway = ConversationRuntimeGateway(repository=repository)
