@@ -1,5 +1,6 @@
 import pytest
 
+from ai_karen_engine.core.memory.formation.evaluator import MemoryFormationEvaluator
 from ai_karen_engine.core.memory.formation.service import MemoryFormationService
 from ai_karen_engine.core.memory.protocols import VaultWriteReceipt
 from ai_karen_engine.core.memory.signals import ExtractionResult, MemorySignal
@@ -19,9 +20,26 @@ class _Scorer:
         return {"is_worthy": True, "score": 0.9, "threshold": 0.6}
 
 
+class _PrivacyClassifier:
+    def __init__(self, *, contains_pii=False, pii_types=None):
+        self.contains_pii = contains_pii
+        self.pii_types = list(pii_types or [])
+
+    def extract_safe_metadata(self, value):
+        return {
+            "text_length": len(value or ""),
+            "word_count": len((value or "").split()),
+            "contains_pii": self.contains_pii,
+            "pii_types": self.pii_types,
+            "pii_count": len(self.pii_types),
+        }
+
+
 class _RejectingVault:
     async def persist(self, entry, *, context):
-        raise PermissionError("durable memory operation requires explicit capability: memory.write")
+        raise PermissionError(
+            "durable memory operation requires explicit capability: memory.write"
+        )
 
 
 class _Vault:
@@ -47,13 +65,17 @@ class _Projector:
         return {"redis": True, "memory_graph": True}
 
 
-def _service(vault, projector, signal):
-    service = object.__new__(MemoryFormationService)
-    service.signal_pipeline = _Pipeline(signal)
-    service.worthiness_scorer = _Scorer()
-    service._vault_factory = lambda tenant_id: vault
-    service._derived_projector = projector
-    return service
+def _service(vault, projector, signal, *, privacy_classifier=None):
+    evaluator = MemoryFormationEvaluator(
+        signal_pipeline=_Pipeline(signal),
+        worthiness_scorer=_Scorer(),
+        privacy_classifier=privacy_classifier or _PrivacyClassifier(),
+    )
+    return MemoryFormationService(
+        vault_factory=lambda tenant_id: vault,
+        derived_projector=projector,
+        evaluator=evaluator,
+    )
 
 
 @pytest.mark.asyncio
@@ -76,6 +98,40 @@ async def test_formation_fails_closed_without_memory_write_authority():
     assert result["status"] == "rejected"
     assert result["reason"] == "memory_write_not_authorized"
     assert result["persisted"] == 0
+    assert projector.calls == []
+
+
+@pytest.mark.asyncio
+async def test_privacy_sensitive_interaction_is_rejected_before_vault():
+    signal = MemorySignal(
+        text="My email is user@example.com",
+        signal_type="fact",
+        confidence=0.9,
+    )
+    vault = _Vault()
+    projector = _Projector()
+    service = _service(
+        vault,
+        projector,
+        signal,
+        privacy_classifier=_PrivacyClassifier(
+            contains_pii=True,
+            pii_types=["email"],
+        ),
+    )
+
+    result = await service.process_interaction(
+        text=signal.text,
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id="00000000-0000-0000-0000-000000000002",
+        policy_context={"memory_write_authorized": True},
+    )
+
+    assert result["status"] == "rejected"
+    assert result["reason"] == "privacy_sensitive_interaction"
+    assert result["admitted"] == 0
+    assert result["persisted"] == 0
+    assert vault.calls == []
     assert projector.calls == []
 
 
