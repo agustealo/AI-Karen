@@ -262,12 +262,12 @@ class PostgresConversationRepository(ConversationRepository):
         operation="add_message", repository="PostgresConversationRepository"
     )
     async def add_message(self, message: Message) -> RepositoryResult[str]:
-        """Append a message only when its parent belongs to the same tenant.
+        """Append a tenant-owned message with retry-safe deterministic identity.
 
-        Tenant ownership is enforced atomically in the INSERT statement rather
-        than by a separate preflight read. This mirrors the migration-owned RLS
-        policy and prevents a cross-tenant conversation UUID from becoming an
-        append oracle when database roles bypass RLS during internal work.
+        The INSERT is tenant-scoped atomically through the parent conversation.
+        When the deterministic message id already exists, the existing row is
+        accepted only if tenant, conversation, role, and content match exactly.
+        Conflicting reuse fails closed.
         """
         start = time.perf_counter()
         try:
@@ -284,6 +284,7 @@ class PostgresConversationRepository(ConversationRepository):
                         FROM {self._conversation_table} c
                         WHERE c.conversation_id = :conversation_id
                           AND c.tenant_id = :tenant_id
+                        ON CONFLICT (message_id) DO NOTHING
                         """
                     ),
                     {
@@ -296,20 +297,60 @@ class PostgresConversationRepository(ConversationRepository):
                         "created_at": message.created_at,
                     },
                 )
-                if result.rowcount != 1:
-                    await session.rollback()
-                    return RepositoryResult(
-                        success=False,
-                        error="conversation_not_found_or_tenant_mismatch",
+                if result.rowcount == 1:
+                    await session.commit()
+                    latency = time.perf_counter() - start
+                    logger.debug(
+                        "add_message id=%s latency_ms=%.2f",
+                        message.id,
+                        latency * 1000,
                     )
-                await session.commit()
-                latency = time.perf_counter() - start
-                logger.debug(
-                    "add_message id=%s latency_ms=%.2f",
-                    message.id,
-                    latency * 1000,
+                    return RepositoryResult(
+                        success=True,
+                        data=message.id,
+                        metadata={"idempotent_replay": False},
+                    )
+
+                existing_result = await session.execute(
+                    text(
+                        f"""
+                        SELECT m.message_id, m.role, m.content
+                        FROM {self._message_table} m
+                        JOIN {self._conversation_table} c
+                          ON m.conversation_id = c.conversation_id
+                        WHERE m.message_id = :id
+                          AND m.conversation_id = :conversation_id
+                          AND c.tenant_id = :tenant_id
+                        """
+                    ),
+                    {
+                        "id": message.id,
+                        "conversation_id": message.conversation_id,
+                        "tenant_id": message.tenant_id,
+                    },
                 )
-                return RepositoryResult(success=True, data=message.id)
+                existing = existing_result.fetchone()
+                if (
+                    existing is not None
+                    and str(existing.role) == str(message.role)
+                    and str(existing.content) == str(message.content)
+                ):
+                    await session.commit()
+                    return RepositoryResult(
+                        success=True,
+                        data=message.id,
+                        metadata={"idempotent_replay": True},
+                    )
+
+                await session.rollback()
+                return RepositoryResult(
+                    success=False,
+                    error=(
+                        "message_idempotency_conflict"
+                        if existing is not None
+                        else "conversation_not_found_or_tenant_mismatch"
+                    ),
+                )
         except Exception as exc:
             logger.error("add_message failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
@@ -467,7 +508,5 @@ class PostgresConversationRepository(ConversationRepository):
                 else row.message_metadata or {}
             ),
             created_at=row.created_at,
-            # Production ``messages`` has no updated_at column. Preserve the
-            # repository contract without inventing database state.
             updated_at=row.created_at,
         )
