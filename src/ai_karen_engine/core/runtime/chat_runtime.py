@@ -522,22 +522,15 @@ class ChatRuntime:
 
         persistence_failed = False
         if decision.memory_write_allowed and streamed_text:
-            try:
-                await self._persist_memory(
-                    request,
-                    streamed_text,
-                    memory_recall_meta,
-                    plan,
-                )
-            except Exception as exc:
-                persistence_failed = True
-                logger.warning(
-                    "Streaming memory persistence raised unexpectedly",
-                    extra={
-                        "correlation_id": ctx.correlation_id,
-                        "error_type": type(exc).__name__,
-                    },
-                )
+            await self._persist_memory(
+                request,
+                streamed_text,
+                memory_recall_meta,
+                plan,
+            )
+            persistence_failed = (
+                memory_recall_meta.get("memory_persistence_status") == "failed"
+            )
 
         latency_ms = (time.time() - stream_start) * 1000.0
         success = bool(streamed_text) and generation_error is None
@@ -691,66 +684,118 @@ class ChatRuntime:
         response_text: str,
         memory_recall_meta: Dict[str, Any],
         plan: AuthorizedExecutionPlan,
-    ) -> None:
+    ) -> Dict[str, Any]:
         if not await ActionExecutionGate.authorize(plan, "memory.write"):
+            result = {
+                "status": "rejected",
+                "reason": "memory_write_not_authorized",
+                "persisted": 0,
+            }
             memory_recall_meta["memory_persistence_status"] = "denied_by_policy"
-            return
-
-        if (
-            memory_recall_meta.get("memory_degraded")
-            and memory_recall_meta.get("memory_recall_status") == "failed"
-        ):
-            memory_recall_meta["memory_persistence_status"] = "skipped_degraded_recall"
-            return
+            return result
 
         ctx = request.context
+        user_message = self._extract_user_message(request.messages)
+        if not user_message.strip():
+            result = {
+                "status": "noop",
+                "reason": "empty_user_interaction",
+                "persisted": 0,
+            }
+            memory_recall_meta["memory_persistence_status"] = "no_candidate"
+            return result
+
+        policy_context = {
+            "memory_write_authorized": True,
+            "allowed_capabilities": list(plan.allowed_capabilities),
+            "policy_decision_id": plan.policy_decision_id,
+            "execution_id": plan.execution_id,
+            "authorized_user_id": plan.authorized_user_id,
+            "authorized_tenant_id": plan.authorized_tenant_id,
+            "authorized_session_id": plan.authorized_session_id,
+        }
+
         try:
             from ai_karen_engine.core.memory import get_memory_manager
 
             mem = get_memory_manager()
-            user_message = self._extract_user_message(request.messages)
-
-            if user_message.strip():
-                await mem.process_interaction(
-                    text=user_message,
-                    tenant_id=ctx.tenant_id,
-                    user_id=ctx.user_id,
-                    source_type="chat_user",
-                    source_ref=ctx.conversation_id or ctx.session_id,
-                    metadata={
-                        "correlation_id": ctx.correlation_id,
-                        "session_id": ctx.session_id,
-                        "conversation_id": ctx.conversation_id,
-                        "request_id": ctx.request_id,
-                        "response_length": len(response_text or ""),
-                        "memory_actor": "user",
-                    },
-                )
-
-            if response_text.strip():
-                await mem.process_interaction(
-                    text=response_text,
-                    tenant_id=ctx.tenant_id,
-                    user_id=ctx.user_id,
-                    source_type="chat_assistant",
-                    source_ref=ctx.conversation_id or ctx.session_id,
-                    metadata={
-                        "correlation_id": ctx.correlation_id,
-                        "session_id": ctx.session_id,
-                        "conversation_id": ctx.conversation_id,
-                        "request_id": ctx.request_id,
-                        "is_assistant": True,
-                        "memory_actor": "assistant",
-                        "memory_promotion_eligible": False,
-                    },
-                )
-
-            memory_recall_meta["memory_persistence_status"] = "persisted"
-            self._emitter.emit(
-                RuntimeEventType.PERSISTENCE_COMPLETED,
-                policy_decision_id=plan.policy_decision_id,
-                metadata={"target": "memory"},
+            result = await mem.process_interaction(
+                text=user_message,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                source_type="chat_user",
+                source_ref=ctx.conversation_id or ctx.session_id,
+                metadata={
+                    "correlation_id": ctx.correlation_id,
+                    "session_id": ctx.session_id,
+                    "conversation_id": ctx.conversation_id,
+                    "request_id": ctx.request_id,
+                    "response_length": len(response_text or ""),
+                    "memory_actor": "user",
+                },
+                request_id=ctx.request_id,
+                correlation_id=ctx.correlation_id,
+                actor_id=ctx.user_id,
+                session_id=ctx.session_id,
+                conversation_id=ctx.conversation_id,
+                policy_context=policy_context,
             )
+
+            persisted = int(result.get("persisted") or 0)
+            admitted = int(result.get("admitted") or 0)
+            formation_status = str(result.get("status") or "unknown")
+            reason = result.get("reason")
+
+            if formation_status == "rejected" and reason == "memory_write_not_authorized":
+                memory_recall_meta["memory_persistence_status"] = "failed"
+                memory_recall_meta["memory_degraded"] = True
+                memory_recall_meta["memory_degradation_reason"] = (
+                    "memory_authorization_proof_rejected"
+                )
+            elif persisted > 0:
+                memory_recall_meta["memory_persistence_status"] = "persisted"
+            elif formation_status in {"failed", "error"}:
+                memory_recall_meta["memory_persistence_status"] = "failed"
+                memory_recall_meta["memory_degraded"] = True
+                memory_recall_meta["memory_degradation_reason"] = (
+                    "memory_persistence_failed"
+                )
+            else:
+                memory_recall_meta["memory_persistence_status"] = "no_candidate"
+
+            memory_recall_meta["memory_candidate_count"] = int(
+                result.get("extracted") or 0
+            )
+            memory_recall_meta["memory_admitted_count"] = admitted
+            memory_recall_meta["memory_persisted_count"] = persisted
+            memory_recall_meta["memory_formation_status"] = formation_status
+            if reason:
+                memory_recall_meta["memory_formation_reason"] = str(reason)
+
+            event_type = (
+                RuntimeEventType.PERSISTENCE_FAILED
+                if memory_recall_meta["memory_persistence_status"] == "failed"
+                else RuntimeEventType.PERSISTENCE_COMPLETED
+            )
+            self._emitter.emit(
+                event_type,
+                policy_decision_id=plan.policy_decision_id,
+                metadata={
+                    "target": "memory",
+                    "formation_status": formation_status,
+                    "reason": reason,
+                    "candidate_count": memory_recall_meta["memory_candidate_count"],
+                    "admitted_count": admitted,
+                    "persisted_count": persisted,
+                    "request_id": ctx.request_id,
+                    "correlation_id": ctx.correlation_id,
+                    "user_id": ctx.user_id,
+                    "tenant_id": ctx.tenant_id,
+                    "session_id": ctx.session_id,
+                    "conversation_id": ctx.conversation_id,
+                },
+            )
+            return result
 
         except Exception as exc:
             error_type = type(exc).__name__
@@ -771,6 +816,12 @@ class ChatRuntime:
                 error_type=error_type,
                 metadata={"target": "memory", "error_code": "MEMORY_PERSISTENCE_FAILED"},
             )
+            return {
+                "status": "failed",
+                "reason": "memory_persistence_failed",
+                "persisted": 0,
+                "error_type": error_type,
+            }
 
     # ------------------------------------------------------------------
     # Routing
