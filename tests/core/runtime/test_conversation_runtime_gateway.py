@@ -401,3 +401,59 @@ async def test_incomplete_turn_is_not_persisted() -> None:
     assert result.status == "skipped"
     assert result.reason == "incomplete_turn"
     assert repository.messages == []
+
+@pytest.mark.asyncio
+async def test_session_snapshot_uses_canonical_repository_without_semantic_memory() -> None:
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    context = _context(
+        conversation_id=None,
+        session_id="presentation-session",
+        request_id="request-snapshot",
+    )
+
+    snapshot = await gateway.ensure_session_snapshot(context)
+
+    assert snapshot.conversation.tenant_id == "tenant-a"
+    assert snapshot.conversation.user_id == "user-a"
+    assert snapshot.conversation.metadata["session_id"] == "presentation-session"
+    assert snapshot.messages == ()
+
+
+@pytest.mark.asyncio
+async def test_append_message_enforces_conversation_user_ownership() -> None:
+    repository = _Repository()
+    owner_context = _context(
+        request_id="request-owner",
+        session_id="presentation-session",
+    )
+    gateway = ConversationRuntimeGateway(repository=repository)
+    snapshot = await gateway.ensure_session_snapshot(owner_context)
+
+    message = await gateway.append_message(
+        _context(
+            request_id="request-message",
+            session_id=None,
+            conversation_id=snapshot.conversation.id,
+        ),
+        role="user",
+        content="This is durable presentation transcript evidence.",
+        metadata={"ui_source": "web"},
+    )
+
+    assert message.role == "user"
+    assert message.metadata["source"] == "conversation_api"
+    assert repository.messages == [message]
+
+    with pytest.raises(PermissionError, match="conversation_user_mismatch"):
+        await gateway.append_message(
+            _context(
+                user_id="user-b",
+                request_id="request-wrong-user",
+                session_id=None,
+                conversation_id=snapshot.conversation.id,
+            ),
+            role="user",
+            content="This must not cross the user boundary.",
+        )
+
