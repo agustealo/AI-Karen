@@ -2,6 +2,16 @@ name: Beta Live Model Smoke
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "scripts/beta_live_model_smoke.py"
+      - "scripts/ci/production-first-boot-smoke.sh"
+      - "src/ai_karen_engine/api_routes/chat/**"
+      - "src/ai_karen_engine/core/model_runtime/provider_execution.py"
+      - "src/ai_karen_engine/core/runtime/**"
+      - ".github/workflows/beta-live-model-smoke.yml"
   push:
     branches:
       - main
@@ -18,6 +28,7 @@ permissions:
 
 jobs:
   live-model-smoke:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on:
       - self-hosted
       - Windows
