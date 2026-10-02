@@ -4,9 +4,9 @@
   "authenticated": true,
   "account_kind": "sanitized-demo",
   "capture_harness_git_sha": "87213d021e4f30987c222fa716ddce3edce8c9fc",
-  "target_revision": "57b19ba92d77a622f4335948206b677a546f6a48",
+  "target_revision": "9980fb0bbcf52d162c53278d759c6632dc416a24",
   "target_revision_attestation": "operator-supplied",
-  "captured_at": "2026-10-02T11:42:41.511Z",
+  "captured_at": "2026-10-02T11:53:07.710Z",
   "browser": "chromium 147.0.7727.15",
   "viewport": {
     "width": 1600,
