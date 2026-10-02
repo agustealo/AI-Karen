@@ -1766,12 +1766,12 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     }
 
     const shareUrl = `${window.location.origin}/chat/${currentSession.id}`;
-    const shareText = `Check out this conversation with Karen AI: ${currentSession.title || 'Chat'}`;
+    const shareText = `Check out this conversation with KAREN: ${currentSession.title || 'Chat'}`;
 
     try {
       if (navigator.share) {
         await navigator.share({
-          title: currentSession.title || 'Karen AI Chat',
+          title: currentSession.title || 'KAREN Chat',
           text: shareText,
           url: shareUrl,
         });
