@@ -9,10 +9,17 @@ failures to API errors, and never fabricates conversation state.
 from __future__ import annotations
 
 import inspect
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, cast
 
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+    ConversationRuntimeGateway,
+    ConversationSnapshot,
+    get_conversation_runtime_gateway,
+)
 from ai_karen_engine.core.services.dependencies import (
     bypass_user_context_func,
     get_conversation_service,
@@ -277,6 +284,79 @@ def _convert_conversation_to_response(conversation: Any) -> ConversationResponse
     )
 
 
+def _canonical_message_to_response(message: Any) -> MessageResponse:
+    metadata = dict(getattr(message, "metadata", {}) or {})
+    return MessageResponse(
+        id=str(message.id),
+        role=str(message.role),
+        content=str(message.content),
+        timestamp=message.created_at.isoformat(),
+        metadata=metadata,
+        function_call=metadata.get("function_call"),
+        function_response=metadata.get("function_response"),
+        ui_source=metadata.get("ui_source"),
+        ai_confidence=metadata.get("ai_confidence"),
+        processing_time_ms=metadata.get("processing_time_ms"),
+        tokens_used=metadata.get("tokens_used"),
+        model_used=metadata.get("model_used"),
+        user_feedback=metadata.get("user_feedback"),
+        edited=bool(metadata.get("edited", False)),
+        edit_history=list(metadata.get("edit_history", [])),
+    )
+
+
+def _canonical_snapshot_to_response(
+    snapshot: ConversationSnapshot,
+) -> ConversationResponse:
+    conversation = snapshot.conversation
+    metadata = dict(conversation.metadata or {})
+    messages = [_canonical_message_to_response(message) for message in snapshot.messages]
+    last_message_at = (
+        snapshot.messages[-1].created_at.isoformat() if snapshot.messages else None
+    )
+    return ConversationResponse(
+        id=str(conversation.id),
+        user_id=str(conversation.user_id),
+        title=conversation.title,
+        messages=messages,
+        metadata=metadata,
+        is_active=bool(conversation.is_active),
+        created_at=conversation.created_at.isoformat(),
+        updated_at=conversation.updated_at.isoformat(),
+        message_count=len(messages),
+        last_message_at=last_message_at,
+        session_id=metadata.get("session_id"),
+        ui_context=dict(metadata.get("ui_context", {}) or {}),
+        ai_insights=dict(metadata.get("ai_insights", {}) or {}),
+        user_settings=dict(metadata.get("user_settings", {}) or {}),
+        summary=conversation.summary,
+        tags=list(conversation.tags or []),
+        last_ai_response_id=metadata.get("last_ai_response_id"),
+        status="active" if conversation.is_active else "inactive",
+        priority=str(metadata.get("priority", "normal")),
+        context_memories=[],
+        proactive_suggestions=[],
+    )
+
+
+def _conversation_api_context(
+    *,
+    tenant_id: str,
+    user_id: str,
+    session_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+) -> ChatExecutionContext:
+    request_id = str(uuid.uuid4())
+    return ChatExecutionContext(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        session_id=session_id,
+        conversation_id=conversation_id,
+        request_id=request_id,
+        correlation_id=request_id,
+    )
+
+
 # Static GET routes must be registered before /{conversation_id}.
 @router.get("/health")
 async def health_check() -> Dict[str, str]:
@@ -384,14 +464,16 @@ async def get_conversation_by_session(
 @router.get("/ensure-session/{session_id}", response_model=ConversationResponse)
 async def ensure_session_conversation_get(
     session_id: str,
-    conversation_service: ConversationService = Depends(get_conversation_service),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     """Compatibility alias for clients still using GET during session ensure."""
     return await ensure_session_conversation(
         session_id=session_id,
-        conversation_service=conversation_service,
+        conversation_gateway=conversation_gateway,
         tenant_id=tenant_id,
         user_ctx=user_ctx,
     )
@@ -520,39 +602,24 @@ async def create_conversation(
 @router.post("/ensure-session/{session_id}", response_model=ConversationResponse)
 async def ensure_session_conversation(
     session_id: str,
-    conversation_service: ConversationService = Depends(get_conversation_service),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Return the durable session conversation, creating it when absent."""
+    """Return the canonical durable session conversation, creating it when absent."""
     try:
         user_id = _require_user_id(user_ctx)
-        existing_conversation = (
-            await conversation_service.get_web_ui_conversation_by_session(
+        snapshot = await conversation_gateway.ensure_session_snapshot(
+            _conversation_api_context(
                 tenant_id=tenant_id,
-                session_id=session_id,
                 user_id=user_id,
-                include_context=False,
-            )
-        )
-        if existing_conversation:
-            return _convert_conversation_to_response(existing_conversation)
-
-        new_conversation = await conversation_service.create_web_ui_conversation(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            session_id=session_id,
-            ui_source=UISource.WEB,
+                session_id=session_id,
+            ),
             title="New Conversation",
-            initial_message=None,
-            user_settings={},
-            ui_context={},
-            tags=["new-session"],
-            priority=ConversationPriority.NORMAL,
         )
-        if not new_conversation:
-            raise RuntimeError("Conversation service returned no conversation")
-        return _convert_conversation_to_response(new_conversation)
+        return _canonical_snapshot_to_response(snapshot)
     except HTTPException:
         raise
     except Exception as error:
@@ -665,44 +732,35 @@ async def get_conversation(
 async def add_message(
     conversation_id: str,
     request: AddMessageRequest,
-    conversation_service: ConversationService = Depends(get_conversation_service),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
+    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
+    """Append a durable transcript message without invoking semantic memory."""
     try:
-        message = await conversation_service.add_web_ui_message(
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            role=request.role,
-            content=request.content,
-            ui_source=request.ui_source,
-            metadata=request.metadata,
-            ai_confidence=request.ai_confidence,
-            processing_time_ms=request.processing_time_ms,
-            tokens_used=request.tokens_used,
-            model_used=request.model_used,
-        )
-        if not message:
-            raise RuntimeError("Conversation service returned no message")
-
-        message_dict = message.to_dict()
-        return AddMessageResponse(
-            message=MessageResponse(
-                id=str(message_dict["id"]),
-                role=str(message_dict["role"]),
-                content=str(message_dict["content"]),
-                timestamp=str(message_dict["timestamp"]),
-                metadata=message_dict.get("metadata", {}),
-                function_call=message_dict.get("function_call"),
-                function_response=message_dict.get("function_response"),
-                ui_source=message_dict.get("ui_source"),
-                ai_confidence=message_dict.get("ai_confidence"),
-                processing_time_ms=message_dict.get("processing_time_ms"),
-                tokens_used=message_dict.get("tokens_used"),
-                model_used=message_dict.get("model_used"),
-                user_feedback=message_dict.get("user_feedback"),
-                edited=bool(message_dict.get("edited", False)),
-                edit_history=message_dict.get("edit_history", []),
+        user_id = _require_user_id(user_ctx)
+        metadata = {
+            **dict(request.metadata or {}),
+            "ui_source": str(request.ui_source.value),
+            "ai_confidence": request.ai_confidence,
+            "processing_time_ms": request.processing_time_ms,
+            "tokens_used": request.tokens_used,
+            "model_used": request.model_used,
+        }
+        message = await conversation_gateway.append_message(
+            _conversation_api_context(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
             ),
+            role=str(request.role.value),
+            content=request.content,
+            metadata={key: value for key, value in metadata.items() if value is not None},
+        )
+        return AddMessageResponse(
+            message=_canonical_message_to_response(message),
             success=True,
         )
     except HTTPException:
