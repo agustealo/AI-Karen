@@ -835,6 +835,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     lastChunkTime: number;
   } | null>(null);
   const [agentSteps, setAgentSteps] = useState<AgentStepEvent[]>([]);
+  const [isLocalRecoveryUnconfirmed, setIsLocalRecoveryUnconfirmed] = useState(false);
   const [degradedMode, setDegradedMode] = useState<{
     active: boolean;
     reason?: string;
@@ -1063,6 +1064,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         setIsLoading(false); // Start as false, only set to true if we have an in-flight request
         setAgentSteps([]);
         setDegradedMode({ active: false });
+        setIsLocalRecoveryUnconfirmed(false);
         submitInFlightRef.current = false;
       }
 
@@ -1080,6 +1082,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       if (!cancelled && persisted) {
         if (persistedMessages.length > 0) {
           setMessages(persistedMessages);
+          setIsLocalRecoveryUnconfirmed(true);
         }
         setInput(persisted.input || '');
         setStreamedContent(persisted.streamedContent || '');
@@ -1091,8 +1094,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       if (!cancelled && hasRestorableState && restoredSessionNoticeRef.current !== sessionId) {
         restoredSessionNoticeRef.current = sessionId;
         toast({
-          title: 'Restored previous session',
-          description: 'Picked up where you left off.',
+          title: 'Recovered local session state',
+          description: 'Checking the server before treating restored messages as durably saved.',
         });
       }
 
@@ -1115,6 +1118,9 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
 
         if (shouldApplyServerMessages) {
           setMessages(serverMessages);
+          if (serverMessages.length >= persistedMessages.length) {
+            setIsLocalRecoveryUnconfirmed(false);
+          }
         }
 
         if (persisted?.inFlight && serverMessages.length <= persistedMessages.length) {
@@ -1136,6 +1142,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
               if (cancelled) return;
               if (polledMessages.length > persistedMessages.length) {
                 setMessages(polledMessages);
+                setIsLocalRecoveryUnconfirmed(false);
                 setIsLoading(false);
                 submitInFlightRef.current = false;
                 setProcessingStatus('');
@@ -1146,7 +1153,10 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           }
         }
       } catch {
-        // Keep locally restored state if server sync fails.
+        // Keep useful recovery state visible, but never present it as durable truth.
+        if (!cancelled && persistedMessages.length > 0) {
+          setIsLocalRecoveryUnconfirmed(true);
+        }
       } finally {
         if (!cancelled) {
           setIsLoading(false);
@@ -1923,6 +1933,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         error={error}
         currentSession={currentSession}
         isLoading={isLoading}
+        isLocalRecoveryUnconfirmed={isLocalRecoveryUnconfirmed}
       />
 
       <RuntimeMetadataPanel
