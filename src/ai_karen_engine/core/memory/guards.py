@@ -47,7 +47,7 @@ class MemoryRetentionScope(str, Enum):
 
 @dataclass(slots=True)
 class MemoryTrustProvenance:
-    origin: MemoryOrigin = MemoryOrigin.INFERRED
+    origin: MemoryOrigin = MemoryOrigin.DERIVED_INFERENCE
     trust_class: MemoryTrustClass = MemoryTrustClass.INFERRED
     authority: str = ""
     source_ref: str = ""
