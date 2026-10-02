@@ -387,6 +387,35 @@ class ConversationRuntimeGateway:
                 reason=str(exc),
                 error_type=type(exc).__name__,
             )
+        except RuntimeError as exc:
+            reason = str(exc)
+            safe_reason = (
+                reason
+                if reason
+                in {
+                    "duplicate_conversation_id",
+                    "conversation_lookup_failed",
+                    "conversation_create_failed",
+                }
+                else "transcript_persistence_failed"
+            )
+            logger.warning(
+                "Canonical transcript persistence rejected by repository state",
+                extra={
+                    "conversation_id": conversation_id,
+                    "tenant_id": context.tenant_id,
+                    "user_id": context.user_id,
+                    "correlation_id": context.correlation_id,
+                    "error_type": type(exc).__name__,
+                    "reason": safe_reason,
+                },
+            )
+            return TranscriptPersistenceResult(
+                status="failed",
+                conversation_id=conversation_id,
+                reason=safe_reason,
+                error_type=type(exc).__name__,
+            )
         except Exception as exc:
             logger.exception(
                 "Canonical transcript persistence failed",
