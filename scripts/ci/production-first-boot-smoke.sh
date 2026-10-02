@@ -32,6 +32,19 @@ BASE_URL="http://127.0.0.1:${HOST_PORT}"
 COOKIE_JAR="$(mktemp)"
 API_LOG="$(mktemp)"
 DUPLICATE_BODY="$(mktemp)"
+LIVE_MODEL_BASE_URL="${KAREN_SMOKE_LIVE_MODEL_BASE_URL:-}"
+LIVE_MODEL_PROVIDER="${KAREN_SMOKE_LIVE_MODEL_PROVIDER:-lmstudio-desktop}"
+LIVE_MODEL_NAME="${KAREN_SMOKE_LIVE_MODEL_NAME:-}"
+LIVE_MODEL_TIMEOUT_SECONDS="${KAREN_SMOKE_LIVE_MODEL_TIMEOUT_SECONDS:-90}"
+
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+else
+  echo "python is required for the production smoke harness" >&2
+  exit 1
+fi
 
 cleanup() {
   rm -f "${COOKIE_JAR}" "${API_LOG}" "${DUPLICATE_BODY}"
@@ -108,12 +121,45 @@ api_env=(
   -e REDIS_PORT=6379
 )
 
+if [[ -n "${LIVE_MODEL_BASE_URL}" ]]; then
+  container_model_url="$("${PYTHON_BIN}" - "${LIVE_MODEL_BASE_URL}" <<'PY'
+import sys
+from urllib.parse import urlsplit, urlunsplit
+
+raw = sys.argv[1].strip().rstrip("/")
+parts = urlsplit(raw)
+if (parts.hostname or "") in {"127.0.0.1", "localhost"}:
+    netloc = "host.docker.internal"
+    if parts.port:
+        netloc += f":{parts.port}"
+    parts = parts._replace(netloc=netloc)
+print(urlunsplit(parts))
+PY
+)"
+  case "${LIVE_MODEL_PROVIDER}" in
+    lmstudio-desktop)
+      api_env+=( -e LMSTUDIO_BASE_URL="${container_model_url}" )
+      ;;
+    ollama-local)
+      api_env+=( -e OLLAMA_BASE_URL="${container_model_url}" )
+      ;;
+    llamacpp-server)
+      api_env+=( -e LLAMACPP_BASE_URL="${container_model_url}" )
+      ;;
+    *)
+      echo "unsupported production live-model provider: ${LIVE_MODEL_PROVIDER}" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 start_api() {
   : >"${API_LOG}"
   docker rm -f "${API_CONTAINER}" >/dev/null 2>&1 || true
   docker run -d \
     --name "${API_CONTAINER}" \
     --network "${NETWORK}" \
+    --add-host "host.docker.internal:host-gateway" \
     -p "127.0.0.1:${HOST_PORT}:8000" \
     "${api_env[@]}" \
     "${API_IMAGE}" >/dev/null
@@ -190,7 +236,7 @@ fi
 
 echo "[smoke] proving empty installation reports first-run"
 first_run_json="$(curl -fsS "${BASE_URL}/api/auth/first-run")"
-python3 - "${first_run_json}" <<'PY'
+"${PYTHON_BIN}" - "${first_run_json}" <<'PY'
 import json
 import sys
 payload = json.loads(sys.argv[1])
@@ -204,7 +250,7 @@ setup_json="$(curl -fsS \
   -H 'Content-Type: application/json' \
   -d "{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\",\"confirm_password\":\"${ADMIN_PASSWORD}\",\"full_name\":\"${ADMIN_NAME}\"}" \
   "${BASE_URL}/api/auth/first-run/setup")"
-python3 - "${setup_json}" <<'PY'
+"${PYTHON_BIN}" - "${setup_json}" <<'PY'
 import json
 import sys
 payload = json.loads(sys.argv[1])
@@ -248,7 +294,7 @@ fi
 
 echo "[smoke] proving setup state and authenticated identity are queryable"
 post_setup_json="$(curl -fsS "${BASE_URL}/api/auth/first-run")"
-python3 - "${post_setup_json}" <<'PY'
+"${PYTHON_BIN}" - "${post_setup_json}" <<'PY'
 import json
 import sys
 payload = json.loads(sys.argv[1])
@@ -257,7 +303,7 @@ assert payload.get("message") == "System already configured", payload
 PY
 
 me_json="$(curl -fsS -b "${COOKIE_JAR}" "${BASE_URL}/api/auth/me")"
-python3 - "${me_json}" "${ADMIN_EMAIL}" <<'PY'
+"${PYTHON_BIN}" - "${me_json}" "${ADMIN_EMAIL}" <<'PY'
 import json
 import sys
 payload = json.loads(sys.argv[1])
@@ -276,7 +322,7 @@ start_api
 
 echo "[smoke] proving durable owner and completed first-run state survive restart"
 post_restart_first_run="$(curl -fsS "${BASE_URL}/api/auth/first-run")"
-python3 - "${post_restart_first_run}" <<'PY'
+"${PYTHON_BIN}" - "${post_restart_first_run}" <<'PY'
 import json
 import sys
 payload = json.loads(sys.argv[1])
@@ -288,7 +334,7 @@ login_json="$(curl -fsS \
   -H 'Content-Type: application/json' \
   -d "{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}" \
   "${BASE_URL}/api/auth/login")"
-python3 - "${login_json}" <<'PY'
+"${PYTHON_BIN}" - "${login_json}" <<'PY'
 import json
 import sys
 payload = json.loads(sys.argv[1])
@@ -300,7 +346,7 @@ assert "admin" in [str(role).lower() for role in user.get("roles", [])], payload
 PY
 
 me_after_restart="$(curl -fsS -b "${COOKIE_JAR}" "${BASE_URL}/api/auth/me")"
-python3 - "${me_after_restart}" "${ADMIN_EMAIL}" <<'PY'
+"${PYTHON_BIN}" - "${me_after_restart}" "${ADMIN_EMAIL}" <<'PY'
 import json
 import sys
 payload = json.loads(sys.argv[1])
@@ -312,5 +358,124 @@ assert payload.get("tenant_id"), payload
 assert payload.get("username"), payload
 assert {"admin", "user"}.issubset(roles), payload
 PY
+
+if [[ -n "${LIVE_MODEL_BASE_URL}" ]]; then
+  echo "[smoke] proving two-turn ChatRuntime execution against configured live model"
+  live_session="beta_live_${GITHUB_RUN_ID:-local}_$"
+  live_token="KAREN_${GITHUB_RUN_ID:-local}_$_CONTINUITY"
+
+  first_payload="$("${PYTHON_BIN}" - "${live_session}" "${LIVE_MODEL_PROVIDER}" "${LIVE_MODEL_NAME}" "${live_token}" <<'PY'
+import json
+import sys
+
+session_id, provider, model, token = sys.argv[1:5]
+payload = {
+    "messages": [{
+        "content": (
+            "Remember this exact release token for the next turn: "
+            f"{token}. Reply briefly and include the token exactly once."
+        ),
+        "message_type": "user",
+    }],
+    "preferred_llm_provider": provider,
+    "temperature": 0.0,
+    "max_tokens": 96,
+    "stream": False,
+    "session_id": session_id,
+}
+if model:
+    payload["preferred_model"] = model
+print(json.dumps(payload))
+PY
+)"
+
+  first_response="$(curl -fsS --max-time "${LIVE_MODEL_TIMEOUT_SECONDS}" \
+    -b "${COOKIE_JAR}" \
+    -H 'Content-Type: application/json' \
+    -d "${first_payload}" \
+    "${BASE_URL}/api/chat")"
+
+  "${PYTHON_BIN}" - "${first_response}" "${LIVE_MODEL_PROVIDER}" "${LIVE_MODEL_NAME}" "${live_token}" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+expected_provider, expected_model, token = sys.argv[2:5]
+content = str(payload.get("content") or "")
+metadata = payload.get("metadata") or {}
+assert content, payload
+assert token in content, payload
+assert payload.get("model") not in {None, "", "unknown"}, payload
+assert metadata.get("actual_provider") == expected_provider, metadata
+assert metadata.get("response_source") not in {"emergency", "unavailable"}, metadata
+if expected_model:
+    actual_model = str(metadata.get("actual_model") or payload.get("model") or "")
+    assert actual_model, metadata
+PY
+
+  second_payload="$("${PYTHON_BIN}" - "${live_session}" "${LIVE_MODEL_PROVIDER}" "${LIVE_MODEL_NAME}" <<'PY'
+import json
+import sys
+
+session_id, provider, model = sys.argv[1:4]
+payload = {
+    "messages": [{
+        "content": (
+            "What exact release token did I ask you to remember in the previous turn? "
+            "Reply with that token and nothing else."
+        ),
+        "message_type": "user",
+    }],
+    "preferred_llm_provider": provider,
+    "temperature": 0.0,
+    "max_tokens": 64,
+    "stream": False,
+    "session_id": session_id,
+}
+if model:
+    payload["preferred_model"] = model
+print(json.dumps(payload))
+PY
+)"
+
+  second_response="$(curl -fsS --max-time "${LIVE_MODEL_TIMEOUT_SECONDS}" \
+    -b "${COOKIE_JAR}" \
+    -H 'Content-Type: application/json' \
+    -d "${second_payload}" \
+    "${BASE_URL}/api/chat")"
+
+  "${PYTHON_BIN}" - "${second_response}" "${LIVE_MODEL_PROVIDER}" "${live_token}" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+expected_provider, token = sys.argv[2:4]
+content = str(payload.get("content") or "").strip()
+metadata = payload.get("metadata") or {}
+assert token in content, payload
+assert metadata.get("actual_provider") == expected_provider, metadata
+assert metadata.get("response_source") not in {"emergency", "unavailable"}, metadata
+PY
+
+  transcript_json="$(curl -fsS -b "${COOKIE_JAR}" \
+    "${BASE_URL}/api/conversations/by-session/${live_session}")"
+
+  "${PYTHON_BIN}" - "${transcript_json}" "${live_token}" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+token = sys.argv[2]
+messages = payload.get("messages") or []
+assert payload.get("message_count") == len(messages), payload
+assert len(messages) >= 4, payload
+roles = [str(message.get("role") or "").lower() for message in messages[-4:]]
+assert roles == ["user", "assistant", "user", "assistant"], roles
+assert token in str(messages[-4].get("content") or ""), messages[-4]
+assert token in str(messages[-1].get("content") or ""), messages[-1]
+PY
+
+  echo "PRODUCTION LIVE-MODEL TWO-TURN CHAT PROOF PASSED"
+fi
 
 echo "PRODUCTION FIRST-RUN SMOKE PASSED"
