@@ -2,6 +2,7 @@ import pytest
 
 from ai_karen_engine.core.memory.formation.evaluator import MemoryFormationEvaluator
 from ai_karen_engine.core.memory.formation.service import MemoryFormationService
+from ai_karen_engine.core.memory.guards import MemoryOrigin, MemoryTrustProvenance
 from ai_karen_engine.core.memory.protocols import VaultWriteReceipt
 from ai_karen_engine.core.memory.signals import ExtractionResult, MemorySignal
 from ai_karen_engine.core.memory.types import MemoryType
@@ -195,3 +196,9 @@ async def test_projection_failure_degrades_but_does_not_deny_committed_truth():
     assert result["persisted"] == 1
     assert result["status"] == "degraded"
     assert result["projection_failures"] == 1
+
+
+def test_memory_trust_provenance_defaults_to_derived_inference_origin():
+    provenance = MemoryTrustProvenance()
+
+    assert provenance.origin is MemoryOrigin.DERIVED_INFERENCE
