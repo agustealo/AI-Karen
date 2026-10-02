@@ -57,6 +57,14 @@ def resolve_runtime_conversation_id(context: ChatExecutionContext) -> str:
 
 
 @dataclass(frozen=True)
+class ConversationSnapshot:
+    """Tenant/user-authorized canonical conversation plus durable messages."""
+
+    conversation: Conversation
+    messages: tuple[Message, ...] = ()
+
+
+@dataclass(frozen=True)
 class TranscriptPersistenceResult:
     """Truthful result of one durable transcript operation."""
 
@@ -165,6 +173,110 @@ class ConversationRuntimeGateway:
             raise RuntimeError(created.error or "conversation_create_failed")
 
         return conversation_id
+
+    async def ensure_session_snapshot(
+        self,
+        context: ChatExecutionContext,
+        *,
+        title: str = "New Conversation",
+        message_limit: int = 100,
+    ) -> ConversationSnapshot:
+        """Ensure and load one tenant/user-owned durable conversation.
+
+        This is a transcript-only operation. It deliberately bypasses semantic
+        memory formation and exists so thin API/session surfaces can share the
+        same canonical repository authority as ChatRuntime.
+        """
+        self._require_identity(context)
+        conversation_id = await self.ensure_conversation(
+            context,
+            first_user_message=title,
+        )
+
+        conversation_result = await self._repository.get_conversation(
+            conversation_id,
+            context.tenant_id,
+        )
+        if not conversation_result.success or conversation_result.data is None:
+            raise RuntimeError(
+                conversation_result.error or "conversation_lookup_failed"
+            )
+        if str(conversation_result.data.user_id) != str(context.user_id):
+            raise PermissionError("conversation_user_mismatch")
+
+        messages_result = await self._repository.get_messages(
+            conversation_id,
+            context.tenant_id,
+            limit=max(0, int(message_limit)),
+            offset=0,
+        )
+        if not messages_result.success:
+            raise RuntimeError(
+                messages_result.error or "conversation_history_read_failed"
+            )
+
+        return ConversationSnapshot(
+            conversation=conversation_result.data,
+            messages=tuple(messages_result.data or []),
+        )
+
+    async def append_message(
+        self,
+        context: ChatExecutionContext,
+        *,
+        role: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Message:
+        """Append one authorized durable transcript message.
+
+        Unlike completed-turn persistence, this operation supports explicit
+        conversation-management requests that intentionally persist a single
+        user-authored message. It never invokes semantic-memory formation.
+        """
+        self._require_message_identity(context)
+        conversation_id = resolve_runtime_conversation_id(context)
+        message_content = str(content or "").strip()
+        if not message_content:
+            raise ValueError("conversation_message_empty")
+
+        existing = await self._repository.get_conversation(
+            conversation_id,
+            context.tenant_id,
+        )
+        if not existing.success:
+            raise RuntimeError(existing.error or "conversation_lookup_failed")
+        if existing.data is None:
+            raise RuntimeError("conversation_not_found")
+        if str(existing.data.user_id) != str(context.user_id):
+            raise PermissionError("conversation_user_mismatch")
+
+        message_id = self._message_id(
+            context=context,
+            conversation_id=conversation_id,
+            role=str(role),
+        )
+        message = Message(
+            id=message_id,
+            conversation_id=conversation_id,
+            tenant_id=context.tenant_id,
+            role=str(role),
+            content=message_content,
+            metadata={
+                "request_id": context.request_id,
+                "correlation_id": context.correlation_id,
+                "session_id": context.session_id,
+                "conversation_id": conversation_id,
+                "source": "conversation_api",
+                **dict(metadata or {}),
+            },
+        )
+        write_result = await self._repository.add_message(message)
+        if not write_result.success:
+            raise RuntimeError(
+                write_result.error or "conversation_message_persistence_failed"
+            )
+        return message
 
     async def load_history(
         self,
@@ -455,6 +567,23 @@ class ConversationRuntimeGateway:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
 
     @staticmethod
+    def _require_message_identity(context: ChatExecutionContext) -> None:
+        missing = [
+            name
+            for name, value in (
+                ("tenant_id", context.tenant_id),
+                ("user_id", context.user_id),
+                ("conversation_id", context.conversation_id),
+                ("request_id", context.request_id),
+            )
+            if not str(value or "").strip()
+        ]
+        if missing:
+            raise ValueError(
+                "transcript_message_identity_incomplete:" + ",".join(missing)
+            )
+
+    @staticmethod
     def _require_identity(context: ChatExecutionContext) -> None:
         missing = [
             name
@@ -491,6 +620,7 @@ def reset_conversation_runtime_gateway() -> None:
 
 __all__ = [
     "ConversationRuntimeGateway",
+    "ConversationSnapshot",
     "TranscriptHistoryResult",
     "TranscriptPersistenceResult",
     "get_conversation_runtime_gateway",
