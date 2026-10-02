@@ -24,22 +24,11 @@ COGNITIVE_COMPATIBILITY_SHIMS: tuple[CompatibilityShim, ...] = (
         legacy_symbol="ai_karen_engine.core.personalization.contracts.UserGoalStatus",
         canonical_symbol="ai_karen_engine.core.personalization.goals.contracts.GoalState",
         owner="personalization/goals",
-        reason="legacy user-profile goal status remains for stored/profile compatibility",
-        remove_after=date(2026, 10, 1),
-    ),
-    CompatibilityShim(
-        legacy_symbol="ai_karen_engine.core.reasoning.contracts.ReasoningEvidence.timestamp",
-        canonical_symbol="ai_karen_engine.core.reasoning.contracts.ReasoningEvidence.recorded_at",
-        owner="reasoning",
-        reason="legacy float timestamp view retained while consumers migrate to aware datetime",
-        remove_after=date(2026, 10, 1),
-    ),
-    CompatibilityShim(
-        legacy_symbol="ai_karen_engine.core.reasoning.contracts.ReasoningEvidence.valid_at",
-        canonical_symbol="ai_karen_engine.core.reasoning.contracts.ReasoningEvidence.valid_from",
-        owner="reasoning",
-        reason="legacy validity alias retained while temporal contracts converge",
-        remove_after=date(2026, 10, 1),
+        reason=(
+            "active stored UserGoal/UserModel contracts and GoalStore lifecycle still "
+            "consume UserGoalStatus; migrate persistence readers before removal"
+        ),
+        remove_after=date(2026, 10, 15),
     ),
 )
 
