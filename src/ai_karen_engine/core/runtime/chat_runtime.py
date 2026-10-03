@@ -558,6 +558,7 @@ class ChatRuntime:
                 request,
                 streamed_text,
                 provider_meta,
+                trajectory_id=trajectory.trajectory_id,
             )
         transcript_meta = transcript_result.to_metadata()
         transcript_persistence_failed = transcript_result.status in {
@@ -656,6 +657,8 @@ class ChatRuntime:
         request: ChatExecutionRequest,
         response_text: str,
         provider_meta: Dict[str, Any],
+        *,
+        trajectory_id: str | None = None,
     ) -> TranscriptPersistenceResult:
         """Persist one completed turn through the canonical transcript owner."""
         ctx = request.context
@@ -696,9 +699,12 @@ class ChatRuntime:
             user_text=self._extract_user_message(request.messages),
             assistant_text=response_text,
             response_metadata={
-                key: value
-                for key, value in provider_meta.items()
-                if key in _CANONICAL_META_KEYS
+                **{
+                    key: value
+                    for key, value in provider_meta.items()
+                    if key in _CANONICAL_META_KEYS
+                },
+                **({"trajectory_id": trajectory_id} if trajectory_id else {}),
             },
         )
 

@@ -65,3 +65,9 @@ def test_chat_runtime_uses_async_outcome_persistence() -> None:
     assert "await self._outcome_recorder.record_execution_outcome_async(" in source
     assert "async_transaction_scope" in store
     assert "async def save_outcome_async" in store
+
+
+def test_streamed_transcript_persists_trajectory_identity_for_feedback() -> None:
+    source = (ROOT / "src/ai_karen_engine/core/runtime/chat_runtime.py").read_text(encoding="utf-8")
+    assert "trajectory_id=trajectory.trajectory_id" in source
+    assert '**({"trajectory_id": trajectory_id} if trajectory_id else {})' in source

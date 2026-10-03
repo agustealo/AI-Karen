@@ -203,7 +203,8 @@ class LearningDatasetBuilder:
                     trajectory.trajectory_id
                 )
                 outcomes = self._outcome_store.get_for_trajectory(
-                    trajectory.trajectory_id
+                    trajectory.trajectory_id,
+                    tenant_id=query.tenant_scope,
                 )
                 for observation in observations:
                     if _DECISION_TYPE_TO_TASK.get(observation.decision_type) != query.task:
