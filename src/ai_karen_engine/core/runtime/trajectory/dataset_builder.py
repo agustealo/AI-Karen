@@ -18,8 +18,8 @@ from ai_karen_engine.core.contracts.learning import (
     LearningExample,
     LearningTask,
 )
-from src.ai_karen_engine.platform.observability.contracts import EventType as RuntimeEventType
-from src.ai_karen_engine.platform.observability import emit_event as _emit_event
+from ai_karen_engine.platform.observability.contracts import EventType as RuntimeEventType
+from ai_karen_engine.platform.observability import emit_event as _emit_event
 from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
     DecisionObservation,
     DecisionType,
