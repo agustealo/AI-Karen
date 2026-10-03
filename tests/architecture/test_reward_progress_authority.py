@@ -95,6 +95,7 @@ def test_legacy_adaptive_reward_computer_is_retired() -> None:
     # The adaptive vector remains a neutral data contract for learning signals.
     assert "class LearningRewardVector" in adaptive_contracts
     assert "not a product reward authority" in adaptive_contracts
+    assert "def aggregate(" not in adaptive_contracts
 
 
 def test_reward_projector_is_only_executable_reward_calculator() -> None:
