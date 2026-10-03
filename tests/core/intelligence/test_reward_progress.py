@@ -122,3 +122,29 @@ def test_failed_attempts_do_not_increase_level_depth() -> None:
     assert snapshot.completed_outcome_count == 1
     assert snapshot.observed_outcome_count == 29
     assert snapshot.level == "Foundation"
+
+
+
+def test_partial_successes_do_not_unlock_quality_run() -> None:
+    records = [
+        _execution(f"p{i:02d}", status="partial_success")
+        for i in range(1, 6)
+    ]
+    snapshot = RewardProjector().project(records)
+    assert snapshot.completed_outcome_count == 0
+    assert snapshot.quality_run == 0
+    milestone = next(
+        item for item in snapshot.milestones
+        if item.milestone_id == "quality_run_5"
+    )
+    assert milestone.unlocked is False
+
+
+def test_failed_attempt_after_completed_work_does_not_erase_completed_quality_run() -> None:
+    records = [
+        *[_execution(f"t{i:02d}") for i in range(1, 6)],
+        _execution("f06", status="failure"),
+    ]
+    snapshot = RewardProjector().project(records)
+    assert snapshot.completed_outcome_count == 5
+    assert snapshot.quality_run == 5

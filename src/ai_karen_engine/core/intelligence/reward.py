@@ -164,7 +164,7 @@ class RewardProjector:
             evidence_depth = min(1.0, len(completed_evidence) / 25.0)
             progress_index = min(100.0, average_quality * 0.8 + evidence_depth * 20.0)
 
-        quality_run = self._quality_run(evidence)
+        quality_run = self._quality_run(completed_evidence)
         level = self._level(
             completed_count=len(completed_evidence),
             average_quality=average_quality,
