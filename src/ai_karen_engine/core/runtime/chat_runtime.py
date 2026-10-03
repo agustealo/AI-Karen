@@ -1759,10 +1759,21 @@ class ChatRuntime:
             "transcript_persistence_status",
             "skipped",
         )
-        persistence_success = (
-            memory_status != "failed"
-            and transcript_status not in {"failed", "rejected"}
+        persistence_failure = (
+            memory_status == "failed"
+            or transcript_status in {"failed", "rejected"}
         )
+        durable_write_proven = (
+            memory_status == "persisted"
+            or transcript_status in {"persisted", "already_persisted"}
+        )
+        persistence_success: Optional[bool]
+        if persistence_failure:
+            persistence_success = False
+        elif durable_write_proven:
+            persistence_success = True
+        else:
+            persistence_success = None
         self._outcome_recorder.record_execution_outcome(
             trajectory_id=trajectory_id,
             status=(

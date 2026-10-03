@@ -67,3 +67,12 @@ def test_quality_run_requires_quality_and_confidence() -> None:
     assert snapshot.quality_run == 5
     milestone = next(item for item in snapshot.milestones if item.milestone_id == "quality_run_5")
     assert milestone.unlocked is True
+
+
+def test_unknown_durability_is_not_rewarded_as_success() -> None:
+    record = _execution("t01")
+    record["persistence_success"] = None
+    snapshot = RewardProjector().project([record])
+    evidence = snapshot.recent_evidence[0]
+    assert "durability" not in evidence.dimensions
+    assert snapshot.dimension_coverage["durability"] == 0.0
