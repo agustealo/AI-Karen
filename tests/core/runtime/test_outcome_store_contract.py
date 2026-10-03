@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from ai_karen_engine.core.observability.context import (
-    ObservabilityContext,
-    clear_observability_context,
-    set_observability_context,
+from ai_karen_engine.platform.observability.context import (
+    CorrelationContext,
+    reset_correlation_context,
+    set_correlation_context,
 )
 from ai_karen_engine.core.runtime.outcome.contracts import ExecutionStatus
 from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
@@ -29,8 +29,8 @@ def test_in_memory_store_can_filter_user_within_tenant() -> None:
 
 
 def test_recorder_reports_persistence_failure_without_faking_success() -> None:
-    set_observability_context(
-        ObservabilityContext(
+    token = set_correlation_context(
+        CorrelationContext(
             correlation_id="corr",
             tenant_id="t1",
             user_id="u1",
@@ -42,15 +42,15 @@ def test_recorder_reports_persistence_failure_without_faking_success() -> None:
             status=ExecutionStatus.SUCCESS,
         )
     finally:
-        clear_observability_context()
+        reset_correlation_context(token)
     assert payload["outcome_store_status"] == "failed"
     assert payload["outcome_store_error_code"] == "outcome_persistence_failed"
 
 
 def test_recorder_reports_stored_when_store_accepts_record() -> None:
     store = InMemoryOutcomeStore()
-    set_observability_context(
-        ObservabilityContext(
+    token = set_correlation_context(
+        CorrelationContext(
             correlation_id="corr",
             tenant_id="t1",
             user_id="u1",
@@ -62,6 +62,6 @@ def test_recorder_reports_stored_when_store_accepts_record() -> None:
             status=ExecutionStatus.SUCCESS,
         )
     finally:
-        clear_observability_context()
+        reset_correlation_context(token)
     assert payload["outcome_store_status"] == "stored"
     assert len(store.list_for_tenant("t1", user_id="u1")) == 1
