@@ -260,24 +260,26 @@ class RewardProjector:
 
     @staticmethod
     def _feedback_score(records: list[dict[str, Any]]) -> float | None:
-        scores: list[float] = []
-        for record in records:
+        """Return the latest explicit feedback state for one trajectory.
+
+        Feedback records remain append-only for audit. Current reward evidence
+        follows the newest signal instead of averaging a user's corrections
+        with their superseded rating.
+        """
+        for record in reversed(records):
             feedback_type = str(record.get("feedback_type") or "")
             rating = record.get("rating")
             if isinstance(rating, (int, float)):
-                scores.append(max(0.0, min(1.0, float(rating) / 5.0)))
-                continue
+                return max(0.0, min(1.0, float(rating) / 5.0))
             if feedback_type in {"thumbs_up", "task_completion_confirmation"}:
-                scores.append(1.0)
-            elif feedback_type in {"thumbs_down", "user_correction"}:
-                scores.append(0.0)
-            elif feedback_type in {"retry", "regeneration"}:
-                scores.append(0.25)
-            elif feedback_type == "follow_up_clarification":
-                scores.append(0.5)
-        if not scores:
-            return None
-        return sum(scores) / len(scores)
+                return 1.0
+            if feedback_type in {"thumbs_down", "user_correction"}:
+                return 0.0
+            if feedback_type in {"retry", "regeneration"}:
+                return 0.25
+            if feedback_type == "follow_up_clarification":
+                return 0.5
+        return None
 
     def _quality_run(self, evidence: list[RewardEvidence]) -> int:
         run = 0

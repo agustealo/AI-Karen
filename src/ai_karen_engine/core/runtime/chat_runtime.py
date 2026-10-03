@@ -283,7 +283,7 @@ class ChatRuntime:
             memory_recall_count=memory_recall_meta.get("memory_recall_count", 0),
         )
 
-        return self._build_result(
+        result = self._build_result(
             request,
             decision,
             provider_meta,
@@ -292,6 +292,8 @@ class ChatRuntime:
             text,
             latency_ms,
         )
+        result.metadata.extra["trajectory_id"] = trajectory.trajectory_id
+        return result
 
     async def execute_stream(
         self, request: ChatExecutionRequest
@@ -606,6 +608,7 @@ class ChatRuntime:
             memory_persistence_failed=memory_persistence_failed,
             transcript_persistence_failed=transcript_persistence_failed,
         )
+        terminal_metadata["trajectory_id"] = trajectory.trajectory_id
 
         self._emitter.emit(
             RuntimeEventType.REQUEST_COMPLETED,

@@ -47,3 +47,13 @@ def test_growth_ui_consumes_backend_truth() -> None:
     assert "progress_index" in source
     assert "Math.random" not in source
     assert "localStorage" not in source
+
+
+def test_chat_feedback_is_backend_persisted_not_ui_local() -> None:
+    source = (
+        ROOT
+        / "src/ui_launchers/Karen-AI-Theme/src/components/chat/MessageBubble.tsx"
+    ).read_text(encoding="utf-8")
+    assert "/api/progress/feedback" in source
+    assert "Feedback remains UI-local" not in source
+    assert "trajectory_id" in source

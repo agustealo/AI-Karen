@@ -76,3 +76,23 @@ def test_unknown_durability_is_not_rewarded_as_success() -> None:
     evidence = snapshot.recent_evidence[0]
     assert "durability" not in evidence.dimensions
     assert snapshot.dimension_coverage["durability"] == 0.0
+
+
+def test_latest_feedback_supersedes_prior_feedback_without_erasing_audit_history() -> None:
+    records = [
+        _execution("t01"),
+        {
+            "source": "user.feedback",
+            "trajectory_id": "t01",
+            "feedback_type": "thumbs_down",
+            "recorded_at": "2026-10-03T12:01:00",
+        },
+        {
+            "source": "user.feedback",
+            "trajectory_id": "t01",
+            "feedback_type": "thumbs_up",
+            "recorded_at": "2026-10-03T12:02:00",
+        },
+    ]
+    snapshot = RewardProjector().project(records)
+    assert snapshot.recent_evidence[0].dimensions["user_feedback"] == 1.0

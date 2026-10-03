@@ -108,6 +108,7 @@ class OutcomeRecorder:
         rating: float | None = None,
         correction_text: str | None = None,
         confidence: float | None = None,
+        message_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         ctx = get_observability_context()
@@ -129,6 +130,7 @@ class OutcomeRecorder:
                 "user_id": ctx.user_id,
                 "session_id": ctx.session_id,
                 "conversation_id": ctx.conversation_id,
+                "message_id": message_id,
                 "recorded_at": datetime.now(timezone.utc).isoformat(),
                 "source": "user.feedback",
             }

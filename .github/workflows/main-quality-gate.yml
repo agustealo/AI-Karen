@@ -134,6 +134,7 @@ jobs:
           pytest tests/core/runtime/test_runtime_evidence_resolution.py -q
           pytest tests/core/runtime/test_outcome_store_contract.py -q
           pytest tests/core/intelligence/test_reward_progress.py -q
+          pytest tests/services/test_reward_progress.py -q
 
       - name: Classifier burn contracts
         run: |
