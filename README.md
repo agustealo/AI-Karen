@@ -219,62 +219,137 @@ AI-Karen/
 └── README.md
 ```
 
-## Quick start
+## Install, first-time setup, and run
 
-### Requirements
+This is the supported operator path for a fresh KAREN installation. The goal is not merely to start containers: a healthy first run has migrated infrastructure, durable authentication, a real installation tenant, a first owner/admin, an eligible provider/model, and a successful chat through the canonical runtime.
 
-- Python 3.10+
-- Docker with Docker Compose
-- Optional NVIDIA GPU for CUDA/vLLM workflows
+For the deeper authority and security contract, see [KAREN First-Run System](docs/architecture/FIRST_RUN_SYSTEM.md).
 
-### 1. Clone and configure
+### 1. Prerequisites
+
+Required for the normal containerized path:
+
+- **Git**
+- **Docker** with Docker Compose v2
+- **Python 3.10+** for repository utilities, verification, and local development
+
+Useful but not required for the container-only path:
+
+- **Node.js 20+** when developing the web UI outside Docker
+- **curl** or another HTTP client for health and bootstrap checks
+- **NVIDIA Container Toolkit + compatible GPU** only when using CUDA/vLLM deployment paths
+
+Before starting, confirm Docker is healthy:
+
+```bash
+docker version
+docker compose version
+```
+
+### 2. Clone KAREN
 
 ```bash
 git clone https://github.com/agustealo/AI-Karen.git
 cd AI-Karen
+```
+
+### 3. Create the environment file
+
+For a local/development installation:
+
+```bash
 cp .env.example .env
 ```
 
-Review `.env` before startup. Replace production secrets and never commit real credentials.
+PowerShell:
 
-### 2. Start the stack
-
-Core stack:
-
-```bash
-docker compose up
+```powershell
+Copy-Item .env.example .env
 ```
 
-CPU overlay:
+Review `.env` before startup. At minimum, make sure database, Redis, auth, provider/model, and any enabled external-service settings match the machine you are actually running.
+
+Important rules:
+
+- never commit real passwords, API keys, tokens, or production secrets;
+- do not leave production deployments on example/default secrets;
+- keep provider/model configuration in the canonical backend configuration/runtime path;
+- do not enable development auth bypasses in production;
+- if an optional subsystem is disabled, do not fabricate readiness for it.
+
+### 4. Choose the runtime profile
+
+The normal local stack:
 
 ```bash
-docker compose -f docker-compose.yml -f deploy/compose/docker-compose.cpu.yml up
+docker compose up -d
 ```
 
-CUDA overlay:
+CPU-oriented overlay:
 
 ```bash
-docker compose -f docker-compose.yml -f deploy/compose/docker-compose.cuda.yml up
+docker compose \
+  -f docker-compose.yml \
+  -f deploy/compose/docker-compose.cpu.yml \
+  up -d
 ```
 
-Optional services are enabled through their Compose profiles when required by the deployment.
+CUDA-oriented overlay:
 
-### 3. Verify liveness and auth readiness
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f deploy/compose/docker-compose.cuda.yml \
+  up -d
+```
+
+Optional services remain profile/config driven. Do not enable an optional provider, model runtime, plugin, or observability service merely to make the UI look configured.
+
+### 5. Watch startup
+
+Check running services:
+
+```bash
+docker compose ps
+```
+
+Follow logs when diagnosing startup:
+
+```bash
+docker compose logs -f
+```
+
+For one service:
+
+```bash
+docker compose logs -f api
+```
+
+The API must not be treated as ready simply because its process exists. KAREN intentionally fails closed when required auth/database state is unavailable.
+
+### 6. Verify backend and authentication readiness
+
+Check basic liveness:
 
 ```bash
 curl http://localhost:8000/health/live
+```
+
+Check canonical authentication readiness:
+
+```bash
 curl http://localhost:8000/api/auth/health
 ```
 
-If auth readiness fails, fix configuration/database/migration state before trying to bootstrap an owner. First run is fail-closed.
+If auth readiness fails, fix environment, database, or migration state before creating an administrator. First-run bootstrap does not create missing production schema as a convenience fallback.
 
-### 4. Check first-run state
+### 7. Check whether first-run setup is required
 
 ```bash
 curl http://localhost:8000/api/auth/first-run
 ```
 
-A fresh installation should return:
+A fresh installation should report:
 
 ```json
 {
@@ -283,7 +358,19 @@ A fresh installation should return:
 }
 ```
 
-### 5. Create the first owner
+KAREN derives this state from durable backend truth. Browser storage, failed login attempts, or UI state are not first-run authority.
+
+### 8. Create the first owner/admin
+
+Open the web application:
+
+```text
+http://localhost:8010
+```
+
+If the active UI presents the first-run flow, use it to create the installation owner. The UI delegates to the same backend authority described below.
+
+The canonical API bootstrap is:
 
 ```bash
 curl -X POST http://localhost:8000/api/auth/first-run/setup \
@@ -296,44 +383,201 @@ curl -X POST http://localhost:8000/api/auth/first-run/setup \
   }'
 ```
 
-The canonical auth service creates the installation tenant and verified first owner, then authenticates through the normal session path. Bootstrap is transaction-serialized across workers. Once durable user state exists, later first-run setup attempts are rejected.
+This operation is intentionally privileged and one-time. The backend:
 
-### 6. Open the UI
+1. acquires the bootstrap transaction lock;
+2. re-checks that no durable user already owns the installation;
+3. creates or resolves the durable installation tenant;
+4. creates the verified first owner with backend `admin` and `user` roles;
+5. emits the auth audit event;
+6. authenticates through the normal session path.
 
-```text
-http://localhost:8010
+After a successful bootstrap, repeating the first-run setup is rejected.
+
+### 9. Log in and verify the durable identity
+
+Use the owner credentials created above.
+
+You can also verify the authenticated identity through the normal auth API/session path. The important result is that the account is durable, tenant-scoped, and backend-authorized. The frontend does not grant administrative authority by itself.
+
+Restart KAREN and confirm the installation remains configured:
+
+```bash
+docker compose restart
 ```
 
-Log in with the identity created during first run.
+Then re-check:
 
-### 7. Verify installation readiness after login
+```bash
+curl http://localhost:8000/api/auth/first-run
+```
 
-Identity bootstrap does not take ownership of unrelated subsystems. Verify backend truth for the capabilities your deployment requires:
+It should no longer report first-run setup as required.
 
-1. **Provider availability:** at least one intended provider is enabled and healthy.
-2. **Model configuration:** the intended local/default model is discoverable and eligible through the canonical model control plane.
-3. **Memory services:** durable memory dependencies are healthy when enabled.
-4. **Extensions:** only governed, validated extensions required for the deployment are enabled.
-5. **Observability:** metrics, logs, and tracing required by the environment are reachable.
-6. **Secrets and security:** production JWT, database, Redis, extension, provider, and dashboard secrets are non-example values.
-7. **First real chat:** submit a request through the canonical chat runtime and verify response provenance/degradation metadata reflects the provider/model that actually executed.
+### 10. Configure and verify the AI provider/model
 
-A typed installation-readiness view may aggregate these subsystem signals, but it must not become a second provider, memory, extension, or observability authority.
+Identity bootstrap and model setup are separate responsibilities.
 
-## Production deployment
+After logging in:
 
-Production uses the validated production environment file and Compose overlay:
+1. open **Application Settings**;
+2. verify the intended provider is enabled and healthy;
+3. verify the intended model is discoverable through backend/model-runtime truth;
+4. confirm local endpoint/base URL configuration if using LM Studio, Ollama, llama.cpp, vLLM, or another supported local runtime;
+5. add external provider credentials only when that provider is intentionally enabled;
+6. do not rely on a frontend-only model entry or fallback label.
+
+Provider selection, availability, fallback, and execution remain owned by the canonical model runtime. A provider shown in the UI is useful only when the backend reports it as actually eligible.
+
+### 11. Verify memory and supporting services
+
+Before calling the installation ready, check the subsystems required by your deployment:
+
+- **PostgreSQL/pgvector:** durable application and memory data
+- **Redis:** bounded STM/hot state and distributed coordination
+- **MemoryFormation/NeuroVault:** governed durable memory mutation when enabled
+- **Plugins/extensions:** only validated and authorized extensions should be enabled
+- **Observability:** metrics/logging/tracing services required by your environment
+- **Storage/integrations:** only when enabled by configuration
+
+A disabled optional subsystem is acceptable. A silently broken subsystem pretending to be healthy is not.
+
+### 12. Run the first real chat
+
+Use the Chat surface in the web application and submit a real request.
+
+A successful first-chat check should prove:
+
+- the request traveled through the canonical chat runtime;
+- an eligible provider/model actually executed;
+- the response is not an emergency/canned substitute;
+- provider/model/degradation metadata reflects what really happened;
+- the conversation is durably persisted;
+- a second turn can use the prior durable transcript when policy allows.
+
+If the chat reports no eligible model/provider, fix provider/model configuration instead of adding route-level or UI fallbacks.
+
+### 13. Normal run commands
+
+Start in the background:
+
+```bash
+docker compose up -d
+```
+
+See service state:
+
+```bash
+docker compose ps
+```
+
+Follow logs:
+
+```bash
+docker compose logs -f
+```
+
+Restart:
+
+```bash
+docker compose restart
+```
+
+Stop while preserving durable volumes:
+
+```bash
+docker compose down
+```
+
+Rebuild after code/dependency changes:
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+Do not delete database/model volumes as a routine troubleshooting step. Treat destructive storage cleanup as an explicit reset operation because it can remove durable installation state.
+
+### 14. First-time administrator checklist
+
+Before inviting other users or relying on KAREN operationally, confirm:
+
+- [ ] environment file reviewed and secrets replaced where required;
+- [ ] Docker/Compose configuration validates;
+- [ ] API liveness is healthy;
+- [ ] auth health is ready;
+- [ ] first owner/admin was created through canonical first-run bootstrap;
+- [ ] first-run cannot be re-entered after setup;
+- [ ] owner identity survives restart;
+- [ ] intended provider is healthy;
+- [ ] intended model is discoverable and eligible;
+- [ ] Redis and PostgreSQL-backed state are healthy;
+- [ ] required memory/extension/observability services are healthy;
+- [ ] first real chat succeeds through the actual runtime;
+- [ ] conversation continuity works on a second turn;
+- [ ] logs/telemetry do not expose secrets;
+- [ ] production deployments do not use development auth bypasses.
+
+### 15. Common first-run failures
+
+**`/health/live` fails**
+
+Inspect the API/container logs first:
+
+```bash
+docker compose ps
+docker compose logs api
+```
+
+Treat dependency/configuration errors as real startup failures.
+
+**`/api/auth/health` is not ready**
+
+Verify database connectivity, migrations, auth configuration, and required secrets. Do not bypass the check by creating users manually in the route/UI.
+
+**`first_run_required` is unexpectedly false**
+
+The durable database already contains one or more users. Confirm that you are connected to the intended database before making changes.
+
+**First-admin creation is rejected**
+
+Re-check first-run state and backend logs. A concurrent or previously completed bootstrap is deliberately denied.
+
+**The UI loads but chat cannot answer**
+
+Check backend provider/model availability. UI reachability does not prove inference readiness.
+
+**The model exists locally but KAREN cannot reach it**
+
+Verify the configured provider base URL from the environment/runtime context where the API is running. Remember that `localhost` inside a container refers to that container, not automatically to the host machine.
+
+**A restart loses identity or conversation state**
+
+Treat that as a persistence/deployment defect. Confirm the expected PostgreSQL/Redis volumes and connection settings instead of accepting a fresh bootstrap as normal behavior.
+
+### 16. Production deployment
+
+Production uses the production environment template and production Compose overlay:
 
 ```bash
 cp .env.production.example .env.production
-# Replace all CHANGE_ME/example values and choose the real public HTTP/HTTPS scheme.
+```
 
+Before starting production, replace every required `CHANGE_ME`, example secret, placeholder URL, database credential, Redis credential, provider secret, and public scheme value with deployment-specific values.
+
+Validate the fully rendered Compose contract before starting anything:
+
+```bash
 docker compose \
   --env-file .env.production \
   -f docker-compose.yml \
   -f deploy/compose/docker-compose.prod.yml \
   config
+```
 
+Then start:
+
+```bash
 docker compose \
   --env-file .env.production \
   -f docker-compose.yml \
@@ -341,7 +585,38 @@ docker compose \
   up -d
 ```
 
-Production/staging authentication validates configuration and fails closed. Canonical migrations remain authoritative for production schema, and the API must not invent missing tables or bootstrap state at runtime.
+After startup, repeat the same readiness sequence used above:
+
+```text
+/health/live
+-> /api/auth/health
+-> /api/auth/first-run
+-> first owner bootstrap if required
+-> authenticated login
+-> provider/model readiness
+-> first real chat
+-> restart/persistence confirmation
+```
+
+Production/staging authentication validates configuration and fails closed. Canonical migrations remain authoritative for schema creation and upgrades. The runtime must not invent missing auth tables, users, tenants, provider state, or successful persistence.
+
+### 17. Production first-run proof
+
+The repository includes a real production bootstrap smoke:
+
+```bash
+docker build --target app --build-arg PROFILE=runtime -t ai-karen-api:beta .
+KAREN_SMOKE_API_IMAGE=ai-karen-api:beta bash scripts/ci/production-first-boot-smoke.sh
+```
+
+That proof exercises fresh PostgreSQL/pgvector, password-protected Redis, canonical migrations, first-owner creation, duplicate-bootstrap denial, authenticated identity, process restart, and durable first-run completion.
+
+Fast architecture-level checks:
+
+```bash
+pytest tests/architecture/test_first_run_system_contract.py -q
+bash -n scripts/ci/production-first-boot-smoke.sh
+```
 
 ## Default development endpoints
 
