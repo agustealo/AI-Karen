@@ -21,9 +21,18 @@ def test_learning_scope_values():
     assert LearningScope.USER.value == "user"
 
 
-def test_learning_reward_vector_aggregate():
-    reward = LearningRewardVector(task_success=1.0, user_satisfaction=1.0, correctness=1.0, safety=1.0)
-    assert reward.aggregate() > 0.0
+def test_learning_reward_vector_is_passive_contract():
+    reward = LearningRewardVector(
+        task_success=1.0,
+        user_satisfaction=1.0,
+        correctness=1.0,
+        safety=1.0,
+    )
+    assert reward.task_success == 1.0
+    assert reward.user_satisfaction == 1.0
+    assert reward.correctness == 1.0
+    assert reward.safety == 1.0
+    assert not hasattr(reward, "aggregate")
 
 
 def test_outcome_assessment_status_values():
