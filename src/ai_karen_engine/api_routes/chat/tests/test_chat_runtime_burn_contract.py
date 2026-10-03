@@ -79,7 +79,7 @@ def _runtime(decision: ExecutionDecision, gateway: _Gateway) -> ChatRuntime:
         return_value=[{"role": "user", "content": "burn"}]
     )
     runtime._record_trajectory_completion = lambda *args, **kwargs: None
-    runtime._record_execution_outcome = lambda *args, **kwargs: None
+    runtime._record_execution_outcome = AsyncMock(return_value=None)
     return runtime
 
 

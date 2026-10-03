@@ -59,6 +59,7 @@ from ai_karen_engine.api_routes.tools.code_execution import router as code_execu
 from ai_karen_engine.api_routes.tools.tools import router as tool_router
 from ai_karen_engine.api_routes.users.persona import router as user_persona_router
 from ai_karen_engine.api_routes.users.profile import router as user_profile_router
+from ai_karen_engine.api_routes.users.progress import router as user_progress_router
 from ai_karen_engine.api_routes.users.users import router as users_router
 from ai_karen_engine.auth.auth_middleware import AuthenticationError, get_auth_middleware
 from ai_karen_engine.core.security.auth_config import (
@@ -138,6 +139,7 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     RouterSpec(runtime_catalog_router, "/api", ("runtime",)),
     RouterSpec(provider_public_router, "/api/public/providers", ("public-providers",)),
     RouterSpec(user_profile_router, "/api/profiles", ("profiles",)),
+    RouterSpec(user_progress_router, "/api", ("progress",)),
     RouterSpec(users_router, "/api", ("users",)),
     RouterSpec(error_response_router, "/api", ("error-response",)),
     RouterSpec(health_router, "/api", ("health",)),
