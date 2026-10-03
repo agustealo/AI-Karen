@@ -91,10 +91,20 @@ def test_global_learning_requires_explicit_eligibility():
     assert eligibility.action != LearningEligibility.UPDATE_PROFILE
 
 
-def test_reward_is_multidimensional():
-    reward = LearningRewardVector(task_success=0.9, user_satisfaction=0.8, correctness=0.9, efficiency=0.7, safety=0.9)
-    agg = reward.aggregate()
-    assert agg > 0.0
+def test_reward_vector_preserves_multidimensional_learning_evidence():
+    reward = LearningRewardVector(
+        task_success=0.9,
+        user_satisfaction=0.8,
+        correctness=0.9,
+        efficiency=0.7,
+        safety=0.9,
+    )
+    assert reward.task_success == 0.9
+    assert reward.user_satisfaction == 0.8
+    assert reward.correctness == 0.9
+    assert reward.efficiency == 0.7
+    assert reward.safety == 0.9
+    assert not hasattr(reward, "aggregate")
 
 
 def test_success_attribution_can_remain_uncertain():
