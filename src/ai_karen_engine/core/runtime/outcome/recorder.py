@@ -12,7 +12,7 @@ from ai_karen_engine.core.runtime.outcome.contracts import (
     UserOutcome,
 )
 from ai_karen_engine.core.runtime.outcome.store import OutcomeStore
-from src.ai_karen_engine.platform.observability.context import (
+from ai_karen_engine.platform.observability.context import (
     get_correlation_context as get_observability_context,
 )
 
