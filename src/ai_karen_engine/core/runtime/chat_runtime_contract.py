@@ -6,6 +6,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from ai_karen_engine.utils.chat_helpers import normalize_session_id
+
 
 class ChatExecutionMode(str, Enum):
     """Authoritative runtime mode for a single chat execution.
@@ -63,7 +65,10 @@ class ChatExecutionContext:
     """Stable request/tenant/session identity for one chat execution.
 
     This is the single identity carrier that must propagate from ingress
-    through provider, memory, plugin, and persistence.
+    through provider, memory, plugin, and persistence. When ingress has not
+    assigned a conversation yet, the context derives one stable UUID from the
+    tenant and session exactly once so every downstream owner observes the
+    same durable identity.
     """
 
     user_id: str
@@ -74,6 +79,20 @@ class ChatExecutionContext:
     correlation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     roles: List[str] = field(default_factory=list)
     permissions: List[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.conversation_id or not self.session_id:
+            return
+        normalized_session_id = normalize_session_id(self.session_id)
+        identity = ":".join(
+            (
+                "ai-karen",
+                "conversation",
+                str(self.tenant_id or "default"),
+                normalized_session_id,
+            )
+        )
+        self.conversation_id = str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
 
 
 @dataclass

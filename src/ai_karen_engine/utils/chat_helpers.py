@@ -1,8 +1,9 @@
+import logging
+import os
 import re
 import uuid
-import logging
 from datetime import datetime
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,6 @@ def strip_internal_analysis_leakage(text: str) -> str:
     cleaned = original
     lowered = cleaned.lower()
 
-    # Known internal-analysis scaffold markers
     internal_markers = (
         "to complete the session continuity summary",
         "session continuity summary:",
@@ -30,7 +30,6 @@ def strip_internal_analysis_leakage(text: str) -> str:
             cleaned = cleaned[:index]
             lowered = cleaned.lower()
 
-    # Known internal-analysis line patterns
     internal_patterns = (
         r"^\s*to complete the session continuity summary.*$",
         r"^\s*session continuity summary:\s*.*$",
@@ -42,7 +41,6 @@ def strip_internal_analysis_leakage(text: str) -> str:
     for pattern in internal_patterns:
         cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE | re.MULTILINE)
 
-    # Standard thought tag cleanup
     cleaned = re.sub(
         r"<(thought|analysis|internal|reasoning)>.*?</\1>",
         "",
@@ -58,7 +56,6 @@ def strip_internal_analysis_leakage(text: str) -> str:
 
     cleaned = re.sub(r"^\s*=+\s*$", "", cleaned, flags=re.MULTILINE)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    
     return cleaned.strip()
 
 
@@ -69,7 +66,6 @@ def is_low_information_content(content: str) -> bool:
         return True
     if len(text) == 1 and not text.isalnum():
         return True
-    # If it only consists of punctuation or whitespace
     punctuation_only_chars = set(".-_=`'\"!?,:;()[]{}|/\\ \n\t")
     if all(ch in punctuation_only_chars for ch in text):
         return True
@@ -155,11 +151,13 @@ def dedupe_and_markdown_sections(text: str) -> str:
     def push_current() -> None:
         if current["heading"] is None and not current["body"]:
             return
-        sections.append({
-            "heading": current["heading"],
-            "is_heading": current["is_heading"],
-            "body": list(current["body"]),
-        })
+        sections.append(
+            {
+                "heading": current["heading"],
+                "is_heading": current["is_heading"],
+                "body": list(current["body"]),
+            }
+        )
 
     for line in lines:
         is_md_heading = bool(re.match(r"^\s*#{1,6}\s+\S", line))
@@ -178,7 +176,9 @@ def dedupe_and_markdown_sections(text: str) -> str:
         body_lines = sec.get("body", [])
         body_text = collapse_repeated_sentences("\n".join(body_lines).strip())
         if heading:
-            canon_heading = re.sub(r"\s+", " ", re.sub(r"^#+\s*", "", heading).strip()).lower()
+            canon_heading = re.sub(
+                r"\s+", " ", re.sub(r"^#+\s*", "", heading).strip()
+            ).lower()
             key = (canon_heading, re.sub(r"\s+", " ", body_text).strip())
             if key in seen_sections:
                 continue
@@ -193,9 +193,17 @@ def dedupe_and_markdown_sections(text: str) -> str:
         if heading:
             cleaned_heading = re.sub(r"^#+\s*", "", heading).strip()
             if has_markdown_heading:
-                output.append(f"## {cleaned_heading}" if not heading.lstrip().startswith("#") else heading)
+                output.append(
+                    f"## {cleaned_heading}"
+                    if not heading.lstrip().startswith("#")
+                    else heading
+                )
             else:
-                output.append(f"# {cleaned_heading}" if heading_index == 0 else f"## {cleaned_heading}")
+                output.append(
+                    f"# {cleaned_heading}"
+                    if heading_index == 0
+                    else f"## {cleaned_heading}"
+                )
             heading_index += 1
         if body_lines:
             body_text = collapse_repeated_sentences("\n".join(body_lines).strip())
@@ -215,14 +223,26 @@ def finalize_user_visible_text(response_text: str, user_message: str) -> str:
 
     user_lower = str(user_message or "").lower()
     response = str(sanitized or "")
-    
-    article_triggers = ("full article", "write an article", "article on", "long-form", "blog post")
+
+    article_triggers = (
+        "full article",
+        "write an article",
+        "article on",
+        "long-form",
+        "blog post",
+    )
     should_enforce = any(trigger in user_lower for trigger in article_triggers)
-    
+
     if not should_enforce:
-        plain_heading_count = sum(1 for ln in response.splitlines() if is_plain_heading_line(ln))
-        markdown_heading_count = len(re.findall(r"(?m)^\s*#{1,6}\s+\S", response))
-        should_enforce = (plain_heading_count + markdown_heading_count) >= 4 and len(response) >= 500
+        plain_heading_count = sum(
+            1 for ln in response.splitlines() if is_plain_heading_line(ln)
+        )
+        markdown_heading_count = len(
+            re.findall(r"(?m)^\s*#{1,6}\s+\S", response)
+        )
+        should_enforce = (
+            plain_heading_count + markdown_heading_count
+        ) >= 4 and len(response) >= 500
 
     if should_enforce:
         return dedupe_and_markdown_sections(sanitized)
@@ -252,7 +272,16 @@ def normalize_processing_status(status: Any, default: str = "processing") -> str
 
 
 def normalize_session_id(session_id: Optional[str]) -> str:
-    """Return a UUID session id for downstream memory/orchestration services."""
+    """Return a stable UUID identity for a chat session.
+
+    Existing UUIDs are preserved. Legacy ``chat_<uuid>`` identifiers resolve to
+    that UUID. Application session identifiers that are not UUID-shaped are
+    deterministically mapped with UUIDv5 so repeated requests for the same
+    session resolve to the same durable conversation identity.
+
+    A missing session remains a new-session request and therefore receives a
+    fresh UUID.
+    """
     raw = str(session_id or "").strip()
     if not raw:
         return str(uuid.uuid4())
@@ -264,18 +293,10 @@ def normalize_session_id(session_id: Optional[str]) -> str:
     for candidate in candidates:
         try:
             return str(uuid.UUID(candidate))
-        except Exception:
+        except (ValueError, AttributeError, TypeError):
             continue
 
-    generated = str(uuid.uuid4())
-    logger.warning(
-        "Invalid session_id received; generated replacement.",
-        extra={
-            "provided_session_id": raw,
-            "normalized_session_id": generated,
-        },
-    )
-    return generated
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-karen:chat-session:{raw}"))
 
 
 def json_safe(value: Any) -> Any:
@@ -293,7 +314,6 @@ def json_safe(value: Any) -> Any:
 
 async def resolve_user_context(request: Any) -> Optional[Dict[str, Any]]:
     """Resolve user context from FastAPI request state or authenticated context."""
-    # First check request state (set by middleware)
     try:
         if (
             hasattr(request, "state")
@@ -304,7 +324,6 @@ async def resolve_user_context(request: Any) -> Optional[Dict[str, Any]]:
     except AttributeError:
         pass
 
-    # Best-effort fallback to dependency resolver
     try:
         from ai_karen_engine.core.services.dependencies import bypass_user_context_func
 
@@ -320,20 +339,20 @@ def is_production_env() -> bool:
 
 
 async def resolve_display_name(
-    auth_service: Any, user_id: str, request_context: Optional[Dict[str, Any]] = None
+    auth_service: Any,
+    user_id: str,
+    request_context: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Resolve the display name for a given user ID."""
     if not user_id:
         return None
 
-    # Fast path: Check context/request
     if request_context and isinstance(request_context, dict):
         if request_context.get("full_name"):
             return str(request_context["full_name"])
         if request_context.get("display_name"):
             return str(request_context["display_name"])
 
-    # Try the auth service
     if auth_service and hasattr(auth_service, "get_user_display_name"):
         try:
             return await auth_service.get_user_display_name(user_id)

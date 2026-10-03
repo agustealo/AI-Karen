@@ -2,6 +2,16 @@ name: Beta Live Model Smoke
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "scripts/beta_live_model_smoke.py"
+      - "scripts/ci/production-first-boot-smoke.sh"
+      - "src/ai_karen_engine/api_routes/chat/**"
+      - "src/ai_karen_engine/core/model_runtime/provider_execution.py"
+      - "src/ai_karen_engine/core/runtime/**"
+      - ".github/workflows/beta-live-model-smoke.yml"
   push:
     branches:
       - main
@@ -18,12 +28,13 @@ permissions:
 
 jobs:
   live-model-smoke:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on:
       - self-hosted
       - Windows
       - X64
       - karen-beta-model
-    timeout-minutes: 5
+    timeout-minutes: 25
     environment: beta-release
     env:
       BETA_MODEL_BASE_URL: ${{ vars.BETA_MODEL_BASE_URL }}
@@ -48,3 +59,23 @@ jobs:
 
       - name: Prove real local model inference
         run: python scripts/beta_live_model_smoke.py
+
+      - name: Verify production proof prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker version
+          bash -n scripts/ci/production-first-boot-smoke.sh
+
+      - name: Build exact production API image
+        run: docker build --target app --build-arg PROFILE=runtime -t ai-karen-api:beta-live .
+
+      - name: Prove production-backed two-turn KAREN chat
+        shell: bash
+        env:
+          KAREN_SMOKE_API_IMAGE: ai-karen-api:beta-live
+          KAREN_SMOKE_LIVE_MODEL_BASE_URL: ${{ vars.BETA_MODEL_BASE_URL }}
+          KAREN_SMOKE_LIVE_MODEL_PROVIDER: lmstudio-desktop
+          KAREN_SMOKE_LIVE_MODEL_NAME: ${{ vars.BETA_MODEL_NAME }}
+          KAREN_SMOKE_LIVE_MODEL_TIMEOUT_SECONDS: "90"
+        run: bash scripts/ci/production-first-boot-smoke.sh

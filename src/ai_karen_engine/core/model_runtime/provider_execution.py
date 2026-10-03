@@ -32,9 +32,6 @@ class ProviderExecutionError(RuntimeError):
 
 
 def _resolve_base_url(endpoint: ProviderEndpoint) -> str | None:
-    if endpoint.base_url:
-        return endpoint.base_url.rstrip("/")
-
     env_names = {
         RuntimeEngine.VLLM: ("VLLM_BASE_URL", "KAREN_VLLM_BASE_URL"),
         RuntimeEngine.LMSTUDIO: ("LMSTUDIO_BASE_URL", "LM_STUDIO_BASE_URL"),
@@ -52,6 +49,9 @@ def _resolve_base_url(endpoint: ProviderEndpoint) -> str | None:
         value = (os.getenv(env_name) or "").strip()
         if value:
             return value.rstrip("/")
+
+    if endpoint.base_url:
+        return endpoint.base_url.rstrip("/")
     return defaults.get(endpoint.runtime_engine)
 
 

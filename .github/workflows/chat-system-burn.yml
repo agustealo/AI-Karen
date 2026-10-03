@@ -20,6 +20,22 @@ jobs:
     timeout-minutes: 15
     env:
       PYTHONPATH: src
+      CHAT_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/ai_karen
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ai_karen
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ai_karen"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
 
     steps:
       - uses: actions/checkout@v4
@@ -61,6 +77,12 @@ jobs:
 
       - name: Run chat concurrency burn
         run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_concurrency_burn.py -q
+
+      - name: Run durable transcript continuity and tenant isolation proof
+        run: pytest tests/integration/test_chat_transcript_continuity.py -q
+
+      - name: Burn canonical transcript isolation against real PostgreSQL
+        run: pytest tests/integration/test_chat_transcript_postgres_isolation.py -q
 
       - name: Run provider authority contract
         run: pytest tests/architecture/test_provider_chat_authority.py -q

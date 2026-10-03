@@ -7,6 +7,7 @@ interface StatusIndicatorsProps {
   error: string | null;
   currentSession: Session | null;
   isLoading?: boolean;
+  isLocalRecoveryUnconfirmed?: boolean;
 }
 
 const reloadPage = () => {
@@ -24,6 +25,7 @@ export function StatusIndicators({
   error,
   currentSession,
   isLoading = false,
+  isLocalRecoveryUnconfirmed = false,
 }: StatusIndicatorsProps) {
   const errorMessage = getSafeErrorMessage(error);
   const shouldShowError = Boolean(errorMessage) && !isBackendOffline;
@@ -90,6 +92,25 @@ export function StatusIndicators({
           >
             Reload
           </button>
+        </div>
+      )}
+
+
+      {isLocalRecoveryUnconfirmed && !isBackendOffline && !shouldShowError && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="local-recovery-unconfirmed"
+          className="sticky top-0 z-10 flex items-center gap-3 border-b border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-700 shadow-sm ring-1 ring-amber-500/20 backdrop-blur-sm dark:text-amber-300"
+        >
+          <AlertCircle className="h-5 w-5 shrink-0" aria-hidden="true" />
+          <div className="flex flex-col gap-1">
+            <span className="font-medium">Local recovery only</span>
+            <span className="text-xs opacity-90">
+              Restored messages from this device are visible, but the server has not
+              confirmed them in durable conversation history yet.
+            </span>
+          </div>
         </div>
       )}
 

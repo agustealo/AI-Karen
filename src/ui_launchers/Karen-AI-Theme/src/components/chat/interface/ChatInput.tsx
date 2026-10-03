@@ -336,7 +336,7 @@ export function ChatInput({
 
       {/* Screen-reader help text stays colocated with the controls that reference it. */}
       <div className="sr-only">
-        <div id="starter-help">Get a suggested conversation starter from Karen AI</div>
+        <div id="starter-help">Get a suggested conversation starter from KAREN</div>
 
         <div id="mic-help">
           {speechRecognitionSupported
@@ -345,14 +345,14 @@ export function ChatInput({
         </div>
 
         <div id="input-help">
-          Type your message to Karen AI. Press Enter to send, Shift+Enter for new
+          Type your message to KAREN. Press Enter to send, Shift+Enter for new
           line.
         </div>
 
         <div id="submit-help">
           {showStopButton
             ? 'Stop the current AI response generation'
-            : 'Send your message to Karen AI'}
+            : 'Send your message to KAREN'}
         </div>
       </div>
     </div>

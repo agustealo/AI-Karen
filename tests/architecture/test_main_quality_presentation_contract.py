@@ -36,3 +36,11 @@ def test_web_dashboard_health_proxy_uses_canonical_backend_monitoring_route() ->
     assert "proxyToBackend(" in route
     assert "'/api/health'" in route
     assert "proxyToBackend(\n      nextRequest,\n      '/health'" not in route
+
+
+def test_main_quality_backend_fetches_full_history_for_provenance() -> None:
+    workflow = MAIN_QUALITY_WORKFLOW.read_text(encoding="utf-8")
+    backend = workflow.split("  backend-quality:", 1)[1].split("  frontend-quality:", 1)[0]
+
+    assert "uses: actions/checkout@v4" in backend
+    assert "fetch-depth: 0" in backend

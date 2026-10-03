@@ -145,16 +145,6 @@ class ReasoningEvidence:
             if value is not None:
                 setattr(self, name, _utc(value))
 
-    @property
-    def timestamp(self) -> float:
-        """Deprecated compatibility view; use recorded_at."""
-        return self.recorded_at.timestamp()
-
-    @property
-    def valid_at(self) -> str | None:
-        """Deprecated compatibility view; use valid_from."""
-        return self.valid_from.isoformat() if self.valid_from else None
-
 
 @dataclass(slots=True)
 class ReasoningHypothesis:

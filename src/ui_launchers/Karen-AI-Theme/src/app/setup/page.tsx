@@ -125,7 +125,7 @@ export default function SetupPage() {
                   <Brain className="h-6 w-6 text-primary" />
                 </div>
                 <div>
-                  <p className="font-semibold">Karen AI</p>
+                  <p className="font-semibold">KAREN</p>
                   <p className="text-sm text-muted-foreground">Private-first runtime setup</p>
                 </div>
               </div>

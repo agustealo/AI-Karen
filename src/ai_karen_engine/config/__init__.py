@@ -11,6 +11,11 @@ from .config_asset_loaders import (
     load_performance_config,
     load_deployment_config,
 )
+from .conversation import (
+    ConversationContextSettings,
+    get_conversation_context_settings,
+    reset_conversation_context_settings,
+)
 from .runtime import (
     Environment,
     RuntimeEngine,
@@ -39,6 +44,9 @@ __all__ = [
     "SecuritySettings",
     "Environment",
     "RuntimeEngine",
+    "ConversationContextSettings",
+    "get_conversation_context_settings",
+    "reset_conversation_context_settings",
     "get_runtime_settings",
     "reload_runtime_settings",
     "validate_runtime_settings",

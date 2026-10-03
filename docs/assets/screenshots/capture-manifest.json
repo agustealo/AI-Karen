@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "source": "real-running-application",
+  "authenticated": true,
+  "account_kind": "sanitized-demo",
+  "capture_harness_git_sha": "87213d021e4f30987c222fa716ddce3edce8c9fc",
+  "target_revision": "9980fb0bbcf52d162c53278d759c6632dc416a24",
+  "target_revision_attestation": "operator-supplied",
+  "captured_at": "2026-10-02T11:53:07.710Z",
+  "browser": "chromium 147.0.7727.15",
+  "viewport": {
+    "width": 1600,
+    "height": 1000
+  },
+  "color_scheme": "dark",
+  "policy": {
+    "mocked_responses": false,
+    "generated_ui": false,
+    "fixture_only_state": false,
+    "production_or_personal_data": false,
+    "presentation_ready_state_required": true,
+    "retired_visible_brand_forbidden": true
+  },
+  "files": [
+    "01-chat-runtime.png",
+    "02-agents-overview.png",
+    "03-plugin-ecosystem.png",
+    "04-comms-center.png",
+    "05-settings-and-models.png"
+  ]
+}

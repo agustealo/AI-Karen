@@ -112,14 +112,6 @@ class ExecutionDecision:
         ):
             self.graph_required = True
 
-        # Compatibility bridge for the pre-convergence ChatRuntime persistence
-        # call site. EVIDENCE-1 removes this bridge once ChatRuntime persists from
-        # memory_write_allowed independently of recall relevance.
-        if self.memory_write_allowed and not self.memory_recall_required:
-            self.memory_recall_required = True
-            if "compat_memory_write_requires_recall" not in self.reason_codes:
-                self.reason_codes.append("compat_memory_write_requires_recall")
-
     @property
     def is_graph_required(self) -> bool:
         return bool(self.graph_required) or self.topology in {
