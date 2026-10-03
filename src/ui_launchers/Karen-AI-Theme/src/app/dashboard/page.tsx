@@ -22,6 +22,7 @@ import {
   SettingsIcon as SettingsIconLucide,
   SlidersHorizontal,
   UserCircle,
+  Trophy,
 } from "lucide-react";
 
 import { AuthWrapper } from "@/components/AuthWrapper";
@@ -35,6 +36,7 @@ import TasksPage from "@/components/automation/TasksPage";
 import JobsPage from "@/components/automation/JobsPage";
 import CronJobsPage from "@/components/automation/CronJobsPage";
 import AccountPage from "@/components/account/AccountPage";
+import GrowthPage from "@/components/growth/GrowthPage";
 import ChatInterface, {
   SessionProvider,
 } from "@/components/chat/ChatInterface";
@@ -71,6 +73,7 @@ type ActiveView =
   | "chat"
   | "commsCenter"
   | "account"
+  | "growth"
   | "settings"
   | "agentsOverview"
   | "agents"
@@ -114,6 +117,7 @@ const PRIMARY_NAV: Array<{
     section: "Personal",
     items: [
       { key: "account", label: "My Account", icon: UserCircle },
+      { key: "growth", label: "Growth", icon: Trophy },
       {
         key: "settings",
         label: "Application Settings",
@@ -288,6 +292,7 @@ export default function DashboardPage() {
       cronJobs: <CronJobsPage />,
       commsCenter: <CommsCenterPage />,
       account: <AccountPage />,
+      growth: <GrowthPage />,
     }),
     [],
   );

@@ -126,11 +126,14 @@ jobs:
           pytest tests/architecture/test_http_transport_authority.py -q
           pytest tests/architecture/test_rate_limit_identity_authority.py -q
           pytest tests/architecture/test_public_scheme_authority.py -q
+          pytest tests/architecture/test_reward_progress_authority.py -q
 
       - name: Runtime evidence authority proofs
         run: |
           pytest tests/core/runtime/test_context_evidence_contracts.py -q
           pytest tests/core/runtime/test_runtime_evidence_resolution.py -q
+          pytest tests/core/runtime/test_outcome_store_contract.py -q
+          pytest tests/core/intelligence/test_reward_progress.py -q
 
       - name: Classifier burn contracts
         run: |

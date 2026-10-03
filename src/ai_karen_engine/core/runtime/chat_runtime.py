@@ -89,7 +89,7 @@ class ChatRuntime:
         self._composition = composition or get_runtime_composition()
         self._conversation_gateway = conversation_gateway
         self._trajectory_recorder = TrajectoryRecorder()
-        self._outcome_recorder = OutcomeRecorder()
+        self._outcome_recorder = OutcomeRecorder(store=self._composition.outcome_store)
         self._emitter = get_observability_emitter()
 
     async def get_orchestrator(self) -> Any:
@@ -212,6 +212,7 @@ class ChatRuntime:
                     meter,
                     memory_recall_meta,
                     success=False,
+                    provider_meta=provider_meta or {},
                 )
                 return fallback
             self._record_trajectory_completion(
@@ -232,6 +233,7 @@ class ChatRuntime:
                 meter,
                 memory_recall_meta,
                 success=False,
+                provider_meta={},
             )
             return ChatExecutionResult(
                 answer="",
@@ -266,6 +268,7 @@ class ChatRuntime:
             meter,
             memory_recall_meta,
             success=True,
+            provider_meta=provider_meta,
         )
 
         self._emitter.emit(
@@ -587,6 +590,7 @@ class ChatRuntime:
             memory_recall_meta,
             success=success,
             transcript_meta=transcript_meta,
+            provider_meta=provider_meta,
         )
 
         terminal_metadata = self._build_stream_terminal_metadata(
@@ -1745,6 +1749,7 @@ class ChatRuntime:
         memory_meta: Dict[str, Any],
         success: bool,
         transcript_meta: Optional[Dict[str, Any]] = None,
+        provider_meta: Optional[Dict[str, Any]] = None,
     ) -> None:
         from ai_karen_engine.core.runtime.outcome.contracts import ExecutionStatus
 
@@ -1764,7 +1769,7 @@ class ChatRuntime:
                 ExecutionStatus.SUCCESS if success else ExecutionStatus.FAILURE
             ),
             latency_ms=latency_ms,
-            fallback_count=0,
+            fallback_count=int((provider_meta or {}).get("fallback_level", 0) or 0),
             response_completed=bool(text),
             persistence_success=persistence_success,
             metadata={
