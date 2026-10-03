@@ -151,19 +151,6 @@ class LearningRewardVector:
     verification_value: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def aggregate(self) -> float:
-        raw = (
-            self.task_success
-            + self.user_satisfaction
-            + self.correctness
-            + self.efficiency
-            + self.safety
-            + self.verification_value
-        )
-        penalties = self.cost + self.latency + self.clarification_cost
-        return max(0.0, min(1.0, raw - penalties))
-
-
 @dataclass(slots=True)
 class LearningFailureClassification:
     """Classification of learning failure."""
