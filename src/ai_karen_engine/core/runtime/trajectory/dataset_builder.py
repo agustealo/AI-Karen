@@ -18,8 +18,8 @@ from ai_karen_engine.core.contracts.learning import (
     LearningExample,
     LearningTask,
 )
-from src.ai_karen_engine.platform.observability.contracts import EventType as RuntimeEventType
-from src.ai_karen_engine.platform.observability import emit_event as _emit_event
+from ai_karen_engine.platform.observability.contracts import EventType as RuntimeEventType
+from ai_karen_engine.platform.observability import emit_event as _emit_event
 from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
     DecisionObservation,
     DecisionType,
@@ -203,7 +203,8 @@ class LearningDatasetBuilder:
                     trajectory.trajectory_id
                 )
                 outcomes = self._outcome_store.get_for_trajectory(
-                    trajectory.trajectory_id
+                    trajectory.trajectory_id,
+                    tenant_id=query.tenant_scope,
                 )
                 for observation in observations:
                     if _DECISION_TYPE_TO_TASK.get(observation.decision_type) != query.task:

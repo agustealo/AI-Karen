@@ -46,8 +46,8 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
 )
 from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
 from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
-from src.ai_karen_engine.platform.observability import get_observability_emitter
-from src.ai_karen_engine.platform.observability.contracts import EventType as RuntimeEventType
+from ai_karen_engine.platform.observability import get_observability_emitter
+from ai_karen_engine.platform.observability.contracts import EventType as RuntimeEventType
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk
 from ai_karen_engine.utils.chat_helpers import normalize_session_id as normalize_chat_session_id
 from ai_karen_engine.core.expression.contracts import ExpressionTask
@@ -89,7 +89,7 @@ class ChatRuntime:
         self._composition = composition or get_runtime_composition()
         self._conversation_gateway = conversation_gateway
         self._trajectory_recorder = TrajectoryRecorder()
-        self._outcome_recorder = OutcomeRecorder()
+        self._outcome_recorder = OutcomeRecorder(store=self._composition.outcome_store)
         self._emitter = get_observability_emitter()
 
     async def get_orchestrator(self) -> Any:
@@ -204,7 +204,7 @@ class ChatRuntime:
                     memory_recall_meta,
                     error=f"fallback:{error_type}",
                 )
-                self._record_execution_outcome(
+                await self._record_execution_outcome(
                     trajectory.trajectory_id,
                     decision,
                     fallback.answer,
@@ -212,6 +212,7 @@ class ChatRuntime:
                     meter,
                     memory_recall_meta,
                     success=False,
+                    provider_meta=provider_meta or {},
                 )
                 return fallback
             self._record_trajectory_completion(
@@ -224,7 +225,7 @@ class ChatRuntime:
                 memory_recall_meta,
                 error="all_execution_paths_failed",
             )
-            self._record_execution_outcome(
+            await self._record_execution_outcome(
                 trajectory.trajectory_id,
                 decision,
                 "",
@@ -232,6 +233,7 @@ class ChatRuntime:
                 meter,
                 memory_recall_meta,
                 success=False,
+                provider_meta={},
             )
             return ChatExecutionResult(
                 answer="",
@@ -258,7 +260,7 @@ class ChatRuntime:
             provider_meta,
             memory_recall_meta,
         )
-        self._record_execution_outcome(
+        await self._record_execution_outcome(
             trajectory.trajectory_id,
             decision,
             text,
@@ -266,6 +268,7 @@ class ChatRuntime:
             meter,
             memory_recall_meta,
             success=True,
+            provider_meta=provider_meta,
         )
 
         self._emitter.emit(
@@ -280,7 +283,7 @@ class ChatRuntime:
             memory_recall_count=memory_recall_meta.get("memory_recall_count", 0),
         )
 
-        return self._build_result(
+        result = self._build_result(
             request,
             decision,
             provider_meta,
@@ -289,6 +292,8 @@ class ChatRuntime:
             text,
             latency_ms,
         )
+        result.metadata.extra["trajectory_id"] = trajectory.trajectory_id
+        return result
 
     async def execute_stream(
         self, request: ChatExecutionRequest
@@ -553,6 +558,7 @@ class ChatRuntime:
                 request,
                 streamed_text,
                 provider_meta,
+                trajectory_id=trajectory.trajectory_id,
             )
         transcript_meta = transcript_result.to_metadata()
         transcript_persistence_failed = transcript_result.status in {
@@ -578,7 +584,7 @@ class ChatRuntime:
                 else None
             ),
         )
-        self._record_execution_outcome(
+        await self._record_execution_outcome(
             trajectory.trajectory_id,
             decision,
             streamed_text,
@@ -587,6 +593,7 @@ class ChatRuntime:
             memory_recall_meta,
             success=success,
             transcript_meta=transcript_meta,
+            provider_meta=provider_meta,
         )
 
         terminal_metadata = self._build_stream_terminal_metadata(
@@ -602,6 +609,7 @@ class ChatRuntime:
             memory_persistence_failed=memory_persistence_failed,
             transcript_persistence_failed=transcript_persistence_failed,
         )
+        terminal_metadata["trajectory_id"] = trajectory.trajectory_id
 
         self._emitter.emit(
             RuntimeEventType.REQUEST_COMPLETED,
@@ -649,6 +657,8 @@ class ChatRuntime:
         request: ChatExecutionRequest,
         response_text: str,
         provider_meta: Dict[str, Any],
+        *,
+        trajectory_id: str | None = None,
     ) -> TranscriptPersistenceResult:
         """Persist one completed turn through the canonical transcript owner."""
         ctx = request.context
@@ -689,9 +699,12 @@ class ChatRuntime:
             user_text=self._extract_user_message(request.messages),
             assistant_text=response_text,
             response_metadata={
-                key: value
-                for key, value in provider_meta.items()
-                if key in _CANONICAL_META_KEYS
+                **{
+                    key: value
+                    for key, value in provider_meta.items()
+                    if key in _CANONICAL_META_KEYS
+                },
+                **({"trajectory_id": trajectory_id} if trajectory_id else {}),
             },
         )
 
@@ -1735,7 +1748,7 @@ class ChatRuntime:
             response_source=provider_meta.get("response_source"),
         )
 
-    def _record_execution_outcome(
+    async def _record_execution_outcome(
         self,
         trajectory_id: Optional[str],
         decision: ExecutionDecision,
@@ -1745,6 +1758,7 @@ class ChatRuntime:
         memory_meta: Dict[str, Any],
         success: bool,
         transcript_meta: Optional[Dict[str, Any]] = None,
+        provider_meta: Optional[Dict[str, Any]] = None,
     ) -> None:
         from ai_karen_engine.core.runtime.outcome.contracts import ExecutionStatus
 
@@ -1754,17 +1768,28 @@ class ChatRuntime:
             "transcript_persistence_status",
             "skipped",
         )
-        persistence_success = (
-            memory_status != "failed"
-            and transcript_status not in {"failed", "rejected"}
+        persistence_failure = (
+            memory_status == "failed"
+            or transcript_status in {"failed", "rejected"}
         )
-        self._outcome_recorder.record_execution_outcome(
+        durable_write_proven = (
+            memory_status == "persisted"
+            or transcript_status in {"persisted", "already_persisted"}
+        )
+        persistence_success: Optional[bool]
+        if persistence_failure:
+            persistence_success = False
+        elif durable_write_proven:
+            persistence_success = True
+        else:
+            persistence_success = None
+        await self._outcome_recorder.record_execution_outcome_async(
             trajectory_id=trajectory_id,
             status=(
                 ExecutionStatus.SUCCESS if success else ExecutionStatus.FAILURE
             ),
             latency_ms=latency_ms,
-            fallback_count=0,
+            fallback_count=int((provider_meta or {}).get("fallback_level", 0) or 0),
             response_completed=bool(text),
             persistence_success=persistence_success,
             metadata={

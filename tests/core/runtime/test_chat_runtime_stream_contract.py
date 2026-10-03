@@ -223,6 +223,7 @@ async def test_execute_stream_assigns_canonical_sequence_and_ids():
     assert len(gateway.calls) == 1
     assert gateway.calls[0]["user_text"] == "hello"
     assert gateway.calls[0]["assistant_text"] == "Hello world"
+    assert gateway.calls[0]["response_metadata"]["trajectory_id"]
 
 
 @pytest.mark.asyncio

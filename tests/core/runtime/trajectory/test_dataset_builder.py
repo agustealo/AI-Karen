@@ -371,3 +371,45 @@ class TestDatasetBuilderSecurity:
         assert "user_id" not in result.examples[0].features
         # But traceability is preserved in metadata.
         assert result.examples[0].metadata["tenant_id"] == "tenant_a"
+
+
+
+def test_dataset_builder_passes_tenant_scope_to_outcome_store() -> None:
+    class ScopedOutcomeStore(InMemoryOutcomeStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[tuple[str, str | None]] = []
+
+        def get_for_trajectory(
+            self,
+            trajectory_id: str,
+            *,
+            tenant_id: str | None = None,
+        ) -> list[dict]:
+            self.calls.append((trajectory_id, tenant_id))
+            return super().get_for_trajectory(
+                trajectory_id,
+                tenant_id=tenant_id,
+            )
+
+    tstore = InMemoryTrajectoryStore()
+    ostore = ScopedOutcomeStore()
+    _build_record(
+        tstore,
+        ostore,
+        trajectory_id="traj_scope",
+        tenant_id="tenant_a",
+        executed_topology="reasoning",
+        chosen_action="REASONING",
+        eligible_actions=("REASONING",),
+        candidate_actions=("REASONING",),
+    )
+
+    LearningDatasetBuilder(tstore, ostore).build(
+        LearningDatasetQuery(
+            task=LearningTask.EXECUTION_TOPOLOGY,
+            tenant_scope="tenant_a",
+        )
+    )
+
+    assert ostore.calls == [("traj_scope", "tenant_a")]

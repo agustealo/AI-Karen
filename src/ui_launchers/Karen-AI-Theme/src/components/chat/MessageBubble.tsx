@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChatMessage } from '@/lib/types';
 import type { SuggestedAction } from '@/lib/agent-ui/service';
+import { apiClient } from '@/lib/api';
 import Image from 'next/image';
 import { format } from 'date-fns';
 import {
@@ -150,8 +151,10 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [feedback, setFeedback] = useState<FeedbackValue>(null);
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
 
   const responseDetailsId = `response-details-${message.id}`;
+  const feedbackTrajectoryId = String(message.metadata?.trajectory_id || '').trim();
   const normalizedContent = useMemo(
     () => sanitizeChatContent(message.content),
     [message.content],
@@ -275,20 +278,40 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
 
   const handleFeedback = useCallback(
     async (type: Exclude<FeedbackValue, null>) => {
-      const nextFeedback = feedback === type ? null : type;
-      setFeedback(nextFeedback);
-
-      if (!nextFeedback || feedbackSubmitted) {
+      if (feedbackSubmitted || feedback === type) {
         return;
       }
 
-      /*
-       * Feedback remains UI-local until the backend feedback endpoint is wired.
-       * Do not fake provider/runtime metadata from this control.
-       */
+      if (!feedbackTrajectoryId) {
+        setFeedbackError('Feedback is unavailable for this response because runtime evidence is missing.');
+        return;
+      }
+
+      const previousFeedback = feedback;
+      setFeedback(type);
+      setFeedbackError(null);
       setFeedbackSubmitted(true);
+
+      try {
+        await apiClient.post('/api/progress/feedback', {
+          trajectory_id: feedbackTrajectoryId,
+          feedback_type: type === 'up' ? 'thumbs_up' : 'thumbs_down',
+          message_id: String(message.metadata?.assistant_message_id || message.id),
+        });
+      } catch (error) {
+        console.error('Failed to persist response feedback:', error);
+        setFeedback(previousFeedback);
+        setFeedbackSubmitted(false);
+        setFeedbackError('Feedback was not saved. Try again.');
+      }
     },
-    [feedback, feedbackSubmitted],
+    [
+      feedback,
+      feedbackSubmitted,
+      feedbackTrajectoryId,
+      message.id,
+      message.metadata?.assistant_message_id,
+    ],
   );
 
   return (
@@ -682,7 +705,7 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                   }
                   aria-pressed={feedback === 'up'}
                   title="Thumbs Up"
-                  disabled={feedbackSubmitted}
+                  disabled={feedbackSubmitted || !feedbackTrajectoryId}
                 >
                   <ThumbsUp
                     className={`h-3.5 w-3.5 ${
@@ -709,7 +732,7 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                   }
                   aria-pressed={feedback === 'down'}
                   title="Thumbs Down"
-                  disabled={feedbackSubmitted}
+                  disabled={feedbackSubmitted || !feedbackTrajectoryId}
                 >
                   <ThumbsDown
                     className={`h-3.5 w-3.5 ${
@@ -718,6 +741,12 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                     aria-hidden="true"
                   />
                 </button>
+
+                {feedbackError && (
+                  <span className="text-[10px] text-rose-500" role="status">
+                    {feedbackError}
+                  </span>
+                )}
 
                 <button
                   type="button"
