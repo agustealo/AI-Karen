@@ -57,3 +57,11 @@ def test_chat_feedback_is_backend_persisted_not_ui_local() -> None:
     assert "/api/progress/feedback" in source
     assert "Feedback remains UI-local" not in source
     assert "trajectory_id" in source
+
+
+def test_chat_runtime_uses_async_outcome_persistence() -> None:
+    source = (ROOT / "src/ai_karen_engine/core/runtime/chat_runtime.py").read_text(encoding="utf-8")
+    store = (ROOT / "src/ai_karen_engine/core/runtime/outcome/store.py").read_text(encoding="utf-8")
+    assert "await self._outcome_recorder.record_execution_outcome_async(" in source
+    assert "async_transaction_scope" in store
+    assert "async def save_outcome_async" in store

@@ -204,7 +204,7 @@ class ChatRuntime:
                     memory_recall_meta,
                     error=f"fallback:{error_type}",
                 )
-                self._record_execution_outcome(
+                await self._record_execution_outcome(
                     trajectory.trajectory_id,
                     decision,
                     fallback.answer,
@@ -225,7 +225,7 @@ class ChatRuntime:
                 memory_recall_meta,
                 error="all_execution_paths_failed",
             )
-            self._record_execution_outcome(
+            await self._record_execution_outcome(
                 trajectory.trajectory_id,
                 decision,
                 "",
@@ -260,7 +260,7 @@ class ChatRuntime:
             provider_meta,
             memory_recall_meta,
         )
-        self._record_execution_outcome(
+        await self._record_execution_outcome(
             trajectory.trajectory_id,
             decision,
             text,
@@ -583,7 +583,7 @@ class ChatRuntime:
                 else None
             ),
         )
-        self._record_execution_outcome(
+        await self._record_execution_outcome(
             trajectory.trajectory_id,
             decision,
             streamed_text,
@@ -1742,7 +1742,7 @@ class ChatRuntime:
             response_source=provider_meta.get("response_source"),
         )
 
-    def _record_execution_outcome(
+    async def _record_execution_outcome(
         self,
         trajectory_id: Optional[str],
         decision: ExecutionDecision,
@@ -1777,7 +1777,7 @@ class ChatRuntime:
             persistence_success = True
         else:
             persistence_success = None
-        self._outcome_recorder.record_execution_outcome(
+        await self._outcome_recorder.record_execution_outcome_async(
             trajectory_id=trajectory_id,
             status=(
                 ExecutionStatus.SUCCESS if success else ExecutionStatus.FAILURE

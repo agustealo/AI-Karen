@@ -53,6 +53,8 @@ interface RewardProgressResponse {
   progress_index: number;
   average_quality: number;
   evidence_count: number;
+  completed_outcome_count: number;
+  observed_outcome_count: number;
   quality_run: number;
   dimensions: Record<string, number>;
   dimension_coverage: Record<string, number>;
@@ -223,8 +225,9 @@ export default function GrowthPage() {
           </CardHeader>
           <CardContent>
             <p className="text-xs text-muted-foreground">
-              Confidence-weighted across {progress.evidence_count} completed outcome
-              {progress.evidence_count === 1 ? "" : "s"}.
+              Confidence-weighted across {progress.completed_outcome_count} completed outcome
+              {progress.completed_outcome_count === 1 ? "" : "s"} from {progress.observed_outcome_count} observed attempt
+              {progress.observed_outcome_count === 1 ? "" : "s"}.
             </p>
           </CardContent>
         </Card>
@@ -352,9 +355,9 @@ export default function GrowthPage() {
             {progress.recent_evidence.length === 0 ? (
               <div className="rounded-xl border border-dashed p-6 text-center">
                 <Trophy className="mx-auto h-7 w-7 text-muted-foreground" />
-                <p className="mt-2 text-sm font-medium">No outcome evidence yet</p>
+                <p className="mt-2 text-sm font-medium">No completed outcome evidence yet</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Complete real work through KAREN and durable evidence will appear here.
+                  Failed attempts remain observable but do not earn Growth progress.
                 </p>
               </div>
             ) : (

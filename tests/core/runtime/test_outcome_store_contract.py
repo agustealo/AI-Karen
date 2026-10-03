@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from ai_karen_engine.platform.observability.context import (
     CorrelationContext,
     reset_correlation_context,
@@ -65,3 +67,43 @@ def test_recorder_reports_stored_when_store_accepts_record() -> None:
         reset_correlation_context(token)
     assert payload["outcome_store_status"] == "stored"
     assert len(store.list_for_tenant("t1", user_id="u1")) == 1
+
+
+
+class AsyncTrackingStore(OutcomeStore):
+    def __init__(self) -> None:
+        self.async_calls = 0
+
+    def save_outcome(self, payload):
+        raise AssertionError("sync save must not run on async runtime path")
+
+    async def save_outcome_async(self, payload):
+        self.async_calls += 1
+
+    def get_for_trajectory(self, trajectory_id, *, tenant_id=None):
+        return []
+
+    def list_for_tenant(self, tenant_id, *, limit=100, user_id=None):
+        return []
+
+
+@pytest.mark.asyncio
+async def test_async_recorder_uses_async_store_path() -> None:
+    store = AsyncTrackingStore()
+    token = set_correlation_context(
+        CorrelationContext(
+            correlation_id="corr-async",
+            tenant_id="t1",
+            user_id="u1",
+        )
+    )
+    try:
+        payload = await OutcomeRecorder(store=store).record_execution_outcome_async(
+            trajectory_id="traj-async",
+            status=ExecutionStatus.SUCCESS,
+        )
+    finally:
+        reset_correlation_context(token)
+
+    assert store.async_calls == 1
+    assert payload["outcome_store_status"] == "stored"

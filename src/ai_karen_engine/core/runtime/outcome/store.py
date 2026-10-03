@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from ai_karen_engine.persistence.postgres.transactions import transaction_scope
+from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope, transaction_scope
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,17 @@ class OutcomeStore(ABC):
     @abstractmethod
     def save_outcome(self, payload: dict[str, Any]) -> None:
         """Persist an outcome payload."""
+
+    async def save_outcome_async(self, payload: dict[str, Any]) -> None:
+        """Persist without blocking an async runtime path.
+
+        Stores with native async I/O should override this method. The default
+        delegates synchronous adapters to a worker thread so they cannot block
+        the event loop.
+        """
+        import asyncio
+
+        await asyncio.to_thread(self.save_outcome, payload)
 
     @abstractmethod
     def get_for_trajectory(
@@ -107,70 +118,110 @@ class PostgresOutcomeStore(OutcomeStore):
                 return parsed
         raise OutcomeStoreError("Stored outcome payload is not a JSON object")
 
-    def save_outcome(self, payload: dict[str, Any]) -> None:
-        tenant_id = self._require_tenant(payload.get("tenant_id"))
+    @staticmethod
+    def _insert_statement():
+        return text(
+            """
+            INSERT INTO public.outcome_records (
+                outcome_id,
+                trajectory_id,
+                decision_observation_id,
+                request_id,
+                correlation_id,
+                message_id,
+                conversation_id,
+                session_id,
+                tenant_id,
+                user_id,
+                source,
+                recorded_at,
+                payload
+            ) VALUES (
+                :outcome_id,
+                :trajectory_id,
+                :decision_observation_id,
+                :request_id,
+                :correlation_id,
+                :message_id,
+                :conversation_id,
+                :session_id,
+                CAST(:tenant_id AS uuid),
+                NULLIF(:user_id, '')::uuid,
+                :source,
+                COALESCE(CAST(:recorded_at AS timestamptz), now()),
+                CAST(:payload AS jsonb)
+            )
+            ON CONFLICT (outcome_id) DO NOTHING
+            """
+        )
+
+    @staticmethod
+    def _insert_params(
+        payload: dict[str, Any],
+        *,
+        tenant_id: str,
+        source: str,
+    ) -> dict[str, Any]:
+        return {
+            "outcome_id": payload.get("outcome_id"),
+            "trajectory_id": payload.get("trajectory_id"),
+            "decision_observation_id": payload.get("decision_observation_id"),
+            "request_id": payload.get("request_id"),
+            "correlation_id": payload.get("correlation_id"),
+            "message_id": payload.get("message_id"),
+            "conversation_id": payload.get("conversation_id"),
+            "session_id": payload.get("session_id"),
+            "tenant_id": tenant_id,
+            "user_id": str(payload.get("user_id") or ""),
+            "source": source,
+            "recorded_at": payload.get("recorded_at"),
+            "payload": json.dumps(payload, default=str),
+        }
+
+    @staticmethod
+    def _validated_identity(payload: dict[str, Any]) -> tuple[str, str]:
+        tenant_id = PostgresOutcomeStore._require_tenant(payload.get("tenant_id"))
         source = str(payload.get("source") or "").strip()
         if source not in {"runtime.execution", "user.feedback"}:
             raise OutcomeStoreError(f"Unsupported outcome source: {source or 'missing'}")
+        return tenant_id, source
 
+    def save_outcome(self, payload: dict[str, Any]) -> None:
+        tenant_id, source = self._validated_identity(payload)
         try:
             with transaction_scope(tenant_id) as session:
                 session.execute(
-                    text(
-                        """
-                        INSERT INTO public.outcome_records (
-                            outcome_id,
-                            trajectory_id,
-                            decision_observation_id,
-                            request_id,
-                            correlation_id,
-                            message_id,
-                            conversation_id,
-                            session_id,
-                            tenant_id,
-                            user_id,
-                            source,
-                            recorded_at,
-                            payload
-                        ) VALUES (
-                            :outcome_id,
-                            :trajectory_id,
-                            :decision_observation_id,
-                            :request_id,
-                            :correlation_id,
-                            :message_id,
-                            :conversation_id,
-                            :session_id,
-                            CAST(:tenant_id AS uuid),
-                            NULLIF(:user_id, '')::uuid,
-                            :source,
-                            COALESCE(CAST(:recorded_at AS timestamptz), now()),
-                            CAST(:payload AS jsonb)
-                        )
-                        ON CONFLICT (outcome_id) DO NOTHING
-                        """
-                    ),
-                    {
-                        "outcome_id": payload.get("outcome_id"),
-                        "trajectory_id": payload.get("trajectory_id"),
-                        "decision_observation_id": payload.get("decision_observation_id"),
-                        "request_id": payload.get("request_id"),
-                        "correlation_id": payload.get("correlation_id"),
-                        "message_id": payload.get("message_id"),
-                        "conversation_id": payload.get("conversation_id"),
-                        "session_id": payload.get("session_id"),
-                        "tenant_id": tenant_id,
-                        "user_id": str(payload.get("user_id") or ""),
-                        "source": source,
-                        "recorded_at": payload.get("recorded_at"),
-                        "payload": json.dumps(payload, default=str),
-                    },
+                    self._insert_statement(),
+                    self._insert_params(payload, tenant_id=tenant_id, source=source),
                 )
         except OutcomeStoreError:
             raise
         except Exception as exc:
             logger.exception(
                 "outcome.store.save_failed",
+                extra={
+                    "outcome_id": payload.get("outcome_id"),
+                    "tenant_id": tenant_id,
+                    "user_id": payload.get("user_id"),
+                    "source": source,
+                },
+            )
+            raise OutcomeStoreError("Outcome persistence failed") from exc
+
+    async def save_outcome_async(self, payload: dict[str, Any]) -> None:
+        """Persist through SQLAlchemy's async engine on async runtime paths."""
+        tenant_id, source = self._validated_identity(payload)
+        try:
+            async with async_transaction_scope(tenant_id) as session:
+                await session.execute(
+                    self._insert_statement(),
+                    self._insert_params(payload, tenant_id=tenant_id, source=source),
+                )
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "outcome.store.async_save_failed",
                 extra={
                     "outcome_id": payload.get("outcome_id"),
                     "tenant_id": tenant_id,

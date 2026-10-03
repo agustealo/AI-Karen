@@ -77,6 +77,8 @@ class RewardProgressSnapshot:
     progress_index: float
     average_quality: float
     evidence_count: int
+    completed_outcome_count: int
+    observed_outcome_count: int
     quality_run: int
     dimensions: dict[str, float]
     dimension_coverage: dict[str, float]
@@ -91,6 +93,8 @@ class RewardProgressSnapshot:
             "progress_index": round(self.progress_index, 1),
             "average_quality": round(self.average_quality, 1),
             "evidence_count": self.evidence_count,
+            "completed_outcome_count": self.completed_outcome_count,
+            "observed_outcome_count": self.observed_outcome_count,
             "quality_run": self.quality_run,
             "dimensions": {key: round(value * 100.0, 1) for key, value in self.dimensions.items()},
             "dimension_coverage": {
@@ -130,10 +134,16 @@ class RewardProjector:
                 self._score_execution(record, feedback_by_trajectory.get(trajectory_id, []))
             )
 
+        completed_evidence = [
+            item
+            for item in evidence
+            if item.dimensions.get("completion") == 1.0
+        ]
+
         dimension_values: dict[str, list[float]] = {
             key: [] for key in self._policy.weights
         }
-        for item in evidence:
+        for item in completed_evidence:
             for key, value in item.dimensions.items():
                 dimension_values.setdefault(key, []).append(value)
 
@@ -142,21 +152,25 @@ class RewardProjector:
             for key, values in dimension_values.items()
             if values
         }
-        total = max(1, len(evidence))
+        completed_total = max(1, len(completed_evidence))
         coverage = {
-            key: len(values) / total
+            key: len(values) / completed_total
             for key, values in dimension_values.items()
         }
 
-        average_quality = self._confidence_weighted_average(evidence)
+        average_quality = self._confidence_weighted_average(completed_evidence)
         progress_index = 0.0
-        if evidence:
-            evidence_depth = min(1.0, len(evidence) / 25.0)
+        if completed_evidence:
+            evidence_depth = min(1.0, len(completed_evidence) / 25.0)
             progress_index = min(100.0, average_quality * 0.8 + evidence_depth * 20.0)
 
         quality_run = self._quality_run(evidence)
-        level = self._level(evidence, average_quality, quality_run)
-        milestones = self._milestones(evidence, quality_run)
+        level = self._level(
+            completed_count=len(completed_evidence),
+            average_quality=average_quality,
+            quality_run=quality_run,
+        )
+        milestones = self._milestones(completed_evidence, quality_run)
 
         return RewardProgressSnapshot(
             policy_id=self._policy.policy_id,
@@ -164,12 +178,14 @@ class RewardProjector:
             level=level,
             progress_index=progress_index,
             average_quality=average_quality,
-            evidence_count=len(evidence),
+            evidence_count=len(completed_evidence),
+            completed_outcome_count=len(completed_evidence),
+            observed_outcome_count=len(evidence),
             quality_run=quality_run,
             dimensions=dimensions,
             dimension_coverage=coverage,
             milestones=tuple(milestones),
-            recent_evidence=tuple(reversed(evidence[-8:])),
+            recent_evidence=tuple(reversed(completed_evidence[-8:])),
             generated_at=datetime.utcnow().isoformat(),
         )
 
@@ -299,11 +315,12 @@ class RewardProjector:
 
     @staticmethod
     def _level(
-        evidence: list[RewardEvidence],
+        *,
+        completed_count: int,
         average_quality: float,
         quality_run: int,
     ) -> str:
-        count = len(evidence)
+        count = completed_count
         if count < 3:
             return "Foundation"
         if count < 10 or average_quality < 70.0:

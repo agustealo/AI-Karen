@@ -96,3 +96,29 @@ def test_latest_feedback_supersedes_prior_feedback_without_erasing_audit_history
     ]
     snapshot = RewardProjector().project(records)
     assert snapshot.recent_evidence[0].dimensions["user_feedback"] == 1.0
+
+
+def test_failed_executions_do_not_create_growth_progress() -> None:
+    failures = [
+        _execution(f"f{i:02d}", status="failure")
+        for i in range(1, 26)
+    ]
+    snapshot = RewardProjector().project(failures)
+    assert snapshot.observed_outcome_count == 25
+    assert snapshot.completed_outcome_count == 0
+    assert snapshot.evidence_count == 0
+    assert snapshot.progress_index == 0.0
+    assert snapshot.average_quality == 0.0
+    assert snapshot.level == "Foundation"
+    assert snapshot.recent_evidence == ()
+
+
+def test_failed_attempts_do_not_increase_level_depth() -> None:
+    records = [_execution("t01"), *[
+        _execution(f"f{i:02d}", status="failure")
+        for i in range(2, 30)
+    ]]
+    snapshot = RewardProjector().project(records)
+    assert snapshot.completed_outcome_count == 1
+    assert snapshot.observed_outcome_count == 29
+    assert snapshot.level == "Foundation"

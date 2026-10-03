@@ -50,7 +50,27 @@ class OutcomeRecorder:
                 },
             )
 
-    def record_execution_outcome(
+    async def _persist_async(self, payload: dict[str, Any]) -> None:
+        if self._store is None:
+            payload["outcome_store_status"] = "not_configured"
+            return
+        try:
+            await self._store.save_outcome_async(payload)
+            payload["outcome_store_status"] = "stored"
+        except Exception:
+            payload["outcome_store_status"] = "failed"
+            payload["outcome_store_error_code"] = "outcome_persistence_failed"
+            logger.exception(
+                "outcome.recorder.async_persistence_failed",
+                extra={
+                    "outcome_id": payload.get("outcome_id"),
+                    "tenant_id": payload.get("tenant_id"),
+                    "user_id": payload.get("user_id"),
+                    "source": payload.get("source"),
+                },
+            )
+
+    def _execution_payload(
         self,
         trajectory_id: str | None = None,
         *,
@@ -96,7 +116,72 @@ class OutcomeRecorder:
         )
         if metadata:
             payload["metadata"] = metadata
+        return payload
+
+    def record_execution_outcome(
+        self,
+        trajectory_id: str | None = None,
+        *,
+        decision_observation_id: str | None = None,
+        status: ExecutionStatus = ExecutionStatus.FAILURE,
+        latency_ms: float | None = None,
+        provider_errors: list[str] | None = None,
+        fallback_count: int = 0,
+        tool_success: bool | None = None,
+        plugin_success: bool | None = None,
+        schema_valid: bool | None = None,
+        response_completed: bool | None = None,
+        persistence_success: bool | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = self._execution_payload(
+            trajectory_id,
+            decision_observation_id=decision_observation_id,
+            status=status,
+            latency_ms=latency_ms,
+            provider_errors=provider_errors,
+            fallback_count=fallback_count,
+            tool_success=tool_success,
+            plugin_success=plugin_success,
+            schema_valid=schema_valid,
+            response_completed=response_completed,
+            persistence_success=persistence_success,
+            metadata=metadata,
+        )
         self._persist(payload)
+        return payload
+
+    async def record_execution_outcome_async(
+        self,
+        trajectory_id: str | None = None,
+        *,
+        decision_observation_id: str | None = None,
+        status: ExecutionStatus = ExecutionStatus.FAILURE,
+        latency_ms: float | None = None,
+        provider_errors: list[str] | None = None,
+        fallback_count: int = 0,
+        tool_success: bool | None = None,
+        plugin_success: bool | None = None,
+        schema_valid: bool | None = None,
+        response_completed: bool | None = None,
+        persistence_success: bool | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = self._execution_payload(
+            trajectory_id,
+            decision_observation_id=decision_observation_id,
+            status=status,
+            latency_ms=latency_ms,
+            provider_errors=provider_errors,
+            fallback_count=fallback_count,
+            tool_success=tool_success,
+            plugin_success=plugin_success,
+            schema_valid=schema_valid,
+            response_completed=response_completed,
+            persistence_success=persistence_success,
+            metadata=metadata,
+        )
+        await self._persist_async(payload)
         return payload
 
     def record_user_outcome(
