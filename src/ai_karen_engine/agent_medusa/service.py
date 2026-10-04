@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional, List, AsyncGenerator
+from typing import Dict, Any, Optional, List
 from .contracts.runtime_request import RuntimeRequest
 from .contracts.runtime_response import RuntimeResponse, ResponseStatus
 from .coordinator.medusa_coordinator import MedusaCoordinator
@@ -9,7 +9,6 @@ from .contracts.safe_error import to_safe_response
 from .telemetry.metrics import get_medusa_metrics
 from .telemetry.tracing import get_medusa_tracer
 from .safety import get_safety_manager
-from .adapters.auth_context_adapter import AuthContextAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +21,6 @@ class AgentMedusaService:
         self.metrics = get_medusa_metrics()
         self.tracer = get_medusa_tracer()
         self.safety = get_safety_manager()
-        self.auth = AuthContextAdapter()
         self.catalog = AgentCatalogService(self.registry)
         self._initialized = False
 
@@ -32,7 +30,6 @@ class AgentMedusaService:
             return
         
         await self.registry.initialize()
-        # Additional initialization logic if needed
         self._initialized = True
         logger.info("AgentMedusaService initialized")
 
@@ -69,10 +66,22 @@ class AgentMedusaService:
             await self.initialize()
         
         correlation_id = request.request_id
-        trace = self.tracer.start_trace(agent_id="medusa_coordinator", correlation_id=correlation_id)
-        
+        trace = self.tracer.start_trace(
+            agent_id="medusa_coordinator",
+            correlation_id=correlation_id,
+        )
+
         try:
-            # 1. Safety Check
+            if request.authorized_plan is None:
+                raise PermissionError(
+                    "Agent Medusa execution requires RuntimePolicy authorization"
+                )
+            if not str(request.tenant_id or "").strip():
+                raise PermissionError("Agent Medusa execution requires tenant identity")
+            if not str(request.user_id or "").strip():
+                raise PermissionError("Agent Medusa execution requires user identity")
+
+            # Safety check
             safety_result = await self.safety.validate_input(request.query)
             if not safety_result.is_safe:
                 self.tracer.add_event(trace.trace_id, "safety_violation", safety_result.reason)
@@ -82,13 +91,9 @@ class AgentMedusaService:
                     content=f"Safety violation: {safety_result.reason}"
                 )
 
-            # 2. Auth/RBAC Check
-            # ...
-
-            # 3. Delegate to Coordinator
             response = await self.coordinator.handle_request(request)
-            
-            # 4. Record Metrics
+
+            # Record metrics
             success = response.status == ResponseStatus.SUCCESS
             self.metrics.record_execution("medusa_coordinator", trace.duration_ms or 0, success)
             self.tracer.end_trace(trace.trace_id, success)
