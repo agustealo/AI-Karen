@@ -10,7 +10,7 @@ CHAT_ROUTE = ROOT / "src/ai_karen_engine/api_routes/chat/runtime.py"
 CONVERSATION_ROUTE = ROOT / "src/ai_karen_engine/api_routes/chat/conversation.py"
 AUTH_ROUTE = ROOT / "src/ai_karen_engine/api_routes/auth/auth.py"
 AGENT_AUTH = ROOT / "src/ai_karen_engine/agents/auth.py"
-AGENT_ROUTE = ROOT / "src/ai_karen_engine/api_routes/agents/integration.py"
+AGENT_ROUTE = ROOT / "src/ai_karen_engine/api_routes/agents/runtime.py"
 
 
 def test_user_data_does_not_synthesize_default_tenant() -> None:
@@ -189,32 +189,24 @@ def test_agent_wildcard_permission_path_has_required_regex_dependency() -> None:
     assert "re.match(" in source
 
 
-def test_agent_catalog_authorizes_before_touching_global_registry() -> None:
+def test_agent_catalog_requires_canonical_authenticated_identity() -> None:
     source = AGENT_ROUTE.read_text(encoding="utf-8")
-    route = _agent_route_block(source, "get_all_agents")
+    route = _agent_route_block(source, "get_agent_catalog")
 
-    permission = "_has_agent_permission(current_user, AgentPermission.VIEW_AGENT)"
-    assert permission in route
-    assert route.index(permission) < route.index("get_agent_integration_service()")
-    assert "except HTTPException:\n        raise" in route
+    assert "Depends(bypass_user_context_func)" in route
+    assert "service.list_agent_catalog()" in route
+    assert "get_agent_integration_service" not in route
+    assert "AgentPermission." not in route
 
 
-def test_agent_api_preserves_explicit_rbac_denials() -> None:
+def test_agent_runtime_route_is_read_only_and_has_no_legacy_execution_surface() -> None:
     source = AGENT_ROUTE.read_text(encoding="utf-8")
 
-    for function_name in (
-        "execute_agent",
-        "execute_agent_stream",
-        "get_all_agents",
-        "get_agent",
-        "create_agent",
-        "delete_agent",
-        "terminate_agent",
-        "get_agent_events",
-        "get_system_metrics",
-        "get_agent_metrics",
-        "cancel_request",
-        "get_routing_recommendations",
-    ):
-        route = _agent_route_block(source, function_name)
-        assert "except HTTPException:\n        raise" in route
+    assert '@router.get("/catalog")' in source
+    assert '@router.post("/execute")' not in source
+    assert '@router.post("/execute/stream")' not in source
+    assert '@router.post("/")' not in source
+    assert '@router.delete(' not in source
+    assert "terminate_agent" not in source
+    assert 'execution_authority": "chat_runtime"' in source
+
