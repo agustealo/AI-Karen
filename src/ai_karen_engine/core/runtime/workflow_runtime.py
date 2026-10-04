@@ -63,6 +63,12 @@ class WorkflowRuntime:
                 session_id=conversation_id,
                 config=config,
             ):
+                for activity_chunk in self._extract_agent_activity_chunks(
+                    chunk,
+                    correlation_id=ctx.correlation_id,
+                ):
+                    yield activity_chunk
+
                 content, meta = self._extract_stream_payload(chunk)
                 if content or meta:
                     yield _SharedChatStreamChunk(
@@ -266,6 +272,73 @@ class WorkflowRuntime:
     def _extract_from_raw(self, state: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         text = str(state.get("response") or state.get("llm_response") or "")
         return text, dict(state.get("response_metadata") or {})
+
+    def _extract_agent_activity_chunks(
+        self,
+        chunk: Any,
+        *,
+        correlation_id: str,
+    ) -> List[_SharedChatStreamChunk]:
+        """Project canonical Medusa plan truth into the shared chat stream.
+
+        LangGraph yields node-state updates. Medusa owns execution and records the
+        terminal plan; this adapter only translates those already-authoritative
+        step results into transport events. It does not invent agent selection,
+        authorization, or execution state.
+        """
+
+        if not isinstance(chunk, dict):
+            return []
+
+        projected: List[_SharedChatStreamChunk] = []
+        for state_update in chunk.values():
+            if not isinstance(state_update, dict):
+                continue
+            metadata = state_update.get("response_metadata")
+            if not isinstance(metadata, dict):
+                continue
+            if metadata.get("execution_topology") != "multi_agent":
+                continue
+            plan = metadata.get("plan")
+            if not isinstance(plan, dict):
+                continue
+            steps = plan.get("steps")
+            if not isinstance(steps, list):
+                continue
+
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                status = str(step.get("status") or "pending").strip().lower()
+                event_type = {
+                    "completed": "agent_step_completed",
+                    "failed": "agent_step_failed",
+                    "skipped": "agent_step_skipped",
+                    "running": "agent_step_started",
+                    "pending": "agent_step_started",
+                }.get(status, "agent_step_completed")
+                step_id = str(step.get("id") or "").strip()
+                agent_id = str(step.get("agent_specialist") or "").strip()
+                description = str(step.get("description") or "").strip()
+                projected.append(
+                    _SharedChatStreamChunk(
+                        type="agent_step",
+                        content=description,
+                        correlation_id=correlation_id,
+                        metadata={
+                            "event_type": event_type,
+                            "step_id": step_id,
+                            "agent_id": agent_id,
+                            "status": status,
+                            "required_tools": list(step.get("required_tools") or []),
+                            "required_plugins": list(step.get("required_plugins") or []),
+                            "degradation_metadata": step.get("degradation_metadata"),
+                            "policy_decision_id": metadata.get("policy_decision_id"),
+                            "execution_topology": "multi_agent",
+                        },
+                    )
+                )
+        return projected
 
     def _extract_stream_payload(self, chunk: Any) -> Tuple[str, Dict[str, Any]]:
         if isinstance(chunk, dict):
