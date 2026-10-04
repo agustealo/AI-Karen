@@ -8,8 +8,8 @@ Closes the split authority described in P0-4 / A4:
             -> TrustedImplementationFactory.resolve
             -> executable specialist
 
-No hardcoded specialist dictionary in the coordinator. Custom agents resolve
-to a governed generic specialist; system specialists resolve to native classes.
+No hardcoded specialist dictionary in the coordinator. Only explicitly trusted
+implementation identifiers resolve to executable specialists.
 
 Security boundary: only implementations registered in this factory are
 resolvable. Never import arbitrary classes from user input.
@@ -35,15 +35,8 @@ class TrustedImplementationFactory:
     def __init__(self) -> None:
         # Built-in native implementations.
         self._implementations: Dict[str, ImplementationFactory] = {}
-        # Sentinel for prompt-defined / custom agents.
-        self._generic_id = "karen.agent.generic.governed"
 
     def register_implementation(self, implementation_id: str, factory: ImplementationFactory) -> None:
-        self._implementations[implementation_id] = factory
-
-    def register_generic(self, implementation_id: str, factory: ImplementationFactory) -> None:
-        """Register the governed generic specialist used for custom agents."""
-        self._generic_id = implementation_id
         self._implementations[implementation_id] = factory
 
     def resolve(self, registration: AgentRegistration) -> Any:
@@ -51,14 +44,6 @@ class TrustedImplementationFactory:
         impl_id = getattr(registration, "implementation_id", None)
         if impl_id and impl_id in self._implementations:
             return self._implementations[impl_id](registration)
-        # Fall back to governed generic for prompt-defined / custom agents.
-        if self._generic_id in self._implementations:
-            logger.info(
-                "Resolving agent %s (impl=%s) via generic governed specialist",
-                registration.agent_id,
-                impl_id,
-            )
-            return self._implementations[self._generic_id](registration)
         raise ValueError(
             f"No trusted implementation registered for agent {registration.agent_id!r} "
             f"(implementation_id={impl_id!r})"
@@ -92,11 +77,4 @@ def _register_builtins(factory: TrustedImplementationFactory) -> None:
     factory.register_implementation(
         "karen.agent.researcher.native",
         lambda reg: ResearcherSpecialist(),
-    )
-    # Generic governed specialist for custom / prompt-defined agents.
-    from .specialists.generic_specialist import GenericGovernedSpecialist
-
-    factory.register_generic(
-        "karen.agent.generic.governed",
-        lambda reg: GenericGovernedSpecialist(registration=reg),
     )
