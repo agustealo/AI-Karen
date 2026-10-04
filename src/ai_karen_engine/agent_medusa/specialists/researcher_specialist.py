@@ -90,11 +90,22 @@ class ResearcherSpecialist(SpecialistBase):
                     "context_found": summary.strip(),
                     "confidence": 0.9,
                 }
-            except Exception:
-                pass
+            except Exception as exc:
+                self.logger.warning(
+                    "Research synthesis failed; returning unsynthesized tool evidence",
+                    extra={"error_type": type(exc).__name__},
+                )
+                return {
+                    "search_results": tool_results,
+                    "context_found": findings_data,
+                    "confidence": 0.65,
+                    "degraded": True,
+                    "degradation_reason": "research_synthesis_failed",
+                }
 
         return {
             "search_results": tool_results,
-            "context_found": f"Found {len(tool_results)} results related to {query}" if tool_results else "No additional context found.",
+            "context_found": "No additional context found.",
             "confidence": 0.5,
+            "degraded": False,
         }
