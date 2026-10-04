@@ -10,7 +10,6 @@ from ...core.runtime.contracts import (
     ExecutionBudget,
     ExecutionRequirements,
 )
-from ..adapters.extension_runtime_adapter import ExtensionRuntimeAdapter
 from ..contracts.deep_execution_plan import (
     DeepExecutionPlan,
     DegradationLevel,
@@ -63,7 +62,6 @@ class MedusaCoordinator:
         self.active_plans: Dict[str, DeepExecutionPlan] = {}
         self.event_emitter = event_emitter or EventEmitter()
         self.trajectories: Dict[str, ExecutionTrajectory] = {}
-        self.extension_adapter = ExtensionRuntimeAdapter()
         self._global_sinks: List[Any] = []
 
     def attach_sink(self, sink: Any) -> None:
