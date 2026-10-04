@@ -1,17 +1,15 @@
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 const apiSource = readFileSync(
-  fileURLToPath(new URL("../../src/lib/api.ts", import.meta.url)),
+  resolve(process.cwd(), "src/lib/api.ts"),
   "utf8",
 );
 
 const chatSource = readFileSync(
-  fileURLToPath(
-    new URL("../../src/components/chat/ChatInterface.tsx", import.meta.url),
-  ),
+  resolve(process.cwd(), "src/components/chat/ChatInterface.tsx"),
   "utf8",
 );
 
