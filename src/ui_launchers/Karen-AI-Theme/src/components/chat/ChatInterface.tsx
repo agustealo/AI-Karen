@@ -35,7 +35,7 @@ import { useUserPreferences } from './const/userPreferences';
 
 // Import interface components
 import { StatusIndicators, MessagesArea, ChatInput } from './interface';
-// import AgentActivityPanel from './AgentActivityPanel';
+import AgentActivityPanel from './AgentActivityPanel';
 import DegradedModeBanner from './DegradedModeBanner';
 import RuntimeMetadataPanel from './RuntimeMetadataPanel';
 import RuntimeReceipt from './RuntimeReceipt';
@@ -1977,14 +1977,11 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         messagesContainerRef={messagesContainerRef}
       />
 
-      {/* Legacy AgentActivityPanel removed to simplify UI */}
-      {/* 
       {agentSteps.length > 0 && (
         <div className="mx-4 mb-4">
           <AgentActivityPanel steps={agentSteps} />
         </div>
       )}
-      */}
 
       <ChatInput
         onSubmit={handleFormSubmit}
