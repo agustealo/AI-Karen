@@ -1,5 +1,7 @@
-from .extension_runtime_adapter import ExtensionRuntimeAdapter
+"""Canonical Medusa adapters.
 
-__all__ = [
-    "ExtensionRuntimeAdapter",
-]
+Execution adapters are intentionally narrow. Memory, authentication, and
+extension authority remain owned by their canonical runtime domains.
+"""
+
+__all__: list[str] = []
