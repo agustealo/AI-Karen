@@ -321,7 +321,10 @@ class CapabilityAwareMedusaPlanner:
             required_plugins_set = set(authorized_plan.allowed_plugins) & agent_plugins
 
             for tool_req in requirements.tool_requirements:
-                if tool_req in set(authorized_plan.allowed_tools):
+                if (
+                    tool_req in set(authorized_plan.allowed_tools)
+                    and tool_req in agent_tools
+                ):
                     required_tools_set.add(tool_req)
 
             steps.append(
