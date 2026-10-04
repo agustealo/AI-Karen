@@ -104,9 +104,9 @@ export default function AutomationOverviewPage() {
         <div className="flex items-center space-x-3">
           <Settings className="h-8 w-8 text-primary" />
           <div>
-            <h2 className="text-2xl font-semibold tracking-tight">Agents Overview</h2>
+            <h2 className="text-2xl font-semibold tracking-tight">Automation Overview</h2>
             <p className="text-sm text-muted-foreground">
-              Orchestrate autonomous operations with persistent agents and workflows.
+              Monitor tenant-scoped tasks, jobs, and schedules owned by KAREN's automation runtime.
             </p>
           </div>
         </div>
@@ -127,7 +127,7 @@ export default function AutomationOverviewPage() {
           <Info className="h-4 w-4" />
           <AlertTitle>Live Runtime Connected</AlertTitle>
           <AlertDescription>
-            KAREN Agents & Workflows is connected to tenant-scoped automation owners. The dashboard metrics below are verified values returned by the live runtime.
+            KAREN Automation is connected to tenant-scoped task, job, and schedule owners. The dashboard metrics below are verified values returned by the live runtime.
           </AlertDescription>
         </Alert>
       )}
@@ -240,12 +240,12 @@ export default function AutomationOverviewPage() {
           </Card>
           <Card className="bg-muted/20 border-primary/20">
             <CardHeader>
-              <CardTitle className="text-base">Agent Collaboration</CardTitle>
-              <CardDescription>Primary agents can orchestrate sub-agents.</CardDescription>
+              <CardTitle className="text-base">Runtime Delegation</CardTitle>
+              <CardDescription>Agent collaboration remains owned by ChatRuntime and Agent Medusa.</CardDescription>
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground">
-                Assign delegated agents to a task while the primary agent coordinates execution and synthesizes the result.
+                Automation jobs may invoke canonical runtime work, but this surface does not create or directly control specialist agents.
               </p>
             </CardContent>
           </Card>
@@ -268,7 +268,7 @@ export default function AutomationOverviewPage() {
       <Card className="bg-muted/30">
         <CardHeader>
           <CardTitle className="text-lg">The Operational Flow</CardTitle>
-          <CardDescription>Leverage modular components to build sophisticated autonomous systems.</CardDescription>
+          <CardDescription>Compose governed automation without creating a second agent-execution authority.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-col md:flex-row items-center justify-center space-y-4 md:space-y-0 md:space-x-4 text-center">
@@ -284,8 +284,8 @@ export default function AutomationOverviewPage() {
               <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 mb-2">
                 <Bot className="h-6 w-6 text-primary" />
               </div>
-              <p className="font-semibold">2. Agents</p>
-              <p className="text-xs text-muted-foreground">Autonomous workers with specialized skills.</p>
+              <p className="font-semibold">2. Runtime</p>
+              <p className="text-xs text-muted-foreground">Canonical ChatRuntime and governed tool execution.</p>
             </div>
             <ArrowRight className="h-6 w-6 text-muted-foreground hidden md:block" />
             <div className="flex flex-col items-center max-w-[10rem]">
@@ -293,7 +293,7 @@ export default function AutomationOverviewPage() {
                 <FileText className="h-6 w-6 text-primary" />
               </div>
               <p className="font-semibold">3. Tasks</p>
-              <p className="text-xs text-muted-foreground">Specific objectives assigned to primary agents.</p>
+              <p className="text-xs text-muted-foreground">Tenant-scoped work units owned by automation services.</p>
             </div>
             <ArrowRight className="h-6 w-6 text-muted-foreground hidden md:block" />
             <div className="flex flex-col items-center max-w-[10rem]">
