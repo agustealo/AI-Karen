@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ai_karen_engine.api_routes.agents.integration import router as agent_integration_router
+from ai_karen_engine.api_routes.agents.runtime import router as agent_runtime_router
 from ai_karen_engine.api_routes.artifacts import router as artifacts_router
 from ai_karen_engine.api_routes.auth.auth import router as auth_router
 from ai_karen_engine.api_routes.auth.privacy import router as privacy_router
@@ -116,7 +117,8 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     ),
     RouterSpec(privacy_router, "/api", ("privacy",)),
     RouterSpec(ai_router, "/api/ai", ("ai",)),
-    RouterSpec(agent_integration_router, tags=("agents",)),
+    RouterSpec(agent_integration_router, tags=("agents-legacy",)),
+    RouterSpec(agent_runtime_router, tags=("agent-runtime",)),
     RouterSpec(tasks_router, tags=("tasks",)),
     RouterSpec(automation_jobs_router, "/api", ("automation-jobs",)),
     RouterSpec(automation_cron_router, "/api", ("automation-cron",)),
