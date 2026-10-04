@@ -40,7 +40,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "RuntimeTelemetry": (".telemetry", "RuntimeTelemetry"),
     "AuthContextAdapter": (".adapters", "AuthContextAdapter"),
     "ExtensionRuntimeAdapter": (".adapters", "ExtensionRuntimeAdapter"),
-    "MemoryRuntimeAdapter": (".adapters", "MemoryRuntimeAdapter"),
 }
 
 
@@ -85,5 +84,4 @@ __all__ = [
     # Canonical runtime adapters
     "AuthContextAdapter",
     "ExtensionRuntimeAdapter",
-    "MemoryRuntimeAdapter",
 ]
