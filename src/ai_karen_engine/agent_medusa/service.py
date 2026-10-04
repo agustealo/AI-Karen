@@ -106,66 +106,6 @@ class AgentMedusaService:
             self.tracer.end_trace(trace.trace_id, success=False)
             return to_safe_response(e, correlation_id=correlation_id)
 
-    # Compatibility methods for migration
-    async def execute_task(self, task: Any, execution_mode: Any = None) -> Any:
-        """Compatibility method for old AgentTask execution."""
-        import warnings
-
-        warnings.warn(
-            "AgentMedusaService.execute_task is deprecated. "
-            "Use AgentMedusaService.execute with RuntimeRequest instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        from .contracts.runtime_request import RuntimeRequest
-        request = RuntimeRequest(
-            query=task.description,
-            session_id=task.task_id,
-            user_id="system",
-            context=task.input_data
-        )
-        medusa_response = await self.execute(request)
-        
-        # Convert Medusa response back to AgentResponse-like object
-        # This is a bit hacky but helps migration
-        from ai_karen_engine.agents.models import AgentResponse
-        return AgentResponse(
-            request_id=task.task_id,
-            agent_id=task.agent_id,
-            execution_mode=execution_mode,
-            response=medusa_response.content,
-            processing_time=0.0, # Filled by metrics later if needed
-            metadata=medusa_response.metadata
-        )
-
-    async def execute_request(self, request: Any) -> Any:
-        """Compatibility method for old AgentRequest execution."""
-        import warnings
-
-        warnings.warn(
-            "AgentMedusaService.execute_request is deprecated. "
-            "Use AgentMedusaService.execute with RuntimeRequest instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        runtime_request = RuntimeRequest(
-            query=request.message,
-            session_id=request.session_id or "unknown",
-            user_id=request.user_id or "anonymous",
-            context=request.context or {}
-        )
-        medusa_response = await self.execute(runtime_request)
-        
-        from ai_karen_engine.agents.models import AgentResponse
-        return AgentResponse(
-            request_id=request.request_id,
-            agent_id=medusa_response.agent_trace[0] if medusa_response.agent_trace else "medusa",
-            execution_mode=request.execution_mode,
-            response=medusa_response.content,
-            processing_time=0.0,
-            metadata=medusa_response.metadata
-        )
-
 _service: Optional[AgentMedusaService] = None
 
 def get_agent_medusa_service() -> AgentMedusaService:
