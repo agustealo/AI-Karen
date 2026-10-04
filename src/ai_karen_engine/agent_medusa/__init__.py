@@ -34,7 +34,7 @@ __author__ = "AI-Karen Team"
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "MedusaCoordinator": (".coordinator", "MedusaCoordinator"),
     "MedusaArbitrator": (".arbitration", "MedusaArbitrator"),
-    "MedusaPlanner": (".planning", "MedusaPlanner"),
+    "CapabilityAwareMedusaPlanner": (".planning", "CapabilityAwareMedusaPlanner"),
     "ExecutionEngine": (".execution", "ExecutionEngine"),
     "ExecutionPolicy": (".execution", "ExecutionPolicy"),
     "RuntimeTelemetry": (".telemetry", "RuntimeTelemetry"),
@@ -75,7 +75,7 @@ __all__ = [
     # Multi-agent coordination
     "MedusaCoordinator",
     "MedusaArbitrator",
-    "MedusaPlanner",
+    "CapabilityAwareMedusaPlanner",
     # Execution
     "ExecutionEngine",
     "ExecutionPolicy",
