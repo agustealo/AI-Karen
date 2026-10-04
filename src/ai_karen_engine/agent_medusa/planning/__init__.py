@@ -1,3 +1,8 @@
-from .medusa_planner import MedusaPlanner
+from .capability_planner import CapabilityAwareMedusaPlanner
+from .plan_validator import PlanValidator, ValidationReport
 
-__all__ = ["MedusaPlanner"]
+__all__ = [
+    "CapabilityAwareMedusaPlanner",
+    "PlanValidator",
+    "ValidationReport",
+]
