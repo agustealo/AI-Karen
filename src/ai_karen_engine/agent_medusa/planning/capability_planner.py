@@ -33,6 +33,7 @@ from ..contracts.deep_execution_plan import (
     StepInputContract,
     StepOutputContract,
 )
+from ..contracts.capabilities import AgentCapabilityType
 from ..contracts.registration import AgentRegistration
 from ..planning.plan_validator import PlanValidator
 
@@ -126,111 +127,161 @@ class CapabilityAwareMedusaPlanner:
         registry: Any,
         allowed_agents: set[str],
     ) -> list[AgentRegistration]:
-        """Resolve and filter registrations based on capabilities and lifecycle."""
-        candidate_ids: set[str] = set()
-        for cap in list(requirements.required_capabilities) + list(requirements.tool_requirements):
-            try:
-                regs = await registry.find_agents_by_capability(cap)
-                candidate_ids.update(r.agent_id for r in regs)
-            except Exception:
-                continue
+        """Resolve authorized specialists that satisfy declared capabilities/tools."""
 
-        if not candidate_ids:
-            required = list(requirements.required_capabilities) + list(requirements.tool_requirements)
-            if required:
-                raise ValueError("PLAN_UNSATISFIABLE: no specialists match required capabilities")
-            authorized_candidates = allowed_agents
-        else:
-            authorized_candidates = candidate_ids & allowed_agents
-            if not authorized_candidates:
-                raise ValueError("PLAN_UNSATISFIABLE: no authorized specialists match required capabilities")
+        all_agents = await registry.list_agents()
+        allowed = [
+            reg
+            for reg in all_agents
+            if reg.agent_id in allowed_agents
+            and reg.lifecycle_state not in ("disabled", "archived")
+        ]
 
-        registrations: list[AgentRegistration] = []
-        for agent_id in sorted(authorized_candidates):
-            reg = await _safe_get(registry, agent_id)
-            if reg is None:
-                continue
-            if reg.lifecycle_state in ("disabled", "archived"):
-                continue
-            registrations.append(reg)
+        required_capabilities = {
+            str(value).strip().lower()
+            for value in requirements.required_capabilities
+            if str(value).strip()
+        }
+        required_tools = {
+            str(value).strip()
+            for value in requirements.tool_requirements
+            if str(value).strip()
+        }
 
-        if not registrations:
-            raise ValueError("PLAN_UNSATISFIABLE: no eligible specialists after lifecycle filtering")
+        def capability_tokens(reg: AgentRegistration) -> set[str]:
+            tokens: set[str] = set()
+            for capability in reg.capabilities:
+                cap_type = getattr(capability, "type", None)
+                if isinstance(cap_type, AgentCapabilityType):
+                    tokens.add(cap_type.value.lower())
+                elif cap_type is not None:
+                    tokens.add(str(cap_type).strip().lower())
+                name = str(getattr(capability, "name", "") or "").strip().lower()
+                if name:
+                    tokens.add(name)
+                    tokens.add(name.replace(" ", "_"))
+            return tokens
 
-        healthy = [r for r in registrations if await _is_healthy(registry, r.agent_id)]
-        return healthy if healthy else registrations
+        selected: list[AgentRegistration] = []
+        for reg in allowed:
+            tokens = capability_tokens(reg)
+            tools = {str(tool).strip() for tool in reg.allowed_tools}
+            matches_capability = bool(required_capabilities & tokens)
+            matches_tool = bool(required_tools & tools)
+            if not required_capabilities and not required_tools:
+                selected.append(reg)
+            elif matches_capability or matches_tool:
+                selected.append(reg)
+
+        if required_capabilities or required_tools:
+            matched_capabilities: set[str] = set()
+            matched_tools: set[str] = set()
+            for reg in selected:
+                matched_capabilities.update(required_capabilities & capability_tokens(reg))
+                matched_tools.update(required_tools & {str(tool).strip() for tool in reg.allowed_tools})
+
+            missing_caps = sorted(required_capabilities - matched_capabilities)
+            missing_tools = sorted(required_tools - matched_tools)
+            if missing_caps or missing_tools:
+                missing = []
+                if missing_caps:
+                    missing.append(f"capabilities={missing_caps}")
+                if missing_tools:
+                    missing.append(f"tools={missing_tools}")
+                raise ValueError(
+                    "PLAN_UNSATISFIABLE: no authorized specialist satisfies "
+                    + ", ".join(missing)
+                )
+
+        if not selected:
+            raise ValueError(
+                "PLAN_UNSATISFIABLE: no eligible specialists after capability filtering"
+            )
+
+        healthy = [r for r in selected if await _is_healthy(registry, r.agent_id)]
+        return healthy if healthy else selected
 
     def _build_dependency_graph(
         self,
         registrations: list[AgentRegistration],
         requirements: ExecutionRequirements,
     ) -> dict[str, list[str]]:
-        """Build dependency graph from agent capability_dependencies and requirements."""
-        registration_map = {reg.agent_id: reg for reg in registrations}
-        dependency_graph: dict[str, list[str]] = {reg.agent_id: [] for reg in registrations}
+        """Build declared specialist dependencies without inventing tool ordering."""
 
-        all_registered_agents = set(registration_map.keys())
+        del requirements
+        registration_map = {reg.agent_id: reg for reg in registrations}
+        dependency_graph: dict[str, list[str]] = {
+            reg.agent_id: [] for reg in registrations
+        }
         capability_to_agents: dict[str, list[str]] = {}
 
         for reg in registrations:
-            for cap in reg.capabilities:
-                cap_name = cap.name if hasattr(cap, 'name') else str(cap)
-                capability_to_agents.setdefault(cap_name, []).append(reg.agent_id)
+            for capability in reg.capabilities:
+                tokens = {
+                    str(getattr(capability, "name", "") or "").strip(),
+                    str(getattr(getattr(capability, "type", None), "value", "") or "").strip(),
+                }
+                for token in tokens:
+                    if token:
+                        capability_to_agents.setdefault(token, []).append(reg.agent_id)
 
         unsatisfied: list[str] = []
         for reg in registrations:
-            declared_deps = getattr(reg, 'capability_dependencies', [])
-            if declared_deps:
-                for dep_capability in declared_deps:
-                    if dep_capability in capability_to_agents:
-                        providers = capability_to_agents[dep_capability]
-                        for provider_id in providers:
-                            if provider_id in all_registered_agents and provider_id != reg.agent_id:
-                                if provider_id not in dependency_graph[reg.agent_id]:
-                                    dependency_graph[reg.agent_id].append(provider_id)
-                    else:
-                        unsatisfied.append(
-                            f"{reg.agent_id} requires capability '{dep_capability}' which no specialist provides"
-                        )
-
-            for tool_req in requirements.tool_requirements:
-                for other_reg in registrations:
-                    if other_reg.agent_id != reg.agent_id:
-                        other_tools = getattr(other_reg, 'allowed_tools', [])
-                        if tool_req in other_tools:
-                            if other_reg.agent_id not in dependency_graph[reg.agent_id]:
-                                dependency_graph[reg.agent_id].append(other_reg.agent_id)
+            for dependency in reg.capability_dependencies:
+                providers = capability_to_agents.get(str(dependency).strip(), [])
+                providers = [
+                    agent_id
+                    for agent_id in providers
+                    if agent_id in registration_map and agent_id != reg.agent_id
+                ]
+                if not providers:
+                    unsatisfied.append(
+                        f"{reg.agent_id} requires capability '{dependency}' which no specialist provides"
+                    )
+                    continue
+                for provider_id in sorted(providers):
+                    if provider_id not in dependency_graph[reg.agent_id]:
+                        dependency_graph[reg.agent_id].append(provider_id)
 
         if unsatisfied:
-            raise ValueError("PLAN_UNSATISFIABLE: unsatisfied dependencies: " + "; ".join(unsatisfied))
+            raise ValueError(
+                "PLAN_UNSATISFIABLE: unsatisfied dependencies: "
+                + "; ".join(unsatisfied)
+            )
 
         return dependency_graph
 
     def _topological_sort(self, dependency_graph: dict[str, list[str]]) -> list[str]:
-        """Kahn's algorithm for topological sorting."""
-        in_degree = {node: 0 for node in dependency_graph}
-        for node in dependency_graph:
-            for neighbor in dependency_graph[node]:
-                if neighbor in in_degree:
-                    in_degree[neighbor] += 1
+        """Topologically sort a graph expressed as node -> dependencies."""
 
-        queue = [node for node in in_degree if in_degree[node] == 0]
-        queue.sort()
-        result = []
+        in_degree = {
+            node: len([dep for dep in dependencies if dep in dependency_graph])
+            for node, dependencies in dependency_graph.items()
+        }
+        dependents: dict[str, list[str]] = {
+            node: [] for node in dependency_graph
+        }
+        for node, dependencies in dependency_graph.items():
+            for dependency in dependencies:
+                if dependency in dependents:
+                    dependents[dependency].append(node)
+
+        queue = sorted(node for node, degree in in_degree.items() if degree == 0)
+        result: list[str] = []
 
         while queue:
             node = queue.pop(0)
             result.append(node)
-
-            for neighbor in dependency_graph[node]:
-                if neighbor in in_degree:
-                    in_degree[neighbor] -= 1
-                    if in_degree[neighbor] == 0:
-                        queue.append(neighbor)
-            queue.sort()
+            for dependent in sorted(dependents[node]):
+                in_degree[dependent] -= 1
+                if in_degree[dependent] == 0:
+                    queue.append(dependent)
+                    queue.sort()
 
         if len(result) != len(dependency_graph):
-            raise ValueError("PLAN_CYCLE: detected circular dependency in agent execution plan")
+            raise ValueError(
+                "PLAN_CYCLE: detected circular dependency in agent execution plan"
+            )
 
         return result
 
