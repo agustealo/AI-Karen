@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
 from ...core.runtime.contracts import (
@@ -78,8 +79,12 @@ class MedusaCoordinator:
         if current_task is None:  # pragma: no cover - asyncio always supplies one here
             raise RuntimeError("Medusa execution requires an asyncio task")
 
-        tenant_id = str(getattr(request, "tenant_id", None) or "default")
-        user_id = str(request.user_id or "anonymous")
+        tenant_id = str(request.tenant_id or "").strip()
+        user_id = str(request.user_id or "").strip()
+        if not tenant_id:
+            raise PermissionError("Medusa execution requires tenant identity")
+        if not user_id:
+            raise PermissionError("Medusa execution requires user identity")
         plan_data = (
             request.authorized_plan if isinstance(request.authorized_plan, dict) else {}
         )
@@ -364,10 +369,16 @@ class MedusaCoordinator:
                 )
             )
 
+        specialist_plan = replace(
+            authorized_plan,
+            allowed_tools=list(step.required_tools),
+            allowed_plugins=list(step.required_plugins),
+            allowed_agents=[step.agent_specialist],
+        )
         execution = SpecialistExecutionContext(
-            authorized_plan=authorized_plan,
-            tenant_id=str(getattr(request, "tenant_id", None) or "default"),
-            user_id=request.user_id or "anonymous",
+            authorized_plan=specialist_plan,
+            tenant_id=str(request.tenant_id or "").strip(),
+            user_id=str(request.user_id or "").strip(),
             policy_decision_id=authorized_plan.policy_decision_id,
             trajectory_id=request.request_id,
             correlation_id=request.request_id,
