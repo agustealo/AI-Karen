@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from ai_karen_engine.core.intelligence.features import IntelligenceFeatures
@@ -46,6 +47,8 @@ class MemoryRelevancePredictor(BasePredictor):
         "follow up",
         "unfinished",
     )
+    EXACT_CONTINUITY_CUES = ("next", "continue", "proceed", "keep going", "carry on")
+    WORD_CONTINUITY_CUES = ("continue", "proceed")
     CONTINUITY_CUES = (
         "remember",
         "recall",
@@ -53,7 +56,6 @@ class MemoryRelevancePredictor(BasePredictor):
         "last time",
         "we discussed",
         "my project",
-        "continue",
         "again",
         "yesterday",
         "earlier",
@@ -68,7 +70,15 @@ class MemoryRelevancePredictor(BasePredictor):
 
     @classmethod
     def heuristic_score(cls, text: str) -> float:
-        normalized = str(text or "").casefold()
+        normalized = str(text or "").strip().casefold()
+        normalized_phrase = normalized.strip(" .!?")
+        if normalized_phrase in cls.EXACT_CONTINUITY_CUES:
+            return 0.75
+        if any(
+            re.search(rf"\b{re.escape(cue)}\b", normalized)
+            for cue in cls.WORD_CONTINUITY_CUES
+        ):
+            return 0.75
         if any(cue in normalized for cue in cls.DIRECT_RECALL_CUES):
             return 0.75
 
