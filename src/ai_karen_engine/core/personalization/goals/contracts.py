@@ -13,6 +13,7 @@ from typing import Any
 
 from ai_karen_engine.core.contracts.values import JsonValue
 from ai_karen_engine.core.memory.contracts import (
+    GoalState,
     ProspectiveMemory,
     ProspectiveState,
     ProspectiveTrigger,
@@ -43,19 +44,6 @@ class GoalPriority(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
-
-
-class GoalState(str, Enum):
-    PROPOSED = "proposed"
-    ACTIVE = "active"
-    BLOCKED = "blocked"
-    PAUSED = "paused"
-    AT_RISK = "at_risk"
-    SATISFIED = "satisfied"
-    COMPLETED = "completed"
-    ABANDONED = "abandoned"
-    SUPERSEDED = "superseded"
-    EXPIRED = "expired"
 
 
 class ConflictType(str, Enum):
