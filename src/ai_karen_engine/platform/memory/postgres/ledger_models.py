@@ -234,6 +234,52 @@ class MemoryProspectiveItem(Base):
     )
 
 
+class MemoryOpenLoop(Base):
+    """Durable projection of unfinished work or a user commitment."""
+
+    __tablename__ = "memory_open_loop"
+
+    open_loop_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("memory_event.event_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    tenant_id = Column(UUID(as_uuid=True), nullable=False)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    loop_type = Column(String(50), nullable=False, default="unfinished_work")
+    description = Column(Text, nullable=False)
+    domain = Column(String(100), nullable=True)
+    lifecycle_state = Column(String(50), nullable=False, default="open")
+    confidence = Column(Float, default=1.0, nullable=False)
+    source_type = Column(String(100), nullable=False)
+    source_ref = Column(String(255), nullable=True)
+    target_text = Column(Text, nullable=True)
+    target_at = Column(DateTime, nullable=True)
+    valid_from = Column(DateTime, default=datetime.utcnow, nullable=False)
+    valid_to = Column(DateTime, nullable=True)
+    metadata_payload = Column(JSONB, default=lambda: {}, nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index(
+            "idx_memory_open_loop_tenant_user_state",
+            "tenant_id",
+            "user_id",
+            "lifecycle_state",
+            "updated_at",
+        ),
+        Index(
+            "idx_memory_open_loop_target",
+            "tenant_id",
+            "user_id",
+            "target_at",
+        ),
+    )
+
+
 class MemoryEntity(Base):
     """Canonical entity identity used by the memory graph projection."""
 
