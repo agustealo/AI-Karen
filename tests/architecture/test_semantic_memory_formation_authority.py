@@ -63,8 +63,10 @@ def test_new_user_state_tables_are_privacy_export_and_erasure_covered() -> None:
 
     assert '"memory_user_goal"' in privacy
     assert '"memory_prospective_item"' in privacy
+    assert '"memory_open_loop"' in privacy
     assert privacy.count('"memory_user_goal"') >= 2
     assert privacy.count('"memory_prospective_item"') >= 2
+    assert privacy.count('"memory_open_loop"') >= 2
 
 
 def test_formation_and_vault_share_one_sensitivity_metadata_contract() -> None:
@@ -98,6 +100,41 @@ def test_derived_recall_requires_valid_canonical_source_event() -> None:
     for adapter in (profile, user_state, procedural):
         assert "MemoryEvent.consent_state == \"granted\"" in adapter
         assert "MemoryEvent.valid_to.is_(None)" in adapter
+
+
+def test_legacy_ram_goal_and_prospective_authorities_are_retired() -> None:
+    goals_init = _text("src/ai_karen_engine/core/personalization/goals/__init__.py")
+    memory_init = _text("src/ai_karen_engine/core/memory/__init__.py")
+
+    for legacy_name in (
+        "GoalLifecycle",
+        "GoalStore",
+        "IntentionLifecycle",
+        "CommitmentLifecycle",
+        "ProspectiveMemoryManager",
+    ):
+        assert legacy_name not in goals_init
+
+    assert "ProspectiveMemoryStore" not in memory_init
+    assert not (
+        ROOT / "src/ai_karen_engine/core/personalization/goals/lifecycle.py"
+    ).exists()
+    assert not (
+        ROOT / "src/ai_karen_engine/core/personalization/goals/prospective.py"
+    ).exists()
+    assert not (
+        ROOT / "src/ai_karen_engine/core/memory/prospective/__init__.py"
+    ).exists()
+
+
+def test_open_loop_schema_is_migration_owned_and_rls_protected() -> None:
+    migration = _text(
+        "supabase/migrations/20261005020000_22_memory_open_loops.sql"
+    )
+
+    assert "CREATE TABLE IF NOT EXISTS public.memory_open_loop" in migration
+    assert "REFERENCES public.memory_event(event_id) ON DELETE CASCADE" in migration
+    assert "ALTER TABLE public.memory_open_loop ENABLE ROW LEVEL SECURITY" in migration
 
 
 def test_semantic_user_model_schema_is_migration_owned_and_rls_protected() -> None:
