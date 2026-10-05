@@ -833,6 +833,7 @@ class ChatRuntime:
                 query=query,
                 cognitive_context=decision.cognitive_context,
                 top_k=5,
+                runtime_context=dict(request.metadata or {}),
             )
         except Exception as exc:
             logger.warning(
