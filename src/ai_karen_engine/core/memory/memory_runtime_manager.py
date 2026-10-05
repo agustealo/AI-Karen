@@ -297,6 +297,7 @@ class MemoryRuntimeManager:
                     "metadata": payload.get("metadata", {}),
                     "timestamp": item.timestamp.timestamp(),
                     "similarity_score": item.relevance,
+                    "confidence": item.confidence,
                     "memory_type": item.memory_type.value,
                     "result": item.content,
                 }
