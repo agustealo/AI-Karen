@@ -1,7 +1,8 @@
-"""Goal / Intention / Commitment cognitive contracts for AI-Karen.
+"""Goal, intention, and commitment cognitive contracts for AI-Karen.
 
-This domain owns GoalState and the semantics of goals, intentions, commitments,
-and prospective memory. Evidence vocabulary is owned by reasoning/belief.
+Canonical continuity state enums and prospective-memory contracts are owned by
+core.memory. This module owns goal/personalization semantics layered on those
+shared contracts. Evidence vocabulary is owned by reasoning/belief.
 """
 
 from __future__ import annotations
