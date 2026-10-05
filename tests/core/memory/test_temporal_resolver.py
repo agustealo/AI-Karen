@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from ai_karen_engine.core.memory.temporal_resolver import resolve_temporal_text
+from ai_karen_engine.core.memory.temporal import resolve_temporal_text
 
 
 def test_resolves_next_weekday_and_explicit_time() -> None:
