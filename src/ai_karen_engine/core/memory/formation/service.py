@@ -444,7 +444,14 @@ class MemoryFormationService:
         kind = str(signal_type or "").casefold()
         if kind in {"workflow", "procedure", "tool_use"}:
             return MemoryType.PROCEDURAL
-        if kind in {"identity_fact", "preference", "fact", "entity", "goal"}:
+        if kind in {
+            "identity_fact",
+            "preference",
+            "fact",
+            "entity",
+            "goal",
+            "open_loop",
+        }:
             return MemoryType.SEMANTIC
         return MemoryType.EPISODIC
 
