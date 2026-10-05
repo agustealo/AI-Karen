@@ -689,6 +689,67 @@ class PostgresDerivedMemoryProjector:
             )
         )
 
+    async def _transition_open_loop(
+        self,
+        *,
+        session: Any,
+        tenant_uuid: uuid.UUID,
+        user_uuid: uuid.UUID,
+        event_uuid: uuid.UUID,
+        signal: MemorySignal,
+        metadata: dict[str, Any],
+    ) -> None:
+        target_state = str(metadata.get("target_state") or "").strip().casefold()
+        target_description = str(
+            metadata.get("target_description") or ""
+        ).strip().casefold()
+        if target_state not in {"completed", "cancelled", "superseded"}:
+            return
+        if not target_description:
+            return
+
+        rows = (
+            await session.execute(
+                select(MemoryOpenLoop)
+                .where(
+                    MemoryOpenLoop.tenant_id == tenant_uuid,
+                    MemoryOpenLoop.user_id == user_uuid,
+                    MemoryOpenLoop.lifecycle_state == "open",
+                    MemoryOpenLoop.valid_to.is_(None),
+                )
+                .order_by(MemoryOpenLoop.updated_at.desc())
+                .limit(30)
+            )
+        ).scalars().all()
+
+        candidates = [
+            (self._text_overlap(target_description, row.description), row)
+            for row in rows
+        ]
+        candidates = [item for item in candidates if item[0] >= 0.35]
+        if not candidates:
+            return
+
+        _score, item = max(candidates, key=lambda pair: pair[0])
+        now = datetime.utcnow()
+        item.lifecycle_state = target_state
+        item.valid_to = now
+        item.updated_at = now
+
+        payload = dict(item.metadata_payload or {})
+        history = list(payload.get("lifecycle_history") or [])
+        history.append(
+            {
+                "state": target_state,
+                "reason": metadata.get("transition_reason"),
+                "source_event_id": str(event_uuid),
+                "source_text": signal.text,
+                "observed_at": now.isoformat(),
+            }
+        )
+        payload["lifecycle_history"] = history[-50:]
+        item.metadata_payload = payload
+
     async def _record_projection_statuses(
         self,
         *,
