@@ -516,8 +516,6 @@ class ProspectiveMemory:
         _validate_tenant(self.tenant_id, "prospective memory")
 
 
-from .lifecycle import GoalStore
-
 __all__ = [
     "Commitment",
     "CommitmentCondition",
@@ -543,7 +541,6 @@ __all__ = [
     "GoalRevision",
     "GoalSnapshot",
     "GoalState",
-    "GoalStore",
     "GoalType",
     "Intention",
     "IntentionEvidence",
