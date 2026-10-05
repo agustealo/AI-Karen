@@ -49,6 +49,15 @@ _GOAL_ABANDON = re.compile(
 _GOAL_STOPPED = re.compile(
     r"(?i)\bi\s+(?:stopped|quit|gave up)\s+(?:trying to|working on)?\s*(.+?)(?=[.!?]|$)"
 )
+_OPEN_LOOP_PATTERNS = (
+    re.compile(r"(?i)\bi still need to\s+(.+?)(?=[.!?]|$)"),
+    re.compile(r"(?i)\bi need to follow up(?: with| on)?\s+(.+?)(?=[.!?]|$)"),
+    re.compile(r"(?i)\bi promised to\s+(.+?)(?=[.!?]|$)"),
+    re.compile(r"(?i)\bwe still need to\s+(.+?)(?=[.!?]|$)"),
+)
+_OPEN_LOOP_DONE = re.compile(
+    r"(?i)\bi\s+(?:finished|completed|handled|took care of)\s+(.+?)(?=[.!?]|$)"
+)
 
 
 def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
@@ -183,6 +192,52 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
                 },
             )
         )
+
+    open_loop_done = _OPEN_LOOP_DONE.search(normalized)
+    if open_loop_done:
+        description = _clean_value(open_loop_done.group(1))
+        if description:
+            signals.append(
+                MemorySignal(
+                    text=normalized,
+                    signal_type="open_loop_transition",
+                    confidence=0.97,
+                    scope="user",
+                    metadata={
+                        "source": "explicit_semantic_rule",
+                        "explicit_user_statement": True,
+                        "semantic_class": "open_loop_transition",
+                        "target_state": "completed",
+                        "target_description": description,
+                        "transition_reason": "user_reported_completed",
+                        "retention_scope": "user_profile",
+                    },
+                )
+            )
+    else:
+        for pattern in _OPEN_LOOP_PATTERNS:
+            match = pattern.search(normalized)
+            if match:
+                description = _clean_value(match.group(1))
+                if description:
+                    signals.append(
+                        MemorySignal(
+                            text=normalized,
+                            signal_type="open_loop",
+                            confidence=0.96,
+                            scope="user",
+                            metadata={
+                                "source": "explicit_semantic_rule",
+                                "explicit_user_statement": True,
+                                "semantic_class": "open_loop",
+                                "loop_type": "unfinished_work",
+                                "description": description,
+                                "lifecycle_state": "open",
+                                "retention_scope": "user_profile",
+                            },
+                        )
+                    )
+                break
 
     interview_match = _INTERVIEW.search(normalized)
     has_prospective_transition = any(
