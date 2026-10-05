@@ -80,6 +80,26 @@ def test_formation_and_vault_share_one_sensitivity_metadata_contract() -> None:
     assert '"memory_sensitivity"' not in evaluator
 
 
+def test_derived_recall_requires_valid_canonical_source_event() -> None:
+    vault = _text(
+        "src/ai_karen_engine/platform/memory/postgres/vault.py"
+    )
+    profile = _text(
+        "src/ai_karen_engine/platform/memory/postgres/profile_retriever.py"
+    )
+    user_state = _text(
+        "src/ai_karen_engine/platform/memory/postgres/user_state_retriever.py"
+    )
+    procedural = _text(
+        "src/ai_karen_engine/platform/memory/postgres/procedural_retriever.py"
+    )
+
+    assert "source_event.valid_to =" in vault
+    for adapter in (profile, user_state, procedural):
+        assert "MemoryEvent.consent_state == \"granted\"" in adapter
+        assert "MemoryEvent.valid_to.is_(None)" in adapter
+
+
 def test_semantic_user_model_schema_is_migration_owned_and_rls_protected() -> None:
     migration = _text(
         "supabase/migrations/20261005010000_21_memory_semantic_user_model.sql"
