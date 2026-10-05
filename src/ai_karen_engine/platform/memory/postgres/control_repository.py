@@ -22,6 +22,9 @@ from .ledger_models import (
     MemoryAssertion,
     MemoryEpisode,
     MemoryEvent,
+    MemoryOpenLoop,
+    MemoryProspectiveItem,
+    MemoryUserGoal,
     ProfileFact,
     ProjectionStatus,
     RetentionPolicy,
@@ -101,18 +104,27 @@ class PostgresMemoryControlRepository(MemoryControlPort):
         assertion_filters: list[Any] = []
         fact_filters: list[Any] = []
         episode_filters: list[Any] = []
+        goal_filters: list[Any] = []
+        prospective_filters: list[Any] = []
+        open_loop_filters: list[Any] = []
         consent_filters: list[Any] = []
         if tenant_uuid is not None:
             event_filters.append(MemoryEvent.tenant_id == tenant_uuid)
             assertion_filters.append(MemoryAssertion.tenant_id == tenant_uuid)
             fact_filters.append(ProfileFact.tenant_id == tenant_uuid)
             episode_filters.append(MemoryEpisode.tenant_id == tenant_uuid)
+            goal_filters.append(MemoryUserGoal.tenant_id == tenant_uuid)
+            prospective_filters.append(MemoryProspectiveItem.tenant_id == tenant_uuid)
+            open_loop_filters.append(MemoryOpenLoop.tenant_id == tenant_uuid)
             consent_filters.append(ConsentScope.tenant_id == tenant_uuid)
         if user_uuid is not None:
             event_filters.append(MemoryEvent.user_id == user_uuid)
             assertion_filters.append(MemoryAssertion.user_id == user_uuid)
             fact_filters.append(ProfileFact.user_id == user_uuid)
             episode_filters.append(MemoryEpisode.user_id == user_uuid)
+            goal_filters.append(MemoryUserGoal.user_id == user_uuid)
+            prospective_filters.append(MemoryProspectiveItem.user_id == user_uuid)
+            open_loop_filters.append(MemoryOpenLoop.user_id == user_uuid)
             consent_filters.append(ConsentScope.user_id == user_uuid)
 
         async with session_factory() as session:
@@ -129,6 +141,17 @@ class PostgresMemoryControlRepository(MemoryControlPort):
             )
             facts = await _rows(ProfileFact, fact_filters, ProfileFact.created_at)
             episodes = await _rows(MemoryEpisode, episode_filters, MemoryEpisode.created_at)
+            goals = await _rows(MemoryUserGoal, goal_filters, MemoryUserGoal.updated_at)
+            prospective = await _rows(
+                MemoryProspectiveItem,
+                prospective_filters,
+                MemoryProspectiveItem.updated_at,
+            )
+            open_loops = await _rows(
+                MemoryOpenLoop,
+                open_loop_filters,
+                MemoryOpenLoop.updated_at,
+            )
             consents = await _rows(ConsentScope, consent_filters, ConsentScope.granted_at)
 
             contradiction_stmt = select(ContradictionEvent).join(
@@ -178,6 +201,9 @@ class PostgresMemoryControlRepository(MemoryControlPort):
                 ("assertions", MemoryAssertion, assertion_filters),
                 ("profile_facts", ProfileFact, fact_filters),
                 ("episodes", MemoryEpisode, episode_filters),
+                ("goals", MemoryUserGoal, goal_filters),
+                ("prospective_items", MemoryProspectiveItem, prospective_filters),
+                ("open_loops", MemoryOpenLoop, open_loop_filters),
                 ("consent_scopes", ConsentScope, consent_filters),
             ):
                 stmt = select(func.count()).select_from(model)
@@ -255,6 +281,46 @@ class PostgresMemoryControlRepository(MemoryControlPort):
                     "updated_at": self._dt(row.updated_at),
                 }
                 for row in facts
+            ],
+            "recent_goals": [
+                {
+                    "goal_id": str(row.goal_id),
+                    "event_id": str(row.event_id),
+                    "description": row.description,
+                    "goal_type": row.goal_type,
+                    "lifecycle_state": row.lifecycle_state,
+                    "confidence": row.confidence,
+                    "target_at": self._dt(row.target_at),
+                    "valid_from": self._dt(row.valid_from),
+                    "valid_to": self._dt(row.valid_to),
+                }
+                for row in goals
+            ],
+            "recent_prospective_items": [
+                {
+                    "prospective_id": str(row.prospective_id),
+                    "event_id": str(row.event_id),
+                    "event_type": row.event_type,
+                    "description": row.description,
+                    "temporal_text": row.temporal_text,
+                    "target_at": self._dt(row.target_at),
+                    "lifecycle_state": row.lifecycle_state,
+                    "confidence": row.confidence,
+                }
+                for row in prospective
+            ],
+            "recent_open_loops": [
+                {
+                    "open_loop_id": str(row.open_loop_id),
+                    "event_id": str(row.event_id),
+                    "loop_type": row.loop_type,
+                    "description": row.description,
+                    "domain": row.domain,
+                    "lifecycle_state": row.lifecycle_state,
+                    "confidence": row.confidence,
+                    "target_at": self._dt(row.target_at),
+                }
+                for row in open_loops
             ],
             "recent_episodes": [
                 {
