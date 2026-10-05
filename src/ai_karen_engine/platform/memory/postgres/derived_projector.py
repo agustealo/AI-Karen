@@ -25,6 +25,7 @@ from ai_karen_engine.persistence.postgres.transactions import async_transaction_
 
 from .ledger_models import (
     MemoryEpisode,
+    MemoryOpenLoop,
     MemoryProspectiveItem,
     MemoryUserGoal,
     ProfileFact,
