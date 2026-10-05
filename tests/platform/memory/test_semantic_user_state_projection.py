@@ -13,6 +13,7 @@ from ai_karen_engine.platform.memory.postgres.derived_projector import (
 )
 from ai_karen_engine.platform.memory.postgres.ledger_models import (
     MemoryEpisode,
+    MemoryOpenLoop,
     MemoryProspectiveItem,
     MemoryUserGoal,
     ProfileFact,
@@ -30,6 +31,14 @@ class _Result:
 
     def scalar_one_or_none(self):
         return self._scalar
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        if isinstance(self._scalar, list):
+            return self._scalar
+        return [] if self._scalar is None else [self._scalar]
 
 
 class _Session:
@@ -235,6 +244,227 @@ async def test_interview_projects_to_prospective_memory(monkeypatch):
     assert items[0].event_type == "job_interview"
     assert items[0].temporal_text == "with Ford Friday at 2 PM"
     assert items[0].lifecycle_state == "dormant"
+
+
+@pytest.mark.asyncio
+async def test_goal_transition_abandons_matching_durable_goal(monkeypatch):
+    goal = MemoryUserGoal(
+        event_id=UUID("00000000-0000-0000-0000-000000000031"),
+        tenant_id=TENANT,
+        user_id=USER,
+        description="work out four days a week",
+        goal_type="explicit",
+        lifecycle_state="active",
+        confidence=0.95,
+        source_type="chat_user",
+    )
+    session = _Session([None, [goal]])
+    monkeypatch.setattr(
+        projector_module,
+        "async_transaction_scope",
+        _scope(session),
+    )
+    projector = PostgresDerivedMemoryProjector(_ProjectionManager())
+
+    await projector._project_relational_views(
+        tenant_uuid=TENANT,
+        user_uuid=USER,
+        event_uuid=EVENT,
+        signal=MemorySignal(
+            text="I stopped trying to work out four days a week",
+            signal_type="goal_transition",
+            confidence=0.98,
+            metadata={
+                "target_state": "abandoned",
+                "target_description": "work out four days a week",
+            },
+        ),
+        confidence=0.98,
+        source_type="chat_user",
+        source_ref="conversation-1",
+        metadata={
+            "target_state": "abandoned",
+            "target_description": "work out four days a week",
+            "transition_reason": "user_abandoned_goal",
+        },
+    )
+
+    assert goal.lifecycle_state == "abandoned"
+    assert goal.valid_to is not None
+    history = goal.metadata_payload["lifecycle_history"]
+    assert history[-1]["source_event_id"] == str(EVENT)
+
+
+@pytest.mark.asyncio
+async def test_job_offer_completes_single_current_interview(monkeypatch):
+    interview = MemoryProspectiveItem(
+        event_id=UUID("00000000-0000-0000-0000-000000000041"),
+        tenant_id=TENANT,
+        user_id=USER,
+        event_type="job_interview",
+        description="I have a job interview with Ford Friday at 2 PM",
+        lifecycle_state="dormant",
+        confidence=0.96,
+        source_type="chat_user",
+    )
+    session = _Session([None, [interview]])
+    monkeypatch.setattr(
+        projector_module,
+        "async_transaction_scope",
+        _scope(session),
+    )
+    projector = PostgresDerivedMemoryProjector(_ProjectionManager())
+
+    await projector._project_relational_views(
+        tenant_uuid=TENANT,
+        user_uuid=USER,
+        event_uuid=EVENT,
+        signal=MemorySignal(
+            text="They offered me the job",
+            signal_type="prospective_transition",
+            confidence=0.99,
+            metadata={
+                "event_type": "job_interview",
+                "target_state": "completed",
+            },
+        ),
+        confidence=0.99,
+        source_type="chat_user",
+        source_ref="conversation-1",
+        metadata={
+            "event_type": "job_interview",
+            "target_state": "completed",
+            "transition_reason": "job_offer_received",
+            "outcome": "job_offer",
+        },
+    )
+
+    assert interview.lifecycle_state == "completed"
+    assert interview.valid_to is not None
+    assert interview.metadata_payload["outcome"] == "job_offer"
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_multiple_current_interviews_do_not_auto_transition(monkeypatch):
+    first = MemoryProspectiveItem(
+        event_id=UUID("00000000-0000-0000-0000-000000000051"),
+        tenant_id=TENANT,
+        user_id=USER,
+        event_type="job_interview",
+        description="Interview one",
+        lifecycle_state="dormant",
+        confidence=0.96,
+        source_type="chat_user",
+    )
+    second = MemoryProspectiveItem(
+        event_id=UUID("00000000-0000-0000-0000-000000000052"),
+        tenant_id=TENANT,
+        user_id=USER,
+        event_type="job_interview",
+        description="Interview two",
+        lifecycle_state="dormant",
+        confidence=0.96,
+        source_type="chat_user",
+    )
+    session = _Session([None, [first, second]])
+    monkeypatch.setattr(
+        projector_module,
+        "async_transaction_scope",
+        _scope(session),
+    )
+    projector = PostgresDerivedMemoryProjector(_ProjectionManager())
+
+    await projector._project_relational_views(
+        tenant_uuid=TENANT,
+        user_uuid=USER,
+        event_uuid=EVENT,
+        signal=MemorySignal(
+            text="They offered me the job",
+            signal_type="prospective_transition",
+            confidence=0.99,
+            metadata={"event_type": "job_interview"},
+        ),
+        confidence=0.99,
+        source_type="chat_user",
+        source_ref="conversation-1",
+        metadata={
+            "event_type": "job_interview",
+            "target_state": "completed",
+            "transition_reason": "job_offer_received",
+        },
+    )
+
+    assert first.lifecycle_state == "dormant"
+    assert second.lifecycle_state == "dormant"
+
+
+@pytest.mark.asyncio
+async def test_open_loop_projects_and_completion_closes_it(monkeypatch):
+    session = _Session([None, None])
+    monkeypatch.setattr(
+        projector_module,
+        "async_transaction_scope",
+        _scope(session),
+    )
+    projector = PostgresDerivedMemoryProjector(_ProjectionManager())
+
+    await projector._project_relational_views(
+        tenant_uuid=TENANT,
+        user_uuid=USER,
+        event_uuid=EVENT,
+        signal=MemorySignal(
+            text="I still need to send the client the revised estimate",
+            signal_type="open_loop",
+            confidence=0.96,
+            metadata={"description": "send the client the revised estimate"},
+        ),
+        confidence=0.96,
+        source_type="chat_user",
+        source_ref="conversation-1",
+        metadata={
+            "description": "send the client the revised estimate",
+            "loop_type": "unfinished_work",
+            "lifecycle_state": "open",
+        },
+    )
+
+    loops = [item for item in session.added if isinstance(item, MemoryOpenLoop)]
+    assert len(loops) == 1
+    assert loops[0].description == "send the client the revised estimate"
+    assert loops[0].lifecycle_state == "open"
+
+    close_session = _Session([None, [loops[0]]])
+    monkeypatch.setattr(
+        projector_module,
+        "async_transaction_scope",
+        _scope(close_session),
+    )
+
+    await projector._project_relational_views(
+        tenant_uuid=TENANT,
+        user_uuid=USER,
+        event_uuid=UUID("00000000-0000-0000-0000-000000000099"),
+        signal=MemorySignal(
+            text="I finished sending the client the revised estimate",
+            signal_type="open_loop_transition",
+            confidence=0.97,
+            metadata={
+                "target_state": "completed",
+                "target_description": "sending the client the revised estimate",
+            },
+        ),
+        confidence=0.97,
+        source_type="chat_user",
+        source_ref="conversation-1",
+        metadata={
+            "target_state": "completed",
+            "target_description": "sending the client the revised estimate",
+            "transition_reason": "user_reported_completed",
+        },
+    )
+
+    assert loops[0].lifecycle_state == "completed"
+    assert loops[0].valid_to is not None
 
 
 def test_each_semantic_projection_also_keeps_episode_lineage():

@@ -67,6 +67,8 @@ async def test_memory_relevance_predictor():
         "What is my favorite color?",
         "What are my goals?",
         "Do I have an upcoming interview?",
+        "What did I leave unfinished?",
+        "What should I do next?",
     ],
 )
 async def test_direct_continuity_queries_request_memory_without_embeddings(text):

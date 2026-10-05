@@ -444,7 +444,14 @@ class MemoryFormationService:
         kind = str(signal_type or "").casefold()
         if kind in {"workflow", "procedure", "tool_use"}:
             return MemoryType.PROCEDURAL
-        if kind in {"identity_fact", "preference", "fact", "entity", "goal"}:
+        if kind in {
+            "identity_fact",
+            "preference",
+            "fact",
+            "entity",
+            "goal",
+            "open_loop",
+        }:
             return MemoryType.SEMANTIC
         return MemoryType.EPISODIC
 
@@ -453,7 +460,16 @@ class MemoryFormationService:
         kind = str(signal_type or "").casefold()
         if kind == "identity_fact":
             return MemoryNamespace.PERSISTENT
-        if kind in {"preference", "goal", "prospective_event", "fact"}:
+        if kind in {
+            "preference",
+            "goal",
+            "goal_transition",
+            "prospective_event",
+            "prospective_transition",
+            "open_loop",
+            "open_loop_transition",
+            "fact",
+        }:
             return MemoryNamespace.LONG_TERM
         if kind in {"workflow", "procedure", "tool_use"}:
             return MemoryNamespace.LONG_TERM

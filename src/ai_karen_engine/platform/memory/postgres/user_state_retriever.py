@@ -17,7 +17,12 @@ from ai_karen_engine.core.memory.types import (
 )
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
-from .ledger_models import MemoryEvent, MemoryProspectiveItem, MemoryUserGoal
+from .ledger_models import (
+    MemoryEvent,
+    MemoryOpenLoop,
+    MemoryProspectiveItem,
+    MemoryUserGoal,
+)
 
 
 class PostgresUserStateRecallRetriever:
@@ -40,6 +45,11 @@ class PostgresUserStateRecallRetriever:
         "about me",
         "what should i",
         "what am i",
+        "unfinished",
+        "still need",
+        "follow up",
+        "what is left",
+        "what's left",
     )
 
     async def recall(self, query: MemoryQuery) -> list[MemoryEntry]:
@@ -86,6 +96,29 @@ class PostgresUserStateRecallRetriever:
                 )
             ).scalars().all()
 
+            open_loop_rows = (
+                await session.execute(
+                    select(MemoryOpenLoop)
+                    .join(MemoryEvent, MemoryEvent.event_id == MemoryOpenLoop.event_id)
+                    .where(
+                        MemoryOpenLoop.tenant_id == tenant_uuid,
+                        MemoryOpenLoop.user_id == user_uuid,
+                        MemoryEvent.tenant_id == tenant_uuid,
+                        MemoryEvent.user_id == user_uuid,
+                        MemoryEvent.consent_state == "granted",
+                        or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
+                        MemoryOpenLoop.lifecycle_state == "open",
+                        or_(MemoryOpenLoop.valid_to.is_(None), MemoryOpenLoop.valid_to > now),
+                    )
+                    .order_by(
+                        MemoryOpenLoop.target_at.asc().nullslast(),
+                        MemoryOpenLoop.confidence.desc(),
+                        MemoryOpenLoop.updated_at.desc(),
+                    )
+                    .limit(top_k * 2)
+                )
+            ).scalars().all()
+
             prospective_rows = (
                 await session.execute(
                     select(MemoryProspectiveItem)
@@ -101,7 +134,7 @@ class PostgresUserStateRecallRetriever:
                         MemoryEvent.consent_state == "granted",
                         or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
                         MemoryProspectiveItem.lifecycle_state.in_(
-                            ("dormant", "ready", "active", "triggered")
+                            ("dormant", "ready", "triggered")
                         ),
                         or_(
                             MemoryProspectiveItem.valid_to.is_(None),
@@ -127,6 +160,16 @@ class PostgresUserStateRecallRetriever:
             if relevance <= 0.0:
                 continue
             candidates.append(self._goal_entry(row, query, relevance))
+
+        for row in open_loop_rows:
+            relevance = self._relevance(
+                query_text,
+                f"{row.description} {row.domain or ''} {row.target_text or ''}",
+                broad=broad,
+            )
+            if relevance <= 0.0:
+                continue
+            candidates.append(self._open_loop_entry(row, query, relevance))
 
         for row in prospective_rows:
             relevance = self._relevance(
@@ -199,6 +242,57 @@ class PostgresUserStateRecallRetriever:
         return MemoryEntry(
             id=str(row.goal_id),
             content=f"Active goal: {row.description}",
+            memory_type=MemoryType.SEMANTIC,
+            namespace=MemoryNamespace.LONG_TERM,
+            timestamp=created_at,
+            created_at=created_at,
+            updated_at=row.updated_at or created_at,
+            relevance=relevance,
+            confidence=float(row.confidence or 0.0),
+            importance=8.0,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _open_loop_entry(
+        row: MemoryOpenLoop,
+        query: MemoryQuery,
+        relevance: float,
+    ) -> MemoryEntry:
+        created_at = row.created_at or datetime.utcnow()
+        metadata = MemoryMetadata(
+            tenant_id=str(row.tenant_id),
+            user_id=str(row.user_id),
+            conversation_id=query.conversation_id,
+            session_id=query.session_id,
+            source="postgres_open_loop",
+            custom={
+                "source_store": "postgres",
+                "memory_class": "semantic",
+                "open_loop_id": str(row.open_loop_id),
+                "event_id": str(row.event_id),
+                "loop_type": row.loop_type,
+                "domain": row.domain,
+                "lifecycle_state": row.lifecycle_state,
+                "target_at": row.target_at.isoformat() if row.target_at else None,
+                "unresolved_intention_relevance": 1.0,
+                "current_goal_relevance": 0.7,
+                "freshness": 1.0,
+                "source_trust": 1.0,
+                "tenant_match": 1.0,
+                "provenance": {
+                    "store": "postgres",
+                    "record_type": "memory_open_loop",
+                    "open_loop_id": str(row.open_loop_id),
+                    "event_id": str(row.event_id),
+                    "source_type": row.source_type,
+                    "source_ref": row.source_ref,
+                },
+            },
+        )
+        return MemoryEntry(
+            id=str(row.open_loop_id),
+            content=f"Unfinished: {row.description}",
             memory_type=MemoryType.SEMANTIC,
             namespace=MemoryNamespace.LONG_TERM,
             timestamp=created_at,

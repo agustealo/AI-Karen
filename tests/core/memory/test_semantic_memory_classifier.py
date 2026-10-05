@@ -71,5 +71,58 @@ def test_interview_is_not_duplicated_as_goal() -> None:
     assert [signal.signal_type for signal in signals] == ["prospective_event"]
 
 
+def test_explicit_goal_abandonment_becomes_lifecycle_evidence() -> None:
+    signal = _one(
+        "I stopped trying to work out four days a week.",
+        "goal_transition",
+    )
+
+    assert signal.metadata["target_state"] == "abandoned"
+    assert signal.metadata["target_description"] == "work out four days a week"
+
+
+def test_cancelled_interview_becomes_prospective_lifecycle_evidence() -> None:
+    signal = _one(
+        "My job interview was cancelled.",
+        "prospective_transition",
+    )
+
+    assert signal.metadata["event_type"] == "job_interview"
+    assert signal.metadata["target_state"] == "cancelled"
+
+
+def test_job_offer_completes_current_interview_without_creating_new_interview() -> None:
+    signals = classify_explicit_user_memory("They offered me the job.")
+
+    transitions = [
+        signal for signal in signals if signal.signal_type == "prospective_transition"
+    ]
+    assert len(transitions) == 1
+    assert transitions[0].metadata["target_state"] == "completed"
+    assert transitions[0].metadata["outcome"] == "job_offer"
+    assert not any(signal.signal_type == "prospective_event" for signal in signals)
+
+
+def test_unfinished_work_becomes_open_loop() -> None:
+    signal = _one(
+        "I still need to send the client the revised estimate.",
+        "open_loop",
+    )
+
+    assert signal.metadata["loop_type"] == "unfinished_work"
+    assert signal.metadata["description"] == "send the client the revised estimate"
+    assert signal.metadata["lifecycle_state"] == "open"
+
+
+def test_completed_unfinished_work_becomes_open_loop_transition() -> None:
+    signal = _one(
+        "I finished sending the client the revised estimate.",
+        "open_loop_transition",
+    )
+
+    assert signal.metadata["target_state"] == "completed"
+    assert signal.metadata["target_description"] == "sending the client the revised estimate"
+
+
 def test_unrelated_text_does_not_create_explicit_user_state() -> None:
     assert classify_explicit_user_memory("Explain how TCP congestion control works.") == []

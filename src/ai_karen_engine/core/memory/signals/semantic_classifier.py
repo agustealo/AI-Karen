@@ -34,6 +34,30 @@ _INTERVIEW = re.compile(
     r"(?i)\b(?:i have|i(?:'ve| have) got|i(?:'m| am) scheduled for)\s+"
     r"(?:an?\s+)?(?:job\s+)?interview\b(.*?)(?=[.!?]|$)"
 )
+_INTERVIEW_CANCELLED = re.compile(
+    r"(?i)\b(?:my\s+)?(?:job\s+)?interview\b.*\b(?:was|is|got)\s+cancel(?:led|ed)\b"
+)
+_INTERVIEW_DONE = re.compile(
+    r"(?i)\b(?:my\s+)?(?:job\s+)?interview\b.*\b(?:is|was)\s+(?:done|over|finished|completed)\b"
+)
+_JOB_OFFER = re.compile(
+    r"(?i)\b(?:i got the job|they offered me the job|i got an? offer)\b"
+)
+_GOAL_ABANDON = re.compile(
+    r"(?i)\bi(?:'m| am| have)?\s*(?:no longer|not)\s+(?:trying to|working on)\s+(.+?)(?=[.!?]|$)"
+)
+_GOAL_STOPPED = re.compile(
+    r"(?i)\bi\s+(?:stopped|quit|gave up)\s+(?:trying to|working on)?\s*(.+?)(?=[.!?]|$)"
+)
+_OPEN_LOOP_PATTERNS = (
+    re.compile(r"(?i)\bi still need to\s+(.+?)(?=[.!?]|$)"),
+    re.compile(r"(?i)\bi need to follow up(?: with| on)?\s+(.+?)(?=[.!?]|$)"),
+    re.compile(r"(?i)\bi promised to\s+(.+?)(?=[.!?]|$)"),
+    re.compile(r"(?i)\bwe still need to\s+(.+?)(?=[.!?]|$)"),
+)
+_OPEN_LOOP_DONE = re.compile(
+    r"(?i)\bi\s+(?:finished|completed|handled|took care of)\s+(.+?)(?=[.!?]|$)"
+)
 
 
 def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
@@ -92,8 +116,134 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
                 )
             )
 
+    if _INTERVIEW_CANCELLED.search(normalized):
+        signals.append(
+            MemorySignal(
+                text=normalized,
+                signal_type="prospective_transition",
+                confidence=0.99,
+                scope="user",
+                metadata={
+                    "source": "explicit_semantic_rule",
+                    "explicit_user_statement": True,
+                    "semantic_class": "prospective_transition",
+                    "event_type": "job_interview",
+                    "target_state": "cancelled",
+                    "transition_reason": "user_reported_cancelled",
+                    "retention_scope": "user_profile",
+                },
+            )
+        )
+    elif _INTERVIEW_DONE.search(normalized):
+        signals.append(
+            MemorySignal(
+                text=normalized,
+                signal_type="prospective_transition",
+                confidence=0.98,
+                scope="user",
+                metadata={
+                    "source": "explicit_semantic_rule",
+                    "explicit_user_statement": True,
+                    "semantic_class": "prospective_transition",
+                    "event_type": "job_interview",
+                    "target_state": "completed",
+                    "transition_reason": "user_reported_completed",
+                    "retention_scope": "user_profile",
+                },
+            )
+        )
+    elif _JOB_OFFER.search(normalized):
+        signals.append(
+            MemorySignal(
+                text=normalized,
+                signal_type="prospective_transition",
+                confidence=0.99,
+                scope="user",
+                metadata={
+                    "source": "explicit_semantic_rule",
+                    "explicit_user_statement": True,
+                    "semantic_class": "prospective_transition",
+                    "event_type": "job_interview",
+                    "target_state": "completed",
+                    "transition_reason": "job_offer_received",
+                    "outcome": "job_offer",
+                    "retention_scope": "user_profile",
+                },
+            )
+        )
+
+    goal_abandon = _GOAL_ABANDON.search(normalized) or _GOAL_STOPPED.search(normalized)
+    if goal_abandon:
+        description = _clean_value(goal_abandon.group(1))
+        signals.append(
+            MemorySignal(
+                text=normalized,
+                signal_type="goal_transition",
+                confidence=0.98,
+                scope="user",
+                metadata={
+                    "source": "explicit_semantic_rule",
+                    "explicit_user_statement": True,
+                    "semantic_class": "goal_transition",
+                    "target_state": "abandoned",
+                    "target_description": description or None,
+                    "transition_reason": "user_abandoned_goal",
+                    "retention_scope": "user_profile",
+                },
+            )
+        )
+
+    open_loop_done = _OPEN_LOOP_DONE.search(normalized)
+    if open_loop_done:
+        description = _clean_value(open_loop_done.group(1))
+        if description:
+            signals.append(
+                MemorySignal(
+                    text=normalized,
+                    signal_type="open_loop_transition",
+                    confidence=0.97,
+                    scope="user",
+                    metadata={
+                        "source": "explicit_semantic_rule",
+                        "explicit_user_statement": True,
+                        "semantic_class": "open_loop_transition",
+                        "target_state": "completed",
+                        "target_description": description,
+                        "transition_reason": "user_reported_completed",
+                        "retention_scope": "user_profile",
+                    },
+                )
+            )
+    else:
+        for pattern in _OPEN_LOOP_PATTERNS:
+            match = pattern.search(normalized)
+            if match:
+                description = _clean_value(match.group(1))
+                if description:
+                    signals.append(
+                        MemorySignal(
+                            text=normalized,
+                            signal_type="open_loop",
+                            confidence=0.96,
+                            scope="user",
+                            metadata={
+                                "source": "explicit_semantic_rule",
+                                "explicit_user_statement": True,
+                                "semantic_class": "open_loop",
+                                "loop_type": "unfinished_work",
+                                "description": description,
+                                "lifecycle_state": "open",
+                                "retention_scope": "user_profile",
+                            },
+                        )
+                    )
+                break
+
     interview_match = _INTERVIEW.search(normalized)
-    if interview_match:
+    has_prospective_transition = any(
+        signal.signal_type == "prospective_transition" for signal in signals
+    )
+    if interview_match and not has_prospective_transition:
         detail = _clean_value(interview_match.group(1))
         signals.append(
             MemorySignal(
@@ -114,7 +264,12 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
             )
         )
 
+    has_goal_transition = any(
+        signal.signal_type == "goal_transition" for signal in signals
+    )
     for pattern in _GOAL_PATTERNS:
+        if has_goal_transition:
+            break
         match = pattern.search(normalized)
         if match:
             description = _clean_value(match.group(1))

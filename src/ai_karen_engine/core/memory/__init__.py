@@ -13,9 +13,14 @@ from typing import Any
 
 from .contracts import (
     ClaimStatus,
+    GoalState,
     MemoryClaim,
+    OpenLoopState,
     MemoryLifecycleState,
     ProspectiveMemory,
+    ProspectiveState,
+    ProspectiveTrigger,
+    ProspectiveTriggerType,
     RecallScoreComponents,
     RelationshipModel,
     SalienceScore,
@@ -89,7 +94,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "SelfModelStore": (".self_model", "SelfModelStore"),
     "UserModelStore": (".user_model", "UserModelStore"),
     "RelationshipModelStore": (".relationship_model", "RelationshipModelStore"),
-    "ProspectiveMemoryStore": (".prospective", "ProspectiveMemoryStore"),
 }
 
 
@@ -149,12 +153,17 @@ __all__ = [
     "ProcedureArtifact",
     "LessonArtifact",
     "MemoryClaim",
+    "GoalState",
+    "OpenLoopState",
     "ClaimStatus",
     "SalienceScore",
     "SelfModel",
     "UserModel",
     "RelationshipModel",
     "ProspectiveMemory",
+    "ProspectiveState",
+    "ProspectiveTrigger",
+    "ProspectiveTriggerType",
     "MemoryLifecycleState",
     "RecallScoreComponents",
     "SaliencePolicy",
@@ -176,5 +185,4 @@ __all__ = [
     "SelfModelStore",
     "UserModelStore",
     "RelationshipModelStore",
-    "ProspectiveMemoryStore",
 ]

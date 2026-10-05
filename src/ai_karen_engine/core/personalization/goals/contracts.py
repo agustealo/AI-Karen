@@ -1,7 +1,8 @@
-"""Goal / Intention / Commitment cognitive contracts for AI-Karen.
+"""Goal, intention, and commitment cognitive contracts for AI-Karen.
 
-This domain owns GoalState and the semantics of goals, intentions, commitments,
-and prospective memory. Evidence vocabulary is owned by reasoning/belief.
+Canonical continuity state enums and prospective-memory contracts are owned by
+core.memory. This module owns goal/personalization semantics layered on those
+shared contracts. Evidence vocabulary is owned by reasoning/belief.
 """
 
 from __future__ import annotations
@@ -12,6 +13,12 @@ from enum import Enum
 from typing import Any
 
 from ai_karen_engine.core.contracts.values import JsonValue
+from ai_karen_engine.core.memory.contracts import (
+    GoalState,
+    ProspectiveMemory,
+    ProspectiveState,
+    ProspectiveTrigger,
+)
 from ai_karen_engine.core.reasoning.belief.contracts import EvidenceType
 
 from ..contracts import PreferenceScope, UserGoal, UserGoalStatus
@@ -38,19 +45,6 @@ class GoalPriority(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
-
-
-class GoalState(str, Enum):
-    PROPOSED = "proposed"
-    ACTIVE = "active"
-    BLOCKED = "blocked"
-    PAUSED = "paused"
-    AT_RISK = "at_risk"
-    SATISFIED = "satisfied"
-    COMPLETED = "completed"
-    ABANDONED = "abandoned"
-    SUPERSEDED = "superseded"
-    EXPIRED = "expired"
 
 
 class ConflictType(str, Enum):
@@ -128,13 +122,6 @@ class CommitmentStatus(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     SUPERSEDED = "superseded"
-
-
-class ProspectiveState(str, Enum):
-    DORMANT = "dormant"
-    TRIGGERED = "triggered"
-    ARCHIVED = "archived"
-
 
 
 class GoalRelationship(str, Enum):
@@ -483,41 +470,6 @@ class Commitment:
         return self.status == CommitmentStatus.ACTIVE
 
 
-@dataclass
-class ProspectiveTrigger:
-    trigger_type: IntentionTriggerType
-    target_ref: str
-    description: str
-    condition: str | None = None
-    tenant_id: str | None = None
-    user_id: str | None = None
-
-    def __post_init__(self) -> None:
-        _validate_tenant(self.tenant_id, "prospective trigger")
-
-
-@dataclass
-class ProspectiveMemory:
-    pm_id: str
-    description: str
-    trigger: ProspectiveTrigger
-    state: ProspectiveState
-    target_intention_id: str | None
-    target_goal_id: str | None
-    evidence_refs: list[str] = field(default_factory=list)
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    triggered_at: datetime | None = None
-    archived_at: datetime | None = None
-    tenant_id: str | None = None
-    user_id: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        _validate_tenant(self.tenant_id, "prospective memory")
-
-
-from .lifecycle import GoalStore
-
 __all__ = [
     "Commitment",
     "CommitmentCondition",
@@ -543,7 +495,6 @@ __all__ = [
     "GoalRevision",
     "GoalSnapshot",
     "GoalState",
-    "GoalStore",
     "GoalType",
     "Intention",
     "IntentionEvidence",
