@@ -68,6 +68,7 @@ class ContinuityPlanner:
         items: list[ContinuityStateItem],
         now: datetime | None = None,
         top_k: int = 5,
+        context: dict[str, object] | None = None,
     ) -> ContinuityPlan:
         """Return bounded, explainable suggestions without execution authority."""
 
@@ -84,6 +85,7 @@ class ContinuityPlanner:
                 query=query,
                 item=item,
                 now=reference,
+                context=context or {},
             )
             if score <= 0.0:
                 continue
@@ -128,10 +130,23 @@ class ContinuityPlanner:
         query: str,
         item: ContinuityStateItem,
         now: datetime,
+        context: dict[str, object],
     ) -> tuple[float, list[str]]:
         score = 0.0
         reasons: list[str] = []
         source = item.source_type.casefold()
+        state = item.lifecycle_state.casefold()
+        if state == "paused":
+            return 0.0, []
+        if state in {
+            "completed",
+            "cancelled",
+            "abandoned",
+            "superseded",
+            "expired",
+            "archived",
+        }:
+            return 0.0, []
 
         if source == "open_loop":
             score += 0.50
@@ -148,7 +163,10 @@ class ContinuityPlanner:
         temporal = self._temporal_score(item.target_at, now)
         if temporal > 0.0:
             score += 0.28 * temporal
-            reasons.append("near_term" if temporal >= 0.7 else "time_relevant")
+            if item.target_at is not None and self._is_due(item.target_at, now):
+                reasons.append("due_or_overdue")
+            else:
+                reasons.append("near_term" if temporal >= 0.7 else "time_relevant")
 
         overlap = self._text_overlap(query, item.description)
         if item.domain:
@@ -157,24 +175,29 @@ class ContinuityPlanner:
             score += 0.18 * overlap
             reasons.append("context_match")
 
+        current_domain = str(
+            context.get("domain") or context.get("current_domain") or ""
+        ).strip().casefold()
+        if item.domain and current_domain and item.domain.casefold() == current_domain:
+            score += 0.12
+            reasons.append("current_domain")
+
+        current_project = str(
+            context.get("project_id") or context.get("current_project_id") or ""
+        ).strip()
+        item_project = str(item.metadata.get("project_id") or "").strip()
+        if current_project and item_project and current_project == item_project:
+            score += 0.12
+            reasons.append("current_project")
+
         confidence = max(0.0, min(1.0, item.confidence))
         score += 0.04 * confidence
         if confidence >= 0.9:
             reasons.append("high_confidence")
 
-        state = item.lifecycle_state.casefold()
         if state in {"blocked", "at_risk"}:
             score += 0.08
             reasons.append("needs_attention")
-        elif state in {
-            "completed",
-            "cancelled",
-            "abandoned",
-            "superseded",
-            "expired",
-            "archived",
-        }:
-            return 0.0, []
 
         return min(1.0, score), reasons
 
@@ -198,6 +221,13 @@ class ContinuityPlanner:
         if hours <= 720:
             return 0.25
         return 0.0
+
+    @staticmethod
+    def _is_due(target_at: datetime, now: datetime) -> bool:
+        target = target_at
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        return target <= now
 
     @classmethod
     def _terms(cls, text: str) -> set[str]:
