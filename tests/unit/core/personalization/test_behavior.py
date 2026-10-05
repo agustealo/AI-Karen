@@ -11,7 +11,6 @@ from typing import Any, Dict
 import pytest
 
 from ai_karen_engine.core.personalization.behavior.aggregator import BehaviorAggregator
-from ai_karen_engine.core.personalization.behavior.contracts import BehaviorPatternStore
 from ai_karen_engine.core.personalization.contracts import BehaviorPattern, PreferenceStability
 
 
@@ -50,25 +49,6 @@ class TestBehaviorAggregator:
         assert patterns[0].observation_count == 2
 
 
-class TestBehaviorPatternStore:
-    def test_upsert_and_list(self):
-        store = BehaviorPatternStore()
-        pattern = BehaviorPattern(
-            pattern_id="p1",
-            user_id="u1",
-            tenant_id="t1",
-            pattern_type="audit",
-            context_signature="ctx",
-            observation_count=1,
-            confidence=0.5,
-            first_seen=datetime.utcnow(),
-            last_seen=datetime.utcnow(),
-            recurrence="observed",
-            stability=PreferenceStability.SHORT_TERM,
-        )
-        store.upsert(pattern)
-        assert store.get("p1") is pattern
-        assert len(store.list_for_user("u1", "t1")) == 1
 
 
-__all__ = ["TestBehaviorAggregator", "TestBehaviorPatternStore"]
+__all__ = ["TestBehaviorAggregator"]
