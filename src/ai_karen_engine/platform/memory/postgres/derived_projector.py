@@ -799,7 +799,14 @@ class PostgresDerivedMemoryProjector:
     def _memory_type(signal_type: str) -> str:
         if signal_type in {"workflow", "procedure", "tool_use"}:
             return "procedural"
-        if signal_type in {"identity_fact", "preference", "fact", "entity", "goal"}:
+        if signal_type in {
+            "identity_fact",
+            "preference",
+            "fact",
+            "entity",
+            "goal",
+            "open_loop",
+        }:
             return "semantic"
         return "episodic"
 
