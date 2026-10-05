@@ -459,6 +459,8 @@ class MemoryFormationService:
             "goal_transition",
             "prospective_event",
             "prospective_transition",
+            "open_loop",
+            "open_loop_transition",
             "fact",
         }:
             return MemoryNamespace.LONG_TERM
