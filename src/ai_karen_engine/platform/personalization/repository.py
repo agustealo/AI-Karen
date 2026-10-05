@@ -51,9 +51,7 @@ class PostgresPersonalizationRepository(PersonalizationRepository):
     async def health_check(self) -> UserModelHealthStatus:
         try:
             # Health is intentionally shallow: availability, not synthetic readiness.
-            async with async_transaction_scope(
-                tenant_id="00000000-0000-0000-0000-000000000000"
-            ) as session:
+            async with async_transaction_scope() as session:
                 await session.execute(text("SELECT 1"))
         except Exception:
             return UserModelHealthStatus(
