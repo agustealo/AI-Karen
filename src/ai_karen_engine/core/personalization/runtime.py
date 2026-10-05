@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, Dict
 
 from .behavior.aggregator import BehaviorAggregator
+from .behavior.contracts import BehaviorObservation
 from .contracts import (
     BehaviorCandidate,
     BehaviorPattern,
@@ -92,15 +93,14 @@ class UserModelRuntime:
                 )
         return snapshot
 
-    async def ingest_outcome(self, outcome: Any) -> list[BehaviorPattern]:
-        """Learn recurring behavior evidence from canonical runtime outcomes."""
-        candidates = self.behavior_aggregator.ingest_outcome(outcome)
-        promoted: list[BehaviorPattern] = []
-        for candidate in candidates:
-            pattern = await self._accumulate_behavior(candidate)
-            if pattern.observation_count >= self._BEHAVIOR_PROMOTION_THRESHOLD:
-                promoted.append(pattern)
-        return promoted
+    async def ingest_behavior_observation(
+        self,
+        observation: BehaviorObservation,
+    ) -> BehaviorPattern:
+        """Accumulate an explicit user-behavior observation durably."""
+
+        candidate = self.behavior_aggregator.observe(observation)
+        return await self._accumulate_behavior(candidate)
 
     async def _accumulate_behavior(self, candidate: BehaviorCandidate) -> BehaviorPattern:
         existing_patterns = await self.repository.list_behaviors(
