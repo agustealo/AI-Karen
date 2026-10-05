@@ -17,7 +17,12 @@ from ai_karen_engine.core.memory.types import (
 )
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
-from .ledger_models import MemoryEvent, MemoryProspectiveItem, MemoryUserGoal
+from .ledger_models import (
+    MemoryEvent,
+    MemoryOpenLoop,
+    MemoryProspectiveItem,
+    MemoryUserGoal,
+)
 
 
 class PostgresUserStateRecallRetriever:
