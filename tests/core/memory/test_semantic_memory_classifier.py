@@ -35,6 +35,13 @@ def test_favorite_color_becomes_long_term_preference() -> None:
     assert signal.metadata["stability"] == "long_term"
 
 
+def test_favorite_color_correction_is_classified_as_same_preference_key() -> None:
+    signal = _one("Actually orange is my favorite color now.", "preference")
+
+    assert signal.metadata["attribute"] == "favorite_color"
+    assert signal.metadata["normalized_value"] == "orange"
+
+
 def test_gym_goal_becomes_explicit_goal_not_generic_preference() -> None:
     signals = classify_explicit_user_memory("I'm trying to work out four days a week.")
 
