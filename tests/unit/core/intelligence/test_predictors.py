@@ -60,6 +60,25 @@ async def test_memory_relevance_predictor():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What's my name?",
+        "What is my favorite color?",
+        "What are my goals?",
+        "Do I have an upcoming interview?",
+    ],
+)
+async def test_direct_continuity_queries_request_memory_without_embeddings(text):
+    predictor = MemoryRelevancePredictor()
+    result = await predictor.predict(IntelligenceFeatures(text=text))
+
+    assert result.value >= 0.5
+    assert result.label == "relevant"
+    assert result.fallback_used is True
+
+
+@pytest.mark.asyncio
 async def test_capability_predictor():
     predictor = CapabilityPredictor()
     features = IntelligenceFeatures(text="Search for Python tutorials and run the code.")
