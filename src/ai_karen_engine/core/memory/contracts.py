@@ -163,17 +163,58 @@ class RelationshipModel:
     interaction_history: list[JsonMap] = field(default_factory=list)
 
 
+class ProspectiveState(str, Enum):
+    DORMANT = "dormant"
+    READY = "ready"
+    TRIGGERED = "triggered"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    SUPERSEDED = "superseded"
+    ARCHIVED = "archived"
+
+
+class ProspectiveTriggerType(str, Enum):
+    TIME_RELEVANT = "time_relevant"
+    EVENT_RELEVANT = "event_relevant"
+    CONTEXT_RELEVANT = "context_relevant"
+    GOAL_STATE_RELEVANT = "goal_state_relevant"
+    USER_RELEVANT = "user_relevant"
+    PROJECT_RELEVANT = "project_relevant"
+
+
+@dataclass
+class ProspectiveTrigger:
+    trigger_type: ProspectiveTriggerType
+    target_ref: str
+    description: str
+    condition: str | None = None
+    tenant_id: str | None = None
+    user_id: str | None = None
+    target_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.tenant_id or self.tenant_id == "default":
+            raise ValueError("prospective trigger tenant_id must be explicit and non-default")
+
+
 @dataclass
 class ProspectiveMemory:
-    intention: str
+    pm_id: str
+    description: str
+    trigger: ProspectiveTrigger
+    state: ProspectiveState
     tenant_id: str
     user_id: str | None = None
-    trigger: JsonMap = field(default_factory=dict)
-    status: str = "open"
+    target_intention_id: str | None = None
+    target_goal_id: str | None = None
+    evidence_refs: list[str] = field(default_factory=list)
     priority: str = "medium"
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    created_from: str | None = None
+    triggered_at: datetime | None = None
     completed_at: datetime | None = None
+    archived_at: datetime | None = None
+    created_from: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -235,6 +276,9 @@ __all__ = [
     "MemoryProcessingStage",
     "MemorySalience",
     "ProspectiveMemory",
+    "ProspectiveState",
+    "ProspectiveTrigger",
+    "ProspectiveTriggerType",
     "RecallScoreComponents",
     "RelationshipModel",
     "SalienceScore",
