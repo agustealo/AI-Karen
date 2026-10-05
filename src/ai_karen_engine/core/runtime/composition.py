@@ -64,10 +64,6 @@ def build_runtime_composition() -> RuntimeComposition:
     from ai_karen_engine.core.runtime.decision_pipeline import RuntimeDecisionPipeline
     from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer
     from ai_karen_engine.core.runtime.outcome.store import get_outcome_store
-    from ai_karen_engine.platform.memory.postgres import (
-        PostgresContinuityStateRepository,
-    )
-
     cognitive_cortex = CortexExecutionDecider()
     runtime_policy = RuntimePolicyEnforcer()
     decision_pipeline = RuntimeDecisionPipeline(
@@ -81,9 +77,7 @@ def build_runtime_composition() -> RuntimeComposition:
         decision_pipeline=decision_pipeline,
         expression_gateway=ExpressionGateway(),
         outcome_store=get_outcome_store(),
-        continuity_runtime=ContinuityRuntime(
-            state_repository=PostgresContinuityStateRepository(),
-        ),
+        continuity_runtime=ContinuityRuntime(),
     )
 
 
