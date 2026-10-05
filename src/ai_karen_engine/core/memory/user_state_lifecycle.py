@@ -14,6 +14,14 @@ from ai_karen_engine.core.memory.contracts import (
 
 
 _GOAL_TRANSITIONS: dict[GoalState, frozenset[GoalState]] = {
+    GoalState.PROPOSED: frozenset(
+        {
+            GoalState.ACTIVE,
+            GoalState.PAUSED,
+            GoalState.ABANDONED,
+            GoalState.EXPIRED,
+        }
+    ),
     GoalState.ACTIVE: frozenset(
         {
             GoalState.BLOCKED,
