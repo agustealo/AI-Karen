@@ -139,7 +139,7 @@ async def test_explicit_name_only_pii_is_allowed_as_confidential_profile_memory(
     assert result["persisted"] == 1
     entry, _context = vault.calls[0]
     assert entry.memory_type is MemoryType.SEMANTIC
-    assert entry.metadata.custom["memory_sensitivity"] == "confidential"
+    assert entry.metadata.custom["sensitivity_class"] == "confidential"
     assert entry.metadata.custom["retention_scope"] == "user_profile"
     assert projector.calls[0]["signal"].signal_type == "identity_fact"
 
