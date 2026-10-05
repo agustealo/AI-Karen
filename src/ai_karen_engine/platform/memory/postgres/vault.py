@@ -367,6 +367,15 @@ class PostgresNeuroVault(VaultPort):
             if assertion is None:
                 return VaultWriteReceipt(memory_id=memory_id, persisted=False, tombstoned=False)
             assertion.valid_to = now
+            source_event = await self._scoped_event(
+                session,
+                assertion.event_id,
+                tenant_uuid=tenant_uuid,
+                user_uuid=user_uuid,
+            )
+            if source_event is not None:
+                source_event.valid_to = now
+                source_event.updated_at = now
             event = self._mutation_event(
                 tenant_uuid=tenant_uuid,
                 user_uuid=user_uuid,
@@ -406,6 +415,16 @@ class PostgresNeuroVault(VaultPort):
             )
             if assertion is None:
                 return VaultWriteReceipt(memory_id=memory_id, persisted=False)
+
+            source_event = await self._scoped_event(
+                session,
+                assertion.event_id,
+                tenant_uuid=tenant_uuid,
+                user_uuid=user_uuid,
+            )
+            if source_event is not None:
+                source_event.valid_to = datetime.utcnow()
+                source_event.updated_at = datetime.utcnow()
 
             event = self._mutation_event(
                 tenant_uuid=tenant_uuid,
@@ -497,6 +516,22 @@ class PostgresNeuroVault(VaultPort):
     @staticmethod
     async def _find_by_idempotency(session: Any, key: str) -> MemoryEvent | None:
         stmt = select(MemoryEvent).where(MemoryEvent.idempotency_key == key).limit(1)
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def _scoped_event(
+        session: Any,
+        event_id: uuid.UUID,
+        *,
+        tenant_uuid: uuid.UUID,
+        user_uuid: uuid.UUID,
+    ) -> MemoryEvent | None:
+        stmt = select(MemoryEvent).where(
+            MemoryEvent.event_id == event_id,
+            MemoryEvent.tenant_id == tenant_uuid,
+            MemoryEvent.user_id == user_uuid,
+        )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
