@@ -215,6 +215,16 @@ class DataExporter:
             "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
         ),
         (
+            "memory_user_goal",
+            "SELECT * FROM memory_user_goal WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
+            "memory_prospective_item",
+            "SELECT * FROM memory_prospective_item WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
             "memory_entity",
             "SELECT * FROM memory_entity WHERE tenant_id = CAST(:tenant_id AS uuid) "
             "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
@@ -556,6 +566,8 @@ class DataEraser:
                 "memory_assertion",
                 "memory_episode",
                 "profile_fact",
+                "memory_user_goal",
+                "memory_prospective_item",
                 "projection_status",
                 "memory_procedure",
             ],

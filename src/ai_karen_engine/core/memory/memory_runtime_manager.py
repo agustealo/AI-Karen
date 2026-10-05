@@ -82,6 +82,7 @@ class MemoryRuntimeManager:
             PostgresProfileRecallRetriever,
             PostgresProceduralRecallRetriever,
             PostgresRecallRetriever,
+            PostgresUserStateRecallRetriever,
         )
         from ai_karen_engine.platform.memory.postgres.entity_resolver import (
             PostgresEntityResolver,
@@ -101,6 +102,7 @@ class MemoryRuntimeManager:
             retrievers=(
                 PostgresRecallRetriever(),
                 PostgresProfileRecallRetriever(),
+                PostgresUserStateRecallRetriever(),
                 PostgresProceduralRecallRetriever(),
                 source_router,
             )

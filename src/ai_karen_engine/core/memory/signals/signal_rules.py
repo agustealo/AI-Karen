@@ -6,6 +6,7 @@ Heuristic and pattern-based fallback extraction rules when spaCy is unavailable.
 
 import re
 
+from .semantic_classifier import classify_explicit_user_memory
 from .signal_models import MemorySignal
 
 
@@ -21,10 +22,13 @@ class RuleBasedExtractor:
         
     def extract(self, text: str) -> list[MemorySignal]:
         """Apply fallback rules to extract signals."""
-        signals = []
+        signals = classify_explicit_user_memory(text)
+        explicit_types = {signal.signal_type for signal in signals}
         
         # Simple preference extraction
         for pattern in self.preference_patterns:
+            if "goal" in explicit_types or "prospective_event" in explicit_types:
+                break
             match = pattern.search(text)
             if match:
                 signals.append(
@@ -57,4 +61,16 @@ class RuleBasedExtractor:
                  )
              )
              
-        return signals
+        deduped: list[MemorySignal] = []
+        seen: set[tuple[str, str, str]] = set()
+        for signal in signals:
+            key = (
+                signal.signal_type,
+                str(signal.metadata.get("attribute") or ""),
+                signal.text.casefold(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(signal)
+        return deduped

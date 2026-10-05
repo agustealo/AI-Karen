@@ -103,6 +103,48 @@ async def test_formation_fails_closed_without_memory_write_authority():
 
 
 @pytest.mark.asyncio
+async def test_explicit_name_only_pii_is_allowed_as_confidential_profile_memory():
+    signal = MemorySignal(
+        text="My name is Orlando",
+        signal_type="identity_fact",
+        confidence=0.98,
+        metadata={
+            "explicit_user_statement": True,
+            "semantic_class": "identity",
+            "category": "identity",
+            "attribute": "preferred_name",
+            "normalized_value": "Orlando",
+        },
+    )
+    vault = _Vault()
+    projector = _Projector()
+    service = _service(
+        vault,
+        projector,
+        signal,
+        privacy_classifier=_PrivacyClassifier(
+            contains_pii=True,
+            pii_types=["name"],
+        ),
+    )
+
+    result = await service.process_interaction(
+        text=signal.text,
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id="00000000-0000-0000-0000-000000000002",
+        policy_context={"memory_write_authorized": True},
+    )
+
+    assert result["status"] == "success"
+    assert result["persisted"] == 1
+    entry, _context = vault.calls[0]
+    assert entry.memory_type is MemoryType.SEMANTIC
+    assert entry.metadata.custom["memory_sensitivity"] == "confidential"
+    assert entry.metadata.custom["retention_scope"] == "user_profile"
+    assert projector.calls[0]["signal"].signal_type == "identity_fact"
+
+
+@pytest.mark.asyncio
 async def test_privacy_sensitive_interaction_is_rejected_before_vault():
     signal = MemorySignal(
         text="My email is user@example.com",
