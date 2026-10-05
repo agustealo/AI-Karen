@@ -155,6 +155,8 @@ class ChatRuntime:
                 if item.get("id")
             ]
 
+        self._resolve_continuity_context(request, decision)
+
         try:
             if decision.topology.value == "reasoning":
                 text, provider_meta = await self._run_reasoning(request, decision, plan, meter)
@@ -375,6 +377,8 @@ class ChatRuntime:
                 for item in (memory_recall_meta.get("memory_context") or {}).get("recall", [])[:5]
                 if item.get("id")
             ]
+
+        self._resolve_continuity_context(request, decision)
 
         streamed_text = ""
         provider_meta: Dict[str, Any] = {}
@@ -811,6 +815,54 @@ class ChatRuntime:
 
         request.metadata["memory_context"] = {"recall": list(recall_items)}
         return meta
+
+    def _resolve_continuity_context(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+    ) -> Dict[str, Any]:
+        """Derive non-executable next-action context from governed evidence."""
+
+        runtime = self._composition.continuity_runtime
+        if runtime is None:
+            return {}
+
+        query = self._extract_user_message(request.messages)
+        try:
+            plan = runtime.plan_from_context(
+                query=query,
+                cognitive_context=decision.cognitive_context,
+                top_k=5,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Continuity planning failed; continuing without suggestions",
+                extra={
+                    "correlation_id": request.context.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            request.metadata["continuity_context"] = {
+                "status": "failed",
+                "reason_codes": ["continuity_planning_failed"],
+                "suggestions": [],
+                "execution_authorized": False,
+            }
+            return request.metadata["continuity_context"]
+
+        payload = plan.to_dict()
+        if plan.has_suggestions:
+            payload["status"] = "success"
+            request.metadata["continuity_context"] = payload
+            logger.info(
+                "Continuity suggestions resolved",
+                extra={
+                    "correlation_id": request.context.correlation_id,
+                    "continuity_suggestion_count": len(plan.suggestions),
+                    "continuity_reason_codes": list(plan.reason_codes),
+                },
+            )
+        return payload
 
     async def _persist_memory(
         self,
@@ -1262,6 +1314,11 @@ class ChatRuntime:
                 "reasoning_depth": decision.reasoning_depth,
                 "tool_requirements": list(decision.tool_requirements),
                 "plugin_candidates": list(decision.plugin_candidates),
+                **(
+                    {"continuity": request.metadata["continuity_context"]}
+                    if request.metadata.get("continuity_context", {}).get("suggestions")
+                    else {}
+                ),
             },
             policy_decision_id=decision.policy_decision_id or "",
             budget=ReasoningBudget(
@@ -1406,6 +1463,11 @@ class ChatRuntime:
                 "workflow_version": decision.workflow_version,
                 "requires_human_gate": decision.requires_human_gate,
                 "requires_resumability": decision.requires_resumability,
+                **(
+                    {"continuity": request.metadata["continuity_context"]}
+                    if request.metadata.get("continuity_context", {}).get("suggestions")
+                    else {}
+                ),
             },
             token_budget=decision.token_budget,
             messages=[dict(msg) for msg in request.messages],
