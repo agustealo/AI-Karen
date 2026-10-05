@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
     from ai_karen_engine.core.expression.gateway import ExpressionGateway
+    from ai_karen_engine.core.runtime.continuity_runtime import ContinuityRuntime
+    from ai_karen_engine.core.runtime.continuity_runtime import ContinuityRuntime
     from ai_karen_engine.core.runtime.decision_pipeline import RuntimeDecisionPipeline
     from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer
     from ai_karen_engine.core.runtime.outcome.store import OutcomeStore
@@ -35,6 +37,7 @@ class RuntimeComposition:
     decision_pipeline: RuntimeDecisionPipeline
     expression_gateway: ExpressionGateway
     outcome_store: OutcomeStore | None = None
+    continuity_runtime: ContinuityRuntime | None = None
 
     @property
     def cortex(self) -> RuntimeDecisionPipeline:
@@ -61,6 +64,9 @@ def build_runtime_composition() -> RuntimeComposition:
     from ai_karen_engine.core.runtime.decision_pipeline import RuntimeDecisionPipeline
     from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer
     from ai_karen_engine.core.runtime.outcome.store import get_outcome_store
+    from ai_karen_engine.platform.memory.postgres import (
+        PostgresContinuityStateRepository,
+    )
 
     cognitive_cortex = CortexExecutionDecider()
     runtime_policy = RuntimePolicyEnforcer()
@@ -75,6 +81,9 @@ def build_runtime_composition() -> RuntimeComposition:
         decision_pipeline=decision_pipeline,
         expression_gateway=ExpressionGateway(),
         outcome_store=get_outcome_store(),
+        continuity_runtime=ContinuityRuntime(
+            state_repository=PostgresContinuityStateRepository(),
+        ),
     )
 
 
