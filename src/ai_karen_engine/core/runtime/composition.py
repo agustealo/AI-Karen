@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
     from ai_karen_engine.core.expression.gateway import ExpressionGateway
     from ai_karen_engine.core.runtime.continuity_runtime import ContinuityRuntime
-    from ai_karen_engine.core.runtime.continuity_runtime import ContinuityRuntime
     from ai_karen_engine.core.runtime.decision_pipeline import RuntimeDecisionPipeline
     from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer
     from ai_karen_engine.core.runtime.outcome.store import OutcomeStore
@@ -61,9 +60,11 @@ def build_runtime_composition() -> RuntimeComposition:
     """Build a fresh runtime dependency graph at the composition edge."""
     from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
     from ai_karen_engine.core.expression.gateway import ExpressionGateway
+    from ai_karen_engine.core.runtime.continuity_runtime import ContinuityRuntime
     from ai_karen_engine.core.runtime.decision_pipeline import RuntimeDecisionPipeline
     from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer
     from ai_karen_engine.core.runtime.outcome.store import get_outcome_store
+
     cognitive_cortex = CortexExecutionDecider()
     runtime_policy = RuntimePolicyEnforcer()
     decision_pipeline = RuntimeDecisionPipeline(
