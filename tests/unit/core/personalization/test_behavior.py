@@ -4,14 +4,7 @@ Unit tests for AI-Karen personalization behavior.
 
 from __future__ import annotations
 
-import uuid
-from datetime import datetime
-from typing import Any, Dict
-
-import pytest
-
 from ai_karen_engine.core.personalization.behavior.aggregator import BehaviorAggregator
-from ai_karen_engine.core.personalization.contracts import BehaviorPattern, PreferenceStability
 
 
 class DummyOutcome:
@@ -47,8 +40,6 @@ class TestBehaviorAggregator:
         patterns = agg.promote_candidates([c1, c2])
         assert len(patterns) == 1
         assert patterns[0].observation_count == 2
-
-
 
 
 __all__ = ["TestBehaviorAggregator"]
