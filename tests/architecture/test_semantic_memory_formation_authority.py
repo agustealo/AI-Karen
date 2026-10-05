@@ -110,3 +110,56 @@ def test_semantic_user_model_schema_is_migration_owned_and_rls_protected() -> No
     assert "REFERENCES public.memory_event(event_id) ON DELETE CASCADE" in migration
     assert "ALTER TABLE public.memory_user_goal ENABLE ROW LEVEL SECURITY" in migration
     assert "ALTER TABLE public.memory_prospective_item ENABLE ROW LEVEL SECURITY" in migration
+
+
+def test_goal_and_prospective_state_use_durable_memory_authority() -> None:
+    goals_init = _text(
+        "src/ai_karen_engine/core/personalization/goals/__init__.py"
+    )
+    memory_init = _text(
+        "src/ai_karen_engine/core/memory/__init__.py"
+    )
+    projector = _text(
+        "src/ai_karen_engine/platform/memory/postgres/derived_projector.py"
+    )
+
+    for retired in (
+        "GoalLifecycle",
+        "GoalStore",
+        "ProspectiveMemoryManager",
+        "ProspectiveMemoryStore",
+        "IntentionLifecycle",
+        "CommitmentLifecycle",
+    ):
+        assert retired not in goals_init
+        assert retired not in memory_init
+
+    assert "can_transition_goal" in projector
+    assert "can_transition_prospective" in projector
+    assert "MemoryUserGoal" in projector
+    assert "MemoryProspectiveItem" in projector
+
+
+def test_temporal_resolution_belongs_to_existing_memory_temporal_domain() -> None:
+    temporal_init = _text(
+        "src/ai_karen_engine/core/memory/temporal/__init__.py"
+    )
+    projector = _text(
+        "src/ai_karen_engine/platform/memory/postgres/derived_projector.py"
+    )
+
+    assert "resolve_temporal_text" in temporal_init
+    assert "from ai_karen_engine.core.memory.temporal import resolve_temporal_text" in projector
+    assert not (
+        ROOT / "src/ai_karen_engine/core/memory/temporal_resolver.py"
+    ).exists()
+
+
+def test_retired_ram_lifecycle_files_are_absent() -> None:
+    retired_paths = (
+        "src/ai_karen_engine/core/personalization/goals/lifecycle.py",
+        "src/ai_karen_engine/core/personalization/goals/prospective.py",
+        "src/ai_karen_engine/core/memory/prospective/__init__.py",
+    )
+    for relative in retired_paths:
+        assert not (ROOT / relative).exists()
