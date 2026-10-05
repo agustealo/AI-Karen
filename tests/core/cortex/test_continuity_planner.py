@@ -119,6 +119,14 @@ def test_due_item_is_labeled_honestly() -> None:
     assert "due_or_overdue" in plan.suggestions[0].reason_codes
 
 
+def test_terse_continuation_requests_trigger_without_substring_false_positives() -> None:
+    assert ContinuityPlanner.should_plan("next")
+    assert ContinuityPlanner.should_plan("Proceed with the work")
+    assert ContinuityPlanner.should_plan("continue fixing this")
+    assert not ContinuityPlanner.should_plan("Explain a discontinued product")
+    assert not ContinuityPlanner.should_plan("How does Next.js routing work?")
+
+
 def test_non_continuity_query_does_not_trigger_planning() -> None:
     planner = ContinuityPlanner()
     plan = planner.plan(
