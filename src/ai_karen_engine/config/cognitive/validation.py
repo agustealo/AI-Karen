@@ -5,6 +5,7 @@ from ai_karen_engine.config.cognitive.models import (
     BeliefPolicyConfig,
     CognitivePolicyConfig,
     ContextPolicyConfig,
+    ContinuityPolicyConfig,
     LearningPolicyConfig,
     MemoryPolicyConfig,
     MetaCognitionPolicyConfig,
@@ -171,6 +172,21 @@ def validate_learning(config: LearningPolicyConfig) -> None:
         )
 
 
+def validate_continuity(config: ContinuityPolicyConfig) -> None:
+    _validate_positive(config.top_k, "continuity.top_k")
+    for name in (
+        "open_loop_weight",
+        "prospective_weight",
+        "goal_weight",
+        "temporal_weight",
+        "context_overlap_weight",
+        "scope_match_weight",
+        "confidence_weight",
+        "needs_attention_weight",
+    ):
+        _validate_weight(getattr(config, name), f"continuity.{name}")
+
+
 def validate_memory(config: MemoryPolicyConfig) -> None:
     _validate_threshold(config.default_decay_lambda, "default_decay_lambda")
     _validate_weight(config.default_importance_score, "default_importance_score")
@@ -195,3 +211,4 @@ def validate_cognitive_policy(config: CognitivePolicyConfig) -> None:
     validate_behavior(config.behavior)
     validate_learning(config.learning)
     validate_memory(config.memory)
+    validate_continuity(config.continuity)
