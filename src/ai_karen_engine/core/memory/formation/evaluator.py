@@ -223,8 +223,14 @@ class MemoryFormationEvaluator:
             if not allowed:
                 continue
 
-            signal.metadata.setdefault("memory_sensitivity", consent_policy.sensitivity.value)
-            signal.metadata.setdefault("retention_scope", consent_policy.retention_scope.value)
+            signal.metadata.setdefault(
+                "sensitivity_class",
+                consent_policy.sensitivity.value,
+            )
+            signal.metadata.setdefault(
+                "retention_scope",
+                consent_policy.retention_scope.value,
+            )
             admitted.append(
                 AdmittedMemorySignal(
                     signal=signal,
