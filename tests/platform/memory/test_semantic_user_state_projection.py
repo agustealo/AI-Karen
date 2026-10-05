@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import datetime
-from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
