@@ -26,6 +26,9 @@ from ai_karen_engine.core.runtime.trajectory.store import (
     InMemoryTrajectoryStore,
     PostgresTrajectoryStore,
     TrajectoryStore,
+    TrajectoryStoreError,
+    get_trajectory_store,
+    set_trajectory_store,
 )
 
 __all__ = [
@@ -45,6 +48,9 @@ __all__ = [
     "ProviderAttempt",
     "TrajectoryRecorder",
     "TrajectoryStore",
+    "TrajectoryStoreError",
+    "get_trajectory_store",
+    "set_trajectory_store",
     "build_dataset_builder",
     "create_decision_observation",
     "create_feature_snapshot",
