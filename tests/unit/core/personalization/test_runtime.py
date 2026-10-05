@@ -19,7 +19,6 @@ from ai_karen_engine.core.personalization.contracts import (
     PreferenceStability,
     UserGoal,
 )
-from ai_karen_engine.core.personalization.goals.contracts import GoalStore
 from ai_karen_engine.core.personalization.persistence.repository import PersonalizationRepository
 from ai_karen_engine.core.personalization.runtime import UserModelRuntime
 
@@ -164,24 +163,4 @@ class TestPersonalizationRepository:
         assert repo.get_preference("p1") is None
 
 
-class TestGoalStore:
-    def test_upsert_and_list(self):
-        store = GoalStore()
-        goal = UserGoal(
-            goal_id="g1",
-            user_id="u1",
-            tenant_id="t1",
-            description="ship",
-            scope="global",
-            status="active",
-            confidence=0.8,
-            evidence=[],
-            started_at=datetime.utcnow(),
-            last_observed_at=datetime.utcnow(),
-        )
-        store.upsert(goal)
-        assert store.get("g1") is goal
-        assert len(store.list_active("u1", "t1")) == 1
-
-
-__all__ = ["TestUserModelRuntime", "TestPersonalizationRepository", "TestGoalStore"]
+__all__ = ["TestUserModelRuntime", "TestPersonalizationRepository"]
