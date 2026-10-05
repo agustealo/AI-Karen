@@ -11,6 +11,8 @@ import hashlib
 import re
 from datetime import datetime, timezone
 
+from ai_karen_engine.config.cognitive.models import ContinuityPolicyConfig
+
 from .contracts import (
     ContinuityPlan,
     ContinuityStateItem,
@@ -20,6 +22,9 @@ from .contracts import (
 
 class ContinuityPlanner:
     """Rank likely next needs from governed continuity state."""
+
+    def __init__(self, config: ContinuityPolicyConfig | None = None) -> None:
+        self._config = config or ContinuityPolicyConfig()
 
     _EXACT_CUES = ("next", "continue", "proceed", "keep going", "carry on")
     _WORD_CUES = ("continue", "proceed")
@@ -76,11 +81,13 @@ class ContinuityPlanner:
         query: str,
         items: list[ContinuityStateItem],
         now: datetime | None = None,
-        top_k: int = 5,
+        top_k: int | None = None,
         context: dict[str, object] | None = None,
     ) -> ContinuityPlan:
         """Return bounded, explainable suggestions without execution authority."""
 
+        if not self._config.enabled:
+            return ContinuityPlan(reason_codes=("continuity_disabled",))
         if not self.should_plan(query):
             return ContinuityPlan(reason_codes=("continuity_not_requested",))
 
@@ -121,7 +128,8 @@ class ContinuityPlanner:
             ),
             reverse=True,
         )
-        bounded = max(1, min(int(top_k), 10))
+        requested_top_k = self._config.top_k if top_k is None else int(top_k)
+        bounded = max(1, min(requested_top_k, 10))
         selected = tuple(ranked[:bounded])
         return ContinuityPlan(
             suggestions=selected,
@@ -158,20 +166,20 @@ class ContinuityPlanner:
             return 0.0, []
 
         if source == "open_loop":
-            score += 0.50
+            score += self._config.open_loop_weight
             reasons.append("unfinished_work")
         elif source == "prospective":
-            score += 0.42
+            score += self._config.prospective_weight
             reasons.append("upcoming_event")
         elif source == "goal":
-            score += 0.34
+            score += self._config.goal_weight
             reasons.append("active_goal")
         else:
             return 0.0, []
 
         temporal = self._temporal_score(item.target_at, now)
         if temporal > 0.0:
-            score += 0.28 * temporal
+            score += self._config.temporal_weight * temporal
             if item.target_at is not None and self._is_due(item.target_at, now):
                 reasons.append("due_or_overdue")
             else:
@@ -181,14 +189,14 @@ class ContinuityPlanner:
         if item.domain:
             overlap = max(overlap, self._text_overlap(query, item.domain))
         if overlap > 0.0:
-            score += 0.18 * overlap
+            score += self._config.context_overlap_weight * overlap
             reasons.append("context_match")
 
         current_domain = str(
             context.get("domain") or context.get("current_domain") or ""
         ).strip().casefold()
         if item.domain and current_domain and item.domain.casefold() == current_domain:
-            score += 0.12
+            score += self._config.scope_match_weight
             reasons.append("current_domain")
 
         current_project = str(
@@ -196,16 +204,16 @@ class ContinuityPlanner:
         ).strip()
         item_project = str(item.metadata.get("project_id") or "").strip()
         if current_project and item_project and current_project == item_project:
-            score += 0.12
+            score += self._config.scope_match_weight
             reasons.append("current_project")
 
         confidence = max(0.0, min(1.0, item.confidence))
-        score += 0.04 * confidence
+        score += self._config.confidence_weight * confidence
         if confidence >= 0.9:
             reasons.append("high_confidence")
 
         if state in {"blocked", "at_risk"}:
-            score += 0.08
+            score += self._config.needs_attention_weight
             reasons.append("needs_attention")
 
         return min(1.0, score), reasons
