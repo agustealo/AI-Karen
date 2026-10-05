@@ -1,14 +1,6 @@
-"""
-AI-Karen Personalization Module.
-
-User model and preference learning runtime.
-"""
+"""Personalization domain and derived user-model runtime."""
 
 from .persistence.repository import PersonalizationRepository
+from .runtime import UserModelRuntime
 
-try:
-    from .adapters import PersonalizationRepositoryAdapter
-except ImportError:
-    PersonalizationRepositoryAdapter = None
-
-__all__ = ["PersonalizationRepository", "PersonalizationRepositoryAdapter"]
+__all__ = ["PersonalizationRepository", "UserModelRuntime"]
