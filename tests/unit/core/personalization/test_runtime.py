@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from types import SimpleNamespace
-
 import pytest
 
+from ai_karen_engine.core.personalization.behavior.contracts import BehaviorObservation
 from ai_karen_engine.core.personalization.contracts import (
     BehaviorPattern,
     PreferenceCategory,
@@ -119,16 +118,17 @@ def _goal() -> UserGoal:
     )
 
 
-def _successful_outcome():
-    return SimpleNamespace(
+def _behavior_observation(observation_id: str) -> BehaviorObservation:
+    return BehaviorObservation(
+        observation_id=observation_id,
+        pattern_id="",
         user_id="u1",
         tenant_id="t1",
-        metadata={"workflow": "audit"},
-        execution_outcome=SimpleNamespace(
-            tool_success=True,
-            fallback_count=0,
-            response_completed=True,
-        ),
+        context_signature="workflow=audit",
+        action="accept_suggestion",
+        outcome="accepted",
+        observed_at=datetime.utcnow(),
+        metadata={"confidence": 0.8},
     )
 
 
@@ -174,11 +174,16 @@ async def test_behavior_learning_survives_runtime_reconstruction_via_repository(
     first = UserModelRuntime(repository=repository)
     second = UserModelRuntime(repository=repository)
 
-    assert await first.ingest_outcome(_successful_outcome()) == []
-    promoted = await second.ingest_outcome(_successful_outcome())
+    first_pattern = await first.ingest_behavior_observation(
+        _behavior_observation("obs-1")
+    )
+    second_pattern = await second.ingest_behavior_observation(
+        _behavior_observation("obs-2")
+    )
 
-    assert len(promoted) == 1
-    assert promoted[0].observation_count == 2
+    assert first_pattern.observation_count == 1
+    assert second_pattern.observation_count == 2
+    assert second_pattern.pattern_type == "accept_suggestion"
 
 
 @pytest.mark.asyncio
