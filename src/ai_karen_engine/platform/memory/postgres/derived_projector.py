@@ -19,6 +19,7 @@ from ai_karen_engine.core.memory.signals import MemorySignal
 from ai_karen_engine.core.memory.temporal import resolve_temporal_text
 from ai_karen_engine.core.memory.user_state_lifecycle import (
     can_transition_goal,
+    can_transition_open_loop,
     can_transition_prospective,
 )
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
@@ -703,7 +704,7 @@ class PostgresDerivedMemoryProjector:
         target_description = str(
             metadata.get("target_description") or ""
         ).strip().casefold()
-        if target_state not in {"completed", "cancelled", "superseded"}:
+        if not target_state:
             return
         if not target_description:
             return
@@ -731,6 +732,12 @@ class PostgresDerivedMemoryProjector:
             return
 
         _score, item = max(candidates, key=lambda pair: pair[0])
+        if not can_transition_open_loop(
+            str(item.lifecycle_state),
+            target_state,
+        ):
+            return
+
         now = datetime.utcnow()
         item.lifecycle_state = target_state
         item.valid_to = now
