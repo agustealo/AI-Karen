@@ -179,6 +179,29 @@ class PostgresDerivedMemoryProjector:
                     metadata=metadata,
                 )
 
+            if signal.signal_type == "open_loop":
+                await self._project_open_loop(
+                    session=session,
+                    tenant_uuid=tenant_uuid,
+                    user_uuid=user_uuid,
+                    event_uuid=event_uuid,
+                    signal=signal,
+                    confidence=confidence,
+                    source_type=source_type,
+                    source_ref=source_ref,
+                    metadata=metadata,
+                )
+
+            if signal.signal_type == "open_loop_transition":
+                await self._transition_open_loop(
+                    session=session,
+                    tenant_uuid=tenant_uuid,
+                    user_uuid=user_uuid,
+                    event_uuid=event_uuid,
+                    signal=signal,
+                    metadata=metadata,
+                )
+
             if signal.signal_type == "prospective_transition":
                 await self._transition_prospective_item(
                     session=session,
