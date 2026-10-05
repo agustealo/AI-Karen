@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from ai_karen_engine.core.memory.contracts import (
+    GoalState as CanonicalGoalState,
+    OpenLoopState,
+    ProspectiveState as CanonicalProspectiveState,
+)
 from ai_karen_engine.core.memory.user_state_lifecycle import (
-    ProspectiveItemState,
-    UserGoalState,
     can_transition_goal,
+    can_transition_open_loop,
     can_transition_prospective,
 )
 from ai_karen_engine.core.personalization.contracts import (
@@ -89,31 +93,46 @@ def test_goal_snapshot_is_read_only_projection() -> None:
 
 
 def test_canonical_goal_transition_rules_cover_terminal_user_outcomes() -> None:
-    assert can_transition_goal(UserGoalState.ACTIVE.value, UserGoalState.COMPLETED.value)
-    assert can_transition_goal(UserGoalState.ACTIVE.value, UserGoalState.ABANDONED.value)
-    assert can_transition_goal(UserGoalState.ACTIVE.value, UserGoalState.SUPERSEDED.value)
+    assert can_transition_goal(CanonicalGoalState.ACTIVE.value, CanonicalGoalState.COMPLETED.value)
+    assert can_transition_goal(CanonicalGoalState.ACTIVE.value, CanonicalGoalState.ABANDONED.value)
+    assert can_transition_goal(CanonicalGoalState.ACTIVE.value, CanonicalGoalState.SUPERSEDED.value)
     assert not can_transition_goal(
-        UserGoalState.COMPLETED.value,
-        UserGoalState.ACTIVE.value,
+        CanonicalGoalState.COMPLETED.value,
+        CanonicalGoalState.ACTIVE.value,
     )
 
 
 def test_canonical_prospective_transition_rules_are_monotonic() -> None:
     assert can_transition_prospective(
-        ProspectiveItemState.DORMANT.value,
-        ProspectiveItemState.TRIGGERED.value,
+        CanonicalProspectiveState.DORMANT.value,
+        CanonicalProspectiveState.TRIGGERED.value,
     )
     assert can_transition_prospective(
-        ProspectiveItemState.DORMANT.value,
-        ProspectiveItemState.CANCELLED.value,
+        CanonicalProspectiveState.DORMANT.value,
+        CanonicalProspectiveState.CANCELLED.value,
     )
     assert can_transition_prospective(
-        ProspectiveItemState.COMPLETED.value,
-        ProspectiveItemState.ARCHIVED.value,
+        CanonicalProspectiveState.COMPLETED.value,
+        CanonicalProspectiveState.ARCHIVED.value,
     )
     assert not can_transition_prospective(
-        ProspectiveItemState.ARCHIVED.value,
-        ProspectiveItemState.DORMANT.value,
+        CanonicalProspectiveState.ARCHIVED.value,
+        CanonicalProspectiveState.DORMANT.value,
+    )
+
+
+def test_canonical_open_loop_transition_rules_are_terminal() -> None:
+    assert can_transition_open_loop(
+        OpenLoopState.OPEN.value,
+        OpenLoopState.COMPLETED.value,
+    )
+    assert can_transition_open_loop(
+        OpenLoopState.OPEN.value,
+        OpenLoopState.CANCELLED.value,
+    )
+    assert not can_transition_open_loop(
+        OpenLoopState.COMPLETED.value,
+        OpenLoopState.OPEN.value,
     )
 
 
