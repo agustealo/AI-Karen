@@ -371,25 +371,7 @@ class IntelligenceRuntime:
         return "simple"
 
     def _heuristic_memory_relevance(self, text: str) -> float:
-        lower = text.lower()
-        cues = [
-            "remember",
-            "recall",
-            "previous",
-            "last time",
-            "we discussed",
-            "my preference",
-            "my project",
-            "continue",
-            "again",
-            "yesterday",
-            "earlier",
-            "before",
-            "history",
-            "past",
-        ]
-        matches = sum(1 for cue in cues if cue in lower)
-        return min(1.0, max(0.0, matches * 0.25))
+        return MemoryRelevancePredictor.heuristic_score(text)
 
     def _assess_topology_signals(
         self,
