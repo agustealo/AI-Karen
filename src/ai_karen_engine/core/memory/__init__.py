@@ -89,7 +89,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "SelfModelStore": (".self_model", "SelfModelStore"),
     "UserModelStore": (".user_model", "UserModelStore"),
     "RelationshipModelStore": (".relationship_model", "RelationshipModelStore"),
-    "ProspectiveMemoryStore": (".prospective", "ProspectiveMemoryStore"),
 }
 
 
@@ -176,5 +175,4 @@ __all__ = [
     "SelfModelStore",
     "UserModelStore",
     "RelationshipModelStore",
-    "ProspectiveMemoryStore",
 ]
