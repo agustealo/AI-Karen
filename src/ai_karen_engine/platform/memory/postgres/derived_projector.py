@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from ai_karen_engine.core.memory.projections import ProjectionManager
 from ai_karen_engine.core.memory.signals import MemorySignal
-from ai_karen_engine.core.memory.temporal_resolver import resolve_temporal_text
+from ai_karen_engine.core.memory.temporal import resolve_temporal_text
 from ai_karen_engine.core.memory.user_state_lifecycle import (
     can_transition_goal,
     can_transition_prospective,
