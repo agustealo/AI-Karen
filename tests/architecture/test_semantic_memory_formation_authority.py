@@ -67,6 +67,19 @@ def test_new_user_state_tables_are_privacy_export_and_erasure_covered() -> None:
     assert privacy.count('"memory_prospective_item"') >= 2
 
 
+def test_formation_and_vault_share_one_sensitivity_metadata_contract() -> None:
+    evaluator = _text(
+        "src/ai_karen_engine/core/memory/formation/evaluator.py"
+    )
+    vault = _text(
+        "src/ai_karen_engine/platform/memory/postgres/vault.py"
+    )
+
+    assert '"sensitivity_class"' in evaluator
+    assert 'custom.get("sensitivity_class")' in vault
+    assert '"memory_sensitivity"' not in evaluator
+
+
 def test_semantic_user_model_schema_is_migration_owned_and_rls_protected() -> None:
     migration = _text(
         "supabase/migrations/20261005010000_21_memory_semantic_user_model.sql"
