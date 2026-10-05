@@ -322,6 +322,64 @@ class PostgresMemoryControlRepository(MemoryControlPort):
                 }
                 for row in open_loops
             ],
+            "recent_goals": [
+                {
+                    "goal_id": str(row.goal_id),
+                    "event_id": str(row.event_id),
+                    "tenant_id": str(row.tenant_id),
+                    "user_id": str(row.user_id),
+                    "description": row.description,
+                    "goal_type": row.goal_type,
+                    "lifecycle_state": row.lifecycle_state,
+                    "confidence": row.confidence,
+                    "target_text": row.target_text,
+                    "target_at": self._dt(row.target_at),
+                    "valid_from": self._dt(row.valid_from),
+                    "valid_to": self._dt(row.valid_to),
+                    "metadata": row.metadata_payload,
+                    "updated_at": self._dt(row.updated_at),
+                }
+                for row in goals
+            ],
+            "recent_prospective_items": [
+                {
+                    "prospective_id": str(row.prospective_id),
+                    "event_id": str(row.event_id),
+                    "tenant_id": str(row.tenant_id),
+                    "user_id": str(row.user_id),
+                    "event_type": row.event_type,
+                    "description": row.description,
+                    "temporal_text": row.temporal_text,
+                    "target_at": self._dt(row.target_at),
+                    "lifecycle_state": row.lifecycle_state,
+                    "confidence": row.confidence,
+                    "valid_from": self._dt(row.valid_from),
+                    "valid_to": self._dt(row.valid_to),
+                    "metadata": row.metadata_payload,
+                    "updated_at": self._dt(row.updated_at),
+                }
+                for row in prospective
+            ],
+            "recent_open_loops": [
+                {
+                    "open_loop_id": str(row.open_loop_id),
+                    "event_id": str(row.event_id),
+                    "tenant_id": str(row.tenant_id),
+                    "user_id": str(row.user_id),
+                    "loop_type": row.loop_type,
+                    "description": row.description,
+                    "domain": row.domain,
+                    "lifecycle_state": row.lifecycle_state,
+                    "confidence": row.confidence,
+                    "target_text": row.target_text,
+                    "target_at": self._dt(row.target_at),
+                    "valid_from": self._dt(row.valid_from),
+                    "valid_to": self._dt(row.valid_to),
+                    "metadata": row.metadata_payload,
+                    "updated_at": self._dt(row.updated_at),
+                }
+                for row in open_loops
+            ],
             "recent_episodes": [
                 {
                     "episode_id": str(row.episode_id),
