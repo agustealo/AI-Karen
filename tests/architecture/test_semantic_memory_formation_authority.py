@@ -200,3 +200,43 @@ def test_retired_ram_lifecycle_files_are_absent() -> None:
     )
     for relative in retired_paths:
         assert not (ROOT / relative).exists()
+
+
+def test_continuity_contracts_have_single_memory_owner() -> None:
+    memory_contracts = _text(
+        "src/ai_karen_engine/core/memory/contracts.py"
+    )
+    goal_contracts = _text(
+        "src/ai_karen_engine/core/personalization/goals/contracts.py"
+    )
+
+    assert memory_contracts.count("class ProspectiveMemory") == 1
+    assert memory_contracts.count("class GoalState") == 1
+    assert memory_contracts.count("class OpenLoopState") == 1
+    assert "class ProspectiveMemory" not in goal_contracts
+    assert "class GoalState" not in goal_contracts
+    assert "from ai_karen_engine.core.memory.contracts import (" in goal_contracts
+
+
+def test_open_loop_continuity_is_durable_private_and_recallable() -> None:
+    migration = _text(
+        "supabase/migrations/20261005020000_22_memory_open_loops.sql"
+    )
+    privacy = _text(
+        "src/ai_karen_engine/services/privacy_compliance.py"
+    )
+    retriever = _text(
+        "src/ai_karen_engine/platform/memory/postgres/user_state_retriever.py"
+    )
+    projector = _text(
+        "src/ai_karen_engine/platform/memory/postgres/derived_projector.py"
+    )
+
+    assert "CREATE TABLE IF NOT EXISTS public.memory_open_loop" in migration
+    assert "ALTER TABLE public.memory_open_loop ENABLE ROW LEVEL SECURITY" in migration
+    assert '"memory_open_loop"' in privacy
+    assert "MemoryOpenLoop" in retriever
+    assert "unresolved_intention_relevance" in retriever
+    assert 'signal.signal_type == "open_loop"' in projector
+    assert 'signal.signal_type == "open_loop_transition"' in projector
+    assert "can_transition_open_loop" in projector
