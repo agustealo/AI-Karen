@@ -134,7 +134,7 @@ class PostgresUserStateRecallRetriever:
                         MemoryEvent.consent_state == "granted",
                         or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
                         MemoryProspectiveItem.lifecycle_state.in_(
-                            ("dormant", "ready", "active", "triggered")
+                            ("dormant", "ready", "triggered")
                         ),
                         or_(
                             MemoryProspectiveItem.valid_to.is_(None),
