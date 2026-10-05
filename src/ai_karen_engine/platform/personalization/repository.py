@@ -27,7 +27,9 @@ from ai_karen_engine.core.personalization.contracts import (
     UserModelHealth,
     UserModelHealthStatus,
 )
-from ai_karen_engine.core.personalization.persistence.repository import PersonalizationRepository
+from ai_karen_engine.core.personalization.persistence.repository import (
+    PersonalizationRepository,
+)
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
 
