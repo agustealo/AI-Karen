@@ -118,8 +118,15 @@ class PostgresPersonalizationRepository(PersonalizationRepository):
         records: list[PreferenceRecord] = []
         for row in rows:
             payload = self._json_object(row["value"])
-            key = self._preference_key(str(row["attribute"] or "preference"))
+            key = str(
+                payload.get("preference_key")
+                or self._preference_key(str(row["attribute"] or "preference"))
+            )
             category = self._category_for_key(key)
+            scope = self._scope_from_payload(payload)
+            stability = self._stability(
+                str(payload.get("stability") or PreferenceStability.LONG_TERM.value)
+            )
             observed = row["valid_from"] or row["updated_at"] or now
             records.append(
                 PreferenceRecord(
@@ -129,7 +136,7 @@ class PostgresPersonalizationRepository(PersonalizationRepository):
                     key=key,
                     value=payload.get("value", payload.get("text")),
                     confidence=float(row["confidence"] or 0.0),
-                    stability=PreferenceStability.LONG_TERM,
+                    stability=stability,
                     state=PreferenceState.STABLE,
                     evidence_count=1,
                     contradiction_count=0,
@@ -137,12 +144,18 @@ class PostgresPersonalizationRepository(PersonalizationRepository):
                     last_observed_at=row["updated_at"] or observed,
                     last_confirmed_at=row["updated_at"] or observed,
                     source_types=[str(row["source_type"] or "memory")],
-                    scope=PreferenceScope.GLOBAL,
+                    scope=scope,
                     version=1,
                     category=category,
                     metadata={
                         "source_ref": row["source_ref"],
                         "source": "canonical_memory_projection",
+                        "domain": payload.get("domain"),
+                        "project_id": payload.get("project_id"),
+                        "task_id": payload.get("task_id"),
+                        "task_type": payload.get("task_type"),
+                        "conversation_id": payload.get("conversation_id"),
+                        "session_id": payload.get("session_id"),
                     },
                 )
             )
@@ -359,6 +372,26 @@ class PostgresPersonalizationRepository(PersonalizationRepository):
             return PreferenceCategory(prefix)
         except ValueError:
             return PreferenceCategory.INTERACTION
+
+    @staticmethod
+    def _scope_from_payload(payload: dict[str, Any]) -> PreferenceScope:
+        raw_scope = str(payload.get("scope") or "").strip().casefold()
+        if raw_scope:
+            try:
+                return PreferenceScope(raw_scope)
+            except ValueError:
+                pass
+        if payload.get("session_id"):
+            return PreferenceScope.SESSION
+        if payload.get("conversation_id"):
+            return PreferenceScope.CONVERSATION
+        if payload.get("project_id"):
+            return PreferenceScope.PROJECT
+        if payload.get("task_id") or payload.get("task_type"):
+            return PreferenceScope.TASK_TYPE
+        if payload.get("domain"):
+            return PreferenceScope.DOMAIN
+        return PreferenceScope.GLOBAL
 
     @staticmethod
     def _goal_status(state: str) -> UserGoalStatus:
