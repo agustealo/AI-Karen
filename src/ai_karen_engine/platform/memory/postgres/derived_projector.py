@@ -338,6 +338,19 @@ class PostgresDerivedMemoryProjector:
             "text": signal.text,
             "semantic_class": metadata.get("semantic_class"),
         }
+        for key in (
+            "preference_key",
+            "scope",
+            "domain",
+            "project_id",
+            "task_id",
+            "task_type",
+            "conversation_id",
+            "session_id",
+            "stability",
+        ):
+            if metadata.get(key) is not None:
+                value[key] = metadata.get(key)
         if signal.keywords:
             value["keywords"] = list(signal.keywords)
         if signal.entities:

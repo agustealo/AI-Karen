@@ -91,9 +91,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "AssociationGraph": (".associative", "AssociationGraph"),
     "SpreadingActivation": (".associative", "SpreadingActivation"),
     "ReflectionEngine": (".reflection", "ReflectionEngine"),
-    "SelfModelStore": (".self_model", "SelfModelStore"),
-    "UserModelStore": (".user_model", "UserModelStore"),
-    "RelationshipModelStore": (".relationship_model", "RelationshipModelStore"),
 }
 
 
@@ -182,7 +179,4 @@ __all__ = [
     "AssociationGraph",
     "SpreadingActivation",
     "ReflectionEngine",
-    "SelfModelStore",
-    "UserModelStore",
-    "RelationshipModelStore",
 ]

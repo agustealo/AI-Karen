@@ -230,6 +230,12 @@ class DataExporter:
             "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
         ),
         (
+            "personalization_behavior_pattern",
+            "SELECT * FROM personalization_behavior_pattern "
+            "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
             "memory_entity",
             "SELECT * FROM memory_entity WHERE tenant_id = CAST(:tenant_id AS uuid) "
             "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
@@ -574,6 +580,7 @@ class DataEraser:
                 "memory_user_goal",
                 "memory_prospective_item",
                 "memory_open_loop",
+                "personalization_behavior_pattern",
                 "projection_status",
                 "memory_procedure",
             ],
