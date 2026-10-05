@@ -161,6 +161,16 @@ class PostgresUserStateRecallRetriever:
                 continue
             candidates.append(self._goal_entry(row, query, relevance))
 
+        for row in open_loop_rows:
+            relevance = self._relevance(
+                query_text,
+                f"{row.description} {row.domain or ''} {row.target_text or ''}",
+                broad=broad,
+            )
+            if relevance <= 0.0:
+                continue
+            candidates.append(self._open_loop_entry(row, query, relevance))
+
         for row in prospective_rows:
             relevance = self._relevance(
                 query_text,
