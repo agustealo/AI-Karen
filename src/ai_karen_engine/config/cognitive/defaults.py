@@ -3,6 +3,7 @@ from ai_karen_engine.config.cognitive.models import (
     BeliefPolicyConfig,
     CognitivePolicyConfig,
     ContextPolicyConfig,
+    ContinuityPolicyConfig,
     LearningPolicyConfig,
     MemoryPolicyConfig,
     MetaCognitionPolicyConfig,
@@ -19,6 +20,7 @@ def cognitive_policy_defaults() -> CognitivePolicyConfig:
         behavior=BehaviorPolicyConfig(),
         learning=LearningPolicyConfig(),
         memory=MemoryPolicyConfig(),
+        continuity=ContinuityPolicyConfig(),
     )
 
 
@@ -44,6 +46,10 @@ def behavior_defaults() -> BehaviorPolicyConfig:
 
 def learning_defaults() -> LearningPolicyConfig:
     return LearningPolicyConfig()
+
+
+def continuity_defaults() -> ContinuityPolicyConfig:
+    return ContinuityPolicyConfig()
 
 
 def memory_defaults() -> MemoryPolicyConfig:
