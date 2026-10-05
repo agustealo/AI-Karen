@@ -6,136 +6,132 @@ timers, reminders, scheduling, or runtime execution.
 
 from __future__ import annotations
 
-from enum import Enum
+from ai_karen_engine.core.memory.contracts import (
+    GoalState,
+    OpenLoopState,
+    ProspectiveState,
+)
 
 
-class UserGoalState(str, Enum):
-    ACTIVE = "active"
-    BLOCKED = "blocked"
-    PAUSED = "paused"
-    AT_RISK = "at_risk"
-    SATISFIED = "satisfied"
-    COMPLETED = "completed"
-    ABANDONED = "abandoned"
-    SUPERSEDED = "superseded"
-    EXPIRED = "expired"
-
-
-class ProspectiveItemState(str, Enum):
-    DORMANT = "dormant"
-    READY = "ready"
-    TRIGGERED = "triggered"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
-    SUPERSEDED = "superseded"
-    ARCHIVED = "archived"
-
-
-_GOAL_TRANSITIONS: dict[UserGoalState, frozenset[UserGoalState]] = {
-    UserGoalState.ACTIVE: frozenset(
+_GOAL_TRANSITIONS: dict[GoalState, frozenset[GoalState]] = {
+    GoalState.ACTIVE: frozenset(
         {
-            UserGoalState.BLOCKED,
-            UserGoalState.PAUSED,
-            UserGoalState.AT_RISK,
-            UserGoalState.SATISFIED,
-            UserGoalState.COMPLETED,
-            UserGoalState.ABANDONED,
-            UserGoalState.SUPERSEDED,
-            UserGoalState.EXPIRED,
+            GoalState.BLOCKED,
+            GoalState.PAUSED,
+            GoalState.AT_RISK,
+            GoalState.SATISFIED,
+            GoalState.COMPLETED,
+            GoalState.ABANDONED,
+            GoalState.SUPERSEDED,
+            GoalState.EXPIRED,
         }
     ),
-    UserGoalState.BLOCKED: frozenset(
+    GoalState.BLOCKED: frozenset(
         {
-            UserGoalState.ACTIVE,
-            UserGoalState.PAUSED,
-            UserGoalState.ABANDONED,
-            UserGoalState.SUPERSEDED,
-            UserGoalState.EXPIRED,
+            GoalState.ACTIVE,
+            GoalState.PAUSED,
+            GoalState.ABANDONED,
+            GoalState.SUPERSEDED,
+            GoalState.EXPIRED,
         }
     ),
-    UserGoalState.PAUSED: frozenset(
+    GoalState.PAUSED: frozenset(
         {
-            UserGoalState.ACTIVE,
-            UserGoalState.ABANDONED,
-            UserGoalState.SUPERSEDED,
-            UserGoalState.EXPIRED,
+            GoalState.ACTIVE,
+            GoalState.ABANDONED,
+            GoalState.SUPERSEDED,
+            GoalState.EXPIRED,
         }
     ),
-    UserGoalState.AT_RISK: frozenset(
+    GoalState.AT_RISK: frozenset(
         {
-            UserGoalState.ACTIVE,
-            UserGoalState.BLOCKED,
-            UserGoalState.PAUSED,
-            UserGoalState.SATISFIED,
-            UserGoalState.COMPLETED,
-            UserGoalState.ABANDONED,
-            UserGoalState.SUPERSEDED,
-            UserGoalState.EXPIRED,
+            GoalState.ACTIVE,
+            GoalState.BLOCKED,
+            GoalState.PAUSED,
+            GoalState.SATISFIED,
+            GoalState.COMPLETED,
+            GoalState.ABANDONED,
+            GoalState.SUPERSEDED,
+            GoalState.EXPIRED,
         }
     ),
-    UserGoalState.SATISFIED: frozenset(
+    GoalState.SATISFIED: frozenset(
         {
-            UserGoalState.COMPLETED,
-            UserGoalState.ACTIVE,
-            UserGoalState.ABANDONED,
-            UserGoalState.EXPIRED,
+            GoalState.COMPLETED,
+            GoalState.ACTIVE,
+            GoalState.ABANDONED,
+            GoalState.EXPIRED,
         }
     ),
-    UserGoalState.COMPLETED: frozenset(),
-    UserGoalState.ABANDONED: frozenset(),
-    UserGoalState.SUPERSEDED: frozenset(),
-    UserGoalState.EXPIRED: frozenset(),
+    GoalState.COMPLETED: frozenset(),
+    GoalState.ABANDONED: frozenset(),
+    GoalState.SUPERSEDED: frozenset(),
+    GoalState.EXPIRED: frozenset(),
 }
 
 _PROSPECTIVE_TRANSITIONS: dict[
-    ProspectiveItemState,
-    frozenset[ProspectiveItemState],
+    ProspectiveState,
+    frozenset[ProspectiveState],
 ] = {
-    ProspectiveItemState.DORMANT: frozenset(
+    ProspectiveState.DORMANT: frozenset(
         {
-            ProspectiveItemState.READY,
-            ProspectiveItemState.TRIGGERED,
-            ProspectiveItemState.COMPLETED,
-            ProspectiveItemState.CANCELLED,
-            ProspectiveItemState.SUPERSEDED,
-            ProspectiveItemState.ARCHIVED,
+            ProspectiveState.READY,
+            ProspectiveState.TRIGGERED,
+            ProspectiveState.COMPLETED,
+            ProspectiveState.CANCELLED,
+            ProspectiveState.SUPERSEDED,
+            ProspectiveState.ARCHIVED,
         }
     ),
-    ProspectiveItemState.READY: frozenset(
+    ProspectiveState.READY: frozenset(
         {
-            ProspectiveItemState.TRIGGERED,
-            ProspectiveItemState.COMPLETED,
-            ProspectiveItemState.CANCELLED,
-            ProspectiveItemState.ARCHIVED,
+            ProspectiveState.TRIGGERED,
+            ProspectiveState.COMPLETED,
+            ProspectiveState.CANCELLED,
+            ProspectiveState.ARCHIVED,
         }
     ),
-    ProspectiveItemState.TRIGGERED: frozenset(
+    ProspectiveState.TRIGGERED: frozenset(
         {
-            ProspectiveItemState.COMPLETED,
-            ProspectiveItemState.CANCELLED,
-            ProspectiveItemState.ARCHIVED,
+            ProspectiveState.COMPLETED,
+            ProspectiveState.CANCELLED,
+            ProspectiveState.ARCHIVED,
         }
     ),
-    ProspectiveItemState.COMPLETED: frozenset({ProspectiveItemState.ARCHIVED}),
-    ProspectiveItemState.CANCELLED: frozenset({ProspectiveItemState.ARCHIVED}),
-    ProspectiveItemState.SUPERSEDED: frozenset({ProspectiveItemState.ARCHIVED}),
-    ProspectiveItemState.ARCHIVED: frozenset(),
+    ProspectiveState.COMPLETED: frozenset({ProspectiveState.ARCHIVED}),
+    ProspectiveState.CANCELLED: frozenset({ProspectiveState.ARCHIVED}),
+    ProspectiveState.SUPERSEDED: frozenset({ProspectiveState.ARCHIVED}),
+    ProspectiveState.ARCHIVED: frozenset(),
 }
 
 
 def can_transition_goal(current: str, target: str) -> bool:
     try:
-        current_state = UserGoalState(current)
-        target_state = UserGoalState(target)
+        current_state = GoalState(current)
+        target_state = GoalState(target)
     except ValueError:
         return False
     return current_state == target_state or target_state in _GOAL_TRANSITIONS[current_state]
 
 
+_OPEN_LOOP_TRANSITIONS: dict[OpenLoopState, frozenset[OpenLoopState]] = {
+    OpenLoopState.OPEN: frozenset(
+        {
+            OpenLoopState.COMPLETED,
+            OpenLoopState.CANCELLED,
+            OpenLoopState.SUPERSEDED,
+        }
+    ),
+    OpenLoopState.COMPLETED: frozenset(),
+    OpenLoopState.CANCELLED: frozenset(),
+    OpenLoopState.SUPERSEDED: frozenset(),
+}
+
+
 def can_transition_prospective(current: str, target: str) -> bool:
     try:
-        current_state = ProspectiveItemState(current)
-        target_state = ProspectiveItemState(target)
+        current_state = ProspectiveState(current)
+        target_state = ProspectiveState(target)
     except ValueError:
         return False
     return (
@@ -144,9 +140,23 @@ def can_transition_prospective(current: str, target: str) -> bool:
     )
 
 
+def can_transition_open_loop(current: str, target: str) -> bool:
+    try:
+        current_state = OpenLoopState(current)
+        target_state = OpenLoopState(target)
+    except ValueError:
+        return False
+    return (
+        current_state == target_state
+        or target_state in _OPEN_LOOP_TRANSITIONS[current_state]
+    )
+
+
 __all__ = [
-    "ProspectiveItemState",
-    "UserGoalState",
+    "GoalState",
+    "OpenLoopState",
+    "ProspectiveState",
     "can_transition_goal",
+    "can_transition_open_loop",
     "can_transition_prospective",
 ]
