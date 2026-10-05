@@ -20,6 +20,10 @@ _NAME = re.compile(
 _FAVORITE_COLOR = re.compile(
     r"(?i)\bmy favou?rite colou?r is\s+([A-Za-z][A-Za-z -]{0,30}?)(?=[.!?,;]|$)"
 )
+_COLOR_IS_FAVORITE = re.compile(
+    r"(?i)\b(?:actually\s+)?([A-Za-z][A-Za-z -]{0,30}?)\s+is\s+"
+    r"my favou?rite colou?r(?:\s+now)?(?=[.!?,;]|$)"
+)
 _GOAL_PATTERNS = (
     re.compile(r"(?i)\bmy goal is\s+(.+?)(?=[.!?]|$)"),
     re.compile(r"(?i)\bi(?:'m| am) trying to\s+(.+?)(?=[.!?]|$)"),
@@ -63,7 +67,9 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
                 )
             )
 
-    color_match = _FAVORITE_COLOR.search(normalized)
+    color_match = _FAVORITE_COLOR.search(normalized) or _COLOR_IS_FAVORITE.search(
+        normalized
+    )
     if color_match:
         value = _clean_value(color_match.group(1)).casefold()
         if value:
