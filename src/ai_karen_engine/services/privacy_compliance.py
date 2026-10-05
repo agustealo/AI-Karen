@@ -225,6 +225,11 @@ class DataExporter:
             "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
         ),
         (
+            "memory_open_loop",
+            "SELECT * FROM memory_open_loop WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
             "memory_entity",
             "SELECT * FROM memory_entity WHERE tenant_id = CAST(:tenant_id AS uuid) "
             "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
@@ -568,6 +573,7 @@ class DataEraser:
                 "profile_fact",
                 "memory_user_goal",
                 "memory_prospective_item",
+                "memory_open_loop",
                 "projection_status",
                 "memory_procedure",
             ],
