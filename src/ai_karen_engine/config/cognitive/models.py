@@ -17,6 +17,9 @@ class CognitivePolicyConfig:
     behavior: BehaviorPolicyConfig = field(default_factory=lambda: BehaviorPolicyConfig())
     learning: LearningPolicyConfig = field(default_factory=lambda: LearningPolicyConfig())
     memory: MemoryPolicyConfig = field(default_factory=lambda: MemoryPolicyConfig())
+    continuity: ContinuityPolicyConfig = field(
+        default_factory=lambda: ContinuityPolicyConfig()
+    )
 
 
 @dataclass(slots=True)
@@ -242,6 +245,24 @@ class LearningPolicyConfig:
     reflection_failure_confidence: float = 0.7
     reflection_failure_salience: float = 0.8
     min_successes_for_pattern: int = 2
+
+
+@dataclass(slots=True)
+class ContinuityPolicyConfig:
+    schema_version: str = "1"
+    policy_version: str = "continuity-v1"
+    scoring_version: str = "weighted-v1"
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    enabled: bool = True
+    top_k: int = 5
+    open_loop_weight: float = 0.50
+    prospective_weight: float = 0.42
+    goal_weight: float = 0.34
+    temporal_weight: float = 0.28
+    context_overlap_weight: float = 0.18
+    scope_match_weight: float = 0.12
+    confidence_weight: float = 0.04
+    needs_attention_weight: float = 0.08
 
 
 @dataclass(slots=True)
