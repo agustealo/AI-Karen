@@ -135,7 +135,14 @@ class MemoryFormationEvaluator:
         retention = (
             MemoryRetentionScope.USER_PROFILE
             if signal.signal_type
-            in {"identity_fact", "preference", "goal", "prospective_event"}
+            in {
+                "identity_fact",
+                "preference",
+                "goal",
+                "goal_transition",
+                "prospective_event",
+                "prospective_transition",
+            }
             else MemoryRetentionScope.CONVERSATION
         )
 
