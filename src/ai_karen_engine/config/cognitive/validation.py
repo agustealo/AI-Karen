@@ -184,7 +184,7 @@ def validate_continuity(config: ContinuityPolicyConfig) -> None:
         "confidence_weight",
         "needs_attention_weight",
     ):
-        _validate_weight(getattr(config, name), f"continuity.{name}")
+        _validate_threshold(getattr(config, name), f"continuity.{name}")
 
 
 def validate_memory(config: MemoryPolicyConfig) -> None:
