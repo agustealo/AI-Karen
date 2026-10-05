@@ -31,6 +31,7 @@ class ContinuityRuntime:
         cognitive_context: CognitiveContext | None,
         now: datetime | None = None,
         top_k: int = 5,
+        runtime_context: dict[str, object] | None = None,
     ) -> ContinuityPlan:
         if not self._planner.should_plan(query):
             return ContinuityPlan(reason_codes=("continuity_not_requested",))
@@ -49,6 +50,7 @@ class ContinuityRuntime:
             items=items,
             now=now,
             top_k=top_k,
+            context=runtime_context,
         )
 
     @staticmethod
