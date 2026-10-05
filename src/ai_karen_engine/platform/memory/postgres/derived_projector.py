@@ -309,7 +309,12 @@ class PostgresDerivedMemoryProjector:
         ).scalar_one_or_none()
 
         valid_from = self._datetime(metadata.get("valid_from")) or datetime.utcnow()
-        if current is not None and current.value == value:
+        current_value = (
+            current.value.get("value")
+            if current is not None and isinstance(current.value, dict)
+            else None
+        )
+        if current is not None and current_value == value.get("value"):
             current.confidence = max(float(current.confidence or 0.0), confidence)
             current.updated_at = datetime.utcnow()
             return
