@@ -276,7 +276,9 @@ class RuntimeEvidenceResolver:
             content=str(item.get("content") or item.get("result") or ""),
             source_ref=evidence_id,
             relevance=cls._coerce_float(item.get("similarity_score")),
-            confidence=cls._coerce_float(item_metadata.get("confidence")),
+            confidence=cls._coerce_float(
+                item.get("confidence", item_metadata.get("confidence"))
+            ),
             provenance=EvidenceProvenance(
                 source_ref=evidence_id,
                 source_record_id=evidence_id,
