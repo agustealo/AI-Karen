@@ -240,3 +240,16 @@ def test_open_loop_continuity_is_durable_private_and_recallable() -> None:
     assert 'signal.signal_type == "open_loop"' in projector
     assert 'signal.signal_type == "open_loop_transition"' in projector
     assert "can_transition_open_loop" in projector
+
+
+def test_memory_control_inspection_surfaces_durable_continuity_state() -> None:
+    control = _text(
+        "src/ai_karen_engine/platform/memory/postgres/control_repository.py"
+    )
+
+    assert '"recent_goals"' in control
+    assert '"recent_prospective_items"' in control
+    assert '"recent_open_loops"' in control
+    assert '("goals", MemoryUserGoal, goal_filters)' in control
+    assert '("prospective_items", MemoryProspectiveItem, prospective_filters)' in control
+    assert '("open_loops", MemoryOpenLoop, open_loop_filters)' in control
