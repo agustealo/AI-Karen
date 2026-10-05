@@ -96,6 +96,29 @@ class PostgresUserStateRecallRetriever:
                 )
             ).scalars().all()
 
+            open_loop_rows = (
+                await session.execute(
+                    select(MemoryOpenLoop)
+                    .join(MemoryEvent, MemoryEvent.event_id == MemoryOpenLoop.event_id)
+                    .where(
+                        MemoryOpenLoop.tenant_id == tenant_uuid,
+                        MemoryOpenLoop.user_id == user_uuid,
+                        MemoryEvent.tenant_id == tenant_uuid,
+                        MemoryEvent.user_id == user_uuid,
+                        MemoryEvent.consent_state == "granted",
+                        or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
+                        MemoryOpenLoop.lifecycle_state == "open",
+                        or_(MemoryOpenLoop.valid_to.is_(None), MemoryOpenLoop.valid_to > now),
+                    )
+                    .order_by(
+                        MemoryOpenLoop.target_at.asc().nullslast(),
+                        MemoryOpenLoop.confidence.desc(),
+                        MemoryOpenLoop.updated_at.desc(),
+                    )
+                    .limit(top_k * 2)
+                )
+            ).scalars().all()
+
             prospective_rows = (
                 await session.execute(
                     select(MemoryProspectiveItem)
