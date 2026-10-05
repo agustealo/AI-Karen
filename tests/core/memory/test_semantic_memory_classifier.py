@@ -103,5 +103,26 @@ def test_job_offer_completes_current_interview_without_creating_new_interview() 
     assert not any(signal.signal_type == "prospective_event" for signal in signals)
 
 
+def test_unfinished_work_becomes_open_loop() -> None:
+    signal = _one(
+        "I still need to send the client the revised estimate.",
+        "open_loop",
+    )
+
+    assert signal.metadata["loop_type"] == "unfinished_work"
+    assert signal.metadata["description"] == "send the client the revised estimate"
+    assert signal.metadata["lifecycle_state"] == "open"
+
+
+def test_completed_unfinished_work_becomes_open_loop_transition() -> None:
+    signal = _one(
+        "I finished sending the client the revised estimate.",
+        "open_loop_transition",
+    )
+
+    assert signal.metadata["target_state"] == "completed"
+    assert signal.metadata["target_description"] == "sending the client the revised estimate"
+
+
 def test_unrelated_text_does_not_create_explicit_user_state() -> None:
     assert classify_explicit_user_memory("Explain how TCP congestion control works.") == []
