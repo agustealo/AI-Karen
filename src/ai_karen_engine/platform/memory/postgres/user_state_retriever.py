@@ -45,6 +45,11 @@ class PostgresUserStateRecallRetriever:
         "about me",
         "what should i",
         "what am i",
+        "unfinished",
+        "still need",
+        "follow up",
+        "what is left",
+        "what's left",
     )
 
     async def recall(self, query: MemoryQuery) -> list[MemoryEntry]:
