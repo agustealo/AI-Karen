@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
 
 
 @dataclass(frozen=True)
@@ -75,22 +74,8 @@ class ContinuityPlan:
         }
 
 
-class ContinuityStatePort(Protocol):
-    """Backend-neutral reader for current user continuity state."""
-
-    async def list_current_state(
-        self,
-        *,
-        tenant_id: str,
-        user_id: str,
-        limit: int = 50,
-    ) -> list[ContinuityStateItem]:
-        """Return current governed state only."""
-
-
 __all__ = [
     "ContinuityPlan",
     "ContinuityStateItem",
-    "ContinuityStatePort",
     "ContinuitySuggestion",
 ]
