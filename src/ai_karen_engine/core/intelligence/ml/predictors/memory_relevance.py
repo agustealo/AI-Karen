@@ -34,6 +34,17 @@ class MemoryRelevancePredictor(BasePredictor):
         "upcoming interview",
         "coming up",
         "what do you know about me",
+        "what did i leave unfinished",
+        "what did we leave unfinished",
+        "what is left",
+        "what's left",
+        "what should i do next",
+        "what should we do next",
+        "next step",
+        "next steps",
+        "still need",
+        "follow up",
+        "unfinished",
     )
     CONTINUITY_CUES = (
         "remember",
