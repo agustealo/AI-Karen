@@ -17,6 +17,7 @@ from ai_karen_engine.core.memory.types import (
 )
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
+from .ledger_models import MemoryEvent
 from .procedural_models import MemoryProcedure
 
 
@@ -38,9 +39,17 @@ class PostgresProceduralRecallRetriever:
         async with async_transaction_scope(tenant_id=str(query.tenant_id)) as session:
             stmt = (
                 select(MemoryProcedure)
+                .join(
+                    MemoryEvent,
+                    MemoryEvent.event_id == MemoryProcedure.source_event_id,
+                )
                 .where(
                     MemoryProcedure.tenant_id == tenant_uuid,
                     MemoryProcedure.user_id == user_uuid,
+                    MemoryEvent.tenant_id == tenant_uuid,
+                    MemoryEvent.user_id == user_uuid,
+                    MemoryEvent.consent_state == "granted",
+                    or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
                     MemoryProcedure.lifecycle_state == "active",
                     or_(MemoryProcedure.valid_to.is_(None), MemoryProcedure.valid_to > now),
                 )
