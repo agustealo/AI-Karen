@@ -18,7 +18,7 @@ from ai_karen_engine.core.memory.types import (
 )
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
-from .ledger_models import ProfileFact
+from .ledger_models import MemoryEvent, ProfileFact
 
 
 class PostgresProfileRecallRetriever:
@@ -40,9 +40,14 @@ class PostgresProfileRecallRetriever:
         async with async_transaction_scope(tenant_id=str(query.tenant_id)) as session:
             stmt = (
                 select(ProfileFact)
+                .join(MemoryEvent, MemoryEvent.event_id == ProfileFact.event_id)
                 .where(
                     ProfileFact.tenant_id == tenant_uuid,
                     ProfileFact.user_id == user_uuid,
+                    MemoryEvent.tenant_id == tenant_uuid,
+                    MemoryEvent.user_id == user_uuid,
+                    MemoryEvent.consent_state == "granted",
+                    or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
                     or_(ProfileFact.valid_to.is_(None), ProfileFact.valid_to > now),
                 )
                 .order_by(ProfileFact.confidence.desc(), ProfileFact.updated_at.desc())
