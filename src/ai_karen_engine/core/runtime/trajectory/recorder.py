@@ -100,6 +100,40 @@ class TrajectoryRecorder:
             )
         )
 
+    def persist(self, trajectory: ExecutionTrajectory) -> bool:
+        """Persist current trajectory state without affecting execution authority."""
+        if self._store is None:
+            return False
+        try:
+            self._store.save(trajectory)
+            return True
+        except Exception:
+            _emit_event(
+                RuntimeEventType.LEARNING_RECORDING_FAILED,
+                metadata={
+                    "kind": "trajectory",
+                    "trajectory_id": trajectory.trajectory_id,
+                },
+            )
+            return False
+
+    async def persist_async(self, trajectory: ExecutionTrajectory) -> bool:
+        """Persist current trajectory state on an async runtime path."""
+        if self._store is None:
+            return False
+        try:
+            await self._store.save_async(trajectory)
+            return True
+        except Exception:
+            _emit_event(
+                RuntimeEventType.LEARNING_RECORDING_FAILED,
+                metadata={
+                    "kind": "trajectory",
+                    "trajectory_id": trajectory.trajectory_id,
+                },
+            )
+            return False
+
     def complete(
         self,
         trajectory: ExecutionTrajectory,
@@ -109,18 +143,33 @@ class TrajectoryRecorder:
         response_source: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> ExecutionTrajectory:
-        """Finalize the trajectory and optionally persist it."""
+        """Finalize the trajectory and persist it when a store is configured."""
         trajectory.completed_at = datetime.utcnow()
         trajectory.execution_status = execution_status
         trajectory.error_code = error_code
         trajectory.response_source = response_source
         if metadata:
             trajectory.metadata.update(metadata)
-        if self._store is not None:
-            try:
-                self._store.save(trajectory)
-            except Exception:
-                pass
+        self.persist(trajectory)
+        return trajectory
+
+    async def complete_async(
+        self,
+        trajectory: ExecutionTrajectory,
+        *,
+        execution_status: str,
+        error_code: str | None = None,
+        response_source: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ExecutionTrajectory:
+        """Finalize and persist a trajectory without blocking the event loop."""
+        trajectory.completed_at = datetime.utcnow()
+        trajectory.execution_status = execution_status
+        trajectory.error_code = error_code
+        trajectory.response_source = response_source
+        if metadata:
+            trajectory.metadata.update(metadata)
+        await self.persist_async(trajectory)
         return trajectory
 
     def build_feature_snapshot(
@@ -202,6 +251,43 @@ class TrajectoryRecorder:
         )
         return feature_snapshot
 
+    async def record_feature_snapshot_async(
+        self,
+        trajectory: ExecutionTrajectory,
+        *,
+        feature_snapshot: FeatureSnapshot,
+    ) -> FeatureSnapshot:
+        """Persist a feature snapshot using the store's async path."""
+        if feature_snapshot.trajectory_id != trajectory.trajectory_id:
+            raise ValueError("feature snapshot trajectory_id does not match trajectory")
+        if feature_snapshot.feature_snapshot_id not in trajectory.feature_snapshot_refs:
+            trajectory.feature_snapshot_refs.append(feature_snapshot.feature_snapshot_id)
+        status = "success"
+        try:
+            if self._store is not None:
+                await self._store.save_feature_snapshot_async(feature_snapshot)
+        except Exception:
+            status = "failed"
+            _emit_event(
+                RuntimeEventType.LEARNING_RECORDING_FAILED,
+                metadata={
+                    "kind": "feature_snapshot",
+                    "trajectory_id": trajectory.trajectory_id,
+                    "feature_snapshot_id": feature_snapshot.feature_snapshot_id,
+                },
+            )
+        _emit_event(
+            RuntimeEventType.LEARNING_FEATURE_SNAPSHOT_RECORDED,
+            status=status,
+            tenant_scope=feature_snapshot.tenant_id,
+            metadata={
+                "trajectory_id": trajectory.trajectory_id,
+                "feature_snapshot_id": feature_snapshot.feature_snapshot_id,
+                "feature_version": feature_snapshot.feature_version,
+            },
+        )
+        return feature_snapshot
+
     def build_decision_observation(
         self,
         trajectory: ExecutionTrajectory,
@@ -260,6 +346,50 @@ class TrajectoryRecorder:
         try:
             if self._store is not None:
                 self._store.save_decision_observation(decision_observation)
+        except Exception:
+            status = "failed"
+            _emit_event(
+                RuntimeEventType.LEARNING_RECORDING_FAILED,
+                metadata={
+                    "kind": "decision_observation",
+                    "trajectory_id": trajectory.trajectory_id,
+                    "decision_observation_id": decision_observation.decision_observation_id,
+                },
+            )
+        _emit_event(
+            RuntimeEventType.LEARNING_DECISION_OBSERVATION_RECORDED,
+            status=status,
+            tenant_scope=decision_observation.tenant_id,
+            metadata={
+                "trajectory_id": trajectory.trajectory_id,
+                "decision_observation_id": decision_observation.decision_observation_id,
+                "decision_type": decision_observation.decision_type,
+                "chosen_action": decision_observation.chosen_action,
+                "ope_eligible": decision_observation.ope_eligible,
+            },
+        )
+        return decision_observation
+
+    async def record_decision_observation_async(
+        self,
+        trajectory: ExecutionTrajectory,
+        *,
+        decision_observation: DecisionObservation,
+    ) -> DecisionObservation:
+        """Persist a decision observation using the store's async path."""
+        if decision_observation.trajectory_id != trajectory.trajectory_id:
+            raise ValueError("decision observation trajectory_id does not match trajectory")
+        if (
+            decision_observation.decision_observation_id
+            not in trajectory.decision_observation_refs
+        ):
+            trajectory.decision_observation_refs.append(
+                decision_observation.decision_observation_id
+            )
+        status = "success"
+        try:
+            if self._store is not None:
+                await self._store.save_decision_observation_async(decision_observation)
         except Exception:
             status = "failed"
             _emit_event(
