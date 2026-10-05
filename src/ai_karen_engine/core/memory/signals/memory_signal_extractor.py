@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 
+from .semantic_classifier import classify_explicit_user_memory
 from .signal_models import MemorySignal
 from .spacy_service import ParsedMessage, SpacyService
 
@@ -33,9 +34,10 @@ class MemorySignalExtractor:
             return []
 
         parsed = await self.spacy_service.parse_message(text)
-        signals: list[MemorySignal] = []
+        signals: list[MemorySignal] = classify_explicit_user_memory(text)
+        explicit_types = {signal.signal_type for signal in signals}
 
-        if parsed.entities:
+        if parsed.entities and "identity_fact" not in explicit_types:
             signals.append(
                 MemorySignal(
                     text=text,
@@ -47,9 +49,23 @@ class MemorySignalExtractor:
                 )
             )
 
-        signals.extend(self._extract_preferences(parsed))
+        if "goal" not in explicit_types and "prospective_event" not in explicit_types:
+            signals.extend(self._extract_preferences(parsed))
 
-        return signals
+        return self._dedupe(signals)
+
+    @staticmethod
+    def _dedupe(signals: list[MemorySignal]) -> list[MemorySignal]:
+        seen: set[tuple[str, str, str]] = set()
+        result: list[MemorySignal] = []
+        for signal in signals:
+            attribute = str(signal.metadata.get("attribute") or "")
+            key = (signal.signal_type, attribute, signal.text.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(signal)
+        return result
 
     def _extract_preferences(self, parsed: ParsedMessage) -> list[MemorySignal]:
         """Detect preference and directive cues from dependency parsing."""

@@ -14,6 +14,7 @@ from ai_karen_engine.core.memory.guards import (
     MemoryConsentPolicy,
     MemoryGuards,
     MemoryOrigin,
+    MemoryRetentionScope,
     MemorySensitivity,
     MemoryTrustClass,
     MemoryTrustProvenance,
@@ -96,6 +97,58 @@ class MemoryFormationEvaluator:
 
         return PIIDetector()
 
+    @staticmethod
+    def _consent_policy_for_signal(
+        signal: MemorySignal,
+        *,
+        privacy_metadata: dict[str, Any],
+    ) -> MemoryConsentPolicy:
+        """Map classified PII to memory retention without weakening privacy globally.
+
+        Explicit user identity is allowed only for name-only PII. More sensitive
+        PII remains prohibited in automatic formation and requires a separate,
+        explicit product consent path before durable storage is ever considered.
+        """
+
+        pii_types = {
+            str(item).casefold()
+            for item in list(privacy_metadata.get("pii_types") or [])
+            if str(item).strip()
+        }
+        explicit = bool(signal.metadata.get("explicit_user_statement"))
+        is_identity = signal.signal_type == "identity_fact"
+
+        if pii_types:
+            profile_safe_name = pii_types.issubset({"name"}) and explicit and is_identity
+            sensitivity = (
+                MemorySensitivity.CONFIDENTIAL
+                if profile_safe_name
+                else MemorySensitivity.PROHIBITED
+            )
+        else:
+            sensitivity = (
+                MemorySensitivity.CONFIDENTIAL
+                if explicit and is_identity
+                else MemorySensitivity.INTERNAL
+            )
+
+        retention = (
+            MemoryRetentionScope.USER_PROFILE
+            if signal.signal_type
+            in {"identity_fact", "preference", "goal", "prospective_event"}
+            else MemoryRetentionScope.CONVERSATION
+        )
+
+        return MemoryConsentPolicy(
+            sensitivity=sensitivity,
+            explicit_user_intent=explicit,
+            retention_scope=retention,
+            purpose="personalization_and_continuity",
+            deletion_rights="user_controlled",
+            require_explicit_consent=False,
+            propagation_allowed=sensitivity is not MemorySensitivity.PROHIBITED,
+        )
+
     async def evaluate(
         self,
         *,
@@ -140,22 +193,6 @@ class MemoryFormationEvaluator:
 
         privacy_metadata = self._privacy_classifier.extract_safe_metadata(normalized)
         contains_pii = bool(privacy_metadata.get("contains_pii", False))
-        sensitivity = (
-            MemorySensitivity.PROHIBITED
-            if contains_pii
-            else MemorySensitivity.INTERNAL
-        )
-        guards = MemoryGuards(
-            trust_provenance=MemoryTrustProvenance(
-                origin=MemoryOrigin.USER_INPUT,
-                trust_class=MemoryTrustClass.EXPLICIT_USER,
-                verification_confidence=1.0,
-                source_ref="chat_interaction",
-            ),
-            consent_policy=MemoryConsentPolicy(sensitivity=sensitivity),
-            strict_mode=True,
-            metadata={"privacy": privacy_metadata},
-        )
 
         admitted: list[AdmittedMemorySignal] = []
         for signal in extraction.signals:
@@ -167,10 +204,33 @@ class MemoryFormationEvaluator:
                 continue
 
             score = max(0.0, min(1.0, float(worthiness.get("score") or 0.0)))
+            consent_policy = self._consent_policy_for_signal(
+                signal,
+                privacy_metadata=privacy_metadata,
+            )
+            guards = MemoryGuards(
+                trust_provenance=MemoryTrustProvenance(
+                    origin=MemoryOrigin.USER_INPUT,
+                    trust_class=MemoryTrustClass.EXPLICIT_USER,
+                    verification_confidence=1.0,
+                    source_ref="chat_interaction",
+                ),
+                consent_policy=consent_policy,
+                strict_mode=True,
+                metadata={"privacy": privacy_metadata},
+            )
             allowed, _reason = guards.can_create_memory(score, signal.text)
             if not allowed:
                 continue
 
+            signal.metadata.setdefault(
+                "sensitivity_class",
+                consent_policy.sensitivity.value,
+            )
+            signal.metadata.setdefault(
+                "retention_scope",
+                consent_policy.retention_scope.value,
+            )
             admitted.append(
                 AdmittedMemorySignal(
                     signal=signal,

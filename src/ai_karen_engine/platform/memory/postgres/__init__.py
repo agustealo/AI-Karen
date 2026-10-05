@@ -10,6 +10,7 @@ from .graph_repository import PostgresGraphRepository, PostgresGraphScopeError
 from .profile_retriever import PostgresProfileRecallRetriever
 from .procedural_retriever import PostgresProceduralRecallRetriever
 from .recall_retriever import PostgresRecallRetriever, PostgresRecallScopeError
+from .user_state_retriever import PostgresUserStateRecallRetriever
 from .vault import (
     NeuroVaultAuthorizationError,
     NeuroVaultScopeError,
@@ -27,4 +28,5 @@ __all__ = [
     "PostgresProceduralRecallRetriever",
     "PostgresRecallRetriever",
     "PostgresRecallScopeError",
+    "PostgresUserStateRecallRetriever",
 ]

@@ -420,7 +420,7 @@ class MemoryFormationService:
             id=str(uuid.uuid4()),
             content=signal.text,
             memory_type=memory_type,
-            namespace=MemoryNamespace.LONG_TERM,
+            namespace=MemoryFormationService._namespace(signal.signal_type),
             confidence=max(0.0, min(1.0, score)),
             importance=max(1.0, min(10.0, 1.0 + score * 9.0)),
             keywords=[str(keyword) for keyword in signal.keywords or []],
@@ -444,9 +444,20 @@ class MemoryFormationService:
         kind = str(signal_type or "").casefold()
         if kind in {"workflow", "procedure", "tool_use"}:
             return MemoryType.PROCEDURAL
-        if kind in {"preference", "fact", "entity"}:
+        if kind in {"identity_fact", "preference", "fact", "entity", "goal"}:
             return MemoryType.SEMANTIC
         return MemoryType.EPISODIC
+
+    @staticmethod
+    def _namespace(signal_type: str) -> MemoryNamespace:
+        kind = str(signal_type or "").casefold()
+        if kind == "identity_fact":
+            return MemoryNamespace.PERSISTENT
+        if kind in {"preference", "goal", "prospective_event", "fact"}:
+            return MemoryNamespace.LONG_TERM
+        if kind in {"workflow", "procedure", "tool_use"}:
+            return MemoryNamespace.LONG_TERM
+        return MemoryNamespace.LONG_TERM
 
     @staticmethod
     def _json_safe(value: Any) -> Any:

@@ -155,6 +155,85 @@ class ProfileFact(Base):
     )
 
 
+class MemoryUserGoal(Base):
+    """Durable projection of an active/known user goal."""
+
+    __tablename__ = "memory_user_goal"
+
+    goal_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("memory_event.event_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    tenant_id = Column(UUID(as_uuid=True), nullable=False)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    description = Column(Text, nullable=False)
+    goal_type = Column(String(50), nullable=False, default="explicit")
+    lifecycle_state = Column(String(50), nullable=False, default="active")
+    confidence = Column(Float, default=1.0, nullable=False)
+    source_type = Column(String(100), nullable=False)
+    source_ref = Column(String(255), nullable=True)
+    target_text = Column(Text, nullable=True)
+    target_at = Column(DateTime, nullable=True)
+    valid_from = Column(DateTime, default=datetime.utcnow, nullable=False)
+    valid_to = Column(DateTime, nullable=True)
+    supersedes = Column(UUID(as_uuid=True), nullable=True)
+    metadata_payload = Column(JSONB, default=lambda: {}, nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("idx_memory_user_goal_tenant_user_state", "tenant_id", "user_id", "lifecycle_state"),
+        Index("idx_memory_user_goal_validity", "tenant_id", "user_id", "valid_from", "valid_to"),
+    )
+
+
+class MemoryProspectiveItem(Base):
+    """Durable time/context-relevant item that may become relevant later."""
+
+    __tablename__ = "memory_prospective_item"
+
+    prospective_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("memory_event.event_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    tenant_id = Column(UUID(as_uuid=True), nullable=False)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    event_type = Column(String(100), nullable=False)
+    description = Column(Text, nullable=False)
+    temporal_text = Column(Text, nullable=True)
+    target_at = Column(DateTime, nullable=True)
+    lifecycle_state = Column(String(50), nullable=False, default="dormant")
+    confidence = Column(Float, default=1.0, nullable=False)
+    source_type = Column(String(100), nullable=False)
+    source_ref = Column(String(255), nullable=True)
+    valid_from = Column(DateTime, default=datetime.utcnow, nullable=False)
+    valid_to = Column(DateTime, nullable=True)
+    metadata_payload = Column(JSONB, default=lambda: {}, nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index(
+            "idx_memory_prospective_tenant_user_state",
+            "tenant_id",
+            "user_id",
+            "lifecycle_state",
+        ),
+        Index(
+            "idx_memory_prospective_target",
+            "tenant_id",
+            "user_id",
+            "target_at",
+        ),
+    )
+
+
 class MemoryEntity(Base):
     """Canonical entity identity used by the memory graph projection."""
 
