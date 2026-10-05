@@ -21,8 +21,9 @@ from .contracts import (
 class ContinuityPlanner:
     """Rank likely next needs from governed continuity state."""
 
+    _EXACT_CUES = ("next", "continue", "proceed", "keep going", "carry on")
+    _WORD_CUES = ("continue", "proceed")
     _DIRECT_CUES = (
-        "continue",
         "what next",
         "what should i do next",
         "what should we do next",
@@ -59,6 +60,14 @@ class ContinuityPlanner:
     @classmethod
     def should_plan(cls, query: str) -> bool:
         normalized = str(query or "").strip().casefold()
+        normalized_phrase = normalized.strip(" .!?")
+        if normalized_phrase in cls._EXACT_CUES:
+            return True
+        if any(
+            re.search(rf"\b{re.escape(cue)}\b", normalized)
+            for cue in cls._WORD_CUES
+        ):
+            return True
         return any(cue in normalized for cue in cls._DIRECT_CUES)
 
     def plan(
