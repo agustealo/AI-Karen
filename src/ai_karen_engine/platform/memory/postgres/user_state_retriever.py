@@ -254,6 +254,57 @@ class PostgresUserStateRecallRetriever:
         )
 
     @staticmethod
+    def _open_loop_entry(
+        row: MemoryOpenLoop,
+        query: MemoryQuery,
+        relevance: float,
+    ) -> MemoryEntry:
+        created_at = row.created_at or datetime.utcnow()
+        metadata = MemoryMetadata(
+            tenant_id=str(row.tenant_id),
+            user_id=str(row.user_id),
+            conversation_id=query.conversation_id,
+            session_id=query.session_id,
+            source="postgres_open_loop",
+            custom={
+                "source_store": "postgres",
+                "memory_class": "semantic",
+                "open_loop_id": str(row.open_loop_id),
+                "event_id": str(row.event_id),
+                "loop_type": row.loop_type,
+                "domain": row.domain,
+                "lifecycle_state": row.lifecycle_state,
+                "target_at": row.target_at.isoformat() if row.target_at else None,
+                "unresolved_intention_relevance": 1.0,
+                "current_goal_relevance": 0.7,
+                "freshness": 1.0,
+                "source_trust": 1.0,
+                "tenant_match": 1.0,
+                "provenance": {
+                    "store": "postgres",
+                    "record_type": "memory_open_loop",
+                    "open_loop_id": str(row.open_loop_id),
+                    "event_id": str(row.event_id),
+                    "source_type": row.source_type,
+                    "source_ref": row.source_ref,
+                },
+            },
+        )
+        return MemoryEntry(
+            id=str(row.open_loop_id),
+            content=f"Unfinished: {row.description}",
+            memory_type=MemoryType.SEMANTIC,
+            namespace=MemoryNamespace.LONG_TERM,
+            timestamp=created_at,
+            created_at=created_at,
+            updated_at=row.updated_at or created_at,
+            relevance=relevance,
+            confidence=float(row.confidence or 0.0),
+            importance=8.0,
+            metadata=metadata,
+        )
+
+    @staticmethod
     def _prospective_entry(
         row: MemoryProspectiveItem,
         query: MemoryQuery,
