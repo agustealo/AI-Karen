@@ -17,7 +17,7 @@ from ai_karen_engine.core.memory.types import (
 )
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
-from .ledger_models import MemoryProspectiveItem, MemoryUserGoal
+from .ledger_models import MemoryEvent, MemoryProspectiveItem, MemoryUserGoal
 
 
 class PostgresUserStateRecallRetriever:
@@ -62,9 +62,14 @@ class PostgresUserStateRecallRetriever:
             goal_rows = (
                 await session.execute(
                     select(MemoryUserGoal)
+                    .join(MemoryEvent, MemoryEvent.event_id == MemoryUserGoal.event_id)
                     .where(
                         MemoryUserGoal.tenant_id == tenant_uuid,
                         MemoryUserGoal.user_id == user_uuid,
+                        MemoryEvent.tenant_id == tenant_uuid,
+                        MemoryEvent.user_id == user_uuid,
+                        MemoryEvent.consent_state == "granted",
+                        or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
                         MemoryUserGoal.lifecycle_state.in_(
                             ("active", "blocked", "paused", "at_risk")
                         ),
@@ -84,9 +89,17 @@ class PostgresUserStateRecallRetriever:
             prospective_rows = (
                 await session.execute(
                     select(MemoryProspectiveItem)
+                    .join(
+                        MemoryEvent,
+                        MemoryEvent.event_id == MemoryProspectiveItem.event_id,
+                    )
                     .where(
                         MemoryProspectiveItem.tenant_id == tenant_uuid,
                         MemoryProspectiveItem.user_id == user_uuid,
+                        MemoryEvent.tenant_id == tenant_uuid,
+                        MemoryEvent.user_id == user_uuid,
+                        MemoryEvent.consent_state == "granted",
+                        or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
                         MemoryProspectiveItem.lifecycle_state.in_(
                             ("dormant", "ready", "active", "triggered")
                         ),
