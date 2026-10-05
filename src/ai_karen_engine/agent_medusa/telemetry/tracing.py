@@ -52,14 +52,23 @@ class MedusaTracer:
             return
         
         trace = self._active_traces.pop(trace_id)
-        trace.complete()
-        
-        # Add completion event
+
         status_msg = "completed successfully" if success else "failed"
-        self.add_event(trace_id, 
-                       AgentEventType.AGENT_COMPLETED if success else AgentEventType.AGENT_FAILED,
-                       f"Agent {trace.agent_id} {status_msg}")
-        
+        trace.add_event(
+            AgentEvent(
+                type=(
+                    AgentEventType.AGENT_COMPLETED
+                    if success
+                    else AgentEventType.AGENT_FAILED
+                ),
+                agent_id=trace.agent_id,
+                message=f"Agent {trace.agent_id} {status_msg}",
+                metadata={},
+                correlation_id=trace.metadata.get("correlation_id"),
+            )
+        )
+        trace.complete()
+
         self._trace_history.append(trace)
         if len(self._trace_history) > self._max_history:
             self._trace_history.pop(0)

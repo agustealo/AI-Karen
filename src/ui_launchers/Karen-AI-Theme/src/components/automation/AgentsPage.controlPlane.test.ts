@@ -8,27 +8,26 @@ const source = readFileSync(
   "utf8",
 );
 
-describe("AgentsPage control-plane boundary", () => {
-  it("fails closed before non-admin catalog access", () => {
-    const nonAdminGuard = source.indexOf("if (!isAdmin) {");
-    const catalogRequest = source.indexOf(
-      'apiClient.get<AgentRecord[]>("/api/agents")',
-    );
-
-    expect(nonAdminGuard).toBeGreaterThan(-1);
-    expect(catalogRequest).toBeGreaterThan(-1);
-    expect(nonAdminGuard).toBeLessThan(catalogRequest);
+describe("AgentsPage canonical Medusa boundary", () => {
+  it("uses the canonical Medusa catalog instead of the legacy agent registry", () => {
+    expect(source).toContain('"/api/agent-runtime/catalog"');
+    expect(source).not.toContain('apiClient.get<AgentRecord[]>("/api/agents")');
+    expect(source).not.toContain('apiClient.post<AgentRecord>("/api/agents/"');
   });
 
-  it("does not load management inventory for ordinary users", () => {
-    expect(source).toContain("if (isAuthenticated && isAdmin) {");
-    expect(source).toContain("void loadToolInventory();");
+  it("surfaces real run-level control instead of fake agent daemon controls", () => {
+    expect(source).toContain('"/api/admin/agents/runs?include_terminal=true"');
+    expect(source).toContain("/api/admin/agents/runs/");
+    expect(source).toContain("Cancel run");
+    expect(source).not.toContain("terminate");
+    expect(source).not.toContain("Delete agent");
+    expect(source).not.toContain("Create agent");
   });
 
-  it("presents the installation-wide registry as an admin control plane", () => {
-    expect(source).toContain("Administrator Control Plane");
-    expect(source).toContain("legacy agent registry is installation-wide");
-    expect(source).not.toContain("Read-Only Access");
-    expect(source).not.toContain("You can inspect the registered agents");
+  it("keeps execution authority in ChatRuntime and RuntimePolicy", () => {
+    expect(source).toContain("Chat remains the execution entry point");
+    expect(source).toContain("CORTEX decides");
+    expect(source).toContain("RuntimePolicy authorizes");
+    expect(source).toContain("Per-agent daemon");
   });
 });

@@ -54,7 +54,8 @@ class MedusaRegistry:
             capabilities=[
                 AgentCapability(type=AgentCapabilityType.RESEARCH, name="Deep Research", description="Web and memory research"),
                 AgentCapability(type=AgentCapabilityType.WEB_BROWSING, name="Web Browsing", description="Accessing web information")
-            ]
+            ],
+            allowed_tools=["web_search"],
         )
         await self.register_agent(researcher)
 

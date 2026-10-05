@@ -41,6 +41,8 @@ export interface StreamingMetrics {
 export type AgentStepEventType =
   | 'agent_step_started'
   | 'agent_step_completed'
+  | 'agent_step_failed'
+  | 'agent_step_skipped'
   | 'tool_execution_started'
   | 'tool_execution_completed'
   | 'web_search_started'
@@ -974,6 +976,54 @@ class ApiClient {
                 collectedContent = collectedContent.slice(-50000);
               }
               callbacks?.onContent?.(parsed.content);
+              break;
+            case 'agent_step': {
+              const metadata = parsed.metadata || {};
+              const eventType = String(
+                metadata.event_type || metadata.type || 'agent_step_completed',
+              ) as AgentStepEventType;
+              callbacks?.onAgentStep?.({
+                type: eventType,
+                step_id: String(metadata.step_id || parsed.event_id || ''),
+                action_type: typeof metadata.action_type === 'string'
+                  ? metadata.action_type
+                  : undefined,
+                correlation_id: parsed.correlation_id,
+                timestamp: parsed.timestamp,
+                metadata,
+              });
+              break;
+            }
+            case 'tool': {
+              const metadata = parsed.metadata || {};
+              const phase = String(metadata.phase || metadata.status || '').toLowerCase();
+              callbacks?.onAgentStep?.({
+                type: phase === 'started'
+                  ? 'tool_execution_started'
+                  : 'tool_execution_completed',
+                step_id: String(metadata.step_id || parsed.event_id || ''),
+                action_type: typeof metadata.action_type === 'string'
+                  ? metadata.action_type
+                  : undefined,
+                correlation_id: parsed.correlation_id,
+                timestamp: parsed.timestamp,
+                metadata,
+              });
+              break;
+            }
+            case 'citation': {
+              const metadata = parsed.metadata || {};
+              const citations = Array.isArray(metadata.citations)
+                ? metadata.citations as Citation[]
+                : [];
+              callbacks?.onCitationBundle?.(citations);
+              break;
+            }
+            case 'approval':
+              callbacks?.onStatus?.(
+                parsed.content || 'Approval required',
+                parsed.metadata,
+              );
               break;
             case 'error':
               cleanup();

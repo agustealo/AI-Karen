@@ -35,8 +35,15 @@ def resolve_prompt_text(
             definition = get_prompt_registry().get(prompt_contract_id, prompt_version)
             if definition and definition.system_instructions:
                 return definition.system_instructions
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Prompt contract resolution failed; using registered fallback text",
+                extra={
+                    "prompt_contract_id": prompt_contract_id,
+                    "prompt_version": prompt_version,
+                    "error_type": type(exc).__name__,
+                },
+            )
     return fallback
 
 

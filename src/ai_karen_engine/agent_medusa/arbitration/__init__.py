@@ -1,3 +1,7 @@
-from .medusa_arbitrator import MedusaArbitrator
+"""Agent arbitration contracts remain available under agent_medusa.contracts.
 
-__all__ = ["MedusaArbitrator"]
+Runtime arbitration is not a separate execution authority. CORTEX and
+RuntimePolicy decide execution; Medusa coordinates the authorized plan.
+"""
+
+__all__: list[str] = []

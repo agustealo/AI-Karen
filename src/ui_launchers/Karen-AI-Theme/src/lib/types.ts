@@ -35,6 +35,8 @@ export interface Citation {
 export type AgentStepEventType =
   | 'agent_step_started'
   | 'agent_step_completed'
+  | 'agent_step_failed'
+  | 'agent_step_skipped'
   | 'tool_execution_started'
   | 'tool_execution_completed'
   | 'web_search_started'

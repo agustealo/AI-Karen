@@ -42,6 +42,7 @@ class ChatStreamEventType(str, Enum):
 
     STATUS = "status"
     CONTENT = "content"
+    AGENT_STEP = "agent_step"
     TOOL = "tool"
     CITATION = "citation"
     APPROVAL = "approval"

@@ -132,7 +132,7 @@ const RUNTIME_SUBGROUPS: NavSubgroup[] = [
     label: "Agents & Workflows",
     icon: Binary,
     items: [
-      { key: "agentsOverview", label: "Agents Overview", icon: LayoutGrid },
+      { key: "agentsOverview", label: "Automation Overview", icon: LayoutGrid },
       { key: "agents", label: "Agents", icon: BotIcon },
       { key: "tasks", label: "Tasks", icon: ScrollText },
       { key: "jobs", label: "Jobs", icon: LayoutGrid },

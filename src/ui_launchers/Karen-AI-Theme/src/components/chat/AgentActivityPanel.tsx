@@ -61,6 +61,10 @@ const getActionLabel = (type: string): string => {
       return 'Processing';
     case 'agent_step_completed':
       return 'Completed';
+    case 'agent_step_failed':
+      return 'Failed';
+    case 'agent_step_skipped':
+      return 'Skipped';
     case 'tool_execution_started':
       return 'Executing tool';
     case 'tool_execution_completed':
@@ -105,6 +109,16 @@ const actionIcons: ActionIconMap = {
   agent_step_completed: (
     <svg className="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+    </svg>
+  ),
+  agent_step_failed: (
+    <svg className="h-4 w-4 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+    </svg>
+  ),
+  agent_step_skipped: (
+    <svg className="h-4 w-4 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14" />
     </svg>
   ),
   tool_execution_started: (
