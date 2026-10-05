@@ -163,6 +163,26 @@ class RelationshipModel:
     interaction_history: list[JsonMap] = field(default_factory=list)
 
 
+class GoalState(str, Enum):
+    PROPOSED = "proposed"
+    ACTIVE = "active"
+    BLOCKED = "blocked"
+    PAUSED = "paused"
+    AT_RISK = "at_risk"
+    SATISFIED = "satisfied"
+    COMPLETED = "completed"
+    ABANDONED = "abandoned"
+    SUPERSEDED = "superseded"
+    EXPIRED = "expired"
+
+
+class OpenLoopState(str, Enum):
+    OPEN = "open"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    SUPERSEDED = "superseded"
+
+
 class ProspectiveState(str, Enum):
     DORMANT = "dormant"
     READY = "ready"
@@ -272,7 +292,9 @@ class RecallScoreComponents:
 __all__ = [
     "ClaimStatus",
     "MemoryClaim",
+    "GoalState",
     "MemoryLifecycleState",
+    "OpenLoopState",
     "MemoryProcessingStage",
     "MemorySalience",
     "ProspectiveMemory",
