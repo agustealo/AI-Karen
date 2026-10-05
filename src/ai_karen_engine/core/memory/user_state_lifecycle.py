@@ -1,7 +1,7 @@
-"""Canonical lifecycle contracts for durable user goals and prospective memory.
+"""Legal lifecycle transitions for durable user-state projections.
 
-These contracts define legal state transitions only. They do not own storage,
-timers, reminders, scheduling, or runtime execution.
+State vocabulary is owned by core.memory.contracts. This module only defines
+transition legality; it owns no persistence or process-local state.
 """
 
 from __future__ import annotations
@@ -77,10 +77,7 @@ _GOAL_TRANSITIONS: dict[GoalState, frozenset[GoalState]] = {
     GoalState.EXPIRED: frozenset(),
 }
 
-_PROSPECTIVE_TRANSITIONS: dict[
-    ProspectiveState,
-    frozenset[ProspectiveState],
-] = {
+_PROSPECTIVE_TRANSITIONS: dict[ProspectiveState, frozenset[ProspectiveState]] = {
     ProspectiveState.DORMANT: frozenset(
         {
             ProspectiveState.READY,
@@ -112,16 +109,6 @@ _PROSPECTIVE_TRANSITIONS: dict[
     ProspectiveState.ARCHIVED: frozenset(),
 }
 
-
-def can_transition_goal(current: str, target: str) -> bool:
-    try:
-        current_state = GoalState(current)
-        target_state = GoalState(target)
-    except ValueError:
-        return False
-    return current_state == target_state or target_state in _GOAL_TRANSITIONS[current_state]
-
-
 _OPEN_LOOP_TRANSITIONS: dict[OpenLoopState, frozenset[OpenLoopState]] = {
     OpenLoopState.OPEN: frozenset(
         {
@@ -134,6 +121,15 @@ _OPEN_LOOP_TRANSITIONS: dict[OpenLoopState, frozenset[OpenLoopState]] = {
     OpenLoopState.CANCELLED: frozenset(),
     OpenLoopState.SUPERSEDED: frozenset(),
 }
+
+
+def can_transition_goal(current: str, target: str) -> bool:
+    try:
+        current_state = GoalState(current)
+        target_state = GoalState(target)
+    except ValueError:
+        return False
+    return current_state == target_state or target_state in _GOAL_TRANSITIONS[current_state]
 
 
 def can_transition_prospective(current: str, target: str) -> bool:
@@ -161,9 +157,6 @@ def can_transition_open_loop(current: str, target: str) -> bool:
 
 
 __all__ = [
-    "GoalState",
-    "OpenLoopState",
-    "ProspectiveState",
     "can_transition_goal",
     "can_transition_open_loop",
     "can_transition_prospective",
