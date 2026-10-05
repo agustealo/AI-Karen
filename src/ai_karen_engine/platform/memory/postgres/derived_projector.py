@@ -645,6 +645,50 @@ class PostgresDerivedMemoryProjector:
             return 0.0
         return len(left_terms & right_terms) / len(left_terms)
 
+    async def _project_open_loop(
+        self,
+        *,
+        session: Any,
+        tenant_uuid: uuid.UUID,
+        user_uuid: uuid.UUID,
+        event_uuid: uuid.UUID,
+        signal: MemorySignal,
+        confidence: float,
+        source_type: str,
+        source_ref: str | None,
+        metadata: dict[str, Any],
+    ) -> None:
+        exists = (
+            await session.execute(
+                select(MemoryOpenLoop.open_loop_id)
+                .where(MemoryOpenLoop.event_id == event_uuid)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if exists is not None:
+            return
+
+        session.add(
+            MemoryOpenLoop(
+                event_id=event_uuid,
+                tenant_id=tenant_uuid,
+                user_id=user_uuid,
+                loop_type=str(metadata.get("loop_type") or "unfinished_work"),
+                description=str(metadata.get("description") or signal.text),
+                domain=self._optional_text(metadata.get("domain")),
+                lifecycle_state=str(metadata.get("lifecycle_state") or "open"),
+                confidence=confidence,
+                source_type=source_type,
+                source_ref=source_ref,
+                target_text=self._optional_text(metadata.get("target_text")),
+                target_at=self._datetime(metadata.get("target_at")),
+                valid_from=self._datetime(metadata.get("valid_from"))
+                or datetime.utcnow(),
+                valid_to=self._datetime(metadata.get("valid_to")),
+                metadata_payload=metadata,
+            )
+        )
+
     async def _record_projection_statuses(
         self,
         *,
