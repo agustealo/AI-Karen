@@ -35,8 +35,9 @@ class MemorySignalExtractor:
 
         parsed = await self.spacy_service.parse_message(text)
         signals: list[MemorySignal] = classify_explicit_user_memory(text)
+        explicit_types = {signal.signal_type for signal in signals}
 
-        if parsed.entities:
+        if parsed.entities and "identity_fact" not in explicit_types:
             signals.append(
                 MemorySignal(
                     text=text,
@@ -48,7 +49,6 @@ class MemorySignalExtractor:
                 )
             )
 
-        explicit_types = {signal.signal_type for signal in signals}
         if "goal" not in explicit_types and "prospective_event" not in explicit_types:
             signals.extend(self._extract_preferences(parsed))
 
