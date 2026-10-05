@@ -8,21 +8,17 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from ..contracts import (
     BehaviorCandidate,
     BehaviorPattern,
     PreferenceStability,
 )
-from .contracts import BehaviorObservation, BehaviorPatternStore
 
 
 class BehaviorAggregator:
     """Aggregates behavior patterns from observations."""
-
-    def __init__(self, store: Optional[BehaviorPatternStore] = None):
-        self.store = store or BehaviorPatternStore()
 
     def ingest_outcome(self, outcome: Any) -> List[BehaviorCandidate]:
         candidates: List[BehaviorCandidate] = []
@@ -86,7 +82,6 @@ class BehaviorAggregator:
                 recurrence="recurring" if len(bucket) >= 3 else "observed",
                 stability=PreferenceStability.SHORT_TERM,
             )
-            self.store.upsert(pattern)
             promoted.append(pattern)
         return promoted
 
