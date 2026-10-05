@@ -142,6 +142,8 @@ class MemoryFormationEvaluator:
                 "goal_transition",
                 "prospective_event",
                 "prospective_transition",
+                "open_loop",
+                "open_loop_transition",
             }
             else MemoryRetentionScope.CONVERSATION
         )
