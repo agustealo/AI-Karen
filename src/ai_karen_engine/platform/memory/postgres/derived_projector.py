@@ -16,6 +16,11 @@ from sqlalchemy import select
 
 from ai_karen_engine.core.memory.projections import ProjectionManager
 from ai_karen_engine.core.memory.signals import MemorySignal
+from ai_karen_engine.core.memory.temporal_resolver import resolve_temporal_text
+from ai_karen_engine.core.memory.user_state_lifecycle import (
+    can_transition_goal,
+    can_transition_prospective,
+)
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
 from .ledger_models import (
@@ -160,6 +165,26 @@ class PostgresDerivedMemoryProjector:
                     confidence=confidence,
                     source_type=source_type,
                     source_ref=source_ref,
+                    metadata=metadata,
+                )
+
+            if signal.signal_type == "goal_transition":
+                await self._transition_goal(
+                    session=session,
+                    tenant_uuid=tenant_uuid,
+                    user_uuid=user_uuid,
+                    event_uuid=event_uuid,
+                    signal=signal,
+                    metadata=metadata,
+                )
+
+            if signal.signal_type == "prospective_transition":
+                await self._transition_prospective_item(
+                    session=session,
+                    tenant_uuid=tenant_uuid,
+                    user_uuid=user_uuid,
+                    event_uuid=event_uuid,
+                    signal=signal,
                     metadata=metadata,
                 )
 
@@ -408,6 +433,15 @@ class PostgresDerivedMemoryProjector:
         if exists is not None:
             return
 
+        temporal_text = self._optional_text(metadata.get("temporal_text"))
+        target_at = self._datetime(metadata.get("target_at"))
+        if target_at is None and temporal_text:
+            reference = self._datetime(metadata.get("observed_at")) or datetime.utcnow()
+            target_at = resolve_temporal_text(
+                temporal_text,
+                reference=reference,
+            )
+
         session.add(
             MemoryProspectiveItem(
                 event_id=event_uuid,
@@ -415,8 +449,8 @@ class PostgresDerivedMemoryProjector:
                 user_id=user_uuid,
                 event_type=str(metadata.get("event_type") or "user_event"),
                 description=signal.text,
-                temporal_text=self._optional_text(metadata.get("temporal_text")),
-                target_at=self._datetime(metadata.get("target_at")),
+                temporal_text=temporal_text,
+                target_at=target_at,
                 lifecycle_state=str(metadata.get("lifecycle_state") or "dormant"),
                 confidence=confidence,
                 source_type=source_type,
@@ -427,6 +461,165 @@ class PostgresDerivedMemoryProjector:
                 metadata_payload=metadata,
             )
         )
+
+    async def _transition_goal(
+        self,
+        *,
+        session: Any,
+        tenant_uuid: uuid.UUID,
+        user_uuid: uuid.UUID,
+        event_uuid: uuid.UUID,
+        signal: MemorySignal,
+        metadata: dict[str, Any],
+    ) -> None:
+        target_state = str(metadata.get("target_state") or "").strip().casefold()
+        target_description = str(
+            metadata.get("target_description") or ""
+        ).strip().casefold()
+        if not target_state or not target_description:
+            return
+
+        rows = (
+            await session.execute(
+                select(MemoryUserGoal)
+                .where(
+                    MemoryUserGoal.tenant_id == tenant_uuid,
+                    MemoryUserGoal.user_id == user_uuid,
+                    MemoryUserGoal.lifecycle_state.in_(
+                        ("active", "blocked", "paused", "at_risk", "satisfied")
+                    ),
+                    MemoryUserGoal.valid_to.is_(None),
+                )
+                .order_by(MemoryUserGoal.updated_at.desc())
+                .limit(20)
+            )
+        ).scalars().all()
+
+        candidates = [
+            (self._text_overlap(target_description, row.description), row)
+            for row in rows
+        ]
+        candidates = [item for item in candidates if item[0] > 0.0]
+        if not candidates:
+            return
+
+        score, goal = max(candidates, key=lambda item: item[0])
+        if score < 0.35 or not can_transition_goal(
+            str(goal.lifecycle_state),
+            target_state,
+        ):
+            return
+
+        now = datetime.utcnow()
+        goal.lifecycle_state = target_state
+        goal.updated_at = now
+        if target_state in {"completed", "abandoned", "superseded", "expired"}:
+            goal.valid_to = now
+        payload = dict(goal.metadata_payload or {})
+        history = list(payload.get("lifecycle_history") or [])
+        history.append(
+            {
+                "state": target_state,
+                "reason": metadata.get("transition_reason"),
+                "source_event_id": str(event_uuid),
+                "source_text": signal.text,
+                "observed_at": now.isoformat(),
+            }
+        )
+        payload["lifecycle_history"] = history[-50:]
+        goal.metadata_payload = payload
+
+    async def _transition_prospective_item(
+        self,
+        *,
+        session: Any,
+        tenant_uuid: uuid.UUID,
+        user_uuid: uuid.UUID,
+        event_uuid: uuid.UUID,
+        signal: MemorySignal,
+        metadata: dict[str, Any],
+    ) -> None:
+        target_state = str(metadata.get("target_state") or "").strip().casefold()
+        event_type = str(metadata.get("event_type") or "").strip()
+        if not target_state or not event_type:
+            return
+
+        rows = (
+            await session.execute(
+                select(MemoryProspectiveItem)
+                .where(
+                    MemoryProspectiveItem.tenant_id == tenant_uuid,
+                    MemoryProspectiveItem.user_id == user_uuid,
+                    MemoryProspectiveItem.event_type == event_type,
+                    MemoryProspectiveItem.lifecycle_state.in_(
+                        ("dormant", "ready", "triggered")
+                    ),
+                    MemoryProspectiveItem.valid_to.is_(None),
+                )
+                .order_by(MemoryProspectiveItem.updated_at.desc())
+                .limit(2)
+            )
+        ).scalars().all()
+
+        if len(rows) != 1:
+            return
+        item = rows[0]
+        if not can_transition_prospective(
+            str(item.lifecycle_state),
+            target_state,
+        ):
+            return
+
+        now = datetime.utcnow()
+        item.lifecycle_state = target_state
+        item.updated_at = now
+        if target_state in {"completed", "cancelled", "superseded", "archived"}:
+            item.valid_to = now
+        payload = dict(item.metadata_payload or {})
+        history = list(payload.get("lifecycle_history") or [])
+        history.append(
+            {
+                "state": target_state,
+                "reason": metadata.get("transition_reason"),
+                "outcome": metadata.get("outcome"),
+                "source_event_id": str(event_uuid),
+                "source_text": signal.text,
+                "observed_at": now.isoformat(),
+            }
+        )
+        payload["lifecycle_history"] = history[-50:]
+        if metadata.get("outcome") is not None:
+            payload["outcome"] = metadata.get("outcome")
+        item.metadata_payload = payload
+
+    @staticmethod
+    def _text_overlap(left: str, right: str) -> float:
+        stop = {
+            "the",
+            "and",
+            "for",
+            "that",
+            "this",
+            "with",
+            "from",
+            "into",
+            "trying",
+            "working",
+            "goal",
+        }
+        left_terms = {
+            token
+            for token in str(left).casefold().replace("-", " ").split()
+            if len(token) >= 3 and token not in stop
+        }
+        right_terms = {
+            token
+            for token in str(right).casefold().replace("-", " ").split()
+            if len(token) >= 3 and token not in stop
+        }
+        if not left_terms or not right_terms:
+            return 0.0
+        return len(left_terms & right_terms) / len(left_terms)
 
     async def _record_projection_statuses(
         self,
