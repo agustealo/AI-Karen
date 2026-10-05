@@ -138,7 +138,7 @@ class LearningSignal:
 
 @dataclass(slots=True)
 class LearningRewardVector:
-    """Multi-dimensional reward vector."""
+    """Passive learning-evidence vector, not a product reward authority.\n\n    This contract can carry normalized learning signals between adaptive\n    components. It must not calculate Growth progress, authorize actions,\n    or compete with ``core.intelligence.reward.RewardProjector``.\n    """
 
     task_success: float = 0.0
     user_satisfaction: float = 0.0
@@ -150,19 +150,6 @@ class LearningRewardVector:
     clarification_cost: float = 0.0
     verification_value: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
-
-    def aggregate(self) -> float:
-        raw = (
-            self.task_success
-            + self.user_satisfaction
-            + self.correctness
-            + self.efficiency
-            + self.safety
-            + self.verification_value
-        )
-        penalties = self.cost + self.latency + self.clarification_cost
-        return max(0.0, min(1.0, raw - penalties))
-
 
 @dataclass(slots=True)
 class LearningFailureClassification:

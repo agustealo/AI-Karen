@@ -26,8 +26,6 @@ from ai_karen_engine.core.adaptive.learning.experience.eligibility import (
 from ai_karen_engine.core.adaptive.learning.experience.normalization import (
     ExperienceNormalizer,
 )
-from ai_karen_engine.core.adaptive.learning.experience.reward import RewardComputer
-
 __all__ = [
     "AttributionEngine",
     "EligibilityGate",
@@ -47,5 +45,4 @@ __all__ = [
     "OutcomeAttribution",
     "ProfileUpdateCandidate",
     "ReflectionTrigger",
-    "RewardComputer",
 ]

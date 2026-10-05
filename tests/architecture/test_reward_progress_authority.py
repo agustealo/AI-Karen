@@ -71,3 +71,43 @@ def test_streamed_transcript_persists_trajectory_identity_for_feedback() -> None
     source = (ROOT / "src/ai_karen_engine/core/runtime/chat_runtime.py").read_text(encoding="utf-8")
     assert "trajectory_id=trajectory.trajectory_id" in source
     assert '**({"trajectory_id": trajectory_id} if trajectory_id else {})' in source
+
+
+
+def test_legacy_adaptive_reward_computer_is_retired() -> None:
+    retired_module = (
+        ROOT
+        / "src/ai_karen_engine/core/adaptive/learning/experience/reward.py"
+    )
+    experience_init = (
+        ROOT
+        / "src/ai_karen_engine/core/adaptive/learning/experience/__init__.py"
+    ).read_text(encoding="utf-8")
+    adaptive_contracts = (
+        ROOT
+        / "src/ai_karen_engine/core/adaptive/learning/experience/contracts.py"
+    ).read_text(encoding="utf-8")
+
+    assert not retired_module.exists()
+    assert "RewardComputer" not in experience_init
+    assert "experience.reward" not in experience_init
+
+    # The adaptive vector remains a neutral data contract for learning signals.
+    assert "class LearningRewardVector" in adaptive_contracts
+    assert "not a product reward authority" in adaptive_contracts
+    assert "def aggregate(" not in adaptive_contracts
+
+
+def test_reward_projector_is_only_executable_reward_calculator() -> None:
+    src_root = ROOT / "src/ai_karen_engine"
+    offenders: list[str] = []
+    for path in src_root.rglob("*.py"):
+        if path == src_root / "core/intelligence/reward.py":
+            continue
+        source = path.read_text(encoding="utf-8")
+        if "class RewardComputer" in source:
+            offenders.append(str(path.relative_to(ROOT)))
+        if "from ai_karen_engine.core.adaptive.learning.experience.reward" in source:
+            offenders.append(str(path.relative_to(ROOT)))
+
+    assert offenders == []
