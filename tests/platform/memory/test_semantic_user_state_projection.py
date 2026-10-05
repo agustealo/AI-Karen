@@ -13,6 +13,7 @@ from ai_karen_engine.platform.memory.postgres.derived_projector import (
 )
 from ai_karen_engine.platform.memory.postgres.ledger_models import (
     MemoryEpisode,
+    MemoryOpenLoop,
     MemoryProspectiveItem,
     MemoryUserGoal,
     ProfileFact,
@@ -395,6 +396,75 @@ async def test_ambiguous_multiple_current_interviews_do_not_auto_transition(monk
 
     assert first.lifecycle_state == "dormant"
     assert second.lifecycle_state == "dormant"
+
+
+@pytest.mark.asyncio
+async def test_open_loop_projects_and_completion_closes_it(monkeypatch):
+    session = _Session([None, None])
+    monkeypatch.setattr(
+        projector_module,
+        "async_transaction_scope",
+        _scope(session),
+    )
+    projector = PostgresDerivedMemoryProjector(_ProjectionManager())
+
+    await projector._project_relational_views(
+        tenant_uuid=TENANT,
+        user_uuid=USER,
+        event_uuid=EVENT,
+        signal=MemorySignal(
+            text="I still need to send the client the revised estimate",
+            signal_type="open_loop",
+            confidence=0.96,
+            metadata={"description": "send the client the revised estimate"},
+        ),
+        confidence=0.96,
+        source_type="chat_user",
+        source_ref="conversation-1",
+        metadata={
+            "description": "send the client the revised estimate",
+            "loop_type": "unfinished_work",
+            "lifecycle_state": "open",
+        },
+    )
+
+    loops = [item for item in session.added if isinstance(item, MemoryOpenLoop)]
+    assert len(loops) == 1
+    assert loops[0].description == "send the client the revised estimate"
+    assert loops[0].lifecycle_state == "open"
+
+    close_session = _Session([None, [loops[0]]])
+    monkeypatch.setattr(
+        projector_module,
+        "async_transaction_scope",
+        _scope(close_session),
+    )
+
+    await projector._project_relational_views(
+        tenant_uuid=TENANT,
+        user_uuid=USER,
+        event_uuid=UUID("00000000-0000-0000-0000-000000000099"),
+        signal=MemorySignal(
+            text="I finished sending the client the revised estimate",
+            signal_type="open_loop_transition",
+            confidence=0.97,
+            metadata={
+                "target_state": "completed",
+                "target_description": "sending the client the revised estimate",
+            },
+        ),
+        confidence=0.97,
+        source_type="chat_user",
+        source_ref="conversation-1",
+        metadata={
+            "target_state": "completed",
+            "target_description": "sending the client the revised estimate",
+            "transition_reason": "user_reported_completed",
+        },
+    )
+
+    assert loops[0].lifecycle_state == "completed"
+    assert loops[0].valid_to is not None
 
 
 def test_each_semantic_projection_also_keeps_episode_lineage():
