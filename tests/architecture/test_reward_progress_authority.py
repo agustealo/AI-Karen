@@ -111,3 +111,34 @@ def test_reward_projector_is_only_executable_reward_calculator() -> None:
             offenders.append(str(path.relative_to(ROOT)))
 
     assert offenders == []
+
+
+def test_proactive_feedback_attribution_is_service_owned_and_candidate_validated() -> None:
+    route = (
+        ROOT / "src/ai_karen_engine/api_routes/users/progress.py"
+    ).read_text(encoding="utf-8")
+    service = (
+        ROOT / "src/ai_karen_engine/services/reward_progress.py"
+    ).read_text(encoding="utf-8")
+
+    assert "continuity_candidate_id" in route
+    assert "continuity_candidate_id=request.continuity_candidate_id" in route
+    assert "continuity_candidate_ids" not in route
+    assert "Continuity candidate was not shown for this trajectory" in service
+    assert '"continuity_attribution": (' in service
+    assert '"response_level_weak"' in service
+    assert '"explicit_candidate"' in service
+    assert '"continuity_attribution_confidence"' in service
+
+
+def test_generic_chat_thumbs_do_not_claim_explicit_candidate_acceptance() -> None:
+    ui = (
+        ROOT
+        / "src/ui_launchers/Karen-AI-Theme/src/components/chat/MessageBubble.tsx"
+    ).read_text(encoding="utf-8")
+
+    feedback_call = ui.split(
+        "await apiClient.post('/api/progress/feedback'",
+        1,
+    )[1].split("});", 1)[0]
+    assert "continuity_candidate_id" not in feedback_call
