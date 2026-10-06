@@ -270,22 +270,47 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
     return 'New Chat';
   };
 
-  // Create a new session
+  // Create a new durable session. The UI does not present a conversation
+  // as created until the server has acknowledged the canonical session id.
   const createNewSession = useCallback(async () => {
     const sessionId = createSessionId();
-    const newSession: Session = {
-      id: sessionId,
-      title: 'New Chat',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      messageCount: 0,
-      isActive: true,
-    };
-    
-    setCurrentSession(newSession);
-    setSessions(prev => [newSession, ...prev]);
+    setIsLoadingSessions(true);
     setError(null);
-    persistActiveSessionId(sessionId);
+
+    try {
+      const conversationResponse = await fetchConversationBootstrap(sessionId);
+      const createdAt = new Date(conversationResponse.created_at || Date.now());
+      const updatedAt = new Date(conversationResponse.updated_at || Date.now());
+      const newSession: Session = {
+        id: sessionId,
+        title: conversationResponse.title || 'New Chat',
+        createdAt,
+        updatedAt,
+        messageCount: conversationResponse.messages?.length || 0,
+        isActive: true,
+        lastMessage:
+          conversationResponse.messages?.[conversationResponse.messages.length - 1]?.content,
+      };
+
+      setCurrentSession(newSession);
+      setSessions((prev) => [
+        newSession,
+        ...prev
+          .filter((session) => session.id !== sessionId)
+          .map((session) => ({ ...session, isActive: false })),
+      ]);
+      persistActiveSessionId(sessionId);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 429) {
+        console.warn('New conversation creation was rate-limited; no local-only session was created.');
+      } else {
+        console.error('Failed to create durable conversation:', err);
+      }
+      setError('Unable to create a new chat. Your current conversation was kept unchanged.');
+      throw err;
+    } finally {
+      setIsLoadingSessions(false);
+    }
   }, [persistActiveSessionId]);
 
   // Load a specific session
@@ -1447,11 +1472,19 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       lastAssistantMessage?.metadata?.addressPreferencePrompt &&
       matchedAddressOption
     ) {
-      setIsLoading(true);
       try {
         await savePreferredAddressName(matchedAddressOption);
+      } catch {
+        toast({
+          title: 'Preference update failed',
+          description: 'Karen could not save your preferred form of address.',
+          variant: 'destructive',
+        });
+        return;
+      }
+    }
 
-        const userMessage: ChatMessage = {
+    const userMessage: ChatMessage = {
           id: 'user-' + Date.now(),
           role: 'user',
           content: trimmedInput,
@@ -2145,81 +2178,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     }
   }, [currentSession, messages, toast]);
 
-  const handleShareChat = useCallback(async () => {
-    if (!currentSession) {
-      toast({
-        title: 'No active chat',
-        description: 'Select or start a chat before sharing.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    const shareUrl = `${window.location.origin}/chat/${currentSession.id}`;
-    const shareText = `Check out this conversation with KAREN: ${currentSession.title || 'Chat'}`;
-
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: currentSession.title || 'KAREN Chat',
-          text: shareText,
-          url: shareUrl,
-        });
-      } else {
-        // Fallback: copy shareable link to clipboard
-        await navigator.clipboard.writeText(`${shareText}\n\n${shareUrl}`);
-        toast({
-          title: 'Share link copied',
-          description: 'Shareable link copied to clipboard.',
-        });
-      }
-    } catch {
-      toast({
-        title: 'Share failed',
-        description: 'Unable to share chat. Link copied to clipboard as fallback.',
-        variant: 'destructive',
-      });
-      try {
-        await navigator.clipboard.writeText(`${shareText}\n\n${shareUrl}`);
-      } catch {
-        console.error('Failed to copy share link');
-      }
-    }
-  }, [currentSession, toast]);
-
-  const handleClearChat = useCallback(async () => {
-    if (!currentSession) {
-      toast({
-        title: 'No active chat',
-        description: 'Select or start a chat before clearing.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    // Clear messages but keep the session
-    setMessages([]);
-    setStreamedContent('');
-
-    toast({
-      title: 'Chat cleared',
-      description: 'All messages have been removed from this chat.',
-    });
-  }, [currentSession, setMessages, setStreamedContent, toast]);
-
-  const handleSearchInChat = useCallback(() => {
-    // Focus search input if it exists, otherwise show a message
-    const searchInput = document.querySelector('[data-chat-search]') as HTMLInputElement;
-    if (searchInput) {
-      searchInput.focus();
-    } else {
-      toast({
-        title: 'Search not available',
-        description: 'Chat search functionality is not yet implemented.',
-      });
-    }
-  }, [toast]);
-
   // Handle external message injection (e.g. from plugins)
   useEffect(() => {
     const handleInjectMessage = (event: Event) => {
@@ -2435,9 +2393,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         createNewSession={createNewSession}
         onExportChat={handleExportCurrentChat}
         onCopyChat={handleCopyChat}
-        onShareChat={handleShareChat}
-        onClearChat={handleClearChat}
-        onSearchInChat={handleSearchInChat}
         streamingStatus={streamingStatus}
       />
       </div>
