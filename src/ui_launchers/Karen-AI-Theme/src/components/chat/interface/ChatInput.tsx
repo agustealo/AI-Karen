@@ -179,8 +179,8 @@ export function ChatInput({
   };
 
   return (
-    <div id="chat-input-area">
-      <div className="chat-input-container sticky bottom-0 border-t border-border bg-background/80 p-3 backdrop-blur-sm md:p-4">
+    <div id="chat-input-area" className="shrink-0 border-t border-border/70 bg-background/70 backdrop-blur-xl">
+      <div className="chat-input-container mx-auto max-w-5xl px-3 py-3 md:px-5">
         <div className="mb-2 flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="sr-only">
             <select 
@@ -303,7 +303,7 @@ export function ChatInput({
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             placeholder={inputPlaceholder}
-            className="h-10 flex-1 bg-[#292929] text-sm sm:h-11 sm:text-base"
+            className="h-11 flex-1 border-border/80 bg-card/72 text-sm shadow-inner sm:h-12 sm:text-[15px]"
             data-testid="chat-input"
             disabled={isAuthLoading}
             aria-label="Chat message input"
