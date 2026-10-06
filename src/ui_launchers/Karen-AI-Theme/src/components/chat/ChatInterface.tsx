@@ -57,7 +57,7 @@ interface ChatInterfaceProps {
   isActive?: boolean;
 }
 
-interface PendingApproval {
+interface ActionableApproval {
   approval_id: string;
   conversation_id?: string | null;
   policy_decision_id?: string | null;
@@ -756,7 +756,7 @@ const approvalActions = (approvalId: string): SuggestedAction[] => [
   },
 ];
 
-const pendingApprovalToMessage = (approval: PendingApproval): ChatMessage => ({
+const actionableApprovalToMessage = (approval: ActionableApproval): ChatMessage => ({
   id: `approval-${approval.approval_id}`,
   role: 'assistant',
   content: 'Approval required before KAREN can continue this action.',
@@ -778,12 +778,12 @@ const pendingApprovalToMessage = (approval: PendingApproval): ChatMessage => ({
   },
 });
 
-const reconcilePendingApprovalMessages = (
+const reconcileActionableApprovalMessages = (
   currentMessages: ChatMessage[],
-  pendingApprovals: PendingApproval[],
+  actionableApprovals: ActionableApproval[],
 ): ChatMessage[] => {
   const pendingById = new Map(
-    pendingApprovals.map((approval) => [approval.approval_id, approval]),
+    actionableApprovals.map((approval) => [approval.approval_id, approval]),
   );
 
   const reconciled = currentMessages
@@ -827,9 +827,9 @@ const reconcilePendingApprovalMessages = (
       .filter(Boolean),
   );
 
-  for (const approval of pendingApprovals) {
+  for (const approval of actionableApprovals) {
     if (!represented.has(approval.approval_id)) {
-      reconciled.push(pendingApprovalToMessage(approval));
+      reconciled.push(actionableApprovalToMessage(approval));
     }
   }
 
@@ -944,8 +944,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     lastChunkTime: number;
   } | null>(null);
   const [agentSteps, setAgentSteps] = useState<AgentStepEvent[]>([]);
-  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
-  const [pendingApprovalsLoadState, setPendingApprovalsLoadState] = useState<
+  const [actionableApprovals, setActionableApprovals] = useState<ActionableApproval[]>([]);
+  const [actionableApprovalsLoadState, setActionableApprovalsLoadState] = useState<
     'idle' | 'loading' | 'ready' | 'unavailable'
   >('idle');
   const [isLocalRecoveryUnconfirmed, setIsLocalRecoveryUnconfirmed] = useState(false);
@@ -1083,11 +1083,11 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   const { applyModelSelection, getSelectableProviders } = useModelSettings();
 
 
-  const refreshPendingApprovals = useCallback(
-    async (conversationId: string): Promise<PendingApproval[] | null> => {
-      setPendingApprovalsLoadState('loading');
+  const refreshActionableApprovals = useCallback(
+    async (conversationId: string): Promise<ActionableApproval[] | null> => {
+      setActionableApprovalsLoadState('loading');
       try {
-        const approvals = await apiClient.get<PendingApproval[]>(
+        const approvals = await apiClient.get<ActionableApproval[]>(
           `/api/approvals?conversation_id=${encodeURIComponent(conversationId)}`,
         );
         const pending = Array.isArray(approvals)
@@ -1103,15 +1103,15 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           return pending;
         }
 
-        setPendingApprovals(pending);
+        setActionableApprovals(pending);
         setMessages((current) =>
-          reconcilePendingApprovalMessages(current, pending),
+          reconcileActionableApprovalMessages(current, pending),
         );
-        setPendingApprovalsLoadState('ready');
+        setActionableApprovalsLoadState('ready');
         return pending;
       } catch (error) {
         if (sessionIdRef.current === conversationId) {
-          setPendingApprovalsLoadState('unavailable');
+          setActionableApprovalsLoadState('unavailable');
         }
         if (error instanceof ApiError && error.status === 401) {
           return null;
@@ -1222,17 +1222,17 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   useEffect(() => {
     const conversationId = currentSession?.id;
     if (isAuthLoading || !isAuthenticated || !conversationId) {
-      setPendingApprovals([]);
-      setPendingApprovalsLoadState('idle');
+      setActionableApprovals([]);
+      setActionableApprovalsLoadState('idle');
       return;
     }
 
-    void refreshPendingApprovals(conversationId);
+    void refreshActionableApprovals(conversationId);
   }, [
     currentSession?.id,
     isAuthenticated,
     isAuthLoading,
-    refreshPendingApprovals,
+    refreshActionableApprovals,
   ]);
 
   useEffect(() => {
