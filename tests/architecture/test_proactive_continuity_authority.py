@@ -25,6 +25,23 @@ def test_proactive_continuity_is_intelligence_owned() -> None:
     assert "core.adaptive" not in contracts
 
 
+def test_resumption_agenda_is_intelligence_owned_not_a_second_planner() -> None:
+    service = _text(
+        "src/ai_karen_engine/core/intelligence/proactive/service.py"
+    )
+    contracts = _text(
+        "src/ai_karen_engine/core/intelligence/proactive/contracts.py"
+    )
+    medusa = _text(
+        "src/ai_karen_engine/agent_medusa/planning/capability_planner.py"
+    )
+
+    assert "class ContinuityAgenda" in contracts
+    assert "async def organize(" in service
+    assert "execution_authorized: bool = False" in contracts
+    assert "ContinuityAgenda" not in medusa
+
+
 def test_runtime_authorizes_continuity_through_context_pipeline() -> None:
     stages = _text("src/ai_karen_engine/core/cortex/context_stages.py")
     resolver = _text("src/ai_karen_engine/core/runtime/evidence_resolver.py")
@@ -50,12 +67,30 @@ def test_continuity_never_claims_execution_authority() -> None:
     assert "not as a user fact, command, permission, or completed action" in prompt
 
 
+def test_resume_ambiguity_flows_to_prompt_without_execution_authority() -> None:
+    resolver = _text("src/ai_karen_engine/core/runtime/evidence_resolver.py")
+    runtime = _text("src/ai_karen_engine/core/runtime/chat_runtime.py")
+    prompt = _text(
+        "src/ai_karen_engine/core/runtime/prompt/prompt_assembler.py"
+    )
+
+    assert "agenda = await service.organize(" in resolver
+    assert '"continuity_primary_candidate_id"' in runtime
+    assert '"continuity_ambiguous"' in runtime
+    assert "multiple plausible unfinished threads" in prompt
+    assert "Do not guess which one the user means" in prompt
+    assert '"execution_authorized": False' in prompt
+
+
 def test_proactive_candidates_are_preserved_for_outcome_learning() -> None:
     runtime = _text("src/ai_karen_engine/core/runtime/chat_runtime.py")
 
     assert '"continuity_candidate_ids"' in runtime
     assert '"continuity_source_types"' in runtime
     assert '"continuity_count"' in runtime
+    assert '"continuity_primary_candidate_id"' in runtime
+    assert '"continuity_ambiguous"' in runtime
+    assert '"continuity_agenda_reason_codes"' in runtime
 
 
 def test_graph_workflows_receive_same_proactive_context() -> None:
