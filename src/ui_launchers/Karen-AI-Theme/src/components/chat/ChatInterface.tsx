@@ -202,6 +202,7 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
   const [error, setError] = useState<string | null>(null);
   const currentSessionRef = useRef<Session | null>(currentSession);
   const sessionsRef = useRef<Session[]>(sessions);
+  const sessionListRefreshInFlightRef = useRef<Promise<ConversationApiResponse> | null>(null);
 
   const persistActiveSessionId = useCallback((sessionId: string | null) => {
     if (typeof window === 'undefined') return;
@@ -291,12 +292,37 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
   const loadSession = useCallback(async (sessionId: string) => {
     setIsLoadingSessions(true);
     setError(null);
-    
+
     try {
-      // Load session metadata and history.
-      // We use the same endpoint for both since ConversationResponse includes all metadata.
-      const conversationResponse = await fetchConversationBootstrap(sessionId);
-      
+      const MAX_ATTEMPTS = 3;
+      let conversationResponse: ConversationResponse | null = null;
+      let lastError: unknown = null;
+
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+        try {
+          conversationResponse = await fetchConversationBootstrap(sessionId);
+          break;
+        } catch (err) {
+          lastError = err;
+          const retryableRateLimit =
+            err instanceof ApiError &&
+            err.status === 429 &&
+            attempt < MAX_ATTEMPTS;
+
+          if (!retryableRateLimit) {
+            throw err;
+          }
+
+          await new Promise((resolve) =>
+            window.setTimeout(resolve, getRateLimitDelayMs(err, 1200)),
+          );
+        }
+      }
+
+      if (!conversationResponse) {
+        throw (lastError ?? new Error('Failed to load session'));
+      }
+
       const session: Session = {
         id: sessionId,
         title: conversationResponse.title || generateSessionTitle(conversationResponse.messages?.map(m => ({
@@ -311,94 +337,131 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
         isActive: true,
         lastMessage: conversationResponse.messages?.[conversationResponse.messages.length - 1]?.content,
       };
-      
+
       setCurrentSession(session);
       persistActiveSessionId(sessionId);
-      
-      // Update sessions list to mark this as active
+
       setSessions(prev => prev.map(s => ({
         ...s,
         isActive: s.id === sessionId
       })));
-      
     } catch (err) {
-      if (!(err instanceof ApiError && err.status === 429)) {
-        console.error('Failed to load session:', err);
+      if (err instanceof ApiError && err.status === 429) {
+        const existingSession =
+          currentSessionRef.current?.id === sessionId
+            ? currentSessionRef.current
+            : sessionsRef.current.find((session) => session.id === sessionId);
+
+        const preservedSession: Session = existingSession
+          ? { ...existingSession, isActive: true }
+          : {
+              id: sessionId,
+              title: 'Current Chat',
+              createdAt: new Date(),
+              updatedAt: new Date(),
+              messageCount: 0,
+              isActive: true,
+            };
+
+        setCurrentSession(preservedSession);
+        setSessions((prev) => {
+          const exists = prev.some((session) => session.id === sessionId);
+          const next = exists
+            ? prev.map((session) => ({
+                ...session,
+                isActive: session.id === sessionId,
+              }))
+            : [preservedSession, ...prev.map((session) => ({ ...session, isActive: false }))];
+          return next;
+        });
+        persistActiveSessionId(sessionId);
+        setError('Session service is temporarily rate limited. Keeping your current chat available.');
+        console.warn('Session load was rate-limited; preserving the requested conversation.');
+        return;
       }
 
-      // If session not found (404), explicit recovery
       if (err instanceof ApiError && err.status === 404) {
         console.warn('Session was not found on server, starting fresh.');
-      } else if (err instanceof ApiError && err.status === 429) {
-        console.warn('Session load was rate-limited, starting fresh session.');
+        setError('Saved session was not found. Starting a fresh chat.');
+        await createNewSession();
+        return;
       }
-      
+
+      console.error('Failed to load session:', err);
       setError('Failed to load session. Starting fresh chat.');
-      
-      // Fallback: create new session
       await createNewSession();
     } finally {
       setIsLoadingSessions(false);
     }
-  }, [createNewSession, persistActiveSessionId]);
+  }, [
+    createNewSession,
+    getRateLimitDelayMs,
+    persistActiveSessionId,
+  ]);
 
   // Refresh sessions list
   const refreshSessions = useCallback(async () => {
     setIsLoadingSessions(true);
     setError(null);
-    
+
     try {
-      const MAX_ATTEMPTS = 3;
-      let response: ConversationApiResponse | null = null;
-      let lastError: unknown = null;
+      let request = sessionListRefreshInFlightRef.current;
 
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-        try {
-          response = await apiClient.get<ConversationApiResponse>('/api/conversations');
-          break;
-        } catch (err) {
-          lastError = err;
-          const isRetryableRateLimit =
-            err instanceof ApiError &&
-            err.status === 429 &&
-            attempt < MAX_ATTEMPTS;
+      if (!request) {
+        request = (async (): Promise<ConversationApiResponse> => {
+          const MAX_ATTEMPTS = 3;
+          let lastError: unknown = null;
 
-          if (!isRetryableRateLimit) {
-            throw err;
+          for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+            try {
+              return await apiClient.get<ConversationApiResponse>('/api/conversations');
+            } catch (err) {
+              lastError = err;
+              const retryableRateLimit =
+                err instanceof ApiError &&
+                err.status === 429 &&
+                attempt < MAX_ATTEMPTS;
+
+              if (!retryableRateLimit) {
+                throw err;
+              }
+
+              await new Promise((resolve) =>
+                window.setTimeout(resolve, getRateLimitDelayMs(err, 1200)),
+              );
+            }
           }
 
-          const delayMs = getRateLimitDelayMs(err, 1200);
-          await new Promise((resolve) => window.setTimeout(resolve, delayMs));
-        }
+          throw (lastError ?? new Error('Failed to fetch sessions'));
+        })();
+
+        sessionListRefreshInFlightRef.current = request;
       }
 
-      if (!response) {
-        throw (lastError ?? new Error('Failed to fetch sessions'));
-      }
-
+      const response = await request;
       const sessionsData: Session[] = response.conversations?.map((session) => ({
         id: session.id,
         title: session.title || 'Untitled Chat',
         createdAt: new Date(session.created_at),
         updatedAt: new Date(session.updated_at),
         messageCount: session.message_count || 0,
-        isActive: false, // Will be synced by separate effect
-        lastMessage: session.messages && session.messages.length > 0 
-          ? session.messages[session.messages.length - 1].content 
+        isActive: false,
+        lastMessage: session.messages && session.messages.length > 0
+          ? session.messages[session.messages.length - 1].content
           : session.last_message
       })) || [];
-      
+
       setSessions(sessionsData);
     } catch (err) {
-      console.error('Failed to load sessions:', err);
       if (err instanceof ApiError && err.status === 429) {
-        const retryMs = getRateLimitDelayMs(err, 2000);
-        const retrySeconds = Math.max(1, Math.ceil(retryMs / 1000));
-        setError(`Rate limited while refreshing sessions. Retrying shortly (about ${retrySeconds}s).`);
+        setError('Session list is temporarily rate limited. Your current chat remains available.');
+        console.warn('Session list refresh was rate-limited; preserving existing session state.');
       } else {
+        console.error('Failed to load sessions:', err);
         setError('Failed to load sessions list. Some features may be limited.');
       }
     } finally {
+      sessionListRefreshInFlightRef.current = null;
       setIsLoadingSessions(false);
     }
   }, [getRateLimitDelayMs]);
