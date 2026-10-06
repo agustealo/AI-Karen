@@ -656,10 +656,7 @@ async def test_execute_stream_preserves_rich_results_in_terminal_metadata_and_tr
     runtime, gateway = _make_runtime()
     request = _make_request()
     decision = _make_decision()
-    decision.topology = ExecutionTopology.WORKFLOW
-    decision.is_graph_required = True
     plan = _make_plan()
-    plan.topology = ExecutionTopology.WORKFLOW
 
     rich = {
         "structured_content": {"summary": {"status": "ready"}},
