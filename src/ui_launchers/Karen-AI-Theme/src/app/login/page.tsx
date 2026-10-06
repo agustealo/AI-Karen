@@ -82,7 +82,8 @@ function LoginForm() {
       password: formData.password,
     };
     await login(credentials);
-    router.replace(nextPath);
+    // The authenticated-state effect owns navigation so login cannot trigger
+    // a duplicate route transition.
   };
 
   if (checkingSetup) {

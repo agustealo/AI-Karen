@@ -1,5 +1,7 @@
 "use client";
 
+import { dispatchAuthUserUpdated } from './auth-events';
+
 /**
  * Authentication Service for Karen AI Theme
  * 
@@ -523,6 +525,7 @@ class AuthService {
    */
   setCurrentUser(user: AuthUser | (AuthUser & Record<string, unknown>)): void {
     localStorage.setItem('user_data', JSON.stringify(user));
+    dispatchAuthUserUpdated();
   }
 
   /**

@@ -332,54 +332,53 @@ export default function DashboardPage() {
     );
   }, [activeMainView, staticViewMap, viewMap]);
 
-  if (backendStatus !== "ready") {
-    return (
-      <AuthWrapper>
-        <div className="flex h-screen w-full items-center justify-center bg-background px-6">
-          <div className="flex max-w-md flex-col items-center space-y-4 text-center">
-            <Loader2
-              className={`h-8 w-8 text-primary ${
-                backendStatus === "checking" ? "animate-spin" : ""
-              }`}
-            />
+  const backendGate =
+    backendStatus === "ready" ? null : (
+      <div
+        className="flex min-h-0 flex-1 items-center justify-center px-6"
+        data-testid="backend-health-gate"
+      >
+        <div className="karen-surface flex max-w-md flex-col items-center space-y-4 rounded-2xl p-6 text-center">
+          <Loader2
+            className={`h-7 w-7 text-primary ${
+              backendStatus === "checking" ? "animate-spin" : ""
+            }`}
+          />
 
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">
-                {backendStatus === "failed"
-                  ? "Backend Connection Failed"
-                  : "Initializing KAREN"}
-              </h2>
+          <div>
+            <h2 className="text-base font-semibold text-foreground">
+              {backendStatus === "failed"
+                ? "Backend Connection Failed"
+                : "Initializing KAREN"}
+            </h2>
 
-              <p className="mt-1 text-sm text-muted-foreground">
-                {backendStatus === "failed"
-                  ? backendErrorMessage
-                  : "Connecting to backend services..."}
+            <p className="mt-1 text-sm text-muted-foreground">
+              {backendStatus === "failed"
+                ? backendErrorMessage
+                : "The workspace will stay mounted while backend services become ready."}
+            </p>
+
+            {backendStatus === "checking" && backendCheckRetries > 0 && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Retrying connection ({backendCheckRetries}/{MAX_BACKEND_RETRIES})...
               </p>
-
-              {backendStatus === "checking" && backendCheckRetries > 0 && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Retrying connection ({backendCheckRetries}/{MAX_BACKEND_RETRIES}
-                  )...
-                </p>
-              )}
-            </div>
-
-            {backendStatus === "failed" && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleRetryBackend}
-                className="gap-2"
-              >
-                <RefreshCw className="h-4 w-4" />
-                Retry Connection
-              </Button>
             )}
           </div>
+
+          {backendStatus === "failed" && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleRetryBackend}
+              className="gap-2"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Retry Connection
+            </Button>
+          )}
         </div>
-      </AuthWrapper>
+      </div>
     );
-  }
 
   return (
     <AuthWrapper>
@@ -584,7 +583,7 @@ export default function DashboardPage() {
             <SidebarInset className="karen-workspace-grid flex min-h-0 flex-1 flex-col bg-transparent">
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 md:p-3">
                 <div className="karen-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
-                  {currentViewContent}
+                  {backendGate ?? currentViewContent}
                 </div>
               </div>
             </SidebarInset>

@@ -1,6 +1,8 @@
 "use client";
 
 import type { RuntimeProviderCatalogResponse } from '@/lib/model-runtime-inventory';
+import { authService } from '@/lib/auth';
+import { dispatchAuthInvalidated } from '@/lib/auth-events';
 
 // API service for HTTP requests
 const SAME_ORIGIN_API_BASE_URL = '';
@@ -86,6 +88,17 @@ class ApiClient {
   private readonly SESSION_MARKER_KEY = 'kari_session_expected';
   private readonly SESSION_WARNING_SHOWN_KEY = 'session_warning_shown';
   private readonly TOKEN_REFRESH_ATTEMPTED_KEY = 'token_refresh_attempted';
+
+  private invalidateAuthSession(
+    reason: 'terminal_401' | 'refresh_failed' | 'session_invalid',
+  ): void {
+    if (!this.isBrowser()) return;
+
+    authService.clearAuth();
+    localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
+    this.clearSessionWarningFlag();
+    dispatchAuthInvalidated(reason);
+  }
 
   private formatApiErrorMessage(payload: unknown, fallback: string): string {
     if (typeof payload === 'string') {
@@ -445,13 +458,8 @@ class ApiClient {
               console.warn('[ApiClient] Transient failure during token refresh. Preserving local auth state.');
               headers['Authorization'] = `Bearer ${accessToken}`; // Try with current token anyway
             } else {
-              // Terminal failure - Clear auth state
-              localStorage.removeItem('access_token');
-              localStorage.removeItem('refresh_token');
-              localStorage.removeItem('user_data');
-              if (typeof window !== 'undefined') {
-                window.location.href = '/login';
-              }
+              // Terminal failure is routed through the shared auth owner.
+              this.invalidateAuthSession('refresh_failed');
             }
             return headers;
           }
@@ -608,16 +616,8 @@ class ApiClient {
             console.warn('[ApiClient] Token refresh failed for 401, redirecting to login:', refreshError);
             localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
 
-            // Only redirect to login after refresh failure
-            if (typeof window !== 'undefined') {
-              // Clear auth data
-              localStorage.removeItem('access_token');
-              localStorage.removeItem('refresh_token');
-              localStorage.removeItem('user_data');
-              this.clearSessionWarningFlag();
-              window.location.href = '/login';
-            }
-            return undefined as T; // Don't throw, let redirect happen
+            this.invalidateAuthSession('refresh_failed');
+            return undefined as T;
           }
         }
       } else {
@@ -625,14 +625,8 @@ class ApiClient {
         console.warn('[ApiClient] 401 after refresh attempt, redirecting to login');
         localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
 
-        if (typeof window !== 'undefined') {
-          localStorage.removeItem('access_token');
-          localStorage.removeItem('refresh_token');
-          localStorage.removeItem('user_data');
-          this.clearSessionWarningFlag();
-          window.location.href = '/login';
-        }
-        return undefined as T; // Don't throw, let redirect happen
+        this.invalidateAuthSession('terminal_401');
+        return undefined as T;
       }
     } else {
       // Clear refresh attempt flag on non-401 responses
@@ -680,14 +674,8 @@ class ApiClient {
       // Handle 401 errors by redirecting to login
       if (response.status === 401 && typeof window !== 'undefined') {
         if (!isDegradedMode) {
-          console.warn('[ApiClient] Authentication failed, redirecting to login');
-          // Clear any remaining auth data
-          localStorage.removeItem('access_token');
-          localStorage.removeItem('refresh_token');
-          localStorage.removeItem('user_data');
-          // Redirect to login page
-          window.location.href = '/login';
-          // Don't throw error, let the redirect happen
+          console.warn('[ApiClient] Authentication failed; invalidating shared auth state');
+          this.invalidateAuthSession('terminal_401');
           return undefined as T;
         } else {
           // If it's a 401 but in degraded mode, we just throw the ApiError instead of redirecting
