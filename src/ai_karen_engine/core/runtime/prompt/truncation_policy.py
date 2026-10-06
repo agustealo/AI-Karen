@@ -36,9 +36,10 @@ class SectionPriority(int, Enum):
     CORTEX = 6
     PROFILE = 7
     MEMORY = 8
-    TOOL_CONTRACTS = 9
-    WORKFLOW = 10
-    HISTORY = 11
+    CONTINUITY = 9
+    TOOL_CONTRACTS = 10
+    WORKFLOW = 11
+    HISTORY = 12
 
 
 class SectionProtection(str, Enum):
@@ -113,6 +114,13 @@ class HierarchicalTruncationPolicy:
                 SectionProtection.ITEM_TRIMMABLE,
                 TruncationStrategy.REMOVE_OLDEST_ITEMS,
                 min_keep_percentage=0.3,
+            ),
+            "continuity": TruncationRule(
+                "continuity",
+                SectionPriority.CONTINUITY,
+                SectionProtection.ITEM_TRIMMABLE,
+                TruncationStrategy.REMOVE_OLDEST_ITEMS,
+                min_keep_percentage=0.2,
             ),
             "tool": TruncationRule(
                 "tool",
@@ -223,6 +231,18 @@ class HierarchicalTruncationPolicy:
             return 1
         if section == "provider_capabilities" and request.provider_capabilities:
             request.provider_capabilities = {}
+            return 1
+        if section == "continuity" and request.continuity_items:
+            keep = max(
+                0,
+                int(
+                    len(request.continuity_items)
+                    * self.rules[section].min_keep_percentage
+                ),
+            )
+            if len(request.continuity_items) <= keep:
+                return 0
+            request.continuity_items.pop()
             return 1
         if section == "tool" and request.tool_contracts:
             keep = max(0, int(len(request.tool_contracts) * self.rules[section].min_keep_percentage))
