@@ -1907,6 +1907,15 @@ class ChatRuntime:
                 "continuity_count": int(
                     memory_meta.get("continuity_count") or 0
                 ),
+                "continuity_primary_candidate_id": memory_meta.get(
+                    "continuity_primary_candidate_id"
+                ),
+                "continuity_ambiguous": bool(
+                    memory_meta.get("continuity_ambiguous", False)
+                ),
+                "continuity_agenda_reason_codes": list(
+                    memory_meta.get("continuity_agenda_reason_codes") or []
+                ),
             },
         )
 
