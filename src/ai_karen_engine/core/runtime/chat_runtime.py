@@ -842,7 +842,7 @@ class ChatRuntime:
                 **{
                     key: value
                     for key, value in provider_meta.items()
-                    if key in _CANONICAL_META_KEYS
+                    if key in _CANONICAL_META_KEYS or key in _RICH_RESULT_KEYS
                 },
                 **({"trajectory_id": trajectory_id} if trajectory_id else {}),
             },
