@@ -226,6 +226,46 @@ class PostgresConversationRepository(ConversationRepository):
             return RepositoryResult(success=False, error=str(exc))
 
     @instrument_repository(
+        operation="count_conversations",
+        repository="PostgresConversationRepository",
+    )
+    async def count_conversations(
+        self,
+        query: ConversationQuery,
+    ) -> RepositoryResult[int]:
+        try:
+            clauses = ["tenant_id = :tenant_id"]
+            params: Dict[str, Any] = {"tenant_id": query.tenant_id}
+            if query.user_id:
+                clauses.append("user_id = :user_id")
+                params["user_id"] = query.user_id
+            if query.is_active is not None:
+                clauses.append("is_active = :is_active")
+                params["is_active"] = query.is_active
+            if query.tags:
+                clauses.append("tags @> :tags")
+                params["tags"] = query.tags
+            if query.created_after:
+                clauses.append("created_at >= :created_after")
+                params["created_after"] = query.created_after
+
+            async with await self._session() as session:
+                result = await session.execute(
+                    text(
+                        f"""
+                        SELECT COUNT(*) AS total
+                        FROM {self._conversation_table}
+                        WHERE {" AND ".join(clauses)}
+                        """
+                    ),
+                    params,
+                )
+                return RepositoryResult(success=True, data=int(result.scalar_one()))
+        except Exception as exc:
+            logger.error("count_conversations failed: %s", exc)
+            return RepositoryResult(success=False, error=str(exc))
+
+    @instrument_repository(
         operation="update_conversation", repository="PostgresConversationRepository"
     )
     async def update_conversation(
