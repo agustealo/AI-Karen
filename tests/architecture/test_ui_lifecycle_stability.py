@@ -46,3 +46,35 @@ def test_dashboard_health_checks_do_not_replace_application_shell() -> None:
     assert "backendGate ?? currentViewContent" in dashboard
     assert 'if (backendStatus !== "ready")' not in dashboard
     assert "karen-app-shell" in dashboard
+
+
+
+def test_chat_session_rate_limits_are_coalesced_and_nonfatal() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    assert "sessionListRefreshInFlightRef" in chat
+    assert "getRateLimitDelayMs(err, 1200)" in chat
+    assert "Session list refresh was rate-limited; preserving existing session state." in chat
+    assert "console.error('Failed to load sessions:', err);" in chat
+
+    refresh = chat.split("// Refresh sessions list", 1)[1].split(
+        "// Sync isActive state", 1
+    )[0]
+    assert "sessionListRefreshInFlightRef.current" in refresh
+    assert "err.status === 429" in refresh
+    assert "console.warn('Session list refresh was rate-limited" in refresh
+    rate_limited_branch = refresh.split(
+        "if (err instanceof ApiError && err.status === 429)", 1
+    )[1].split("} else {", 1)[0]
+    assert "console.error" not in rate_limited_branch
+
+    load = chat.split("// Load a specific session", 1)[1].split(
+        "// Refresh sessions list", 1
+    )[0]
+    assert "err.status === 429" in load
+    assert "preserving the requested conversation" in load
+    rate_limited_load = load.split(
+        "if (err instanceof ApiError && err.status === 429)", 1
+    )[1].split("if (err instanceof ApiError && err.status === 404)", 1)[0]
+    assert "createNewSession" not in rate_limited_load
+    assert "setCurrentSession(preservedSession)" in rate_limited_load
