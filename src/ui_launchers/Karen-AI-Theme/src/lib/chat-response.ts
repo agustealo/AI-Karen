@@ -999,10 +999,18 @@ export function normalizeConversationMessage(
     status: mapBackendStatusToMessageStatus(metadata.status),
     structuredContent: sanitizeStructuredContent(message.structured_content),
     actions: Array.isArray(message.actions) ? message.actions : [],
-    citations: Array.isArray(metadata.citations) ? metadata.citations as ChatMessage['citations'] : [],
-    sources: Array.isArray(metadata.sources) ? metadata.sources as ChatMessage['sources'] : [],
-    attachments: Array.isArray(metadata.attachments) ? metadata.attachments as ChatMessage['attachments'] : [],
-    artifacts: Array.isArray(metadata.artifacts) ? metadata.artifacts as ChatMessage['artifacts'] : [],
+    citations: Array.isArray(metadata.citations)
+      ? (metadata.citations as Citation[])
+      : [],
+    sources: Array.isArray(metadata.sources)
+      ? (metadata.sources as Citation[])
+      : [],
+    attachments: Array.isArray(metadata.attachments)
+      ? (metadata.attachments as ChatAttachment[])
+      : [],
+    artifacts: Array.isArray(metadata.artifacts)
+      ? (metadata.artifacts as ChatArtifact[])
+      : [],
     metadata,
   };
 }
