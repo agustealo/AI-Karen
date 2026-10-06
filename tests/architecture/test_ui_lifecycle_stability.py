@@ -78,3 +78,21 @@ def test_chat_session_rate_limits_are_coalesced_and_nonfatal() -> None:
     )[1].split("if (err instanceof ApiError && err.status === 404)", 1)[0]
     assert "createNewSession" not in rate_limited_load
     assert "setCurrentSession(preservedSession)" in rate_limited_load
+
+def test_chat_ui_preserves_durable_conversation_lifecycle_authority() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    assert "Session cleanup for old/inactive sessions" not in chat
+    assert "Cleaning up " not in chat
+    assert "Session timed out, creating new session" not in chat
+    assert "const SESSION_TIMEOUT" not in chat
+    assert "Conversation lifetime/retention is owned by the backend policy layer" in chat
+    assert "const activeSessionId = currentSession?.id" in chat
+    assert "}, [currentSession?.id]);" in chat
+
+    refresh = chat.split("// Refresh sessions list", 1)[1].split(
+        "// Sync isActive state", 1
+    )[0]
+    assert "isActive: currentSessionRef.current?.id === session.id" in refresh
+    assert "isActive: false" not in refresh
+
