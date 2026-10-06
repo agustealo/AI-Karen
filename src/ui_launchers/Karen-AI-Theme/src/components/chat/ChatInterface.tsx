@@ -355,8 +355,9 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
         throw (lastError ?? new Error('Failed to load session'));
       }
 
+      const conversationId = conversationResponse.id;
       const session: Session = {
-        id: sessionId,
+        id: conversationId,
         title: conversationResponse.title || generateSessionTitle(conversationResponse.messages?.map(m => ({
           ...m,
           role: m.role as 'user' | 'assistant',
@@ -372,11 +373,11 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
       };
 
       setCurrentSession(session);
-      persistActiveSessionId(sessionId);
+      persistActiveSessionId(conversationId);
 
       setSessions(prev => prev.map(s => ({
         ...s,
-        isActive: s.id === sessionId
+        isActive: s.id === conversationId
       })));
     } catch (err) {
       if (err instanceof ApiError && err.status === 429) {
