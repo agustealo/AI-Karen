@@ -66,9 +66,9 @@ async def list_approvals(
     conversation_id: Optional[UUID] = None,
     user: UserData = Depends(get_current_user),
 ):
-    """List pending Runtime approvals within the caller's authenticated scope."""
+    """List actionable Runtime approvals within the caller's authenticated scope."""
     try:
-        records = await get_approval_service().list_pending(
+        records = await get_approval_service().list_actionable(
             user=user,
             conversation_id=str(conversation_id) if conversation_id else None,
         )
