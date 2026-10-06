@@ -236,6 +236,15 @@ class ChatRuntime:
                     success=False,
                     provider_meta=provider_meta or {},
                 )
+                fallback.metadata.extra["trajectory_id"] = trajectory.trajectory_id
+                fallback.metadata.extra["policy_decision_id"] = decision.policy_decision_id
+                if decision_observation_id:
+                    fallback.metadata.extra["decision_observation_id"] = (
+                        decision_observation_id
+                    )
+                fallback.metadata.extra["feature_snapshot_count"] = len(
+                    trajectory.feature_snapshot_refs
+                )
                 return fallback
             await self._record_trajectory_completion(
                 trajectory,
@@ -267,6 +276,14 @@ class ChatRuntime:
                     mode="emergency",
                     degraded_mode=True,
                     degradation_reason=f"all_execution_paths_failed:{error_type}",
+                    extra={
+                        "trajectory_id": trajectory.trajectory_id,
+                        "policy_decision_id": decision.policy_decision_id,
+                        "decision_observation_id": decision_observation_id,
+                        "feature_snapshot_count": len(
+                            trajectory.feature_snapshot_refs
+                        ),
+                    },
                 ),
             )
 
@@ -317,6 +334,12 @@ class ChatRuntime:
             latency_ms,
         )
         result.metadata.extra["trajectory_id"] = trajectory.trajectory_id
+        result.metadata.extra["policy_decision_id"] = decision.policy_decision_id
+        if decision_observation_id:
+            result.metadata.extra["decision_observation_id"] = decision_observation_id
+        result.metadata.extra["feature_snapshot_count"] = len(
+            trajectory.feature_snapshot_refs
+        )
         return result
 
     async def execute_stream(
@@ -645,6 +668,12 @@ class ChatRuntime:
             transcript_persistence_failed=transcript_persistence_failed,
         )
         terminal_metadata["trajectory_id"] = trajectory.trajectory_id
+        terminal_metadata["policy_decision_id"] = decision.policy_decision_id
+        if decision_observation_id:
+            terminal_metadata["decision_observation_id"] = decision_observation_id
+        terminal_metadata["feature_snapshot_count"] = len(
+            trajectory.feature_snapshot_refs
+        )
 
         self._emitter.emit(
             RuntimeEventType.REQUEST_COMPLETED,
