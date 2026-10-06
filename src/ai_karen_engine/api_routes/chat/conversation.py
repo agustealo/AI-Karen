@@ -56,6 +56,16 @@ def _require_user_id(user_ctx: Dict[str, Any]) -> str:
     return user_id.strip()
 
 
+def _has_admin_role(user_ctx: Dict[str, Any]) -> bool:
+    roles = user_ctx.get("roles") or []
+    return any(str(role).strip().lower() == "admin" for role in roles)
+
+
+def _require_admin_role(user_ctx: Dict[str, Any]) -> None:
+    if not _has_admin_role(user_ctx):
+        raise HTTPException(status_code=403, detail="Administrator role required")
+
+
 def _get_total_conversations_from_stats(stats: Any, fallback: int) -> int:
     """Read total conversation count from dict or model-like stats."""
     if isinstance(stats, dict):
@@ -364,6 +374,33 @@ def _conversation_api_context(
     )
 
 
+
+async def _require_owned_conversation_access(
+    *,
+    conversation_gateway: ConversationRuntimeGateway,
+    tenant_id: str,
+    user_ctx: Dict[str, Any],
+    conversation_id: str,
+) -> None:
+    user_id = _require_user_id(user_ctx)
+    try:
+        await conversation_gateway.require_owned_conversation(
+            _conversation_api_context(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
+        )
+    except (PermissionError, RuntimeError) as error:
+        if str(error) in {"conversation_user_mismatch", "conversation_not_found"}:
+            _raise_not_found(
+                message="Conversation not found or access denied",
+                user_message="The requested conversation could not be found.",
+                details={"conversation_id": conversation_id},
+            )
+        raise
+
+
 # Static GET routes must be registered before /{conversation_id}.
 @router.get("/health")
 async def health_check() -> Dict[str, str]:
@@ -390,6 +427,8 @@ async def get_analytics(
             if time_range_start and time_range_end
             else None
         )
+        if user_id and user_id != authenticated_user_id:
+            _require_admin_role(user_ctx)
         target_user_id = user_id or authenticated_user_id
         analytics = await conversation_service.get_conversation_analytics(
             tenant_id=tenant_id,
@@ -642,8 +681,11 @@ async def cleanup_inactive_conversations(
     days_inactive: int = Query(30, ge=1, description="Days of inactivity threshold"),
     conversation_service: ConversationService = Depends(get_conversation_service),
     tenant_id: str = Depends(get_current_tenant_id),
+    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     try:
+        _require_user_id(user_ctx)
+        _require_admin_role(user_ctx)
         count = await conversation_service.base_manager.cleanup_inactive_conversations(
             tenant_id=tenant_id,
             days_inactive=days_inactive,
@@ -653,6 +695,8 @@ async def cleanup_inactive_conversations(
             "inactive_count": count,
             "message": f"Marked {count} conversations as inactive",
         }
+    except HTTPException:
+        raise
     except Exception as error:
         logger.exception("Failed to cleanup conversations", error=str(error))
         _raise_service_error(
@@ -785,9 +829,19 @@ async def build_context(
     conversation_id: str,
     request: BuildContextRequest,
     conversation_service: ConversationService = Depends(get_conversation_service),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
+    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     try:
+        await _require_owned_conversation_access(
+            conversation_gateway=conversation_gateway,
+            tenant_id=tenant_id,
+            user_ctx=user_ctx,
+            conversation_id=conversation_id,
+        )
         context = await conversation_service.build_conversation_context(
             tenant_id=tenant_id,
             conversation_id=conversation_id,
@@ -809,9 +863,19 @@ async def update_ui_context(
     conversation_id: str,
     request: UpdateUIContextRequest,
     conversation_service: ConversationService = Depends(get_conversation_service),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
+    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     try:
+        await _require_owned_conversation_access(
+            conversation_gateway=conversation_gateway,
+            tenant_id=tenant_id,
+            user_ctx=user_ctx,
+            conversation_id=conversation_id,
+        )
         success = await conversation_service.update_conversation_ui_context(
             tenant_id=tenant_id,
             conversation_id=conversation_id,
@@ -839,9 +903,19 @@ async def update_ai_insights(
     conversation_id: str,
     request: UpdateAIInsightsRequest,
     conversation_service: ConversationService = Depends(get_conversation_service),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
+    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     try:
+        await _require_owned_conversation_access(
+            conversation_gateway=conversation_gateway,
+            tenant_id=tenant_id,
+            user_ctx=user_ctx,
+            conversation_id=conversation_id,
+        )
         success = await conversation_service.update_conversation_ai_insights(
             tenant_id=tenant_id,
             conversation_id=conversation_id,
@@ -869,9 +943,19 @@ async def add_tags(
     conversation_id: str,
     request: AddTagsRequest,
     conversation_service: ConversationService = Depends(get_conversation_service),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
+    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     try:
+        await _require_owned_conversation_access(
+            conversation_gateway=conversation_gateway,
+            tenant_id=tenant_id,
+            user_ctx=user_ctx,
+            conversation_id=conversation_id,
+        )
         success = await conversation_service.add_conversation_tags(
             tenant_id=tenant_id,
             conversation_id=conversation_id,
