@@ -107,7 +107,9 @@ class SqlApprovalRepository:
                 text(
                     """
                     UPDATE public.runtime_approval_requests
-                    SET status = 'expired', updated_at = now()
+                    SET status = 'expired',
+                        request_payload = '{}'::jsonb,
+                        updated_at = now()
                     WHERE tenant_id = CAST(:tenant_id AS uuid)
                       AND user_id = CAST(:user_id AS uuid)
                       AND status IN ('pending', 'approved')
@@ -147,7 +149,9 @@ class SqlApprovalRepository:
                 text(
                     """
                     UPDATE public.runtime_approval_requests
-                    SET status = 'expired', updated_at = now()
+                    SET status = 'expired',
+                        request_payload = '{}'::jsonb,
+                        updated_at = now()
                     WHERE tenant_id = CAST(:tenant_id AS uuid)
                       AND user_id = CAST(:user_id AS uuid)
                       AND status IN ('pending', 'approved')
@@ -197,6 +201,10 @@ class SqlApprovalRepository:
                         decision_reason = :reason,
                         decided_by = CAST(:decided_by AS uuid),
                         decided_at = now(),
+                        request_payload = CASE
+                            WHEN :decision = 'rejected' THEN '{}'::jsonb
+                            ELSE request_payload
+                        END,
                         updated_at = now()
                     WHERE approval_id = CAST(:approval_id AS uuid)
                       AND tenant_id = CAST(:tenant_id AS uuid)
@@ -234,6 +242,7 @@ class SqlApprovalRepository:
                     UPDATE public.runtime_approval_requests
                     SET status = 'consumed',
                         consumed_at = now(),
+                        request_payload = '{}'::jsonb,
                         updated_at = now()
                     WHERE approval_id = CAST(:approval_id AS uuid)
                       AND tenant_id = CAST(:tenant_id AS uuid)
