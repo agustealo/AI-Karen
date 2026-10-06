@@ -35,10 +35,8 @@ import { useUserPreferences } from './const/userPreferences';
 
 // Import interface components
 import { StatusIndicators, MessagesArea, ChatInput } from './interface';
-import AgentActivityPanel from './AgentActivityPanel';
+import ChatIntelligenceSidecar from './ChatIntelligenceSidecar';
 import DegradedModeBanner from './DegradedModeBanner';
-import RuntimeMetadataPanel from './RuntimeMetadataPanel';
-import RuntimeReceipt from './RuntimeReceipt';
 import CircuitBreakerWarning from './CircuitBreakerWarning';
 
 // Session Management Types
@@ -1002,6 +1000,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       degradedMode: Boolean(metadata.degraded_mode),
       degradedReason,
       showCircuitWarning: Boolean(metadata.circuit_breaker_open || metadata.dependency_degraded || degradedReason),
+      raw: metadata,
     };
   }, [messages]);
   const selectableProviders = useMemo(() => {
@@ -1927,7 +1926,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   }, [shouldSubmitVoiceInput, input, isLoading, isAuthLoading, handleSubmit]);
 
   return (
-    <div data-testid="chat-root" className="flex flex-col flex-1">
+    <div data-testid="chat-root" className="flex min-h-0 flex-1 flex-col">
       <StatusIndicators
         isBackendOffline={isBackendOffline}
         error={error}
@@ -1936,109 +1935,116 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         isLocalRecoveryUnconfirmed={isLocalRecoveryUnconfirmed}
       />
 
-      <RuntimeMetadataPanel
-        requestedProvider={latestAssistantMetadata.requestedProvider}
-        actualProvider={latestAssistantMetadata.actualProvider}
-        requestedModel={latestAssistantMetadata.requestedModel}
-        actualModel={latestAssistantMetadata.actualModel}
-        runtimeEngine={latestAssistantMetadata.runtimeEngine}
-        fallbackLevel={latestAssistantMetadata.fallbackLevel}
-        correlationId={latestAssistantMetadata.correlationId}
-        requestId={latestAssistantMetadata.requestId}
-        status={latestAssistantMetadata.status}
-        responseSource={latestAssistantMetadata.responseSource}
-        degradedMode={latestAssistantMetadata.degradedMode}
-        degradationReason={latestAssistantMetadata.degradedReason}
-      />
+      <div className="border-b border-border bg-card/30 px-3 py-2 xl:hidden">
+        <details>
+          <summary className="cursor-pointer select-none text-xs font-medium text-muted-foreground">
+            AI details
+          </summary>
+          <div className="mt-2 max-h-[55vh] overflow-hidden rounded-lg border border-border">
+            <ChatIntelligenceSidecar
+              metadata={latestAssistantMetadata.raw}
+              agentSteps={agentSteps}
+              configuredProvider={selectedProvider}
+              configuredModel={selectedModel}
+              streamingStatus={streamingStatus}
+              isLoading={isLoading}
+              isBackendOffline={isBackendOffline}
+            />
+          </div>
+        </details>
+      </div>
 
-      <RuntimeReceipt
-        source={latestAssistantMetadata.responseSource}
-        usedFallback={latestAssistantMetadata.usedFallback}
-        degradedReason={latestAssistantMetadata.degradedReason}
-      />
+      <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <section className="flex min-h-0 min-w-0 flex-col" aria-label="Conversation">
+          <CircuitBreakerWarning
+            show={latestAssistantMetadata.showCircuitWarning}
+            reason={latestAssistantMetadata.degradedReason}
+          />
 
-      <CircuitBreakerWarning
-        show={latestAssistantMetadata.showCircuitWarning}
-        reason={latestAssistantMetadata.degradedReason}
-      />
+          {degradedMode.active && (
+            <DegradedModeBanner
+              reason={degradedMode.reason || "System operating in degraded mode"}
+              fallbackPath={degradedMode.fallbackPath}
+              onDismiss={() => setDegradedMode({ active: false })}
+            />
+          )}
 
-      {degradedMode.active && (
-        <DegradedModeBanner
-          reason={degradedMode.reason || "System operating in degraded mode"}
-          fallbackPath={degradedMode.fallbackPath}
-          onDismiss={() => setDegradedMode({ active: false })}
-        />
-      )}
+          <MessagesArea
+            messages={messages}
+            onActionClick={handleActionClick}
+            viewportRef={viewportRef}
+            messagesContainerRef={messagesContainerRef}
+          />
 
-      <MessagesArea
-        messages={messages}
-        onActionClick={handleActionClick}
-        viewportRef={viewportRef}
-        messagesContainerRef={messagesContainerRef}
-      />
+          <ChatInput
+            onSubmit={handleFormSubmit}
+            displayedInputValue={displayedInputValue}
+            onInputChange={setInput}
+            onKeyDown={(e) => {
+              if (
+                showStopButton &&
+                !isEditingDuringProcessing &&
+                (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Delete')
+              ) {
+                setIsEditingDuringProcessing(true);
+                setInput('');
+              }
+            }}
+            onPaste={(e) => {
+              if (showStopButton && !isEditingDuringProcessing) {
+                e.preventDefault();
+                const pastedText = e.clipboardData.getData('text');
+                setIsEditingDuringProcessing(true);
+                setInput(pastedText);
+              }
+            }}
+            isLoading={isLoading}
+            isAuthLoading={isAuthLoading}
+            isRecording={isRecording}
+            isSuggestingStarter={isSuggestingStarter}
+            isEditingDuringProcessing={isEditingDuringProcessing}
+            isBackendOffline={isBackendOffline}
+            speechRecognitionSupported={speechRecognitionSupported}
+            showStopButton={showStopButton}
+            onMicClick={handleMicClick}
+            onSuggestStarter={handleSuggestStarter}
+            onStopRequest={stopActiveRequest}
+            selectableProviders={selectableProviders}
+            providers={modelSettings?.providers ?? []}
+            selectedProvider={selectedProvider}
+            selectedModel={selectedModel}
+            applyModelSelection={handleApplyModelSelection}
+            isUpdatingModelSelection={isUpdatingModelSelection}
+            sessions={sessions}
+            currentSession={currentSession}
+            isLoadingSessions={isLoadingSessions}
+            error={error}
+            loadSession={loadSession}
+            deleteSession={deleteSession}
+            deleteSessions={deleteSessions}
+            updateSessionTitle={updateSessionTitle}
+            refreshSessions={refreshSessions}
+            createNewSession={createNewSession}
+            onExportChat={handleExportCurrentChat}
+            onCopyChat={handleCopyCurrentChat}
+            onShareChat={handleShareCurrentChat}
+            onClearChat={handleClearCurrentChat}
+            onSearchInChat={handleSearchInChat}
+          />
+        </section>
 
-      {agentSteps.length > 0 && (
-        <div className="mx-4 mb-4">
-          <AgentActivityPanel steps={agentSteps} />
+        <div className="hidden min-h-0 xl:block">
+          <ChatIntelligenceSidecar
+            metadata={latestAssistantMetadata.raw}
+            agentSteps={agentSteps}
+            configuredProvider={selectedProvider}
+            configuredModel={selectedModel}
+            streamingStatus={streamingStatus}
+            isLoading={isLoading}
+            isBackendOffline={isBackendOffline}
+          />
         </div>
-      )}
-
-      <ChatInput
-        onSubmit={handleFormSubmit}
-        displayedInputValue={displayedInputValue}
-        onInputChange={setInput}
-        onKeyDown={(e) => {
-          if (
-            showStopButton &&
-            !isEditingDuringProcessing &&
-            (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Delete')
-          ) {
-            setIsEditingDuringProcessing(true);
-            setInput('');
-          }
-        }}
-        onPaste={(e) => {
-          if (showStopButton && !isEditingDuringProcessing) {
-            e.preventDefault();
-            const pastedText = e.clipboardData.getData('text');
-            setIsEditingDuringProcessing(true);
-            setInput(pastedText);
-          }
-        }}
-        isLoading={isLoading}
-        isAuthLoading={isAuthLoading}
-        isRecording={isRecording}
-        isSuggestingStarter={isSuggestingStarter}
-        isEditingDuringProcessing={isEditingDuringProcessing}
-        isBackendOffline={isBackendOffline}
-        speechRecognitionSupported={speechRecognitionSupported}
-        showStopButton={showStopButton}
-        onMicClick={handleMicClick}
-        onSuggestStarter={handleSuggestStarter}
-        onStopRequest={stopActiveRequest}
-        selectableProviders={selectableProviders}
-        providers={modelSettings?.providers ?? []}
-        selectedProvider={selectedProvider}
-        selectedModel={selectedModel}
-        applyModelSelection={handleApplyModelSelection}
-        isUpdatingModelSelection={isUpdatingModelSelection}
-        sessions={sessions}
-        currentSession={currentSession}
-        isLoadingSessions={isLoadingSessions}
-        error={error}
-        loadSession={loadSession}
-        deleteSession={deleteSession}
-        deleteSessions={deleteSessions}
-        updateSessionTitle={updateSessionTitle}
-        refreshSessions={refreshSessions}
-        createNewSession={createNewSession}
-        onExportChat={handleExportCurrentChat}
-        onCopyChat={handleCopyChat}
-        onShareChat={handleShareChat}
-        onClearChat={handleClearChat}
-        onSearchInChat={handleSearchInChat}
-        streamingStatus={streamingStatus}
-      />
+      </div>
     </div>
   );
 }
