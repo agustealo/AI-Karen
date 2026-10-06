@@ -117,4 +117,69 @@ describe('ConversationContextRail', () => {
       screen.getByText(/no request-scoped capability receipt was reported yet/i),
     ).toBeTruthy();
   });
+
+  it('surfaces durable approval recovery states without inventing execution', () => {
+    const { rerender } = render(
+      <ConversationContextRail
+        metadata={{}}
+        agentSteps={[]}
+        approvals={[
+          {
+            approval_id: 'approval-1',
+            intent: 'external_action',
+            risk_level: 'high',
+            status: 'pending',
+            expires_at: '2026-10-06T14:00:00Z',
+          },
+        ]}
+        approvalsLoadState="ready"
+      />,
+    );
+
+    expect(screen.getByText('Needs you')).toBeTruthy();
+    expect(
+      screen.getByText(/external action is waiting for your decision/i),
+    ).toBeTruthy();
+    expect(screen.getByText(/approval required/i)).toBeTruthy();
+    expect(screen.getByText(/high risk/i)).toBeTruthy();
+
+    rerender(
+      <ConversationContextRail
+        metadata={{}}
+        agentSteps={[]}
+        approvals={[
+          {
+            approval_id: 'approval-1',
+            intent: 'external_action',
+            risk_level: 'high',
+            status: 'approved',
+            expires_at: '2026-10-06T14:00:00Z',
+          },
+        ]}
+        approvalsLoadState="ready"
+      />,
+    );
+
+    expect(
+      screen.getByText(/external action is approved and ready to resume/i),
+    ).toBeTruthy();
+    expect(screen.getByText(/ready to resume/i)).toBeTruthy();
+  });
+
+  it('distinguishes unavailable approval truth from an empty approval list', () => {
+    render(
+      <ConversationContextRail
+        metadata={{}}
+        agentSteps={[]}
+        approvals={[]}
+        approvalsLoadState="unavailable"
+      />,
+    );
+
+    expect(screen.getByText('Needs you')).toBeTruthy();
+    expect(
+      screen.getByText(/approval state is unavailable/i),
+    ).toBeTruthy();
+  });
+
 });
