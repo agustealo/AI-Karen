@@ -113,6 +113,9 @@ class RewardProgressService:
                     "continuity_primary_candidate_id": execution_metadata.get(
                         "continuity_primary_candidate_id"
                     ),
+                    "continuity_decision_observation_id": execution_metadata.get(
+                        "continuity_decision_observation_id"
+                    ),
                     "continuity_ambiguous": bool(
                         execution_metadata.get("continuity_ambiguous", False)
                     ),
