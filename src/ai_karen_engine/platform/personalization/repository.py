@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy import text
 
 from ai_karen_engine.core.personalization.contracts import (
+    BehaviorCandidate,
     BehaviorPattern,
     PreferenceCategory,
     PreferenceRecord,
@@ -26,6 +27,7 @@ from ai_karen_engine.core.personalization.contracts import (
     UserGoalStatus,
     UserModelHealth,
     UserModelHealthStatus,
+    make_pattern_id,
 )
 from ai_karen_engine.core.personalization.persistence.repository import (
     PersonalizationRepository,
@@ -220,6 +222,221 @@ class PostgresPersonalizationRepository(PersonalizationRepository):
             for row in rows
         ]
 
+    async def accumulate_behavior(
+        self,
+        candidate: BehaviorCandidate,
+    ) -> BehaviorPattern:
+        user, tenant = self._require_scope(candidate.user_id, candidate.tenant_id)
+        observation_id = str(
+            candidate.metadata.get("observation_id")
+            or candidate.candidate_id
+        )
+        observed_at_raw = candidate.metadata.get("observed_at")
+        observed_at = (
+            datetime.fromisoformat(observed_at_raw)
+            if isinstance(observed_at_raw, str)
+            else datetime.utcnow()
+        )
+        metadata_payload = {
+            **dict(candidate.metadata),
+            "observation": candidate.observation,
+        }
+
+        async with async_transaction_scope(tenant_id=tenant) as session:
+            inserted = (
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO public.personalization_behavior_observation (
+                            observation_id,
+                            tenant_id,
+                            user_id,
+                            pattern_type,
+                            context_signature,
+                            observed_at,
+                            metadata_payload,
+                            created_at
+                        ) VALUES (
+                            :observation_id,
+                            CAST(:tenant_id AS uuid),
+                            CAST(:user_id AS uuid),
+                            :pattern_type,
+                            :context_signature,
+                            :observed_at,
+                            CAST(:metadata_payload AS jsonb),
+                            now()
+                        )
+                        ON CONFLICT (
+                            tenant_id,
+                            user_id,
+                            observation_id
+                        ) DO NOTHING
+                        RETURNING observation_id
+                        """
+                    ),
+                    {
+                        "observation_id": observation_id,
+                        "tenant_id": tenant,
+                        "user_id": user,
+                        "pattern_type": candidate.pattern_type,
+                        "context_signature": candidate.context_signature,
+                        "observed_at": observed_at,
+                        "metadata_payload": json.dumps(
+                            metadata_payload,
+                            default=str,
+                        ),
+                    },
+                )
+            ).scalar_one_or_none()
+
+            if inserted is None:
+                row = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT
+                                pattern_id,
+                                pattern_type,
+                                context_signature,
+                                observation_count,
+                                confidence,
+                                first_seen,
+                                last_seen,
+                                recurrence,
+                                stability,
+                                metadata_payload
+                            FROM public.personalization_behavior_pattern
+                            WHERE tenant_id = CAST(:tenant_id AS uuid)
+                              AND user_id = CAST(:user_id AS uuid)
+                              AND pattern_type = :pattern_type
+                              AND context_signature = :context_signature
+                            LIMIT 1
+                            """
+                        ),
+                        {
+                            "tenant_id": tenant,
+                            "user_id": user,
+                            "pattern_type": candidate.pattern_type,
+                            "context_signature": candidate.context_signature,
+                        },
+                    )
+                ).mappings().first()
+                if row is None:
+                    raise RuntimeError(
+                        "behavior observation exists without behavior pattern"
+                    )
+                return self._behavior_from_row(row, user=user, tenant=tenant)
+
+            row = (
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO public.personalization_behavior_pattern (
+                            pattern_id,
+                            tenant_id,
+                            user_id,
+                            pattern_type,
+                            context_signature,
+                            observation_count,
+                            confidence,
+                            first_seen,
+                            last_seen,
+                            recurrence,
+                            stability,
+                            metadata_payload,
+                            created_at,
+                            updated_at
+                        ) VALUES (
+                            :pattern_id,
+                            CAST(:tenant_id AS uuid),
+                            CAST(:user_id AS uuid),
+                            :pattern_type,
+                            :context_signature,
+                            1,
+                            :confidence,
+                            :observed_at,
+                            :observed_at,
+                            'observed',
+                            'session',
+                            CAST(:metadata_payload AS jsonb),
+                            now(),
+                            now()
+                        )
+                        ON CONFLICT (
+                            tenant_id,
+                            user_id,
+                            pattern_type,
+                            context_signature
+                        ) DO UPDATE SET
+                            observation_count =
+                                personalization_behavior_pattern.observation_count + 1,
+                            confidence = LEAST(
+                                1.0,
+                                GREATEST(
+                                    personalization_behavior_pattern.confidence,
+                                    EXCLUDED.confidence
+                                ) + (
+                                    0.1 * LEAST(
+                                        personalization_behavior_pattern.observation_count,
+                                        4
+                                    )
+                                )
+                            ),
+                            first_seen = LEAST(
+                                personalization_behavior_pattern.first_seen,
+                                EXCLUDED.first_seen
+                            ),
+                            last_seen = GREATEST(
+                                personalization_behavior_pattern.last_seen,
+                                EXCLUDED.last_seen
+                            ),
+                            recurrence = CASE
+                                WHEN personalization_behavior_pattern.observation_count + 1 >= 3
+                                    THEN 'recurring'
+                                ELSE 'repeated'
+                            END,
+                            stability = CASE
+                                WHEN personalization_behavior_pattern.observation_count + 1 >= 2
+                                    THEN 'short_term'
+                                ELSE personalization_behavior_pattern.stability
+                            END,
+                            metadata_payload =
+                                COALESCE(
+                                    personalization_behavior_pattern.metadata_payload,
+                                    '{}'::jsonb
+                                ) || EXCLUDED.metadata_payload,
+                            updated_at = now()
+                        RETURNING
+                            pattern_id,
+                            pattern_type,
+                            context_signature,
+                            observation_count,
+                            confidence,
+                            first_seen,
+                            last_seen,
+                            recurrence,
+                            stability,
+                            metadata_payload
+                        """
+                    ),
+                    {
+                        "pattern_id": make_pattern_id(),
+                        "tenant_id": tenant,
+                        "user_id": user,
+                        "pattern_type": candidate.pattern_type,
+                        "context_signature": candidate.context_signature,
+                        "confidence": candidate.confidence,
+                        "observed_at": observed_at,
+                        "metadata_payload": json.dumps(
+                            metadata_payload,
+                            default=str,
+                        ),
+                    },
+                )
+            ).mappings().one()
+
+        return self._behavior_from_row(row, user=user, tenant=tenant)
+
     async def save_behavior(self, pattern: BehaviorPattern) -> None:
         user, tenant = self._require_scope(pattern.user_id, pattern.tenant_id)
         async with async_transaction_scope(tenant_id=tenant) as session:
@@ -344,6 +561,29 @@ class PostgresPersonalizationRepository(PersonalizationRepository):
             )
             for row in rows
         ]
+
+    @classmethod
+    def _behavior_from_row(
+        cls,
+        row: Any,
+        *,
+        user: str,
+        tenant: str,
+    ) -> BehaviorPattern:
+        return BehaviorPattern(
+            pattern_id=str(row["pattern_id"]),
+            user_id=user,
+            tenant_id=tenant,
+            pattern_type=str(row["pattern_type"]),
+            context_signature=str(row["context_signature"]),
+            observation_count=int(row["observation_count"] or 0),
+            confidence=float(row["confidence"] or 0.0),
+            first_seen=row["first_seen"],
+            last_seen=row["last_seen"],
+            recurrence=str(row["recurrence"]),
+            stability=cls._stability(str(row["stability"])),
+            metadata=cls._json_object(row["metadata_payload"]),
+        )
 
     @staticmethod
     def _json_object(value: Any) -> dict[str, Any]:
