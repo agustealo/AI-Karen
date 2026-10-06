@@ -50,8 +50,15 @@ export type AgentStepEventType =
   | 'extension_execution_started'
   | 'extension_execution_completed'
   | 'citation_bundle_ready'
-  | 'degraded_mode_entered';
-
+  | 'degraded_mode_entered'
+  | 'provider_selection_started'
+  | 'provider_selected'
+  | 'provider_fallback_started'
+  | 'provider_fallback_succeeded'
+  | 'provider_invocation_failed'
+  | 'streaming_started'
+  | 'streaming_completed'
+;
 export interface AgentStepEvent {
   type: AgentStepEventType;
   step_id: string;
