@@ -207,7 +207,7 @@ class RuntimeEvidenceResolver:
                 self._proactive_continuity_service
                 or self._get_proactive_continuity_service()
             )
-            candidates = await service.rank(
+            agenda = await service.organize(
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
                 limit=max(1, int(requirement.max_items or 5)),
@@ -219,6 +219,7 @@ class RuntimeEvidenceResolver:
                     if str(value).strip()
                 ),
             )
+            candidates = list(agenda.candidates)
         except Exception as exc:
             logger.warning(
                 "Runtime proactive continuity resolution failed: %s",
@@ -279,6 +280,10 @@ class RuntimeEvidenceResolver:
                         "urgency": candidate.urgency,
                         "interruption_cost": candidate.interruption_cost,
                         "reason_codes": list(candidate.reason_codes),
+                        "resume_primary": (
+                            agenda.primary_candidate_id == candidate.candidate_id
+                        ),
+                        "resume_ambiguous": agenda.ambiguous,
                         "execution_authorized": False,
                         **dict(candidate.metadata),
                     },
@@ -293,6 +298,9 @@ class RuntimeEvidenceResolver:
                 "continuity_count": len(candidates),
                 "continuity_degraded": False,
                 "continuity_resolver_id": "runtime.evidence.proactive_continuity",
+                "continuity_primary_candidate_id": agenda.primary_candidate_id,
+                "continuity_ambiguous": agenda.ambiguous,
+                "continuity_agenda_reason_codes": list(agenda.reason_codes),
             }
         )
 
