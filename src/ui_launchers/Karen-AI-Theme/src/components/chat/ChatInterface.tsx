@@ -170,6 +170,9 @@ const fetchConversationBootstrap = async (conversationId: string): Promise<Conve
 const ensureConversationSession = async (sessionId: string): Promise<ConversationResponse> =>
   apiClient.post<ConversationResponse>(`/api/conversations/ensure-session/${sessionId}`);
 
+const fetchConversationByLegacySession = async (sessionId: string): Promise<ConversationResponse> =>
+  apiClient.get<ConversationResponse>(`/api/conversations/by-session/${sessionId}`);
+
 const shouldSuppressRecentBootstrap = (key: string): boolean => {
   const now = Date.now();
   const lastRunAt = recentSessionBootstrapRuns.get(key);
@@ -335,6 +338,17 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
           conversationResponse = await fetchConversationBootstrap(sessionId);
           break;
         } catch (err) {
+          if (err instanceof ApiError && err.status === 404) {
+            try {
+              conversationResponse = await fetchConversationByLegacySession(sessionId);
+              break;
+            } catch (legacyErr) {
+              if (!(legacyErr instanceof ApiError && legacyErr.status === 404)) {
+                throw legacyErr;
+              }
+            }
+          }
+
           lastError = err;
           const retryableRateLimit =
             err instanceof ApiError &&
@@ -525,8 +539,8 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
   // Keep server-side activity fresh without rotating durable conversations.
   // Conversation lifetime/retention is owned by the backend policy layer, not the UI.
   useEffect(() => {
-    const activeSessionId = currentSession?.id;
-    if (!activeSessionId) {
+    const activeRuntimeSessionId = currentSession?.runtimeSessionId;
+    if (!activeRuntimeSessionId) {
       return;
     }
 
@@ -534,7 +548,7 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
 
     const renewSession = async () => {
       try {
-        await apiClient.post(`/api/conversations/update-session-activity/${activeSessionId}`);
+        await apiClient.post(`/api/conversations/update-session-activity/${activeRuntimeSessionId}`);
       } catch (err) {
         // Heartbeat failures are transient during backend startup or brief outages.
         // Keep the current session intact and let the next interval retry naturally.
@@ -547,7 +561,7 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
     return () => {
       window.clearInterval(renewalId);
     };
-  }, [currentSession?.id]);
+  }, [currentSession?.runtimeSessionId]);
 
   // Delete a session
   const deleteSession = useCallback(async (sessionId: string) => {

@@ -236,3 +236,12 @@ def test_chat_ingress_preserves_canonical_conversation_identity() -> None:
     assert "conversation_id=request.conversation_id" in source
     assert "conversation_id=normalize_chat_session_id(session_id)" not in source
 
+def test_chat_runtime_has_no_second_session_to_conversation_identity_formula() -> None:
+    runtime = (ROOT / "src/ai_karen_engine/core/runtime/chat_runtime.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "def _canonical_conversation_id(context: ChatExecutionContext)" in runtime
+    assert "normalize_chat_session_id" not in runtime
+    assert 'raise ValueError("conversation_identity_incomplete:conversation_id")' in runtime
+
