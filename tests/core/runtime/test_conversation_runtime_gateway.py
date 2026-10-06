@@ -457,3 +457,59 @@ async def test_append_message_enforces_conversation_user_ownership() -> None:
             content="This must not cross the user boundary.",
         )
 
+@pytest.mark.asyncio
+async def test_conversation_update_requires_same_user_and_preserves_canonical_fields() -> None:
+    repository = _Repository()
+    context = _context()
+    original = Conversation(
+        id=context.conversation_id or "",
+        tenant_id=context.tenant_id,
+        user_id=context.user_id,
+        title="Original",
+        summary="Keep me",
+        tags=["durable"],
+        metadata={"session_id": "session-a", "source": "chat_runtime"},
+    )
+    repository.conversations[(context.tenant_id, original.id)] = original
+    gateway = ConversationRuntimeGateway(repository=repository)
+
+    updated = await gateway.update_conversation(
+        context,
+        title="Renamed",
+    )
+
+    assert updated.title == "Renamed"
+    assert updated.summary == "Keep me"
+    assert updated.tags == ["durable"]
+    assert updated.metadata["session_id"] == "session-a"
+
+    with pytest.raises(PermissionError, match="conversation_user_mismatch"):
+        await gateway.update_conversation(
+            _context(user_id="user-b"),
+            title="Forbidden",
+        )
+
+    assert repository.conversations[(context.tenant_id, original.id)].title == "Renamed"
+
+
+@pytest.mark.asyncio
+async def test_conversation_delete_requires_same_user() -> None:
+    repository = _Repository()
+    context = _context()
+    conversation_id = context.conversation_id or ""
+    repository.conversations[(context.tenant_id, conversation_id)] = Conversation(
+        id=conversation_id,
+        tenant_id=context.tenant_id,
+        user_id=context.user_id,
+        title="Owned",
+    )
+    gateway = ConversationRuntimeGateway(repository=repository)
+
+    with pytest.raises(PermissionError, match="conversation_user_mismatch"):
+        await gateway.delete_conversation(_context(user_id="user-b"))
+
+    assert (context.tenant_id, conversation_id) in repository.conversations
+
+    assert await gateway.delete_conversation(context) is True
+    assert (context.tenant_id, conversation_id) not in repository.conversations
+
