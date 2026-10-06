@@ -104,7 +104,7 @@ class ProactiveContinuityService:
         confidence = max(0.0, min(1.0, float(item.confidence or 0.0)))
         reason_codes: list[str] = []
         utility = 0.0
-        interruption_cost = 0.25
+        interruption_cost = self._settings.default_interruption_cost
         urgency = "normal"
 
         if source == "open_loop":
@@ -140,7 +140,7 @@ class ProactiveContinuityService:
                 self._settings.behavior_observation_boost
                 * item.observation_count,
             )
-            interruption_cost = 0.35
+            interruption_cost = self._settings.behavior_interruption_cost
             reason_codes.extend(("recurring_behavior", "behavior_repeated"))
         else:
             return None
@@ -194,17 +194,17 @@ class ProactiveContinuityService:
         delta = target - now
         if delta < timedelta(hours=-1):
             return self._settings.overdue_boost, "high", ["overdue"]
-        if delta <= timedelta(hours=6):
+        if delta <= timedelta(hours=self._settings.due_soon_hours):
             return self._settings.due_six_hours_boost, "high", ["due_soon"]
-        if delta <= timedelta(days=1):
+        if delta <= timedelta(hours=self._settings.due_day_hours):
             return self._settings.due_one_day_boost, "high", ["due_within_day"]
-        if delta <= timedelta(days=3):
+        if delta <= timedelta(hours=self._settings.due_three_days_hours):
             return (
                 self._settings.due_three_days_boost,
                 "normal",
                 ["due_within_three_days"],
             )
-        if delta <= timedelta(days=7):
+        if delta <= timedelta(hours=self._settings.due_week_hours):
             return self._settings.due_seven_days_boost, "low", ["due_within_week"]
         return 0.0, "low", ["future"]
 
