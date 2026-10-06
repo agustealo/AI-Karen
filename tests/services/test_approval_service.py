@@ -97,7 +97,7 @@ class FakeApprovalRepository:
             for record in self.records.values()
             if record["tenant_id"] == tenant_id
             and record["user_id"] == user_id
-            and record["status"] == "pending"
+            and record["status"] in {"pending", "approved"}
             and (
                 conversation_id is None
                 or record["conversation_id"] == conversation_id
