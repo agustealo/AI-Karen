@@ -137,7 +137,7 @@ class SqlApprovalRepository:
             row = result.mappings().one_or_none()
             return _row(row) if row else None
 
-    async def list_pending(
+    async def list_actionable(
         self,
         *,
         tenant_id: str,
@@ -168,7 +168,7 @@ class SqlApprovalRepository:
                     FROM public.runtime_approval_requests
                     WHERE tenant_id = CAST(:tenant_id AS uuid)
                       AND user_id = CAST(:user_id AS uuid)
-                      AND status = 'pending'
+                      AND status IN ('pending', 'approved')
                       AND (
                             :conversation_id IS NULL
                             OR conversation_id = CAST(:conversation_id AS uuid)
