@@ -290,3 +290,93 @@ async def test_non_gated_request_never_creates_approval() -> None:
 
     assert await service.authorize_or_request(_request(), decision) is None
     assert repo.records == {}
+
+
+@pytest.mark.asyncio
+async def test_request_fingerprint_is_transport_independent() -> None:
+    streaming = _request()
+    nonstream = _request()
+    nonstream.stream = False
+
+    assert request_fingerprint(streaming) == request_fingerprint(nonstream)
+
+
+@pytest.mark.asyncio
+async def test_resume_rebinds_fresh_roles_and_permissions_without_stale_claims() -> None:
+    repo = FakeApprovalRepository()
+    service = ApprovalService(repository=repo)
+    original = _request()
+    original.context.roles = ["old-role"]
+    original.context.permissions = ["stale.permission"]
+
+    pending = await service.authorize_or_request(original, _decision())
+    assert pending is not None
+    stored_context = pending["request_payload"]["context"]
+    assert "roles" not in stored_context
+    assert "permissions" not in stored_context
+
+    await service.decide(
+        pending["approval_id"],
+        user=_user(),
+        decision="approved",
+    )
+
+    fresh_user = _user()
+    fresh_user.roles = ["current-role"]
+    rebuilt = await service.build_resume_request(
+        pending["approval_id"],
+        user=fresh_user,
+        request_id="resume-request",
+        correlation_id="resume-correlation",
+        fresh_permissions=["current.permission"],
+        stream=True,
+    )
+
+    assert rebuilt.context.roles == ["current-role"]
+    assert rebuilt.context.permissions == ["current.permission"]
+    assert rebuilt.context.request_id == "resume-request"
+    assert rebuilt.context.correlation_id == "resume-correlation"
+    assert rebuilt.metadata["approval_id"] == pending["approval_id"]
+    assert rebuilt.metadata["transport"] == "approval_resume"
+
+
+@pytest.mark.asyncio
+async def test_repeat_same_decision_is_idempotent_until_consumed() -> None:
+    repo = FakeApprovalRepository()
+    service = ApprovalService(repository=repo)
+    pending = await service.authorize_or_request(_request(), _decision())
+    assert pending is not None
+
+    first = await service.decide(
+        pending["approval_id"],
+        user=_user(),
+        decision="approved",
+    )
+    second = await service.decide(
+        pending["approval_id"],
+        user=_user(),
+        decision="approved",
+    )
+
+    assert first["status"] == "approved"
+    assert second["status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_policy_drift_invalidates_approved_receipt() -> None:
+    repo = FakeApprovalRepository()
+    service = ApprovalService(repository=repo)
+    pending = await service.authorize_or_request(_request(), _decision())
+    assert pending is not None
+    await service.decide(
+        pending["approval_id"],
+        user=_user(),
+        decision="approved",
+    )
+
+    drifted = _decision()
+    drifted.intent = "different_intent"
+    resumed = _request(approval_id=pending["approval_id"])
+
+    with pytest.raises(ApprovalScopeError, match="current policy decision"):
+        await service.authorize_or_request(resumed, drifted)
