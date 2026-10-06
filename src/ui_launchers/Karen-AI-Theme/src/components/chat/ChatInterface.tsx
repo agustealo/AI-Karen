@@ -2464,6 +2464,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       <ConversationContextRail
         metadata={latestAssistantMetadata.rawMetadata}
         agentSteps={agentSteps}
+        approvals={actionableApprovals}
+        approvalsLoadState={actionableApprovalsLoadState}
       />
     </div>
   );
