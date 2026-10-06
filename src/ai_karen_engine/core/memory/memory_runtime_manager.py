@@ -248,6 +248,45 @@ class MemoryRuntimeManager:
         result["write_authority"] = "neurovault"
         return result
 
+    async def record_structured_observation(
+        self,
+        *,
+        signal: Any,
+        tenant_id: str,
+        user_id: str,
+        source_type: str,
+        source_ref: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        actor_id: str | None = None,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        policy_context: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Persist a Runtime-observed continuity fact through canonical formation."""
+
+        result = await self._formation_service.record_structured_observation(
+            signal=signal,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source_type=source_type,
+            source_ref=source_ref,
+            metadata=metadata,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            actor_id=actor_id,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            policy_context=policy_context,
+        )
+        memory_metrics.increment("ledger_writes", int(result.get("persisted") or 0))
+        memory_metrics.increment(
+            "projection_failures",
+            int(result.get("projection_failures") or 0),
+        )
+        return result
+
     async def recall_context(
         self,
         user_id: Any,
