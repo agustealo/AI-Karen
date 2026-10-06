@@ -20,6 +20,11 @@ class _FailingStore(InMemoryTrajectoryStore):
         raise RuntimeError("database unavailable")
 
 
+class _SnapshotFailingStore(InMemoryTrajectoryStore):
+    def save_feature_snapshot(self, snapshot) -> None:
+        raise RuntimeError("snapshot storage unavailable")
+
+
 def _runtime(store: InMemoryTrajectoryStore) -> ChatRuntime:
     runtime = ChatRuntime.__new__(ChatRuntime)
     runtime._trajectory_recorder = TrajectoryRecorder(store=store)
@@ -112,3 +117,31 @@ async def test_failed_learning_store_does_not_create_phantom_lineage_id() -> Non
     )
 
     assert observation_id is None
+
+
+@pytest.mark.asyncio
+async def test_partial_learning_failure_leaves_no_phantom_snapshot_reference() -> None:
+    store = _SnapshotFailingStore()
+    runtime = _runtime(store)
+    trajectory = _trajectory()
+    decision = ExecutionDecision(
+        topology=ExecutionTopology.REASONING,
+        intent="general_assist",
+        policy_decision_id="policy_partial",
+    )
+
+    observation_id = await runtime._record_learning_decision(
+        trajectory,
+        decision,
+    )
+
+    assert observation_id is None
+    assert trajectory.feature_snapshot_refs == []
+    assert trajectory.decision_observation_refs == []
+    stored = store.get(
+        trajectory.trajectory_id,
+        tenant_id=trajectory.tenant_id,
+    )
+    assert stored is not None
+    assert stored.feature_snapshot_refs == []
+    assert stored.decision_observation_refs == []
