@@ -12,7 +12,12 @@ import {
   type ReactNode,
 } from 'react';
 
-import { authService, type AuthUser, type LoginCredentials } from './auth';
+import {
+  authService,
+  type AuthUser,
+  type LoginCredentials,
+  type LoginResponse,
+} from './auth';
 import {
   AUTH_INVALIDATED_EVENT,
   AUTH_USER_UPDATED_EVENT,
@@ -26,7 +31,7 @@ interface AuthState {
 }
 
 interface AuthContextValue extends AuthState {
-  login(credentials: LoginCredentials): Promise<unknown>;
+  login(credentials: LoginCredentials): Promise<LoginResponse>;
   logout(): Promise<void>;
   refreshSession(): Promise<void>;
   initializeAuth(): Promise<void>;
