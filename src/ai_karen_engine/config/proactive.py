@@ -12,6 +12,8 @@ class ProactiveContinuitySettings:
     enabled: bool = True
     max_candidates: int = 5
     min_candidate_utility: float = 0.5
+    resume_primary_min_utility: float = 0.65
+    resume_primary_margin: float = 0.12
     behavior_min_observations: int = 3
     behavior_min_confidence: float = 0.6
     open_loop_weight: float = 0.68
@@ -42,6 +44,8 @@ class ProactiveContinuitySettings:
             raise ValueError("proactive behavior_min_observations must be at least 2")
         for name, value in (
             ("min_candidate_utility", self.min_candidate_utility),
+            ("resume_primary_min_utility", self.resume_primary_min_utility),
+            ("resume_primary_margin", self.resume_primary_margin),
             ("behavior_min_confidence", self.behavior_min_confidence),
             ("open_loop_weight", self.open_loop_weight),
             ("prospective_weight", self.prospective_weight),
@@ -133,6 +137,14 @@ def get_proactive_continuity_settings() -> ProactiveContinuitySettings:
         min_candidate_utility=_env_float(
             "KARI_PROACTIVE_CONTINUITY_MIN_UTILITY",
             0.5,
+        ),
+        resume_primary_min_utility=_env_float(
+            "KARI_PROACTIVE_CONTINUITY_RESUME_PRIMARY_MIN_UTILITY",
+            0.65,
+        ),
+        resume_primary_margin=_env_float(
+            "KARI_PROACTIVE_CONTINUITY_RESUME_PRIMARY_MARGIN",
+            0.12,
         ),
         behavior_min_observations=_env_int(
             "KARI_PROACTIVE_CONTINUITY_BEHAVIOR_MIN_OBSERVATIONS",
