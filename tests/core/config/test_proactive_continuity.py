@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 from ai_karen_engine.config.proactive import (
@@ -9,7 +11,7 @@ from ai_karen_engine.config.proactive import (
 
 
 @pytest.fixture(autouse=True)
-def _reset_settings() -> None:
+def _reset_settings() -> Iterator[None]:
     reset_proactive_continuity_settings()
     yield
     reset_proactive_continuity_settings()
