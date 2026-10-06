@@ -179,6 +179,7 @@ class CortexExecutionDecider:
             {
                 "memory_write_requested": memory_write_requested,
                 "risk_signals": dict(analysis.get("risk_signals", {}) or {}),
+                "current_domains": list(analysis.get("topics", []) or []),
                 "max_model_calls": max_model_calls,
                 "max_steps": max_steps,
             }
@@ -275,6 +276,7 @@ class CortexExecutionDecider:
                 "intent": intent_value,
                 "intent_confidence": confidence,
                 "task_complexity": getattr(analysis, "task_complexity", "simple"),
+                "topics": list(getattr(analysis, "topics", []) or []),
                 "memory_relevance": getattr(analysis, "memory_relevance", 0.0),
                 "topology_signals": getattr(analysis, "topology_signals", {}),
                 "risk_signals": getattr(analysis, "risk_signals", {}),
@@ -325,6 +327,7 @@ class CortexExecutionDecider:
             "intent": "general_assist",
             "intent_confidence": 0.0,
             "task_complexity": "simple",
+            "topics": [],
             "memory_relevance": 0.0,
             "topology_signals": {},
             "risk_signals": {"categories": [], "score": 0.0},

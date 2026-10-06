@@ -8,6 +8,7 @@ Pure orchestration: no production source edits, no providers/network.
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Any
 
 from ai_karen_engine.core.adaptive.contracts import ActionOutcomeObservation
@@ -25,10 +26,9 @@ from ai_karen_engine.core.personalization.contracts import (
 )
 from ai_karen_engine.core.personalization.goals.conflicts import ConflictDetector
 from ai_karen_engine.core.personalization.goals.contracts import (
-    CompletionEvidenceSource,
     GoalState,
 )
-from ai_karen_engine.core.personalization.goals.lifecycle import GoalLifecycle
+from ai_karen_engine.core.memory.user_state_lifecycle import can_transition_goal
 from ai_karen_engine.core.personalization.goals.prioritization import GoalPrioritizer
 from ai_karen_engine.core.personalization.preferences.lifecycle import (
     PreferenceLifecycle,
@@ -344,49 +344,37 @@ def _run_behavior_selection(scenario: Scenario, state: CognitiveState) -> Cognit
 
 
 def _run_goal_intention(scenario: Scenario, state: CognitiveState) -> CognitiveResult:
-    lifecycle = GoalLifecycle()
     prioritizer = GoalPrioritizer()
     conflicts = ConflictDetector()
     defects: list[DefectRecord] = []
 
-    for g in state.goals:
-        lifecycle.upsert(g)
-
     flags = scenario.expected.flags or {}
     target_goal_id = flags.get("target_goal_id")
     target_state = _enum_goal_state(flags.get("target_state"))
-    goal = next((g for g in state.goals if g.goal_id == target_goal_id), state.goals[0] if state.goals else None)
+    goal = next(
+        (g for g in state.goals if g.goal_id == target_goal_id),
+        state.goals[0] if state.goals else None,
+    )
 
     verdict = goal.state.value if goal else "NO_GOAL"
     confidence = goal.confidence if goal else 0.0
 
     if goal and target_state is not None:
         try:
-            if target_state == GoalState.COMPLETED:
-                if goal.state == GoalState.ACTIVE and lifecycle.check_satisfied(goal):
-                    lifecycle.mark_satisfied(goal, _completion_source(goal), "scenario_satisfied")
-                if goal.state != GoalState.COMPLETED:
-                    lifecycle.mark_completed(goal, "scenario_completion")
-            elif target_state == GoalState.SATISFIED:
-                if lifecycle.check_satisfied(goal):
-                    lifecycle.mark_satisfied(goal, _completion_source(goal), "scenario_satisfied")
-                else:
-                    raise ValueError("completion evidence not satisfied")
-            elif lifecycle.can_transition(goal, target_state):
-                lifecycle.transition(goal, target_state, reason="scenario-driven")
-            else:
-                raise ValueError(f"cannot transition to {target_state.value}")
+            _apply_goal_transition(goal, target_state)
             verdict = goal.state.value
         except (ValueError, KeyError, AttributeError, TypeError) as exc:
-            defects.append(DefectRecord(
-                scenario_id=scenario.scenario_id,
-                expected=f"transition to {target_state.value}",
-                actual=goal.state.value,
-                affected_owner="ai_karen_engine.core.personalization.goals.lifecycle",
-                severity=DefectSeverity.MEDIUM,
-                kind=scenario.kind,
-                detail=f"State transition blocked: {type(exc).__name__}: {exc}",
-            ))
+            defects.append(
+                DefectRecord(
+                    scenario_id=scenario.scenario_id,
+                    expected=f"transition to {target_state.value}",
+                    actual=goal.state.value,
+                    affected_owner="ai_karen_engine.core.memory.user_state_lifecycle",
+                    severity=DefectSeverity.MEDIUM,
+                    kind=scenario.kind,
+                    detail=f"State transition blocked: {type(exc).__name__}: {exc}",
+                )
+            )
 
     active = bool(goal.is_active()) if goal else False
 
@@ -395,7 +383,7 @@ def _run_goal_intention(scenario: Scenario, state: CognitiveState) -> CognitiveR
 
     appears_in = [g.goal_id for g in state.goals[:3]]
     if detected:
-        appears_in.extend([c.conflict_id for c in detected[:3]])
+        appears_in.extend([conflict.conflict_id for conflict in detected[:3]])
 
     return CognitiveResult(
         scenario_id=scenario.scenario_id,
@@ -711,6 +699,52 @@ def _salience_request(state: CognitiveState, scenario: Scenario) -> SalienceAsse
     )
 
 
+def _goal_completion_satisfied(goal: Any) -> bool:
+    required = {
+        source.value
+        for source in list(getattr(goal, "completion_evidence_required", []) or [])
+    }
+    observed = {
+        source.value
+        for source in list(getattr(goal, "completion_evidence_sources", []) or [])
+    }
+    return bool(required) and required.issubset(observed)
+
+
+def _apply_goal_transition(goal: Any, target_state: GoalState) -> None:
+    if target_state == GoalState.SATISFIED:
+        if not _goal_completion_satisfied(goal):
+            raise ValueError("completion evidence not satisfied")
+        if not can_transition_goal(goal.state.value, target_state.value):
+            raise ValueError(f"cannot transition to {target_state.value}")
+        goal.state = target_state
+        return
+
+    if target_state == GoalState.COMPLETED:
+        if goal.completion_evidence_required and not _goal_completion_satisfied(goal):
+            raise ValueError("completion evidence not satisfied")
+        if (
+            goal.state == GoalState.ACTIVE
+            and goal.completion_evidence_required
+            and can_transition_goal(goal.state.value, GoalState.SATISFIED.value)
+        ):
+            goal.state = GoalState.SATISFIED
+        if not can_transition_goal(goal.state.value, target_state.value):
+            raise ValueError(f"cannot transition to {target_state.value}")
+        goal.state = target_state
+        goal.completed_at = datetime.utcnow()
+        if "scenario_completion" not in goal.completion_evidence:
+            goal.completion_evidence.append("scenario_completion")
+        return
+
+    if not can_transition_goal(goal.state.value, target_state.value):
+        raise ValueError(f"cannot transition to {target_state.value}")
+
+    goal.state = target_state
+    if target_state == GoalState.ABANDONED:
+        goal.expires_at = datetime.utcnow()
+
+
 def _enum_goal_state(value: Any) -> Any:
     if value is None:
         return None
@@ -725,9 +759,3 @@ def _enum_goal_state(value: Any) -> Any:
     return None
 
 
-def _completion_source(goal: Any) -> CompletionEvidenceSource:
-    required = list(getattr(goal, "completion_evidence_required", []) or [])
-    for src in required:
-        if src == CompletionEvidenceSource.USER_CONFIRMED:
-            return CompletionEvidenceSource.USER_CONFIRMED
-    return CompletionEvidenceSource.USER_CONFIRMED

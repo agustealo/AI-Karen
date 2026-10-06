@@ -339,6 +339,11 @@ class PromptRegistry:
             for item in request.memory_items:
                 breakdown.memory_tokens += self._count_tokens(str(item))
             
+            # Proactive continuity candidates are evidence-backed possibilities,
+            # not memory facts. Budget them separately from conversational history.
+            for item in request.continuity_items:
+                breakdown.memory_tokens += self._count_tokens(str(item))
+            
             # Cortex intent tokens
             if request.cortex_intent:
                 breakdown.system_tokens += self._count_tokens(str(request.cortex_intent))

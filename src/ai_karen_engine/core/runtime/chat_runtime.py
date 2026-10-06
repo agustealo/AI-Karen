@@ -771,6 +771,12 @@ class ChatRuntime:
             for item in cognitive_context.evidence
             if getattr(item.source, "value", str(item.source)) == "memory"
         ]
+        continuity_evidence = [
+            item
+            for item in cognitive_context.evidence
+            if getattr(item.source, "value", str(item.source)) == "user_model"
+        ]
+
         recall_items: List[Dict[str, Any]] = []
         for item in memory_evidence[: decision.memory_top_k]:
             observed_at = item.temporal.observed_at
@@ -785,6 +791,24 @@ class ChatRuntime:
                     "relevance": item.relevance,
                     "confidence": item.confidence,
                     "source_ref": item.source_ref,
+                }
+            )
+
+        continuity_items: List[Dict[str, Any]] = []
+        for item in continuity_evidence[:5]:
+            item_meta = dict(item.metadata or {})
+            continuity_items.append(
+                {
+                    "id": item.evidence_id,
+                    "subject": item.content,
+                    "source_type": item_meta.get("source_type"),
+                    "source_id": item_meta.get("source_id") or item.source_ref,
+                    "utility": item_meta.get("utility", item.relevance),
+                    "confidence": item.confidence,
+                    "urgency": item_meta.get("urgency", "normal"),
+                    "interruption_cost": item_meta.get("interruption_cost", 0.0),
+                    "reason_codes": list(item_meta.get("reason_codes") or []),
+                    "execution_authorized": False,
                 }
             )
 
@@ -806,10 +830,29 @@ class ChatRuntime:
                     "memory_degradation_reason"
                 ),
                 "memory_context": {"recall": recall_items},
+                "proactive_continuity": {"candidates": continuity_items},
+                "continuity_status": context_meta.get(
+                    "continuity_status",
+                    "success",
+                ),
+                "continuity_count": len(continuity_items),
+                "continuity_candidate_ids": [
+                    str(item.get("id") or "")
+                    for item in continuity_items
+                    if item.get("id")
+                ],
+                "continuity_source_types": [
+                    str(item.get("source_type") or "")
+                    for item in continuity_items
+                    if item.get("source_type")
+                ],
             }
         )
 
         request.metadata["memory_context"] = {"recall": list(recall_items)}
+        request.metadata["proactive_continuity"] = {
+            "candidates": list(continuity_items)
+        }
         return meta
 
     async def _persist_memory(
@@ -1224,6 +1267,11 @@ class ChatRuntime:
                 (request.metadata or {}).get("memory_context", {}).get("recall") or []
             )
         recall_items = memory_items[: decision.memory_top_k]
+        continuity_items = (
+            (request.metadata or {})
+            .get("proactive_continuity", {})
+            .get("candidates", [])
+        )[:5]
 
         evidence = [
             ReasoningEvidence(
@@ -1238,6 +1286,20 @@ class ChatRuntime:
             )
             for idx, item in enumerate(recall_items[: decision.memory_top_k])
         ]
+        evidence.extend(
+            ReasoningEvidence(
+                evidence_id=str(item.get("id", f"continuity-{idx}")),
+                type="continuity",
+                source="proactive_continuity",
+                source_ref=str(item.get("source_id") or ""),
+                content=str(item.get("subject") or ""),
+                relevance=float(item.get("utility") or 0.5),
+                confidence=float(item.get("confidence") or 0.5),
+                tenant_id=ctx.tenant_id,
+            )
+            for idx, item in enumerate(continuity_items)
+            if str(item.get("subject") or "").strip()
+        )
 
         objective = self._extract_user_message(request.messages)
         activation = get_runtime_reasoning_bridge().activate(
@@ -1388,6 +1450,11 @@ class ChatRuntime:
         recall_items = (
             (memory_context or {}).get("recall", []) if memory_context else []
         )
+        continuity_items = (
+            (request.metadata or {})
+            .get("proactive_continuity", {})
+            .get("candidates", [])
+        )
         if not recall_items and decision.memory_recall_required:
             recall_items = (
                 (request.metadata or {}).get("memory_context", {}).get("recall") or []
@@ -1397,6 +1464,11 @@ class ChatRuntime:
             prompt_id="karen.chat.default",
             prompt_version="v1",
             memory_items=recall_items if decision.memory_recall_required else [],
+            continuity_items=(
+                list(continuity_items)
+                if decision.memory_recall_required
+                else []
+            ),
             tool_contracts=[
                 {"name": name, "description": ""}
                 for name in decision.tool_requirements
@@ -1805,6 +1877,15 @@ class ChatRuntime:
                 "transcript_persisted_count": (transcript_meta or {}).get(
                     "transcript_persisted_count",
                     0,
+                ),
+                "continuity_candidate_ids": list(
+                    memory_meta.get("continuity_candidate_ids") or []
+                ),
+                "continuity_source_types": list(
+                    memory_meta.get("continuity_source_types") or []
+                ),
+                "continuity_count": int(
+                    memory_meta.get("continuity_count") or 0
                 ),
             },
         )

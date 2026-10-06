@@ -165,6 +165,15 @@ class PromptRuntimeService:
             self._normalize_context_items(integrated_context.get("recall"), source="recall")
         )
         memory_items = self._dedupe_context_items(memory_items)
+        continuity_items: List[Dict[str, Any]] = []
+        for key in ("continuity", "next_needs", "proactive_continuity"):
+            continuity_items.extend(
+                self._normalize_context_items(
+                    integrated_context.get(key),
+                    source=key,
+                )
+            )
+        continuity_items = self._dedupe_context_items(continuity_items)
 
         instruction_lines = self._instruction_lines(integrated_context.get("instructions"))
 
@@ -173,6 +182,7 @@ class PromptRuntimeService:
             persona=persona_result.data,
             profile=profile_payload,
             memory_items=memory_items,
+            continuity_items=continuity_items,
             cortex_intent=dict(cortex_intent or {}),
             workflow_context=dict(workflow_context or {}),
             token_budget=self._normalize_token_budget(token_budget),

@@ -52,9 +52,11 @@ class RuntimeEvidenceResolver:
         *,
         memory_manager: Any | None = None,
         conversation_gateway: ConversationRuntimeGateway | None = None,
+        proactive_continuity_service: Any | None = None,
     ) -> None:
         self._memory_manager = memory_manager
         self._conversation_gateway = conversation_gateway
+        self._proactive_continuity_service = proactive_continuity_service
         self._emitter = get_observability_emitter()
 
     async def resolve(
@@ -74,6 +76,12 @@ class RuntimeEvidenceResolver:
                 continue
             if requirement.source is EvidenceSource.MEMORY:
                 await self._resolve_memory(request, cognitive_context, requirement)
+            elif requirement.source is EvidenceSource.USER_MODEL:
+                await self._resolve_continuity(
+                    request,
+                    cognitive_context,
+                    requirement,
+                )
             elif requirement.source is EvidenceSource.CONVERSATION:
                 await self._resolve_conversation(
                     request,
@@ -185,6 +193,107 @@ class RuntimeEvidenceResolver:
                 "status": cognitive_context.metadata["memory_recall_status"],
                 "degraded": degraded,
             },
+        )
+
+    async def _resolve_continuity(
+        self,
+        request: ChatExecutionRequest,
+        cognitive_context: CognitiveContext,
+        requirement: ContextRequirement,
+    ) -> None:
+        ctx = request.context
+        try:
+            service = (
+                self._proactive_continuity_service
+                or self._get_proactive_continuity_service()
+            )
+            candidates = await service.rank(
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                limit=max(1, int(requirement.max_items or 5)),
+                current_domains=tuple(
+                    str(value)
+                    for value in list(
+                        requirement.metadata.get("current_domains") or []
+                    )
+                    if str(value).strip()
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Runtime proactive continuity resolution failed: %s",
+                exc,
+                extra={
+                    "correlation_id": ctx.correlation_id,
+                    "tenant_id": ctx.tenant_id,
+                    "user_id": ctx.user_id,
+                },
+            )
+            cognitive_context.metadata.update(
+                {
+                    "continuity_status": "failed",
+                    "continuity_count": 0,
+                    "continuity_degraded": True,
+                    "continuity_reason": str(exc),
+                }
+            )
+            return
+
+        now = datetime.now(timezone.utc)
+        cognitive_context.evidence.extend(
+            [
+                ContextEvidence(
+                    evidence_id=candidate.candidate_id,
+                    source=EvidenceSource.USER_MODEL,
+                    content=candidate.subject,
+                    source_ref=candidate.source_id,
+                    relevance=candidate.utility,
+                    confidence=candidate.confidence,
+                    provenance=EvidenceProvenance(
+                        source_ref=candidate.source_id,
+                        source_record_id=candidate.source_id,
+                        resolver_id="runtime.evidence.proactive_continuity",
+                        resolver_version=self.RESOLVER_VERSION,
+                        retrieval_method="proactive_continuity_ranker",
+                        retrieved_at=now,
+                        reason_codes=tuple(candidate.reason_codes),
+                    ),
+                    temporal=EvidenceTemporalContext(
+                        effective_until=candidate.target_at,
+                        as_of=now,
+                    ),
+                    contradiction=EvidenceContradiction(
+                        status=EvidenceContradictionStatus.NONE,
+                    ),
+                    scope=EvidenceScope(
+                        tenant_id=ctx.tenant_id,
+                        user_id=ctx.user_id,
+                        session_id=ctx.session_id,
+                        conversation_id=ctx.conversation_id,
+                    ),
+                    metadata={
+                        "candidate_id": candidate.candidate_id,
+                        "source_type": candidate.source_type,
+                        "source_id": candidate.source_id,
+                        "utility": candidate.utility,
+                        "urgency": candidate.urgency,
+                        "interruption_cost": candidate.interruption_cost,
+                        "reason_codes": list(candidate.reason_codes),
+                        "execution_authorized": False,
+                        **dict(candidate.metadata),
+                    },
+                )
+                for candidate in candidates
+            ]
+        )
+        self._mark_resolved(cognitive_context, EvidenceSource.USER_MODEL)
+        cognitive_context.metadata.update(
+            {
+                "continuity_status": "success",
+                "continuity_count": len(candidates),
+                "continuity_degraded": False,
+                "continuity_resolver_id": "runtime.evidence.proactive_continuity",
+            }
         )
 
     async def _resolve_conversation(
@@ -456,6 +565,19 @@ class RuntimeEvidenceResolver:
                 if metadata.get("contradiction_resolution_ref") is not None
                 else None
             ),
+        )
+
+    @staticmethod
+    def _get_proactive_continuity_service() -> Any:
+        from ai_karen_engine.core.intelligence.proactive import (
+            ProactiveContinuityService,
+        )
+        from ai_karen_engine.platform.personalization.proactive_repository import (
+            PostgresProactiveContinuityRepository,
+        )
+
+        return ProactiveContinuityService(
+            PostgresProactiveContinuityRepository()
         )
 
     @staticmethod

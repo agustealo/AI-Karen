@@ -102,6 +102,7 @@ class PromptAssemblyRequest:
     persona: Dict[str, Any] = field(default_factory=dict)
     profile: Dict[str, Any] = field(default_factory=dict)
     memory_items: List[Dict[str, Any]] = field(default_factory=list)
+    continuity_items: List[Dict[str, Any]] = field(default_factory=list)
     cortex_intent: Dict[str, Any] = field(default_factory=dict)
     tool_contracts: List[Dict[str, Any]] = field(default_factory=list)
     workflow_context: Dict[str, Any] = field(default_factory=dict)
@@ -132,6 +133,7 @@ class PromptProvenance:
     
     # Included component references
     memory_refs: List[str] = field(default_factory=list)
+    continuity_refs: List[str] = field(default_factory=list)
     tool_contract_ids: List[str] = field(default_factory=list)
     workflow_id: str = ""
     workflow_version: str = ""
@@ -167,6 +169,7 @@ class PromptAssemblyResult:
     prompt_version: Optional[str]
     prompt_hash: str
     included_memory_refs: List[str] = field(default_factory=list)
+    included_continuity_refs: List[str] = field(default_factory=list)
     included_tool_contracts: List[str] = field(default_factory=list)
     token_estimate: int = 0
     truncation_events: List[PromptTruncationEvent] = field(default_factory=list)
