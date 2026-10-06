@@ -107,10 +107,11 @@ def test_session_activity_is_authenticated_and_tenant_scoped_before_mutation() -
     assert "tenant_id: str = Depends(get_current_tenant_id)" in route_source
     assert "user_ctx: Dict[str, Any] = Depends(bypass_user_context_func)" in route_source
     assert "user_id = _require_user_id(user_ctx)" in route_source
-    assert "get_web_ui_conversation_by_session(" in route_source
+    assert "conversation_gateway.touch_conversation_activity(" in route_source
+    assert "get_web_ui_conversation_by_session(" not in route_source
     assert "tenant_id=tenant_id" in route_source
     assert "user_id=user_id" in route_source
-    assert "update_session_activity(" in route_source
+    assert "session_id=session_id" in route_source
 
 
 def test_static_conversation_get_routes_precede_dynamic_conversation_id_route() -> None:
