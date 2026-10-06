@@ -1,4 +1,5 @@
 export const AUTH_INVALIDATED_EVENT = 'karen:auth-invalidated';
+export const AUTH_USER_UPDATED_EVENT = 'karen:auth-user-updated';
 
 export interface AuthInvalidatedDetail {
   reason: 'terminal_401' | 'refresh_failed' | 'session_invalid';
@@ -13,4 +14,10 @@ export const dispatchAuthInvalidated = (
       detail: { reason },
     }),
   );
+};
+
+
+export const dispatchAuthUserUpdated = (): void => {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(AUTH_USER_UPDATED_EVENT));
 };
