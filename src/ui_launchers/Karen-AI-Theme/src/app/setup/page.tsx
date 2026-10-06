@@ -116,9 +116,9 @@ export default function SetupPage() {
 
   return (
     <PublicWrapper>
-      <main className="min-h-screen bg-background px-4 py-8 md:px-8 md:py-12">
+      <main className="karen-app-shell karen-workspace-grid min-h-screen bg-background px-4 py-8 md:px-8 md:py-12">
         <div className="mx-auto grid w-full max-w-6xl gap-8 lg:grid-cols-[0.9fr_1.1fr]">
-          <section className="flex flex-col justify-between rounded-3xl border bg-muted/30 p-7 md:p-10">
+          <section className="karen-surface flex flex-col justify-between rounded-2xl p-7 md:p-10">
             <div>
               <div className="mb-8 flex items-center gap-3">
                 <div className="flex h-11 w-11 items-center justify-center rounded-2xl border bg-background shadow-sm">
@@ -135,7 +135,7 @@ export default function SetupPage() {
                   <Sparkles className="h-3.5 w-3.5" />
                   First-run experience
                 </div>
-                <h1 className="max-w-xl text-3xl font-semibold tracking-tight md:text-5xl">
+                <h1 className="karen-page-title max-w-xl text-balance md:text-5xl">
                   Build your Karen around you, not around a config file.
                 </h1>
                 <p className="max-w-lg text-base leading-7 text-muted-foreground">
@@ -152,7 +152,7 @@ export default function SetupPage() {
           </section>
 
           <section className="flex items-center">
-            <Card className="w-full border shadow-sm">
+            <Card className="karen-surface w-full">
               <CardHeader className="space-y-4">
                 <div className="flex items-center justify-between gap-4">
                   <div>
