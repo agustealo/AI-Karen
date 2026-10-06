@@ -1,4 +1,10 @@
-import type { ChatMessage, MessageResponse } from '@/lib/types';
+import type {
+  ChatArtifact,
+  ChatAttachment,
+  ChatMessage,
+  Citation,
+  MessageResponse,
+} from '@/lib/types';
 import { getDegradationReasonLabel } from '@/components/chat/const/constants';
 
 type PrimitiveMetadataValue = string | number | boolean | null | undefined;
@@ -35,10 +41,10 @@ type BackendChatEnvelope = {
   structured_content?: Record<string, unknown>;
   structuredContent?: Record<string, unknown>;
   actions?: SuggestedAction[];
-  citations?: Array<Record<string, unknown>>;
-  sources?: Array<Record<string, unknown>>;
-  attachments?: Array<Record<string, unknown>>;
-  artifacts?: Array<Record<string, unknown>>;
+  citations?: Citation[];
+  sources?: Citation[];
+  attachments?: ChatAttachment[];
+  artifacts?: ChatArtifact[];
   metadata?: Record<string, unknown>;
   correlation_id?: string;
   request_id?: string;
@@ -58,10 +64,10 @@ export type NormalizedChatResponse = {
   structuredContent: Record<string, unknown>;
   actions: SuggestedAction[];
   metadata: Record<string, unknown>;
-  citations: Array<Record<string, unknown>>;
-  sources: Array<Record<string, unknown>>;
-  attachments: Array<Record<string, unknown>>;
-  artifacts: Array<Record<string, unknown>>;
+  citations: Citation[];
+  sources: Citation[];
+  attachments: ChatAttachment[];
+  artifacts: ChatArtifact[];
   correlationId: string;
 };
 
