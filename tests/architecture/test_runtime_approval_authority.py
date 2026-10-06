@@ -81,3 +81,14 @@ def test_resume_ingress_rebuilds_server_side_and_reenters_chat_runtime() -> None
     assert "_sse(runtime_request)" in source
     assert "original_input" not in ui_source
     assert "/api/chat/approvals/${approvalResume?.approvalId}/resume" in ui_source
+
+
+def test_terminal_approval_states_minimize_stored_request_payload() -> None:
+    source = (
+        ROOT
+        / "src/ai_karen_engine/persistence/repositories/approval_repository.py"
+    ).read_text(encoding="utf-8")
+
+    assert "request_payload = '{}'::jsonb" in source
+    assert "WHEN :decision = 'rejected' THEN '{}'::jsonb" in source
+    assert "SET status = 'consumed'" in source
