@@ -325,6 +325,63 @@ async function assertCommsReady(page: Page): Promise<void> {
   await assertCanonicalVisibleBrand(page);
 }
 
+async function installLifecycleSentinel(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const shell = document.querySelector<HTMLElement>(".karen-app-shell");
+    if (!shell) {
+      throw new Error("Authenticated KAREN shell is missing before lifecycle proof.");
+    }
+
+    const token =
+      typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `karen-lifecycle-${Date.now()}`;
+
+    const lifecycleWindow = window as Window & {
+      __karenLifecycleSentinel?: string;
+    };
+    lifecycleWindow.__karenLifecycleSentinel = token;
+    shell.dataset.lifecycleSentinel = token;
+    return token;
+  });
+}
+
+async function assertLifecycleStable(
+  page: Page,
+  token: string,
+  stage: string,
+): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        page.evaluate((expectedToken) => {
+          const lifecycleWindow = window as Window & {
+            __karenLifecycleSentinel?: string;
+          };
+          const shell = document.querySelector<HTMLElement>(".karen-app-shell");
+          return {
+            pathname: window.location.pathname,
+            windowToken: lifecycleWindow.__karenLifecycleSentinel ?? null,
+            shellToken: shell?.dataset.lifecycleSentinel ?? null,
+            shellCount: document.querySelectorAll(".karen-app-shell").length,
+            expectedToken,
+          };
+        }, token),
+      {
+        timeout: 10_000,
+        message:
+          `Authenticated KAREN shell remounted or hard-navigated during ${stage}. The product must keep one stable document and shell while switching workspace surfaces.`,
+      },
+    )
+    .toEqual({
+      pathname: "/dashboard",
+      windowToken: token,
+      shellToken: token,
+      shellCount: 1,
+      expectedToken: token,
+    });
+}
+
 async function capture(
   page: Page,
   filename: string,
@@ -351,10 +408,15 @@ async function capture(
   });
 }
 
-async function openSurface(page: Page, label: string): Promise<void> {
+async function openSurface(
+  page: Page,
+  label: string,
+  lifecycleToken: string,
+): Promise<void> {
   const control = page.getByRole("button", { name: label, exact: true });
   await expect(control).toBeVisible();
   await control.click();
+  await assertLifecycleStable(page, lifecycleToken, label);
 }
 
 test("capture premium KAREN product surfaces from a real runtime", async ({
@@ -388,27 +450,31 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
 
   await ensureRealChatEvidence(page);
   await assertChatReady(page);
+
+  const lifecycleToken = await installLifecycleSentinel(page);
+  await assertLifecycleStable(page, lifecycleToken, "Chat ready");
   await capture(page, GALLERY_FILES[0], email);
 
-  await openSurface(page, "Agents Overview");
+  await openSurface(page, "Agents Overview", lifecycleToken);
   await assertAgentsReady(page);
   await capture(page, GALLERY_FILES[1], email);
 
-  await openSurface(page, "Plugin Overview");
+  await openSurface(page, "Plugin Overview", lifecycleToken);
   await assertPluginOverviewReady(page);
   await capture(page, GALLERY_FILES[2], email);
 
-  await openSurface(page, "Comms Center");
+  await openSurface(page, "Comms Center", lifecycleToken);
   await assertCommsReady(page);
   await capture(page, GALLERY_FILES[3], email);
 
-  await openSurface(page, "Application Settings");
+  await openSurface(page, "Application Settings", lifecycleToken);
   const runtimeCategory = page.getByRole("tab", {
     name: "Models & Runtime",
     exact: true,
   });
   await expect(runtimeCategory).toBeVisible();
   await runtimeCategory.click();
+  await assertLifecycleStable(page, lifecycleToken, "Models & Runtime");
 
   const providersSection = page.getByRole("button", {
     name: "Providers",
@@ -416,6 +482,7 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
   });
   await expect(providersSection).toBeVisible();
   await providersSection.click();
+  await assertLifecycleStable(page, lifecycleToken, "Providers");
   await expect(
     page.getByRole("heading", { name: "Providers", exact: true }),
   ).toBeVisible({ timeout: 30_000 });
@@ -441,6 +508,7 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
       production_or_personal_data: false,
       presentation_ready_state_required: true,
       retired_visible_brand_forbidden: true,
+      stable_authenticated_shell_required: true,
     },
     files: [...GALLERY_FILES],
   };
