@@ -103,7 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const currentUser = authService.getCurrentUser();
       const canPreserveResolvedSession =
         initialResolutionCompleteRef.current &&
-        state.isAuthenticated &&
+        authService.isAuthenticated() &&
         Boolean(currentUser);
 
       if (canPreserveResolvedSession) {
@@ -129,7 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         error: error instanceof Error ? error.message : 'Authentication failed',
       });
     }
-  }, [applyCanonicalState, state.isAuthenticated]);
+  }, [applyCanonicalState]);
 
   const login = useCallback(async (credentials: LoginCredentials) => {
     setState((previous) => ({
