@@ -44,7 +44,7 @@ const asDisplayName = (
 const asHref = (value: unknown): string | null => {
   if (typeof value !== 'string' || !value.trim()) return null;
   const href = value.trim();
-  return /^(https?:|file:)/i.test(href) ? href : null;
+  return /^(https?:\/\/)/i.test(href) || href.startsWith('/') ? href : null;
 };
 
 const DataValue = ({ value }: { value: unknown }) => {
@@ -63,17 +63,9 @@ const DataValue = ({ value }: { value: unknown }) => {
   );
 };
 
-const LinkRow = ({
-  citation,
-}: {
-  citation: Citation;
-}) => (
-  <a
-    href={citation.url}
-    target="_blank"
-    rel="noreferrer"
-    className="group block rounded-lg border border-border/60 bg-background/30 p-3 transition-colors hover:border-primary/25 hover:bg-muted/50"
-  >
+const LinkRow = ({ citation }: { citation: Citation }) => {
+  const href = asHref(citation.url);
+  const body = (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
         <p className="truncate text-xs font-semibold text-foreground">
@@ -85,10 +77,31 @@ const LinkRow = ({
           </p>
         )}
       </div>
-      <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
+      {href && (
+        <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
+      )}
     </div>
-  </a>
-);
+  );
+
+  if (!href) {
+    return (
+      <div className="rounded-lg border border-border/60 bg-background/30 p-3">
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="group block rounded-lg border border-border/60 bg-background/30 p-3 transition-colors hover:border-primary/25 hover:bg-muted/50"
+    >
+      {body}
+    </a>
+  );
+};
 
 export default function RichResultWorkspace({
   message,
