@@ -167,3 +167,15 @@ def test_deleted_conversations_cannot_rehydrate_from_local_recovery() -> None:
     assert "setCurrentSession(null)" in bulk_delete
     assert "persistActiveSessionId(null)" in bulk_delete
 
+def test_chat_keeps_session_identity_separate_from_canonical_conversation_id() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    assert "const ensureConversationSession = async (sessionId: string)" in chat
+    assert "apiClient.get<ConversationResponse>(`/api/conversations/${conversationId}`)" in chat
+    assert "const conversationId = conversationResponse.id;" in chat
+    assert "runtimeSessionId: conversationResponse.session_id || sessionId" in chat
+
+    stream = chat.split("const streamRequestPayload = {", 1)[1].split("};", 1)[0]
+    assert "conversation_id: sessionIdRef.current" in stream
+    assert "session_id: currentSessionRef.current?.runtimeSessionId || sessionIdRef.current" in stream
+
