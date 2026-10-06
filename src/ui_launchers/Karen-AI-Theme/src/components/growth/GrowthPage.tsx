@@ -188,9 +188,9 @@ export default function GrowthPage() {
         <div>
           <div className="flex items-center gap-3">
             <Trophy className="h-7 w-7 text-primary" />
-            <h2 className="text-3xl font-bold tracking-tight">Growth</h2>
+            <h2 className="karen-page-title">Growth</h2>
           </div>
-          <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+          <p className="karen-page-description mt-2">
             Progress comes from completed, durable, verified work. Message volume and
             daily logins do not earn progress, and this score never changes permissions,
             routing, or memory consent.
