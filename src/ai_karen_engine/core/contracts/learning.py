@@ -55,6 +55,8 @@ class DatasetExclusionReason(str, Enum):
     DATABASE_OUTAGE = "database_outage"
     CORRUPT_CONFIG = "corrupt_config"
     CANCELLED_BEFORE_EXECUTION = "cancelled_before_execution"
+    MISSING_EXPLICIT_CANDIDATE_FEEDBACK = "missing_explicit_candidate_feedback"
+    CANDIDATE_NOT_IN_DECISION = "candidate_not_in_decision"
     UNKNOWN = "unknown"
 
 
