@@ -87,8 +87,8 @@ def test_chat_ui_preserves_durable_conversation_lifecycle_authority() -> None:
     assert "Session timed out, creating new session" not in chat
     assert "const SESSION_TIMEOUT" not in chat
     assert "Conversation lifetime/retention is owned by the backend policy layer" in chat
-    assert "const activeSessionId = currentSession?.id" in chat
-    assert "}, [currentSession?.id]);" in chat
+    assert "const activeRuntimeSessionId = currentSession?.runtimeSessionId" in chat
+    assert "}, [currentSession?.runtimeSessionId]);" in chat
 
     refresh = chat.split("// Refresh sessions list", 1)[1].split(
         "// Sync isActive state", 1
@@ -119,9 +119,9 @@ def test_new_chat_requires_server_ack_before_becoming_current() -> None:
     create = chat.split("// Create a new durable session", 1)[1].split(
         "// Load a specific session", 1
     )[0]
-    ensure_index = create.index("await fetchConversationBootstrap(sessionId)")
+    ensure_index = create.index("await ensureConversationSession(sessionId)")
     current_index = create.index("setCurrentSession(newSession)")
-    persist_index = create.index("persistActiveSessionId(sessionId)")
+    persist_index = create.index("persistActiveSessionId(conversationId)")
 
     assert ensure_index < current_index < persist_index
     assert "no local-only session was created" in create
@@ -178,4 +178,28 @@ def test_chat_keeps_session_identity_separate_from_canonical_conversation_id() -
     stream = chat.split("const streamRequestPayload = {", 1)[1].split("};", 1)[0]
     assert "conversation_id: sessionIdRef.current" in stream
     assert "session_id: currentSessionRef.current?.runtimeSessionId || sessionIdRef.current" in stream
+
+def test_legacy_active_session_id_is_migrated_before_new_chat_fallback() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    load = chat.split("// Load a specific session", 1)[1].split(
+        "// Refresh sessions list", 1
+    )[0]
+    assert "await fetchConversationBootstrap(sessionId)" in load
+    assert "await fetchConversationByLegacySession(sessionId)" in load
+    assert load.index("await fetchConversationByLegacySession(sessionId)") < load.index(
+        "Saved session was not found. Starting a fresh chat."
+    )
+    assert "persistActiveSessionId(conversationId)" in load
+
+
+def test_session_heartbeat_uses_runtime_session_identity_not_conversation_id() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    heartbeat = chat.split("// Keep server-side activity fresh", 1)[1].split(
+        "// Delete a session", 1
+    )[0]
+    assert "const activeRuntimeSessionId = currentSession?.runtimeSessionId" in heartbeat
+    assert "update-session-activity/${activeRuntimeSessionId}" in heartbeat
+    assert "update-session-activity/${currentSession?.id}" not in heartbeat
 
