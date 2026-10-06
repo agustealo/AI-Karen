@@ -1059,7 +1059,7 @@ class ChatRuntime:
         This observes user behavior only. Provider/model outcomes, fallbacks,
         latency, and execution success belong to trajectory/outcome learning.
         """
-        runtime = self._composition.user_model_runtime
+        runtime = getattr(self._composition, "user_model_runtime", None)
         intent = str(decision.intent or "").strip().casefold()
         if runtime is None or intent in {"", "unknown", "general_assist", "fallback"}:
             return
