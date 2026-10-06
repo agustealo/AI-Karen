@@ -210,3 +210,29 @@ def test_agent_runtime_route_is_read_only_and_has_no_legacy_execution_surface() 
     assert "terminate_agent" not in source
     assert 'execution_authority": "chat_runtime"' in source
 
+def test_conversation_mutations_require_authenticated_user_gateway_scope() -> None:
+    source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
+
+    update_start = source.index('async def update_conversation(')
+    delete_start = source.index('@router.delete("/{conversation_id}")', update_start)
+    update_route = source[update_start:delete_start]
+    delete_route = source[delete_start:]
+
+    for route_source in (update_route, delete_route):
+        assert "user_ctx: Dict[str, Any] = Depends(bypass_user_context_func)" in route_source
+        assert "user_id = _require_user_id(user_ctx)" in route_source
+        assert "get_conversation_runtime_gateway" in route_source
+        assert "tenant_id=tenant_id" in route_source
+        assert "user_id=user_id" in route_source
+        assert "conversation_id=conversation_id" in route_source
+
+    assert "conversation_service.base_manager.update_conversation(" not in update_route
+    assert "conversation_service.delete_conversation(" not in delete_route
+
+def test_chat_ingress_preserves_canonical_conversation_identity() -> None:
+    source = CHAT_ROUTE.read_text(encoding="utf-8")
+
+    assert "conversation_id: Optional[str] = Field(default=None, max_length=100)" in source
+    assert "conversation_id=request.conversation_id" in source
+    assert "conversation_id=normalize_chat_session_id(session_id)" not in source
+

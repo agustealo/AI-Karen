@@ -38,9 +38,6 @@ from ai_karen_engine.services.approvals import (
     ApprovalStateError,
     get_approval_service,
 )
-from ai_karen_engine.utils.chat_helpers import (
-    normalize_session_id as normalize_chat_session_id,
-)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
@@ -84,6 +81,7 @@ class ChatRequest(BaseModel):
         pattern=r"^[a-zA-Z0-9_-]+$",
         max_length=100,
     )
+    conversation_id: Optional[str] = Field(default=None, max_length=100)
 
     @field_validator("messages")
     @classmethod
@@ -119,6 +117,8 @@ class ChatStreamRequest(BaseModel):
         pattern=r"^[a-zA-Z0-9_-]+$",
         max_length=100,
     )
+    conversation_id: Optional[str] = Field(default=None, max_length=100)
+
     preferred_llm_provider: Optional[str] = Field(default=None, max_length=100)
     preferred_model: Optional[str] = Field(default=None, max_length=200)
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
@@ -182,6 +182,7 @@ def _execution_context(
     *,
     user: Dict[str, Any],
     session_id: str,
+    conversation_id: Optional[str],
     request_id: str,
     correlation_id: str,
 ) -> ChatExecutionContext:
@@ -190,7 +191,7 @@ def _execution_context(
         user_id=user_id,
         tenant_id=tenant_id,
         session_id=session_id,
-        conversation_id=normalize_chat_session_id(session_id),
+        conversation_id=conversation_id,
         request_id=request_id,
         correlation_id=correlation_id,
         roles=list(user.get("roles") or []),
@@ -216,6 +217,7 @@ def _stream_execution_request(
         context=_execution_context(
             user=user,
             session_id=session_id,
+            conversation_id=request.conversation_id,
             request_id=response_id,
             correlation_id=correlation_id,
         ),
@@ -263,6 +265,7 @@ async def create_chat_response(
             context=_execution_context(
                 user=user,
                 session_id=session_id,
+                conversation_id=request.conversation_id,
                 request_id=response_id,
                 correlation_id=correlation_id,
             ),

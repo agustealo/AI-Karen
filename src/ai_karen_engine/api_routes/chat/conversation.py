@@ -135,6 +135,13 @@ class BuildContextRequest(BaseModel):
     include_insights: bool = Field(True, description="Include AI insights")
 
 
+class UpdateConversationRequest(BaseModel):
+    """Request model for mutating conversation metadata owned by this user."""
+
+    title: Optional[str] = Field(None, description="New title")
+    is_active: Optional[bool] = Field(None, description="Active status")
+
+
 class UpdateUIContextRequest(BaseModel):
     ui_context: Dict[str, Any] = Field(..., description="UI context data")
 
@@ -893,27 +900,39 @@ async def add_tags(
 @router.put("/{conversation_id}")
 async def update_conversation(
     conversation_id: str,
-    title: Optional[str] = Query(None, description="New title"),
-    is_active: Optional[bool] = Query(None, description="Active status"),
-    conversation_service: ConversationService = Depends(get_conversation_service),
+    request: UpdateConversationRequest,
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
+    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     try:
-        success = await conversation_service.base_manager.update_conversation(
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            title=title,
-            is_active=is_active,
+        user_id = _require_user_id(user_ctx)
+        await conversation_gateway.update_conversation(
+            _conversation_api_context(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            ),
+            title=request.title,
+            is_active=request.is_active,
         )
-        if not success:
-            _raise_not_found(
-                message="Conversation not found or update failed",
-                user_message="The requested conversation could not be found or updated.",
-                details={"conversation_id": conversation_id},
-            )
         return {"success": True, "message": "Conversation updated successfully"}
     except HTTPException:
         raise
+    except (PermissionError, RuntimeError) as error:
+        if str(error) in {"conversation_user_mismatch", "conversation_not_found"}:
+            _raise_not_found(
+                message="Conversation not found or update denied",
+                user_message="The requested conversation could not be found or updated.",
+                details={"conversation_id": conversation_id},
+            )
+        logger.exception("Failed to update conversation", error=str(error))
+        _raise_service_error(
+            error=error,
+            user_message="Failed to update conversation. Please try again.",
+        )
     except Exception as error:
         logger.exception("Failed to update conversation", error=str(error))
         _raise_service_error(
@@ -925,23 +944,36 @@ async def update_conversation(
 @router.delete("/{conversation_id}")
 async def delete_conversation(
     conversation_id: str,
-    conversation_service: ConversationService = Depends(get_conversation_service),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
+    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     try:
-        success = await conversation_service.delete_conversation(
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-        )
-        if not success:
-            _raise_not_found(
-                message="Conversation not found or deletion failed",
-                user_message="The requested conversation could not be found or deleted.",
-                details={"conversation_id": conversation_id},
+        user_id = _require_user_id(user_ctx)
+        await conversation_gateway.delete_conversation(
+            _conversation_api_context(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
             )
+        )
         return {"success": True, "message": "Conversation deleted successfully"}
     except HTTPException:
         raise
+    except (PermissionError, RuntimeError) as error:
+        if str(error) in {"conversation_user_mismatch", "conversation_not_found"}:
+            _raise_not_found(
+                message="Conversation not found or deletion denied",
+                user_message="The requested conversation could not be found or deleted.",
+                details={"conversation_id": conversation_id},
+            )
+        logger.exception("Failed to delete conversation", error=str(error))
+        _raise_service_error(
+            error=error,
+            user_message="Failed to delete conversation. Please try again.",
+        )
     except Exception as error:
         logger.exception("Failed to delete conversation", error=str(error))
         _raise_service_error(

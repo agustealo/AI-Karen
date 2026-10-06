@@ -51,6 +51,7 @@ export interface Session {
   messageCount: number;
   isActive: boolean;
   lastMessage?: string;
+  runtimeSessionId?: string;
 }
 
 interface ChatInterfaceProps {
@@ -81,6 +82,7 @@ interface ConversationApiResponse {
     message_count?: number;
     messages?: Array<{ content: string }>;
     last_message?: string;
+    session_id?: string;
   }>;
   total_count: number;
   has_more: boolean;
@@ -139,31 +141,34 @@ const takeConversationBootstrap = (sessionId: string): ConversationResponse | nu
   return cached.response;
 };
 
-const fetchConversationBootstrap = async (sessionId: string): Promise<ConversationResponse> => {
-  const cached = takeConversationBootstrap(sessionId);
+const fetchConversationBootstrap = async (conversationId: string): Promise<ConversationResponse> => {
+  const cached = takeConversationBootstrap(conversationId);
   if (cached) {
     return cached;
   }
 
-  const existingRequest = sessionConversationBootstrapRequests.get(sessionId);
+  const existingRequest = sessionConversationBootstrapRequests.get(conversationId);
   if (existingRequest) {
     return existingRequest;
   }
 
-  const request = apiClient.post<ConversationResponse>(`/api/conversations/ensure-session/${sessionId}`)
+  const request = apiClient.get<ConversationResponse>(`/api/conversations/${conversationId}`)
     .then((response) => {
-      cacheConversationBootstrap(sessionId, response);
+      cacheConversationBootstrap(conversationId, response);
       return response;
     })
     .finally(() => {
-      if (sessionConversationBootstrapRequests.get(sessionId) === request) {
-        sessionConversationBootstrapRequests.delete(sessionId);
+      if (sessionConversationBootstrapRequests.get(conversationId) === request) {
+        sessionConversationBootstrapRequests.delete(conversationId);
       }
     });
 
-  sessionConversationBootstrapRequests.set(sessionId, request);
+  sessionConversationBootstrapRequests.set(conversationId, request);
   return request;
 };
+
+const ensureConversationSession = async (sessionId: string): Promise<ConversationResponse> =>
+  apiClient.post<ConversationResponse>(`/api/conversations/ensure-session/${sessionId}`);
 
 const shouldSuppressRecentBootstrap = (key: string): boolean => {
   const now = Date.now();
@@ -278,11 +283,12 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
     setError(null);
 
     try {
-      const conversationResponse = await fetchConversationBootstrap(sessionId);
+      const conversationResponse = await ensureConversationSession(sessionId);
+      const conversationId = conversationResponse.id;
       const createdAt = new Date(conversationResponse.created_at || Date.now());
       const updatedAt = new Date(conversationResponse.updated_at || Date.now());
       const newSession: Session = {
-        id: sessionId,
+        id: conversationId,
         title: conversationResponse.title || 'New Chat',
         createdAt,
         updatedAt,
@@ -290,16 +296,17 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
         isActive: true,
         lastMessage:
           conversationResponse.messages?.[conversationResponse.messages.length - 1]?.content,
+        runtimeSessionId: conversationResponse.session_id || sessionId,
       };
 
       setCurrentSession(newSession);
       setSessions((prev) => [
         newSession,
         ...prev
-          .filter((session) => session.id !== sessionId)
+          .filter((session) => session.id !== conversationId)
           .map((session) => ({ ...session, isActive: false })),
       ]);
-      persistActiveSessionId(sessionId);
+      persistActiveSessionId(conversationId);
     } catch (err) {
       if (err instanceof ApiError && err.status === 429) {
         console.warn('New conversation creation was rate-limited; no local-only session was created.');
@@ -348,8 +355,9 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
         throw (lastError ?? new Error('Failed to load session'));
       }
 
+      const conversationId = conversationResponse.id;
       const session: Session = {
-        id: sessionId,
+        id: conversationId,
         title: conversationResponse.title || generateSessionTitle(conversationResponse.messages?.map(m => ({
           ...m,
           role: m.role as 'user' | 'assistant',
@@ -361,14 +369,15 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
         messageCount: conversationResponse.messages?.length || 0,
         isActive: true,
         lastMessage: conversationResponse.messages?.[conversationResponse.messages.length - 1]?.content,
+        runtimeSessionId: conversationResponse.session_id || sessionId,
       };
 
       setCurrentSession(session);
-      persistActiveSessionId(sessionId);
+      persistActiveSessionId(conversationId);
 
       setSessions(prev => prev.map(s => ({
         ...s,
-        isActive: s.id === sessionId
+        isActive: s.id === conversationId
       })));
     } catch (err) {
       if (err instanceof ApiError && err.status === 429) {
@@ -481,7 +490,8 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
         isActive: currentSessionRef.current?.id === session.id,
         lastMessage: session.messages && session.messages.length > 0
           ? session.messages[session.messages.length - 1].content
-          : session.last_message
+          : session.last_message,
+        runtimeSessionId: session.session_id || session.id,
       })) || [];
 
       setSessions(sessionsData);
@@ -544,7 +554,8 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
     try {
       await apiClient.delete(`/api/conversations/${sessionId}`);
 
-      // Update sessions list optimistically, then re-sync from server to avoid stale history.
+      // Remove stale browser recovery only after durable server deletion succeeds.
+      removeSessionState(sessionId);
       setSessions(prev => prev.filter(s => s.id !== sessionId));
 
       let replacementFailed = false;
@@ -615,11 +626,19 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
       }
 
       if (deletedIds.size > 0) {
+        deletedIds.forEach((sessionId) => removeSessionState(sessionId));
         setSessions(prev => prev.filter(s => !deletedIds.has(s.id)));
       }
 
+      let replacementFailed = false;
       if (currentSession && deletedIds.has(currentSession.id)) {
-        await createNewSession();
+        setCurrentSession(null);
+        persistActiveSessionId(null);
+        try {
+          await createNewSession();
+        } catch {
+          replacementFailed = true;
+        }
       }
 
       if (deletedIds.size > 0) {
@@ -631,13 +650,16 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
         return false;
       }
 
+      if (replacementFailed) {
+        setError('Chats were deleted, but a replacement chat could not be created yet.');
+      }
       return true;
     } catch (err) {
       console.error('Failed to delete sessions:', err);
       setError('Failed to delete some sessions. Please try again.');
       return false;
     }
-  }, [currentSession, createNewSession, getRateLimitDelayMs, refreshSessions]);
+  }, [currentSession, createNewSession, getRateLimitDelayMs, persistActiveSessionId, refreshSessions]);
 
   // Update a session title
   const updateSessionTitle = useCallback(async (sessionId: string, newTitle: string) => {
@@ -944,6 +966,15 @@ const loadSessionState = (sessionId: string): PersistedChatSessionState | null =
     return parsed;
   } catch {
     return null;
+  }
+};
+
+const removeSessionState = (sessionId: string): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(getSessionStateStorageKey(sessionId));
+  } catch {
+    // Ignore storage failures. Durable server deletion remains authoritative.
   }
 };
 
@@ -1589,7 +1620,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
 
         const streamRequestPayload = {
           message: userMessage.content,
-          session_id: sessionIdRef.current,
+          session_id: currentSessionRef.current?.runtimeSessionId || sessionIdRef.current,
+          conversation_id: sessionIdRef.current,
           preferred_llm_provider: preferredProvider,
           preferred_model: preferredModel,
           temperature: 0.7,

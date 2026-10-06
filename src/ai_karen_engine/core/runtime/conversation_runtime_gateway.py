@@ -8,7 +8,8 @@ legacy Web UI service's memory-coupled message helpers.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from ai_karen_engine.core.logging import get_logger
@@ -219,6 +220,71 @@ class ConversationRuntimeGateway:
             conversation=conversation_result.data,
             messages=tuple(messages_result.data or []),
         )
+
+    async def update_conversation(
+        self,
+        context: ChatExecutionContext,
+        *,
+        title: Optional[str] = None,
+        is_active: Optional[bool] = None,
+    ) -> Conversation:
+        """Update one tenant/user-owned canonical conversation."""
+        self._require_message_identity(context)
+        conversation_id = resolve_runtime_conversation_id(context)
+        existing = await self._repository.get_conversation(
+            conversation_id,
+            context.tenant_id,
+        )
+        if not existing.success:
+            raise RuntimeError(existing.error or "conversation_lookup_failed")
+        if existing.data is None:
+            raise RuntimeError("conversation_not_found")
+        if str(existing.data.user_id) != str(context.user_id):
+            raise PermissionError("conversation_user_mismatch")
+
+        next_title = existing.data.title
+        if title is not None:
+            next_title = str(title).strip()
+            if not next_title:
+                raise ValueError("conversation_title_empty")
+
+        updated = replace(
+            existing.data,
+            title=next_title,
+            is_active=existing.data.is_active if is_active is None else bool(is_active),
+            updated_at=datetime.utcnow(),
+        )
+        result = await self._repository.update_conversation(updated)
+        if not result.success:
+            raise RuntimeError(result.error or "conversation_update_failed")
+        if result.data is not True:
+            raise RuntimeError("conversation_not_found")
+        return updated
+
+    async def delete_conversation(self, context: ChatExecutionContext) -> bool:
+        """Delete one tenant/user-owned canonical conversation."""
+        self._require_message_identity(context)
+        conversation_id = resolve_runtime_conversation_id(context)
+        existing = await self._repository.get_conversation(
+            conversation_id,
+            context.tenant_id,
+        )
+        if not existing.success:
+            raise RuntimeError(existing.error or "conversation_lookup_failed")
+        if existing.data is None:
+            raise RuntimeError("conversation_not_found")
+        if str(existing.data.user_id) != str(context.user_id):
+            raise PermissionError("conversation_user_mismatch")
+
+        result = await self._repository.delete_conversation(
+            conversation_id,
+            context.tenant_id,
+        )
+        if not result.success:
+            raise RuntimeError(result.error or "conversation_delete_failed")
+        if result.data is not True:
+            raise RuntimeError("conversation_not_found")
+        return True
 
     async def append_message(
         self,

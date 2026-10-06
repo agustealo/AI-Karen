@@ -147,3 +147,35 @@ def test_preference_confirmation_stays_on_canonical_chat_runtime() -> None:
     assert "await savePreferredAddressName(matchedAddressOption)" in submit
     assert "'/api/chat/stream'" in submit
 
+def test_deleted_conversations_cannot_rehydrate_from_local_recovery() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    assert "const removeSessionState = (sessionId: string)" in chat
+
+    single_delete = chat.split("// Delete a session", 1)[1].split(
+        "// Delete multiple sessions", 1
+    )[0]
+    assert "await apiClient.delete" in single_delete
+    assert single_delete.index("await apiClient.delete") < single_delete.index(
+        "removeSessionState(sessionId)"
+    )
+
+    bulk_delete = chat.split("// Delete multiple sessions", 1)[1].split(
+        "// Update a session title", 1
+    )[0]
+    assert "deletedIds.forEach((sessionId) => removeSessionState(sessionId))" in bulk_delete
+    assert "setCurrentSession(null)" in bulk_delete
+    assert "persistActiveSessionId(null)" in bulk_delete
+
+def test_chat_keeps_session_identity_separate_from_canonical_conversation_id() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    assert "const ensureConversationSession = async (sessionId: string)" in chat
+    assert "apiClient.get<ConversationResponse>(`/api/conversations/${conversationId}`)" in chat
+    assert "const conversationId = conversationResponse.id;" in chat
+    assert "runtimeSessionId: conversationResponse.session_id || sessionId" in chat
+
+    stream = chat.split("const streamRequestPayload = {", 1)[1].split("};", 1)[0]
+    assert "conversation_id: sessionIdRef.current" in stream
+    assert "session_id: currentSessionRef.current?.runtimeSessionId || sessionIdRef.current" in stream
+
