@@ -78,7 +78,7 @@ def _runtime(decision: ExecutionDecision, gateway: _Gateway) -> ChatRuntime:
     runtime._assemble_prompt = AsyncMock(
         return_value=[{"role": "user", "content": "burn"}]
     )
-    runtime._record_trajectory_completion = lambda *args, **kwargs: None
+    runtime._record_trajectory_completion = AsyncMock(return_value=None)
     runtime._record_execution_outcome = AsyncMock(return_value=None)
     return runtime
 

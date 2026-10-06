@@ -70,14 +70,20 @@ class CapabilityAwareMedusaPlanner:
         Each step receives only the tools/plugins it requires (least privilege).
         """
         budget = budget or authorized_plan.budget
+        effective_registry = registry or self._registry
+        if effective_registry is None:
+            raise ValueError(
+                "PLAN_UNSATISFIABLE: agent registry unavailable"
+            )
+
         allowed_agents = set(authorized_plan.allowed_agents)
         if "*" in allowed_agents:
-            all_agents = await registry.list_agents()
+            all_agents = await effective_registry.list_agents()
             allowed_agents = {a.agent_id for a in all_agents}
 
         registrations = await self._resolve_registrations(
             requirements=requirements,
-            registry=registry,
+            registry=effective_registry,
             allowed_agents=allowed_agents,
         )
 
@@ -90,7 +96,7 @@ class CapabilityAwareMedusaPlanner:
         steps = await self._build_steps(
             query=query,
             requirements=requirements,
-            registry=registry,
+            registry=effective_registry,
             ordered_registrations=ordered_registrations,
             authorized_plan=authorized_plan,
             context=context or {},

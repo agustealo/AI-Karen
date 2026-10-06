@@ -200,7 +200,8 @@ class LearningDatasetBuilder:
                 if not self._in_time_window(trajectory, query):
                     continue
                 observations = self._trajectory_store.list_decision_observations(
-                    trajectory.trajectory_id
+                    trajectory.trajectory_id,
+                    tenant_id=query.tenant_scope,
                 )
                 outcomes = self._outcome_store.get_for_trajectory(
                     trajectory.trajectory_id,
@@ -277,7 +278,8 @@ class LearningDatasetBuilder:
         query: LearningDatasetQuery,
     ) -> tuple[LearningExample | None, ExcludedRecord | None]:
         snapshot = self._trajectory_store.get_feature_snapshot(
-            observation.feature_snapshot_id
+            observation.feature_snapshot_id,
+            tenant_id=query.tenant_scope,
         )
         if snapshot is None:
             return None, ExcludedRecord(

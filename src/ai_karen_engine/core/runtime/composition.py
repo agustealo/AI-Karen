@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from ai_karen_engine.core.runtime.decision_pipeline import RuntimeDecisionPipeline
     from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer
     from ai_karen_engine.core.runtime.outcome.store import OutcomeStore
+    from ai_karen_engine.core.runtime.trajectory.store import TrajectoryStore
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class RuntimeComposition:
     decision_pipeline: RuntimeDecisionPipeline
     expression_gateway: ExpressionGateway
     outcome_store: OutcomeStore | None = None
+    trajectory_store: TrajectoryStore | None = None
 
     @property
     def cortex(self) -> RuntimeDecisionPipeline:
@@ -61,6 +63,7 @@ def build_runtime_composition() -> RuntimeComposition:
     from ai_karen_engine.core.runtime.decision_pipeline import RuntimeDecisionPipeline
     from ai_karen_engine.core.runtime.policy import RuntimePolicyEnforcer
     from ai_karen_engine.core.runtime.outcome.store import get_outcome_store
+    from ai_karen_engine.core.runtime.trajectory.store import get_trajectory_store
 
     cognitive_cortex = CortexExecutionDecider()
     runtime_policy = RuntimePolicyEnforcer()
@@ -75,6 +78,7 @@ def build_runtime_composition() -> RuntimeComposition:
         decision_pipeline=decision_pipeline,
         expression_gateway=ExpressionGateway(),
         outcome_store=get_outcome_store(),
+        trajectory_store=get_trajectory_store(),
     )
 
 
