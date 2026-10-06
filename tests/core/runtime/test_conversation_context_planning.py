@@ -58,6 +58,27 @@ def test_stage_one_requests_governed_conversation_history(monkeypatch: pytest.Mo
     assert requirement.max_items == 6
 
 
+def test_stage_one_requests_ranked_continuity_with_memory_read() -> None:
+    preliminary = _preliminary()
+    preliminary.memory_recall_required = True
+    requirements = build_context_requirements(
+        _request(conversation_id=None),
+        preliminary,
+    )
+
+    assert [item.source for item in requirements.requirements] == [
+        EvidenceSource.MEMORY,
+        EvidenceSource.USER_MODEL,
+    ]
+    assert [item.capability for item in requirements.requirements] == [
+        "memory.read",
+        "memory.read",
+    ]
+    continuity = requirements.requirements[1]
+    assert continuity.classes == ["next_need"]
+    assert continuity.metadata["mode"] == "suggest_only"
+
+
 def test_stage_one_skips_conversation_read_without_conversation_identity() -> None:
     requirements = build_context_requirements(
         _request(conversation_id=None),
