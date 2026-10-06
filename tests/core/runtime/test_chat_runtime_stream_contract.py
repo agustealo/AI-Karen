@@ -649,3 +649,41 @@ async def test_execute_human_gate_returns_gate_without_model_execution():
     assert result.metadata.extra["approval_id"] == approval.approval_id
     run_simple.assert_not_awaited()
     assert gateway.calls == []
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_preserves_rich_results_in_terminal_metadata_and_transcript():
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    decision.topology = ExecutionTopology.WORKFLOW
+    decision.is_graph_required = True
+    plan = _make_plan()
+    plan.topology = ExecutionTopology.WORKFLOW
+
+    rich = {
+        "structured_content": {"summary": {"status": "ready"}},
+        "actions": [{"type": "continue", "description": "Continue"}],
+        "citations": [{"id": "c1", "url": "https://example.com"}],
+        "sources": [{"id": "s1", "url": "https://example.com/source"}],
+        "attachments": [{"id": "a1", "name": "report.pdf"}],
+        "artifacts": [{"id": "r1", "title": "Report"}],
+    }
+
+    async def fake_stream(*args, **kwargs):
+        yield ChatStreamChunk(
+            type="content",
+            content="hi",
+            correlation_id="corr-1",
+            metadata=rich,
+        )
+
+    chunks = await _collect_stream(runtime, request, decision, plan, fake_stream)
+
+    terminal = chunks[-1].metadata
+    for key, value in rich.items():
+        assert terminal[key] == value
+
+    persisted = gateway.calls[0]["response_metadata"]
+    for key, value in rich.items():
+        assert persisted[key] == value
