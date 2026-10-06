@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useId, useMemo, useState } from 'react';
 import type { AgentStepEvent } from '@/lib/types';
 
 interface AgentActivityPanelProps {
@@ -10,8 +10,6 @@ interface AgentActivityPanelProps {
 type ActionIconMap = Record<string, React.ReactNode>;
 
 type AgentStepMetadata = Record<string, unknown>;
-
-const PANEL_CONTENT_ID = 'agent-activity-panel-content';
 
 const cleanString = (value: unknown): string => {
   return typeof value === 'string' ? value.trim() : '';
@@ -252,6 +250,7 @@ const renderFallbackInfo = (
 
 export default function AgentActivityPanel({ steps }: AgentActivityPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const panelContentId = useId();
 
   const normalizedSteps = useMemo(() => {
     return Array.isArray(steps) ? steps.filter(Boolean) : [];
@@ -268,7 +267,7 @@ export default function AgentActivityPanel({ steps }: AgentActivityPanelProps) {
         onClick={() => setIsExpanded((current) => !current)}
         className="flex w-full items-center justify-between border-b border-gray-200 p-3 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-750"
         aria-expanded={isExpanded}
-        aria-controls={PANEL_CONTENT_ID}
+        aria-controls={panelContentId}
       >
         <div className="flex items-center gap-2">
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -295,7 +294,7 @@ export default function AgentActivityPanel({ steps }: AgentActivityPanelProps) {
 
       {isExpanded && (
         <div
-          id={PANEL_CONTENT_ID}
+          id={panelContentId}
           className="max-h-64 space-y-2 overflow-y-auto p-2"
           /*
            * This panel is observability UI only. It must display backend events,
