@@ -1834,7 +1834,8 @@ class ChatRuntime:
                 decision.forbidden_capabilities
             )
 
-            await self._trajectory_recorder.persist_async(trajectory)
+            if not await self._trajectory_recorder.persist_async(trajectory):
+                return None
 
             snapshot = self._trajectory_recorder.build_feature_snapshot(
                 trajectory,
@@ -1878,10 +1879,14 @@ class ChatRuntime:
                     ),
                 },
             )
-            await self._trajectory_recorder.record_feature_snapshot_async(
-                trajectory,
-                feature_snapshot=snapshot,
+            persisted_snapshot = (
+                await self._trajectory_recorder.record_feature_snapshot_async(
+                    trajectory,
+                    feature_snapshot=snapshot,
+                )
             )
+            if persisted_snapshot is None:
+                return None
 
             candidate_actions = tuple(item.value for item in ExecutionTopology)
             observation = self._trajectory_recorder.build_decision_observation(
@@ -1903,10 +1908,14 @@ class ChatRuntime:
                     "policy_decision_id": decision.policy_decision_id,
                 },
             )
-            await self._trajectory_recorder.record_decision_observation_async(
-                trajectory,
-                decision_observation=observation,
+            persisted_observation = (
+                await self._trajectory_recorder.record_decision_observation_async(
+                    trajectory,
+                    decision_observation=observation,
+                )
             )
+            if persisted_observation is None:
+                return None
             await self._trajectory_recorder.persist_async(trajectory)
             return observation.decision_observation_id
         except Exception as exc:
