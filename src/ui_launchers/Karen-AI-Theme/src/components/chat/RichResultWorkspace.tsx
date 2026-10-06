@@ -107,7 +107,7 @@ export default function RichResultWorkspace({
 
   return (
     <aside
-      className="hidden w-[24rem] shrink-0 border-l border-border/70 bg-background/42 xl:flex xl:flex-col"
+      className="hidden w-[22rem] shrink-0 border-l border-border/70 bg-background/42 2xl:flex 2xl:flex-col"
       aria-label="Result workspace"
       data-testid="rich-result-workspace"
     >
