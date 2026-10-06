@@ -63,4 +63,36 @@ describe('RichResultWorkspace', () => {
     expect(screen.getByText('Evidence source')).toBeTruthy();
     expect(screen.getByText('Two findings')).toBeTruthy();
   });
+  it('does not turn unsafe backend URLs into navigable links', () => {
+    const message: ChatMessage = {
+      id: 'm3',
+      role: 'assistant',
+      content: 'Completed',
+      timestamp: new Date(),
+      status: 'completed',
+      sources: [
+        {
+          id: 'source-unsafe',
+          url: 'javascript:alert(1)',
+          title: 'Unsafe source',
+          snippet: 'Must remain text only',
+          index: 1,
+        },
+      ],
+      artifacts: [
+        {
+          id: 'artifact-unsafe',
+          title: 'Local path artifact',
+          type: 'file',
+          url: 'file:///tmp/private.txt',
+        },
+      ],
+    };
+
+    render(<RichResultWorkspace message={message} />);
+
+    expect(screen.getByText('Unsafe source')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /unsafe source/i })).toBeNull();
+    expect(screen.queryByRole('link', { name: /open artifact/i })).toBeNull();
+  });
 });
