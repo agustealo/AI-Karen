@@ -665,35 +665,38 @@ async def cleanup_inactive_conversations(
 async def update_session_activity(
     session_id: str,
     activity_data: Optional[Dict[str, Any]] = None,
-    conversation_service: ConversationService = Depends(get_conversation_service),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Update activity only after proving the session belongs to this tenant/user."""
+    """Refresh activity on the canonical tenant/user-owned conversation."""
+    del activity_data
     try:
         user_id = _require_user_id(user_ctx)
-        conversation = await conversation_service.get_web_ui_conversation_by_session(
-            tenant_id=tenant_id,
-            session_id=session_id,
-            user_id=user_id,
-            include_context=False,
-        )
-        if not conversation:
-            _raise_not_found(
-                message="Conversation not found",
-                user_message="No conversation exists for the requested session.",
-                details={"session_id": session_id},
+        await conversation_gateway.touch_conversation_activity(
+            _conversation_api_context(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                session_id=session_id,
             )
-
-        success = await conversation_service.update_session_activity(
-            session_id=session_id,
-            activity_data=activity_data,
         )
-        if not success:
-            raise RuntimeError("Conversation service failed to update session activity")
         return {"success": True}
     except HTTPException:
         raise
+    except (PermissionError, RuntimeError) as error:
+        if str(error) in {"conversation_user_mismatch", "conversation_not_found"}:
+            _raise_not_found(
+                message="Conversation not found or activity update denied",
+                user_message="No conversation exists for the requested session.",
+                details={"session_id": session_id},
+            )
+        logger.exception("Failed to update session activity", error=str(error))
+        _raise_service_error(
+            error=error,
+            user_message="Failed to update session activity. Please try again.",
+        )
     except Exception as error:
         logger.exception("Failed to update session activity", error=str(error))
         _raise_service_error(
@@ -705,28 +708,38 @@ async def update_session_activity(
 @router.get("/{conversation_id}", response_model=ConversationResponse)
 async def get_conversation(
     conversation_id: str,
-    include_context: bool = Query(True, description="Include context data"),
-    conversation_service: ConversationService = Depends(get_conversation_service),
+    include_context: bool = Query(False, description="Deprecated; transcript restore is context-free"),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
+    del include_context
     try:
         user_id = _require_user_id(user_ctx)
-        conversation = await conversation_service.get_web_ui_conversation(
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            include_context=include_context,
-            user_id=user_id,
+        snapshot = await conversation_gateway.get_snapshot(
+            _conversation_api_context(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
         )
-        if not conversation:
+        return _canonical_snapshot_to_response(snapshot)
+    except HTTPException:
+        raise
+    except (PermissionError, RuntimeError) as error:
+        if str(error) in {"conversation_user_mismatch", "conversation_not_found"}:
             _raise_not_found(
                 message="Conversation not found",
                 user_message="The requested conversation could not be found.",
                 details={"conversation_id": conversation_id},
             )
-        return _convert_conversation_to_response(conversation)
-    except HTTPException:
-        raise
+        logger.exception("Failed to get conversation", error=str(error))
+        _raise_service_error(
+            error=error,
+            user_message="Failed to get conversation. Please try again.",
+        )
     except Exception as error:
         logger.exception("Failed to get conversation", error=str(error))
         _raise_service_error(
