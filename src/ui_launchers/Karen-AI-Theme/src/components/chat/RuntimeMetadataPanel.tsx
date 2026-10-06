@@ -97,7 +97,7 @@ export default function RuntimeMetadataPanel(props: RuntimeMetadataPanelProps) {
 
   return (
     <section
-      className="mx-3 mt-3 overflow-hidden rounded-xl border border-border/70 bg-card/62 shadow-sm backdrop-blur-md md:mx-4"
+      className="mx-3 mt-3 overflow-hidden rounded-xl border border-border/70 bg-card/60 shadow-sm backdrop-blur-md md:mx-4"
       aria-label="Execution truth"
       data-testid="runtime-metadata-panel"
     >
@@ -108,7 +108,7 @@ export default function RuntimeMetadataPanel(props: RuntimeMetadataPanelProps) {
         aria-expanded={expanded}
         aria-controls="runtime-execution-details"
       >
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-primary/20 bg-primary/8">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-primary/20 bg-primary/10">
           <Cpu className="h-3.5 w-3.5 text-primary" />
         </div>
 
@@ -164,7 +164,7 @@ export default function RuntimeMetadataPanel(props: RuntimeMetadataPanelProps) {
       {expanded && (
         <div
           id="runtime-execution-details"
-          className="border-t border-border/60 bg-background/18 p-3"
+          className="border-t border-border/60 bg-background/20 p-3"
         >
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             <Detail
