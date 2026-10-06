@@ -1233,7 +1233,12 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     approvalResume?: { approvalId: string; suppressUserMessage?: boolean },
   ) => {
     const rawInput = manualInput || input;
-    if (!rawInput.trim() || isAuthLoading || submitInFlightRef.current) return;
+    const isApprovalResume = Boolean(approvalResume?.approvalId);
+    if (
+      (!rawInput.trim() && !isApprovalResume) ||
+      isAuthLoading ||
+      submitInFlightRef.current
+    ) return;
 
     const trimmedInput = rawInput.trim();
     const lastAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant');
@@ -1244,7 +1249,11 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       (option) => option.trim().toLowerCase() === trimmedInput.toLowerCase()
     );
 
-    if (lastAssistantMessage?.metadata?.addressPreferencePrompt && matchedAddressOption) {
+    if (
+      !isApprovalResume &&
+      lastAssistantMessage?.metadata?.addressPreferencePrompt &&
+      matchedAddressOption
+    ) {
       setIsLoading(true);
       try {
         await savePreferredAddressName(matchedAddressOption);
@@ -1252,7 +1261,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         const userMessage: ChatMessage = {
           id: 'user-' + Date.now(),
           role: 'user',
-          content: trimmedInput,
+          content: trimmedInput || 'Approved request resume',
           timestamp: new Date(),
           status: 'completed',
         };
@@ -1374,8 +1383,10 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         };
 
       await apiClient.postStream(
-        '/api/chat/stream',
-        streamRequestPayload,
+        isApprovalResume
+          ? `/api/chat/approvals/${approvalResume?.approvalId}/resume`
+          : '/api/chat/stream',
+        isApprovalResume ? undefined : streamRequestPayload,
         {
           onStatus: (message, metadata) => {
             const statusKey =
@@ -1482,7 +1493,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
                       description: 'Approve',
                       params: {
                         approval_id: approvalId,
-                        original_input: trimmedInput,
                       },
                     },
                     {
@@ -1490,7 +1500,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
                       description: 'Reject',
                       params: {
                         approval_id: approvalId,
-                        original_input: trimmedInput,
                       },
                     },
                   ]
@@ -1695,7 +1704,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   const handleActionClick = useCallback(async (action: SuggestedAction) => {
     if (action.type === 'approval.approve' || action.type === 'approval.reject') {
       const approvalId = String(action.params?.approval_id || '').trim();
-      const originalInput = String(action.params?.original_input || '').trim();
       if (!approvalId) {
         toast({
           title: 'Approval unavailable',
@@ -1729,10 +1737,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         );
 
         if (decision === 'approved') {
-          if (!originalInput) {
-            throw new Error('The original request is unavailable for resume.');
-          }
-          await handleSubmit(originalInput, {
+          await handleSubmit(undefined, {
             approvalId,
             suppressUserMessage: true,
           });
