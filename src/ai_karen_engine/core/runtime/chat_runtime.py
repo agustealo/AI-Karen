@@ -836,6 +836,16 @@ class ChatRuntime:
                     "success",
                 ),
                 "continuity_count": len(continuity_items),
+                "continuity_candidate_ids": [
+                    str(item.get("id") or "")
+                    for item in continuity_items
+                    if item.get("id")
+                ],
+                "continuity_source_types": [
+                    str(item.get("source_type") or "")
+                    for item in continuity_items
+                    if item.get("source_type")
+                ],
             }
         )
 
@@ -1867,6 +1877,15 @@ class ChatRuntime:
                 "transcript_persisted_count": (transcript_meta or {}).get(
                     "transcript_persisted_count",
                     0,
+                ),
+                "continuity_candidate_ids": list(
+                    memory_meta.get("continuity_candidate_ids") or []
+                ),
+                "continuity_source_types": list(
+                    memory_meta.get("continuity_source_types") or []
+                ),
+                "continuity_count": int(
+                    memory_meta.get("continuity_count") or 0
                 ),
             },
         )
