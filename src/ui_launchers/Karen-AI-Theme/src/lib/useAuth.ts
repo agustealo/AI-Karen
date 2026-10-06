@@ -1,7 +1,19 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
-import { authService, AuthUser, LoginCredentials } from './auth';
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+
+import { authService, type AuthUser, type LoginCredentials } from './auth';
+import { AUTH_INVALIDATED_EVENT } from './auth-events';
 
 interface AuthState {
   user: AuthUser | null;
@@ -10,62 +22,106 @@ interface AuthState {
   error: string | null;
 }
 
-export function useAuth() {
+interface AuthContextValue extends AuthState {
+  login(credentials: LoginCredentials): Promise<unknown>;
+  logout(): Promise<void>;
+  refreshSession(): Promise<void>;
+  initializeAuth(): Promise<void>;
+  clearError(): void;
+  hasPermission(permission: string): boolean;
+  isAdmin(): boolean;
+}
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+const unauthenticatedState: AuthState = {
+  user: null,
+  isAuthenticated: false,
+  isLoading: false,
+  error: null,
+};
+
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({
     user: null,
     isAuthenticated: false,
     isLoading: true,
     error: null,
   });
+  const initialResolutionCompleteRef = useRef(false);
 
-  // Initialize auth state
+  const applyCanonicalState = useCallback((isValid: boolean) => {
+    const user = isValid ? authService.getCurrentUser() : null;
+
+    if (!isValid || !user) {
+      if (!isValid) {
+        authService.clearAuth();
+      }
+      setState(unauthenticatedState);
+      initialResolutionCompleteRef.current = true;
+      return;
+    }
+
+    setState({
+      user,
+      isAuthenticated: true,
+      isLoading: false,
+      error: null,
+    });
+    initialResolutionCompleteRef.current = true;
+  }, []);
+
   const initializeAuth = useCallback(async () => {
-    try {
-      setState((prev: AuthState) => ({ ...prev, isLoading: true, error: null }));
+    const blockRendering = !initialResolutionCompleteRef.current;
 
-      // Skip full validation if we have a fresh login session to prevent flash
+    if (blockRendering) {
+      setState((previous) => ({
+        ...previous,
+        isLoading: true,
+        error: null,
+      }));
+    } else {
+      setState((previous) => ({
+        ...previous,
+        error: null,
+      }));
+    }
+
+    try {
       const hasFreshLogin = authService.hasFreshLoginMarker();
       const currentUser = authService.getCurrentUser();
-      const hasAccessToken = !!authService.getAccessToken();
+      const hasAccessToken = Boolean(authService.getAccessToken());
 
       if (hasFreshLogin && currentUser && hasAccessToken) {
-        console.log('[useAuth] Skipping validation for fresh login session');
-        setState({
-          user: currentUser,
-          isAuthenticated: true,
-          isLoading: false,
-          error: null,
-        });
+        applyCanonicalState(true);
         return;
       }
 
-      console.log('[useAuth] Initializing auth state...');
-
       const isValid = await authService.validateSession();
-      const validatedUser = isValid ? authService.getCurrentUser() : null;
+      applyCanonicalState(isValid);
+    } catch (error) {
+      const currentUser = authService.getCurrentUser();
+      const canPreserveResolvedSession =
+        initialResolutionCompleteRef.current &&
+        state.isAuthenticated &&
+        Boolean(currentUser);
 
-      console.log('[useAuth] Session validation result:', {
-        isValid,
-        hasCurrentUser: !!validatedUser,
-        hasAccessToken: !!authService.getAccessToken(),
-        hasRefreshToken: !!authService.getRefreshToken(),
-        isAuthenticated: authService.isAuthenticated(),
-      });
-
-      if (!isValid || !validatedUser) {
-        console.log('[useAuth] Session invalid, clearing auth');
-        authService.clearAuth();
+      if (canPreserveResolvedSession) {
+        setState((previous) => ({
+          ...previous,
+          user: currentUser,
+          isAuthenticated: true,
+          isLoading: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Session validation temporarily unavailable',
+        }));
+        return;
       }
 
-      setState({
-        user: isValid ? validatedUser : null,
-        isAuthenticated: isValid && !!validatedUser,
-        isLoading: false,
-        error: null,
-      });
-    } catch (error) {
-      console.error('Auth initialization error:', error);
       authService.clearAuth();
+      initialResolutionCompleteRef.current = true;
       setState({
         user: null,
         isAuthenticated: false,
@@ -73,148 +129,145 @@ export function useAuth() {
         error: error instanceof Error ? error.message : 'Authentication failed',
       });
     }
-  }, []);
+  }, [applyCanonicalState, state.isAuthenticated]);
 
-  // Login function
   const login = useCallback(async (credentials: LoginCredentials) => {
+    setState((previous) => ({
+      ...previous,
+      isLoading: true,
+      error: null,
+    }));
+
     try {
-      setState((prev: AuthState) => ({ ...prev, isLoading: true, error: null }));
-      
       const response = await authService.login(credentials);
-      
-      setState((prev: AuthState) => ({
-        ...prev,
-        user: response.user,
-        isAuthenticated: true,
+      const user = response.user ?? authService.getCurrentUser();
+
+      initialResolutionCompleteRef.current = true;
+      setState({
+        user: user ?? null,
+        isAuthenticated: Boolean(user),
         isLoading: false,
         error: null,
-      }));
-      
+      });
       return response;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Login failed';
-      setState((prev: AuthState) => ({
-        ...prev,
+      setState((previous) => ({
+        ...previous,
         isLoading: false,
-        error: errorMessage,
+        error: error instanceof Error ? error.message : 'Login failed',
       }));
       throw error;
     }
   }, []);
 
-  // Logout function
   const logout = useCallback(async () => {
     try {
-      setState((prev: AuthState) => ({ ...prev, isLoading: true, error: null }));
-      
       await authService.logout();
-      
-      setState({
-        user: null,
-        isAuthenticated: false,
-        isLoading: false,
-        error: null,
-      });
-    } catch (error) {
-      console.error('Logout error:', error);
-      // Still update state even if API call fails
-      setState({
-        user: null,
-        isAuthenticated: false,
-        isLoading: false,
-        error: error instanceof Error ? error.message : 'Logout failed',
-      });
+    } finally {
+      initialResolutionCompleteRef.current = true;
+      setState(unauthenticatedState);
     }
   }, []);
 
-  // Refresh session
   const refreshSession = useCallback(async () => {
-    try {
-      setState((prev: AuthState) => ({ ...prev, isLoading: true, error: null }));
-      
-      const isValid = await authService.validateSession();
-      const currentUser = isValid ? authService.getCurrentUser() : null;
+    // Background refresh must never replace the already-rendered application
+    // with a blocking auth loader.
+    setState((previous) => ({
+      ...previous,
+      error: null,
+    }));
 
-      if (!isValid || !currentUser) {
-        authService.clearAuth();
-      }
-      
-      setState((prev: AuthState) => ({
-        ...prev,
-        user: isValid ? currentUser : null,
-        isAuthenticated: isValid && !!currentUser,
-        isLoading: false,
-        error: null,
-      }));
+    try {
+      const isValid = await authService.validateSession();
+      applyCanonicalState(isValid);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Session refresh failed';
-      setState((prev: AuthState) => ({
-        ...prev,
+      setState((previous) => ({
+        ...previous,
         isLoading: false,
-        error: errorMessage,
+        error:
+          error instanceof Error ? error.message : 'Session refresh failed',
       }));
       throw error;
     }
-  }, []);
+  }, [applyCanonicalState]);
 
-  // Check permissions
-  const hasPermission = useCallback((permission: string) => {
-    return authService.hasPermission(permission);
-  }, []);
-
-  // Check if admin
-  const isAdmin = useCallback(() => {
-    return authService.isAdmin();
-  }, []);
-
-  // Clear error
   const clearError = useCallback(() => {
-    setState((prev: AuthState) => ({ ...prev, error: null }));
+    setState((previous) => ({ ...previous, error: null }));
   }, []);
 
-  // Initialize on mount
+  const hasPermission = useCallback(
+    (permission: string) =>
+      Boolean(state.user?.permissions?.includes(permission)),
+    [state.user?.permissions],
+  );
+
+  const isAdmin = useCallback(
+    () => Boolean(state.user?.roles?.includes('admin')),
+    [state.user?.roles],
+  );
+
   useEffect(() => {
-    initializeAuth();
+    void initializeAuth();
   }, [initializeAuth]);
 
-  // Listen for storage changes (for multi-tab support) with debounce
   useEffect(() => {
-    let timeoutId: NodeJS.Timeout;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     const handleStorageChange = () => {
-      // Debounce storage change handling to prevent excessive re-validations
-      clearTimeout(timeoutId);
+      if (timeoutId) clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
-        initializeAuth();
-      }, 500);
+        void initializeAuth();
+      }, 250);
+    };
+
+    const handleAuthInvalidated = () => {
+      authService.clearAuth();
+      initialResolutionCompleteRef.current = true;
+      setState(unauthenticatedState);
     };
 
     window.addEventListener('storage', handleStorageChange);
+    window.addEventListener(AUTH_INVALIDATED_EVENT, handleAuthInvalidated);
+
     return () => {
-      clearTimeout(timeoutId);
+      if (timeoutId) clearTimeout(timeoutId);
       window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener(AUTH_INVALIDATED_EVENT, handleAuthInvalidated);
     };
   }, [initializeAuth]);
 
-  return {
-    // State
-    user: state.user,
-    isAuthenticated: state.isAuthenticated,
-    isLoading: state.isLoading,
-    error: state.error,
-    
-    // Actions
-    login,
-    logout,
-    refreshSession,
-    initializeAuth,
-    clearError,
-    
-    // Helpers
-    hasPermission,
-    isAdmin,
-  };
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      ...state,
+      login,
+      logout,
+      refreshSession,
+      initializeAuth,
+      clearError,
+      hasPermission,
+      isAdmin,
+    }),
+    [
+      state,
+      login,
+      logout,
+      refreshSession,
+      initializeAuth,
+      clearError,
+      hasPermission,
+      isAdmin,
+    ],
+  );
+
+  return createElement(AuthContext.Provider, { value }, children);
 }
 
-// Export convenience hook for components
+export function useAuth(): AuthContextValue {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+}
+
 export default useAuth;
