@@ -75,6 +75,7 @@ def test_resume_ambiguity_flows_to_prompt_without_execution_authority() -> None:
     )
 
     assert "agenda = await service.organize(" in resolver
+    assert "current_request=self._latest_user_message(request)" in resolver
     assert '"continuity_primary_candidate_id"' in runtime
     assert '"continuity_ambiguous"' in runtime
     assert "multiple plausible unfinished threads" in prompt
@@ -133,6 +134,9 @@ def test_proactive_ranking_policy_is_central_config_owned() -> None:
     assert "get_proactive_continuity_settings" in cortex
     assert "KARI_PROACTIVE_CONTINUITY_ENABLED" in config
     assert "KARI_PROACTIVE_CONTINUITY_MAX_CANDIDATES" in config
+    assert "KARI_PROACTIVE_CONTINUITY_RESUME_PRIMARY_MIN_UTILITY" in config
+    assert "KARI_PROACTIVE_CONTINUITY_RESUME_PRIMARY_MARGIN" in config
+    assert "KARI_PROACTIVE_CONTINUITY_CURRENT_REQUEST_MATCH_BOOST" in config
 
 
 def test_proactive_repository_reads_only_current_governed_evidence() -> None:
