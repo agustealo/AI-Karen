@@ -54,9 +54,6 @@ interface ChatInputProps {
   createNewSession: () => Promise<void>;
   onExportChat: () => Promise<void> | void;
   onCopyChat?: () => Promise<void> | void;
-  onShareChat?: () => Promise<void> | void;
-  onClearChat?: () => Promise<void> | void;
-  onSearchInChat?: () => void;
 }
 
 const DEFAULT_INPUT_PLACEHOLDER = 'Ask Karen anything...';
@@ -101,9 +98,6 @@ export function ChatInput({
   createNewSession,
   onExportChat,
   onCopyChat,
-  onShareChat,
-  onClearChat,
-  onSearchInChat,
 }: ChatInputProps) {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
@@ -224,9 +218,6 @@ export function ChatInput({
               onOpenHistory={() => setIsHistoryOpen(true)}
               onExportChat={onExportChat}
               onCopyChat={onCopyChat}
-              onShareChat={onShareChat}
-              onClearChat={onClearChat}
-              onSearchInChat={onSearchInChat}
             />
 
             <SessionHistory
