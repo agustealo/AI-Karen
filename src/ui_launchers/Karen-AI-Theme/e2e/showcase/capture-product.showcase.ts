@@ -508,7 +508,6 @@ test("capture premium KAREN product surfaces from a real runtime", async ({
       production_or_personal_data: false,
       presentation_ready_state_required: true,
       retired_visible_brand_forbidden: true,
-      stable_authenticated_shell_required: true,
     },
     files: [...GALLERY_FILES],
   };
