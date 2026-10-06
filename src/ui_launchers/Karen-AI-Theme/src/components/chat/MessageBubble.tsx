@@ -20,6 +20,7 @@ import {
   ThumbsDown,
   ThumbsUp,
   User,
+  X,
   Zap,
 } from 'lucide-react';
 
@@ -219,6 +220,10 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
   const hasStructuredContent =
     Boolean(message.structuredContent) &&
     Object.keys(message.structuredContent || {}).length > 0;
+
+  const hasApprovalActions = Boolean(
+    message.actions?.some((action) => action.type.startsWith('approval.')),
+  );
 
   const timestampLabel = useMemo(
     () => getSafeTimestampLabel(message.timestamp),
@@ -603,7 +608,7 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                 <div className="mt-3 animate-in duration-500 fade-in slide-in-from-left-2 sm:mt-4">
                   <div className="mb-2 flex items-center gap-2">
                     <Badge variant="secondary" className="px-2 py-0.5 text-[10px]">
-                      Suggested Actions
+                      {hasApprovalActions ? 'Approval required' : 'Suggested Actions'}
                     </Badge>
                   </div>
 
@@ -623,10 +628,22 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                                 className="group h-7 rounded-full bg-background/50 px-2 text-[10px] shadow-sm transition-all duration-300 hover:border-primary/30 hover:bg-primary/10 hover:text-primary sm:h-8 sm:px-3 sm:text-[11px]"
                                 aria-label={`Perform action: ${actionLabel}`}
                               >
-                                <PlusCircle
-                                  className="mr-1 h-2.5 w-2.5 text-primary/60 transition-colors group-hover:text-primary sm:mr-1.5 sm:h-3 sm:w-3"
-                                  aria-hidden="true"
-                                />
+                                {action.type === 'approval.approve' ? (
+                                  <Check
+                                    className="mr-1 h-2.5 w-2.5 text-emerald-500 sm:mr-1.5 sm:h-3 sm:w-3"
+                                    aria-hidden="true"
+                                  />
+                                ) : action.type === 'approval.reject' ? (
+                                  <X
+                                    className="mr-1 h-2.5 w-2.5 text-rose-500 sm:mr-1.5 sm:h-3 sm:w-3"
+                                    aria-hidden="true"
+                                  />
+                                ) : (
+                                  <PlusCircle
+                                    className="mr-1 h-2.5 w-2.5 text-primary/60 transition-colors group-hover:text-primary sm:mr-1.5 sm:h-3 sm:w-3"
+                                    aria-hidden="true"
+                                  />
+                                )}
                                 <span className="max-w-[120px] truncate sm:max-w-none">
                                   {actionLabel}
                                 </span>

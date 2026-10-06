@@ -159,6 +159,21 @@ class DegradedResponse:
 
 
 @dataclass
+class ApprovalRequiredResponse:
+    """Structured pre-execution human approval gate."""
+
+    approval_id: str
+    message: str = "Approval required before KAREN can continue this action."
+    mode: str = "approval_required"
+    status: str = "pending"
+    intent: Optional[str] = None
+    risk_level: Optional[str] = None
+    reason_codes: List[str] = field(default_factory=list)
+    expires_at: Optional[str] = None
+    system_status_code: int = 409
+
+
+@dataclass
 class DependencyHealth:
     """Health snapshot for a single dependency."""
 
@@ -223,6 +238,7 @@ RuntimeResponse = Union[
     MaintenanceResponse,
     EmergencyFallbackResponse,
     DegradedResponse,
+    ApprovalRequiredResponse,
     None,
 ]
 
@@ -2303,6 +2319,19 @@ def serialize_runtime_response(response: RuntimeResponse) -> Optional[Dict[str, 
             "support_hint": response.support_hint,
         }
 
+    if isinstance(response, ApprovalRequiredResponse):
+        return {
+            "mode": response.mode,
+            "message": response.message,
+            "approval_id": response.approval_id,
+            "status": response.status,
+            "intent": response.intent,
+            "risk_level": response.risk_level,
+            "reason_codes": list(response.reason_codes),
+            "expires_at": response.expires_at,
+            "system_status_code": response.system_status_code,
+        }
+
     raise TypeError(f"Unsupported runtime response type: {type(response)!r}")
 
 
@@ -2335,6 +2364,7 @@ __all__ = [
     "MaintenanceResponse",
     "EmergencyFallbackResponse",
     "DegradedResponse",
+    "ApprovalRequiredResponse",
     "RuntimeSnapshot",
     "RuntimeResponse",
     "serialize_runtime_response",

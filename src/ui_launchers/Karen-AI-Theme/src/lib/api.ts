@@ -79,6 +79,7 @@ export interface AssistStreamCallbacks {
   onMetrics?: (metrics: StreamingMetrics) => void;
   onAgentStep?: (event: AgentStepEvent) => void;
   onCitationBundle?: (citations: Citation[]) => void;
+  onApproval?: (message: string, metadata: Record<string, unknown>) => void;
 }
 
 class ApiClient {
@@ -1020,9 +1021,9 @@ class ApiClient {
               break;
             }
             case 'approval':
-              callbacks?.onStatus?.(
+              callbacks?.onApproval?.(
                 parsed.content || 'Approval required',
-                parsed.metadata,
+                parsed.metadata || {},
               );
               break;
             case 'error':

@@ -1230,9 +1230,17 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
 
 
   // Submit handler
-  const handleSubmit = useCallback(async (manualInput?: string) => {
+  const handleSubmit = useCallback(async (
+    manualInput?: string,
+    approvalResume?: { approvalId: string; suppressUserMessage?: boolean },
+  ) => {
     const rawInput = manualInput || input;
-    if (!rawInput.trim() || isAuthLoading || submitInFlightRef.current) return;
+    const isApprovalResume = Boolean(approvalResume?.approvalId);
+    if (
+      (!rawInput.trim() && !isApprovalResume) ||
+      isAuthLoading ||
+      submitInFlightRef.current
+    ) return;
 
     const trimmedInput = rawInput.trim();
     const lastAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant');
@@ -1243,7 +1251,11 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       (option) => option.trim().toLowerCase() === trimmedInput.toLowerCase()
     );
 
-    if (lastAssistantMessage?.metadata?.addressPreferencePrompt && matchedAddressOption) {
+    if (
+      !isApprovalResume &&
+      lastAssistantMessage?.metadata?.addressPreferencePrompt &&
+      matchedAddressOption
+    ) {
       setIsLoading(true);
       try {
         await savePreferredAddressName(matchedAddressOption);
@@ -1284,7 +1296,9 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       timestamp: new Date(),
       status: 'pending',
     };
-    setMessages((prev) => [...prev, userMessage]);
+    if (!approvalResume?.suppressUserMessage) {
+      setMessages((prev) => [...prev, userMessage]);
+    }
     setInput('');
     submitInFlightRef.current = true;
     setIsLoading(true);
@@ -1352,6 +1366,12 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           reason: '',
           fallbackPath: '',
         };
+        const approvalState: {
+          event: {
+            message: string;
+            metadata: Record<string, unknown>;
+          } | null;
+        } = { event: null };
 
         const streamRequestPayload = {
           message: userMessage.content,
@@ -1364,8 +1384,10 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         };
 
       await apiClient.postStream(
-        '/api/chat/stream',
-        streamRequestPayload,
+        isApprovalResume
+          ? `/api/chat/approvals/${approvalResume?.approvalId}/resume`
+          : '/api/chat/stream',
+        isApprovalResume ? undefined : streamRequestPayload,
         {
           onStatus: (message, metadata) => {
             const statusKey =
@@ -1436,6 +1458,10 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           onCitationBundle: (nextCitations) => {
             collectedCitations = nextCitations;
           },
+          onApproval: (message, metadata) => {
+            approvalState.event = { message, metadata };
+            setProcessingStatus(message || 'Approval required');
+          },
         },
         controller.signal,
       );
@@ -1446,6 +1472,55 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
          }
 
         setIsBackendOffline(false);
+
+        const approvalEvent = approvalState.event;
+        if (approvalEvent) {
+          const approvalMetadata = approvalEvent.metadata;
+          const approvalId = String(approvalMetadata.approval_id || '').trim();
+          const approvalStatus = String(
+            approvalMetadata.approval_status || approvalMetadata.status || 'pending',
+          );
+          const approvalMessage: ChatMessage = {
+            id: `approval-${approvalId || Date.now()}`,
+            role: 'assistant',
+            content:
+              approvalEvent.message ||
+              'Approval required before KAREN can continue.',
+            timestamp: new Date(),
+            status: 'completed',
+            actions:
+              approvalId && approvalStatus === 'pending'
+                ? [
+                    {
+                      type: 'approval.approve',
+                      description: 'Approve',
+                      params: { approval_id: approvalId },
+                    },
+                    {
+                      type: 'approval.reject',
+                      description: 'Reject',
+                      params: { approval_id: approvalId },
+                    },
+                  ]
+                : [],
+            metadata: {
+              ...approvalMetadata,
+              status: 'gate',
+              approval_status: approvalStatus,
+            },
+          };
+
+          setMessages((prev) => {
+            const next = prev.map((message) =>
+              message.id === userMessage.id
+                ? { ...message, status: 'completed' as const }
+                : message,
+            );
+            return next.concat(approvalMessage);
+          });
+          scrollChatToBottom('smooth');
+          return;
+        }
 
         const fullContent = (completionContent || collectedContent).trim();
 
@@ -1473,6 +1548,23 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           actions: (completedMetadata?.actions as SuggestedAction[]) || [],
           metadata: finalMetadata,
         };
+
+        if (approvalResume?.approvalId) {
+          setMessages((prev) =>
+            prev.map((message) =>
+              String(message.metadata?.approval_id || '') === approvalResume.approvalId
+                ? {
+                    ...message,
+                    actions: [],
+                    metadata: {
+                      ...(message.metadata || {}),
+                      approval_status: 'consumed',
+                    },
+                  }
+                : message,
+            ),
+          );
+        }
 
         const streamAssistantMessage: ChatMessage = {
           id: streamResponse.correlationId || 'assistant-' + Date.now(),
@@ -1625,12 +1717,71 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   }, [pendingMessages, isAuthLoading, isLoading, handleSubmit, setInput, popMessage]);
 
   // Handle functions
-  const handleActionClick = useCallback((action: SuggestedAction) => {
+  const handleActionClick = useCallback(async (action: SuggestedAction) => {
+    if (action.type === 'approval.approve' || action.type === 'approval.reject') {
+      const approvalId = String(action.params?.approval_id || '').trim();
+      if (!approvalId) {
+        toast({
+          title: 'Approval unavailable',
+          description: 'The approval receipt is missing.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      const decision =
+        action.type === 'approval.approve' ? 'approved' : 'rejected';
+
+      try {
+        await apiClient.post(`/api/approvals/${approvalId}/decision`, {
+          decision,
+        });
+
+        if (decision === 'approved') {
+          await handleSubmit(undefined, {
+            approvalId,
+            suppressUserMessage: true,
+          });
+          return;
+        }
+
+        setMessages((prev) =>
+          prev.map((message) =>
+            String(message.metadata?.approval_id || '') === approvalId
+              ? {
+                  ...message,
+                  actions: [],
+                  metadata: {
+                    ...(message.metadata || {}),
+                    approval_status: 'rejected',
+                  },
+                }
+              : message,
+          ),
+        );
+        toast({
+          title: 'Action rejected',
+          description: 'Nothing was executed.',
+        });
+        return;
+      } catch (error) {
+        toast({
+          title: 'Approval update failed',
+          description:
+            error instanceof Error
+              ? error.message
+              : 'KAREN could not update that approval.',
+          variant: 'destructive',
+        });
+        return;
+      }
+    }
+
     const messageText = action.description || action.type;
     if (!messageText) return;
     setInput(messageText);
-    handleSubmit(messageText);
-  }, [setInput, handleSubmit]);
+    void handleSubmit(messageText);
+  }, [setInput, handleSubmit, setMessages, toast]);
 
   const handleFormSubmit = useCallback((e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();

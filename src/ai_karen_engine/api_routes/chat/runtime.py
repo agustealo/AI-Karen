@@ -31,6 +31,13 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     serialize_runtime_response,
 )
 from ai_karen_engine.core.services.dependencies import bypass_user_context_func
+from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.services.approvals import (
+    ApprovalNotFoundError,
+    ApprovalScopeError,
+    ApprovalStateError,
+    get_approval_service,
+)
 from ai_karen_engine.utils.chat_helpers import (
     normalize_session_id as normalize_chat_session_id,
 )
@@ -70,6 +77,7 @@ class ChatRequest(BaseModel):
     )
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=1)
+    approval_id: Optional[str] = Field(default=None, max_length=64)
     stream: bool = False
     session_id: Optional[str] = Field(
         default=None,
@@ -109,6 +117,7 @@ class ChatStreamRequest(BaseModel):
     preferred_model: Optional[str] = Field(default=None, max_length=200)
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=1)
+    approval_id: Optional[str] = Field(default=None, max_length=64)
 
     @field_validator("message")
     @classmethod
@@ -209,7 +218,10 @@ def _stream_execution_request(
         temperature=request.temperature,
         max_tokens=request.max_tokens,
         stream=True,
-        metadata={"transport": "sse"},
+        metadata={
+            "transport": "sse",
+            **({"approval_id": request.approval_id} if request.approval_id else {}),
+        },
     )
 
 
@@ -253,7 +265,10 @@ async def create_chat_response(
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             stream=request.stream,
-            metadata={"transport": "http"},
+            metadata={
+                "transport": "http",
+                **({"approval_id": request.approval_id} if request.approval_id else {}),
+            },
         )
 
         structured_logger.log_event(
@@ -419,6 +434,45 @@ async def stream_chat_response(
             details={"duration_ms": (time.time() - start_time) * 1000.0},
         )
         raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+
+@router.post("/chat/approvals/{approval_id}/resume")
+async def resume_approved_chat(
+    approval_id: str,
+    http_request: Request,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Resume an approved request through the canonical streaming runtime."""
+    correlation_id = http_request.headers.get("X-Correlation-Id", str(uuid.uuid4()))
+    response_id = str(uuid.uuid4())
+    principal = UserData.ensure(user)
+
+    try:
+        runtime_request = await get_approval_service().build_resume_request(
+            approval_id,
+            user=principal,
+            request_id=response_id,
+            correlation_id=correlation_id,
+            fresh_permissions=list(user.get("permissions") or []),
+            stream=True,
+        )
+    except ApprovalNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Approval not found") from exc
+    except ApprovalScopeError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ApprovalStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return StreamingResponse(
+        _sse(runtime_request),
+        media_type="text/event-stream",
+        headers={
+            "X-Correlation-Id": correlation_id,
+            "X-Response-Id": response_id,
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.get("/models")
