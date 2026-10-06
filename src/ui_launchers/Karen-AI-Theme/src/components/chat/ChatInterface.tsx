@@ -999,7 +999,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       requestId: asText(metadata.request_id),
       status,
       responseSource,
-      usedFallback: Boolean(metadata.used_fallback),
       degradedMode: Boolean(metadata.degraded_mode),
       degradedReason,
       degradationType: asText(metadata.degradation_type),
@@ -1008,7 +1007,14 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           ? metadata.latency_ms
           : undefined,
       providerAttempts: Array.isArray(metadata.provider_attempts)
-        ? metadata.provider_attempts
+        ? metadata.provider_attempts as Array<{
+            provider: string;
+            model: string;
+            status: string;
+            error_type?: string;
+            error_message?: string;
+            latency_ms?: number;
+          }>
         : [],
       showCircuitWarning: Boolean(metadata.circuit_breaker_open || metadata.dependency_degraded || degradedReason),
       rawMetadata: metadata,
