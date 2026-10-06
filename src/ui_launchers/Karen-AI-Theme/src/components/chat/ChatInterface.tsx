@@ -848,10 +848,15 @@ const reconcileActionableApprovalMessages = (
       .filter(Boolean),
   );
 
-  for (const approval of actionableApprovals) {
-    if (!represented.has(approval.approval_id)) {
-      reconciled.push(actionableApprovalToMessage(approval));
-    }
+  const missingApprovals = actionableApprovals
+    .filter((approval) => !represented.has(approval.approval_id))
+    .sort(
+      (left, right) =>
+        new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
+    );
+
+  for (const approval of missingApprovals) {
+    reconciled.push(actionableApprovalToMessage(approval));
   }
 
   return reconciled;
@@ -1241,22 +1246,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   }, [currentSession?.id]);
 
   useEffect(() => {
-    const conversationId = currentSession?.id;
-    if (isAuthLoading || !isAuthenticated || !conversationId) {
-      setActionableApprovals([]);
-      setActionableApprovalsLoadState('idle');
-      return;
-    }
-
-    void refreshActionableApprovals(conversationId);
-  }, [
-    currentSession?.id,
-    isAuthenticated,
-    isAuthLoading,
-    refreshActionableApprovals,
-  ]);
-
-  useEffect(() => {
     if (!currentSession?.id) return;
 
     let cancelled = false;
@@ -1274,6 +1263,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         setIsLoading(false); // Start as false, only set to true if we have an in-flight request
         setAgentSteps([]);
         setDegradedMode({ active: false });
+        setActionableApprovals([]);
+        setActionableApprovalsLoadState('loading');
         setIsLocalRecoveryUnconfirmed(false);
         submitInFlightRef.current = false;
       }
@@ -1369,6 +1360,9 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         }
       } finally {
         if (!cancelled) {
+          await refreshActionableApprovals(sessionId);
+        }
+        if (!cancelled) {
           setIsLoading(false);
         }
       }
@@ -1379,7 +1373,13 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     return () => {
       cancelled = true;
     };
-  }, [currentSession?.id, setMessages, setInput, toast]);
+  }, [
+    currentSession?.id,
+    setMessages,
+    setInput,
+    toast,
+    refreshActionableApprovals,
+  ]);
 
   /*
    * Local session snapshots protect in-progress UI state across refreshes.
