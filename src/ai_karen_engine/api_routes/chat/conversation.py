@@ -2,16 +2,15 @@
 FastAPI routes for conversation management.
 
 The route layer is intentionally thin: it validates authenticated scope,
-delegates durable state operations to ConversationService, translates service
-failures to API errors, and never fabricates conversation state.
+delegates durable conversation state to ConversationRuntimeGateway, translates
+service failures to API errors, and never fabricates conversation state.
 """
 
 from __future__ import annotations
 
-import inspect
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
@@ -64,19 +63,6 @@ def _has_admin_role(user_ctx: Dict[str, Any]) -> bool:
 def _require_admin_role(user_ctx: Dict[str, Any]) -> None:
     if not _has_admin_role(user_ctx):
         raise HTTPException(status_code=403, detail="Administrator role required")
-
-
-def _get_total_conversations_from_stats(stats: Any, fallback: int) -> int:
-    """Read total conversation count from dict or model-like stats."""
-    if isinstance(stats, dict):
-        value = stats.get("total_conversations", fallback)
-    else:
-        value = getattr(stats, "total_conversations", fallback)
-
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return fallback
 
 
 def _raise_not_found(*, message: str, user_message: str, details: Dict[str, Any]) -> None:
@@ -137,14 +123,6 @@ class AddMessageRequest(BaseModel):
     model_used: Optional[str] = Field(None, description="Model used for generation")
 
 
-class BuildContextRequest(BaseModel):
-    """Request model for building conversation context."""
-
-    current_message: str = Field(..., description="Current message for context")
-    include_memories: bool = Field(True, description="Include memory context")
-    include_insights: bool = Field(True, description="Include AI insights")
-
-
 class UpdateConversationRequest(BaseModel):
     """Request model for mutating conversation metadata owned by this user."""
 
@@ -154,10 +132,6 @@ class UpdateConversationRequest(BaseModel):
 
 class UpdateUIContextRequest(BaseModel):
     ui_context: Dict[str, Any] = Field(..., description="UI context data")
-
-
-class UpdateAIInsightsRequest(BaseModel):
-    ai_insights: Dict[str, Any] = Field(..., description="AI insights data")
 
 
 class AddTagsRequest(BaseModel):
@@ -217,17 +191,6 @@ class AddMessageResponse(BaseModel):
     success: bool
 
 
-class ContextResponse(BaseModel):
-    conversation_summary: Dict[str, Any]
-    recent_messages: List[Dict[str, Any]]
-    relevant_memories: Dict[str, List[Dict[str, Any]]]
-    ai_insights: Dict[str, Any]
-    user_preferences: Dict[str, Any]
-    ai_insights_context: Dict[str, Any]
-    conversation_patterns: Dict[str, Any]
-    context_metadata: Dict[str, Any]
-
-
 class ConversationListResponse(BaseModel):
     conversations: List[ConversationResponse]
     total_count: int
@@ -251,54 +214,6 @@ class AnalyticsResponse(BaseModel):
 
 
 get_current_tenant = get_current_tenant_id
-
-
-def _convert_conversation_to_response(conversation: Any) -> ConversationResponse:
-    conversation_dict = conversation.to_dict()
-    messages = [
-        MessageResponse(
-            id=str(msg_data["id"]),
-            role=str(msg_data["role"]),
-            content=str(msg_data["content"]),
-            timestamp=str(msg_data["timestamp"]),
-            metadata=msg_data.get("metadata", {}),
-            function_call=msg_data.get("function_call"),
-            function_response=msg_data.get("function_response"),
-            ui_source=msg_data.get("ui_source"),
-            ai_confidence=msg_data.get("ai_confidence"),
-            processing_time_ms=msg_data.get("processing_time_ms"),
-            tokens_used=msg_data.get("tokens_used"),
-            model_used=msg_data.get("model_used"),
-            user_feedback=msg_data.get("user_feedback"),
-            edited=bool(msg_data.get("edited", False)),
-            edit_history=msg_data.get("edit_history", []),
-        )
-        for msg_data in conversation_dict["messages"]
-    ]
-
-    return ConversationResponse(
-        id=str(conversation_dict["id"]),
-        user_id=str(conversation_dict["user_id"]),
-        title=conversation_dict.get("title"),
-        messages=messages,
-        metadata=conversation_dict.get("metadata", {}),
-        is_active=bool(conversation_dict.get("is_active", True)),
-        created_at=str(conversation_dict["created_at"]),
-        updated_at=str(conversation_dict["updated_at"]),
-        message_count=int(conversation_dict.get("message_count", 0)),
-        last_message_at=conversation_dict.get("last_message_at"),
-        session_id=conversation_dict.get("session_id"),
-        ui_context=conversation_dict.get("ui_context", {}),
-        ai_insights=conversation_dict.get("ai_insights", {}),
-        user_settings=conversation_dict.get("user_settings", {}),
-        summary=conversation_dict.get("summary"),
-        tags=conversation_dict.get("tags", []),
-        last_ai_response_id=conversation_dict.get("last_ai_response_id"),
-        status=str(conversation_dict.get("status", "active")),
-        priority=str(conversation_dict.get("priority", "normal")),
-        context_memories=conversation_dict.get("context_memories", []),
-        proactive_suggestions=conversation_dict.get("proactive_suggestions", []),
-    )
 
 
 def _canonical_message_to_response(message: Any) -> MessageResponse:
@@ -373,32 +288,6 @@ def _conversation_api_context(
         correlation_id=request_id,
     )
 
-
-
-async def _require_owned_conversation_access(
-    *,
-    conversation_gateway: ConversationRuntimeGateway,
-    tenant_id: str,
-    user_ctx: Dict[str, Any],
-    conversation_id: str,
-) -> None:
-    user_id = _require_user_id(user_ctx)
-    try:
-        await conversation_gateway.require_owned_conversation(
-            _conversation_api_context(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                conversation_id=conversation_id,
-            )
-        )
-    except (PermissionError, RuntimeError) as error:
-        if str(error) in {"conversation_user_mismatch", "conversation_not_found"}:
-            _raise_not_found(
-                message="Conversation not found or access denied",
-                user_message="The requested conversation could not be found.",
-                details={"conversation_id": conversation_id},
-            )
-        raise
 
 
 # Static GET routes must be registered before /{conversation_id}.
