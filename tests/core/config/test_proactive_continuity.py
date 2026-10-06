@@ -26,6 +26,7 @@ def test_proactive_continuity_defaults_are_valid() -> None:
     assert 0.0 <= settings.min_candidate_utility <= 1.0
     assert 0.0 <= settings.resume_primary_min_utility <= 1.0
     assert 0.0 <= settings.resume_primary_margin <= 1.0
+    assert 0.0 <= settings.current_request_match_boost <= 1.0
 
 
 def test_proactive_continuity_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -69,6 +70,17 @@ def test_resume_thresholds_are_config_driven(monkeypatch: pytest.MonkeyPatch) ->
 
     assert settings.resume_primary_min_utility == 0.81
     assert settings.resume_primary_margin == 0.21
+
+
+def test_current_request_match_boost_is_config_driven(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "KARI_PROACTIVE_CONTINUITY_CURRENT_REQUEST_MATCH_BOOST",
+        "0.42",
+    )
+
+    assert get_proactive_continuity_settings().current_request_match_boost == 0.42
 
 
 def test_invalid_resume_margin_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
