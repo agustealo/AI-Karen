@@ -98,7 +98,7 @@ def test_conversation_ingress_never_fabricates_backend_truth() -> None:
     assert "_raise_not_found(" in source
 
 
-def test_session_activity_is_authenticated_and_tenant_scoped_before_mutation() -> None:
+def test_session_activity_is_authenticated_and_canonical_before_mutation() -> None:
     source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
     start = source.index("async def update_session_activity(")
     end = source.index('\n\n@router.get("/{conversation_id}"', start)
@@ -107,10 +107,10 @@ def test_session_activity_is_authenticated_and_tenant_scoped_before_mutation() -
     assert "tenant_id: str = Depends(get_current_tenant_id)" in route_source
     assert "user_ctx: Dict[str, Any] = Depends(bypass_user_context_func)" in route_source
     assert "user_id = _require_user_id(user_ctx)" in route_source
-    assert "get_web_ui_conversation_by_session(" in route_source
-    assert "tenant_id=tenant_id" in route_source
-    assert "user_id=user_id" in route_source
-    assert "update_session_activity(" in route_source
+    assert "get_conversation_runtime_gateway" in route_source
+    assert "touch_session_conversation(" in route_source
+    assert "get_web_ui_conversation_by_session(" not in route_source
+    assert "conversation_service.update_session_activity(" not in route_source
 
 
 def test_static_conversation_get_routes_precede_dynamic_conversation_id_route() -> None:
@@ -247,45 +247,46 @@ def test_chat_runtime_has_no_second_session_to_conversation_identity_formula() -
 
 
 
-def test_sensitive_conversation_surfaces_require_authenticated_user_ownership() -> None:
+def test_active_conversation_routes_use_canonical_gateway_authority() -> None:
     source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
 
     for function_name in (
-        "build_context",
+        "list_conversations",
+        "create_conversation",
+        "get_conversation_by_session",
+        "update_session_activity",
+        "get_conversation",
+        "add_message",
         "update_ui_context",
-        "update_ai_insights",
         "add_tags",
+        "update_conversation",
+        "delete_conversation",
     ):
         start = source.index(f"async def {function_name}(")
         end = source.find("\n\n@router.", start)
         if end == -1:
             end = len(source)
         route = source[start:end]
-        assert "Depends(bypass_user_context_func)" in route
         assert "get_conversation_runtime_gateway" in route
-        assert "_require_owned_conversation_access(" in route
-        assert "tenant_id=tenant_id" in route
-        assert "user_ctx=user_ctx" in route
-        assert "conversation_id=conversation_id" in route
 
-    helper_start = source.index("async def _require_owned_conversation_access(")
-    helper_end = source.index("# Static GET routes", helper_start)
-    helper = source[helper_start:helper_end]
-    assert "conversation_gateway.require_owned_conversation(" in helper
-    assert '"conversation_user_mismatch"' in helper
-    assert '"conversation_not_found"' in helper
+    assert "create_web_ui_conversation(" not in source
+    assert "get_web_ui_conversation_by_session(" not in source
+    assert "update_conversation_ui_context(" not in source
+    assert "add_conversation_tags(" not in source
+    assert '@router.post("/{conversation_id}/context"' not in source
+    assert '@router.put("/{conversation_id}/ai-insights"' not in source
+    assert '@router.post("/cleanup-inactive")' not in source
 
 
-def test_tenant_wide_cleanup_requires_authenticated_admin_role() -> None:
+def test_canonical_conversation_list_reports_repository_total() -> None:
     source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
-    start = source.index("async def cleanup_inactive_conversations(")
-    end = source.index("\n\n@router.post(\"/update-session-activity", start)
+    start = source.index("async def list_conversations(")
+    end = source.index('\n\n@router.post("/create"', start)
     route = source[start:end]
 
-    assert "Depends(bypass_user_context_func)" in route
-    assert "_require_user_id(user_ctx)" in route
-    assert "_require_admin_role(user_ctx)" in route
-    assert "cleanup_inactive_conversations(" in route
+    assert "list_owned_snapshots(" in route
+    assert "count_owned_conversations(" in route
+    assert "has_more=offset + len(snapshots) < total_count" in route
 
 
 def test_conversation_analytics_cannot_cross_user_without_admin_role() -> None:
