@@ -197,7 +197,7 @@ class FeatureSnapshot:
             runtime_capabilities=data.get("runtime_capabilities", {}),
             provider_health_snapshot=data.get("provider_health_snapshot", {}),
             resource_snapshot=data.get("resource_snapshot", {}),
-            metadata={},
+            metadata=data.get("metadata", {}),
         )
 
 
