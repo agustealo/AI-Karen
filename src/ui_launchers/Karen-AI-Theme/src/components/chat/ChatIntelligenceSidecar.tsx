@@ -1,5 +1,6 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { Activity, BrainCircuit, Database, GitBranch, ServerCog } from 'lucide-react';
 
 import type { AgentStepEvent } from '@/lib/types';
@@ -58,7 +59,7 @@ const Row = ({
   mono = false,
 }: {
   label: string;
-  value: React.ReactNode;
+  value: ReactNode;
   mono?: boolean;
 }) => (
   <div className="flex items-start justify-between gap-3 border-b border-border/50 py-2 last:border-b-0">
@@ -74,7 +75,7 @@ const Row = ({
   </div>
 );
 
-const EmptyState = ({ children }: { children: React.ReactNode }) => (
+const EmptyState = ({ children }: { children: ReactNode }) => (
   <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>
 );
 
@@ -105,6 +106,7 @@ export default function ChatIntelligenceSidecar({
   const memoryFormationCount = numberValue(
     first(metadata, 'memory_formation_count', 'memory_persisted_count', 'memory_write_count'),
   );
+  const memoryPersistenceStatus = text(first(metadata, 'memory_persistence_status'));
 
   const trajectoryId = text(first(metadata, 'trajectory_id'));
   const policyDecisionId = text(first(metadata, 'policy_decision_id'));
@@ -135,7 +137,8 @@ export default function ChatIntelligenceSidecar({
   const memoryAvailable =
     contextUsed !== null ||
     memoryRecallCount !== null ||
-    memoryFormationCount !== null;
+    memoryFormationCount !== null ||
+    Boolean(memoryPersistenceStatus);
   const learningAvailable = Boolean(
     trajectoryId ||
       policyDecisionId ||
@@ -250,6 +253,10 @@ export default function ChatIntelligenceSidecar({
                 <Row
                   label="Memories formed"
                   value={memoryFormationCount ?? 'not reported'}
+                />
+                <Row
+                  label="Memory persistence"
+                  value={memoryPersistenceStatus || 'not reported'}
                 />
               </>
             ) : (
