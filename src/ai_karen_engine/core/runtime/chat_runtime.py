@@ -1882,10 +1882,10 @@ class ChatRuntime:
         decision: ExecutionDecision,
     ) -> Optional[ApprovalRequiredResponse]:
         """Enforce CORTEX/RuntimePolicy human gates before any execution."""
-        if not decision.requires_human_gate:
+        approval_id = str(request.metadata.get("approval_id") or "").strip()
+        if not decision.requires_human_gate and not approval_id:
             return None
 
-        approval_id = str(request.metadata.get("approval_id") or "").strip()
         try:
             pending = await get_approval_service().authorize_or_request(
                 request,
