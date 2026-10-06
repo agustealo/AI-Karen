@@ -166,6 +166,16 @@ def test_chat_input_does_not_surface_fake_generated_starter() -> None:
         assert stale not in chat
         assert stale not in chat_input
 
+
+def test_retired_browser_greetings_are_filtered_from_local_recovery() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    restore = chat.split("const restoreSessionState = async () => {", 1)[1].split(
+        "const hasRestorableState", 1
+    )[0]
+    assert "startsWith('karen-initial-')" in restore
+    assert ".filter((message)" in restore
+
 def test_deleted_conversations_cannot_rehydrate_from_local_recovery() -> None:
     chat = _read("components/chat/ChatInterface.tsx")
 
