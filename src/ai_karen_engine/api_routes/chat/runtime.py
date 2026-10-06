@@ -70,6 +70,7 @@ class ChatRequest(BaseModel):
     )
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=1)
+    approval_id: Optional[str] = Field(default=None, max_length=64)
     stream: bool = False
     session_id: Optional[str] = Field(
         default=None,
@@ -109,6 +110,7 @@ class ChatStreamRequest(BaseModel):
     preferred_model: Optional[str] = Field(default=None, max_length=200)
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=1)
+    approval_id: Optional[str] = Field(default=None, max_length=64)
 
     @field_validator("message")
     @classmethod
@@ -209,7 +211,10 @@ def _stream_execution_request(
         temperature=request.temperature,
         max_tokens=request.max_tokens,
         stream=True,
-        metadata={"transport": "sse"},
+        metadata={
+            "transport": "sse",
+            **({"approval_id": request.approval_id} if request.approval_id else {}),
+        },
     )
 
 
@@ -253,7 +258,10 @@ async def create_chat_response(
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             stream=request.stream,
-            metadata={"transport": "http"},
+            metadata={
+                "transport": "http",
+                **({"approval_id": request.approval_id} if request.approval_id else {}),
+            },
         )
 
         structured_logger.log_event(
