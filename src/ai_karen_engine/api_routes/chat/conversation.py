@@ -850,6 +850,8 @@ async def build_context(
             include_insights=request.include_insights,
         )
         return ContextResponse(**context)
+    except HTTPException:
+        raise
     except Exception as error:
         logger.exception("Failed to build context", error=str(error))
         _raise_service_error(
