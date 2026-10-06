@@ -245,3 +245,56 @@ def test_chat_runtime_has_no_second_session_to_conversation_identity_formula() -
     assert "normalize_chat_session_id" not in runtime
     assert 'raise ValueError("conversation_identity_incomplete:conversation_id")' in runtime
 
+
+
+def test_sensitive_conversation_surfaces_require_authenticated_user_ownership() -> None:
+    source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
+
+    for function_name in (
+        "build_context",
+        "update_ui_context",
+        "update_ai_insights",
+        "add_tags",
+    ):
+        start = source.index(f"async def {function_name}(")
+        end = source.find("\n\n@router.", start)
+        if end == -1:
+            end = len(source)
+        route = source[start:end]
+        assert "Depends(bypass_user_context_func)" in route
+        assert "get_conversation_runtime_gateway" in route
+        assert "_require_owned_conversation_access(" in route
+        assert "tenant_id=tenant_id" in route
+        assert "user_ctx=user_ctx" in route
+        assert "conversation_id=conversation_id" in route
+
+    helper_start = source.index("async def _require_owned_conversation_access(")
+    helper_end = source.index("# Static GET routes", helper_start)
+    helper = source[helper_start:helper_end]
+    assert "conversation_gateway.require_owned_conversation(" in helper
+    assert '"conversation_user_mismatch"' in helper
+    assert '"conversation_not_found"' in helper
+
+
+def test_tenant_wide_cleanup_requires_authenticated_admin_role() -> None:
+    source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
+    start = source.index("async def cleanup_inactive_conversations(")
+    end = source.index("\n\n@router.post(\"/update-session-activity", start)
+    route = source[start:end]
+
+    assert "Depends(bypass_user_context_func)" in route
+    assert "_require_user_id(user_ctx)" in route
+    assert "_require_admin_role(user_ctx)" in route
+    assert "cleanup_inactive_conversations(" in route
+
+
+def test_conversation_analytics_cannot_cross_user_without_admin_role() -> None:
+    source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
+    start = source.index("async def get_analytics(")
+    end = source.index("\n\n@router.get(\"/stats\")", start)
+    route = source[start:end]
+
+    assert "authenticated_user_id = _require_user_id(user_ctx)" in route
+    assert "if user_id and user_id != authenticated_user_id:" in route
+    assert "_require_admin_role(user_ctx)" in route
+    assert "target_user_id = user_id or authenticated_user_id" in route
