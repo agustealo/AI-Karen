@@ -79,3 +79,37 @@ def test_auth_and_setup_share_the_same_application_shell() -> None:
     for source in (login, setup, auth):
         assert "karen-app-shell" in source
         assert "karen-workspace-grid" in source
+
+
+def test_primary_product_pages_share_page_heading_rhythm() -> None:
+    pages = (
+        "components/account/AccountPage.tsx",
+        "components/growth/GrowthPage.tsx",
+        "components/comms/CommsCenterPage.tsx",
+        "components/plugins/PluginOverviewPage.tsx",
+        "components/automation/AgentsOverviewPage.tsx",
+        "components/automation/AgentsPage.tsx",
+        "components/automation/TasksPage.tsx",
+        "components/automation/JobsPage.tsx",
+        "components/automation/CronJobsPage.tsx",
+        "components/settings/SettingsDialog.tsx",
+    )
+
+    for page in pages:
+        source = _read(page)
+        assert "karen-page-title" in source, page
+
+
+def test_shared_status_and_selection_primitives_use_theme_tokens() -> None:
+    alert = _read("components/ui/alert.tsx")
+    progress = _read("components/ui/progress.tsx")
+    switch = _read("components/ui/switch.tsx")
+    checkbox = _read("components/ui/checkbox.tsx")
+    sidebar = _read("components/ui/sidebar.tsx")
+
+    assert "yellow-" not in alert
+    assert "bg-muted/70" in progress
+    assert "data-[state=checked]:bg-primary" in switch
+    assert "data-[state=checked]:bg-primary" in checkbox
+    assert "transition-[margin,opa]" not in sidebar
+    assert "KAREN Workspace" in sidebar
