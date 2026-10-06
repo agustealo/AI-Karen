@@ -89,6 +89,7 @@ class FakeApprovalRepository:
         *,
         tenant_id: str,
         user_id: str,
+        conversation_id: Optional[str] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         return [
@@ -97,6 +98,10 @@ class FakeApprovalRepository:
             if record["tenant_id"] == tenant_id
             and record["user_id"] == user_id
             and record["status"] == "pending"
+            and (
+                conversation_id is None
+                or record["conversation_id"] == conversation_id
+            )
         ][:limit]
 
     async def decide(
@@ -338,6 +343,27 @@ async def test_resume_rebinds_fresh_roles_and_permissions_without_stale_claims()
     assert rebuilt.context.correlation_id == "resume-correlation"
     assert rebuilt.metadata["approval_id"] == pending["approval_id"]
     assert rebuilt.metadata["transport"] == "approval_resume"
+
+
+@pytest.mark.asyncio
+async def test_pending_approvals_can_be_scoped_to_one_conversation() -> None:
+    repo = FakeApprovalRepository()
+    service = ApprovalService(repository=repo)
+
+    first = await service.authorize_or_request(_request(), _decision())
+    assert first is not None
+
+    other = _request()
+    other.context.conversation_id = "33333333-3333-3333-3333-333333333333"
+    second = await service.authorize_or_request(other, _decision())
+    assert second is not None
+
+    scoped = await service.list_pending(
+        user=_user(),
+        conversation_id="22222222-2222-2222-2222-222222222222",
+    )
+
+    assert [record["approval_id"] for record in scoped] == [first["approval_id"]]
 
 
 @pytest.mark.asyncio
