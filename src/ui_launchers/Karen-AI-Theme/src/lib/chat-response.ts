@@ -41,10 +41,10 @@ type BackendChatEnvelope = {
   structured_content?: Record<string, unknown>;
   structuredContent?: Record<string, unknown>;
   actions?: SuggestedAction[];
-  citations?: Citation[];
-  sources?: Citation[];
-  attachments?: ChatAttachment[];
-  artifacts?: ChatArtifact[];
+  citations?: unknown[];
+  sources?: unknown[];
+  attachments?: unknown[];
+  artifacts?: unknown[];
   metadata?: Record<string, unknown>;
   correlation_id?: string;
   request_id?: string;
@@ -992,10 +992,10 @@ export function normalizeBackendChatResponse(
       raw.structured_content || raw.structuredContent || {},
     ),
     actions: Array.isArray(raw.actions) ? raw.actions : [],
-    citations: Array.isArray(raw.citations) ? raw.citations : [],
-    sources: Array.isArray(raw.sources) ? raw.sources : [],
-    attachments: Array.isArray(raw.attachments) ? raw.attachments : [],
-    artifacts: Array.isArray(raw.artifacts) ? raw.artifacts : [],
+    citations: normalizeCitationCollection(raw.citations),
+    sources: normalizeCitationCollection(raw.sources),
+    attachments: normalizeAttachmentCollection(raw.attachments),
+    artifacts: normalizeArtifactCollection(raw.artifacts),
     metadata,
     correlationId,
   };
