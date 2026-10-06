@@ -52,9 +52,11 @@ class RuntimeEvidenceResolver:
         *,
         memory_manager: Any | None = None,
         conversation_gateway: ConversationRuntimeGateway | None = None,
+        proactive_continuity_service: Any | None = None,
     ) -> None:
         self._memory_manager = memory_manager
         self._conversation_gateway = conversation_gateway
+        self._proactive_continuity_service = proactive_continuity_service
         self._emitter = get_observability_emitter()
 
     async def resolve(
@@ -201,7 +203,10 @@ class RuntimeEvidenceResolver:
     ) -> None:
         ctx = request.context
         try:
-            service = self._get_proactive_continuity_service()
+            service = (
+                self._proactive_continuity_service
+                or self._get_proactive_continuity_service()
+            )
             candidates = await service.rank(
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
