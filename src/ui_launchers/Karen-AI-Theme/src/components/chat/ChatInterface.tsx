@@ -304,9 +304,9 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
       if (err instanceof ApiError && err.status === 429) {
         console.warn('New conversation creation was rate-limited; no local-only session was created.');
       } else {
-        console.error('Failed to create durable conversation:', err);
+        console.warn('Failed to create durable conversation:', err);
       }
-      setError('Unable to create a new chat. Your current conversation was kept unchanged.');
+      setError('Unable to create a new chat. No local-only conversation was created.');
       throw err;
     } finally {
       setIsLoadingSessions(false);
@@ -408,13 +408,21 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
       if (err instanceof ApiError && err.status === 404) {
         console.warn('Session was not found on server, starting fresh.');
         setError('Saved session was not found. Starting a fresh chat.');
-        await createNewSession();
+        try {
+          await createNewSession();
+        } catch {
+          // createNewSession already exposes truthful failure state.
+        }
         return;
       }
 
       console.error('Failed to load session:', err);
       setError('Failed to load session. Starting fresh chat.');
-      await createNewSession();
+      try {
+        await createNewSession();
+      } catch {
+        // createNewSession already exposes truthful failure state.
+      }
     } finally {
       setIsLoadingSessions(false);
     }
@@ -539,19 +547,28 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
       // Update sessions list optimistically, then re-sync from server to avoid stale history.
       setSessions(prev => prev.filter(s => s.id !== sessionId));
 
-      // If deleted session was current, create new one
+      let replacementFailed = false;
       if (currentSession?.id === sessionId) {
-        await createNewSession();
+        setCurrentSession(null);
+        persistActiveSessionId(null);
+        try {
+          await createNewSession();
+        } catch {
+          replacementFailed = true;
+        }
       }
 
       await refreshSessions();
+      if (replacementFailed) {
+        setError('Chat deleted, but a replacement chat could not be created yet.');
+      }
       return true;
     } catch (err) {
       console.error('Failed to delete session:', err);
       setError('Failed to delete session. Please try again.');
       return false;
     }
-  }, [currentSession?.id, createNewSession, refreshSessions]);
+  }, [currentSession?.id, createNewSession, persistActiveSessionId, refreshSessions]);
 
   // Delete multiple sessions
   const deleteSessions = useCallback(async (sessionIds: string[]) => {
@@ -659,6 +676,8 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
           await createNewSession();
         }
         await refreshSessions();
+      } catch (err) {
+        console.warn('Session initialization could not establish a durable conversation:', err);
       } finally {
         setIsLoadingSessions(false);
       }
