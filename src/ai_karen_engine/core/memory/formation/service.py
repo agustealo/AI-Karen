@@ -292,6 +292,210 @@ class MemoryFormationService:
             "receipts": receipts,
         }
 
+    async def record_structured_observation(
+        self,
+        *,
+        signal: MemorySignal,
+        tenant_id: str,
+        user_id: str,
+        source_type: str,
+        source_ref: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        actor_id: str | None = None,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        policy_context: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Persist a trusted Runtime continuity observation through NeuroVault.
+
+        This is intentionally narrow. Runtime may record only open-loop lifecycle
+        facts that it directly observed from an authorized execution. User facts,
+        preferences, goals, and other semantic memories must continue through the
+        canonical evaluator so Runtime cannot manufacture user identity.
+        """
+
+        allowed_types = {"open_loop", "open_loop_transition"}
+        signal_type = str(signal.signal_type or "").strip().casefold()
+        if signal_type not in allowed_types:
+            raise ValueError(
+                "structured runtime memory only supports open_loop lifecycle signals"
+            )
+
+        resolved_tenant = str(tenant_id or "").strip()
+        resolved_user = str(user_id or "").strip()
+        if not resolved_tenant or resolved_tenant == "default" or not resolved_user:
+            return {
+                "status": "rejected",
+                "reason": "missing_tenant_or_user_scope",
+                "persisted": 0,
+            }
+
+        policy = dict(policy_context or {})
+        allowed_caps = {
+            str(value).strip()
+            for value in policy.get("allowed_capabilities", ())
+            if str(value).strip()
+        }
+        if not (
+            policy.get("memory_write_authorized") is True
+            or "memory.write" in allowed_caps
+            or "*" in allowed_caps
+        ):
+            return {
+                "status": "rejected",
+                "reason": "memory_write_not_authorized",
+                "persisted": 0,
+            }
+
+        resolved_request_id = str(request_id or uuid.uuid4())
+        resolved_correlation_id = str(correlation_id or uuid.uuid4())
+        merged_metadata = self._json_safe(dict(metadata or {}))
+        merged_metadata.update(
+            {
+                "memory_actor": "runtime",
+                "observation_origin": "runtime_execution",
+                "explicit_user_statement": False,
+            }
+        )
+
+        signal_metadata = self._json_safe(dict(signal.metadata or {}))
+        signal_metadata.setdefault("sensitivity_class", "internal")
+        signal_metadata.setdefault("retention_scope", "user_profile")
+        signal_metadata.setdefault("semantic_class", signal_type)
+        signal_metadata.setdefault("explicit_user_statement", False)
+        structured_signal = MemorySignal(
+            text=str(signal.text or "").strip(),
+            signal_type=signal_type,
+            confidence=max(0.0, min(1.0, float(signal.confidence or 0.0))),
+            entities=list(signal.entities or []),
+            keywords=list(signal.keywords or []),
+            scope=signal.scope or "user",
+            metadata=signal_metadata,
+        )
+        if not structured_signal.text:
+            return {
+                "status": "noop",
+                "reason": "empty_structured_observation",
+                "persisted": 0,
+            }
+
+        context = VaultContext(
+            tenant_id=resolved_tenant,
+            user_id=resolved_user,
+            request_id=resolved_request_id,
+            correlation_id=resolved_correlation_id,
+            actor_id=actor_id,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            policy_context=policy,
+        )
+        entry = self._entry_from_signal(
+            signal=structured_signal,
+            score=structured_signal.confidence,
+            tenant_id=resolved_tenant,
+            user_id=resolved_user,
+            source_type=source_type,
+            source_ref=source_ref,
+            metadata=merged_metadata,
+            session_id=session_id,
+            conversation_id=conversation_id,
+        )
+
+        vault = self._vault_factory(resolved_tenant)
+        try:
+            receipt = await vault.persist(entry, context=context)
+        except PermissionError as exc:
+            logger.warning(
+                "memory.formation.structured_write_rejected",
+                extra={
+                    "tenant_id": resolved_tenant,
+                    "user_id": resolved_user,
+                    "request_id": resolved_request_id,
+                    "correlation_id": resolved_correlation_id,
+                    "signal_type": signal_type,
+                    "reason": type(exc).__name__,
+                },
+            )
+            return {
+                "status": "rejected",
+                "reason": "memory_write_not_authorized",
+                "persisted": 0,
+            }
+        except Exception as exc:
+            logger.exception(
+                "memory.formation.structured_persist_failed",
+                extra={
+                    "tenant_id": resolved_tenant,
+                    "user_id": resolved_user,
+                    "request_id": resolved_request_id,
+                    "correlation_id": resolved_correlation_id,
+                    "signal_type": signal_type,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return {
+                "status": "failed",
+                "reason": "structured_persistence_failed",
+                "persisted": 0,
+                "error_type": type(exc).__name__,
+            }
+
+        if not receipt.persisted:
+            return {
+                "status": "failed",
+                "reason": "structured_not_persisted",
+                "persisted": 0,
+            }
+
+        event_id = str(receipt.metadata.get("event_id") or "")
+        projection_results: dict[str, bool] = {}
+        if event_id:
+            try:
+                projection_results = await self._derived_projector.project(
+                    tenant_id=resolved_tenant,
+                    user_id=resolved_user,
+                    event_id=event_id,
+                    memory_id=receipt.memory_id,
+                    signal=structured_signal,
+                    confidence=structured_signal.confidence,
+                    source_type=source_type,
+                    source_ref=source_ref,
+                    metadata=merged_metadata,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "memory.formation.structured_projection_failed",
+                    extra={
+                        "tenant_id": resolved_tenant,
+                        "user_id": resolved_user,
+                        "event_id": event_id,
+                        "memory_id": receipt.memory_id,
+                        "signal_type": signal_type,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                return {
+                    "status": "degraded",
+                    "persisted": 1,
+                    "projection_failures": 1,
+                    "event_id": event_id,
+                    "memory_id": receipt.memory_id,
+                    "error_type": type(exc).__name__,
+                }
+
+        return {
+            "status": "success",
+            "persisted": 1,
+            "projection_failures": sum(
+                1 for ok in projection_results.values() if not ok
+            ),
+            "event_id": event_id or None,
+            "memory_id": receipt.memory_id,
+            "projection_results": projection_results,
+        }
+
     async def _apply_episode_segmentation(
         self,
         *,
