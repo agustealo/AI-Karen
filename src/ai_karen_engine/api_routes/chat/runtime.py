@@ -453,6 +453,7 @@ async def resume_approved_chat(
             user=principal,
             request_id=response_id,
             correlation_id=correlation_id,
+            fresh_permissions=list(user.get("permissions") or []),
             stream=True,
         )
     except ApprovalNotFoundError as exc:
