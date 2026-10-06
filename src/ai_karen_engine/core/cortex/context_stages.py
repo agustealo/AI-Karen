@@ -9,6 +9,7 @@ authorize access, execute providers/tools/workflows, or persist state.
 from dataclasses import replace
 
 from ai_karen_engine.config.conversation import get_conversation_context_settings
+from ai_karen_engine.config.proactive import get_proactive_continuity_settings
 from ai_karen_engine.core.context.contracts import (
     CognitiveContext,
     ContextRequirement,
@@ -39,18 +40,23 @@ def build_context_requirements(
                 reason_codes=["cortex_memory_recall_requested"],
             )
         )
-        requirements.append(
-            ContextRequirement(
-                source=EvidenceSource.USER_MODEL,
+        proactive_settings = get_proactive_continuity_settings()
+        if proactive_settings.enabled:
+            requirements.append(
+                ContextRequirement(
+                    source=EvidenceSource.USER_MODEL,
                 capability="memory.read",
                 required=False,
                 scopes=["user"],
                 classes=["next_need"],
-                max_items=min(5, max(1, int(preliminary.memory_top_k or 5))),
-                reason_codes=["cortex_continuity_context_requested"],
-                metadata={"mode": "suggest_only"},
+                    max_items=min(
+                        proactive_settings.max_candidates,
+                        max(1, int(preliminary.memory_top_k or 1)),
+                    ),
+                    reason_codes=["cortex_continuity_context_requested"],
+                    metadata={"mode": "suggest_only"},
+                )
             )
-        )
 
     if ctx.conversation_id:
         history_limit = get_conversation_context_settings().history_limit
