@@ -25,6 +25,7 @@ class FeedbackRequest(BaseModel):
     trajectory_id: str = Field(..., min_length=1)
     feedback_type: Literal["thumbs_up", "thumbs_down"]
     message_id: str | None = None
+    continuity_candidate_id: str | None = Field(default=None, min_length=1)
 
 
 @router.get("/")
@@ -59,11 +60,13 @@ def record_feedback(
             trajectory_id=request.trajectory_id,
             feedback_type=request.feedback_type,
             message_id=request.message_id,
+            continuity_candidate_id=request.continuity_candidate_id,
         )
         return {
             "saved": True,
             "trajectory_id": request.trajectory_id,
             "feedback_type": request.feedback_type,
+            "continuity_candidate_id": request.continuity_candidate_id,
             "outcome_id": payload.get("outcome_id"),
         }
     except RewardProgressError as exc:
