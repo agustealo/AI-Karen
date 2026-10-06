@@ -946,11 +946,11 @@ export default function PluginOverviewPage() {
         <PlugZap className="h-8 w-8 text-primary" aria-hidden={true} />
 
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">
+          <h2 className="karen-page-title">
             Plugins & Tools Overview
           </h2>
 
-          <p className="text-sm text-muted-foreground">
+          <p className="karen-page-description mt-1">
             Inspect KAREN&apos;s governed plugin capabilities and live integration state.
           </p>
         </div>
