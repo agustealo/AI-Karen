@@ -478,7 +478,7 @@ class LangGraphOrchestrator:
                 {
                     "approved": "memory_write",
                     "rejected": END,
-                    "pending": "approval_gate",  # Wait for human input
+                    "pending": END,  # Runtime owns durable human approval/resume.
                 },
             )
         else:
