@@ -27,6 +27,12 @@ class ProactiveContinuitySettings:
     due_one_day_boost: float = 0.16
     due_three_days_boost: float = 0.10
     due_seven_days_boost: float = 0.05
+    default_interruption_cost: float = 0.25
+    behavior_interruption_cost: float = 0.35
+    due_soon_hours: int = 6
+    due_day_hours: int = 24
+    due_three_days_hours: int = 72
+    due_week_hours: int = 168
 
     def validate(self) -> None:
         if self.max_candidates < 1 or self.max_candidates > 20:
@@ -49,9 +55,21 @@ class ProactiveContinuitySettings:
             ("due_one_day_boost", self.due_one_day_boost),
             ("due_three_days_boost", self.due_three_days_boost),
             ("due_seven_days_boost", self.due_seven_days_boost),
+            ("default_interruption_cost", self.default_interruption_cost),
+            ("behavior_interruption_cost", self.behavior_interruption_cost),
         ):
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"proactive {name} must be between 0 and 1")
+        windows = (
+            self.due_soon_hours,
+            self.due_day_hours,
+            self.due_three_days_hours,
+            self.due_week_hours,
+        )
+        if any(value < 1 for value in windows):
+            raise ValueError("proactive time windows must be positive")
+        if list(windows) != sorted(windows):
+            raise ValueError("proactive time windows must be monotonic")
 
 
 _settings: Optional[ProactiveContinuitySettings] = None
@@ -160,6 +178,30 @@ def get_proactive_continuity_settings() -> ProactiveContinuitySettings:
         due_seven_days_boost=_env_float(
             "KARI_PROACTIVE_CONTINUITY_DUE_SEVEN_DAYS_BOOST",
             0.05,
+        ),
+        default_interruption_cost=_env_float(
+            "KARI_PROACTIVE_CONTINUITY_DEFAULT_INTERRUPTION_COST",
+            0.25,
+        ),
+        behavior_interruption_cost=_env_float(
+            "KARI_PROACTIVE_CONTINUITY_BEHAVIOR_INTERRUPTION_COST",
+            0.35,
+        ),
+        due_soon_hours=_env_int(
+            "KARI_PROACTIVE_CONTINUITY_DUE_SOON_HOURS",
+            6,
+        ),
+        due_day_hours=_env_int(
+            "KARI_PROACTIVE_CONTINUITY_DUE_DAY_HOURS",
+            24,
+        ),
+        due_three_days_hours=_env_int(
+            "KARI_PROACTIVE_CONTINUITY_DUE_THREE_DAYS_HOURS",
+            72,
+        ),
+        due_week_hours=_env_int(
+            "KARI_PROACTIVE_CONTINUITY_DUE_WEEK_HOURS",
+            168,
         ),
     )
     try:
