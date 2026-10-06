@@ -385,7 +385,7 @@ export default function DashboardPage() {
     <AuthWrapper>
       <SidebarProvider>
         <div className="karen-app-shell flex h-screen w-full flex-col overflow-hidden bg-background text-foreground">
-          <header className="z-30 flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-background/78 px-3 backdrop-blur-xl md:px-4">
+          <header className="z-30 flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-background/80 px-3 backdrop-blur-xl md:px-4">
             <div className="flex items-center space-x-3">
               <AppSidebarTrigger className="mr-1 md:mr-2" />
               <Image
@@ -430,7 +430,7 @@ export default function DashboardPage() {
             <Sidebar
               variant="sidebar"
               collapsible="icon"
-              className="z-20 border-r border-sidebar-border/80 bg-sidebar/88 backdrop-blur-xl"
+              className="z-20 border-r border-sidebar-border/80 bg-sidebar/90 backdrop-blur-xl"
             >
               <AppSidebarHeader className="px-3 py-3">
                 <div className="px-1">
