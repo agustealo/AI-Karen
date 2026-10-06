@@ -8,6 +8,7 @@ from datetime import datetime
 
 from sqlalchemy import text
 
+from ai_karen_engine.config.proactive import get_proactive_continuity_settings
 from ai_karen_engine.core.intelligence.proactive.contracts import (
     ContinuityEvidence,
     ProactiveContinuityRepository,
@@ -40,6 +41,7 @@ class PostgresProactiveContinuityRepository(ProactiveContinuityRepository):
         tenant, user = self._scope(tenant_id, user_id)
         bounded = max(1, min(int(limit), 500))
         now = datetime.utcnow()
+        settings = get_proactive_continuity_settings()
 
         async with async_transaction_scope(tenant_id=tenant) as session:
             goals = (
@@ -73,6 +75,8 @@ class PostgresProactiveContinuityRepository(ProactiveContinuityRepository):
                         "user_id": user,
                         "now": now,
                         "limit": bounded,
+                        "behavior_min_observations": settings.behavior_min_observations,
+                        "behavior_min_confidence": settings.behavior_min_confidence,
                     },
                 )
             ).mappings().all()
@@ -159,8 +163,8 @@ class PostgresProactiveContinuityRepository(ProactiveContinuityRepository):
                         FROM public.personalization_behavior_pattern
                         WHERE tenant_id = CAST(:tenant_id AS uuid)
                           AND user_id = CAST(:user_id AS uuid)
-                          AND observation_count >= 3
-                          AND confidence >= 0.6
+                          AND observation_count >= :behavior_min_observations
+                          AND confidence >= :behavior_min_confidence
                         ORDER BY confidence DESC, last_seen DESC
                         LIMIT :limit
                         """
