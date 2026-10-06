@@ -40,6 +40,7 @@ from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.core.runtime.workflow_runtime import get_workflow_runtime
 from ai_karen_engine.core.runtime.runtime_fallback import build_runtime_fallback
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
+    ApprovalRequiredResponse,
     DegradedResponse,
     EmergencyFallbackResponse,
     MaintenanceResponse,
@@ -60,10 +61,19 @@ from ai_karen_engine.platform.observability.contracts import EventType as Runtim
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk
 from ai_karen_engine.utils.chat_helpers import normalize_session_id as normalize_chat_session_id
 from ai_karen_engine.core.expression.contracts import ExpressionTask
+from ai_karen_engine.services.approvals import (
+    ApprovalError,
+    get_approval_service,
+)
 
 logger = get_logger(__name__)
 
-GATE_RESPONSES = (MaintenanceResponse, EmergencyFallbackResponse, DegradedResponse)
+GATE_RESPONSES = (
+    MaintenanceResponse,
+    EmergencyFallbackResponse,
+    DegradedResponse,
+    ApprovalRequiredResponse,
+)
 
 _CANONICAL_META_KEYS = (
     "requested_provider",
@@ -152,6 +162,32 @@ class ChatRuntime:
         )
 
         plan = self._build_authorized_plan(request, decision)
+        approval_gate = await self._resolve_human_approval_gate(request, decision)
+        if approval_gate is not None:
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="approval_required",
+                intent=decision.intent,
+                policy_decision_id=decision.policy_decision_id,
+                metadata={
+                    "approval_id": approval_gate.approval_id,
+                    "approval_status": approval_gate.status,
+                },
+            )
+            return ChatExecutionResult(
+                answer="",
+                status=ChatExecutionStatus.GATE,
+                gate_response=approval_gate,
+                metadata=ChatRuntimeMetadata(
+                    correlation_id=ctx.correlation_id,
+                    latency_ms=(time.time() - start) * 1000.0,
+                    mode=approval_gate.mode,
+                    extra={
+                        "approval_id": approval_gate.approval_id,
+                        "approval_status": approval_gate.status,
+                    },
+                ),
+            )
         meter = ExecutionBudgetMeter(plan.budget)
         meter.start()
         trajectory = self._trajectory_recorder.start()
@@ -376,6 +412,46 @@ class ChatRuntime:
         decision = await self._decide(request)
         await self._record_user_behavior_observation(request, decision)
         plan = self._build_authorized_plan(request, decision)
+        approval_gate = await self._resolve_human_approval_gate(request, decision)
+        if approval_gate is not None:
+            approval_metadata = {
+                "approval_id": approval_gate.approval_id,
+                "approval_status": approval_gate.status,
+                "intent": approval_gate.intent,
+                "risk_level": approval_gate.risk_level,
+                "reason_codes": list(approval_gate.reason_codes),
+                "expires_at": approval_gate.expires_at,
+                "mode": approval_gate.mode,
+            }
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type=ChatStreamEventType.APPROVAL,
+                    content=approval_gate.message,
+                    correlation_id=ctx.correlation_id,
+                    metadata=approval_metadata,
+                ),
+                sequence,
+                request_id,
+                response_id,
+                conversation_id,
+            )
+            sequence += 1
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type=ChatStreamEventType.COMPLETE,
+                    content="",
+                    correlation_id=ctx.correlation_id,
+                    metadata={
+                        **approval_metadata,
+                        "status": "gate",
+                    },
+                ),
+                sequence,
+                request_id,
+                response_id,
+                conversation_id,
+            )
+            return
         meter = ExecutionBudgetMeter(plan.budget)
         meter.start()
         trajectory = self._trajectory_recorder.start()
@@ -1799,6 +1875,58 @@ class ChatRuntime:
             "workflow_version": decision.workflow_version,
             "policy_reason_codes": list(decision.policy_reason_codes),
         }
+
+    async def _resolve_human_approval_gate(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+    ) -> Optional[ApprovalRequiredResponse]:
+        """Enforce CORTEX/RuntimePolicy human gates before any execution."""
+        if not decision.requires_human_gate:
+            return None
+
+        approval_id = str(request.metadata.get("approval_id") or "").strip()
+        try:
+            pending = await get_approval_service().authorize_or_request(
+                request,
+                decision,
+            )
+        except ApprovalError:
+            logger.warning(
+                "runtime.approval_receipt_rejected",
+                extra={
+                    "correlation_id": request.context.correlation_id,
+                    "approval_id": approval_id or None,
+                    "user_id": request.context.user_id,
+                    "tenant_id": request.context.tenant_id,
+                },
+            )
+            return ApprovalRequiredResponse(
+                approval_id=approval_id,
+                message="This approval can no longer authorize the request.",
+                status="invalid",
+                intent=decision.intent,
+                risk_level=str(
+                    getattr(decision.risk_level, "value", decision.risk_level)
+                ),
+                reason_codes=["approval_receipt_invalid"],
+            )
+
+        if pending is None:
+            return None
+
+        return ApprovalRequiredResponse(
+            approval_id=str(pending["approval_id"]),
+            status=str(pending["status"]),
+            intent=str(pending["intent"]),
+            risk_level=str(pending["risk_level"]),
+            reason_codes=list(pending.get("reason_codes") or []),
+            expires_at=(
+                pending["expires_at"].isoformat()
+                if pending.get("expires_at")
+                else None
+            ),
+        )
 
     async def _resolve_gate(self, ctx: ChatExecutionContext):
         control_plane = await get_chat_runtime_control_plane()
