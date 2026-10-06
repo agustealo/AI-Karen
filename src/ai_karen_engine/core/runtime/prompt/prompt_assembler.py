@@ -246,6 +246,22 @@ class PromptAssembler:
             if not subject:
                 continue
             reason_codes = list(item.get("reason_codes") or [])
+            resume_primary = bool(item.get("resume_primary", False))
+            resume_ambiguous = bool(item.get("resume_ambiguous", False))
+            resume_instruction = ""
+            if resume_ambiguous:
+                resume_instruction = (
+                    "\nResumption guidance: multiple plausible unfinished threads "
+                    "exist. Do not guess which one the user means. Offer concise "
+                    "choices when the request is to continue or resume."
+                )
+            elif resume_primary:
+                resume_instruction = (
+                    "\nResumption guidance: this is the clear primary unfinished "
+                    "thread. If the user explicitly asks to continue or resume, "
+                    "use it as the working context, but do not claim any action "
+                    "has been executed without RuntimePolicy authorization."
+                )
             messages.append(
                 {
                     "role": "system",
@@ -253,7 +269,7 @@ class PromptAssembler:
                         f"{boundary}\nContinuity candidate {index + 1}: {subject}\n"
                         f"Urgency: {item.get('urgency', 'normal')}\n"
                         f"Confidence: {item.get('confidence', 0.0)}\n"
-                        f"Reasons: {reason_codes}"
+                        f"Reasons: {reason_codes}{resume_instruction}"
                     ),
                     "source": f"proactive_continuity_{index}",
                     "metadata": {
@@ -263,6 +279,8 @@ class PromptAssembler:
                         "utility": item.get("utility"),
                         "urgency": item.get("urgency"),
                         "reason_codes": reason_codes,
+                        "resume_primary": resume_primary,
+                        "resume_ambiguous": resume_ambiguous,
                         "execution_authorized": False,
                     },
                 }
