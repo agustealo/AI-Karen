@@ -15,6 +15,7 @@ from ai_karen_engine.config.proactive import (
 )
 
 from .contracts import (
+    ContinuityAgenda,
     ContinuityEvidence,
     NextNeedCandidate,
     ProactiveContinuityRepository,
@@ -102,6 +103,71 @@ class ProactiveContinuityService:
             if len(deduped) >= effective_limit:
                 break
         return deduped
+
+    async def organize(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        now: datetime | None = None,
+        limit: int = 5,
+        current_domains: tuple[str, ...] = (),
+    ) -> ContinuityAgenda:
+        """Organize ranked continuity evidence for safe resumption.
+
+        A primary candidate is selected only when the top item is sufficiently
+        strong and clearly separated from the runner-up. Otherwise the agenda is
+        marked ambiguous and callers should present choices rather than guess.
+        """
+
+        candidates = await self.rank(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            now=now,
+            limit=limit,
+            current_domains=current_domains,
+        )
+        if not candidates:
+            return ContinuityAgenda(
+                candidates=(),
+                primary_candidate_id=None,
+                ambiguous=False,
+                reason_codes=("continuity_empty",),
+            )
+
+        top = candidates[0]
+        if top.utility < self._settings.resume_primary_min_utility:
+            return ContinuityAgenda(
+                candidates=tuple(candidates),
+                primary_candidate_id=None,
+                ambiguous=True,
+                reason_codes=("top_candidate_below_resume_threshold",),
+            )
+
+        if len(candidates) == 1:
+            return ContinuityAgenda(
+                candidates=tuple(candidates),
+                primary_candidate_id=top.candidate_id,
+                ambiguous=False,
+                reason_codes=("single_clear_candidate",),
+            )
+
+        runner_up = candidates[1]
+        margin = float(top.utility) - float(runner_up.utility)
+        if margin < self._settings.resume_primary_margin:
+            return ContinuityAgenda(
+                candidates=tuple(candidates),
+                primary_candidate_id=None,
+                ambiguous=True,
+                reason_codes=("candidate_margin_too_small",),
+            )
+
+        return ContinuityAgenda(
+            candidates=tuple(candidates),
+            primary_candidate_id=top.candidate_id,
+            ambiguous=False,
+            reason_codes=("clear_primary_candidate",),
+        )
 
     def _candidate(
         self,
