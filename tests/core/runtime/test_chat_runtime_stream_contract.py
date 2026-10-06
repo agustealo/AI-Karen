@@ -9,6 +9,7 @@ from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
+    ChatExecutionStatus,
     ChatStreamChunk,
     ChatStreamEventType,
 )
@@ -544,4 +545,40 @@ async def test_execute_stream_human_gate_stops_before_execution_and_persistence(
     run_simple_stream.assert_not_called()
     persist_memory.assert_not_awaited()
     persist_transcript.assert_not_awaited()
+    assert gateway.calls == []
+
+
+@pytest.mark.asyncio
+async def test_execute_human_gate_returns_gate_without_model_execution():
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    decision.requires_human_gate = True
+    plan = _make_plan()
+    approval = ApprovalRequiredResponse(
+        approval_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        status="pending",
+        intent="general_assist",
+        risk_level="high",
+    )
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+            with patch.object(runtime, "_record_user_behavior_observation", new_callable=AsyncMock):
+                with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                    with patch.object(
+                        runtime,
+                        "_resolve_human_approval_gate",
+                        new_callable=AsyncMock,
+                        return_value=approval,
+                    ):
+                        with patch.object(runtime, "_run_simple", new_callable=AsyncMock) as run_simple:
+                            with patch.object(runtime._emitter, "emit"):
+                                result = await runtime.execute(request)
+
+    assert result.status == ChatExecutionStatus.GATE
+    assert result.gate_response is approval
+    assert result.metadata.mode == "approval_required"
+    assert result.metadata.extra["approval_id"] == approval.approval_id
+    run_simple.assert_not_awaited()
     assert gateway.calls == []
