@@ -317,6 +317,10 @@ class ChatRuntime:
             latency_ms,
         )
         result.metadata.extra["trajectory_id"] = trajectory.trajectory_id
+        result.metadata.extra["capability_receipt"] = self._build_capability_receipt(
+            decision,
+            plan,
+        )
         return result
 
     async def execute_stream(
@@ -645,6 +649,22 @@ class ChatRuntime:
             transcript_persistence_failed=transcript_persistence_failed,
         )
         terminal_metadata["trajectory_id"] = trajectory.trajectory_id
+        terminal_metadata["capability_receipt"] = self._build_capability_receipt(
+            decision,
+            plan,
+        )
+        terminal_metadata["proactive_continuity"] = dict(
+            memory_recall_meta.get("proactive_continuity") or {"candidates": []}
+        )
+        terminal_metadata["continuity_primary_candidate_id"] = (
+            memory_recall_meta.get("continuity_primary_candidate_id")
+        )
+        terminal_metadata["continuity_ambiguous"] = bool(
+            memory_recall_meta.get("continuity_ambiguous", False)
+        )
+        terminal_metadata["continuity_agenda_reason_codes"] = list(
+            memory_recall_meta.get("continuity_agenda_reason_codes") or []
+        )
 
         self._emitter.emit(
             RuntimeEventType.REQUEST_COMPLETED,
@@ -1748,6 +1768,37 @@ class ChatRuntime:
             }
         )
         return md
+
+    @staticmethod
+    def _build_capability_receipt(
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+    ) -> Dict[str, Any]:
+        """Return request-scoped capability truth for user-facing inspection.
+
+        This receipt is descriptive only. It mirrors the already-authorized
+        execution plan and CORTEX decision so clients can explain what KAREN
+        could use for this request without becoming a second policy authority.
+        """
+        topology = (
+            decision.topology.value
+            if hasattr(decision.topology, "value")
+            else str(decision.topology)
+        )
+        return {
+            "policy_decision_id": plan.policy_decision_id,
+            "execution_topology": topology,
+            "allowed_capabilities": list(plan.allowed_capabilities),
+            "forbidden_capabilities": list(decision.forbidden_capabilities),
+            "allowed_tools": list(plan.allowed_tools),
+            "allowed_plugins": list(plan.allowed_plugins),
+            "allowed_agents": list(plan.allowed_agents),
+            "requires_human_gate": bool(decision.requires_human_gate),
+            "requires_resumability": bool(decision.requires_resumability),
+            "workflow_id": decision.workflow_id,
+            "workflow_version": decision.workflow_version,
+            "policy_reason_codes": list(decision.policy_reason_codes),
+        }
 
     async def _resolve_gate(self, ctx: ChatExecutionContext):
         control_plane = await get_chat_runtime_control_plane()

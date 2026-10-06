@@ -36,6 +36,7 @@ import { useUserPreferences } from './const/userPreferences';
 // Import interface components
 import { StatusIndicators, MessagesArea, ChatInput } from './interface';
 import AgentActivityPanel from './AgentActivityPanel';
+import ConversationContextRail from './ConversationContextRail';
 import DegradedModeBanner from './DegradedModeBanner';
 import RuntimeMetadataPanel from './RuntimeMetadataPanel';
 import RuntimeReceipt from './RuntimeReceipt';
@@ -1002,6 +1003,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       degradedMode: Boolean(metadata.degraded_mode),
       degradedReason,
       showCircuitWarning: Boolean(metadata.circuit_breaker_open || metadata.dependency_degraded || degradedReason),
+      rawMetadata: metadata,
     };
   }, [messages]);
   const selectableProviders = useMemo(() => {
@@ -1927,7 +1929,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   }, [shouldSubmitVoiceInput, input, isLoading, isAuthLoading, handleSubmit]);
 
   return (
-    <div data-testid="chat-root" className="flex flex-col flex-1">
+    <div data-testid="chat-root" className="flex min-h-0 flex-1">
+      <div className="flex min-w-0 flex-1 flex-col">
       <StatusIndicators
         isBackendOffline={isBackendOffline}
         error={error}
@@ -2038,6 +2041,12 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         onClearChat={handleClearChat}
         onSearchInChat={handleSearchInChat}
         streamingStatus={streamingStatus}
+      />
+      </div>
+
+      <ConversationContextRail
+        metadata={latestAssistantMetadata.rawMetadata}
+        agentSteps={agentSteps}
       />
     </div>
   );
