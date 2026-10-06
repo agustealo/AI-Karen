@@ -116,10 +116,14 @@ class MemoryFormationEvaluator:
             if str(item).strip()
         }
         explicit = bool(signal.metadata.get("explicit_user_statement"))
-        is_identity = signal.signal_type == "identity_fact"
+        is_profile_fact = signal.signal_type in {"identity_fact", "profile_fact"}
 
         if pii_types:
-            profile_safe_name = pii_types.issubset({"name"}) and explicit and is_identity
+            profile_safe_name = (
+                pii_types.issubset({"name"})
+                and explicit
+                and is_profile_fact
+            )
             sensitivity = (
                 MemorySensitivity.CONFIDENTIAL
                 if profile_safe_name
@@ -144,6 +148,7 @@ class MemoryFormationEvaluator:
                 "prospective_transition",
                 "open_loop",
                 "open_loop_transition",
+                "profile_fact",
             }
             else MemoryRetentionScope.CONVERSATION
         )

@@ -131,7 +131,7 @@ class PostgresDerivedMemoryProjector:
                 metadata=metadata,
             )
 
-            if signal.signal_type in {"identity_fact", "preference"}:
+            if signal.signal_type in {"identity_fact", "profile_fact", "preference"}:
                 await self._project_profile_fact(
                     session=session,
                     tenant_uuid=tenant_uuid,

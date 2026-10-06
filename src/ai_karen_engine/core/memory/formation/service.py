@@ -446,6 +446,7 @@ class MemoryFormationService:
             return MemoryType.PROCEDURAL
         if kind in {
             "identity_fact",
+            "profile_fact",
             "preference",
             "fact",
             "entity",
@@ -468,6 +469,7 @@ class MemoryFormationService:
             "prospective_transition",
             "open_loop",
             "open_loop_transition",
+            "profile_fact",
             "fact",
         }:
             return MemoryNamespace.LONG_TERM

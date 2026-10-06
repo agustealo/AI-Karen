@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 
+from .general_fact_classifier import classify_general_user_facts
 from .signal_models import MemorySignal
 
 
@@ -293,7 +294,28 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
                 )
             break
 
-    return signals
+    signals.extend(classify_general_user_facts(normalized))
+    return _dedupe(signals)
+
+
+def _dedupe(signals: list[MemorySignal]) -> list[MemorySignal]:
+    seen: set[tuple[str, str, str]] = set()
+    result: list[MemorySignal] = []
+    for signal in signals:
+        key = (
+            signal.signal_type,
+            str(signal.metadata.get("attribute") or ""),
+            str(
+                signal.metadata.get("normalized_value")
+                or signal.metadata.get("description")
+                or signal.text
+            ).casefold(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(signal)
+    return result
 
 
 def _clean_value(value: str) -> str:

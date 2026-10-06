@@ -111,6 +111,49 @@ async def test_identity_fact_projects_current_profile_fact(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_general_profile_fact_projects_to_canonical_profile(monkeypatch):
+    session = _Session([None, None, None])
+    monkeypatch.setattr(
+        projector_module,
+        "async_transaction_scope",
+        _scope(session),
+    )
+    projector = PostgresDerivedMemoryProjector(_ProjectionManager())
+
+    await projector._project_relational_views(
+        tenant_uuid=TENANT,
+        user_uuid=USER,
+        event_uuid=EVENT,
+        signal=MemorySignal(
+            text="I work at Ford",
+            signal_type="profile_fact",
+            confidence=0.97,
+            metadata={
+                "category": "work",
+                "attribute": "employer",
+                "normalized_value": "Ford",
+                "semantic_class": "work",
+            },
+        ),
+        confidence=0.97,
+        source_type="chat_user",
+        source_ref="conversation-1",
+        metadata={
+            "category": "work",
+            "attribute": "employer",
+            "normalized_value": "Ford",
+            "semantic_class": "work",
+        },
+    )
+
+    facts = [item for item in session.added if isinstance(item, ProfileFact)]
+    assert len(facts) == 1
+    assert facts[0].category == "work"
+    assert facts[0].attribute == "employer"
+    assert facts[0].value["value"] == "Ford"
+
+
+@pytest.mark.asyncio
 async def test_new_preference_supersedes_previous_current_fact(monkeypatch):
     old = ProfileFact(
         fact_id=UUID("00000000-0000-0000-0000-000000000020"),

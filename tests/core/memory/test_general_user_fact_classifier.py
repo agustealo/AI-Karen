@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+from ai_karen_engine.core.memory.signals.general_fact_classifier import (
+    classify_general_user_facts,
+)
+from ai_karen_engine.core.memory.signals.semantic_classifier import (
+    classify_explicit_user_memory,
+)
+
+
+def _one(text: str, signal_type: str):
+    matches = [
+        signal
+        for signal in classify_explicit_user_memory(text)
+        if signal.signal_type == signal_type
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_relationship_fact_is_typed_and_durable_candidate() -> None:
+    signal = _one("My wife is Ana.", "profile_fact")
+
+    assert signal.metadata["category"] == "relationship"
+    assert signal.metadata["attribute"] == "relationship.wife"
+    assert signal.metadata["normalized_value"] == "Ana"
+    assert signal.metadata["semantic_class"] == "relationship"
+
+
+def test_occupation_fact_is_typed() -> None:
+    signal = _one("I am a licensed electrician.", "profile_fact")
+
+    assert signal.metadata["category"] == "work"
+    assert signal.metadata["attribute"] == "occupation"
+    assert signal.metadata["normalized_value"] == "licensed electrician"
+
+
+def test_employer_fact_is_typed() -> None:
+    signal = _one("I work at Ford.", "profile_fact")
+
+    assert signal.metadata["category"] == "work"
+    assert signal.metadata["attribute"] == "employer"
+    assert signal.metadata["normalized_value"] == "Ford"
+
+
+def test_skill_fact_uses_multi_value_key() -> None:
+    signal = _one("I'm skilled in WordPress development.", "profile_fact")
+
+    assert signal.metadata["category"] == "skill"
+    assert str(signal.metadata["attribute"]).startswith("skill.")
+    assert signal.metadata["normalized_value"] == "WordPress development"
+
+
+def test_routine_fact_is_typed() -> None:
+    signal = _one("I usually work out in the morning.", "profile_fact")
+
+    assert signal.metadata["category"] == "routine"
+    assert signal.metadata["normalized_value"] == "work out in the morning"
+    assert signal.metadata["frequency_word"] == "usually"
+
+
+def test_market_interest_is_interest_not_financial_account_fact() -> None:
+    signal = _one("I follow NVDA.", "profile_fact")
+
+    assert signal.metadata["category"] == "interest"
+    assert signal.metadata["normalized_value"] == "NVDA"
+    assert signal.metadata["interest_mode"] == "tracked"
+
+
+def test_active_project_is_profile_fact() -> None:
+    signal = _one("I'm building an AI assistant for contractors.", "profile_fact")
+
+    assert signal.metadata["category"] == "project"
+    assert signal.metadata["lifecycle_state"] == "active"
+
+
+def test_travel_plan_uses_existing_prospective_event_contract() -> None:
+    signal = _one("I'm planning a trip to Jamaica next month.", "prospective_event")
+
+    assert signal.metadata["event_type"] == "travel"
+    assert signal.metadata["attribute"] == "travel_plan"
+    assert "Jamaica next month" in signal.metadata["temporal_text"]
+
+
+def test_temporary_self_description_is_not_promoted_to_occupation() -> None:
+    signals = classify_general_user_facts("I'm a little tired.")
+
+    assert not any(
+        signal.metadata.get("attribute") == "occupation"
+        for signal in signals
+    )
+
+
+def test_relationship_requires_person_like_name() -> None:
+    signals = classify_general_user_facts("My friend is awesome.")
+
+    assert not any(
+        signal.metadata.get("category") == "relationship"
+        for signal in signals
+    )

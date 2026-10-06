@@ -72,6 +72,12 @@ async def test_memory_relevance_predictor():
         "Continue.",
         "Pick up where we left off.",
         "Where were we?",
+        "Who is my wife?",
+        "Where do I work?",
+        "What skills do I have?",
+        "What am I working on?",
+        "What are my interests?",
+        "What are my travel plans?",
     ],
 )
 async def test_direct_continuity_queries_request_memory_without_embeddings(text):
