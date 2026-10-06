@@ -808,6 +808,8 @@ class ChatRuntime:
                     "urgency": item_meta.get("urgency", "normal"),
                     "interruption_cost": item_meta.get("interruption_cost", 0.0),
                     "reason_codes": list(item_meta.get("reason_codes") or []),
+                    "resume_primary": bool(item_meta.get("resume_primary", False)),
+                    "resume_ambiguous": bool(item_meta.get("resume_ambiguous", False)),
                     "execution_authorized": False,
                 }
             )
@@ -846,12 +848,30 @@ class ChatRuntime:
                     for item in continuity_items
                     if item.get("source_type")
                 ],
+                "continuity_primary_candidate_id": context_meta.get(
+                    "continuity_primary_candidate_id"
+                ),
+                "continuity_ambiguous": bool(
+                    context_meta.get("continuity_ambiguous", False)
+                ),
+                "continuity_agenda_reason_codes": list(
+                    context_meta.get("continuity_agenda_reason_codes") or []
+                ),
             }
         )
 
         request.metadata["memory_context"] = {"recall": list(recall_items)}
         request.metadata["proactive_continuity"] = {
-            "candidates": list(continuity_items)
+            "candidates": list(continuity_items),
+            "primary_candidate_id": context_meta.get(
+                "continuity_primary_candidate_id"
+            ),
+            "ambiguous": bool(
+                context_meta.get("continuity_ambiguous", False)
+            ),
+            "reason_codes": list(
+                context_meta.get("continuity_agenda_reason_codes") or []
+            ),
         }
         return meta
 
