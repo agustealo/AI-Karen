@@ -308,6 +308,24 @@ class ConversationRuntimeGateway:
             )
         return tuple(snapshots)
 
+    async def count_owned_conversations(
+        self,
+        context: ChatExecutionContext,
+        *,
+        active_only: bool,
+    ) -> int:
+        self._require_identity(context)
+        result = await self._repository.count_conversations(
+            ConversationQuery(
+                tenant_id=context.tenant_id,
+                user_id=context.user_id,
+                is_active=True if active_only else None,
+            )
+        )
+        if not result.success:
+            raise RuntimeError(result.error or "conversation_count_failed")
+        return int(result.data or 0)
+
     async def update_conversation_metadata(
         self,
         context: ChatExecutionContext,
