@@ -17,6 +17,15 @@ from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 
 logger = get_logger(__name__)
 
+_RICH_RESULT_KEYS = (
+    "structured_content",
+    "actions",
+    "citations",
+    "sources",
+    "attachments",
+    "artifacts",
+)
+
 
 class WorkflowRuntime:
     """Runtime-owned adapter for graph-required execution.
@@ -255,23 +264,45 @@ class WorkflowRuntime:
         return converted
 
     def _extract_payload(self, state: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        """Preserve declared user-facing result fields across the graph boundary."""
         formatted = state.get("formatted_response")
         if formatted is not None:
             if hasattr(formatted, "data"):
                 data = getattr(formatted, "data") or {}
-                metadata = getattr(formatted, "metadata") or {}
+                metadata = dict(getattr(formatted, "metadata") or {})
                 text = str(data.get("response") or data.get("content") or "")
-                return text, metadata
+                return text, self._merge_rich_result(metadata, data, state)
             if isinstance(formatted, dict):
                 data = formatted.get("data") or {}
-                metadata = formatted.get("metadata") or {}
+                metadata = dict(formatted.get("metadata") or {})
                 text = str(data.get("response") or data.get("content") or "")
-                return text, metadata
+                return text, self._merge_rich_result(metadata, data, state)
         return self._extract_from_raw(state)
 
     def _extract_from_raw(self, state: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         text = str(state.get("response") or state.get("llm_response") or "")
-        return text, dict(state.get("response_metadata") or {})
+        metadata = dict(state.get("response_metadata") or {})
+        return text, self._merge_rich_result(metadata, state, state)
+
+    @staticmethod
+    def _merge_rich_result(
+        metadata: Dict[str, Any],
+        primary: Dict[str, Any],
+        state: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Forward only the public rich-result contract, never graph internals."""
+        merged = dict(metadata)
+        for key in _RICH_RESULT_KEYS:
+            value = primary.get(key)
+            if value is None:
+                value = state.get(key)
+            if value is None:
+                continue
+            if key == "structured_content":
+                merged[key] = dict(value) if isinstance(value, dict) else {}
+            else:
+                merged[key] = list(value) if isinstance(value, list) else []
+        return merged
 
     def _extract_agent_activity_chunks(
         self,
