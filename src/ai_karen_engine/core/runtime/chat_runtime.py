@@ -1061,7 +1061,11 @@ class ChatRuntime:
         """
         runtime = getattr(self._composition, "user_model_runtime", None)
         intent = str(decision.intent or "").strip().casefold()
-        if runtime is None or intent in {"", "unknown", "general_assist", "fallback"}:
+        if (
+            runtime is None
+            or not decision.memory_write_allowed
+            or intent in {"", "unknown", "general_assist", "fallback"}
+        ):
             return
 
         ctx = request.context
