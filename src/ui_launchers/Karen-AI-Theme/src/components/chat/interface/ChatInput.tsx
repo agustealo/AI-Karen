@@ -1,7 +1,7 @@
 import { FormEvent, KeyboardEvent, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Mic, MicOff, Sparkles } from 'lucide-react';
+import { Mic, MicOff } from 'lucide-react';
 import { ProviderSettingsModal } from '../const/ProviderSettingsModal';
 import { SessionHistory } from '../const/SessionHistory';
 import { ChatActionsMenu } from '../const/ChatActionsMenu';
@@ -19,7 +19,6 @@ interface ChatInputProps {
   isLoading: boolean;
   isAuthLoading: boolean;
   isRecording: boolean;
-  isSuggestingStarter: boolean;
   isEditingDuringProcessing: boolean;
   isBackendOffline: boolean;
   speechRecognitionSupported: boolean;
@@ -30,7 +29,6 @@ interface ChatInputProps {
 
   // Button handlers
   onMicClick: () => void;
-  onSuggestStarter: () => void;
   onStopRequest: () => void;
 
   // Provider settings
@@ -71,14 +69,12 @@ export function ChatInput({
   isLoading,
   isAuthLoading,
   isRecording,
-  isSuggestingStarter,
   isEditingDuringProcessing,
   isBackendOffline,
   speechRecognitionSupported,
   showStopButton,
   streamingStatus,
   onMicClick,
-  onSuggestStarter,
   onStopRequest,
   providers,
   selectableProviders,
@@ -135,9 +131,6 @@ export function ChatInput({
 
   const canUseMic =
     !isLoading && !isAuthLoading && !isBackendOffline && speechRecognitionSupported;
-
-  const canSuggestStarter =
-    !isLoading && !isSuggestingStarter && !isRecording && !isBackendOffline;
 
   const canSubmitMessage =
     !isAuthLoading &&
@@ -236,31 +229,6 @@ export function ChatInput({
               hideTrigger
             />
           </div>
-
-          <div className="flex self-center sm:self-auto">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onSuggestStarter}
-              disabled={!canSuggestStarter}
-              className="h-9 px-3 text-xs sm:text-sm"
-              aria-label={
-                isSuggestingStarter
-                  ? 'Generating conversation starter suggestion'
-                  : 'Generate a conversation starter suggestion'
-              }
-              aria-describedby="starter-help"
-            >
-              <Sparkles className="mr-2 h-4 w-4" aria-hidden="true" />
-              <span className="hidden sm:inline">
-                {isSuggestingStarter ? 'Getting idea...' : 'Need an idea?'}
-              </span>
-              <span className="sm:hidden">
-                {isSuggestingStarter ? 'Idea...' : 'Idea'}
-              </span>
-            </Button>
-          </div>
         </div>
 
         <form
@@ -327,8 +295,6 @@ export function ChatInput({
 
       {/* Screen-reader help text stays colocated with the controls that reference it. */}
       <div className="sr-only">
-        <div id="starter-help">Get a suggested conversation starter from KAREN</div>
-
         <div id="mic-help">
           {speechRecognitionSupported
             ? 'Voice input for chat messages'

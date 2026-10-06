@@ -6,7 +6,6 @@ import { useState, useRef, useEffect, FormEvent, useCallback, useMemo, createCon
 import { useToast } from "@/hooks/use-toast";
 import { ApiError, apiClient } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
-import { authService } from '@/lib/auth';
 import {
   normalizeBackendChatResponse,
   normalizeConversationMessage,
@@ -27,7 +26,6 @@ import {
   resolveProcessingStatusMessage,
 } from './const/processing';
 import { getDegradationReasonLabel } from './const/constants';
-import { useGreetingSystem } from './const/greetingSystem';
 import { useModelSettings } from './const/modelSettings';
 import { useRequestHandlers } from './const/requestHandlers';
 import { useScrollManagement } from './const/scrollManagement';
@@ -1023,7 +1021,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const [speechRecognitionSupported, setSpeechRecognitionSupported] = useState(true);
   const [shouldSubmitVoiceInput, setShouldSubmitVoiceInput] = useState(false);
-  const [isSuggestingStarter, setIsSuggestingStarter] = useState(false);
   const [modelSettings, setModelSettings] = useState<NormalizedRuntimeInventory | null>(null);
   const [selectedProvider, setSelectedProvider] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
@@ -1138,14 +1135,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     displayName,
     recentMessages,
   } = useUserPreferences(user, isAuthenticated, messages);
-
-  useGreetingSystem(
-    isAuthLoading || isLoading || isLoadingSessions || !currentSession?.id,
-    isAuthenticated,
-    user,
-    messages,
-    setMessages,
-  );
 
   // Streaming status
   const streamingStatus = useMemo(
@@ -1342,7 +1331,9 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       }
 
       const persisted = loadSessionState(sessionId);
-      const persistedMessages = (persisted?.messages || []).map(fromPersistedMessage);
+      const persistedMessages = (persisted?.messages || [])
+        .filter((message) => !String(message.id || '').startsWith('karen-initial-'))
+        .map(fromPersistedMessage);
       const hasRestorableState = Boolean(
         persisted &&
           (
@@ -1474,41 +1465,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     });
   }, [currentSession?.id, messages, input, isLoading, processingStatus, streamedContent]);
 
-  // Save preferred address name
-  const savePreferredAddressName = useCallback(async (preferredName: string) => {
-    if (!user) {
-      return false;
-    }
-
-    const nextPreferences = {
-      ...(user.preferences || {}),
-      preferred_address_name: preferredName,
-    };
-
-    await apiClient.put('/api/auth/me', {
-      preferences: nextPreferences,
-    });
-
-    authService.updateCurrentUser({
-      preferences: nextPreferences,
-    });
-
-    await apiClient.post('/api/memory/commit', {
-      user_id: user.user_id,
-      text: `The user prefers to be addressed as ${preferredName}.`,
-      tags: ['personal_fact', 'preferred_name', 'user_preference'],
-      importance: 9,
-      decay: 'pinned',
-    }).catch(() => undefined);
-
-    return true;
-  }, [user]);
-
-
-
-
-
-
   // Submit handler
   const handleSubmit = useCallback(async (
     manualInput?: string,
@@ -1523,31 +1479,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     ) return;
 
     const trimmedInput = rawInput.trim();
-    const lastAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant');
-    const addressOptions = Array.isArray(lastAssistantMessage?.metadata?.addressOptions)
-      ? (lastAssistantMessage.metadata.addressOptions as string[])
-      : [];
-    const matchedAddressOption = addressOptions.find(
-      (option) => option.trim().toLowerCase() === trimmedInput.toLowerCase()
-    );
-
-    if (
-      !isApprovalResume &&
-      lastAssistantMessage?.metadata?.addressPreferencePrompt &&
-      matchedAddressOption
-    ) {
-      try {
-        await savePreferredAddressName(matchedAddressOption);
-      } catch {
-        toast({
-          title: 'Preference update failed',
-          description: 'Karen could not save your preferred form of address.',
-          variant: 'destructive',
-        });
-        return;
-      }
-    }
-
     const userMessage: ChatMessage = {
       id: 'user-' + Date.now(),
       role: 'user',
@@ -1986,7 +1917,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       setStreamingMetrics(null);
     }
 
-  }, [input, isAuthLoading, messages, displayName, preferredAddressName, recentMessages, selectedProvider, selectedModel, toast, user, setInput, setMessages, setIsLoading, setIsEditingDuringProcessing, setProcessingStatus, setStreamedContent, setStreamingMetrics, activeRequestControllerRef, sessionIdRef, isAuthenticated, processingStatus, savePreferredAddressName, scrollChatToBottom, refreshActionableApprovals]);
+  }, [input, isAuthLoading, messages, displayName, preferredAddressName, recentMessages, selectedProvider, selectedModel, toast, setInput, setMessages, setIsLoading, setIsEditingDuringProcessing, setProcessingStatus, setStreamedContent, setStreamingMetrics, activeRequestControllerRef, sessionIdRef, isAuthenticated, processingStatus, scrollChatToBottom, refreshActionableApprovals]);
 
   // Process injected messages from other parts of the app
   useEffect(() => {
@@ -2093,15 +2024,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     e.preventDefault();
     handleSubmit();
   }, [handleSubmit]);
-
-  const handleSuggestStarter = useCallback(() => {
-    setIsSuggestingStarter(true);
-    try {
-      setInput('Tell me a fun fact about space.');
-    } finally {
-      setIsSuggestingStarter(false);
-    }
-  }, [setIsSuggestingStarter, setInput]);
 
   const handleExportCurrentChat = useCallback(async () => {
     if (!currentSession) {
@@ -2403,13 +2325,11 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         isLoading={isLoading}
         isAuthLoading={isAuthLoading}
         isRecording={isRecording}
-        isSuggestingStarter={isSuggestingStarter}
         isEditingDuringProcessing={isEditingDuringProcessing}
         isBackendOffline={isBackendOffline}
         speechRecognitionSupported={speechRecognitionSupported}
         showStopButton={showStopButton}
         onMicClick={handleMicClick}
-        onSuggestStarter={handleSuggestStarter}
         onStopRequest={stopActiveRequest}
         selectableProviders={selectableProviders}
         providers={modelSettings?.providers ?? []}
