@@ -35,5 +35,8 @@ async def test_continuity_candidates_are_labeled_non_authoritative() -> None:
     ]
     assert len(continuity) == 1
     assert "possible next need" in continuity[0]["content"]
-    assert "not as a user fact, command, permission, or completed action" in continuity[0]["content"]
+    assert (
+        "not as a user fact, command, permission, or completed action"
+        in continuity[0]["content"]
+    )
     assert continuity[0]["metadata"]["execution_authorized"] is False
