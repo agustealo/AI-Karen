@@ -427,36 +427,22 @@ export default function ConversationContextRail(
   props: ConversationContextRailProps,
 ) {
   return (
-    <>
-      <details
-        className="mx-4 mb-3 rounded-xl border border-border/70 bg-card/70 p-3 xl:hidden"
-        data-testid="conversation-context-mobile"
-      >
-        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider">
-          Context & capabilities
-        </summary>
-        <div className="mt-3">
-          <RailContent {...props} />
+    <aside
+      className="hidden w-[22rem] shrink-0 overflow-y-auto border-l border-border/70 bg-background/40 p-3 xl:block"
+      aria-label="Conversation context and capabilities"
+      data-testid="conversation-context-rail"
+    >
+      <div className="sticky top-0">
+        <div className="mb-3 px-1">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            Conversation intelligence
+          </p>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            Canonical continuity, permissions, and execution activity for this turn.
+          </p>
         </div>
-      </details>
-
-      <aside
-        className="hidden w-[22rem] shrink-0 overflow-y-auto border-l border-border/70 bg-background/40 p-3 xl:block"
-        aria-label="Conversation context and capabilities"
-        data-testid="conversation-context-rail"
-      >
-        <div className="sticky top-0">
-          <div className="mb-3 px-1">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-              Conversation intelligence
-            </p>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-              Canonical continuity, permissions, and execution activity for this turn.
-            </p>
-          </div>
-          <RailContent {...props} />
-        </div>
-      </aside>
-    </>
+        <RailContent {...props} />
+      </div>
+    </aside>
   );
 }
