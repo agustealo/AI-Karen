@@ -1702,10 +1702,10 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         status: 'completed',
         structuredContent: fallbackErrorResponse.structuredContent,
         actions: fallbackErrorResponse.actions,
-        citations: fallbackErrorResponse.citations as Citation[],
-        sources: fallbackErrorResponse.sources as Citation[],
-        attachments: fallbackErrorResponse.attachments as ChatMessage['attachments'],
-        artifacts: fallbackErrorResponse.artifacts as ChatMessage['artifacts'],
+        citations: fallbackErrorResponse.citations,
+        sources: fallbackErrorResponse.sources,
+        attachments: fallbackErrorResponse.attachments,
+        artifacts: fallbackErrorResponse.artifacts,
         metadata: fallbackErrorResponse.metadata,
       } : null;
 
