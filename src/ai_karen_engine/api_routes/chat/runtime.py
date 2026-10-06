@@ -101,6 +101,12 @@ class ChatResponse(BaseModel):
     model: str
     usage: Dict[str, int]
     metadata: Dict[str, Any]
+    structured_content: Dict[str, Any] = Field(default_factory=dict)
+    actions: List[Dict[str, Any]] = Field(default_factory=list)
+    citations: List[Dict[str, Any]] = Field(default_factory=list)
+    sources: List[Dict[str, Any]] = Field(default_factory=list)
+    attachments: List[Dict[str, Any]] = Field(default_factory=list)
+    artifacts: List[Dict[str, Any]] = Field(default_factory=list)
     timestamp: datetime
 
 
@@ -338,6 +344,12 @@ async def create_chat_response(
             model=actual_model,
             usage=usage,
             metadata=response_metadata,
+            structured_content=result.structured_content,
+            actions=result.actions,
+            citations=result.citations,
+            sources=result.sources,
+            attachments=result.attachments,
+            artifacts=result.artifacts,
             timestamp=datetime.now(timezone.utc),
         )
 
