@@ -261,6 +261,45 @@ async def test_resume_agenda_does_not_promote_weak_single_candidate() -> None:
 
 
 @pytest.mark.asyncio
+async def test_specific_resume_request_prefers_matching_unfinished_thread() -> None:
+    now = datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)
+    repo = _Repository(
+        [
+            ContinuityEvidence(
+                source_type="prospective",
+                source_id="p1",
+                subject="job interview with Ford",
+                state="dormant",
+                confidence=0.96,
+                target_at=now + timedelta(hours=3),
+            ),
+            ContinuityEvidence(
+                source_type="open_loop",
+                source_id="o1",
+                subject="send the client the revised estimate",
+                state="open",
+                confidence=0.95,
+            ),
+        ]
+    )
+
+    agenda = await ProactiveContinuityService(repo).organize(
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        user_id="22222222-2222-2222-2222-222222222222",
+        now=now,
+        current_request="Continue the client revised estimate.",
+    )
+
+    primary = next(
+        item
+        for item in agenda.candidates
+        if item.candidate_id == agenda.primary_candidate_id
+    )
+    assert primary.source_id == "o1"
+    assert "current_request_match" in primary.reason_codes
+
+
+@pytest.mark.asyncio
 async def test_candidate_ids_are_deterministic_for_learning_lineage() -> None:
     evidence = ContinuityEvidence(
         source_type="open_loop",
