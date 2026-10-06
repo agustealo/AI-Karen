@@ -945,6 +945,9 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   } | null>(null);
   const [agentSteps, setAgentSteps] = useState<AgentStepEvent[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+  const [pendingApprovalsLoadState, setPendingApprovalsLoadState] = useState<
+    'idle' | 'loading' | 'ready' | 'unavailable'
+  >('idle');
   const [isLocalRecoveryUnconfirmed, setIsLocalRecoveryUnconfirmed] = useState(false);
   const [degradedMode, setDegradedMode] = useState<{
     active: boolean;
@@ -1080,6 +1083,45 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   const { applyModelSelection, getSelectableProviders } = useModelSettings();
 
 
+  const refreshPendingApprovals = useCallback(
+    async (conversationId: string): Promise<PendingApproval[] | null> => {
+      setPendingApprovalsLoadState('loading');
+      try {
+        const approvals = await apiClient.get<PendingApproval[]>(
+          `/api/approvals?conversation_id=${encodeURIComponent(conversationId)}`,
+        );
+        const pending = Array.isArray(approvals)
+          ? approvals.filter(
+              (approval) =>
+                approval.status === 'pending' &&
+                (!approval.conversation_id ||
+                  approval.conversation_id === conversationId),
+            )
+          : [];
+
+        if (sessionIdRef.current !== conversationId) {
+          return pending;
+        }
+
+        setPendingApprovals(pending);
+        setMessages((current) =>
+          reconcilePendingApprovalMessages(current, pending),
+        );
+        setPendingApprovalsLoadState('ready');
+        return pending;
+      } catch (error) {
+        if (sessionIdRef.current === conversationId) {
+          setPendingApprovalsLoadState('unavailable');
+        }
+        if (error instanceof ApiError && error.status === 401) {
+          return null;
+        }
+        return null;
+      }
+    },
+    [setMessages],
+  );
+
   const latestAssistantMetadata = useMemo(() => {
     const lastAssistant = [...messages]
       .reverse()
@@ -1176,6 +1218,22 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     if (!currentSession?.id) return;
     sessionIdRef.current = currentSession.id;
   }, [currentSession?.id]);
+
+  useEffect(() => {
+    const conversationId = currentSession?.id;
+    if (isAuthLoading || !isAuthenticated || !conversationId) {
+      setPendingApprovals([]);
+      setPendingApprovalsLoadState('idle');
+      return;
+    }
+
+    void refreshPendingApprovals(conversationId);
+  }, [
+    currentSession?.id,
+    isAuthenticated,
+    isAuthLoading,
+    refreshPendingApprovals,
+  ]);
 
   useEffect(() => {
     if (!currentSession?.id) return;
