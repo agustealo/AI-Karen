@@ -256,6 +256,30 @@ class DataExporter:
             "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
         ),
         (
+            "execution_trajectories",
+            "SELECT * FROM execution_trajectories "
+            "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
+            "feature_snapshots",
+            "SELECT * FROM feature_snapshots "
+            "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
+            "decision_observations",
+            "SELECT * FROM decision_observations "
+            "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
+            "outcome_records",
+            "SELECT * FROM outcome_records "
+            "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY recorded_at",
+        ),
+        (
             "consent_scope",
             "SELECT * FROM consent_scope WHERE tenant_id = CAST(:tenant_id AS uuid) "
             "AND user_id = CAST(:user_id AS uuid) ORDER BY granted_at",
@@ -522,6 +546,29 @@ class DataEraser:
         counts: Dict[str, int] = {}
         operations: tuple[tuple[str, str], ...] = (
             (
+                "outcome_records",
+                "DELETE FROM outcome_records WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)",
+            ),
+            (
+                "decision_observations",
+                "DELETE FROM decision_observations "
+                "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)",
+            ),
+            (
+                "feature_snapshots",
+                "DELETE FROM feature_snapshots "
+                "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)",
+            ),
+            (
+                "execution_trajectories",
+                "DELETE FROM execution_trajectories "
+                "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)",
+            ),
+            (
                 "reinforcement_event",
                 "DELETE FROM reinforcement_event WHERE target_assertion_id IN ("
                 "SELECT assertion_id FROM memory_assertion WHERE tenant_id = CAST(:tenant_id AS uuid) "
@@ -583,6 +630,10 @@ class DataEraser:
                 "personalization_behavior_pattern",
                 "projection_status",
                 "memory_procedure",
+                "execution_trajectories",
+                "feature_snapshots",
+                "decision_observations",
+                "outcome_records",
             ],
             "note": "memory_items deletion includes canonical pgvector embeddings",
         }
