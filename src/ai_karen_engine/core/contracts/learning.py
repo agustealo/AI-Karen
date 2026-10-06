@@ -21,6 +21,7 @@ class LearningTask(str, Enum):
     TOOL_SELECTION = "tool_selection"
     PLUGIN_SELECTION = "plugin_selection"
     MEMORY_SELECTION = "memory_selection"
+    PROACTIVE_CONTINUITY = "proactive_continuity"
 
 
 class LabelQuality(str, Enum):
