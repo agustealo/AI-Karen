@@ -105,6 +105,7 @@ def test_explicit_candidate_feedback_is_high_confidence() -> None:
                 "continuity_candidate_ids": ["next-1", "next-2"],
                 "continuity_source_types": ["open_loop", "goal"],
                 "continuity_primary_candidate_id": "next-1",
+                "continuity_decision_observation_id": "obs-continuity-1",
                 "continuity_ambiguous": False,
             },
         )
