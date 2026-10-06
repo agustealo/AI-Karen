@@ -79,6 +79,10 @@ class LangGraphOrchestrationState(TypedDict):
     # Salvaged from Legacy ChatOrchestrator
     structured_content: Optional[Dict[str, Any]]
     actions: Optional[List[Dict[str, Any]]]
+    citations: Optional[List[Dict[str, Any]]]
+    sources: Optional[List[Dict[str, Any]]]
+    attachments: Optional[List[Dict[str, Any]]]
+    artifacts: Optional[List[Dict[str, Any]]]
     telemetry: Optional[Dict[str, Any]]
     formatting_payload: Optional[Dict[str, Any]]
     formatted_response: Optional[str]
@@ -207,6 +211,10 @@ def create_initial_state(
         "file_context": None,
         "structured_content": None,
         "actions": None,
+        "citations": None,
+        "sources": None,
+        "attachments": None,
+        "artifacts": None,
         "telemetry": None,
         "formatting_payload": None,
         "formatted_response": None,
