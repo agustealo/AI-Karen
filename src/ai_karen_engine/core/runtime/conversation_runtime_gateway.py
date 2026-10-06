@@ -221,14 +221,11 @@ class ConversationRuntimeGateway:
             messages=tuple(messages_result.data or []),
         )
 
-    async def update_conversation(
+    async def require_owned_conversation(
         self,
         context: ChatExecutionContext,
-        *,
-        title: Optional[str] = None,
-        is_active: Optional[bool] = None,
     ) -> Conversation:
-        """Update one tenant/user-owned canonical conversation."""
+        """Return one canonical conversation only when tenant/user ownership matches."""
         self._require_message_identity(context)
         conversation_id = resolve_runtime_conversation_id(context)
         existing = await self._repository.get_conversation(
@@ -241,17 +238,28 @@ class ConversationRuntimeGateway:
             raise RuntimeError("conversation_not_found")
         if str(existing.data.user_id) != str(context.user_id):
             raise PermissionError("conversation_user_mismatch")
+        return existing.data
 
-        next_title = existing.data.title
+    async def update_conversation(
+        self,
+        context: ChatExecutionContext,
+        *,
+        title: Optional[str] = None,
+        is_active: Optional[bool] = None,
+    ) -> Conversation:
+        """Update one tenant/user-owned canonical conversation."""
+        existing = await self.require_owned_conversation(context)
+
+        next_title = existing.title
         if title is not None:
             next_title = str(title).strip()
             if not next_title:
                 raise ValueError("conversation_title_empty")
 
         updated = replace(
-            existing.data,
+            existing,
             title=next_title,
-            is_active=existing.data.is_active if is_active is None else bool(is_active),
+            is_active=existing.is_active if is_active is None else bool(is_active),
             updated_at=datetime.utcnow(),
         )
         result = await self._repository.update_conversation(updated)
@@ -263,18 +271,8 @@ class ConversationRuntimeGateway:
 
     async def delete_conversation(self, context: ChatExecutionContext) -> bool:
         """Delete one tenant/user-owned canonical conversation."""
-        self._require_message_identity(context)
-        conversation_id = resolve_runtime_conversation_id(context)
-        existing = await self._repository.get_conversation(
-            conversation_id,
-            context.tenant_id,
-        )
-        if not existing.success:
-            raise RuntimeError(existing.error or "conversation_lookup_failed")
-        if existing.data is None:
-            raise RuntimeError("conversation_not_found")
-        if str(existing.data.user_id) != str(context.user_id):
-            raise PermissionError("conversation_user_mismatch")
+        existing = await self.require_owned_conversation(context)
+        conversation_id = str(existing.id)
 
         result = await self._repository.delete_conversation(
             conversation_id,
@@ -300,22 +298,11 @@ class ConversationRuntimeGateway:
         conversation-management requests that intentionally persist a single
         user-authored message. It never invokes semantic-memory formation.
         """
-        self._require_message_identity(context)
-        conversation_id = resolve_runtime_conversation_id(context)
+        existing = await self.require_owned_conversation(context)
+        conversation_id = str(existing.id)
         message_content = str(content or "").strip()
         if not message_content:
             raise ValueError("conversation_message_empty")
-
-        existing = await self._repository.get_conversation(
-            conversation_id,
-            context.tenant_id,
-        )
-        if not existing.success:
-            raise RuntimeError(existing.error or "conversation_lookup_failed")
-        if existing.data is None:
-            raise RuntimeError("conversation_not_found")
-        if str(existing.data.user_id) != str(context.user_id):
-            raise PermissionError("conversation_user_mismatch")
 
         message_id = self._message_id(
             context=context,
