@@ -2,27 +2,31 @@ import React from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const validateSession = vi.fn();
-const getCurrentUser = vi.fn();
-const getAccessToken = vi.fn();
-const hasFreshLoginMarker = vi.fn();
-const clearAuth = vi.fn();
-const login = vi.fn();
-const logout = vi.fn();
-const isAuthenticated = vi.fn();
+const authMocks = vi.hoisted(() => ({
+  validateSession: vi.fn(),
+  getCurrentUser: vi.fn(),
+  getAccessToken: vi.fn(),
+  hasFreshLoginMarker: vi.fn(),
+  clearAuth: vi.fn(),
+  login: vi.fn(),
+  logout: vi.fn(),
+  isAuthenticated: vi.fn(),
+}));
 
 vi.mock('@/lib/auth', () => ({
-  authService: {
-    validateSession,
-    getCurrentUser,
-    getAccessToken,
-    hasFreshLoginMarker,
-    clearAuth,
-    login,
-    logout,
-    isAuthenticated,
-  },
+  authService: authMocks,
 }));
+
+const {
+  validateSession,
+  getCurrentUser,
+  getAccessToken,
+  hasFreshLoginMarker,
+  clearAuth,
+  login,
+  logout,
+  isAuthenticated,
+} = authMocks;
 
 import { AuthProvider, useAuth } from '@/lib/useAuth';
 import { AUTH_USER_UPDATED_EVENT } from '@/lib/auth-events';
