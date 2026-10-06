@@ -65,3 +65,19 @@ def test_approval_schema_is_tenant_scoped_one_shot_and_rls_enforced() -> None:
     assert "ENABLE ROW LEVEL SECURITY" in source
     assert "FORCE ROW LEVEL SECURITY" in source
     assert "runtime_approval_tenant_scope" in source
+
+
+def test_resume_ingress_rebuilds_server_side_and_reenters_chat_runtime() -> None:
+    source = (ROOT / "src/ai_karen_engine/api_routes/chat/runtime.py").read_text(
+        encoding="utf-8"
+    )
+    ui_source = (
+        ROOT
+        / "src/ui_launchers/Karen-AI-Theme/src/components/chat/ChatInterface.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert '@router.post("/chat/approvals/{approval_id}/resume")' in source
+    assert "build_resume_request(" in source
+    assert "_sse(runtime_request)" in source
+    assert "original_input" not in ui_source
+    assert "/api/chat/approvals/${approvalResume?.approvalId}/resume" in ui_source
