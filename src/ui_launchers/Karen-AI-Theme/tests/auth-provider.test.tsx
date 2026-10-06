@@ -25,6 +25,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { AuthProvider, useAuth } from '@/lib/useAuth';
+import { AUTH_USER_UPDATED_EVENT } from '@/lib/auth-events';
 
 const user = {
   user_id: 'user-1',
@@ -44,6 +45,11 @@ function Consumer({ label }: { label: string }) {
       {auth.isLoading ? 'loading' : auth.isAuthenticated ? 'ready' : 'signed-out'}
     </div>
   );
+}
+
+function UserNameConsumer() {
+  const auth = useAuth();
+  return <span data-testid="user-name">{auth.user?.full_name || 'none'}</span>;
 }
 
 function RefreshConsumer() {
@@ -121,4 +127,35 @@ describe('AuthProvider', () => {
       expect(screen.getByTestId('refresh-state').textContent).toBe('ready');
     });
   });
+
+  it('updates all consumers from same-tab canonical user changes without revalidation', async () => {
+    let currentUser = user;
+    getCurrentUser.mockImplementation(() => currentUser);
+
+    render(
+      <AuthProvider>
+        <UserNameConsumer />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('user-name').textContent).toBe('User');
+    });
+
+    currentUser = {
+      ...user,
+      full_name: 'Updated User',
+    };
+
+    act(() => {
+      window.dispatchEvent(new Event(AUTH_USER_UPDATED_EVENT));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('user-name').textContent).toBe('Updated User');
+    });
+
+    expect(validateSession).toHaveBeenCalledTimes(1);
+  });
+
 });
