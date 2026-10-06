@@ -13,6 +13,11 @@ const chatSource = readFileSync(
   "utf8",
 );
 
+const sidecarSource = readFileSync(
+  resolve(process.cwd(), "src/components/chat/ChatIntelligenceSidecar.tsx"),
+  "utf8",
+);
+
 describe("canonical agent stream surface", () => {
   it("dispatches canonical agent, tool, citation, and approval events", () => {
     expect(apiSource).toContain("case 'agent_step':");
@@ -23,9 +28,11 @@ describe("canonical agent stream surface", () => {
     expect(apiSource).toContain("case 'approval':");
   });
 
-  it("renders agent activity in the canonical chat surface", () => {
-    expect(chatSource).toContain("import AgentActivityPanel from './AgentActivityPanel';");
-    expect(chatSource).toContain("<AgentActivityPanel steps={agentSteps} />");
+  it("renders agent activity through the canonical chat intelligence sidecar", () => {
+    expect(chatSource).toContain("import ChatIntelligenceSidecar from './ChatIntelligenceSidecar';");
+    expect(chatSource).toContain("<ChatIntelligenceSidecar");
+    expect(sidecarSource).toContain("import AgentActivityPanel from './AgentActivityPanel';");
+    expect(sidecarSource).toContain("<AgentActivityPanel steps={agentSteps} />");
     expect(chatSource).not.toContain("Legacy AgentActivityPanel removed to simplify UI");
   });
 });
