@@ -85,8 +85,6 @@ def serialize_request(request: ChatExecutionRequest) -> Dict[str, Any]:
             "tenant_id": request.context.tenant_id,
             "session_id": request.context.session_id,
             "conversation_id": request.context.conversation_id,
-            "roles": list(request.context.roles),
-            "permissions": list(request.context.permissions),
         },
         "preferred_provider": request.preferred_provider,
         "preferred_model": request.preferred_model,
@@ -204,6 +202,7 @@ class ApprovalService:
         if current["status"] == "expired":
             raise ApprovalStateError("Approval expired")
         raise ApprovalStateError("Approval has already been consumed")
+
     async def build_resume_request(
         self,
         approval_id: str,
@@ -211,6 +210,7 @@ class ApprovalService:
         user: UserData,
         request_id: str,
         correlation_id: str,
+        fresh_permissions: Optional[List[str]] = None,
         stream: bool = True,
     ) -> ChatExecutionRequest:
         """Rebuild an approved request using fresh authenticated identity.
@@ -251,7 +251,7 @@ class ApprovalService:
                 request_id=request_id,
                 correlation_id=correlation_id,
                 roles=list(user.roles or []),
-                permissions=list(user.get("permissions") or []),
+                permissions=list(fresh_permissions or []),
             ),
             preferred_provider=payload.get("preferred_provider"),
             preferred_model=payload.get("preferred_model"),
@@ -266,6 +266,7 @@ class ApprovalService:
         if not rebuilt.messages:
             raise ApprovalStateError("Stored approval request has no valid messages")
         return rebuilt
+
     async def list_pending(self, *, user: UserData) -> List[Dict[str, Any]]:
         user_id, tenant_id = _identity(user)
         return await self._repository.list_pending(
