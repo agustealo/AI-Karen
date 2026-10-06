@@ -24,7 +24,6 @@ describe('durable approval surface', () => {
           description: 'Approve',
           params: {
             approval_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-            original_input: 'send the message',
           },
         },
         {
@@ -32,7 +31,6 @@ describe('durable approval surface', () => {
           description: 'Reject',
           params: {
             approval_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-            original_input: 'send the message',
           },
         },
       ],
@@ -42,6 +40,7 @@ describe('durable approval surface', () => {
 
     expect(screen.getByText('Approval required')).toBeTruthy();
     expect(screen.queryByText('Suggested Actions')).toBeNull();
+    expect(JSON.stringify(message.actions)).not.toContain('original_input');
 
     fireEvent.click(screen.getByRole('button', { name: /perform action: approve/i }));
     expect(onActionClick).toHaveBeenCalledWith(message.actions?.[0]);
