@@ -349,7 +349,7 @@ export default function DashboardPage() {
             <h2 className="text-base font-semibold text-foreground">
               {backendStatus === "failed"
                 ? "Backend Connection Failed"
-                : "Connecting to KAREN"}
+                : "Initializing KAREN"}
             </h2>
 
             <p className="mt-1 text-sm text-muted-foreground">
