@@ -43,6 +43,7 @@ class ProactiveContinuityService:
         now: datetime | None = None,
         limit: int = 5,
         current_domains: tuple[str, ...] = (),
+        current_request: str = "",
     ) -> list[NextNeedCandidate]:
         if not self._settings.enabled:
             return []
@@ -66,11 +67,13 @@ class ProactiveContinuityService:
             for domain in current_domains
             if str(domain).strip()
         }
+        request_terms = self._content_terms(current_request)
         ranked = [
             self._candidate(
                 item,
                 now=now_utc,
                 current_domains=normalized_domains,
+                request_terms=request_terms,
             )
             for item in evidence
         ]
@@ -112,6 +115,7 @@ class ProactiveContinuityService:
         now: datetime | None = None,
         limit: int = 5,
         current_domains: tuple[str, ...] = (),
+        current_request: str = "",
     ) -> ContinuityAgenda:
         """Organize ranked continuity evidence for safe resumption.
 
@@ -126,6 +130,7 @@ class ProactiveContinuityService:
             now=now,
             limit=limit,
             current_domains=current_domains,
+            current_request=current_request,
         )
         if not candidates:
             return ContinuityAgenda(
@@ -175,6 +180,7 @@ class ProactiveContinuityService:
         *,
         now: datetime,
         current_domains: set[str],
+        request_terms: set[str],
     ) -> NextNeedCandidate | None:
         source = item.source_type
         state = str(item.state or "").casefold()
@@ -237,6 +243,13 @@ class ProactiveContinuityService:
             urgency = time_urgency
         reason_codes.extend(time_reasons)
 
+        subject_terms = self._content_terms(item.subject)
+        if request_terms and subject_terms:
+            overlap = len(request_terms & subject_terms) / max(len(request_terms), 1)
+            if overlap > 0.0:
+                utility += self._settings.current_request_match_boost * overlap
+                reason_codes.append("current_request_match")
+
         if item.domain:
             reason_codes.append("domain_scoped")
 
@@ -290,6 +303,40 @@ class ProactiveContinuityService:
         if delta <= timedelta(hours=self._settings.due_week_hours):
             return self._settings.due_seven_days_boost, "low", ["due_within_week"]
         return 0.0, "low", ["future"]
+
+    @staticmethod
+    def _content_terms(value: str) -> set[str]:
+        stop = {
+            "a",
+            "an",
+            "and",
+            "continue",
+            "do",
+            "from",
+            "i",
+            "left",
+            "my",
+            "next",
+            "off",
+            "our",
+            "pick",
+            "please",
+            "resume",
+            "should",
+            "the",
+            "to",
+            "we",
+            "what",
+            "where",
+        }
+        return {
+            token
+            for token in "".join(
+                char if char.isalnum() or char in {"_", "-"} else " "
+                for char in str(value or "").casefold()
+            ).split()
+            if len(token) >= 3 and token not in stop
+        }
 
     @staticmethod
     def _candidate_id(item: ContinuityEvidence) -> str:
