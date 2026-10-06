@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from ai_karen_engine.config.conversation import reset_conversation_context_settings
+from ai_karen_engine.config.proactive import reset_proactive_continuity_settings
 from ai_karen_engine.core.context.contracts import EvidenceSource
 from ai_karen_engine.core.cortex.context_stages import build_context_requirements
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
@@ -77,6 +78,26 @@ def test_stage_one_requests_ranked_continuity_with_memory_read() -> None:
     continuity = requirements.requirements[1]
     assert continuity.classes == ["next_need"]
     assert continuity.metadata["mode"] == "suggest_only"
+
+
+def test_proactive_kill_switch_preserves_plain_memory_recall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preliminary = _preliminary()
+    preliminary.memory_recall_required = True
+    monkeypatch.setenv("KARI_PROACTIVE_CONTINUITY_ENABLED", "false")
+    reset_proactive_continuity_settings()
+    try:
+        requirements = build_context_requirements(
+            _request(conversation_id=None),
+            preliminary,
+        )
+    finally:
+        reset_proactive_continuity_settings()
+
+    assert [item.source for item in requirements.requirements] == [
+        EvidenceSource.MEMORY
+    ]
 
 
 def test_stage_one_skips_conversation_read_without_conversation_identity() -> None:
