@@ -57,6 +57,21 @@ interface ChatInterfaceProps {
   isActive?: boolean;
 }
 
+interface PendingApproval {
+  approval_id: string;
+  conversation_id?: string | null;
+  policy_decision_id?: string | null;
+  intent: string;
+  risk_level: string;
+  reason_codes: string[];
+  status: string;
+  decision_reason?: string | null;
+  created_at: string;
+  expires_at: string;
+  decided_at?: string | null;
+  consumed_at?: string | null;
+}
+
 interface ConversationApiResponse {
   conversations: Array<{
     id: string;
@@ -728,6 +743,99 @@ const createSessionId = (): string => {
   ].join('-');
 };
 
+const approvalActions = (approvalId: string): SuggestedAction[] => [
+  {
+    type: 'approval.approve',
+    description: 'Approve',
+    params: { approval_id: approvalId },
+  },
+  {
+    type: 'approval.reject',
+    description: 'Reject',
+    params: { approval_id: approvalId },
+  },
+];
+
+const pendingApprovalToMessage = (approval: PendingApproval): ChatMessage => ({
+  id: `approval-${approval.approval_id}`,
+  role: 'assistant',
+  content: 'Approval required before KAREN can continue this action.',
+  timestamp: new Date(approval.created_at),
+  status: 'completed',
+  actions: approvalActions(approval.approval_id),
+  metadata: {
+    mode: 'approval_required',
+    status: 'gate',
+    approval_projection: true,
+    approval_id: approval.approval_id,
+    approval_status: approval.status,
+    conversation_id: approval.conversation_id || undefined,
+    policy_decision_id: approval.policy_decision_id || undefined,
+    intent: approval.intent,
+    risk_level: approval.risk_level,
+    reason_codes: approval.reason_codes,
+    expires_at: approval.expires_at,
+  },
+});
+
+const reconcilePendingApprovalMessages = (
+  currentMessages: ChatMessage[],
+  pendingApprovals: PendingApproval[],
+): ChatMessage[] => {
+  const pendingById = new Map(
+    pendingApprovals.map((approval) => [approval.approval_id, approval]),
+  );
+
+  const reconciled = currentMessages
+    .filter((message) => {
+      const metadata = message.metadata || {};
+      const approvalId = String(metadata.approval_id || '').trim();
+      const isProjection = metadata.approval_projection === true;
+      return !isProjection || (approvalId && pendingById.has(approvalId));
+    })
+    .map((message) => {
+      const metadata = message.metadata || {};
+      const approvalId = String(metadata.approval_id || '').trim();
+      const pending = approvalId ? pendingById.get(approvalId) : undefined;
+
+      if (!approvalId || !pending) {
+        if (approvalId && message.actions?.some((action) => action.type.startsWith('approval.'))) {
+          return {
+            ...message,
+            actions: [],
+          };
+        }
+        return message;
+      }
+
+      return {
+        ...message,
+        actions: approvalActions(approvalId),
+        metadata: {
+          ...metadata,
+          approval_status: 'pending',
+          risk_level: pending.risk_level,
+          reason_codes: pending.reason_codes,
+          expires_at: pending.expires_at,
+        },
+      };
+    });
+
+  const represented = new Set(
+    reconciled
+      .map((message) => String(message.metadata?.approval_id || '').trim())
+      .filter(Boolean),
+  );
+
+  for (const approval of pendingApprovals) {
+    if (!represented.has(approval.approval_id)) {
+      reconciled.push(pendingApprovalToMessage(approval));
+    }
+  }
+
+  return reconciled;
+};
+
 const CHAT_SESSION_STATE_PREFIX = 'karen.chat.session_state.';
 const CHAT_STATE_VERSION = 1;
 
@@ -836,6 +944,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     lastChunkTime: number;
   } | null>(null);
   const [agentSteps, setAgentSteps] = useState<AgentStepEvent[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [isLocalRecoveryUnconfirmed, setIsLocalRecoveryUnconfirmed] = useState(false);
   const [degradedMode, setDegradedMode] = useState<{
     active: boolean;
@@ -972,7 +1081,13 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
 
 
   const latestAssistantMetadata = useMemo(() => {
-    const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
+    const lastAssistant = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === 'assistant' &&
+          message.metadata?.approval_projection !== true,
+      );
     const metadata = (lastAssistant?.metadata && typeof lastAssistant.metadata === 'object')
       ? lastAssistant.metadata as Record<string, unknown>
       : {};
