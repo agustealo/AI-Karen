@@ -384,8 +384,8 @@ export default function DashboardPage() {
   return (
     <AuthWrapper>
       <SidebarProvider>
-        <div className="flex h-screen w-full flex-col bg-background text-foreground">
-          <header className="sticky top-0 z-30 flex items-center justify-between border-b border-border bg-background/90 p-3 shadow-sm backdrop-blur-md md:p-4">
+        <div className="karen-app-shell flex h-screen w-full flex-col overflow-hidden bg-background text-foreground">
+          <header className="z-30 flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-background/78 px-3 backdrop-blur-xl md:px-4">
             <div className="flex items-center space-x-3">
               <AppSidebarTrigger className="mr-1 md:mr-2" />
               <Image
@@ -396,11 +396,11 @@ export default function DashboardPage() {
                 className="h-7 w-7 shrink-0 md:h-8 md:w-8"
                 priority
               />
-              <div className="flex items-baseline gap-2">
-                <h1 className="text-xl font-semibold tracking-[0.14em] md:text-2xl">
+              <div className="flex items-baseline gap-2.5">
+                <h1 className="font-mono text-sm font-bold uppercase tracking-[0.18em] text-foreground md:text-[15px]">
                   KAREN
                 </h1>
-                <span className="hidden text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground/70 sm:inline">
+                <span className="hidden font-mono text-[9px] font-semibold uppercase tracking-[0.16em] text-primary/80 sm:inline">
                   Local-first runtime
                 </span>
               </div>
@@ -430,12 +430,15 @@ export default function DashboardPage() {
             <Sidebar
               variant="sidebar"
               collapsible="icon"
-              className="z-20 border-r"
+              className="z-20 border-r border-sidebar-border/80 bg-sidebar/88 backdrop-blur-xl"
             >
-              <AppSidebarHeader>
-                <h2 className="px-2 py-1 text-lg font-semibold tracking-tight">
-                  Navigation
-                </h2>
+              <AppSidebarHeader className="px-3 py-3">
+                <div className="px-1">
+                  <p className="karen-panel-label">Workspace</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground group-data-[collapsible=icon]:hidden">
+                    KAREN operating surfaces
+                  </p>
+                </div>
               </AppSidebarHeader>
 
               <Separator className="my-1" />
@@ -444,7 +447,7 @@ export default function DashboardPage() {
                 {PRIMARY_NAV.map((group, groupIndex) => (
                   <div key={group.section}>
                     <SidebarGroup>
-                      <SidebarGroupLabel className="mb-2 px-2 text-xs font-bold uppercase tracking-widest text-primary/70">
+                      <SidebarGroupLabel className="mb-2 px-2 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-muted-foreground/75">
                         {group.section}
                       </SidebarGroupLabel>
                       <SidebarMenu>
@@ -476,7 +479,7 @@ export default function DashboardPage() {
                 <Separator className="mx-2 bg-border/50" />
 
                 <SidebarGroup>
-                  <SidebarGroupLabel className="mb-2 px-2 text-xs font-bold uppercase tracking-widest text-primary/70">
+                  <SidebarGroupLabel className="mb-2 px-2 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-muted-foreground/75">
                     Agents & Plugins
                   </SidebarGroupLabel>
 
@@ -562,7 +565,7 @@ export default function DashboardPage() {
                 </SidebarGroup>
               </AppSidebarContent>
 
-              <AppSidebarFooter className="relative overflow-visible border-t bg-muted/20 p-4">
+              <AppSidebarFooter className="relative overflow-visible border-t border-sidebar-border/70 bg-sidebar/70 p-3">
                 <div className="flex flex-col items-center gap-1.5 text-center">
                   <Image
                     src="/brand/karen-mark.svg"
@@ -578,9 +581,11 @@ export default function DashboardPage() {
               </AppSidebarFooter>
             </Sidebar>
 
-            <SidebarInset className="flex min-h-0 flex-1 flex-col">
-              <div className="container flex flex-1 flex-col overflow-y-auto p-4 md:p-6">
-                {currentViewContent}
+            <SidebarInset className="karen-workspace-grid flex min-h-0 flex-1 flex-col bg-transparent">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 md:p-3">
+                <div className="karen-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
+                  {currentViewContent}
+                </div>
               </div>
             </SidebarInset>
           </div>
