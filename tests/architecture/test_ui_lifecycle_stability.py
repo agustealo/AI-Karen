@@ -147,3 +147,23 @@ def test_preference_confirmation_stays_on_canonical_chat_runtime() -> None:
     assert "await savePreferredAddressName(matchedAddressOption)" in submit
     assert "'/api/chat/stream'" in submit
 
+def test_deleted_conversations_cannot_rehydrate_from_local_recovery() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    assert "const removeSessionState = (sessionId: string)" in chat
+
+    single_delete = chat.split("// Delete a session", 1)[1].split(
+        "// Delete multiple sessions", 1
+    )[0]
+    assert "await apiClient.delete" in single_delete
+    assert single_delete.index("await apiClient.delete") < single_delete.index(
+        "removeSessionState(sessionId)"
+    )
+
+    bulk_delete = chat.split("// Delete multiple sessions", 1)[1].split(
+        "// Update a session title", 1
+    )[0]
+    assert "deletedIds.forEach((sessionId) => removeSessionState(sessionId))" in bulk_delete
+    assert "setCurrentSession(null)" in bulk_delete
+    assert "persistActiveSessionId(null)" in bulk_delete
+
