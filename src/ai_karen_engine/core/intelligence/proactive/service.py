@@ -158,6 +158,16 @@ class ProactiveContinuityService:
             )
 
         runner_up = candidates[1]
+        top_matches_request = "current_request_match" in top.reason_codes
+        runner_matches_request = "current_request_match" in runner_up.reason_codes
+        if top_matches_request and not runner_matches_request:
+            return ContinuityAgenda(
+                candidates=tuple(candidates),
+                primary_candidate_id=top.candidate_id,
+                ambiguous=False,
+                reason_codes=("current_request_clear_match",),
+            )
+
         margin = float(top.utility) - float(runner_up.utility)
         if margin < self._settings.resume_primary_margin:
             return ContinuityAgenda(
