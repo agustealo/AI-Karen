@@ -132,6 +132,23 @@ async def test_generic_or_unknown_intents_do_not_pollute_behavior_learning(
 
 
 @pytest.mark.asyncio
+async def test_behavior_learning_respects_denied_write_authority() -> None:
+    behavior = _BehaviorRuntime()
+    runtime = _runtime(behavior)
+
+    await runtime._record_user_behavior_observation(
+        _request(domain="work"),
+        ExecutionDecision(
+            intent="code_review",
+            intent_confidence=0.9,
+            memory_write_allowed=False,
+        ),
+    )
+
+    assert behavior.observations == []
+
+
+@pytest.mark.asyncio
 async def test_untrusted_behavior_dimensions_are_dropped() -> None:
     behavior = _BehaviorRuntime()
     runtime = _runtime(behavior)
