@@ -61,3 +61,21 @@ def test_rich_workspace_is_progressive_not_a_permanent_empty_panel() -> None:
     assert "2xl:flex" in workspace
     assert "RichResultWorkspace message={workspaceMessage}" in chat
     assert "2xl:hidden" in message
+
+
+def test_runtime_receipt_duplicate_surface_is_retired() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+    receipt = UI / "components/chat/RuntimeReceipt.tsx"
+
+    assert "RuntimeReceipt" not in chat
+    assert not receipt.exists()
+
+
+def test_auth_and_setup_share_the_same_application_shell() -> None:
+    login = _read("app/login/page.tsx")
+    setup = _read("app/setup/page.tsx")
+    auth = _read("components/AuthWrapper.tsx")
+
+    for source in (login, setup, auth):
+        assert "karen-app-shell" in source
+        assert "karen-workspace-grid" in source
