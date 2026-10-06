@@ -48,11 +48,36 @@ def test_runtime_enforces_human_gate_before_execution_paths() -> None:
     assert 'type=ChatStreamEventType.APPROVAL' in source
 
 
-def test_langgraph_cannot_spin_waiting_for_human_input() -> None:
+def test_langgraph_has_no_independent_approval_authority() -> None:
     source = LANGGRAPH.read_text(encoding="utf-8")
+    safety = (
+        ROOT
+        / "src/ai_karen_engine/core/langgraph_orchestrator/nodes/safety_gate.py"
+    ).read_text(encoding="utf-8")
+    node_exports = (
+        ROOT
+        / "src/ai_karen_engine/core/langgraph_orchestrator/nodes/__init__.py"
+    ).read_text(encoding="utf-8")
+    config = (
+        ROOT
+        / "src/ai_karen_engine/core/langgraph_orchestrator/contracts/orchestration_config.py"
+    ).read_text(encoding="utf-8")
 
-    assert '"pending": "approval_gate"' not in source
-    assert '"pending": END' in source
+    assert 'workflow.add_node("approval_gate"' not in source
+    assert "_should_require_approval" not in source
+    assert "_check_approval_status" not in source
+    assert '"review": END' in source
+    assert "runtime_authority_mismatch:safety_review_required" in source
+    assert '"sensitive" in str(result)' not in source
+
+    assert 'state["requires_approval"] = True' not in safety
+    assert "approval_gate_node" not in node_exports
+    assert "ApprovalGateNode" not in node_exports
+    assert "enable_approval_gate" not in config
+    assert not (
+        ROOT
+        / "src/ai_karen_engine/core/langgraph_orchestrator/nodes/approval_gate.py"
+    ).exists()
 
 
 def test_approval_schema_is_tenant_scoped_one_shot_and_rls_enforced() -> None:
