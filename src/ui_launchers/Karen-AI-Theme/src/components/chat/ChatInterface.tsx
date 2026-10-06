@@ -544,7 +544,8 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
     try {
       await apiClient.delete(`/api/conversations/${sessionId}`);
 
-      // Update sessions list optimistically, then re-sync from server to avoid stale history.
+      // Remove stale browser recovery only after durable server deletion succeeds.
+      removeSessionState(sessionId);
       setSessions(prev => prev.filter(s => s.id !== sessionId));
 
       let replacementFailed = false;
@@ -615,11 +616,19 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
       }
 
       if (deletedIds.size > 0) {
+        deletedIds.forEach((sessionId) => removeSessionState(sessionId));
         setSessions(prev => prev.filter(s => !deletedIds.has(s.id)));
       }
 
+      let replacementFailed = false;
       if (currentSession && deletedIds.has(currentSession.id)) {
-        await createNewSession();
+        setCurrentSession(null);
+        persistActiveSessionId(null);
+        try {
+          await createNewSession();
+        } catch {
+          replacementFailed = true;
+        }
       }
 
       if (deletedIds.size > 0) {
@@ -631,13 +640,16 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
         return false;
       }
 
+      if (replacementFailed) {
+        setError('Chats were deleted, but a replacement chat could not be created yet.');
+      }
       return true;
     } catch (err) {
       console.error('Failed to delete sessions:', err);
       setError('Failed to delete some sessions. Please try again.');
       return false;
     }
-  }, [currentSession, createNewSession, getRateLimitDelayMs, refreshSessions]);
+  }, [currentSession, createNewSession, getRateLimitDelayMs, persistActiveSessionId, refreshSessions]);
 
   // Update a session title
   const updateSessionTitle = useCallback(async (sessionId: string, newTitle: string) => {
@@ -944,6 +956,15 @@ const loadSessionState = (sessionId: string): PersistedChatSessionState | null =
     return parsed;
   } catch {
     return null;
+  }
+};
+
+const removeSessionState = (sessionId: string): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(getSessionStateStorageKey(sessionId));
+  } catch {
+    // Ignore storage failures. Durable server deletion remains authoritative.
   }
 };
 
