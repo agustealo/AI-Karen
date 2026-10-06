@@ -44,6 +44,11 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     MaintenanceResponse,
     get_chat_runtime_control_plane,
 )
+from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
+    DecisionType,
+    OpeEligibilityReason,
+    TOPOLOGY_FEATURES_V1,
+)
 from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
 from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
 from ai_karen_engine.platform.observability import get_observability_emitter
@@ -88,7 +93,9 @@ class ChatRuntime:
     ) -> None:
         self._composition = composition or get_runtime_composition()
         self._conversation_gateway = conversation_gateway
-        self._trajectory_recorder = TrajectoryRecorder()
+        self._trajectory_recorder = TrajectoryRecorder(
+            store=self._composition.trajectory_store
+        )
         self._outcome_recorder = OutcomeRecorder(store=self._composition.outcome_store)
         self._emitter = get_observability_emitter()
 
@@ -143,6 +150,10 @@ class ChatRuntime:
         meter = ExecutionBudgetMeter(plan.budget)
         meter.start()
         trajectory = self._trajectory_recorder.start()
+        decision_observation_id = await self._record_learning_decision(
+            trajectory,
+            decision,
+        )
 
         memory_recall_meta: Dict[str, Any] = {}
         provider_meta: Dict[str, Any] = {}
@@ -194,7 +205,7 @@ class ChatRuntime:
                         memory_recall_meta,
                         plan,
                     )
-                self._record_trajectory_completion(
+                await self._record_trajectory_completion(
                     trajectory,
                     decision,
                     fallback.answer,
@@ -207,6 +218,7 @@ class ChatRuntime:
                 await self._record_execution_outcome(
                     trajectory.trajectory_id,
                     decision,
+                    decision_observation_id,
                     fallback.answer,
                     start,
                     meter,
@@ -215,7 +227,7 @@ class ChatRuntime:
                     provider_meta=provider_meta or {},
                 )
                 return fallback
-            self._record_trajectory_completion(
+            await self._record_trajectory_completion(
                 trajectory,
                 decision,
                 "",
@@ -228,6 +240,7 @@ class ChatRuntime:
             await self._record_execution_outcome(
                 trajectory.trajectory_id,
                 decision,
+                decision_observation_id,
                 "",
                 start,
                 meter,
@@ -251,7 +264,7 @@ class ChatRuntime:
             await self._persist_memory(request, text, memory_recall_meta, plan)
 
         latency_ms = (time.time() - start) * 1000.0
-        self._record_trajectory_completion(
+        await self._record_trajectory_completion(
             trajectory,
             decision,
             text,
@@ -263,6 +276,7 @@ class ChatRuntime:
         await self._record_execution_outcome(
             trajectory.trajectory_id,
             decision,
+            decision_observation_id,
             text,
             start,
             meter,
@@ -350,6 +364,10 @@ class ChatRuntime:
         meter = ExecutionBudgetMeter(plan.budget)
         meter.start()
         trajectory = self._trajectory_recorder.start()
+        decision_observation_id = await self._record_learning_decision(
+            trajectory,
+            decision,
+        )
         stream_start = time.time()
 
         yield self._enrich_chunk(
@@ -568,7 +586,7 @@ class ChatRuntime:
 
         latency_ms = (time.time() - stream_start) * 1000.0
         success = bool(streamed_text) and generation_error is None
-        self._record_trajectory_completion(
+        await self._record_trajectory_completion(
             trajectory,
             decision,
             streamed_text,
@@ -587,6 +605,7 @@ class ChatRuntime:
         await self._record_execution_outcome(
             trajectory.trajectory_id,
             decision,
+            decision_observation_id,
             streamed_text,
             stream_start,
             meter,
@@ -1786,7 +1805,137 @@ class ChatRuntime:
             return "degraded_runtime"
         return None
 
-    def _record_trajectory_completion(
+    async def _record_learning_decision(
+        self,
+        trajectory: Any,
+        decision: ExecutionDecision,
+    ) -> Optional[str]:
+        """Persist immutable decision-time lineage without affecting execution."""
+
+        try:
+            trajectory.intent = decision.intent
+            trajectory.cortex_decision = {
+                "topology": decision.topology.value,
+                "execution_mode": decision.execution_mode.value,
+                "risk_level": (
+                    decision.risk_level.value
+                    if hasattr(decision.risk_level, "value")
+                    else str(decision.risk_level)
+                ),
+                "reason_codes": list(decision.reason_codes),
+                "reasoning_modes": list(decision.reasoning_modes),
+                "max_model_calls": decision.max_model_calls,
+            }
+            trajectory.policy_decision_id = decision.policy_decision_id
+            trajectory.policy_allowed_capabilities = list(
+                decision.required_capabilities
+            )
+            trajectory.policy_denied_capabilities = list(
+                decision.forbidden_capabilities
+            )
+
+            await self._trajectory_recorder.persist_async(trajectory)
+
+            snapshot = self._trajectory_recorder.build_feature_snapshot(
+                trajectory,
+                feature_version=TOPOLOGY_FEATURES_V1,
+                intent=decision.intent,
+                intent_confidence=decision.intent_confidence,
+                complexity=decision.reasoning_depth,
+                capability_hints={
+                    "tool_requirements": list(decision.tool_requirements),
+                    "plugin_candidates": list(decision.plugin_candidates),
+                    "requires_agent_delegation": (
+                        decision.requires_agent_delegation
+                    ),
+                    "requires_parallel_execution": (
+                        decision.requires_parallel_execution
+                    ),
+                    "requires_human_gate": decision.requires_human_gate,
+                },
+                topology_signals={
+                    "graph_required": decision.graph_required,
+                    "reasoning_modes": list(decision.reasoning_modes),
+                    "requires_resumability": decision.requires_resumability,
+                },
+                risk_signals={
+                    "risk_level": (
+                        decision.risk_level.value
+                        if hasattr(decision.risk_level, "value")
+                        else str(decision.risk_level)
+                    ),
+                },
+                runtime_capabilities={
+                    "required": list(decision.required_capabilities),
+                    "forbidden": list(decision.forbidden_capabilities),
+                },
+                metadata={
+                    "policy_decision_id": decision.policy_decision_id,
+                    "policy_version": decision.policy_version,
+                    "reason_codes": list(decision.reason_codes),
+                    "policy_reason_codes": list(
+                        decision.policy_reason_codes
+                    ),
+                },
+            )
+            await self._trajectory_recorder.record_feature_snapshot_async(
+                trajectory,
+                feature_snapshot=snapshot,
+            )
+
+            candidate_actions = tuple(item.value for item in ExecutionTopology)
+            observation = self._trajectory_recorder.build_decision_observation(
+                trajectory,
+                feature_snapshot_id=snapshot.feature_snapshot_id,
+                decision_type=DecisionType.EXECUTION_TOPOLOGY.value,
+                candidate_actions=candidate_actions,
+                eligible_actions=(decision.topology.value,),
+                chosen_action=decision.topology.value,
+                chosen_probability=None,
+                action_probabilities={},
+                decision_id=decision.policy_decision_id,
+                ope_eligible=False,
+                ope_ineligible_reason=(
+                    OpeEligibilityReason.MISSING_PROPENSITY.value
+                ),
+                metadata={
+                    "eligibility_scope": "authorized_choice_only",
+                    "policy_decision_id": decision.policy_decision_id,
+                },
+            )
+            await self._trajectory_recorder.record_decision_observation_async(
+                trajectory,
+                decision_observation=observation,
+            )
+            await self._trajectory_recorder.persist_async(trajectory)
+            return observation.decision_observation_id
+        except Exception as exc:
+            logger.warning(
+                "learning decision lineage recording failed",
+                extra={
+                    "trajectory_id": getattr(
+                        trajectory,
+                        "trajectory_id",
+                        None,
+                    ),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            self._emitter.emit(
+                RuntimeEventType.LEARNING_RECORDING_FAILED,
+                error_type=type(exc).__name__,
+                metadata={
+                    "kind": "decision_lineage",
+                    "trajectory_id": getattr(
+                        trajectory,
+                        "trajectory_id",
+                        None,
+                    ),
+                },
+            )
+            return None
+
+    async def _record_trajectory_completion(
         self,
         trajectory: Any,
         decision: ExecutionDecision,
@@ -1798,6 +1947,7 @@ class ChatRuntime:
         error: Optional[str] = None,
     ) -> None:
         trajectory.intent = decision.intent
+        trajectory.executed_topology = decision.topology.value
         trajectory.cortex_decision = {
             "topology": decision.topology.value,
             "execution_mode": decision.execution_mode.value,
@@ -1833,7 +1983,7 @@ class ChatRuntime:
         trajectory.execution_status = "success" if text else "failure"
         trajectory.error_code = error
         trajectory.response_source = provider_meta.get("response_source")
-        self._trajectory_recorder.complete(
+        await self._trajectory_recorder.complete_async(
             trajectory,
             execution_status=trajectory.execution_status,
             error_code=error,
@@ -1844,6 +1994,7 @@ class ChatRuntime:
         self,
         trajectory_id: Optional[str],
         decision: ExecutionDecision,
+        decision_observation_id: Optional[str],
         text: str,
         start: float,
         meter: ExecutionBudgetMeter,
@@ -1877,6 +2028,7 @@ class ChatRuntime:
             persistence_success = None
         await self._outcome_recorder.record_execution_outcome_async(
             trajectory_id=trajectory_id,
+            decision_observation_id=decision_observation_id,
             status=(
                 ExecutionStatus.SUCCESS if success else ExecutionStatus.FAILURE
             ),
