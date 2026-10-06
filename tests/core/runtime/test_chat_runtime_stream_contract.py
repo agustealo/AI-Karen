@@ -16,6 +16,9 @@ from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
     TranscriptPersistenceResult,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
+    ApprovalRequiredResponse,
+)
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionBudget,
@@ -493,4 +496,52 @@ async def test_execute_stream_gate_emits_error_and_complete_without_persistence(
     assert chunks[0].type == ChatStreamEventType.ERROR
     assert chunks[1].type == ChatStreamEventType.COMPLETE
     assert len([chunk for chunk in chunks if chunk.type == ChatStreamEventType.COMPLETE]) == 1
+    assert gateway.calls == []
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_human_gate_stops_before_execution_and_persistence():
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    decision.requires_human_gate = True
+    plan = _make_plan()
+    approval = ApprovalRequiredResponse(
+        approval_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        status="pending",
+        intent="general_assist",
+        risk_level="high",
+        reason_codes=["human_gate_required"],
+    )
+    run_simple_stream = MagicMock()
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+            with patch.object(runtime, "_record_user_behavior_observation", new_callable=AsyncMock):
+                with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                    with patch.object(
+                        runtime,
+                        "_resolve_human_approval_gate",
+                        new_callable=AsyncMock,
+                        return_value=approval,
+                    ):
+                        with patch.object(runtime, "_run_simple_stream", run_simple_stream):
+                            with patch.object(runtime, "_persist_memory", new_callable=AsyncMock) as persist_memory:
+                                with patch.object(runtime, "_persist_transcript", new_callable=AsyncMock) as persist_transcript:
+                                    with patch.object(runtime._emitter, "emit"):
+                                        chunks = [
+                                            chunk
+                                            async for chunk in runtime.execute_stream(request)
+                                        ]
+
+    assert [chunk.type for chunk in chunks] == [
+        ChatStreamEventType.APPROVAL,
+        ChatStreamEventType.COMPLETE,
+    ]
+    assert chunks[0].metadata["approval_id"] == approval.approval_id
+    assert chunks[1].metadata["status"] == "gate"
+    assert chunks[1].metadata["approval_status"] == "pending"
+    run_simple_stream.assert_not_called()
+    persist_memory.assert_not_awaited()
+    persist_transcript.assert_not_awaited()
     assert gateway.calls == []
