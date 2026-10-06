@@ -229,3 +229,10 @@ def test_conversation_mutations_require_authenticated_user_gateway_scope() -> No
     assert "conversation_service.base_manager.update_conversation(" not in update_route
     assert "conversation_service.delete_conversation(" not in delete_route
 
+def test_chat_ingress_preserves_canonical_conversation_identity() -> None:
+    source = CHAT_ROUTE.read_text(encoding="utf-8")
+
+    assert "conversation_id: Optional[str] = Field(default=None, max_length=100)" in source
+    assert "conversation_id=request.conversation_id" in source
+    assert "conversation_id=normalize_chat_session_id(session_id)" not in source
+
