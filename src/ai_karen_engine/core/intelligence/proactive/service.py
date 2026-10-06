@@ -9,6 +9,11 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timedelta, timezone
 
+from ai_karen_engine.config.proactive import (
+    ProactiveContinuitySettings,
+    get_proactive_continuity_settings,
+)
+
 from .contracts import (
     ContinuityEvidence,
     NextNeedCandidate,
@@ -19,10 +24,15 @@ from .contracts import (
 class ProactiveContinuityService:
     """Rank likely next needs from current user-state evidence."""
 
-    def __init__(self, repository: ProactiveContinuityRepository) -> None:
+    def __init__(
+        self,
+        repository: ProactiveContinuityRepository,
+        settings: ProactiveContinuitySettings | None = None,
+    ) -> None:
         if repository is None:
             raise ValueError("proactive continuity requires an explicit repository")
         self._repository = repository
+        self._settings = settings or get_proactive_continuity_settings()
 
     async def rank(
         self,
@@ -32,11 +42,21 @@ class ProactiveContinuityService:
         now: datetime | None = None,
         limit: int = 5,
     ) -> list[NextNeedCandidate]:
+        if not self._settings.enabled:
+            return []
+
         now_utc = self._utc(now or datetime.now(timezone.utc))
+        effective_limit = max(
+            1,
+            min(
+                int(limit),
+                self._settings.max_candidates,
+            ),
+        )
         evidence = await self._repository.load_evidence(
             tenant_id=tenant_id,
             user_id=user_id,
-            limit=max(20, min(int(limit) * 10, 200)),
+            limit=max(20, min(effective_limit * 10, 200)),
         )
 
         ranked = [
@@ -46,7 +66,8 @@ class ProactiveContinuityService:
         ranked = [
             candidate
             for candidate in ranked
-            if candidate is not None and candidate.utility >= 0.5
+            if candidate is not None
+            and candidate.utility >= self._settings.min_candidate_utility
         ]
         ranked.sort(
             key=lambda item: (
@@ -68,7 +89,7 @@ class ProactiveContinuityService:
                 continue
             seen.add(key)
             deduped.append(candidate)
-            if len(deduped) >= max(1, min(int(limit), 10)):
+            if len(deduped) >= effective_limit:
                 break
         return deduped
 
@@ -87,31 +108,37 @@ class ProactiveContinuityService:
         urgency = "normal"
 
         if source == "open_loop":
-            utility = 0.68
+            utility = self._settings.open_loop_weight
             reason_codes.append("unfinished_work")
             if state != "open":
                 return None
         elif source == "prospective":
-            utility = 0.72
+            utility = self._settings.prospective_weight
             reason_codes.append("upcoming_event")
             if state not in {"dormant", "ready", "triggered"}:
                 return None
         elif source == "goal":
-            utility = 0.58
+            utility = self._settings.goal_weight
             reason_codes.append("active_goal")
             if state == "at_risk":
-                utility += 0.18
+                utility += self._settings.at_risk_boost
                 urgency = "high"
                 reason_codes.append("goal_at_risk")
             elif state == "blocked":
-                utility += 0.1
+                utility += self._settings.blocked_boost
                 reason_codes.append("goal_blocked")
             elif state not in {"active", "blocked", "paused", "at_risk", "satisfied"}:
                 return None
         elif source == "behavior":
-            if item.observation_count < 3 or confidence < 0.6:
+            if (
+                item.observation_count < self._settings.behavior_min_observations
+                or confidence < self._settings.behavior_min_confidence
+            ):
                 return None
-            utility = 0.48 + min(0.18, 0.03 * item.observation_count)
+            utility = self._settings.behavior_weight + min(
+                self._settings.at_risk_boost,
+                0.03 * item.observation_count,
+            )
             interruption_cost = 0.35
             reason_codes.extend(("recurring_behavior", "behavior_repeated"))
         else:
@@ -153,8 +180,8 @@ class ProactiveContinuityService:
             },
         )
 
-    @staticmethod
     def _time_adjustment(
+        self,
         target_at: datetime | None,
         *,
         now: datetime,
@@ -165,15 +192,19 @@ class ProactiveContinuityService:
         target = ProactiveContinuityService._utc(target_at)
         delta = target - now
         if delta < timedelta(hours=-1):
-            return 0.12, "high", ["overdue"]
+            return self._settings.overdue_boost, "high", ["overdue"]
         if delta <= timedelta(hours=6):
-            return 0.22, "high", ["due_soon"]
+            return self._settings.due_six_hours_boost, "high", ["due_soon"]
         if delta <= timedelta(days=1):
-            return 0.16, "high", ["due_within_day"]
+            return self._settings.due_one_day_boost, "high", ["due_within_day"]
         if delta <= timedelta(days=3):
-            return 0.1, "normal", ["due_within_three_days"]
+            return (
+                self._settings.due_three_days_boost,
+                "normal",
+                ["due_within_three_days"],
+            )
         if delta <= timedelta(days=7):
-            return 0.05, "low", ["due_within_week"]
+            return self._settings.due_seven_days_boost, "low", ["due_within_week"]
         return 0.0, "low", ["future"]
 
     @staticmethod
