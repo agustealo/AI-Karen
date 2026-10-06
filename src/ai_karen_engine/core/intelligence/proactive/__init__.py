@@ -1,6 +1,7 @@
 """Proactive continuity intelligence."""
 
 from .contracts import (
+    ContinuityAgenda,
     ContinuityEvidence,
     NextNeedCandidate,
     ProactiveContinuityRepository,
@@ -8,6 +9,7 @@ from .contracts import (
 from .service import ProactiveContinuityService
 
 __all__ = [
+    "ContinuityAgenda",
     "ContinuityEvidence",
     "NextNeedCandidate",
     "ProactiveContinuityRepository",
