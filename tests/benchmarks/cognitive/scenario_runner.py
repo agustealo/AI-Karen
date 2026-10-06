@@ -26,7 +26,6 @@ from ai_karen_engine.core.personalization.contracts import (
 )
 from ai_karen_engine.core.personalization.goals.conflicts import ConflictDetector
 from ai_karen_engine.core.personalization.goals.contracts import (
-    CompletionEvidenceSource,
     GoalState,
 )
 from ai_karen_engine.core.memory.user_state_lifecycle import can_transition_goal
@@ -760,9 +759,3 @@ def _enum_goal_state(value: Any) -> Any:
     return None
 
 
-def _completion_source(goal: Any) -> CompletionEvidenceSource:
-    required = list(getattr(goal, "completion_evidence_required", []) or [])
-    for src in required:
-        if src == CompletionEvidenceSource.USER_CONFIRMED:
-            return CompletionEvidenceSource.USER_CONFIRMED
-    return CompletionEvidenceSource.USER_CONFIRMED
