@@ -104,8 +104,8 @@ export default function AutomationOverviewPage() {
         <div className="flex items-center space-x-3">
           <Settings className="h-8 w-8 text-primary" />
           <div>
-            <h2 className="text-2xl font-semibold tracking-tight">Automation Overview</h2>
-            <p className="text-sm text-muted-foreground">
+            <h2 className="karen-page-title">Automation Overview</h2>
+            <p className="karen-page-description mt-1">
               Monitor tenant-scoped tasks, jobs, and schedules owned by KAREN's automation runtime.
             </p>
           </div>
