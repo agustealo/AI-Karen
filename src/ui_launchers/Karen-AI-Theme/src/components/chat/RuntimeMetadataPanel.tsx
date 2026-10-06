@@ -54,7 +54,7 @@ const Detail = ({
   value: string;
   mono?: boolean;
 }) => (
-  <div className="min-w-0 rounded-lg border border-border/60 bg-background/35 p-2.5">
+  <div className="min-w-0 rounded-lg border border-border/60 bg-background/30 p-2.5">
     <p className="karen-panel-label text-[8px]">{label}</p>
     <p
       className={cn(
@@ -104,7 +104,7 @@ export default function RuntimeMetadataPanel(props: RuntimeMetadataPanelProps) {
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/45"
+        className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
         aria-expanded={expanded}
         aria-controls="runtime-execution-details"
       >
@@ -197,7 +197,7 @@ export default function RuntimeMetadataPanel(props: RuntimeMetadataPanelProps) {
           </div>
 
           {props.providerAttempts && props.providerAttempts.length > 0 && (
-            <div className="mt-3 rounded-lg border border-border/60 bg-background/35 p-3">
+            <div className="mt-3 rounded-lg border border-border/60 bg-background/30 p-3">
               <p className="karen-panel-label">Provider attempts</p>
               <div className="mt-2 space-y-1.5">
                 {props.providerAttempts.map((attempt, index) => (
