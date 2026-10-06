@@ -170,6 +170,97 @@ async def test_restricted_domain_requires_current_domain_relevance() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resume_agenda_selects_clear_primary_when_margin_is_large() -> None:
+    now = datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)
+    repo = _Repository(
+        [
+            ContinuityEvidence(
+                source_type="prospective",
+                source_id="p1",
+                subject="job interview with Ford",
+                state="dormant",
+                confidence=0.96,
+                target_at=now + timedelta(hours=3),
+            ),
+            ContinuityEvidence(
+                source_type="open_loop",
+                source_id="o1",
+                subject="send the revised estimate",
+                state="open",
+                confidence=0.95,
+            ),
+        ]
+    )
+
+    agenda = await ProactiveContinuityService(repo).organize(
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        user_id="22222222-2222-2222-2222-222222222222",
+        now=now,
+    )
+
+    assert agenda.primary_candidate_id == agenda.candidates[0].candidate_id
+    assert agenda.ambiguous is False
+    assert "clear_primary_candidate" in agenda.reason_codes
+    assert agenda.execution_authorized is False
+
+
+@pytest.mark.asyncio
+async def test_resume_agenda_refuses_to_guess_between_close_candidates() -> None:
+    repo = _Repository(
+        [
+            ContinuityEvidence(
+                source_type="open_loop",
+                source_id="o1",
+                subject="finish the proposal",
+                state="open",
+                confidence=0.95,
+            ),
+            ContinuityEvidence(
+                source_type="open_loop",
+                source_id="o2",
+                subject="send the invoice",
+                state="open",
+                confidence=0.95,
+            ),
+        ]
+    )
+
+    agenda = await ProactiveContinuityService(repo).organize(
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        user_id="22222222-2222-2222-2222-222222222222",
+    )
+
+    assert agenda.primary_candidate_id is None
+    assert agenda.ambiguous is True
+    assert "candidate_margin_too_small" in agenda.reason_codes
+
+
+@pytest.mark.asyncio
+async def test_resume_agenda_does_not_promote_weak_single_candidate() -> None:
+    repo = _Repository(
+        [
+            ContinuityEvidence(
+                source_type="behavior",
+                source_id="b1",
+                subject="review opportunities",
+                state="recurring",
+                confidence=0.8,
+                observation_count=3,
+            )
+        ]
+    )
+
+    agenda = await ProactiveContinuityService(repo).organize(
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        user_id="22222222-2222-2222-2222-222222222222",
+    )
+
+    assert agenda.primary_candidate_id is None
+    assert agenda.ambiguous is True
+    assert "top_candidate_below_resume_threshold" in agenda.reason_codes
+
+
+@pytest.mark.asyncio
 async def test_candidate_ids_are_deterministic_for_learning_lineage() -> None:
     evidence = ContinuityEvidence(
         source_type="open_loop",
