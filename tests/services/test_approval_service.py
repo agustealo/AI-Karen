@@ -15,6 +15,7 @@ from ai_karen_engine.core.runtime.execution_decision import (
     RiskLevel,
 )
 from ai_karen_engine.services.approvals import (
+    ApprovalNotFoundError,
     ApprovalScopeError,
     ApprovalService,
     ApprovalStateError,
@@ -258,7 +259,7 @@ async def test_receipt_is_bound_to_user_and_tenant() -> None:
         approval_id=pending["approval_id"],
         user_id="33333333-3333-3333-3333-333333333333",
     )
-    with pytest.raises(Exception, match="Approval not found"):
+    with pytest.raises(ApprovalNotFoundError, match="Approval not found"):
         await service.authorize_or_request(foreign, _decision())
 
 
