@@ -1331,7 +1331,9 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       }
 
       const persisted = loadSessionState(sessionId);
-      const persistedMessages = (persisted?.messages || []).map(fromPersistedMessage);
+      const persistedMessages = (persisted?.messages || [])
+        .filter((message) => !String(message.id || '').startsWith('karen-initial-'))
+        .map(fromPersistedMessage);
       const hasRestorableState = Boolean(
         persisted &&
           (
