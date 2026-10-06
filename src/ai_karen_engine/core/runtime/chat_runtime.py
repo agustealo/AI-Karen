@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
 import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
@@ -133,6 +134,7 @@ class ChatRuntime:
             )
 
         decision = await self._decide(request)
+        await self._record_user_behavior_observation(request, decision)
         self._emitter.emit(
             RuntimeEventType.CORTEX_DECISION,
             intent=decision.intent,
@@ -360,6 +362,7 @@ class ChatRuntime:
             return
 
         decision = await self._decide(request)
+        await self._record_user_behavior_observation(request, decision)
         plan = self._build_authorized_plan(request, decision)
         meter = ExecutionBudgetMeter(plan.budget)
         meter.start()
@@ -1045,6 +1048,99 @@ class ChatRuntime:
 
     async def _decide(self, request: ChatExecutionRequest) -> ExecutionDecision:
         return await self._composition.cortex.decide(request)
+
+    async def _record_user_behavior_observation(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+    ) -> None:
+        """Persist privacy-safe evidence of an explicit user request.
+
+        This observes user behavior only. Provider/model outcomes, fallbacks,
+        latency, and execution success belong to trajectory/outcome learning.
+        """
+        runtime = self._composition.user_model_runtime
+        intent = str(decision.intent or "").strip().casefold()
+        if runtime is None or intent in {"", "unknown", "general_assist", "fallback"}:
+            return
+
+        ctx = request.context
+        domain = self._safe_behavior_dimension(request.metadata.get("domain"))
+        task_type = self._safe_behavior_dimension(request.metadata.get("task_type"))
+        signature_source = "|".join(
+            (
+                "chat",
+                f"intent={intent}",
+                f"domain={domain or 'none'}",
+                f"task_type={task_type or 'none'}",
+            )
+        )
+        context_signature = (
+            "chat:" + hashlib.sha256(signature_source.encode("utf-8")).hexdigest()[:20]
+        )
+        confidence = max(
+            0.0,
+            min(1.0, float(decision.intent_confidence or 0.65)),
+        )
+
+        try:
+            from ai_karen_engine.core.personalization.behavior.contracts import (
+                BehaviorObservation,
+            )
+
+            await runtime.ingest_behavior_observation(
+                BehaviorObservation(
+                    observation_id=str(ctx.request_id or ctx.correlation_id),
+                    pattern_id="",
+                    user_id=str(ctx.user_id),
+                    tenant_id=str(ctx.tenant_id),
+                    context_signature=context_signature,
+                    action=intent,
+                    outcome="user_requested",
+                    observed_at=datetime.datetime.utcnow(),
+                    metadata={
+                        "confidence": confidence,
+                        "source": "chat.user_request",
+                        "domain": domain,
+                        "task_type": task_type,
+                        "explicit_user_action": True,
+                    },
+                )
+            )
+            self._emitter.emit(
+                RuntimeEventType.PERSISTENCE_COMPLETED,
+                status="stored",
+                metadata={
+                    "target": "personalization_behavior",
+                    "intent": intent,
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "personalization.behavior_observation_failed",
+                extra={
+                    "correlation_id": ctx.correlation_id,
+                    "error_type": type(exc).__name__,
+                    "intent": intent,
+                },
+            )
+            self._emitter.emit(
+                RuntimeEventType.PERSISTENCE_FAILED,
+                error_type=type(exc).__name__,
+                metadata={
+                    "target": "personalization_behavior",
+                    "error_code": "BEHAVIOR_OBSERVATION_PERSISTENCE_FAILED",
+                },
+            )
+
+    @staticmethod
+    def _safe_behavior_dimension(value: Any) -> str | None:
+        raw = str(value or "").strip().casefold()
+        if not raw or len(raw) > 64:
+            return None
+        if any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in raw):
+            return None
+        return raw
 
     def _build_authorized_plan(
         self, request: ChatExecutionRequest, decision: ExecutionDecision
