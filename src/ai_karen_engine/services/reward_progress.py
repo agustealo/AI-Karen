@@ -55,6 +55,7 @@ class RewardProgressService:
         trajectory_id: str,
         feedback_type: str,
         message_id: str | None = None,
+        continuity_candidate_id: str | None = None,
     ) -> dict:
         """Append feedback only when the trajectory belongs to this user/tenant."""
         tenant_id, user_id = self._scope(user)
@@ -88,6 +89,54 @@ class RewardProgressService:
         if execution is None:
             raise RewardProgressError("Outcome trajectory not found for authenticated user")
 
+        execution_metadata = dict(execution.get("metadata") or {})
+        candidate_ids = [
+            str(item)
+            for item in execution_metadata.get("continuity_candidate_ids") or []
+            if str(item).strip()
+        ]
+        candidate_source_types = [
+            str(item)
+            for item in execution_metadata.get("continuity_source_types") or []
+        ]
+        explicit_candidate_id = str(continuity_candidate_id or "").strip() or None
+        if explicit_candidate_id is not None and explicit_candidate_id not in candidate_ids:
+            raise RewardProgressError(
+                "Continuity candidate was not shown for this trajectory"
+            )
+
+        feedback_metadata: dict[str, object] = {"interface": "web_ui"}
+        if candidate_ids:
+            feedback_metadata.update(
+                {
+                    "continuity_candidate_ids": candidate_ids,
+                    "continuity_primary_candidate_id": execution_metadata.get(
+                        "continuity_primary_candidate_id"
+                    ),
+                    "continuity_ambiguous": bool(
+                        execution_metadata.get("continuity_ambiguous", False)
+                    ),
+                    "continuity_attribution": (
+                        "explicit_candidate"
+                        if explicit_candidate_id is not None
+                        else "response_level_weak"
+                    ),
+                    "continuity_attribution_confidence": (
+                        1.0 if explicit_candidate_id is not None else 0.25
+                    ),
+                }
+            )
+            if explicit_candidate_id is not None:
+                feedback_metadata["continuity_candidate_id"] = explicit_candidate_id
+                try:
+                    candidate_index = candidate_ids.index(explicit_candidate_id)
+                except ValueError:
+                    candidate_index = -1
+                if 0 <= candidate_index < len(candidate_source_types):
+                    feedback_metadata["continuity_source_type"] = (
+                        candidate_source_types[candidate_index]
+                    )
+
         token = set_correlation_context(
             CorrelationContext(
                 request_id=execution.get("request_id"),
@@ -104,7 +153,7 @@ class RewardProgressService:
                 feedback_type=normalized_feedback,
                 message_id=message_id,
                 confidence=1.0,
-                metadata={"interface": "web_ui"},
+                metadata=feedback_metadata,
             )
         finally:
             reset_correlation_context(token)
