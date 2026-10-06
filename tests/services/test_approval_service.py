@@ -84,7 +84,7 @@ class FakeApprovalRepository:
             return None
         return dict(record)
 
-    async def list_pending(
+    async def list_actionable(
         self,
         *,
         tenant_id: str,
@@ -358,12 +358,38 @@ async def test_pending_approvals_can_be_scoped_to_one_conversation() -> None:
     second = await service.authorize_or_request(other, _decision())
     assert second is not None
 
-    scoped = await service.list_pending(
+    scoped = await service.list_actionable(
         user=_user(),
         conversation_id="22222222-2222-2222-2222-222222222222",
     )
 
     assert [record["approval_id"] for record in scoped] == [first["approval_id"]]
+
+
+@pytest.mark.asyncio
+async def test_approved_unconsumed_receipt_remains_actionable_for_resume() -> None:
+    repo = FakeApprovalRepository()
+    service = ApprovalService(repository=repo)
+
+    pending = await service.authorize_or_request(_request(), _decision())
+    assert pending is not None
+
+    approved = await service.decide(
+        pending["approval_id"],
+        user=_user(),
+        decision="approved",
+    )
+    assert approved["status"] == "approved"
+
+    actionable = await service.list_actionable(
+        user=_user(),
+        conversation_id="22222222-2222-2222-2222-222222222222",
+    )
+
+    assert [record["approval_id"] for record in actionable] == [
+        pending["approval_id"]
+    ]
+    assert actionable[0]["status"] == "approved"
 
 
 @pytest.mark.asyncio
