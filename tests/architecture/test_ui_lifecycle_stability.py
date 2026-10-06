@@ -135,17 +135,36 @@ def test_new_chat_requires_server_ack_before_becoming_current() -> None:
     assert "Chat deleted, but a replacement chat could not be created yet." in delete
 
 
-def test_preference_confirmation_stays_on_canonical_chat_runtime() -> None:
+def test_chat_ui_does_not_own_semantic_memory_or_assistant_greetings() -> None:
     chat = _read("components/chat/ChatInterface.tsx")
 
-    assert "Understood. I'll address you as" not in chat
+    assert "useGreetingSystem" not in chat
+    assert "savePreferredAddressName" not in chat
+    assert "/api/memory/commit" not in chat
+    assert "addressPreferencePrompt" not in chat
+    assert "addressOptions" not in chat
     assert "assistant-pref-" not in chat
 
     submit = chat.split("// Submit handler", 1)[1].split(
         "// Process injected messages", 1
     )[0]
-    assert "await savePreferredAddressName(matchedAddressOption)" in submit
     assert "'/api/chat/stream'" in submit
+
+
+def test_chat_input_does_not_surface_fake_generated_starter() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+    chat_input = _read("components/chat/interface/ChatInput.tsx")
+
+    for stale in (
+        "Tell me a fun fact about space.",
+        "handleSuggestStarter",
+        "isSuggestingStarter",
+        "onSuggestStarter",
+        "Generate a conversation starter suggestion",
+        "Getting idea...",
+    ):
+        assert stale not in chat
+        assert stale not in chat_input
 
 def test_deleted_conversations_cannot_rehydrate_from_local_recovery() -> None:
     chat = _read("components/chat/ChatInterface.tsx")
