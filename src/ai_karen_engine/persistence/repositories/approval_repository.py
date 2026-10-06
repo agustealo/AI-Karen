@@ -137,11 +137,12 @@ class SqlApprovalRepository:
             row = result.mappings().one_or_none()
             return _row(row) if row else None
 
-    async def list_pending(
+    async def list_actionable(
         self,
         *,
         tenant_id: str,
         user_id: str,
+        conversation_id: Optional[str] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         async with async_transaction_scope(tenant_id) as session:
@@ -167,7 +168,11 @@ class SqlApprovalRepository:
                     FROM public.runtime_approval_requests
                     WHERE tenant_id = CAST(:tenant_id AS uuid)
                       AND user_id = CAST(:user_id AS uuid)
-                      AND status = 'pending'
+                      AND status IN ('pending', 'approved')
+                      AND (
+                            :conversation_id IS NULL
+                            OR conversation_id = CAST(:conversation_id AS uuid)
+                      )
                     ORDER BY created_at DESC
                     LIMIT :limit
                     """
@@ -175,6 +180,7 @@ class SqlApprovalRepository:
                 {
                     "tenant_id": tenant_id,
                     "user_id": user_id,
+                    "conversation_id": conversation_id,
                     "limit": max(1, min(limit, 100)),
                 },
             )

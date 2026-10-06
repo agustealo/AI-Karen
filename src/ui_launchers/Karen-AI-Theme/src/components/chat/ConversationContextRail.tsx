@@ -20,9 +20,19 @@ import type { AgentStepEvent } from '@/lib/types';
 
 type JsonRecord = Record<string, unknown>;
 
+interface ApprovalAttentionItem {
+  approval_id: string;
+  intent: string;
+  risk_level: string;
+  status: string;
+  expires_at: string;
+}
+
 interface ConversationContextRailProps {
   metadata?: JsonRecord;
   agentSteps: AgentStepEvent[];
+  approvals?: ApprovalAttentionItem[];
+  approvalsLoadState?: 'idle' | 'loading' | 'ready' | 'unavailable';
 }
 
 interface ContinuityCandidate {
@@ -172,6 +182,8 @@ const EmptyTruth = ({ children }: { children: React.ReactNode }) => (
 function RailContent({
   metadata,
   agentSteps,
+  approvals = [],
+  approvalsLoadState = 'idle',
 }: ConversationContextRailProps) {
   const continuity = useMemo(
     () => normalizeContinuity(metadata || {}),
@@ -202,7 +214,11 @@ function RailContent({
     usage.providers.length > 0;
 
   const needsAttention =
-    continuity.ambiguous || capabilities.requiresHumanGate;
+    continuity.ambiguous ||
+    capabilities.requiresHumanGate ||
+    approvals.length > 0 ||
+    approvalsLoadState === 'loading' ||
+    approvalsLoadState === 'unavailable';
 
   return (
     <div className="space-y-3">
@@ -410,12 +426,46 @@ function RailContent({
                 which one you want instead of guessing.
               </p>
             )}
-            {capabilities.requiresHumanGate && (
+            {capabilities.requiresHumanGate && approvals.length === 0 && (
               <p>
                 The authorized plan requires a human approval before execution
                 can continue.
               </p>
             )}
+
+            {approvalsLoadState === 'loading' && (
+              <p className="text-muted-foreground">
+                Checking durable approval state for this conversation…
+              </p>
+            )}
+
+            {approvalsLoadState === 'unavailable' && (
+              <p className="text-muted-foreground">
+                Approval state is unavailable, so KAREN cannot confirm whether
+                an action is waiting for your decision.
+              </p>
+            )}
+
+            {approvals.map((approval) => (
+              <div
+                key={approval.approval_id}
+                className="rounded-lg border border-border/70 bg-background/50 p-2.5"
+              >
+                <p className="font-medium leading-relaxed">
+                  {approval.status === 'approved'
+                    ? `${approval.intent.replace(/_/g, ' ')} is approved and ready to resume.`
+                    : `${approval.intent.replace(/_/g, ' ')} is waiting for your decision.`}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <Badge variant="secondary" className="text-[9px]">
+                    {approval.status === 'approved' ? 'ready to resume' : 'approval required'}
+                  </Badge>
+                  <Badge variant="outline" className="text-[9px]">
+                    {approval.risk_level} risk
+                  </Badge>
+                </div>
+              </div>
+            ))}
           </CardContent>
         </Card>
       )}

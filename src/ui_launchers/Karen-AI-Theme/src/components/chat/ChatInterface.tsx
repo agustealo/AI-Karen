@@ -57,6 +57,21 @@ interface ChatInterfaceProps {
   isActive?: boolean;
 }
 
+interface ActionableApproval {
+  approval_id: string;
+  conversation_id?: string | null;
+  policy_decision_id?: string | null;
+  intent: string;
+  risk_level: string;
+  reason_codes: string[];
+  status: string;
+  decision_reason?: string | null;
+  created_at: string;
+  expires_at: string;
+  decided_at?: string | null;
+  consumed_at?: string | null;
+}
+
 interface ConversationApiResponse {
   conversations: Array<{
     id: string;
@@ -728,6 +743,125 @@ const createSessionId = (): string => {
   ].join('-');
 };
 
+const approvalActions = (
+  approvalId: string,
+  status: string,
+): SuggestedAction[] =>
+  status === 'approved'
+    ? [
+        {
+          type: 'approval.resume',
+          description: 'Resume',
+          params: { approval_id: approvalId },
+        },
+      ]
+    : [
+        {
+          type: 'approval.approve',
+          description: 'Approve',
+          params: { approval_id: approvalId },
+        },
+        {
+          type: 'approval.reject',
+          description: 'Reject',
+          params: { approval_id: approvalId },
+        },
+      ];
+
+const approvalMessageContent = (status: string): string =>
+  status === 'approved'
+    ? 'Approval granted. KAREN is ready to resume this action.'
+    : 'Approval required before KAREN can continue this action.';
+
+const actionableApprovalToMessage = (approval: ActionableApproval): ChatMessage => ({
+  id: `approval-${approval.approval_id}`,
+  role: 'assistant',
+  content: approvalMessageContent(approval.status),
+  timestamp: new Date(approval.created_at),
+  status: 'completed',
+  actions: approvalActions(approval.approval_id, approval.status),
+  metadata: {
+    mode: 'approval_required',
+    status: 'gate',
+    approval_projection: true,
+    approval_id: approval.approval_id,
+    approval_status: approval.status,
+    conversation_id: approval.conversation_id || undefined,
+    policy_decision_id: approval.policy_decision_id || undefined,
+    intent: approval.intent,
+    risk_level: approval.risk_level,
+    reason_codes: approval.reason_codes,
+    expires_at: approval.expires_at,
+  },
+});
+
+const reconcileActionableApprovalMessages = (
+  currentMessages: ChatMessage[],
+  actionableApprovals: ActionableApproval[],
+): ChatMessage[] => {
+  const actionableById = new Map(
+    actionableApprovals.map((approval) => [approval.approval_id, approval]),
+  );
+
+  const reconciled = currentMessages
+    .filter((message) => {
+      const metadata = message.metadata || {};
+      const approvalId = String(metadata.approval_id || '').trim();
+      const isProjection = metadata.approval_projection === true;
+      return !isProjection || (approvalId && actionableById.has(approvalId));
+    })
+    .map((message) => {
+      const metadata = message.metadata || {};
+      const approvalId = String(metadata.approval_id || '').trim();
+      const actionable = approvalId ? actionableById.get(approvalId) : undefined;
+
+      if (!approvalId || !actionable) {
+        if (approvalId && message.actions?.some((action) => action.type.startsWith('approval.'))) {
+          return {
+            ...message,
+            actions: [],
+          };
+        }
+        return message;
+      }
+
+      return {
+        ...message,
+        content:
+          actionable.status === 'approved'
+            ? approvalMessageContent(actionable.status)
+            : message.content,
+        actions: approvalActions(approvalId, actionable.status),
+        metadata: {
+          ...metadata,
+          approval_status: actionable.status,
+          risk_level: actionable.risk_level,
+          reason_codes: actionable.reason_codes,
+          expires_at: actionable.expires_at,
+        },
+      };
+    });
+
+  const represented = new Set(
+    reconciled
+      .map((message) => String(message.metadata?.approval_id || '').trim())
+      .filter(Boolean),
+  );
+
+  const missingApprovals = actionableApprovals
+    .filter((approval) => !represented.has(approval.approval_id))
+    .sort(
+      (left, right) =>
+        new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
+    );
+
+  for (const approval of missingApprovals) {
+    reconciled.push(actionableApprovalToMessage(approval));
+  }
+
+  return reconciled;
+};
+
 const CHAT_SESSION_STATE_PREFIX = 'karen.chat.session_state.';
 const CHAT_STATE_VERSION = 1;
 
@@ -836,6 +970,10 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     lastChunkTime: number;
   } | null>(null);
   const [agentSteps, setAgentSteps] = useState<AgentStepEvent[]>([]);
+  const [actionableApprovals, setActionableApprovals] = useState<ActionableApproval[]>([]);
+  const [actionableApprovalsLoadState, setActionableApprovalsLoadState] = useState<
+    'idle' | 'loading' | 'ready' | 'unavailable'
+  >('idle');
   const [isLocalRecoveryUnconfirmed, setIsLocalRecoveryUnconfirmed] = useState(false);
   const [degradedMode, setDegradedMode] = useState<{
     active: boolean;
@@ -971,8 +1109,53 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   const { applyModelSelection, getSelectableProviders } = useModelSettings();
 
 
+  const refreshActionableApprovals = useCallback(
+    async (conversationId: string): Promise<ActionableApproval[] | null> => {
+      setActionableApprovalsLoadState('loading');
+      try {
+        const approvals = await apiClient.get<ActionableApproval[]>(
+          `/api/approvals?conversation_id=${encodeURIComponent(conversationId)}`,
+        );
+        const actionable = Array.isArray(approvals)
+          ? approvals.filter(
+              (approval) =>
+                (approval.status === 'pending' || approval.status === 'approved') &&
+                (!approval.conversation_id ||
+                  approval.conversation_id === conversationId),
+            )
+          : [];
+
+        if (sessionIdRef.current !== conversationId) {
+          return actionable;
+        }
+
+        setActionableApprovals(actionable);
+        setMessages((current) =>
+          reconcileActionableApprovalMessages(current, actionable),
+        );
+        setActionableApprovalsLoadState('ready');
+        return actionable;
+      } catch (error) {
+        if (sessionIdRef.current === conversationId) {
+          setActionableApprovalsLoadState('unavailable');
+        }
+        if (error instanceof ApiError && error.status === 401) {
+          return null;
+        }
+        return null;
+      }
+    },
+    [setMessages],
+  );
+
   const latestAssistantMetadata = useMemo(() => {
-    const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
+    const lastAssistant = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === 'assistant' &&
+          message.metadata?.approval_projection !== true,
+      );
     const metadata = (lastAssistant?.metadata && typeof lastAssistant.metadata === 'object')
       ? lastAssistant.metadata as Record<string, unknown>
       : {};
@@ -1080,6 +1263,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         setIsLoading(false); // Start as false, only set to true if we have an in-flight request
         setAgentSteps([]);
         setDegradedMode({ active: false });
+        setActionableApprovals([]);
+        setActionableApprovalsLoadState('loading');
         setIsLocalRecoveryUnconfirmed(false);
         submitInFlightRef.current = false;
       }
@@ -1175,6 +1360,9 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         }
       } finally {
         if (!cancelled) {
+          await refreshActionableApprovals(sessionId);
+        }
+        if (!cancelled) {
           setIsLoading(false);
         }
       }
@@ -1185,7 +1373,13 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     return () => {
       cancelled = true;
     };
-  }, [currentSession?.id, setMessages, setInput, toast]);
+  }, [
+    currentSession?.id,
+    setMessages,
+    setInput,
+    toast,
+    refreshActionableApprovals,
+  ]);
 
   /*
    * Local session snapshots protect in-progress UI state across refreshes.
@@ -1503,19 +1697,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
             timestamp: new Date(),
             status: 'completed',
             actions:
-              approvalId && approvalStatus === 'pending'
-                ? [
-                    {
-                      type: 'approval.approve',
-                      description: 'Approve',
-                      params: { approval_id: approvalId },
-                    },
-                    {
-                      type: 'approval.reject',
-                      description: 'Reject',
-                      params: { approval_id: approvalId },
-                    },
-                  ]
+              approvalId
+                ? approvalActions(approvalId, approvalStatus)
                 : [],
             metadata: {
               ...approvalMetadata,
@@ -1533,6 +1716,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
             return next.concat(approvalMessage);
           });
           scrollChatToBottom('smooth');
+          void refreshActionableApprovals(sessionIdRef.current);
           return;
         }
 
@@ -1578,6 +1762,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
                 : message,
             ),
           );
+          void refreshActionableApprovals(sessionIdRef.current);
         }
 
         const richStructuredContent =
@@ -1672,6 +1857,10 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         return;
       }
 
+      if (approvalResume?.approvalId) {
+        void refreshActionableApprovals(sessionIdRef.current);
+      }
+
       if (error instanceof TypeError) {
         setIsBackendOffline(true);
       } else if (
@@ -1745,7 +1934,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       setStreamingMetrics(null);
     }
 
-  }, [input, isAuthLoading, messages, displayName, preferredAddressName, recentMessages, selectedProvider, selectedModel, toast, user, setInput, setMessages, setIsLoading, setIsEditingDuringProcessing, setProcessingStatus, setStreamedContent, setStreamingMetrics, activeRequestControllerRef, sessionIdRef, isAuthenticated, processingStatus, savePreferredAddressName, scrollChatToBottom]);
+  }, [input, isAuthLoading, messages, displayName, preferredAddressName, recentMessages, selectedProvider, selectedModel, toast, user, setInput, setMessages, setIsLoading, setIsEditingDuringProcessing, setProcessingStatus, setStreamedContent, setStreamingMetrics, activeRequestControllerRef, sessionIdRef, isAuthenticated, processingStatus, savePreferredAddressName, scrollChatToBottom, refreshActionableApprovals]);
 
   // Process injected messages from other parts of the app
   useEffect(() => {
@@ -1764,13 +1953,25 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
 
   // Handle functions
   const handleActionClick = useCallback(async (action: SuggestedAction) => {
-    if (action.type === 'approval.approve' || action.type === 'approval.reject') {
+    if (
+      action.type === 'approval.approve' ||
+      action.type === 'approval.reject' ||
+      action.type === 'approval.resume'
+    ) {
       const approvalId = String(action.params?.approval_id || '').trim();
       if (!approvalId) {
         toast({
           title: 'Approval unavailable',
           description: 'The approval receipt is missing.',
           variant: 'destructive',
+        });
+        return;
+      }
+
+      if (action.type === 'approval.resume') {
+        await handleSubmit(undefined, {
+          approvalId,
+          suppressUserMessage: true,
         });
         return;
       }
@@ -1782,6 +1983,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         await apiClient.post(`/api/approvals/${approvalId}/decision`, {
           decision,
         });
+        await refreshActionableApprovals(sessionIdRef.current);
 
         if (decision === 'approved') {
           await handleSubmit(undefined, {
@@ -1827,7 +2029,13 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     if (!messageText) return;
     setInput(messageText);
     void handleSubmit(messageText);
-  }, [setInput, handleSubmit, setMessages, toast]);
+  }, [
+    setInput,
+    handleSubmit,
+    setMessages,
+    toast,
+    refreshActionableApprovals,
+  ]);
 
   const handleFormSubmit = useCallback((e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -2256,6 +2464,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       <ConversationContextRail
         metadata={latestAssistantMetadata.rawMetadata}
         agentSteps={agentSteps}
+        approvals={actionableApprovals}
+        approvalsLoadState={actionableApprovalsLoadState}
       />
     </div>
   );

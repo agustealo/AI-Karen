@@ -266,11 +266,17 @@ class ApprovalService:
             raise ApprovalStateError("Stored approval request has no valid messages")
         return rebuilt
 
-    async def list_pending(self, *, user: UserData) -> List[Dict[str, Any]]:
+    async def list_actionable(
+        self,
+        *,
+        user: UserData,
+        conversation_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         user_id, tenant_id = _identity(user)
-        return await self._repository.list_pending(
+        return await self._repository.list_actionable(
             tenant_id=tenant_id,
             user_id=user_id,
+            conversation_id=conversation_id,
         )
 
     async def get(self, approval_id: str, *, user: UserData) -> Dict[str, Any]:
