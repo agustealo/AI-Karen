@@ -5,6 +5,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "presentation-capture.yml"
+TRUST_BOUNDARY_WORKFLOW = (
+    ROOT / ".github" / "workflows" / "presentation-capture-trust-boundary.yml"
+)
 SELF_CONTAINED_CAPTURE = ROOT / "scripts" / "ci" / "presentation-self-contained-capture.sh"
 CAPTURE_SPEC = (
     ROOT
@@ -164,8 +167,18 @@ def test_trusted_capture_harness_is_repository_owned_and_real_runtime_only() -> 
         'generated_ui: false',
         'production_or_personal_data: false',
         'data-showcase-state="ready"',
+        "installLifecycleSentinel",
+        "assertLifecycleStable",
     ):
         assert required in spec
+
+
+def test_trust_boundary_fetches_history_for_git_provenance_checks() -> None:
+    workflow = TRUST_BOUNDARY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "actions/checkout@v7" in workflow
+    assert "fetch-depth: 0" in workflow
+    assert "python scripts/ci/presentation_gallery_contract.py" in workflow
 
 
 if __name__ == "__main__":
@@ -175,4 +188,5 @@ if __name__ == "__main__":
     test_owner_only_pr_comment_is_bound_to_current_same_repo_pr_head()
     test_write_scoped_job_executes_only_trusted_artifact_code()
     test_trusted_capture_harness_is_repository_owned_and_real_runtime_only()
+    test_trust_boundary_fetches_history_for_git_provenance_checks()
     print("presentation capture trust boundary green")
