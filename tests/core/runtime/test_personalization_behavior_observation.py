@@ -68,6 +68,7 @@ async def test_explicit_user_request_becomes_privacy_safe_behavior_observation()
     decision = ExecutionDecision(
         intent="code_review",
         intent_confidence=0.91,
+        memory_write_allowed=True,
     )
 
     await runtime._record_user_behavior_observation(
@@ -96,6 +97,7 @@ async def test_same_user_behavior_context_has_stable_signature() -> None:
     decision = ExecutionDecision(
         intent="code_review",
         intent_confidence=0.9,
+        memory_write_allowed=True,
     )
     request = _request(domain="work", task_type="review")
 
@@ -119,7 +121,11 @@ async def test_generic_or_unknown_intents_do_not_pollute_behavior_learning(
 
     await runtime._record_user_behavior_observation(
         _request(domain="work"),
-        ExecutionDecision(intent=intent, intent_confidence=0.9),
+        ExecutionDecision(
+            intent=intent,
+            intent_confidence=0.9,
+            memory_write_allowed=True,
+        ),
     )
 
     assert behavior.observations == []
@@ -135,7 +141,11 @@ async def test_untrusted_behavior_dimensions_are_dropped() -> None:
             domain="finance; DROP TABLE users",
             task_type="review client@example.com",
         ),
-        ExecutionDecision(intent="portfolio_review", intent_confidence=0.88),
+        ExecutionDecision(
+            intent="portfolio_review",
+            intent_confidence=0.88,
+            memory_write_allowed=True,
+        ),
     )
 
     observation = behavior.observations[0]
@@ -150,7 +160,11 @@ async def test_behavior_persistence_failure_does_not_break_chat_runtime() -> Non
 
     await runtime._record_user_behavior_observation(
         _request(domain="work"),
-        ExecutionDecision(intent="code_review", intent_confidence=0.9),
+        ExecutionDecision(
+            intent="code_review",
+            intent_confidence=0.9,
+            memory_write_allowed=True,
+        ),
     )
 
     assert runtime._emitter.events
