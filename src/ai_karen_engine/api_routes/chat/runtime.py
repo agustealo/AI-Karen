@@ -116,7 +116,8 @@ class ChatStreamRequest(BaseModel):
         default=None,
         pattern=r"^[a-zA-Z0-9_-]+$",
         max_length=100,
-    )    conversation_id: Optional[str] = Field(default=None, max_length=100)
+    )
+    conversation_id: Optional[str] = Field(default=None, max_length=100)
 
     preferred_llm_provider: Optional[str] = Field(default=None, max_length=100)
     preferred_model: Optional[str] = Field(default=None, max_length=200)
