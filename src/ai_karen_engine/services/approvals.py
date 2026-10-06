@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.audit_logging import (
