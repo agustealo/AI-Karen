@@ -72,7 +72,7 @@ const LinkRow = ({
     href={citation.url}
     target="_blank"
     rel="noreferrer"
-    className="group block rounded-lg border border-border/60 bg-background/35 p-3 transition-colors hover:border-primary/25 hover:bg-muted/50"
+    className="group block rounded-lg border border-border/60 bg-background/30 p-3 transition-colors hover:border-primary/25 hover:bg-muted/50"
   >
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
@@ -148,7 +148,7 @@ export default function RichResultWorkspace({
                 return (
                   <div
                     key={String(artifact.id || artifact.path || index)}
-                    className="rounded-lg border border-border/60 bg-background/35 p-3"
+                    className="rounded-lg border border-border/60 bg-background/30 p-3"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
@@ -193,7 +193,7 @@ export default function RichResultWorkspace({
               {Object.entries(structured).map(([key, value]) => (
                 <div
                   key={key}
-                  className="rounded-lg border border-border/60 bg-background/35 p-3"
+                  className="rounded-lg border border-border/60 bg-background/30 p-3"
                 >
                   <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
                     {key.replace(/_/g, ' ')}
@@ -217,7 +217,7 @@ export default function RichResultWorkspace({
                 return (
                   <div
                     key={String(attachment.id || attachment.path || index)}
-                    className="flex items-center gap-2 rounded-lg border border-border/60 bg-background/35 p-2.5"
+                    className="flex items-center gap-2 rounded-lg border border-border/60 bg-background/30 p-2.5"
                   >
                     <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     <div className="min-w-0 flex-1">
