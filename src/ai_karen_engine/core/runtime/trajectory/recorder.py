@@ -260,8 +260,6 @@ class TrajectoryRecorder:
         """Persist a feature snapshot without blocking the async runtime."""
         if feature_snapshot.trajectory_id != trajectory.trajectory_id:
             raise ValueError("feature snapshot trajectory_id does not match trajectory")
-        if feature_snapshot.feature_snapshot_id not in trajectory.feature_snapshot_refs:
-            trajectory.feature_snapshot_refs.append(feature_snapshot.feature_snapshot_id)
         status = "not_configured"
         persisted = False
         try:
@@ -269,6 +267,13 @@ class TrajectoryRecorder:
                 await self._store.save_feature_snapshot_async(feature_snapshot)
                 status = "success"
                 persisted = True
+                if (
+                    feature_snapshot.feature_snapshot_id
+                    not in trajectory.feature_snapshot_refs
+                ):
+                    trajectory.feature_snapshot_refs.append(
+                        feature_snapshot.feature_snapshot_id
+                    )
         except Exception:
             status = "failed"
             _emit_event(
@@ -382,13 +387,6 @@ class TrajectoryRecorder:
         """Persist a decision observation without blocking the async runtime."""
         if decision_observation.trajectory_id != trajectory.trajectory_id:
             raise ValueError("decision observation trajectory_id does not match trajectory")
-        if (
-            decision_observation.decision_observation_id
-            not in trajectory.decision_observation_refs
-        ):
-            trajectory.decision_observation_refs.append(
-                decision_observation.decision_observation_id
-            )
         status = "not_configured"
         persisted = False
         try:
@@ -398,6 +396,13 @@ class TrajectoryRecorder:
                 )
                 status = "success"
                 persisted = True
+                if (
+                    decision_observation.decision_observation_id
+                    not in trajectory.decision_observation_refs
+                ):
+                    trajectory.decision_observation_refs.append(
+                        decision_observation.decision_observation_id
+                    )
         except Exception:
             status = "failed"
             _emit_event(
