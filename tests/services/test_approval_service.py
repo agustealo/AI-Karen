@@ -380,3 +380,24 @@ async def test_policy_drift_invalidates_approved_receipt() -> None:
 
     with pytest.raises(ApprovalScopeError, match="current policy decision"):
         await service.authorize_or_request(resumed, drifted)
+
+
+@pytest.mark.asyncio
+async def test_supplied_receipt_is_consumed_when_fresh_policy_relaxes_gate() -> None:
+    repo = FakeApprovalRepository()
+    service = ApprovalService(repository=repo)
+    original = _request()
+    pending = await service.authorize_or_request(original, _decision())
+    assert pending is not None
+    await service.decide(
+        pending["approval_id"],
+        user=_user(),
+        decision="approved",
+    )
+
+    relaxed = _decision()
+    relaxed.requires_human_gate = False
+    resumed = _request(approval_id=pending["approval_id"])
+
+    assert await service.authorize_or_request(resumed, relaxed) is None
+    assert repo.records[pending["approval_id"]]["status"] == "consumed"
