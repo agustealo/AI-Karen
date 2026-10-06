@@ -13,7 +13,10 @@ import {
 } from 'react';
 
 import { authService, type AuthUser, type LoginCredentials } from './auth';
-import { AUTH_INVALIDATED_EVENT } from './auth-events';
+import {
+  AUTH_INVALIDATED_EVENT,
+  AUTH_USER_UPDATED_EVENT,
+} from './auth-events';
 
 interface AuthState {
   user: AuthUser | null;
@@ -226,13 +229,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setState(unauthenticatedState);
     };
 
+    const handleUserUpdated = () => {
+      const user = authService.getCurrentUser();
+      if (!user) return;
+      setState((previous) => ({
+        ...previous,
+        user,
+        isAuthenticated: true,
+        isLoading: false,
+      }));
+    };
+
     window.addEventListener('storage', handleStorageChange);
     window.addEventListener(AUTH_INVALIDATED_EVENT, handleAuthInvalidated);
+    window.addEventListener(AUTH_USER_UPDATED_EVENT, handleUserUpdated);
 
     return () => {
       if (timeoutId) clearTimeout(timeoutId);
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener(AUTH_INVALIDATED_EVENT, handleAuthInvalidated);
+      window.removeEventListener(AUTH_USER_UPDATED_EVENT, handleUserUpdated);
     };
   }, [initializeAuth]);
 
