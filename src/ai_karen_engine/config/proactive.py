@@ -18,6 +18,8 @@ class ProactiveContinuitySettings:
     prospective_weight: float = 0.72
     goal_weight: float = 0.58
     behavior_weight: float = 0.48
+    behavior_observation_boost: float = 0.03
+    behavior_max_boost: float = 0.18
     at_risk_boost: float = 0.18
     blocked_boost: float = 0.10
     overdue_boost: float = 0.12
@@ -38,6 +40,8 @@ class ProactiveContinuitySettings:
             ("prospective_weight", self.prospective_weight),
             ("goal_weight", self.goal_weight),
             ("behavior_weight", self.behavior_weight),
+            ("behavior_observation_boost", self.behavior_observation_boost),
+            ("behavior_max_boost", self.behavior_max_boost),
             ("at_risk_boost", self.at_risk_boost),
             ("blocked_boost", self.blocked_boost),
             ("overdue_boost", self.overdue_boost),
@@ -120,6 +124,14 @@ def get_proactive_continuity_settings() -> ProactiveContinuitySettings:
         behavior_weight=_env_float(
             "KARI_PROACTIVE_CONTINUITY_BEHAVIOR_WEIGHT",
             0.48,
+        ),
+        behavior_observation_boost=_env_float(
+            "KARI_PROACTIVE_CONTINUITY_BEHAVIOR_OBSERVATION_BOOST",
+            0.03,
+        ),
+        behavior_max_boost=_env_float(
+            "KARI_PROACTIVE_CONTINUITY_BEHAVIOR_MAX_BOOST",
+            0.18,
         ),
         at_risk_boost=_env_float(
             "KARI_PROACTIVE_CONTINUITY_AT_RISK_BOOST",
