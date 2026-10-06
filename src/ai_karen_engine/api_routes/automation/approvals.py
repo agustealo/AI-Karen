@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from uuid import UUID
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -62,11 +63,15 @@ def _response(record: dict) -> ApprovalResponse:
 
 @router.get("/", response_model=List[ApprovalResponse])
 async def list_approvals(
+    conversation_id: Optional[UUID] = None,
     user: UserData = Depends(get_current_user),
 ):
-    """List the caller's pending, tenant-scoped Runtime approvals."""
+    """List pending Runtime approvals within the caller's authenticated scope."""
     try:
-        records = await get_approval_service().list_pending(user=user)
+        records = await get_approval_service().list_pending(
+            user=user,
+            conversation_id=str(conversation_id) if conversation_id else None,
+        )
         return [_response(record) for record in records]
     except ApprovalScopeError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
