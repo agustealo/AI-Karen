@@ -24,6 +24,9 @@ def test_proactive_continuity_defaults_are_valid() -> None:
     assert settings.max_candidates == 5
     assert settings.behavior_min_observations >= 2
     assert 0.0 <= settings.min_candidate_utility <= 1.0
+    assert 0.0 <= settings.resume_primary_min_utility <= 1.0
+    assert 0.0 <= settings.resume_primary_margin <= 1.0
+    assert 0.0 <= settings.current_request_match_boost <= 1.0
 
 
 def test_proactive_continuity_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -48,6 +51,43 @@ def test_invalid_candidate_limit_fails_closed(monkeypatch: pytest.MonkeyPatch) -
 
 def test_invalid_weight_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("KARI_PROACTIVE_CONTINUITY_OPEN_LOOP_WEIGHT", "1.5")
+
+    with pytest.raises(RuntimeError, match="between 0 and 1"):
+        get_proactive_continuity_settings()
+
+
+def test_resume_thresholds_are_config_driven(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "KARI_PROACTIVE_CONTINUITY_RESUME_PRIMARY_MIN_UTILITY",
+        "0.81",
+    )
+    monkeypatch.setenv(
+        "KARI_PROACTIVE_CONTINUITY_RESUME_PRIMARY_MARGIN",
+        "0.21",
+    )
+
+    settings = get_proactive_continuity_settings()
+
+    assert settings.resume_primary_min_utility == 0.81
+    assert settings.resume_primary_margin == 0.21
+
+
+def test_current_request_match_boost_is_config_driven(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "KARI_PROACTIVE_CONTINUITY_CURRENT_REQUEST_MATCH_BOOST",
+        "0.42",
+    )
+
+    assert get_proactive_continuity_settings().current_request_match_boost == 0.42
+
+
+def test_invalid_resume_margin_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "KARI_PROACTIVE_CONTINUITY_RESUME_PRIMARY_MARGIN",
+        "1.5",
+    )
 
     with pytest.raises(RuntimeError, match="between 0 and 1"):
         get_proactive_continuity_settings()

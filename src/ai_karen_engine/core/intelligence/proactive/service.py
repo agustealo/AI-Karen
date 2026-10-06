@@ -15,6 +15,7 @@ from ai_karen_engine.config.proactive import (
 )
 
 from .contracts import (
+    ContinuityAgenda,
     ContinuityEvidence,
     NextNeedCandidate,
     ProactiveContinuityRepository,
@@ -42,6 +43,7 @@ class ProactiveContinuityService:
         now: datetime | None = None,
         limit: int = 5,
         current_domains: tuple[str, ...] = (),
+        current_request: str = "",
     ) -> list[NextNeedCandidate]:
         if not self._settings.enabled:
             return []
@@ -65,11 +67,13 @@ class ProactiveContinuityService:
             for domain in current_domains
             if str(domain).strip()
         }
+        request_terms = self._content_terms(current_request)
         ranked = [
             self._candidate(
                 item,
                 now=now_utc,
                 current_domains=normalized_domains,
+                request_terms=request_terms,
             )
             for item in evidence
         ]
@@ -103,12 +107,90 @@ class ProactiveContinuityService:
                 break
         return deduped
 
+    async def organize(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        now: datetime | None = None,
+        limit: int = 5,
+        current_domains: tuple[str, ...] = (),
+        current_request: str = "",
+    ) -> ContinuityAgenda:
+        """Organize ranked continuity evidence for safe resumption.
+
+        A primary candidate is selected only when the top item is sufficiently
+        strong and clearly separated from the runner-up. Otherwise the agenda is
+        marked ambiguous and callers should present choices rather than guess.
+        """
+
+        candidates = await self.rank(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            now=now,
+            limit=limit,
+            current_domains=current_domains,
+            current_request=current_request,
+        )
+        if not candidates:
+            return ContinuityAgenda(
+                candidates=(),
+                primary_candidate_id=None,
+                ambiguous=False,
+                reason_codes=("continuity_empty",),
+            )
+
+        top = candidates[0]
+        if top.utility < self._settings.resume_primary_min_utility:
+            return ContinuityAgenda(
+                candidates=tuple(candidates),
+                primary_candidate_id=None,
+                ambiguous=True,
+                reason_codes=("top_candidate_below_resume_threshold",),
+            )
+
+        if len(candidates) == 1:
+            return ContinuityAgenda(
+                candidates=tuple(candidates),
+                primary_candidate_id=top.candidate_id,
+                ambiguous=False,
+                reason_codes=("single_clear_candidate",),
+            )
+
+        runner_up = candidates[1]
+        top_matches_request = "current_request_match" in top.reason_codes
+        runner_matches_request = "current_request_match" in runner_up.reason_codes
+        if top_matches_request and not runner_matches_request:
+            return ContinuityAgenda(
+                candidates=tuple(candidates),
+                primary_candidate_id=top.candidate_id,
+                ambiguous=False,
+                reason_codes=("current_request_clear_match",),
+            )
+
+        margin = float(top.utility) - float(runner_up.utility)
+        if margin < self._settings.resume_primary_margin:
+            return ContinuityAgenda(
+                candidates=tuple(candidates),
+                primary_candidate_id=None,
+                ambiguous=True,
+                reason_codes=("candidate_margin_too_small",),
+            )
+
+        return ContinuityAgenda(
+            candidates=tuple(candidates),
+            primary_candidate_id=top.candidate_id,
+            ambiguous=False,
+            reason_codes=("clear_primary_candidate",),
+        )
+
     def _candidate(
         self,
         item: ContinuityEvidence,
         *,
         now: datetime,
         current_domains: set[str],
+        request_terms: set[str],
     ) -> NextNeedCandidate | None:
         source = item.source_type
         state = str(item.state or "").casefold()
@@ -171,6 +253,13 @@ class ProactiveContinuityService:
             urgency = time_urgency
         reason_codes.extend(time_reasons)
 
+        subject_terms = self._content_terms(item.subject)
+        if request_terms and subject_terms:
+            overlap = len(request_terms & subject_terms) / max(len(request_terms), 1)
+            if overlap > 0.0:
+                utility += self._settings.current_request_match_boost * overlap
+                reason_codes.append("current_request_match")
+
         if item.domain:
             reason_codes.append("domain_scoped")
 
@@ -224,6 +313,40 @@ class ProactiveContinuityService:
         if delta <= timedelta(hours=self._settings.due_week_hours):
             return self._settings.due_seven_days_boost, "low", ["due_within_week"]
         return 0.0, "low", ["future"]
+
+    @staticmethod
+    def _content_terms(value: str) -> set[str]:
+        stop = {
+            "a",
+            "an",
+            "and",
+            "continue",
+            "do",
+            "from",
+            "i",
+            "left",
+            "my",
+            "next",
+            "off",
+            "our",
+            "pick",
+            "please",
+            "resume",
+            "should",
+            "the",
+            "to",
+            "we",
+            "what",
+            "where",
+        }
+        return {
+            token
+            for token in "".join(
+                char if char.isalnum() or char in {"_", "-"} else " "
+                for char in str(value or "").casefold()
+            ).split()
+            if len(token) >= 3 and token not in stop
+        }
 
     @staticmethod
     def _candidate_id(item: ContinuityEvidence) -> str:

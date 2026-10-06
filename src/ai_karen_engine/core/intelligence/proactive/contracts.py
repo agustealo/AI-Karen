@@ -40,6 +40,21 @@ class NextNeedCandidate:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class ContinuityAgenda:
+    """Read-only organization of likely next work.
+
+    This is not an execution plan. It only states whether one continuity item is
+    clearly ahead of alternatives or whether the current evidence is ambiguous.
+    """
+
+    candidates: tuple[NextNeedCandidate, ...]
+    primary_candidate_id: str | None
+    ambiguous: bool
+    reason_codes: tuple[str, ...]
+    execution_authorized: bool = False
+
+
 class ProactiveContinuityRepository(ABC):
     """Read-only evidence port. Canonical persistence remains outside Intelligence."""
 
@@ -55,6 +70,7 @@ class ProactiveContinuityRepository(ABC):
 
 
 __all__ = [
+    "ContinuityAgenda",
     "ContinuityEvidence",
     "NextNeedCandidate",
     "ProactiveContinuityRepository",

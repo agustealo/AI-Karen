@@ -69,6 +69,9 @@ async def test_memory_relevance_predictor():
         "Do I have an upcoming interview?",
         "What did I leave unfinished?",
         "What should I do next?",
+        "Continue.",
+        "Pick up where we left off.",
+        "Where were we?",
     ],
 )
 async def test_direct_continuity_queries_request_memory_without_embeddings(text):

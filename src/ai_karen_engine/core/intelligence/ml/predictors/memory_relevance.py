@@ -45,6 +45,12 @@ class MemoryRelevancePredictor(BasePredictor):
         "still need",
         "follow up",
         "unfinished",
+        "continue",
+        "continue where we left off",
+        "pick up where we left off",
+        "resume",
+        "resume where we left off",
+        "where were we",
     )
     CONTINUITY_CUES = (
         "remember",
