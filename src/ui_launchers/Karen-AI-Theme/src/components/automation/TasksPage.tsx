@@ -88,7 +88,9 @@ export default function TasksPage() {
       const { apiClient } = await import('@/lib/api');
       const [taskResult, agentResult] = await Promise.allSettled([
         apiClient.get<Task[]>('/api/tasks/'),
-        apiClient.get<AgentOption[]>('/api/agents'),
+        apiClient.get<{ agents?: Array<Omit<AgentOption, 'capabilities'> & { capabilities?: string[] }> }>(
+          '/api/agent-runtime/catalog',
+        ),
       ]);
 
       if (taskResult.status === "fulfilled") {
@@ -100,7 +102,13 @@ export default function TasksPage() {
       }
 
       if (agentResult.status === "fulfilled") {
-        setAgents(agentResult.value || []);
+        const catalog = agentResult.value?.agents ?? [];
+        setAgents(
+          catalog.map((agent) => ({
+            ...agent,
+            capabilities: (agent.capabilities ?? []).map((name) => ({ name })),
+          })),
+        );
       } else {
         console.error(agentResult.reason);
         setAgents([]);

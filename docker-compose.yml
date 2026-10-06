@@ -359,8 +359,8 @@ services:
       - .env
     environment:
       # Runtime mode for production-like behavior
-      ENVIRONMENT: "production"
-      DEBUG: "false"
+      ENVIRONMENT: "development"
+      DEBUG: "true"
       AUTH_MODE: "hybrid"
       # Set PYTHONPATH to include src directory for proper module imports
       PYTHONPATH: "/app:/app/src:$PYTHONPATH"
@@ -480,7 +480,7 @@ services:
     command:
       - sh
       - -c
-      - "uvicorn server.app:create_app --factory --host 0.0.0.0 --port 8000 --loop uvloop --http httptools"
+      - "python -m uvicorn ai_karen_engine.app:create_app --factory --host 0.0.0.0 --port 8000 --loop uvloop --http httptools"
     volumes:
       # Bind-mount project into the container so the runtime sees the source files
       # NOTE: must be writable so Docker can create mountpoints under /app (for example /app/backups)
@@ -504,7 +504,7 @@ services:
         condition: service_healthy
     healthcheck:
       # Check simple /health 200 (binds quickly with fast startup)
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health/live || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 20

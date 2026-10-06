@@ -84,18 +84,6 @@
     "error_message": null
   },
   {
-    "name": "azure",
-    "provider_class": "OpenAICompatibleProvider",
-    "description": "Execution adapter for Microsoft Azure AI",
-    "supports_streaming": true,
-    "supports_embeddings": false,
-    "requires_api_key": true,
-    "default_model": "gpt-4o",
-    "health_status": "unknown",
-    "last_health_check": null,
-    "error_message": null
-  },
-  {
     "name": "xai",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for xAI",
@@ -103,6 +91,18 @@
     "supports_embeddings": false,
     "requires_api_key": true,
     "default_model": "grok-4",
+    "health_status": "unknown",
+    "last_health_check": null,
+    "error_message": null
+  },
+  {
+    "name": "azure",
+    "provider_class": "OpenAICompatibleProvider",
+    "description": "Execution adapter for Microsoft Azure AI",
+    "supports_streaming": true,
+    "supports_embeddings": false,
+    "requires_api_key": true,
+    "default_model": "gpt-4o",
     "health_status": "unknown",
     "last_health_check": null,
     "error_message": null
@@ -132,18 +132,6 @@
     "error_message": null
   },
   {
-    "name": "deepseek",
-    "provider_class": "DeepseekProvider",
-    "description": "Execution adapter for DeepSeek",
-    "supports_streaming": true,
-    "supports_embeddings": false,
-    "requires_api_key": true,
-    "default_model": "deepseek-chat",
-    "health_status": "unknown",
-    "last_health_check": null,
-    "error_message": null
-  },
-  {
     "name": "zai",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Z.ai",
@@ -151,6 +139,18 @@
     "supports_embeddings": false,
     "requires_api_key": true,
     "default_model": "glm-4.5",
+    "health_status": "unknown",
+    "last_health_check": null,
+    "error_message": null
+  },
+  {
+    "name": "deepseek",
+    "provider_class": "DeepseekProvider",
+    "description": "Execution adapter for DeepSeek",
+    "supports_streaming": true,
+    "supports_embeddings": false,
+    "requires_api_key": true,
+    "default_model": "deepseek-chat",
     "health_status": "unknown",
     "last_health_check": null,
     "error_message": null

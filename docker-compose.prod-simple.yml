@@ -27,7 +27,7 @@ services:
   # PostgreSQL (Primary Database)
   # ──────────────────────────────────────────────────────────────────────
   postgres:
-    image: postgres:15
+    image: pgvector/pgvector:pg15
     container_name: ai-karen-postgres
     restart: unless-stopped
     environment:

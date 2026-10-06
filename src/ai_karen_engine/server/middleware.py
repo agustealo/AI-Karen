@@ -318,13 +318,15 @@ def configure_middleware(
     async def streaming_header_middleware(request: Request, call_next):
         response = await call_next(request)
         if isinstance(response, StreamingResponse):
-            response.headers.pop("content-length", None)
+            if "content-length" in response.headers:
+                del response.headers["content-length"]
         elif response.headers.get("content-encoding", "").lower() in {
             "gzip",
             "br",
             "deflate",
         }:
-            response.headers.pop("content-length", None)
+            if "content-length" in response.headers:
+                del response.headers["content-length"]
         return response
 
     @app.middleware("http")

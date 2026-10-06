@@ -135,6 +135,58 @@ class AuditLogger:
             }
         )
 
+    def log_error_response_generated(
+        self,
+        error_category: str,
+        error_severity: str,
+        provider_name: Optional[str] = None,
+        ai_analysis_used: bool = False,
+        response_cached: bool = False,
+        user_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+    ) -> None:
+        """Log generation of an intelligent error response."""
+        self.log_audit_event(
+            {
+                "event_type": AuditEventType.SECURITY_EVENT.value,
+                "severity": AuditSeverity.WARNING.value
+                if error_severity in ("critical", "high")
+                else AuditSeverity.INFO.value,
+                "message": "error_response_generated",
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "metadata": {
+                    "error_category": error_category,
+                    "error_severity": error_severity,
+                    "provider_name": provider_name,
+                    "ai_analysis_used": ai_analysis_used,
+                    "response_cached": response_cached,
+                    "correlation_id": correlation_id,
+                },
+            }
+        )
+
+    def log_response_cache_event(
+        self,
+        cache_hit: bool,
+        error_category: Optional[str] = None,
+        additional_context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Log cache events for error responses."""
+        self.log_audit_event(
+            {
+                "event_type": AuditEventType.SYSTEM_EVENT.value,
+                "severity": AuditSeverity.INFO.value,
+                "message": "error_response_cache_hit" if cache_hit else "error_response_cached",
+                "metadata": {
+                    "cache_hit": cache_hit,
+                    "error_category": error_category,
+                    "additional_context": additional_context,
+                },
+            }
+        )
+
 
 _AUDIT_LOGGER: Optional[AuditLogger] = None
 

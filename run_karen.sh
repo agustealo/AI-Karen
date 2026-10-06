@@ -10,6 +10,7 @@ echo "📁 Project directory: $SCRIPT_DIR"
 
 # Set environment file path
 export ENV_FILE="$SCRIPT_DIR/.env"
+export PYTHONPATH="$SCRIPT_DIR/src:$PYTHONPATH"
 echo "📄 Environment file: $ENV_FILE"
 
 # Check if .env file exists
@@ -37,8 +38,10 @@ if [ -d ".virEnv" ]; then
             # Ensure playwright browsers are installed in this environment
             # .virEnv/bin/python3 -m playwright install chromium
 
-            # Run with virtual environment Python
-            exec .virEnv/bin/python3 start.py "$@"
+            # Run with canonical CLI entrypoint (defaults to start)
+            CMD="${1:-start}"
+            if [ $# -gt 0 ]; then shift; fi
+            exec .virEnv/bin/python3 -m ai_karen_engine.cli "$CMD" "$@"
         else
             echo "❌ Error: Required dependencies (including crawl4ai) not found in .virEnv"
             echo "💡 Please ensure you have installed them: .virEnv/bin/pip install -r requirements.txt"

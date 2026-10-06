@@ -230,22 +230,11 @@ class ErrorResponseService:
                 if provider_name:
                     provider_health = self._get_provider_health(provider_name)
                     if provider_health:
-                        response_data["provider_health"] = {
-                            "name": provider_health.name,
-                            "status": provider_health.status.value,
-                            "success_rate": provider_health.success_rate,
-                            "response_time": provider_health.response_time,
-                            "error_message": provider_health.error_message,
-                            "last_check": provider_health.last_check.isoformat()
-                            if provider_health.last_check
-                            else None,
-                        }
+                        health_dict = self._format_provider_health_dict(provider_health, provider_name)
+                        response_data["provider_health"] = health_dict
 
                         # Add alternative provider suggestions if current provider is unhealthy
-                        if provider_health.status in [
-                            HealthStatus.DEGRADED,
-                            HealthStatus.UNHEALTHY,
-                        ]:
+                        if health_dict["status"] in (HealthStatus.DEGRADED.value, HealthStatus.UNHEALTHY.value, "degraded", "unhealthy"):
                             health_monitor = get_health_monitor()
                             alternatives = get_provider_registry_service().get_provider_recommendations(
                                 provider_name
@@ -545,22 +534,11 @@ class ErrorResponseService:
         if context.provider_name:
             provider_health = self._get_provider_health(context.provider_name)
             if provider_health:
-                response_data["provider_health"] = {
-                    "name": provider_health.name,
-                    "status": provider_health.status.value,
-                    "success_rate": provider_health.success_rate,
-                    "response_time": provider_health.response_time,
-                    "error_message": provider_health.error_message,
-                    "last_check": provider_health.last_check.isoformat()
-                    if provider_health.last_check
-                    else None,
-                }
+                health_dict = self._format_provider_health_dict(provider_health, context.provider_name)
+                response_data["provider_health"] = health_dict
 
                 # Add alternative provider suggestions if current provider is unhealthy
-                if provider_health.status in [
-                    HealthStatus.DEGRADED,
-                    HealthStatus.UNHEALTHY,
-                ]:
+                if health_dict["status"] in (HealthStatus.DEGRADED.value, HealthStatus.UNHEALTHY.value, "degraded", "unhealthy"):
                     registry = get_provider_registry_service()
                     alternatives = registry.get_provider_recommendations(
                         context.provider_name
@@ -571,6 +549,38 @@ class ErrorResponseService:
                         )
 
         return IntelligentErrorResponse(**response_data)
+
+    def _format_provider_health_dict(self, provider_health: Any, provider_name: str) -> Dict[str, Any]:
+        """Convert ProviderHealthInfo dataclass, dict, or object into a standardized dictionary."""
+        if isinstance(provider_health, dict):
+            name = provider_health.get("name") or provider_health.get("provider_id") or provider_name
+            raw_status = provider_health.get("status") or provider_health.get("health_status") or "unknown"
+            status_str = raw_status.value if hasattr(raw_status, "value") else str(raw_status)
+            last_check = provider_health.get("last_check") or provider_health.get("last_checked_at")
+            last_check_str = last_check.isoformat() if isinstance(last_check, datetime) else (str(last_check) if last_check else None)
+            return {
+                "name": str(name),
+                "status": str(status_str),
+                "success_rate": provider_health.get("success_rate", 1.0),
+                "response_time": provider_health.get("response_time") or provider_health.get("latency_ms"),
+                "error_message": provider_health.get("error_message") or provider_health.get("last_error_code"),
+                "last_check": last_check_str,
+            }
+
+        name = getattr(provider_health, "provider_id", getattr(provider_health, "name", provider_name))
+        raw_status = getattr(provider_health, "health_status", getattr(provider_health, "status", HealthStatus.UNKNOWN))
+        status_str = raw_status.value if hasattr(raw_status, "value") else str(raw_status)
+        last_check = getattr(provider_health, "last_checked_at", getattr(provider_health, "last_check", None))
+        last_check_str = last_check.isoformat() if isinstance(last_check, datetime) else (str(last_check) if last_check else None)
+
+        return {
+            "name": str(name),
+            "status": str(status_str),
+            "success_rate": getattr(provider_health, "success_rate", 1.0),
+            "response_time": getattr(provider_health, "latency_ms", getattr(provider_health, "response_time", None)),
+            "error_message": getattr(provider_health, "last_error_code", getattr(provider_health, "error_message", None)),
+            "last_check": last_check_str,
+        }
 
     def _get_provider_health(self, provider_name: str) -> Optional[ProviderHealthInfo]:
         """Get cached provider health status"""

@@ -34,8 +34,9 @@ ENV CC=/usr/bin/gcc \
     CMAKE_ARGS="-DLLAMA_METAL=off -DLLAMA_CUBLAS=off -DLLAMA_BLAS=off"
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir "torch==2.8.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir -r requirements.txt
 
 RUN playwright install chromium && playwright install-deps chromium
 RUN python -m spacy download en_core_web_sm || true
@@ -51,8 +52,9 @@ ENV CC=/usr/bin/gcc \
     CMAKE_ARGS="-DLLAMA_METAL=off -DLLAMA_CUBLAS=off -DLLAMA_BLAS=on -DLLAMA_BLAS_VENDOR=OpenBLAS"
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir "torch==2.8.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir -r requirements.txt
 
 RUN playwright install chromium && playwright install-deps chromium
 RUN python -m spacy download en_core_web_sm || true

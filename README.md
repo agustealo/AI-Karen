@@ -376,11 +376,21 @@ The canonical API bootstrap is:
 curl -X POST http://localhost:8000/api/auth/first-run/setup \
   -H "Content-Type: application/json" \
   -d '{
-    "email": "you@example.com",
-    "full_name": "Your Name",
-    "password": "Choose-A-Strong-Pass9!",
-    "confirm_password": "Choose-A-Strong-Pass9!"
+    "email": "admin@karen.ai",
+    "full_name": "Admin User",
+    "password": "!Password123",
+    "confirm_password": "!Password123"
   }'
+```
+
+Alternatively, run the setup script via CLI:
+
+```bash
+# Create default admin user (admin@karen.ai / !Password123)
+.virEnv/bin/python3 create_first_admin.py
+
+# Or customize credentials via environment variables:
+ADMIN_EMAIL="admin@karen.ai" ADMIN_PASSWORD="!Password123" .virEnv/bin/python3 create_first_admin.py
 ```
 
 This operation is intentionally privileged and one-time. The backend:
