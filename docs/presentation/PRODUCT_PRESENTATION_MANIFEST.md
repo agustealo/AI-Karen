@@ -12,6 +12,7 @@ This manifest does **not** supersede `PROJECT_DEV_MANIFEST.md`. The root develop
 | Brand assets | `src/ui_launchers/Karen-AI-Theme/public/brand/` |
 | Web app metadata/PWA identity | `src/ui_launchers/Karen-AI-Theme/src/app/layout.tsx` and `src/app/manifest.ts` |
 | Authenticated shell identity | `src/ui_launchers/Karen-AI-Theme/src/app/dashboard/page.tsx` using canonical `/brand/` assets |
+| Application visual system | `src/ui_launchers/Karen-AI-Theme/src/app/globals.css` plus shared `src/components/ui/` primitives |
 | Trusted screenshot capture harness | `main`: `src/ui_launchers/Karen-AI-Theme/e2e/showcase/` |
 | Reusable screenshot provenance | `main`: `scripts/ci/presentation_gallery_contract.py` |
 | KAREN presentation integration | `scripts/ci/verify_presentation_assets.py` |
