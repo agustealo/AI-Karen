@@ -75,8 +75,6 @@ class PostgresProactiveContinuityRepository(ProactiveContinuityRepository):
                         "user_id": user,
                         "now": now,
                         "limit": bounded,
-                        "behavior_min_observations": settings.behavior_min_observations,
-                        "behavior_min_confidence": settings.behavior_min_confidence,
                     },
                 )
             ).mappings().all()
@@ -173,6 +171,12 @@ class PostgresProactiveContinuityRepository(ProactiveContinuityRepository):
                         "tenant_id": tenant,
                         "user_id": user,
                         "limit": bounded,
+                        "behavior_min_observations": (
+                            settings.behavior_min_observations
+                        ),
+                        "behavior_min_confidence": (
+                            settings.behavior_min_confidence
+                        ),
                     },
                 )
             ).mappings().all()
