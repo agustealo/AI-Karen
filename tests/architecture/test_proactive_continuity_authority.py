@@ -149,3 +149,31 @@ def test_proactive_repository_reads_only_current_governed_evidence() -> None:
     assert "me.valid_to IS NULL OR me.valid_to > :now" in repository
     assert "personalization_behavior_pattern" in repository
     assert "async_transaction_scope(tenant_id=tenant)" in repository
+
+
+def test_proactive_learning_lineage_never_fakes_propensities() -> None:
+    runtime = _text("src/ai_karen_engine/core/runtime/chat_runtime.py")
+    contracts = _text(
+        "src/ai_karen_engine/core/runtime/trajectory/learning_contracts.py"
+    )
+
+    assert "DecisionType.PROACTIVE_CONTINUITY.value" in runtime
+    assert "PROACTIVE_CONTINUITY_FEATURES_V1" in runtime
+    assert "PROACTIVE_CONTINUITY_POLICY_ID" in runtime
+    assert "chosen_probability=None" in runtime
+    assert "action_probabilities={}" in runtime
+    assert "OpeEligibilityReason.MISSING_PROPENSITY.value" in runtime
+    assert 'PROACTIVE_CONTINUITY = "proactive_continuity"' in contracts
+
+
+def test_proactive_learning_uses_only_explicit_candidate_feedback() -> None:
+    builder = _text(
+        "src/ai_karen_engine/core/runtime/trajectory/dataset_builder.py"
+    )
+    service = _text("src/ai_karen_engine/services/reward_progress.py")
+
+    assert "LearningTask.PROACTIVE_CONTINUITY" in builder
+    assert "MISSING_EXPLICIT_CANDIDATE_FEEDBACK" in builder
+    assert '"explicit_candidate"' in builder
+    assert '"response_level_weak"' in service
+    assert '"continuity_decision_observation_id"' in service
