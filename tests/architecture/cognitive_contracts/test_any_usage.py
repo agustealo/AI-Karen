@@ -21,7 +21,7 @@ CONTRACT_FILES = [
     "context/contracts.py",
     "adaptive/contracts.py",
     "adaptive/salience/contracts.py",
-    "adaptive/suggestions/contracts.py",
+    "intelligence/proactive/contracts.py",
     "adaptive/learning/experience/contracts.py",
     "cortex/contracts.py",
     "cortex/behavior/contracts.py",
