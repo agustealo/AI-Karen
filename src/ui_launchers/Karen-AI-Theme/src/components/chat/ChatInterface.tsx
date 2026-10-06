@@ -1355,10 +1355,12 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           reason: '',
           fallbackPath: '',
         };
-        let approvalEvent: {
-          message: string;
-          metadata: Record<string, unknown>;
-        } | null = null;
+        const approvalState: {
+          event: {
+            message: string;
+            metadata: Record<string, unknown>;
+          } | null;
+        } = { event: null };
 
         const streamRequestPayload = {
           message: userMessage.content,
@@ -1445,7 +1447,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
             collectedCitations = nextCitations;
           },
           onApproval: (message, metadata) => {
-            approvalEvent = { message, metadata };
+            approvalState.event = { message, metadata };
             setProcessingStatus(message || 'Approval required');
           },
         },
@@ -1459,6 +1461,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
 
         setIsBackendOffline(false);
 
+        const approvalEvent = approvalState.event;
         if (approvalEvent) {
           const approvalMetadata = approvalEvent.metadata;
           const approvalId = String(approvalMetadata.approval_id || '').trim();
