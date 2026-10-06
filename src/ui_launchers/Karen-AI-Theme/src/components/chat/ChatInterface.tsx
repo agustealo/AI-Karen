@@ -1697,19 +1697,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
             timestamp: new Date(),
             status: 'completed',
             actions:
-              approvalId && approvalStatus === 'pending'
-                ? [
-                    {
-                      type: 'approval.approve',
-                      description: 'Approve',
-                      params: { approval_id: approvalId },
-                    },
-                    {
-                      type: 'approval.reject',
-                      description: 'Reject',
-                      params: { approval_id: approvalId },
-                    },
-                  ]
+              approvalId
+                ? approvalActions(approvalId, approvalStatus)
                 : [],
             metadata: {
               ...approvalMetadata,
@@ -1727,6 +1716,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
             return next.concat(approvalMessage);
           });
           scrollChatToBottom('smooth');
+          void refreshActionableApprovals(sessionIdRef.current);
           return;
         }
 
@@ -1772,6 +1762,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
                 : message,
             ),
           );
+          void refreshActionableApprovals(sessionIdRef.current);
         }
 
         const richStructuredContent =
@@ -1866,6 +1857,10 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         return;
       }
 
+      if (approvalResume?.approvalId) {
+        void refreshActionableApprovals(sessionIdRef.current);
+      }
+
       if (error instanceof TypeError) {
         setIsBackendOffline(true);
       } else if (
@@ -1939,7 +1934,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       setStreamingMetrics(null);
     }
 
-  }, [input, isAuthLoading, messages, displayName, preferredAddressName, recentMessages, selectedProvider, selectedModel, toast, user, setInput, setMessages, setIsLoading, setIsEditingDuringProcessing, setProcessingStatus, setStreamedContent, setStreamingMetrics, activeRequestControllerRef, sessionIdRef, isAuthenticated, processingStatus, savePreferredAddressName, scrollChatToBottom]);
+  }, [input, isAuthLoading, messages, displayName, preferredAddressName, recentMessages, selectedProvider, selectedModel, toast, user, setInput, setMessages, setIsLoading, setIsEditingDuringProcessing, setProcessingStatus, setStreamedContent, setStreamingMetrics, activeRequestControllerRef, sessionIdRef, isAuthenticated, processingStatus, savePreferredAddressName, scrollChatToBottom, refreshActionableApprovals]);
 
   // Process injected messages from other parts of the app
   useEffect(() => {
@@ -1958,13 +1953,25 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
 
   // Handle functions
   const handleActionClick = useCallback(async (action: SuggestedAction) => {
-    if (action.type === 'approval.approve' || action.type === 'approval.reject') {
+    if (
+      action.type === 'approval.approve' ||
+      action.type === 'approval.reject' ||
+      action.type === 'approval.resume'
+    ) {
       const approvalId = String(action.params?.approval_id || '').trim();
       if (!approvalId) {
         toast({
           title: 'Approval unavailable',
           description: 'The approval receipt is missing.',
           variant: 'destructive',
+        });
+        return;
+      }
+
+      if (action.type === 'approval.resume') {
+        await handleSubmit(undefined, {
+          approvalId,
+          suppressUserMessage: true,
         });
         return;
       }
@@ -1976,6 +1983,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         await apiClient.post(`/api/approvals/${approvalId}/decision`, {
           decision,
         });
+        await refreshActionableApprovals(sessionIdRef.current);
 
         if (decision === 'approved') {
           await handleSubmit(undefined, {
@@ -2021,7 +2029,13 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     if (!messageText) return;
     setInput(messageText);
     void handleSubmit(messageText);
-  }, [setInput, handleSubmit, setMessages, toast]);
+  }, [
+    setInput,
+    handleSubmit,
+    setMessages,
+    toast,
+    refreshActionableApprovals,
+  ]);
 
   const handleFormSubmit = useCallback((e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
