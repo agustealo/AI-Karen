@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
 from typing import Any, Dict
 
 from .behavior.aggregator import BehaviorAggregator
@@ -18,12 +17,10 @@ from .contracts import (
     BehaviorCandidate,
     BehaviorPattern,
     CurrentUserState,
-    PreferenceStability,
     ResolvedPreferences,
     UserModelHealth,
     UserModelHealthStatus,
     UserStateSnapshot,
-    make_pattern_id,
 )
 from .persistence.repository import PersonalizationRepository
 from .preferences.resolver import PreferenceResolver
