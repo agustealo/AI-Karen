@@ -215,7 +215,7 @@ const getBackendBadgeConfig = (state: BackendState): BadgeConfig => {
     case 'discovered':
       return {
         icon: Github,
-        color: 'text-gray-600 dark:text-gray-400',
+        color: 'text-muted-foreground',
         label: 'discovered',
       };
 
