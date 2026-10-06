@@ -117,6 +117,7 @@ jobs:
           pytest tests/architecture/test_memory_consumer_domain_migration.py -q
           pytest tests/architecture/test_memory_stm_boundaries.py -q
           pytest tests/architecture/test_memory_formation_authority.py -q
+          pytest tests/architecture/test_semantic_memory_formation_authority.py -q
           pytest tests/architecture/test_memory_temporal_evolution.py -q
           pytest tests/architecture/test_memory_temporal_graph_persistence.py -q
           pytest tests/architecture/test_memory_temporal_graph_projection.py -q
@@ -141,6 +142,7 @@ jobs:
           pytest tests/core/intelligence/test_intent_classifier_burn.py -q
           pytest tests/core/intelligence/test_intelligence_runtime_classify_burn.py -q
           pytest tests/core/intelligence/test_intelligence_runtime.py -q
+          pytest tests/unit/core/intelligence/test_predictors.py -q
 
       - name: Chat runtime burn contracts
         run: |
@@ -154,6 +156,9 @@ jobs:
       - name: Memory recall, STM closure, and tenant security proofs
         run: |
           pytest tests/core/memory/test_neuro_recall_scope.py -q
+          pytest tests/core/memory/test_general_user_fact_classifier.py -q
+          pytest tests/core/memory/test_memory_formation_service.py -q
+          pytest tests/platform/memory/test_semantic_user_state_projection.py -q
           pytest tests/memory/test_stm_closure_1b.py -q
           pytest tests/auth/test_tenant_scope_fail_closed.py -q
 

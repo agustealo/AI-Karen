@@ -53,9 +53,48 @@ def test_semantic_projection_remains_downstream_of_neurovault() -> None:
 
     assert "PostgresNeuroVault" in manager
     assert "PostgresDerivedMemoryProjector" in manager
-    assert 'signal.signal_type in {"identity_fact", "preference"}' in projector
+    assert (
+        'signal.signal_type in {"identity_fact", "profile_fact", "preference"}'
+        in projector
+    )
     assert 'signal.signal_type == "goal"' in projector
     assert 'signal.signal_type == "prospective_event"' in projector
+
+
+def test_broad_profile_facts_use_existing_memory_authority() -> None:
+    classifier = _text(
+        "src/ai_karen_engine/core/memory/signals/general_fact_classifier.py"
+    )
+    semantic = _text(
+        "src/ai_karen_engine/core/memory/signals/semantic_classifier.py"
+    )
+    evaluator = _text(
+        "src/ai_karen_engine/core/memory/formation/evaluator.py"
+    )
+    projector = _text(
+        "src/ai_karen_engine/platform/memory/postgres/derived_projector.py"
+    )
+    profile_retriever = _text(
+        "src/ai_karen_engine/platform/memory/postgres/profile_retriever.py"
+    )
+
+    assert "classify_general_user_facts" in semantic
+    assert 'signal_type="profile_fact"' in classifier
+    assert '"profile_fact"' in evaluator
+    assert '"profile_fact"' in projector
+    assert "ProfileFact" in projector
+    assert "PostgresProfileRecallRetriever" in profile_retriever
+
+
+def test_broad_profile_classifier_does_not_call_model_or_provider_runtime() -> None:
+    classifier = _text(
+        "src/ai_karen_engine/core/memory/signals/general_fact_classifier.py"
+    )
+
+    assert "InferencePort" not in classifier
+    assert "get_model_manager" not in classifier
+    assert "ProviderRuntime" not in classifier
+    assert "preferred_provider" not in classifier
 
 
 def test_new_user_state_tables_are_privacy_export_and_erasure_covered() -> None:
