@@ -33,6 +33,7 @@ class ProactiveContinuitySettings:
     due_day_hours: int = 24
     due_three_days_hours: int = 72
     due_week_hours: int = 168
+    restricted_domains: tuple[str, ...] = ("finance", "medical", "health", "legal")
 
     def validate(self) -> None:
         if self.max_candidates < 1 or self.max_candidates > 20:
@@ -95,6 +96,20 @@ def _env_int(name: str, default: int) -> int:
         return int(raw.strip())
     except ValueError as exc:
         raise RuntimeError(f"{name} must be an integer") from exc
+
+
+def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    values = tuple(
+        dict.fromkeys(
+            value.strip().casefold()
+            for value in raw.split(",")
+            if value.strip()
+        )
+    )
+    return values
 
 
 def _env_float(name: str, default: float) -> float:
@@ -202,6 +217,10 @@ def get_proactive_continuity_settings() -> ProactiveContinuitySettings:
         due_week_hours=_env_int(
             "KARI_PROACTIVE_CONTINUITY_DUE_WEEK_HOURS",
             168,
+        ),
+        restricted_domains=_env_csv(
+            "KARI_PROACTIVE_CONTINUITY_RESTRICTED_DOMAINS",
+            ("finance", "medical", "health", "legal"),
         ),
     )
     try:
