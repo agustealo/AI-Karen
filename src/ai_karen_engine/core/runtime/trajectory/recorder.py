@@ -256,17 +256,19 @@ class TrajectoryRecorder:
         trajectory: ExecutionTrajectory,
         *,
         feature_snapshot: FeatureSnapshot,
-    ) -> FeatureSnapshot:
+    ) -> FeatureSnapshot | None:
         """Persist a feature snapshot without blocking the async runtime."""
         if feature_snapshot.trajectory_id != trajectory.trajectory_id:
             raise ValueError("feature snapshot trajectory_id does not match trajectory")
         if feature_snapshot.feature_snapshot_id not in trajectory.feature_snapshot_refs:
             trajectory.feature_snapshot_refs.append(feature_snapshot.feature_snapshot_id)
         status = "not_configured"
+        persisted = False
         try:
             if self._store is not None:
                 await self._store.save_feature_snapshot_async(feature_snapshot)
                 status = "success"
+                persisted = True
         except Exception:
             status = "failed"
             _emit_event(
@@ -287,7 +289,7 @@ class TrajectoryRecorder:
                 "feature_version": feature_snapshot.feature_version,
             },
         )
-        return feature_snapshot
+        return feature_snapshot if persisted else None
 
     def build_decision_observation(
         self,
@@ -376,7 +378,7 @@ class TrajectoryRecorder:
         trajectory: ExecutionTrajectory,
         *,
         decision_observation: DecisionObservation,
-    ) -> DecisionObservation:
+    ) -> DecisionObservation | None:
         """Persist a decision observation without blocking the async runtime."""
         if decision_observation.trajectory_id != trajectory.trajectory_id:
             raise ValueError("decision observation trajectory_id does not match trajectory")
@@ -388,12 +390,14 @@ class TrajectoryRecorder:
                 decision_observation.decision_observation_id
             )
         status = "not_configured"
+        persisted = False
         try:
             if self._store is not None:
                 await self._store.save_decision_observation_async(
                     decision_observation
                 )
                 status = "success"
+                persisted = True
         except Exception:
             status = "failed"
             _emit_event(
@@ -420,4 +424,4 @@ class TrajectoryRecorder:
                 "ope_eligible": decision_observation.ope_eligible,
             },
         )
-        return decision_observation
+        return decision_observation if persisted else None
