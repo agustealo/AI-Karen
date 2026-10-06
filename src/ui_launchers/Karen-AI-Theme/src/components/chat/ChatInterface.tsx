@@ -1485,35 +1485,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     }
 
     const userMessage: ChatMessage = {
-          id: 'user-' + Date.now(),
-          role: 'user',
-          content: trimmedInput,
-          timestamp: new Date(),
-          status: 'completed',
-        };
-        const assistantMessage: ChatMessage = {
-          id: 'assistant-pref-' + Date.now(),
-          role: 'assistant',
-          content: `Understood. I'll address you as ${matchedAddressOption} from now on.`,
-          timestamp: new Date(),
-          status: 'completed',
-        };
-
-        setMessages((prev) => [...prev, userMessage, assistantMessage]);
-        setInput('');
-      } catch {
-        toast({
-          title: 'Preference update failed',
-          description: 'Karen could not save your preferred form of address.',
-          variant: 'destructive',
-        });
-      } finally {
-        setIsLoading(false);
-      }
-      return;
-    }
-
-    const userMessage: ChatMessage = {
       id: 'user-' + Date.now(),
       role: 'user',
       content: trimmedInput,
