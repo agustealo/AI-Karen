@@ -303,7 +303,7 @@ export function ChatInput({
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             placeholder={inputPlaceholder}
-            className="h-11 flex-1 border-border/80 bg-card/72 text-sm shadow-inner sm:h-12 sm:text-[15px]"
+            className="h-11 flex-1 border-border/80 bg-card/70 text-sm shadow-inner sm:h-12 sm:text-[15px]"
             data-testid="chat-input"
             disabled={isAuthLoading}
             aria-label="Chat message input"
