@@ -275,7 +275,7 @@ export default function AccountPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight">My Account</h2>
+        <h2 className="karen-page-title">My Account</h2>
         <p className="text-sm text-muted-foreground">
           Manage your profile, display preferences, and security settings.
         </p>
