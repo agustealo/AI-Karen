@@ -181,6 +181,17 @@ class ApprovalService:
         if current["request_fingerprint"] != fingerprint:
             raise ApprovalScopeError("Approval does not match this request")
 
+        current_risk = str(
+            getattr(decision.risk_level, "value", decision.risk_level)
+        )
+        if (
+            current["intent"] != decision.intent
+            or current["risk_level"] != current_risk
+        ):
+            raise ApprovalScopeError(
+                "Approval no longer matches the current policy decision"
+            )
+
         if current["status"] == "approved":
             await self.consume_for_request(approval_id, request=request)
             return None
@@ -237,6 +248,8 @@ class ApprovalService:
             )
             if current is None:
                 raise ApprovalNotFoundError("Approval not found")
+            if current["status"] == normalized:
+                return current
             raise ApprovalStateError(
                 f"Approval cannot be decided from status {current['status']}"
             )
