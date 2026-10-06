@@ -245,3 +245,68 @@ def test_chat_runtime_has_no_second_session_to_conversation_identity_formula() -
     assert "normalize_chat_session_id" not in runtime
     assert 'raise ValueError("conversation_identity_incomplete:conversation_id")' in runtime
 
+def _conversation_route_block(source: str, function_name: str) -> str:
+    start = source.index(f"async def {function_name}(")
+    end = source.find("\n\n@router.", start)
+    if end == -1:
+        end = len(source)
+    return source[start:end]
+
+
+def test_sensitive_conversation_routes_require_same_user_ownership() -> None:
+    source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
+
+    for function_name in (
+        "build_context",
+        "update_ui_context",
+        "update_ai_insights",
+        "add_tags",
+    ):
+        route = _conversation_route_block(source, function_name)
+        assert "user_ctx: Dict[str, Any] = Depends(bypass_user_context_func)" in route
+        assert "user_id = _require_user_id(user_ctx)" in route
+        assert "await _require_owned_conversation(" in route
+        assert "conversation_gateway=conversation_gateway" in route
+
+    assert "async def _require_owned_conversation(" in source
+    assert "conversation_gateway.require_owned_conversation(" in source
+
+
+def test_tenant_wide_conversation_cleanup_requires_admin_role() -> None:
+    source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
+    route = _conversation_route_block(source, "cleanup_inactive_conversations")
+
+    assert "user_ctx: Dict[str, Any] = Depends(bypass_user_context_func)" in route
+    assert "_require_conversation_admin(user_ctx)" in route
+    assert 'user.has_role("admin", "super_admin")' in source
+    assert 'status_code=403' in source
+
+
+def test_cross_user_conversation_analytics_requires_admin_role() -> None:
+    source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
+    route = _conversation_route_block(source, "get_analytics")
+
+    assert "authenticated_user_id = _require_user_id(user_ctx)" in route
+    assert "target_user_id = user_id or authenticated_user_id" in route
+    assert "if target_user_id != authenticated_user_id:" in route
+    assert "_require_conversation_admin(user_ctx)" in route
+
+
+def test_conversation_gateway_centralizes_owner_lookup() -> None:
+    gateway = (
+        ROOT / "src/ai_karen_engine/core/runtime/conversation_runtime_gateway.py"
+    ).read_text(encoding="utf-8")
+
+    assert "async def require_owned_conversation(" in gateway
+    assert 'raise PermissionError("conversation_user_mismatch")' in gateway
+    assert 'raise RuntimeError("conversation_not_found")' in gateway
+
+    update = gateway.split("async def update_conversation(", 1)[1].split(
+        "async def delete_conversation(", 1
+    )[0]
+    delete = gateway.split("async def delete_conversation(", 1)[1].split(
+        "async def append_message(", 1
+    )[0]
+    assert "await self.require_owned_conversation(context)" in update
+    assert "await self.require_owned_conversation(context)" in delete
+
