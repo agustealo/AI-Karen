@@ -513,3 +513,62 @@ async def test_conversation_delete_requires_same_user() -> None:
     assert await gateway.delete_conversation(context) is True
     assert (context.tenant_id, conversation_id) not in repository.conversations
 
+@pytest.mark.asyncio
+async def test_snapshot_restore_is_context_free_and_same_user_scoped() -> None:
+    repository = _Repository()
+    context = _context()
+    conversation_id = context.conversation_id or ""
+    repository.conversations[(context.tenant_id, conversation_id)] = Conversation(
+        id=conversation_id,
+        tenant_id=context.tenant_id,
+        user_id=context.user_id,
+        title="Durable",
+        metadata={"session_id": "session-a"},
+    )
+    repository.messages.append(
+        Message(
+            id="message-1",
+            conversation_id=conversation_id,
+            tenant_id=context.tenant_id,
+            role="user",
+            content="durable transcript",
+        )
+    )
+    gateway = ConversationRuntimeGateway(repository=repository)
+
+    snapshot = await gateway.get_snapshot(context)
+
+    assert snapshot.conversation.title == "Durable"
+    assert [message.content for message in snapshot.messages] == ["durable transcript"]
+
+    with pytest.raises(PermissionError, match="conversation_user_mismatch"):
+        await gateway.get_snapshot(_context(user_id="user-b"))
+
+
+@pytest.mark.asyncio
+async def test_activity_touch_requires_same_user_and_preserves_conversation_fields() -> None:
+    repository = _Repository()
+    context = _context(conversation_id=None, session_id="session-a")
+    conversation_id = resolve_runtime_conversation_id(context)
+    repository.conversations[(context.tenant_id, conversation_id)] = Conversation(
+        id=conversation_id,
+        tenant_id=context.tenant_id,
+        user_id=context.user_id,
+        title="Keep title",
+        summary="Keep summary",
+        tags=["keep"],
+        metadata={"session_id": "session-a"},
+    )
+    gateway = ConversationRuntimeGateway(repository=repository)
+
+    touched = await gateway.touch_conversation_activity(context)
+
+    assert touched.title == "Keep title"
+    assert touched.summary == "Keep summary"
+    assert touched.tags == ["keep"]
+
+    with pytest.raises(PermissionError, match="conversation_user_mismatch"):
+        await gateway.touch_conversation_activity(
+            _context(conversation_id=None, session_id="session-a", user_id="user-b")
+        )
+
