@@ -482,15 +482,16 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
   // Keep server-side activity fresh without rotating durable conversations.
   // Conversation lifetime/retention is owned by the backend policy layer, not the UI.
   useEffect(() => {
+    const activeSessionId = currentSession?.id;
+    if (!activeSessionId) {
+      return;
+    }
+
     const RENEWAL_INTERVAL = 5 * 60 * 1000; // 5 minutes
-    let renewalId: number | undefined;
 
     const renewSession = async () => {
       try {
-        const activeSession = currentSessionRef.current;
-        if (activeSession) {
-          await apiClient.post(`/api/conversations/update-session-activity/${activeSession.id}`);
-        }
+        await apiClient.post(`/api/conversations/update-session-activity/${activeSessionId}`);
       } catch (err) {
         // Heartbeat failures are transient during backend startup or brief outages.
         // Keep the current session intact and let the next interval retry naturally.
@@ -498,16 +499,12 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
       }
     };
 
-    if (currentSessionRef.current) {
-      renewalId = window.setInterval(renewSession, RENEWAL_INTERVAL);
-    }
+    const renewalId = window.setInterval(renewSession, RENEWAL_INTERVAL);
 
     return () => {
-      if (typeof renewalId === 'number') {
-        window.clearInterval(renewalId);
-      }
+      window.clearInterval(renewalId);
     };
-  }, []);
+  }, [currentSession?.id]);
 
   // Delete a session
   const deleteSession = useCallback(async (sessionId: string) => {
