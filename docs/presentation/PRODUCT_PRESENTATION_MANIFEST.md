@@ -139,6 +139,12 @@ Do not execute credential-bearing capture code from the presentation branch. The
 
 Presentation code must not change the production first-boot smoke harness merely to make media capture easier. Authentication/bootstrap remains owned by the canonical auth/first-run system.
 
+## Current visual-system status
+
+The authenticated product, first-run flow, login, shared primitives, navigation, chat, settings, plugins, communications, and automation surfaces now derive from one KAREN design-token system. Rich result workspaces and conversation intelligence are projections of backend truth, not independent mini-app themes.
+
+The existing curated gallery remains valid provenance for the older captured revision, but it does **not** represent the current design-system migration. It must be recaptured from an approved sanitized live deployment of the new revision before those images are treated as current release visuals. Do not hand-edit, generate, or relabel the older PNGs as current evidence.
+
 ## Current media status
 
 - Canonical mark: ready
@@ -150,7 +156,7 @@ Presentation code must not change the production first-boot smoke harness merely
 - Plugin Overview presentation copy: converged to KAREN
 - Remote capture trust boundary: production-owned and CI-proven on `main`
 - Generic Playwright reports/results: retired as presentation evidence; generated browser-test output is not a release-proof source
-- Curated five-screen gallery: absent and must be captured from an approved sanitized live stack before this slice is presentation-complete
+- Curated five-screen gallery: provenanced for an older revision; visually superseded by the current design-system migration and requires trusted recapture before consumer-release visual signoff
 
 ## Release gate
 
