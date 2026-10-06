@@ -136,8 +136,9 @@ class ProactiveContinuityService:
             ):
                 return None
             utility = self._settings.behavior_weight + min(
-                self._settings.at_risk_boost,
-                0.03 * item.observation_count,
+                self._settings.behavior_max_boost,
+                self._settings.behavior_observation_boost
+                * item.observation_count,
             )
             interruption_cost = 0.35
             reason_codes.extend(("recurring_behavior", "behavior_repeated"))
