@@ -166,8 +166,14 @@ async def _collect_stream(
     fake_stream,
     *,
     persist_memory=None,
+    resolved_memory_meta: Optional[Dict[str, Any]] = None,
 ) -> list[ChatStreamChunk]:
     memory_persist = persist_memory or AsyncMock()
+    memory_meta = resolved_memory_meta or {
+        "memory_recall_status": "success",
+        "memory_recall_count": 0,
+        "memory_persistence_status": "skipped",
+    }
     with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
         with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
             with patch.object(runtime, "_build_authorized_plan", return_value=plan):
@@ -175,11 +181,7 @@ async def _collect_stream(
                     runtime,
                     "_consume_resolved_memory",
                     new_callable=AsyncMock,
-                    return_value={
-                        "memory_recall_status": "success",
-                        "memory_recall_count": 0,
-                        "memory_persistence_status": "skipped",
-                    },
+                    return_value=memory_meta,
                 ):
                     with patch.object(runtime, "_run_simple_stream", side_effect=fake_stream):
                         with patch.object(runtime, "_persist_memory", memory_persist):
@@ -383,6 +385,71 @@ async def test_execute_stream_terminal_complete_metadata_is_complete():
     ]
     for key in expected_keys:
         assert key in meta, f"terminal metadata missing {key}"
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_surfaces_continuity_and_capability_receipts():
+    runtime, _ = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    decision.required_capabilities = ["memory.read"]
+    decision.forbidden_capabilities = ["external.write"]
+    decision.tool_requirements = ["calendar.lookup"]
+    decision.plugin_candidates = ["calendar"]
+    decision.requires_human_gate = True
+    plan = _make_plan()
+    plan.allowed_capabilities = ["memory.read"]
+    plan.allowed_tools = ["calendar.lookup"]
+    plan.allowed_plugins = ["calendar"]
+    plan.allowed_agents = ["planner"]
+
+    async def fake_stream(*args, **kwargs):
+        yield ChatStreamChunk(type="content", content="hi", correlation_id="corr-1")
+
+    continuity = {
+        "memory_recall_status": "success",
+        "memory_recall_count": 1,
+        "memory_persistence_status": "skipped",
+        "proactive_continuity": {
+            "candidates": [
+                {
+                    "id": "loop-1",
+                    "subject": "Follow up on the interview",
+                    "source_type": "open_loop",
+                    "utility": 0.91,
+                    "confidence": 0.97,
+                    "urgency": "high",
+                    "execution_authorized": False,
+                }
+            ]
+        },
+        "continuity_primary_candidate_id": "loop-1",
+        "continuity_ambiguous": False,
+        "continuity_agenda_reason_codes": ["clear_primary_candidate"],
+    }
+
+    chunks = await _collect_stream(
+        runtime,
+        request,
+        decision,
+        plan,
+        fake_stream,
+        resolved_memory_meta=continuity,
+    )
+
+    meta = chunks[-1].metadata
+    assert meta["proactive_continuity"]["candidates"][0]["id"] == "loop-1"
+    assert meta["continuity_primary_candidate_id"] == "loop-1"
+    assert meta["continuity_ambiguous"] is False
+
+    receipt = meta["capability_receipt"]
+    assert receipt["allowed_capabilities"] == ["memory.read"]
+    assert receipt["forbidden_capabilities"] == ["external.write"]
+    assert receipt["allowed_tools"] == ["calendar.lookup"]
+    assert receipt["allowed_plugins"] == ["calendar"]
+    assert receipt["allowed_agents"] == ["planner"]
+    assert receipt["requires_human_gate"] is True
+    assert receipt["policy_decision_id"] == "policy-1"
 
 
 @pytest.mark.asyncio
