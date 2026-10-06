@@ -13,7 +13,10 @@ from ai_karen_engine.audit_logging import (
     get_audit_logger,
 )
 from ai_karen_engine.auth.models import UserData
-from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
+    ChatExecutionContext,
+    ChatExecutionRequest,
+)
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.persistence.repositories.approval_repository import (
     SqlApprovalRepository,
@@ -62,7 +65,6 @@ def request_fingerprint(request: ChatExecutionRequest) -> str:
         "preferred_model": request.preferred_model,
         "temperature": request.temperature,
         "max_tokens": request.max_tokens,
-        "stream": request.stream,
     }
     encoded = json.dumps(
         payload,
@@ -202,6 +204,68 @@ class ApprovalService:
         if current["status"] == "expired":
             raise ApprovalStateError("Approval expired")
         raise ApprovalStateError("Approval has already been consumed")
+    async def build_resume_request(
+        self,
+        approval_id: str,
+        *,
+        user: UserData,
+        request_id: str,
+        correlation_id: str,
+        stream: bool = True,
+    ) -> ChatExecutionRequest:
+        """Rebuild an approved request using fresh authenticated identity.
+
+        Persisted roles/permissions are deliberately ignored. Authorization is
+        recalculated by CORTEX/RuntimePolicy when the rebuilt request re-enters
+        ChatRuntime, and the approval receipt is consumed there only after the
+        current decision still requires and accepts the same human gate.
+        """
+        user_id, tenant_id = _identity(user)
+        record = await self._repository.get(
+            approval_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+        if record is None:
+            raise ApprovalNotFoundError("Approval not found")
+        if record["status"] != "approved":
+            raise ApprovalStateError(
+                f"Approval cannot resume from status {record['status']}"
+            )
+
+        payload = dict(record.get("request_payload") or {})
+        context = dict(payload.get("context") or {})
+        messages = payload.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ApprovalStateError("Stored approval request is incomplete")
+
+        session_id = str(context.get("session_id") or "").strip() or None
+        conversation_id = str(context.get("conversation_id") or "").strip() or None
+        rebuilt = ChatExecutionRequest(
+            messages=[dict(message) for message in messages if isinstance(message, dict)],
+            context=ChatExecutionContext(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+                correlation_id=correlation_id,
+                roles=list(user.roles or []),
+                permissions=list(user.get("permissions") or []),
+            ),
+            preferred_provider=payload.get("preferred_provider"),
+            preferred_model=payload.get("preferred_model"),
+            temperature=float(payload.get("temperature", 0.7)),
+            max_tokens=payload.get("max_tokens"),
+            stream=stream,
+            metadata={
+                "transport": "approval_resume",
+                "approval_id": approval_id,
+            },
+        )
+        if not rebuilt.messages:
+            raise ApprovalStateError("Stored approval request has no valid messages")
+        return rebuilt
     async def list_pending(self, *, user: UserData) -> List[Dict[str, Any]]:
         user_id, tenant_id = _identity(user)
         return await self._repository.list_pending(
