@@ -44,7 +44,10 @@ const asDisplayName = (
 const asHref = (value: unknown): string | null => {
   if (typeof value !== 'string' || !value.trim()) return null;
   const href = value.trim();
-  return /^(https?:\/\/)/i.test(href) || href.startsWith('/') ? href : null;
+  return /^(https?:\/\/)/i.test(href) ||
+    (href.startsWith('/') && !href.startsWith('//'))
+    ? href
+    : null;
 };
 
 const DataValue = ({ value }: { value: unknown }) => {
