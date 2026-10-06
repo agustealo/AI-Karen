@@ -45,10 +45,10 @@ def build_context_requirements(
             requirements.append(
                 ContextRequirement(
                     source=EvidenceSource.USER_MODEL,
-                capability="memory.read",
-                required=False,
-                scopes=["user"],
-                classes=["next_need"],
+                    capability="memory.read",
+                    required=False,
+                    scopes=["user"],
+                    classes=["next_need"],
                     max_items=min(
                         proactive_settings.max_candidates,
                         max(1, int(preliminary.memory_top_k or 1)),
