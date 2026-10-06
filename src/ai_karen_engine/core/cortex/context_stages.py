@@ -39,6 +39,18 @@ def build_context_requirements(
                 reason_codes=["cortex_memory_recall_requested"],
             )
         )
+        requirements.append(
+            ContextRequirement(
+                source=EvidenceSource.USER_MODEL,
+                capability="memory.read",
+                required=False,
+                scopes=["user"],
+                classes=["next_need"],
+                max_items=min(5, max(1, int(preliminary.memory_top_k or 5))),
+                reason_codes=["cortex_continuity_context_requested"],
+                metadata={"mode": "suggest_only"},
+            )
+        )
 
     if ctx.conversation_id:
         history_limit = get_conversation_context_settings().history_limit
@@ -93,6 +105,11 @@ def finalize_decision_with_context(
         for item in cognitive_context.evidence
         if item.source is EvidenceSource.CONVERSATION
     ]
+    continuity_evidence = [
+        item
+        for item in cognitive_context.evidence
+        if item.source is EvidenceSource.USER_MODEL
+    ]
 
     memory_recall_required = preliminary.memory_recall_required
     required_capabilities = list(preliminary.required_capabilities)
@@ -118,6 +135,18 @@ def finalize_decision_with_context(
                 reason_codes.append("context_memory_evidence_available")
             else:
                 reason_codes.append("context_memory_resolved_empty")
+
+    if EvidenceSource.USER_MODEL.value in denied_sources:
+        reason_codes.append("context_continuity_denied_by_policy")
+    elif EvidenceSource.USER_MODEL.value in authorized_sources:
+        if EvidenceSource.USER_MODEL.value in unresolved_sources:
+            reason_codes.append("context_continuity_unresolved")
+        else:
+            reason_codes.append("context_continuity_resolved")
+            if continuity_evidence:
+                reason_codes.append("context_continuity_evidence_available")
+            else:
+                reason_codes.append("context_continuity_resolved_empty")
 
     if EvidenceSource.CONVERSATION.value in denied_sources:
         if "conversation.read" not in forbidden_capabilities:
@@ -146,6 +175,7 @@ def finalize_decision_with_context(
             "context_evidence_count": len(cognitive_context.evidence),
             "context_memory_evidence_count": len(memory_evidence),
             "context_conversation_evidence_count": len(conversation_evidence),
+            "context_continuity_evidence_count": len(continuity_evidence),
             "context_policy_decision_id": cognitive_context.policy_decision_id,
         }
     )
