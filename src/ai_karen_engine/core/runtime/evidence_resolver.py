@@ -218,6 +218,7 @@ class RuntimeEvidenceResolver:
                     )
                     if str(value).strip()
                 ),
+                current_request=self._latest_user_message(request),
             )
             candidates = list(agenda.candidates)
         except Exception as exc:
