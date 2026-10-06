@@ -743,26 +743,43 @@ const createSessionId = (): string => {
   ].join('-');
 };
 
-const approvalActions = (approvalId: string): SuggestedAction[] => [
-  {
-    type: 'approval.approve',
-    description: 'Approve',
-    params: { approval_id: approvalId },
-  },
-  {
-    type: 'approval.reject',
-    description: 'Reject',
-    params: { approval_id: approvalId },
-  },
-];
+const approvalActions = (
+  approvalId: string,
+  status: string,
+): SuggestedAction[] =>
+  status === 'approved'
+    ? [
+        {
+          type: 'approval.resume',
+          description: 'Resume',
+          params: { approval_id: approvalId },
+        },
+      ]
+    : [
+        {
+          type: 'approval.approve',
+          description: 'Approve',
+          params: { approval_id: approvalId },
+        },
+        {
+          type: 'approval.reject',
+          description: 'Reject',
+          params: { approval_id: approvalId },
+        },
+      ];
+
+const approvalMessageContent = (status: string): string =>
+  status === 'approved'
+    ? 'Approval granted. KAREN is ready to resume this action.'
+    : 'Approval required before KAREN can continue this action.';
 
 const actionableApprovalToMessage = (approval: ActionableApproval): ChatMessage => ({
   id: `approval-${approval.approval_id}`,
   role: 'assistant',
-  content: 'Approval required before KAREN can continue this action.',
+  content: approvalMessageContent(approval.status),
   timestamp: new Date(approval.created_at),
   status: 'completed',
-  actions: approvalActions(approval.approval_id),
+  actions: approvalActions(approval.approval_id, approval.status),
   metadata: {
     mode: 'approval_required',
     status: 'gate',
@@ -782,7 +799,7 @@ const reconcileActionableApprovalMessages = (
   currentMessages: ChatMessage[],
   actionableApprovals: ActionableApproval[],
 ): ChatMessage[] => {
-  const pendingById = new Map(
+  const actionableById = new Map(
     actionableApprovals.map((approval) => [approval.approval_id, approval]),
   );
 
@@ -791,14 +808,14 @@ const reconcileActionableApprovalMessages = (
       const metadata = message.metadata || {};
       const approvalId = String(metadata.approval_id || '').trim();
       const isProjection = metadata.approval_projection === true;
-      return !isProjection || (approvalId && pendingById.has(approvalId));
+      return !isProjection || (approvalId && actionableById.has(approvalId));
     })
     .map((message) => {
       const metadata = message.metadata || {};
       const approvalId = String(metadata.approval_id || '').trim();
-      const pending = approvalId ? pendingById.get(approvalId) : undefined;
+      const actionable = approvalId ? actionableById.get(approvalId) : undefined;
 
-      if (!approvalId || !pending) {
+      if (!approvalId || !actionable) {
         if (approvalId && message.actions?.some((action) => action.type.startsWith('approval.'))) {
           return {
             ...message,
@@ -810,13 +827,17 @@ const reconcileActionableApprovalMessages = (
 
       return {
         ...message,
-        actions: approvalActions(approvalId),
+        content:
+          actionable.status === 'approved'
+            ? approvalMessageContent(actionable.status)
+            : message.content,
+        actions: approvalActions(approvalId, actionable.status),
         metadata: {
           ...metadata,
-          approval_status: 'pending',
-          risk_level: pending.risk_level,
-          reason_codes: pending.reason_codes,
-          expires_at: pending.expires_at,
+          approval_status: actionable.status,
+          risk_level: actionable.risk_level,
+          reason_codes: actionable.reason_codes,
+          expires_at: actionable.expires_at,
         },
       };
     });
@@ -1090,25 +1111,25 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         const approvals = await apiClient.get<ActionableApproval[]>(
           `/api/approvals?conversation_id=${encodeURIComponent(conversationId)}`,
         );
-        const pending = Array.isArray(approvals)
+        const actionable = Array.isArray(approvals)
           ? approvals.filter(
               (approval) =>
-                approval.status === 'pending' &&
+                (approval.status === 'pending' || approval.status === 'approved') &&
                 (!approval.conversation_id ||
                   approval.conversation_id === conversationId),
             )
           : [];
 
         if (sessionIdRef.current !== conversationId) {
-          return pending;
+          return actionable;
         }
 
-        setActionableApprovals(pending);
+        setActionableApprovals(actionable);
         setMessages((current) =>
-          reconcileActionableApprovalMessages(current, pending),
+          reconcileActionableApprovalMessages(current, actionable),
         );
         setActionableApprovalsLoadState('ready');
-        return pending;
+        return actionable;
       } catch (error) {
         if (sessionIdRef.current === conversationId) {
           setActionableApprovalsLoadState('unavailable');
