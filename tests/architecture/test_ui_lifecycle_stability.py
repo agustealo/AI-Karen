@@ -125,6 +125,14 @@ def test_new_chat_requires_server_ack_before_becoming_current() -> None:
 
     assert ensure_index < current_index < persist_index
     assert "no local-only session was created" in create
+    assert "No local-only conversation was created." in create
+
+    delete = chat.split("// Delete a session", 1)[1].split(
+        "// Delete multiple sessions", 1
+    )[0]
+    assert "setCurrentSession(null)" in delete
+    assert "persistActiveSessionId(null)" in delete
+    assert "Chat deleted, but a replacement chat could not be created yet." in delete
 
 
 def test_preference_confirmation_stays_on_canonical_chat_runtime() -> None:
