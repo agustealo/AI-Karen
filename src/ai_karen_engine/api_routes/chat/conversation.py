@@ -476,36 +476,42 @@ async def get_conversation_stats(
 @router.get("/by-session/{session_id}", response_model=ConversationResponse)
 async def get_conversation_by_session(
     session_id: str,
-    include_context: bool = Query(True, description="Include context data"),
-    conversation_service: ConversationService = Depends(get_conversation_service),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Retrieve durable conversation state by session identifier."""
+    """Retrieve canonical durable conversation state by runtime session identifier."""
     try:
         user_id = _require_user_id(user_ctx)
-        conversation = await conversation_service.get_web_ui_conversation_by_session(
-            tenant_id=tenant_id,
-            session_id=session_id,
-            user_id=user_id,
-            include_context=include_context,
+        snapshot = await conversation_gateway.get_owned_snapshot_by_session(
+            _conversation_api_context(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                session_id=session_id,
+            )
         )
-        if not conversation:
+        return _canonical_snapshot_to_response(snapshot)
+    except HTTPException:
+        raise
+    except (PermissionError, RuntimeError) as error:
+        if str(error) in {"conversation_user_mismatch", "conversation_not_found"}:
             _raise_not_found(
                 message="Conversation not found",
                 user_message="No conversation exists for the requested session.",
                 details={"session_id": session_id},
             )
-        return _convert_conversation_to_response(conversation)
-    except HTTPException:
-        raise
+        _raise_service_error(
+            error=error,
+            user_message="Failed to get conversation. Please try again.",
+        )
     except Exception as error:
         logger.exception("Failed to get conversation by session", error=str(error))
         _raise_service_error(
             error=error,
             user_message="Failed to get conversation. Please try again.",
         )
-
 
 @router.get("/ensure-session/{session_id}", response_model=ConversationResponse)
 async def ensure_session_conversation_get(
@@ -530,72 +536,34 @@ async def list_conversations(
     active_only: bool = Query(True, description="Only return active conversations"),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of conversations"),
     offset: int = Query(0, ge=0, description="Number of conversations to skip"),
-    conversation_service: ConversationService = Depends(get_conversation_service),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     try:
         user_id = _require_user_id(user_ctx)
-        base_manager = conversation_service.base_manager
-        params = inspect.signature(base_manager.list_conversations).parameters
-
-        if "active_only" in params:
-            conversations = await base_manager.list_conversations(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                active_only=active_only,
-                limit=limit,
-                offset=offset,
-            )
-        else:
-            from ai_karen_engine.chat.conversation_models import (
-                ConversationFilters as _ConversationFilters,
-                ConversationStatus as _ConversationStatus,
-            )
-
-            filters: Optional[Any] = None
-            if active_only:
-                filters = _ConversationFilters(status=_ConversationStatus.ACTIVE)
-            enhanced_list_conversations = cast(Any, base_manager.list_conversations)
-            conversations = await enhanced_list_conversations(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                filters=filters,
-                limit=limit,
-                offset=offset,
-            )
-
-        web_ui_conversations: List[ConversationResponse] = []
-        for conversation in conversations:
-            web_ui_data = await conversation_service._get_web_ui_conversation_data(
-                tenant_id, conversation.id
-            )
-            web_ui_conversation = await conversation_service._convert_to_web_ui_conversation(
-                conversation,
-                web_ui_data.get("session_id"),
-                web_ui_data.get("ui_context", {}),
-                web_ui_data.get("user_settings", {}),
-                web_ui_data.get("tags", []),
-                ConversationPriority.from_any(web_ui_data.get("priority", "normal")),
-                web_ui_data.get("summary"),
-                web_ui_data.get("last_ai_response_id"),
-            )
-            web_ui_conversations.append(
-                _convert_conversation_to_response(web_ui_conversation)
-            )
-
-        stats = await conversation_service.base_manager.get_conversation_stats(
+        context = _conversation_api_context(
             tenant_id=tenant_id,
             user_id=user_id,
         )
-        total_count = _get_total_conversations_from_stats(
-            stats,
-            len(web_ui_conversations),
+        snapshots = await conversation_gateway.list_owned_snapshots(
+            context,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+        total_count = await conversation_gateway.count_owned_conversations(
+            context,
+            active_only=active_only,
         )
         return ConversationListResponse(
-            conversations=web_ui_conversations,
+            conversations=[
+                _canonical_snapshot_to_response(snapshot) for snapshot in snapshots
+            ],
             total_count=total_count,
-            has_more=len(web_ui_conversations) == limit,
+            has_more=offset + len(snapshots) < total_count,
         )
     except HTTPException:
         raise
@@ -606,32 +574,54 @@ async def list_conversations(
             user_message="Failed to list conversations. Please try again.",
         )
 
-
 @router.post("/create", response_model=CreateConversationResponse)
 async def create_conversation(
     request: CreateConversationRequest,
-    conversation_service: ConversationService = Depends(get_conversation_service),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
+    """Compatibility create surface backed only by canonical conversation storage."""
     try:
         user_id = _require_user_id(user_ctx)
-        conversation = await conversation_service.create_web_ui_conversation(
+        context = _conversation_api_context(
             tenant_id=tenant_id,
             user_id=user_id,
             session_id=request.session_id,
-            ui_source=request.ui_source,
-            title=request.title,
-            initial_message=request.initial_message,
-            user_settings=request.user_settings,
-            ui_context=request.ui_context,
-            tags=request.tags,
-            priority=request.priority,
         )
-        if not conversation:
-            raise RuntimeError("Conversation service returned no conversation")
+        snapshot = await conversation_gateway.ensure_session_snapshot(
+            context,
+            title=request.title or "New Conversation",
+        )
+        context = _conversation_api_context(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            session_id=request.session_id,
+            conversation_id=str(snapshot.conversation.id),
+        )
+        await conversation_gateway.update_conversation_metadata(
+            context,
+            metadata_updates={
+                "ui_source": request.ui_source.value,
+                "session_id": request.session_id,
+                "user_settings": request.user_settings or {},
+                "ui_context": request.ui_context or {},
+                "priority": request.priority.value,
+            },
+            tags_to_add=request.tags or [],
+        )
+        if request.initial_message:
+            await conversation_gateway.append_message(
+                context,
+                role=MessageRole.USER.value,
+                content=request.initial_message,
+                metadata={"ui_source": request.ui_source.value},
+            )
+        snapshot = await conversation_gateway.get_owned_snapshot(context)
         return CreateConversationResponse(
-            conversation=_convert_conversation_to_response(conversation),
+            conversation=_canonical_snapshot_to_response(snapshot),
             success=True,
             message="Conversation created successfully",
         )
@@ -643,7 +633,6 @@ async def create_conversation(
             error=error,
             user_message="Failed to create conversation. Please try again.",
         )
-
 
 @router.post("/ensure-session/{session_id}", response_model=ConversationResponse)
 async def ensure_session_conversation(
@@ -676,68 +665,40 @@ async def ensure_session_conversation(
         )
 
 
-@router.post("/cleanup-inactive")
-async def cleanup_inactive_conversations(
-    days_inactive: int = Query(30, ge=1, description="Days of inactivity threshold"),
-    conversation_service: ConversationService = Depends(get_conversation_service),
-    tenant_id: str = Depends(get_current_tenant_id),
-    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
-):
-    try:
-        _require_user_id(user_ctx)
-        _require_admin_role(user_ctx)
-        count = await conversation_service.base_manager.cleanup_inactive_conversations(
-            tenant_id=tenant_id,
-            days_inactive=days_inactive,
-        )
-        return {
-            "success": True,
-            "inactive_count": count,
-            "message": f"Marked {count} conversations as inactive",
-        }
-    except HTTPException:
-        raise
-    except Exception as error:
-        logger.exception("Failed to cleanup conversations", error=str(error))
-        _raise_service_error(
-            error=error,
-            user_message="Failed to cleanup conversations. Please try again.",
-        )
-
-
 @router.post("/update-session-activity/{session_id}")
 async def update_session_activity(
     session_id: str,
     activity_data: Optional[Dict[str, Any]] = None,
-    conversation_service: ConversationService = Depends(get_conversation_service),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
-    """Update activity only after proving the session belongs to this tenant/user."""
+    """Touch activity only on the authenticated user's canonical session conversation."""
     try:
         user_id = _require_user_id(user_ctx)
-        conversation = await conversation_service.get_web_ui_conversation_by_session(
-            tenant_id=tenant_id,
-            session_id=session_id,
-            user_id=user_id,
-            include_context=False,
+        await conversation_gateway.touch_session_conversation(
+            _conversation_api_context(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                session_id=session_id,
+            )
         )
-        if not conversation:
+        return {"success": True}
+    except HTTPException:
+        raise
+    except (PermissionError, RuntimeError) as error:
+        if str(error) in {"conversation_user_mismatch", "conversation_not_found"}:
             _raise_not_found(
                 message="Conversation not found",
                 user_message="No conversation exists for the requested session.",
                 details={"session_id": session_id},
             )
-
-        success = await conversation_service.update_session_activity(
-            session_id=session_id,
-            activity_data=activity_data,
+        _raise_service_error(
+            error=error,
+            user_message="Failed to update session activity. Please try again.",
         )
-        if not success:
-            raise RuntimeError("Conversation service failed to update session activity")
-        return {"success": True}
-    except HTTPException:
-        raise
     except Exception as error:
         logger.exception("Failed to update session activity", error=str(error))
         _raise_service_error(
@@ -745,39 +706,45 @@ async def update_session_activity(
             user_message="Failed to update session activity. Please try again.",
         )
 
-
 @router.get("/{conversation_id}", response_model=ConversationResponse)
 async def get_conversation(
     conversation_id: str,
-    include_context: bool = Query(True, description="Include context data"),
-    conversation_service: ConversationService = Depends(get_conversation_service),
+    include_context: bool = Query(True, description="Compatibility flag; transcript is canonical"),
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     try:
         user_id = _require_user_id(user_ctx)
-        conversation = await conversation_service.get_web_ui_conversation(
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            include_context=include_context,
-            user_id=user_id,
+        snapshot = await conversation_gateway.get_owned_snapshot(
+            _conversation_api_context(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
         )
-        if not conversation:
+        return _canonical_snapshot_to_response(snapshot)
+    except HTTPException:
+        raise
+    except (PermissionError, RuntimeError) as error:
+        if str(error) in {"conversation_user_mismatch", "conversation_not_found"}:
             _raise_not_found(
                 message="Conversation not found",
                 user_message="The requested conversation could not be found.",
                 details={"conversation_id": conversation_id},
             )
-        return _convert_conversation_to_response(conversation)
-    except HTTPException:
-        raise
+        _raise_service_error(
+            error=error,
+            user_message="Failed to get conversation. Please try again.",
+        )
     except Exception as error:
         logger.exception("Failed to get conversation", error=str(error))
         _raise_service_error(
             error=error,
             user_message="Failed to get conversation. Please try again.",
         )
-
 
 @router.post("/{conversation_id}/messages", response_model=AddMessageResponse)
 async def add_message(
@@ -824,47 +791,10 @@ async def add_message(
         )
 
 
-@router.post("/{conversation_id}/context", response_model=ContextResponse)
-async def build_context(
-    conversation_id: str,
-    request: BuildContextRequest,
-    conversation_service: ConversationService = Depends(get_conversation_service),
-    conversation_gateway: ConversationRuntimeGateway = Depends(
-        get_conversation_runtime_gateway
-    ),
-    tenant_id: str = Depends(get_current_tenant_id),
-    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
-):
-    try:
-        await _require_owned_conversation_access(
-            conversation_gateway=conversation_gateway,
-            tenant_id=tenant_id,
-            user_ctx=user_ctx,
-            conversation_id=conversation_id,
-        )
-        context = await conversation_service.build_conversation_context(
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            current_message=request.current_message,
-            include_memories=request.include_memories,
-            include_insights=request.include_insights,
-        )
-        return ContextResponse(**context)
-    except HTTPException:
-        raise
-    except Exception as error:
-        logger.exception("Failed to build context", error=str(error))
-        _raise_service_error(
-            error=error,
-            user_message="Failed to build conversation context. Please try again.",
-        )
-
-
 @router.put("/{conversation_id}/ui-context")
 async def update_ui_context(
     conversation_id: str,
     request: UpdateUIContextRequest,
-    conversation_service: ConversationService = Depends(get_conversation_service),
     conversation_gateway: ConversationRuntimeGateway = Depends(
         get_conversation_runtime_gateway
     ),
@@ -872,26 +802,29 @@ async def update_ui_context(
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     try:
-        await _require_owned_conversation_access(
-            conversation_gateway=conversation_gateway,
-            tenant_id=tenant_id,
-            user_ctx=user_ctx,
-            conversation_id=conversation_id,
+        user_id = _require_user_id(user_ctx)
+        await conversation_gateway.update_conversation_metadata(
+            _conversation_api_context(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            ),
+            metadata_updates={"ui_context": request.ui_context},
         )
-        success = await conversation_service.update_conversation_ui_context(
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            ui_context=request.ui_context,
-        )
-        if not success:
-            _raise_not_found(
-                message="Conversation not found or update failed",
-                user_message="The requested conversation could not be found or updated.",
-                details={"conversation_id": conversation_id},
-            )
         return {"success": True, "message": "UI context updated successfully"}
     except HTTPException:
         raise
+    except (PermissionError, RuntimeError) as error:
+        if str(error) in {"conversation_user_mismatch", "conversation_not_found"}:
+            _raise_not_found(
+                message="Conversation not found or update denied",
+                user_message="The requested conversation could not be found or updated.",
+                details={"conversation_id": conversation_id},
+            )
+        _raise_service_error(
+            error=error,
+            user_message="Failed to update UI context. Please try again.",
+        )
     except Exception as error:
         logger.exception("Failed to update UI context", error=str(error))
         _raise_service_error(
@@ -899,52 +832,10 @@ async def update_ui_context(
             user_message="Failed to update UI context. Please try again.",
         )
 
-
-@router.put("/{conversation_id}/ai-insights")
-async def update_ai_insights(
-    conversation_id: str,
-    request: UpdateAIInsightsRequest,
-    conversation_service: ConversationService = Depends(get_conversation_service),
-    conversation_gateway: ConversationRuntimeGateway = Depends(
-        get_conversation_runtime_gateway
-    ),
-    tenant_id: str = Depends(get_current_tenant_id),
-    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
-):
-    try:
-        await _require_owned_conversation_access(
-            conversation_gateway=conversation_gateway,
-            tenant_id=tenant_id,
-            user_ctx=user_ctx,
-            conversation_id=conversation_id,
-        )
-        success = await conversation_service.update_conversation_ai_insights(
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            ai_insights=request.ai_insights,
-        )
-        if not success:
-            _raise_not_found(
-                message="Conversation not found or update failed",
-                user_message="The requested conversation could not be found or updated.",
-                details={"conversation_id": conversation_id},
-            )
-        return {"success": True, "message": "AI insights updated successfully"}
-    except HTTPException:
-        raise
-    except Exception as error:
-        logger.exception("Failed to update AI insights", error=str(error))
-        _raise_service_error(
-            error=error,
-            user_message="Failed to update AI insights. Please try again.",
-        )
-
-
 @router.post("/{conversation_id}/tags")
 async def add_tags(
     conversation_id: str,
     request: AddTagsRequest,
-    conversation_service: ConversationService = Depends(get_conversation_service),
     conversation_gateway: ConversationRuntimeGateway = Depends(
         get_conversation_runtime_gateway
     ),
@@ -952,36 +843,38 @@ async def add_tags(
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     try:
-        await _require_owned_conversation_access(
-            conversation_gateway=conversation_gateway,
-            tenant_id=tenant_id,
-            user_ctx=user_ctx,
-            conversation_id=conversation_id,
+        user_id = _require_user_id(user_ctx)
+        await conversation_gateway.update_conversation_metadata(
+            _conversation_api_context(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            ),
+            tags_to_add=request.tags,
         )
-        success = await conversation_service.add_conversation_tags(
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            tags=request.tags,
-        )
-        if not success:
-            _raise_not_found(
-                message="Conversation not found or update failed",
-                user_message="The requested conversation could not be found or updated.",
-                details={"conversation_id": conversation_id},
-            )
         return {
             "success": True,
             "message": f"Added {len(request.tags)} tags to conversation",
         }
     except HTTPException:
         raise
+    except (PermissionError, RuntimeError) as error:
+        if str(error) in {"conversation_user_mismatch", "conversation_not_found"}:
+            _raise_not_found(
+                message="Conversation not found or update denied",
+                user_message="The requested conversation could not be found or updated.",
+                details={"conversation_id": conversation_id},
+            )
+        _raise_service_error(
+            error=error,
+            user_message="Failed to add tags to conversation. Please try again.",
+        )
     except Exception as error:
         logger.exception("Failed to add conversation tags", error=str(error))
         _raise_service_error(
             error=error,
             user_message="Failed to add tags to conversation. Please try again.",
         )
-
 
 @router.put("/{conversation_id}")
 async def update_conversation(
