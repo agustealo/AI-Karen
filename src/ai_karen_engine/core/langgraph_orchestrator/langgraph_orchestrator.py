@@ -6,7 +6,7 @@ human-in-the-loop workflows with typed state management and checkpointing.
 
 Graph Structure:
 auth_gate → safety_gate → memory_fetch → intent_detect → planner →
-router_select → tool_exec → response_synth → approval_gate → memory_write
+runtime_policy → router_select → tool_exec → response_synth → memory_write
 """
 
 from typing import (
@@ -103,7 +103,6 @@ from .nodes import (
     select_reasoning_branch,
     tool_exec_node,
     response_synth_node,
-    approval_gate_node,
     memory_write_node,
     stream_process_node,
 )
@@ -401,7 +400,6 @@ class LangGraphOrchestrator:
         workflow.add_node("tool_exec", _tool_exec_node)
         workflow.add_node("reasoning", _reasoning_node)
         workflow.add_node("response_synth", _response_synth_node)
-        workflow.add_node("approval_gate", approval_gate_node)
         workflow.add_node("memory_write", memory_write_node)
         workflow.add_node("response_formatter", response_formatter_node)
 
@@ -435,7 +433,7 @@ class LangGraphOrchestrator:
                     if self.config.enable_memory_fetch
                     else "intent_detect",
                     "reject": END,
-                    "review": "approval_gate",
+                    "review": END,
                 },
             )
 
@@ -466,23 +464,7 @@ class LangGraphOrchestrator:
 
         workflow.add_edge("reasoning", "response_synth")
 
-        if self.config.enable_approval_gate:
-            workflow.add_conditional_edges(
-                "response_synth",
-                self._should_require_approval,
-                {"approve": "memory_write", "review": "approval_gate"},
-            )
-            workflow.add_conditional_edges(
-                "approval_gate",
-                self._check_approval_status,
-                {
-                    "approved": "memory_write",
-                    "rejected": END,
-                    "pending": END,  # Runtime owns durable human approval/resume.
-                },
-            )
-        else:
-            workflow.add_edge("response_synth", "memory_write")
+        workflow.add_edge("response_synth", "memory_write")
 
         workflow.add_edge("memory_write", "response_formatter")
         workflow.add_edge("response_formatter", END)
@@ -504,27 +486,20 @@ class LangGraphOrchestrator:
         if safety_status == "safe":
             return "continue"
         elif safety_status == "review_required":
+            state.setdefault("errors", []).append(
+                "runtime_authority_mismatch:safety_review_required"
+            )
+            logger.error(
+                "langgraph safety review reached execution after Runtime approval gate",
+                extra={
+                    "correlation_id": state.get("correlation_id"),
+                    "conversation_id": state.get("conversation_id"),
+                    "safety_flags": list(state.get("safety_flags") or []),
+                },
+            )
             return "review"
         else:
             return "reject"
-
-    def _should_require_approval(self, state: LangGraphOrchestrationState) -> str:
-        """Determine if human approval is required"""
-        # Check if approval is required based on various factors
-        safety_flags = state.get("safety_flags", [])
-        tool_results = state.get("tool_results", [])
-
-        # Require approval if there are safety flags or sensitive tools were used
-        if safety_flags or any("sensitive" in str(result) for result in tool_results):
-            state["requires_approval"] = True
-            return "review"
-        else:
-            return "approve"
-
-    def _check_approval_status(self, state: LangGraphOrchestrationState) -> str:
-        """Check the current approval status"""
-        approval_status = state.get("approval_status", "pending")
-        return approval_status
 
     async def initialize(self) -> None:
         """Compatibility initialization hook."""

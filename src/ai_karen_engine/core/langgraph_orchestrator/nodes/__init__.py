@@ -21,7 +21,6 @@ __all__ = [
     "ReasoningNode",
     "ToolExecutionNode",
     "ResponseSynthesisNode",
-    "ApprovalGateNode",
     "MemoryWriteNode",
     # Convenience functions
     "auth_gate_node",
@@ -34,7 +33,6 @@ __all__ = [
     "select_reasoning_branch",
     "tool_exec_node",
     "response_synth_node",
-    "approval_gate_node",
     "memory_write_node",
     "stream_process_node",
     # Data classes
@@ -66,8 +64,6 @@ _EXPORTS = {
     "ResponseSynthesisNode": ("ai_karen_engine.core.langgraph_orchestrator.nodes.response_synth", "ResponseSynthesisNode"),
     "SynthesisConfig": ("ai_karen_engine.core.langgraph_orchestrator.nodes.response_synth", "SynthesisConfig"),
     "response_synth_node": ("ai_karen_engine.core.langgraph_orchestrator.nodes.response_synth", "response_synth_node"),
-    "ApprovalGateNode": ("ai_karen_engine.core.langgraph_orchestrator.nodes.approval_gate", "ApprovalGateNode"),
-    "approval_gate_node": ("ai_karen_engine.core.langgraph_orchestrator.nodes.approval_gate", "approval_gate_node"),
     "MemoryWriteNode": ("ai_karen_engine.core.langgraph_orchestrator.nodes.memory_write", "MemoryWriteNode"),
     "MemoryWriteRequest": ("ai_karen_engine.core.langgraph_orchestrator.nodes.memory_write", "MemoryWriteRequest"),
     "MemoryWriteResult": ("ai_karen_engine.core.langgraph_orchestrator.nodes.memory_write", "MemoryWriteResult"),
