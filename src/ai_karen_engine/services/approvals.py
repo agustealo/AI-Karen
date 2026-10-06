@@ -146,6 +146,46 @@ class ApprovalService:
         )
         return record
 
+    async def authorize_or_request(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+    ) -> Optional[Dict[str, Any]]:
+        """Return a pending approval record or consume an approved one.
+
+        A None result means execution is authorized to continue. This method
+        never grants policy by itself: it only enforces the human gate already
+        required by the current CORTEX/RuntimePolicy decision.
+        """
+        if not decision.requires_human_gate:
+            return None
+
+        approval_id = str(request.metadata.get("approval_id") or "").strip()
+        if not approval_id:
+            return await self.create_for_request(request, decision)
+
+        current = await self._repository.get(
+            approval_id,
+            tenant_id=request.context.tenant_id,
+            user_id=request.context.user_id,
+        )
+        if current is None:
+            raise ApprovalNotFoundError("Approval not found")
+
+        fingerprint = request_fingerprint(request)
+        if current["request_fingerprint"] != fingerprint:
+            raise ApprovalScopeError("Approval does not match this request")
+
+        if current["status"] == "approved":
+            await self.consume_for_request(approval_id, request=request)
+            return None
+        if current["status"] == "pending":
+            return current
+        if current["status"] == "rejected":
+            raise ApprovalStateError("Approval was rejected")
+        if current["status"] == "expired":
+            raise ApprovalStateError("Approval expired")
+        raise ApprovalStateError("Approval has already been consumed")
     async def list_pending(self, *, user: UserData) -> List[Dict[str, Any]]:
         user_id, tenant_id = _identity(user)
         return await self._repository.list_pending(
