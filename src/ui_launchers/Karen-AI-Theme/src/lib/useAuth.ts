@@ -62,9 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const user = isValid ? authService.getCurrentUser() : null;
 
     if (!isValid || !user) {
-      if (!isValid) {
-        authService.clearAuth();
-      }
+      authService.clearAuth();
       setState(unauthenticatedState);
       initialResolutionCompleteRef.current = true;
       return;
