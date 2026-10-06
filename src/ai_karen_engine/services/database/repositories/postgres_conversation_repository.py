@@ -133,6 +133,48 @@ class PostgresConversationRepository(ConversationRepository):
             return RepositoryResult(success=False, error=str(exc))
 
     @instrument_repository(
+        operation="get_conversation_by_session",
+        repository="PostgresConversationRepository",
+    )
+    async def get_conversation_by_session(
+        self,
+        session_id: str,
+        tenant_id: str,
+        user_id: str,
+    ) -> RepositoryResult[Optional[Conversation]]:
+        try:
+            async with await self._session() as session:
+                result = await session.execute(
+                    text(
+                        f"""
+                        SELECT conversation_id, tenant_id, user_id, title, is_active,
+                               summary, tags, conversation_metadata, created_at, updated_at
+                        FROM {self._conversation_table}
+                        WHERE tenant_id = :tenant_id
+                          AND user_id = :user_id
+                          AND (conversation_metadata::jsonb ->> 'session_id') = :session_id
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {
+                        "session_id": session_id,
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                    },
+                )
+                row = result.fetchone()
+                if not row:
+                    return RepositoryResult(success=True, data=None)
+                return RepositoryResult(
+                    success=True,
+                    data=self._row_to_conversation(row),
+                )
+        except Exception as exc:
+            logger.error("get_conversation_by_session failed: %s", exc)
+            return RepositoryResult(success=False, error=str(exc))
+
+    @instrument_repository(
         operation="list_conversations", repository="PostgresConversationRepository"
     )
     async def list_conversations(
