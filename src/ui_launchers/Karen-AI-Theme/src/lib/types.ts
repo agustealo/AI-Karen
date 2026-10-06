@@ -51,8 +51,7 @@ export type AgentStepEventType =
   | 'provider_fallback_succeeded'
   | 'provider_invocation_failed'
   | 'streaming_started'
-  | 'streaming_completed'
-;
+  | 'streaming_completed';
 export interface AgentStepEvent {
   type: AgentStepEventType;
   step_id: string;
