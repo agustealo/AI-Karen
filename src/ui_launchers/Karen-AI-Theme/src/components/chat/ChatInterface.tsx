@@ -39,7 +39,6 @@ import AgentActivityPanel from './AgentActivityPanel';
 import ConversationContextRail from './ConversationContextRail';
 import DegradedModeBanner from './DegradedModeBanner';
 import RuntimeMetadataPanel from './RuntimeMetadataPanel';
-import RuntimeReceipt from './RuntimeReceipt';
 import RichResultWorkspace from './RichResultWorkspace';
 import CircuitBreakerWarning from './CircuitBreakerWarning';
 
@@ -1003,6 +1002,14 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       usedFallback: Boolean(metadata.used_fallback),
       degradedMode: Boolean(metadata.degraded_mode),
       degradedReason,
+      degradationType: asText(metadata.degradation_type),
+      latencyMs:
+        typeof metadata.latency_ms === 'number' && Number.isFinite(metadata.latency_ms)
+          ? metadata.latency_ms
+          : undefined,
+      providerAttempts: Array.isArray(metadata.provider_attempts)
+        ? metadata.provider_attempts
+        : [],
       showCircuitWarning: Boolean(metadata.circuit_breaker_open || metadata.dependency_degraded || degradedReason),
       rawMetadata: metadata,
     };
@@ -2148,13 +2155,10 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         status={latestAssistantMetadata.status}
         responseSource={latestAssistantMetadata.responseSource}
         degradedMode={latestAssistantMetadata.degradedMode}
+        degradationType={latestAssistantMetadata.degradationType}
         degradationReason={latestAssistantMetadata.degradedReason}
-      />
-
-      <RuntimeReceipt
-        source={latestAssistantMetadata.responseSource}
-        usedFallback={latestAssistantMetadata.usedFallback}
-        degradedReason={latestAssistantMetadata.degradedReason}
+        providerAttempts={latestAssistantMetadata.providerAttempts}
+        latencyMs={latestAssistantMetadata.latencyMs}
       />
 
       <CircuitBreakerWarning
