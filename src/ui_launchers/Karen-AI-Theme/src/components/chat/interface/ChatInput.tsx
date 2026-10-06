@@ -229,6 +229,7 @@ export function ChatInput({
               hideTrigger
             />
           </div>
+        </div>
 
         <form
           onSubmit={onSubmit}
