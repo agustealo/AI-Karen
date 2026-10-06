@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-import type { AgentStepEvent } from '@/lib/api';
+import type { AgentStepEvent } from '@/lib/types';
 
 interface AgentActivityPanelProps {
   steps: AgentStepEvent[];
