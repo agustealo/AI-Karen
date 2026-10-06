@@ -48,4 +48,39 @@ describe('durable approval surface', () => {
     fireEvent.click(screen.getByRole('button', { name: /perform action: reject/i }));
     expect(onActionClick).toHaveBeenCalledWith(message.actions?.[1]);
   });
+
+  it('renders an approved unconsumed receipt as Resume instead of another decision', () => {
+    const onActionClick = vi.fn();
+    const message: ChatMessage = {
+      id: 'approval-2',
+      role: 'assistant',
+      content: 'Approval granted. KAREN is ready to resume this action.',
+      timestamp: new Date('2026-10-06T12:05:00Z'),
+      status: 'completed',
+      metadata: {
+        mode: 'approval_required',
+        approval_projection: true,
+        approval_id: 'ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee',
+        approval_status: 'approved',
+      },
+      actions: [
+        {
+          type: 'approval.resume',
+          description: 'Resume',
+          params: {
+            approval_id: 'ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee',
+          },
+        },
+      ],
+    };
+
+    render(<MessageBubble message={message} onActionClick={onActionClick} />);
+
+    expect(screen.queryByRole('button', { name: /approve/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /reject/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /perform action: resume/i }));
+    expect(onActionClick).toHaveBeenCalledWith(message.actions?.[0]);
+  });
+
 });
