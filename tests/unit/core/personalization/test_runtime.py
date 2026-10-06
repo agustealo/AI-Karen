@@ -54,6 +54,69 @@ class _Repository(PersonalizationRepository):
             if item.user_id == user_id and item.tenant_id == tenant_id
         ]
 
+    async def accumulate_behavior(self, candidate) -> BehaviorPattern:
+        existing = next(
+            (
+                item
+                for item in self.behaviors
+                if item.user_id == candidate.user_id
+                and item.tenant_id == candidate.tenant_id
+                and item.pattern_type == candidate.pattern_type
+                and item.context_signature == candidate.context_signature
+            ),
+            None,
+        )
+        now = datetime.utcnow()
+        observation_id = str(
+            candidate.metadata.get("observation_id") or candidate.candidate_id
+        )
+        seen = {
+            str(item.metadata.get("last_observation_id") or "")
+            for item in self.behaviors
+        }
+        if observation_id in seen and existing is not None:
+            return existing
+
+        if existing is None:
+            pattern = BehaviorPattern(
+                pattern_id="p1",
+                user_id=candidate.user_id,
+                tenant_id=candidate.tenant_id,
+                pattern_type=candidate.pattern_type,
+                context_signature=candidate.context_signature,
+                observation_count=1,
+                confidence=candidate.confidence,
+                first_seen=now,
+                last_seen=now,
+                recurrence="observed",
+                stability=PreferenceStability.SESSION,
+                metadata={
+                    **dict(candidate.metadata),
+                    "last_observation_id": observation_id,
+                },
+            )
+            self.behaviors.append(pattern)
+            return pattern
+
+        existing.observation_count += 1
+        existing.last_seen = now
+        existing.recurrence = (
+            "recurring" if existing.observation_count >= 3 else "repeated"
+        )
+        if existing.observation_count >= 2:
+            existing.stability = PreferenceStability.SHORT_TERM
+        existing.confidence = min(
+            1.0,
+            max(existing.confidence, candidate.confidence)
+            + (0.1 * min(existing.observation_count - 1, 4)),
+        )
+        existing.metadata = {
+            **dict(existing.metadata),
+            **dict(candidate.metadata),
+            "last_observation_id": observation_id,
+        }
+        return existing
+
     async def save_behavior(self, pattern: BehaviorPattern) -> None:
         existing = next(
             (
@@ -184,6 +247,19 @@ async def test_behavior_learning_survives_runtime_reconstruction_via_repository(
     assert first_pattern.observation_count == 1
     assert second_pattern.observation_count == 2
     assert second_pattern.pattern_type == "accept_suggestion"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_behavior_observation_is_idempotent() -> None:
+    repository = _Repository()
+    runtime = UserModelRuntime(repository=repository)
+    observation = _behavior_observation("obs-1")
+
+    first = await runtime.ingest_behavior_observation(observation)
+    second = await runtime.ingest_behavior_observation(observation)
+
+    assert first.observation_count == 1
+    assert second.observation_count == 1
 
 
 @pytest.mark.asyncio
