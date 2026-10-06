@@ -108,6 +108,37 @@ def test_resume_ingress_rebuilds_server_side_and_reenters_chat_runtime() -> None
     assert "/api/chat/approvals/${approvalResume?.approvalId}/resume" in ui_source
 
 
+def test_actionable_approval_recovery_is_conversation_scoped_and_resumable() -> None:
+    route = APPROVAL_ROUTE.read_text(encoding="utf-8")
+    service = (
+        ROOT / "src/ai_karen_engine/services/approvals.py"
+    ).read_text(encoding="utf-8")
+    repository = (
+        ROOT
+        / "src/ai_karen_engine/persistence/repositories/approval_repository.py"
+    ).read_text(encoding="utf-8")
+    ui = (
+        ROOT
+        / "src/ui_launchers/Karen-AI-Theme/src/components/chat/ChatInterface.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "conversation_id: Optional[UUID] = None" in route
+    assert "list_actionable(" in route
+    assert "conversation_id=str(conversation_id) if conversation_id else None" in route
+
+    assert "async def list_actionable(" in service
+    assert "conversation_id=conversation_id" in service
+
+    assert "async def list_actionable(" in repository
+    assert "status IN ('pending', 'approved')" in repository
+    assert ":conversation_id IS NULL" in repository
+
+    assert "/api/approvals?conversation_id=" in ui
+    assert "approval.resume" in ui
+    assert "approval_projection" in ui
+    assert "reconcileActionableApprovalMessages" in ui
+
+
 def test_terminal_approval_states_minimize_stored_request_payload() -> None:
     source = (
         ROOT
