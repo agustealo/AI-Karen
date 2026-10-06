@@ -191,6 +191,9 @@ def verify_brand_contract() -> None:
         "assertAgentsReady(page)",
         "assertPluginOverviewReady(page)",
         "assertCommsReady(page)",
+        "installLifecycleSentinel",
+        "assertLifecycleStable",
+        "stable_authenticated_shell_required: true",
         "RETIRED_VISIBLE_BRAND",
     )
     for guard in required_capture_guards:
