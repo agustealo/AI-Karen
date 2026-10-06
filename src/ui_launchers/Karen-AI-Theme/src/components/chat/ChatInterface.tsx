@@ -1549,6 +1549,23 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           metadata: finalMetadata,
         };
 
+        if (approvalResume?.approvalId) {
+          setMessages((prev) =>
+            prev.map((message) =>
+              String(message.metadata?.approval_id || '') === approvalResume.approvalId
+                ? {
+                    ...message,
+                    actions: [],
+                    metadata: {
+                      ...(message.metadata || {}),
+                      approval_status: 'consumed',
+                    },
+                  }
+                : message,
+            ),
+          );
+        }
+
         const streamAssistantMessage: ChatMessage = {
           id: streamResponse.correlationId || 'assistant-' + Date.now(),
           role: 'assistant',
