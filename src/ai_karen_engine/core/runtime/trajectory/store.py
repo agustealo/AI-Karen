@@ -139,7 +139,9 @@ class InMemoryTrajectoryStore(TrajectoryStore):
     def save(self, trajectory: ExecutionTrajectory) -> None:
         self._records[trajectory.trajectory_id] = trajectory
         tenant = trajectory.tenant_id or "_unknown"
-        self._tenant_index.setdefault(tenant, []).append(trajectory.trajectory_id)
+        ids = self._tenant_index.setdefault(tenant, [])
+        if trajectory.trajectory_id not in ids:
+            ids.append(trajectory.trajectory_id)
 
     def get(
         self,
