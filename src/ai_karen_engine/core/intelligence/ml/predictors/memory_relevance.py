@@ -56,6 +56,7 @@ class MemoryRelevancePredictor(BasePredictor):
         "my job",
         "my occupation",
         "my skills",
+        "what skills do i have",
         "what am i good at",
         "my routine",
         "what do i usually",
