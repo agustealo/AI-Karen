@@ -29,24 +29,26 @@ src/ui_launchers/Karen-AI-Theme/public/brand/
 
 Documentation should reference these files instead of creating duplicate logos.
 
-## Palette
+## Palette and surface system
 
-The identity uses the application's existing tokens rather than establishing a second visual system.
+The application theme is the only color authority. Canonical product colors are semantic CSS tokens in:
 
-| Role | Value | Use |
-|---|---:|---|
-| Charcoal | `#18181B` | Primary foundation and dark surfaces |
-| Paper white | `#F8F7FB` | Primary high-contrast type and spine |
-| KAREN lavender | `#CF75FF` | Primary brand signal |
-| Soft lavender | `#E7D8FF` | Highlights and quiet emphasis |
-| Deep violet | `#9B5CFF` | Gradient depth and routed branches |
-| Muted text | `#A9A5B2` | Secondary information |
+`src/ui_launchers/Karen-AI-Theme/src/app/globals.css`
 
-Do not introduce a competing primary color without changing the application theme source of truth first.
+The system defines coordinated light and dark values for background, foreground, card, muted, border, input, primary, accent, destructive, success, warning, information, and sidebar roles. The product also defines `surface-0` through `surface-3` for depth. Screens, plugins, settings, automation views, auth, setup, and chat must consume those roles rather than copying hex values into feature code.
+
+The current brand signal is a restrained violet primary paired with a cyan/teal information accent. Status colors are reserved for semantic state. Decorative gradients may combine existing tokens, but must not become an independent palette.
+
+Do not introduce a competing primary color or page-local color system. Change the global token source of truth first, then let shared primitives propagate the update.
 
 ## Typography
 
-The active web application uses Inter. Brand artwork therefore uses Inter as its preferred face with system sans-serif fallbacks. The wordmark is uppercase with restrained tracking. Product copy remains sentence case.
+Typography is local/system-first and network-independent. The canonical stacks are declared in `globals.css`:
+
+- **Sans / product copy:** Avenir Next → Segoe UI Variable → Segoe UI → Inter → system UI fallbacks.
+- **Mono / instrumentation:** SFMono-Regular → Cascadia Code → Roboto Mono → Consolas → Liberation Mono → monospace.
+
+Product copy remains sentence case. Compact runtime labels, receipts, identifiers, and execution instrumentation may use the mono stack with restrained uppercase tracking. Display headings use tighter tracking and stronger weight, not a separate display font.
 
 ## Voice
 
