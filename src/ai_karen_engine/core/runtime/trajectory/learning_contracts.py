@@ -23,6 +23,7 @@ class DecisionType(str, Enum):
     TOOL_SELECTION = "tool_selection"
     PLUGIN_SELECTION = "plugin_selection"
     MEMORY_SELECTION = "memory_selection"
+    PROACTIVE_CONTINUITY = "proactive_continuity"
 
 
 class OpeEligibilityReason(str, Enum):
@@ -39,11 +40,14 @@ TOPOLOGY_FEATURES_V1 = "topology_features_v1"
 PROVIDER_ROUTING_FEATURES_V1 = "provider_routing_features_v1"
 MEMORY_RANKING_FEATURES_V1 = "memory_ranking_features_v1"
 AGENT_RANKING_FEATURES_V1 = "agent_ranking_features_v1"
+PROACTIVE_CONTINUITY_FEATURES_V1 = "proactive_continuity_features_v1"
 
 # Deterministic baseline behavior policy identity. Never use "current": that
 # destroys reproducibility. Later phases introduce adaptive_* variants.
 CORTEX_TOPOLOGY_POLICY_ID = "cortex_topology"
 CORTEX_TOPOLOGY_POLICY_VERSION = "v1"
+PROACTIVE_CONTINUITY_POLICY_ID = "proactive_continuity_ranker"
+PROACTIVE_CONTINUITY_POLICY_VERSION = "v1"
 
 
 # Keys that must never be persisted into a learning record. Mirrors the

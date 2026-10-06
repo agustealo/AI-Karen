@@ -34,6 +34,7 @@ _DECISION_TYPE_TO_TASK = {
     DecisionType.TOOL_SELECTION.value: LearningTask.TOOL_SELECTION,
     DecisionType.PLUGIN_SELECTION.value: LearningTask.PLUGIN_SELECTION,
     DecisionType.MEMORY_SELECTION.value: LearningTask.MEMORY_SELECTION,
+    DecisionType.PROACTIVE_CONTINUITY.value: LearningTask.PROACTIVE_CONTINUITY,
 }
 
 # Execution failures that do NOT imply the chosen topology was wrong.
@@ -301,6 +302,15 @@ class LearningDatasetBuilder:
                 detail=f"expected {query.feature_version}, got {snapshot.feature_version}",
             )
 
+        if query.task is LearningTask.PROACTIVE_CONTINUITY:
+            return self._try_build_proactive_continuity_example(
+                trajectory,
+                observation,
+                snapshot,
+                outcomes,
+                query,
+            )
+
         label = self._resolve_topology_label(trajectory, observation)
         if label is None:
             return None, ExcludedRecord(
@@ -355,6 +365,140 @@ class LearningDatasetBuilder:
             },
         )
         return example, None
+
+    def _try_build_proactive_continuity_example(
+        self,
+        trajectory: Any,
+        observation: DecisionObservation,
+        snapshot: Any,
+        outcomes: list[dict[str, Any]],
+        query: LearningDatasetQuery,
+    ) -> tuple[LearningExample | None, ExcludedRecord | None]:
+        quality, infra_reason = self._assess_label_quality(trajectory, outcomes)
+        if infra_reason is not None:
+            return None, ExcludedRecord(
+                trajectory_id=trajectory.trajectory_id,
+                decision_observation_id=observation.decision_observation_id,
+                feature_snapshot_id=observation.feature_snapshot_id,
+                reason=infra_reason,
+                label_quality=LabelQuality.EXCLUDED,
+            )
+
+        explicit_feedback = self._latest_explicit_continuity_feedback(outcomes)
+        if explicit_feedback is None:
+            return None, ExcludedRecord(
+                trajectory_id=trajectory.trajectory_id,
+                decision_observation_id=observation.decision_observation_id,
+                feature_snapshot_id=observation.feature_snapshot_id,
+                reason=DatasetExclusionReason.MISSING_EXPLICIT_CANDIDATE_FEEDBACK,
+                label_quality=LabelQuality.EXCLUDED,
+            )
+
+        feedback_meta = dict(explicit_feedback.get("metadata") or {})
+        candidate_id = str(
+            feedback_meta.get("continuity_candidate_id") or ""
+        ).strip()
+        candidate_ids = [
+            str(item)
+            for item in (snapshot.metadata or {}).get("candidate_ids") or []
+        ]
+        if not candidate_id or candidate_id not in candidate_ids:
+            return None, ExcludedRecord(
+                trajectory_id=trajectory.trajectory_id,
+                decision_observation_id=observation.decision_observation_id,
+                feature_snapshot_id=observation.feature_snapshot_id,
+                reason=DatasetExclusionReason.CANDIDATE_NOT_IN_DECISION,
+                label_quality=LabelQuality.EXCLUDED,
+            )
+
+        if _QUALITY_RANK[quality] < _QUALITY_RANK[query.minimum_label_quality]:
+            return None, ExcludedRecord(
+                trajectory_id=trajectory.trajectory_id,
+                decision_observation_id=observation.decision_observation_id,
+                feature_snapshot_id=observation.feature_snapshot_id,
+                reason=DatasetExclusionReason.LABEL_QUALITY_BELOW_MINIMUM,
+                label_quality=quality,
+            )
+
+        candidate_index = candidate_ids.index(candidate_id)
+        hints = dict(snapshot.capability_hints or {})
+        source_types = list(hints.get("source_types") or [])
+        utilities = list(hints.get("utilities") or [])
+        interruption_costs = list(hints.get("interruption_costs") or [])
+
+        target_candidate = {
+            "position": candidate_index,
+            "source_type": (
+                source_types[candidate_index]
+                if candidate_index < len(source_types)
+                else "unknown"
+            ),
+            "utility": (
+                float(utilities[candidate_index])
+                if candidate_index < len(utilities)
+                else 0.0
+            ),
+            "interruption_cost": (
+                float(interruption_costs[candidate_index])
+                if candidate_index < len(interruption_costs)
+                else 0.0
+            ),
+            "was_primary": candidate_id
+            == str((snapshot.metadata or {}).get("primary_candidate_id") or ""),
+        }
+        feedback_type = str(explicit_feedback.get("feedback_type") or "")
+        label = 1.0 if feedback_type == "thumbs_up" else 0.0
+
+        features = snapshot.feature_vector()
+        features["target_candidate"] = target_candidate
+        return (
+            LearningExample(
+                example_id=f"ex_{uuid.uuid4().hex}",
+                task=query.task,
+                feature_version=snapshot.feature_version,
+                features=features,
+                label=label,
+                label_quality=quality,
+                metadata={
+                    "trajectory_id": trajectory.trajectory_id,
+                    "decision_observation_id": observation.decision_observation_id,
+                    "feature_snapshot_id": observation.feature_snapshot_id,
+                    "tenant_id": observation.tenant_id,
+                    "user_id": observation.user_id,
+                    "decision_type": observation.decision_type,
+                    "behavior_policy_id": observation.behavior_policy_id,
+                    "behavior_policy_version": observation.behavior_policy_version,
+                    "ope_eligible": observation.ope_eligible,
+                    "ope_ineligible_reason": observation.ope_ineligible_reason,
+                    "target_candidate_id": candidate_id,
+                    "feedback_outcome_id": explicit_feedback.get("outcome_id"),
+                    "feedback_type": feedback_type,
+                    "attribution_confidence": feedback_meta.get(
+                        "continuity_attribution_confidence"
+                    ),
+                    "created_at": observation.created_at.isoformat(),
+                },
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _latest_explicit_continuity_feedback(
+        outcomes: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        matches = [
+            outcome
+            for outcome in outcomes
+            if outcome.get("source") == "user.feedback"
+            and (outcome.get("metadata") or {}).get("continuity_attribution")
+            == "explicit_candidate"
+            and (outcome.get("metadata") or {}).get(
+                "continuity_attribution_confidence"
+            )
+            == 1.0
+            and outcome.get("feedback_type") in {"thumbs_up", "thumbs_down"}
+        ]
+        return matches[-1] if matches else None
 
     @staticmethod
     def _resolve_topology_label(

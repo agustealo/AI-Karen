@@ -23,6 +23,10 @@ from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
     CORTEX_TOPOLOGY_POLICY_ID,
     CORTEX_TOPOLOGY_POLICY_VERSION,
     DecisionType,
+    OpeEligibilityReason,
+    PROACTIVE_CONTINUITY_FEATURES_V1,
+    PROACTIVE_CONTINUITY_POLICY_ID,
+    PROACTIVE_CONTINUITY_POLICY_VERSION,
     create_decision_observation,
     create_feature_snapshot,
 )
@@ -258,6 +262,174 @@ class TestDatasetBuilderExclusions:
         assert result.manifest.included_count == 0
         assert (
             result.excluded[0].reason == DatasetExclusionReason.UNKNOWN_FEATURE_VERSION
+        )
+
+
+class TestProactiveContinuityDataset:
+    @staticmethod
+    def _record(
+        *,
+        feedback_type: str = "thumbs_up",
+        attribution: str = "explicit_candidate",
+        attribution_confidence: float = 1.0,
+        candidate_id: str = "next-open",
+    ):
+        tstore = InMemoryTrajectoryStore()
+        ostore = InMemoryOutcomeStore()
+        trajectory = ExecutionTrajectory(
+            trajectory_id="traj_proactive",
+            request_id="req_proactive",
+            correlation_id="corr_proactive",
+            tenant_id="tenant_a",
+            user_id="user_a",
+            executed_topology="direct",
+            started_at=datetime(2026, 10, 6, 12, 0, 0),
+        )
+        tstore.save(trajectory)
+
+        snapshot = create_feature_snapshot(
+            trajectory,
+            feature_version=PROACTIVE_CONTINUITY_FEATURES_V1,
+            intent="general_assist",
+            ambiguity=0.0,
+            memory_relevance=0.84,
+            capability_hints={
+                "candidate_count": 2,
+                "source_types": ["open_loop", "goal"],
+                "utilities": [0.84, 0.62],
+                "interruption_costs": [0.2, 0.3],
+                "high_urgency_count": 0,
+                "abstain_available": True,
+            },
+            metadata={
+                "candidate_ids": ["next-open", "next-goal"],
+                "primary_candidate_id": "next-open",
+                "deterministic_ranker": True,
+            },
+        )
+        tstore.save_feature_snapshot(snapshot)
+
+        observation = create_decision_observation(
+            trajectory_id=trajectory.trajectory_id,
+            feature_snapshot_id=snapshot.feature_snapshot_id,
+            decision_type=DecisionType.PROACTIVE_CONTINUITY.value,
+            behavior_policy_id=PROACTIVE_CONTINUITY_POLICY_ID,
+            behavior_policy_version=PROACTIVE_CONTINUITY_POLICY_VERSION,
+            candidate_actions=("next-open", "next-goal", "__abstain__"),
+            eligible_actions=("next-open", "next-goal", "__abstain__"),
+            chosen_action="next-open",
+            chosen_probability=None,
+            action_probabilities={},
+            ope_eligible=False,
+            ope_ineligible_reason=OpeEligibilityReason.MISSING_PROPENSITY.value,
+            tenant_id="tenant_a",
+            user_id="user_a",
+        )
+        tstore.save_decision_observation(observation)
+
+        ostore.save_outcome(
+            {
+                "outcome_id": "out-execution",
+                "trajectory_id": trajectory.trajectory_id,
+                "tenant_id": "tenant_a",
+                "user_id": "user_a",
+                "source": "runtime.execution",
+                "status": "success",
+                "response_completed": True,
+                "persistence_success": True,
+                "recorded_at": "2026-10-06T12:00:01+00:00",
+                "metadata": {
+                    "continuity_decision_observation_id": (
+                        observation.decision_observation_id
+                    ),
+                    "continuity_candidate_ids": ["next-open", "next-goal"],
+                },
+            }
+        )
+        ostore.save_outcome(
+            {
+                "outcome_id": "out-feedback",
+                "trajectory_id": trajectory.trajectory_id,
+                "tenant_id": "tenant_a",
+                "user_id": "user_a",
+                "source": "user.feedback",
+                "feedback_type": feedback_type,
+                "recorded_at": "2026-10-06T12:01:00+00:00",
+                "metadata": {
+                    "continuity_attribution": attribution,
+                    "continuity_attribution_confidence": attribution_confidence,
+                    "continuity_candidate_id": candidate_id,
+                    "continuity_decision_observation_id": (
+                        observation.decision_observation_id
+                    ),
+                },
+            }
+        )
+        return tstore, ostore
+
+    def test_explicit_positive_candidate_feedback_builds_ranker_example(self) -> None:
+        tstore, ostore = self._record(feedback_type="thumbs_up")
+
+        result = LearningDatasetBuilder(tstore, ostore).build(
+            LearningDatasetQuery(
+                task=LearningTask.PROACTIVE_CONTINUITY,
+                tenant_scope="tenant_a",
+                feature_version=PROACTIVE_CONTINUITY_FEATURES_V1,
+            )
+        )
+
+        assert result.manifest.included_count == 1
+        example = result.examples[0]
+        assert example.label == 1.0
+        assert example.metadata["target_candidate_id"] == "next-open"
+        assert example.metadata["ope_eligible"] is False
+        assert (
+            example.metadata["ope_ineligible_reason"]
+            == OpeEligibilityReason.MISSING_PROPENSITY.value
+        )
+        assert example.features["target_candidate"] == {
+            "position": 0,
+            "source_type": "open_loop",
+            "utility": 0.84,
+            "interruption_cost": 0.2,
+            "was_primary": True,
+        }
+
+    def test_explicit_negative_candidate_feedback_builds_negative_example(self) -> None:
+        tstore, ostore = self._record(
+            feedback_type="thumbs_down",
+            candidate_id="next-goal",
+        )
+
+        result = LearningDatasetBuilder(tstore, ostore).build(
+            LearningDatasetQuery(
+                task=LearningTask.PROACTIVE_CONTINUITY,
+                tenant_scope="tenant_a",
+            )
+        )
+
+        assert result.manifest.included_count == 1
+        assert result.examples[0].label == 0.0
+        assert result.examples[0].metadata["target_candidate_id"] == "next-goal"
+
+    def test_weak_response_feedback_is_excluded_from_candidate_learning(self) -> None:
+        tstore, ostore = self._record(
+            attribution="response_level_weak",
+            attribution_confidence=0.25,
+        )
+
+        result = LearningDatasetBuilder(tstore, ostore).build(
+            LearningDatasetQuery(
+                task=LearningTask.PROACTIVE_CONTINUITY,
+                tenant_scope="tenant_a",
+            )
+        )
+
+        assert result.manifest.included_count == 0
+        assert result.manifest.excluded_count == 1
+        assert (
+            result.excluded[0].reason
+            == DatasetExclusionReason.MISSING_EXPLICIT_CANDIDATE_FEEDBACK
         )
 
 

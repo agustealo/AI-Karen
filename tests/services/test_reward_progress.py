@@ -74,6 +74,7 @@ def test_generic_feedback_keeps_continuity_attribution_weak() -> None:
                 "continuity_candidate_ids": ["next-1", "next-2"],
                 "continuity_source_types": ["open_loop", "goal"],
                 "continuity_primary_candidate_id": "next-1",
+                "continuity_decision_observation_id": "obs-continuity-1",
                 "continuity_ambiguous": False,
             },
         )
@@ -104,6 +105,7 @@ def test_explicit_candidate_feedback_is_high_confidence() -> None:
                 "continuity_candidate_ids": ["next-1", "next-2"],
                 "continuity_source_types": ["open_loop", "goal"],
                 "continuity_primary_candidate_id": "next-1",
+                "continuity_decision_observation_id": "obs-continuity-1",
                 "continuity_ambiguous": False,
             },
         )
@@ -122,6 +124,10 @@ def test_explicit_candidate_feedback_is_high_confidence() -> None:
     assert metadata["continuity_attribution_confidence"] == 1.0
     assert metadata["continuity_candidate_id"] == "next-2"
     assert metadata["continuity_source_type"] == "goal"
+    assert (
+        metadata["continuity_decision_observation_id"]
+        == "obs-continuity-1"
+    )
 
 
 def test_feedback_rejects_candidate_not_shown_for_trajectory() -> None:

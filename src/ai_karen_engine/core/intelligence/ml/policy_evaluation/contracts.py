@@ -29,6 +29,7 @@ class DecisionType(str, Enum):
     MEMORY_SELECTION = "memory_selection"
     WORKFLOW_SELECTION = "workflow_selection"
     RESPOND_STRATEGY = "respond_strategy"
+    PROACTIVE_CONTINUITY = "proactive_continuity"
 
 
 class PolicyStatus(str, Enum):

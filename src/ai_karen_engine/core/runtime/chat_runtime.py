@@ -48,6 +48,9 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
 from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
     DecisionType,
     OpeEligibilityReason,
+    PROACTIVE_CONTINUITY_FEATURES_V1,
+    PROACTIVE_CONTINUITY_POLICY_ID,
+    PROACTIVE_CONTINUITY_POLICY_VERSION,
     TOPOLOGY_FEATURES_V1,
 )
 from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
@@ -167,6 +170,11 @@ class ChatRuntime:
                 for item in (memory_recall_meta.get("memory_context") or {}).get("recall", [])[:5]
                 if item.get("id")
             ]
+            await self._record_proactive_continuity_decision(
+                trajectory,
+                decision,
+                memory_recall_meta,
+            )
 
         try:
             if decision.topology.value == "reasoning":
@@ -396,6 +404,11 @@ class ChatRuntime:
                 for item in (memory_recall_meta.get("memory_context") or {}).get("recall", [])[:5]
                 if item.get("id")
             ]
+            await self._record_proactive_continuity_decision(
+                trajectory,
+                decision,
+                memory_recall_meta,
+            )
 
         streamed_text = ""
         provider_meta: Dict[str, Any] = {}
@@ -2044,6 +2057,146 @@ class ChatRuntime:
             )
             return None
 
+    async def _record_proactive_continuity_decision(
+        self,
+        trajectory: Any,
+        decision: ExecutionDecision,
+        memory_meta: Dict[str, Any],
+    ) -> Optional[str]:
+        """Record the deterministic continuity ranking decision honestly.
+
+        The current ranker emits utilities, not calibrated action propensities.
+        Therefore the observation is durable for supervised/ranking learning but
+        explicitly OPE-ineligible until a behavior policy can provide real
+        probabilities.
+        """
+        candidates = list(
+            (memory_meta.get("proactive_continuity") or {}).get("candidates") or []
+        )
+        candidate_ids = [
+            str(item.get("id") or "").strip()
+            for item in candidates
+            if str(item.get("id") or "").strip()
+        ]
+        if not candidate_ids:
+            return None
+
+        abstain_action = "__abstain__"
+        actions = tuple([*candidate_ids, abstain_action])
+        primary_id = str(
+            memory_meta.get("continuity_primary_candidate_id") or ""
+        ).strip()
+        ambiguous = bool(memory_meta.get("continuity_ambiguous", False))
+        chosen_action = (
+            primary_id
+            if primary_id and primary_id in candidate_ids and not ambiguous
+            else abstain_action
+        )
+
+        source_types = [
+            str(item.get("source_type") or "unknown")
+            for item in candidates
+        ]
+        utilities = [
+            max(0.0, min(1.0, float(item.get("utility") or 0.0)))
+            for item in candidates
+        ]
+        interruption_costs = [
+            max(0.0, min(1.0, float(item.get("interruption_cost") or 0.0)))
+            for item in candidates
+        ]
+        high_urgency_count = sum(
+            1
+            for item in candidates
+            if str(item.get("urgency") or "").casefold() == "high"
+        )
+
+        try:
+            snapshot = self._trajectory_recorder.build_feature_snapshot(
+                trajectory,
+                feature_version=PROACTIVE_CONTINUITY_FEATURES_V1,
+                intent=decision.intent,
+                intent_confidence=decision.intent_confidence,
+                ambiguity=1.0 if ambiguous else 0.0,
+                memory_relevance=max(utilities) if utilities else 0.0,
+                capability_hints={
+                    "candidate_count": len(candidate_ids),
+                    "source_types": source_types,
+                    "utilities": utilities,
+                    "interruption_costs": interruption_costs,
+                    "high_urgency_count": high_urgency_count,
+                    "abstain_available": True,
+                },
+                metadata={
+                    "candidate_ids": candidate_ids,
+                    "primary_candidate_id": primary_id or None,
+                    "agenda_reason_codes": list(
+                        memory_meta.get("continuity_agenda_reason_codes") or []
+                    ),
+                    "deterministic_ranker": True,
+                },
+            )
+            persisted_snapshot = (
+                await self._trajectory_recorder.record_feature_snapshot_async(
+                    trajectory,
+                    feature_snapshot=snapshot,
+                )
+            )
+            if persisted_snapshot is None:
+                return None
+
+            observation = self._trajectory_recorder.build_decision_observation(
+                trajectory,
+                feature_snapshot_id=persisted_snapshot.feature_snapshot_id,
+                decision_type=DecisionType.PROACTIVE_CONTINUITY.value,
+                behavior_policy_id=PROACTIVE_CONTINUITY_POLICY_ID,
+                behavior_policy_version=PROACTIVE_CONTINUITY_POLICY_VERSION,
+                candidate_actions=actions,
+                eligible_actions=actions,
+                chosen_action=chosen_action,
+                chosen_probability=None,
+                action_probabilities={},
+                ope_eligible=False,
+                ope_ineligible_reason=OpeEligibilityReason.MISSING_PROPENSITY.value,
+                metadata={
+                    "candidate_source_types": source_types,
+                    "primary_candidate_id": primary_id or None,
+                    "ambiguous": ambiguous,
+                    "deterministic_ranker": True,
+                },
+            )
+            persisted_observation = (
+                await self._trajectory_recorder.record_decision_observation_async(
+                    trajectory,
+                    decision_observation=observation,
+                )
+            )
+            if persisted_observation is None:
+                return None
+
+            memory_meta["continuity_decision_observation_id"] = (
+                persisted_observation.decision_observation_id
+            )
+            await self._trajectory_recorder.persist_async(trajectory)
+            return persisted_observation.decision_observation_id
+        except Exception as exc:
+            logger.warning(
+                "proactive continuity learning lineage recording failed",
+                extra={
+                    "trajectory_id": getattr(trajectory, "trajectory_id", None),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            self._emitter.emit(
+                RuntimeEventType.LEARNING_RECORDING_FAILED,
+                error_type=type(exc).__name__,
+                metadata={
+                    "kind": "proactive_continuity_decision_lineage",
+                    "trajectory_id": getattr(trajectory, "trajectory_id", None),
+                },
+            )
+            return None
+
     async def _record_trajectory_completion(
         self,
         trajectory: Any,
@@ -2158,6 +2311,9 @@ class ChatRuntime:
                 "transcript_persisted_count": (transcript_meta or {}).get(
                     "transcript_persisted_count",
                     0,
+                ),
+                "continuity_decision_observation_id": memory_meta.get(
+                    "continuity_decision_observation_id"
                 ),
                 "continuity_candidate_ids": list(
                     memory_meta.get("continuity_candidate_ids") or []

@@ -79,3 +79,19 @@ def test_dataset_builder_reads_all_lineage_under_explicit_tenant_scope() -> None
 
     assert "tenant_id=query.tenant_scope" in builder
     assert "get_for_trajectory(" in builder
+
+
+def test_proactive_continuity_is_first_class_learning_lineage() -> None:
+    learning = _text("src/ai_karen_engine/core/contracts/learning.py")
+    runtime_contracts = _text(
+        "src/ai_karen_engine/core/runtime/trajectory/learning_contracts.py"
+    )
+    ope_contracts = _text(
+        "src/ai_karen_engine/core/intelligence/ml/policy_evaluation/contracts.py"
+    )
+    runtime = _text("src/ai_karen_engine/core/runtime/chat_runtime.py")
+
+    assert 'PROACTIVE_CONTINUITY = "proactive_continuity"' in learning
+    assert 'PROACTIVE_CONTINUITY = "proactive_continuity"' in runtime_contracts
+    assert 'PROACTIVE_CONTINUITY = "proactive_continuity"' in ope_contracts
+    assert '"continuity_decision_observation_id"' in runtime
