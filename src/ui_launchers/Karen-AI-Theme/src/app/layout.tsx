@@ -5,6 +5,7 @@ import { ThemeProvider } from '@/providers/theme-provider';
 import { PluginRegistryProvider } from '@/plugin_host/registry';
 import { MessageInjectionProvider } from '@/providers/MessageInjectionProvider';
 import SessionWarning from '@/components/SessionWarning';
+import { AuthProvider } from '@/lib/useAuth';
 
 const configuredPublicAppUrl =
   process.env.KAREN_APP_URL ??
@@ -59,13 +60,15 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className="font-sans antialiased">
         <ThemeProvider>
-          <PluginRegistryProvider>
-            <MessageInjectionProvider>
-              <SessionWarning />
-              {children}
-              <Toaster />
-            </MessageInjectionProvider>
-          </PluginRegistryProvider>
+          <AuthProvider>
+            <PluginRegistryProvider>
+              <MessageInjectionProvider>
+                <SessionWarning />
+                {children}
+                <Toaster />
+              </MessageInjectionProvider>
+            </PluginRegistryProvider>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>
