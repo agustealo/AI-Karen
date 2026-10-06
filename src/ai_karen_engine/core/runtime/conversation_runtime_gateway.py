@@ -175,6 +175,62 @@ class ConversationRuntimeGateway:
 
         return conversation_id
 
+    async def get_snapshot(
+        self,
+        context: ChatExecutionContext,
+        *,
+        message_limit: int = 100,
+    ) -> ConversationSnapshot:
+        """Load one existing tenant/user-owned canonical conversation."""
+        self._require_identity(context)
+        conversation_id = resolve_runtime_conversation_id(context)
+
+        conversation_result = await self._repository.get_conversation(
+            conversation_id,
+            context.tenant_id,
+        )
+        if not conversation_result.success:
+            raise RuntimeError(
+                conversation_result.error or "conversation_lookup_failed"
+            )
+        if conversation_result.data is None:
+            raise RuntimeError("conversation_not_found")
+        if str(conversation_result.data.user_id) != str(context.user_id):
+            raise PermissionError("conversation_user_mismatch")
+
+        messages_result = await self._repository.get_messages(
+            conversation_id,
+            context.tenant_id,
+            limit=max(0, int(message_limit)),
+            offset=0,
+        )
+        if not messages_result.success:
+            raise RuntimeError(
+                messages_result.error or "conversation_history_read_failed"
+            )
+
+        return ConversationSnapshot(
+            conversation=conversation_result.data,
+            messages=tuple(messages_result.data or []),
+        )
+
+    async def touch_conversation_activity(
+        self,
+        context: ChatExecutionContext,
+    ) -> Conversation:
+        """Refresh activity timestamp for one tenant/user-owned conversation."""
+        snapshot = await self.get_snapshot(context, message_limit=0)
+        updated = replace(
+            snapshot.conversation,
+            updated_at=datetime.utcnow(),
+        )
+        result = await self._repository.update_conversation(updated)
+        if not result.success:
+            raise RuntimeError(result.error or "conversation_activity_update_failed")
+        if result.data is not True:
+            raise RuntimeError("conversation_not_found")
+        return updated
+
     async def ensure_session_snapshot(
         self,
         context: ChatExecutionContext,
