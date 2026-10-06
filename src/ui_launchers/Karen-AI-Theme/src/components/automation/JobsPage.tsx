@@ -212,7 +212,7 @@ export default function SequencesPage() {
         <div className="flex items-center space-x-3">
           <Workflow className="h-8 w-8 text-primary" />
           <div>
-            <h2 className="text-2xl font-semibold tracking-tight">Jobs</h2>
+            <h2 className="karen-page-title">Jobs</h2>
             <p className="text-sm text-muted-foreground">
               Orchestrate multiple tasks into a single persistent workflow.
             </p>
