@@ -211,6 +211,13 @@ class RuntimeEvidenceResolver:
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
                 limit=max(1, int(requirement.max_items or 5)),
+                current_domains=tuple(
+                    str(value)
+                    for value in list(
+                        requirement.metadata.get("current_domains") or []
+                    )
+                    if str(value).strip()
+                ),
             )
         except Exception as exc:
             logger.warning(
