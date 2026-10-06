@@ -96,3 +96,46 @@ def test_chat_ui_preserves_durable_conversation_lifecycle_authority() -> None:
     assert "isActive: currentSessionRef.current?.id === session.id" in refresh
     assert "isActive: false" not in refresh
 
+def test_chat_actions_only_surface_backed_capabilities() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+    chat_input = _read("components/chat/interface/ChatInput.tsx")
+    actions = _read("components/chat/const/ChatActionsMenu.tsx")
+
+    for fake_surface in ("Share Chat", "Search in Chat", "Clear Chat"):
+        assert fake_surface not in actions
+
+    for fake_handler in ("onShareChat", "onSearchInChat", "onClearChat"):
+        assert fake_handler not in chat_input
+        assert fake_handler not in actions
+
+    assert "shareUrl" not in chat
+    assert "Search not available" not in chat
+    assert "Chat cleared" not in chat
+
+
+def test_new_chat_requires_server_ack_before_becoming_current() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    create = chat.split("// Create a new durable session", 1)[1].split(
+        "// Load a specific session", 1
+    )[0]
+    ensure_index = create.index("await fetchConversationBootstrap(sessionId)")
+    current_index = create.index("setCurrentSession(newSession)")
+    persist_index = create.index("persistActiveSessionId(sessionId)")
+
+    assert ensure_index < current_index < persist_index
+    assert "no local-only session was created" in create
+
+
+def test_preference_confirmation_stays_on_canonical_chat_runtime() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    assert "Understood. I'll address you as" not in chat
+    assert "assistant-pref-" not in chat
+
+    submit = chat.split("// Submit handler", 1)[1].split(
+        "// Process injected messages", 1
+    )[0]
+    assert "await savePreferredAddressName(matchedAddressOption)" in submit
+    assert "'/api/chat/stream'" in submit
+
