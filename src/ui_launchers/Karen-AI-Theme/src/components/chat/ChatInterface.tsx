@@ -445,7 +445,7 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
         createdAt: new Date(session.created_at),
         updatedAt: new Date(session.updated_at),
         messageCount: session.message_count || 0,
-        isActive: false,
+        isActive: currentSessionRef.current?.id === session.id,
         lastMessage: session.messages && session.messages.length > 0
           ? session.messages[session.messages.length - 1].content
           : session.last_message
@@ -479,21 +479,17 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
     }
   }, [currentSession?.id, persistActiveSessionId]);
 
-  // Session timeout and renewal handling
+  // Keep server-side activity fresh without rotating durable conversations.
+  // Conversation lifetime/retention is owned by the backend policy layer, not the UI.
   useEffect(() => {
-    const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
     const RENEWAL_INTERVAL = 5 * 60 * 1000; // 5 minutes
-
-    let timeoutId: number | undefined;
     let renewalId: number | undefined;
 
     const renewSession = async () => {
       try {
         const activeSession = currentSessionRef.current;
         if (activeSession) {
-          // Use the update-activity endpoint which is implemented in the service
           await apiClient.post(`/api/conversations/update-session-activity/${activeSession.id}`);
-          console.log('Session activity updated successfully');
         }
       } catch (err) {
         // Heartbeat failures are transient during backend startup or brief outages.
@@ -502,55 +498,16 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
       }
     };
 
-    const checkSessionTimeout = () => {
-      const lastActivity = Date.now();
-      const activeSession = currentSessionRef.current;
-      const timeSinceLastActivity = lastActivity - (activeSession?.updatedAt.getTime() || lastActivity);
-      
-      if (timeSinceLastActivity > SESSION_TIMEOUT) {
-        console.log('Session timed out, creating new session');
-        createNewSession();
-      }
-    };
-
     if (currentSessionRef.current) {
-      // Start renewal checks
       renewalId = window.setInterval(renewSession, RENEWAL_INTERVAL);
-      
-      // Start timeout checks
-      timeoutId = window.setInterval(checkSessionTimeout, SESSION_TIMEOUT / 2);
     }
 
-    // Update session activity on user interaction
-    // We use a ref for currentSession inside the event listener to avoid re-registering
-    const updateActivity = () => {
-      setCurrentSession(prev => {
-        if (!prev) return null;
-        // Only update if at least 1 minute has passed to throttle state updates
-        const now = new Date();
-        if (now.getTime() - prev.updatedAt.getTime() < 60000) return prev;
-        return { ...prev, updatedAt: now };
-      });
-    };
-
-    // Add event listeners for user activity
-    const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
-    events.forEach(event => {
-      document.addEventListener(event, updateActivity, { passive: true });
-    });
-
     return () => {
-      if (typeof timeoutId === 'number') {
-        window.clearInterval(timeoutId);
-      }
       if (typeof renewalId === 'number') {
         window.clearInterval(renewalId);
       }
-      events.forEach(event => {
-        document.removeEventListener(event, updateActivity);
-      });
     };
-  }, [createNewSession]);
+  }, []);
 
   // Delete a session
   const deleteSession = useCallback(async (sessionId: string) => {
@@ -662,40 +619,6 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
       return false;
     }
   }, [currentSession?.id]);
-
-  // Session cleanup for old/inactive sessions
-  useEffect(() => {
-    const CLEANUP_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
-    const INACTIVE_THRESHOLD = 7 * 24 * 60 * 60 * 1000; // 7 days
-
-    const cleanupSessions = async () => {
-      try {
-        const now = typeof window !== 'undefined' ? Date.now() : 0;
-        const cutoffDate = new Date(now - INACTIVE_THRESHOLD);
-        const inactiveSessions = sessionsRef.current.filter(session =>
-          session.createdAt < cutoffDate && !session.isActive
-        );
-
-        if (inactiveSessions.length > 0) {
-          console.log(`Cleaning up ${inactiveSessions.length} inactive sessions`);
-          // Use for...of to avoid parallel setSessions updates that might complicate the loop
-          for (const session of inactiveSessions) {
-            await deleteSession(session.id).catch(err =>
-              console.warn(`Failed to cleanup session ${session.id}:`, err)
-            );
-          }
-        }
-      } catch (err) {
-        console.error('Session cleanup failed:', err);
-      }
-    };
-
-    const cleanupId = window.setInterval(cleanupSessions, CLEANUP_INTERVAL);
-
-    return () => {
-      window.clearInterval(cleanupId);
-    };
-  }, [deleteSession]);
 
   // Initialize sessions on mount
   useEffect(() => {
