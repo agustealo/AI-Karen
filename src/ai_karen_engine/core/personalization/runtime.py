@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
 from typing import Any, Dict
 
 from .behavior.aggregator import BehaviorAggregator
@@ -18,12 +17,10 @@ from .contracts import (
     BehaviorCandidate,
     BehaviorPattern,
     CurrentUserState,
-    PreferenceStability,
     ResolvedPreferences,
     UserModelHealth,
     UserModelHealthStatus,
     UserStateSnapshot,
-    make_pattern_id,
 )
 from .persistence.repository import PersonalizationRepository
 from .preferences.resolver import PreferenceResolver
@@ -103,51 +100,7 @@ class UserModelRuntime:
         return await self._accumulate_behavior(candidate)
 
     async def _accumulate_behavior(self, candidate: BehaviorCandidate) -> BehaviorPattern:
-        existing_patterns = await self.repository.list_behaviors(
-            candidate.user_id,
-            candidate.tenant_id,
-        )
-        existing = next(
-            (
-                pattern
-                for pattern in existing_patterns
-                if pattern.pattern_type == candidate.pattern_type
-                and pattern.context_signature == candidate.context_signature
-            ),
-            None,
-        )
-        now = datetime.utcnow()
-        if existing is None:
-            pattern = BehaviorPattern(
-                pattern_id=make_pattern_id(),
-                user_id=candidate.user_id,
-                tenant_id=candidate.tenant_id,
-                pattern_type=candidate.pattern_type,
-                context_signature=candidate.context_signature,
-                observation_count=1,
-                confidence=max(0.0, min(1.0, candidate.confidence)),
-                first_seen=now,
-                last_seen=now,
-                recurrence="observed",
-                stability=PreferenceStability.SESSION,
-            )
-        else:
-            existing.observation_count += 1
-            existing.last_seen = now
-            existing.confidence = min(
-                1.0,
-                max(existing.confidence, candidate.confidence)
-                + (0.1 * min(existing.observation_count - 1, 4)),
-            )
-            existing.recurrence = (
-                "recurring" if existing.observation_count >= 3 else "repeated"
-            )
-            if existing.observation_count >= self._BEHAVIOR_PROMOTION_THRESHOLD:
-                existing.stability = PreferenceStability.SHORT_TERM
-            pattern = existing
-
-        await self.repository.save_behavior(pattern)
-        return pattern
+        return await self.repository.accumulate_behavior(candidate)
 
     async def update_current_state(
         self,

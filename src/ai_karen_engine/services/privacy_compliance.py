@@ -236,6 +236,12 @@ class DataExporter:
             "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
         ),
         (
+            "personalization_behavior_observation",
+            "SELECT * FROM personalization_behavior_observation "
+            "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+            "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
+        ),
+        (
             "memory_entity",
             "SELECT * FROM memory_entity WHERE tenant_id = CAST(:tenant_id AS uuid) "
             "AND user_id = CAST(:user_id AS uuid) ORDER BY created_at",
@@ -583,6 +589,18 @@ class DataEraser:
                 "AND user_id = CAST(:user_id AS uuid))",
             ),
             (
+                "personalization_behavior_observation",
+                "DELETE FROM personalization_behavior_observation "
+                "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)",
+            ),
+            (
+                "personalization_behavior_pattern",
+                "DELETE FROM personalization_behavior_pattern "
+                "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                "AND user_id = CAST(:user_id AS uuid)",
+            ),
+            (
                 "memory_relation",
                 "DELETE FROM memory_relation WHERE tenant_id = CAST(:tenant_id AS uuid) "
                 "AND user_id = CAST(:user_id AS uuid)",
@@ -628,6 +646,7 @@ class DataEraser:
                 "memory_prospective_item",
                 "memory_open_loop",
                 "personalization_behavior_pattern",
+                "personalization_behavior_observation",
                 "projection_status",
                 "memory_procedure",
                 "execution_trajectories",

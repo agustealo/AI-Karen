@@ -11,6 +11,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from ..contracts import (
+    BehaviorCandidate,
     BehaviorPattern,
     PreferenceRecord,
     UserGoal,
@@ -40,6 +41,13 @@ class PersonalizationRepository(ABC):
         tenant_id: str,
     ) -> list[UserGoal]:
         """Read current goals derived from canonical memory."""
+
+    @abstractmethod
+    async def accumulate_behavior(
+        self,
+        candidate: BehaviorCandidate,
+    ) -> BehaviorPattern:
+        """Atomically record one deduplicated behavior observation."""
 
     @abstractmethod
     async def save_behavior(self, pattern: BehaviorPattern) -> None:
