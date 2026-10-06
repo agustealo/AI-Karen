@@ -236,3 +236,22 @@ def test_chat_ingress_preserves_canonical_conversation_identity() -> None:
     assert "conversation_id=request.conversation_id" in source
     assert "conversation_id=normalize_chat_session_id(session_id)" not in source
 
+def test_conversation_restore_and_activity_use_canonical_gateway() -> None:
+    source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
+
+    heartbeat_start = source.index("async def update_session_activity(")
+    get_start = source.index('async def get_conversation(', heartbeat_start)
+    add_message_start = source.index('async def add_message(', get_start)
+
+    heartbeat = source[heartbeat_start:get_start]
+    get_route = source[get_start:add_message_start]
+
+    assert "conversation_gateway.touch_conversation_activity(" in heartbeat
+    assert "get_web_ui_conversation_by_session(" not in heartbeat
+    assert "user_id = _require_user_id(user_ctx)" in heartbeat
+
+    assert "conversation_gateway.get_snapshot(" in get_route
+    assert "get_web_ui_conversation(" not in get_route
+    assert "user_id = _require_user_id(user_ctx)" in get_route
+    assert "del include_context" in get_route
+
