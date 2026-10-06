@@ -41,6 +41,7 @@ class ProactiveContinuityService:
         user_id: str,
         now: datetime | None = None,
         limit: int = 5,
+        current_domains: tuple[str, ...] = (),
     ) -> list[NextNeedCandidate]:
         if not self._settings.enabled:
             return []
@@ -59,8 +60,17 @@ class ProactiveContinuityService:
             limit=max(20, min(effective_limit * 10, 200)),
         )
 
+        normalized_domains = {
+            str(domain).strip().casefold()
+            for domain in current_domains
+            if str(domain).strip()
+        }
         ranked = [
-            self._candidate(item, now=now_utc)
+            self._candidate(
+                item,
+                now=now_utc,
+                current_domains=normalized_domains,
+            )
             for item in evidence
         ]
         ranked = [
@@ -98,10 +108,17 @@ class ProactiveContinuityService:
         item: ContinuityEvidence,
         *,
         now: datetime,
+        current_domains: set[str],
     ) -> NextNeedCandidate | None:
         source = item.source_type
         state = str(item.state or "").casefold()
         confidence = max(0.0, min(1.0, float(item.confidence or 0.0)))
+        evidence_domain = str(item.domain or "").strip().casefold()
+        if (
+            evidence_domain in set(self._settings.restricted_domains)
+            and evidence_domain not in current_domains
+        ):
+            return None
         reason_codes: list[str] = []
         utility = 0.0
         interruption_cost = self._settings.default_interruption_cost
