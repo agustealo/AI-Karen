@@ -140,6 +140,36 @@ async def test_behavior_requires_recurrence_and_confidence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_restricted_domain_requires_current_domain_relevance() -> None:
+    repo = _Repository(
+        [
+            ContinuityEvidence(
+                source_type="open_loop",
+                source_id="finance-loop",
+                subject="review stock allocation",
+                state="open",
+                confidence=0.95,
+                domain="finance",
+            )
+        ]
+    )
+    service = ProactiveContinuityService(repo)
+
+    generic = await service.rank(
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        user_id="22222222-2222-2222-2222-222222222222",
+    )
+    finance = await service.rank(
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        user_id="22222222-2222-2222-2222-222222222222",
+        current_domains=("finance",),
+    )
+
+    assert generic == []
+    assert [item.source_id for item in finance] == ["finance-loop"]
+
+
+@pytest.mark.asyncio
 async def test_candidate_ids_are_deterministic_for_learning_lineage() -> None:
     evidence = ContinuityEvidence(
         source_type="open_loop",
