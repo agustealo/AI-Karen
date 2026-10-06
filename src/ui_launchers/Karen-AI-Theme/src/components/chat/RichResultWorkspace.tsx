@@ -29,8 +29,17 @@ const nonEmptyObject = (value: unknown): value is Record<string, unknown> =>
 const asDisplayName = (
   item: ChatArtifact | ChatAttachment,
   fallback: string,
-): string =>
-  String(item.title || item.name || item.filename || fallback).trim() || fallback;
+): string => {
+  const record = item as Record<string, unknown>;
+  return (
+    String(
+      record.title ||
+        record.name ||
+        record.filename ||
+        fallback,
+    ).trim() || fallback
+  );
+};
 
 const asHref = (value: unknown): string | null => {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -41,14 +50,14 @@ const asHref = (value: unknown): string | null => {
 const DataValue = ({ value }: { value: unknown }) => {
   if (typeof value === 'string') {
     return (
-      <p className="whitespace-pre-wrap text-xs leading-6 text-foreground/88">
+      <p className="whitespace-pre-wrap text-xs leading-6 text-foreground/90">
         {value}
       </p>
     );
   }
 
   return (
-    <pre className="max-h-64 overflow-auto rounded-lg border border-border/60 bg-background/55 p-3 font-mono text-[10px] leading-5 text-foreground/78">
+    <pre className="max-h-64 overflow-auto rounded-lg border border-border/60 bg-background/55 p-3 font-mono text-[10px] leading-5 text-foreground/80">
       {JSON.stringify(value, null, 2)}
     </pre>
   );
@@ -107,7 +116,7 @@ export default function RichResultWorkspace({
 
   return (
     <aside
-      className="hidden w-[22rem] shrink-0 border-l border-border/70 bg-background/42 2xl:flex 2xl:flex-col"
+      className="hidden w-[22rem] shrink-0 border-l border-border/70 bg-background/40 2xl:flex 2xl:flex-col"
       aria-label="Result workspace"
       data-testid="rich-result-workspace"
     >
