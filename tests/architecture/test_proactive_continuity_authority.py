@@ -58,6 +58,14 @@ def test_proactive_candidates_are_preserved_for_outcome_learning() -> None:
     assert '"continuity_count"' in runtime
 
 
+def test_graph_workflows_receive_same_proactive_context() -> None:
+    runtime = _text("src/ai_karen_engine/core/runtime/chat_runtime.py")
+    workflow = _text("src/ai_karen_engine/core/runtime/workflow_runtime.py")
+
+    assert 'request.metadata["proactive_continuity"]' in runtime
+    assert "request_config.update(request.metadata or {})" in workflow
+
+
 def test_obsolete_adaptive_suggestion_authority_is_removed() -> None:
     suggestion_root = CORE / "adaptive" / "suggestions"
 
