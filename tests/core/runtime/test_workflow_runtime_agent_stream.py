@@ -69,3 +69,51 @@ def test_non_medusa_updates_do_not_fabricate_agent_activity() -> None:
     )
 
     assert chunks == []
+
+
+def test_formatted_response_preserves_declared_rich_result_fields() -> None:
+    runtime = WorkflowRuntime()
+    text, metadata = runtime._extract_payload(
+        {
+            "formatted_response": {
+                "data": {
+                    "response": "Done",
+                    "structured_content": {"table": {"rows": 2}},
+                    "actions": [{"type": "continue", "description": "Continue"}],
+                    "citations": [{"id": "c1", "url": "https://example.com"}],
+                    "sources": [{"id": "s1", "url": "https://example.com/source"}],
+                    "attachments": [{"id": "a1", "name": "report.pdf"}],
+                    "artifacts": [{"id": "r1", "title": "Report", "type": "document"}],
+                },
+                "metadata": {"actual_provider": "builtin_vllm"},
+            }
+        }
+    )
+
+    assert text == "Done"
+    assert metadata["structured_content"]["table"]["rows"] == 2
+    assert metadata["actions"][0]["type"] == "continue"
+    assert metadata["citations"][0]["id"] == "c1"
+    assert metadata["sources"][0]["id"] == "s1"
+    assert metadata["attachments"][0]["name"] == "report.pdf"
+    assert metadata["artifacts"][0]["title"] == "Report"
+
+
+def test_rich_result_extraction_does_not_copy_internal_graph_state() -> None:
+    runtime = WorkflowRuntime()
+    _, metadata = runtime._extract_payload(
+        {
+            "formatted_response": {
+                "data": {
+                    "response": "Done",
+                    "artifacts": [{"id": "r1"}],
+                    "internal_state": {"secret": True},
+                },
+                "metadata": {},
+            },
+            "internal_state": {"secret": True},
+        }
+    )
+
+    assert metadata["artifacts"] == [{"id": "r1"}]
+    assert "internal_state" not in metadata

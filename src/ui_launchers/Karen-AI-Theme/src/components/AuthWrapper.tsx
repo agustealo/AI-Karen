@@ -25,8 +25,8 @@ export function AuthWrapper({ children }: AuthWrapperProps) {
   // Show loading spinner while checking authentication
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-background">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
+      <div className="karen-app-shell karen-workspace-grid flex min-h-screen items-center justify-center bg-background">
+        <div className="h-7 w-7 animate-spin rounded-full border-2 border-border border-t-primary" aria-label="Checking authentication" />
       </div>
     );
   }
@@ -34,7 +34,7 @@ export function AuthWrapper({ children }: AuthWrapperProps) {
   // If not authenticated, don't render children (will redirect)
   if (!isAuthenticated) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-background text-muted-foreground">
+      <div className="karen-app-shell karen-workspace-grid flex min-h-screen items-center justify-center bg-background text-muted-foreground">
         Redirecting to login...
       </div>
     );

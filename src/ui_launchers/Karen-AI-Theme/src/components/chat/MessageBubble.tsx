@@ -567,12 +567,12 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
               )}
 
               {hasStructuredContent && (
-                <div className="mt-3 flex flex-col gap-2">
+                <div className="mt-3 flex flex-col gap-2 2xl:hidden">
                   {Object.entries(message.structuredContent || {}).map(
                     ([key, value]) => (
                       <div
                         key={key}
-                        className="group rounded-xl border border-border/50 bg-muted/30 p-3 text-sm shadow-inner transition-all hover:bg-muted/40"
+                        className="group rounded-xl border border-border/60 bg-card/50 p-3 text-sm shadow-inner transition-all hover:border-primary/20 hover:bg-muted/50"
                       >
                         <span className="mb-1 block text-xs font-semibold capitalize tracking-tight text-primary transition-colors group-hover:text-blue-500">
                           {key.replace(/_/g, ' ')}

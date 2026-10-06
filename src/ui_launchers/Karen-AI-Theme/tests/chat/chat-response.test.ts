@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { deriveDegradedPresentation, deriveResponseDetailsPresentation } from '@/lib/chat-response';
+import {
+  deriveDegradedPresentation,
+  deriveResponseDetailsPresentation,
+  normalizeBackendChatResponse,
+} from '@/lib/chat-response';
 
 describe('chat response fallback presentation', () => {
   it('renders a human-readable fallback switch banner', () => {
@@ -64,4 +68,51 @@ describe('chat response fallback presentation', () => {
     expect(details.modelLabel).toBe('none');
     expect(details.providerAttempts).toHaveLength(1);
   });
+
+  it('validates rich result collections instead of casting malformed records', () => {
+    const normalized = normalizeBackendChatResponse({
+      content: 'Done',
+      citations: [
+        {
+          id: 'c1',
+          url: 'https://example.com',
+          title: 'Example',
+          snippet: 'Evidence',
+          index: 1,
+        },
+        {
+          id: 'broken',
+          url: 'https://example.com/broken',
+        },
+      ],
+      sources: ['not-an-object'],
+      attachments: [
+        { id: 'a1', name: 'report.csv', mime_type: 'text/csv' },
+        'invalid',
+      ],
+      artifacts: [
+        { id: 'r1', title: 'Report', type: 'document' },
+        null,
+      ],
+    });
+
+    expect(normalized.citations).toEqual([
+      {
+        id: 'c1',
+        url: 'https://example.com',
+        title: 'Example',
+        snippet: 'Evidence',
+        index: 1,
+        metadata: undefined,
+      },
+    ]);
+    expect(normalized.sources).toEqual([]);
+    expect(normalized.attachments).toEqual([
+      { id: 'a1', name: 'report.csv', mime_type: 'text/csv' },
+    ]);
+    expect(normalized.artifacts).toEqual([
+      { id: 'r1', title: 'Report', type: 'document' },
+    ]);
+  });
+
 });

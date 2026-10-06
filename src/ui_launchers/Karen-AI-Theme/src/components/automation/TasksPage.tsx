@@ -238,7 +238,7 @@ export default function TasksPage() {
       <div className="flex items-center space-x-3">
         <ScrollText className="h-8 w-8 text-primary" />
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Task Management</h2>
+          <h2 className="karen-page-title">Task Management</h2>
           <p className="text-sm text-muted-foreground">
             Define specific, single-objective tasks for your agents and monitor execution.
           </p>

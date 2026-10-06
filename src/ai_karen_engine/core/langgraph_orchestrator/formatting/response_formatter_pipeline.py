@@ -241,6 +241,20 @@ class ResponseFormatterPipeline:
         if "execution_plan" in state:
             response_data["execution_plan"] = state["execution_plan"]
 
+        # Preserve only declared user-facing rich result fields. The response
+        # policy enforcer still strips internal state before Runtime sees it.
+        for key in (
+            "structured_content",
+            "actions",
+            "citations",
+            "sources",
+            "attachments",
+            "artifacts",
+        ):
+            value = state.get(key)
+            if value is not None:
+                response_data[key] = value
+
         # Add conversation context
         if "messages" in state:
             response_data["conversation_context"] = state["messages"][

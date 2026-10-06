@@ -88,7 +88,7 @@ function LoginForm() {
   if (checkingSetup) {
     return (
       <PublicWrapper>
-        <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="karen-app-shell karen-workspace-grid flex min-h-screen items-center justify-center bg-background">
           <div className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
             <Loader2 className="h-7 w-7 animate-spin" />
             <span>Checking Karen installation…</span>
@@ -100,9 +100,9 @@ function LoginForm() {
 
   return (
     <PublicWrapper>
-      <main className="min-h-screen bg-background px-4 py-8 md:px-8 md:py-12">
+      <main className="karen-app-shell karen-workspace-grid min-h-screen bg-background px-4 py-8 md:px-8 md:py-12">
         <div className="mx-auto grid min-h-[calc(100vh-6rem)] w-full max-w-5xl items-center gap-8 lg:grid-cols-[1fr_420px]">
-          <section className="hidden rounded-3xl border bg-muted/30 p-10 lg:block">
+          <section className="karen-surface hidden rounded-2xl p-10 lg:block">
             <div className="mb-12 flex items-center gap-3">
               <Image
                 src="/brand/karen-mark.svg"
@@ -117,7 +117,7 @@ function LoginForm() {
                 <p className="text-sm text-muted-foreground">Local by default. Governed by design.</p>
               </div>
             </div>
-            <h1 className="max-w-xl text-4xl font-semibold tracking-tight">
+            <h1 className="karen-page-title max-w-xl text-balance md:text-4xl">
               Your runtime, memory, tools, and models stay behind one trusted identity boundary.
             </h1>
             <div className="mt-10 grid gap-4 text-sm text-muted-foreground">
@@ -132,7 +132,7 @@ function LoginForm() {
             </div>
           </section>
 
-          <Card className="w-full border shadow-sm">
+          <Card className="karen-surface w-full">
             <CardHeader className="space-y-2">
               <Image
                 src="/brand/karen-mark.svg"
@@ -152,7 +152,7 @@ function LoginForm() {
                 </div>
               )}
 
-              <div className="mb-5 grid grid-cols-2 rounded-xl border bg-muted/30 p-1">
+              <div className="mb-5 grid grid-cols-2 rounded-lg border border-border/70 bg-muted/55 p-1">
                 <button
                   type="button"
                   className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${

@@ -42,7 +42,7 @@ export default function Home() {
   }, [isAuthenticated, isLoading, router]);
 
   return (
-    <div className="flex h-screen w-full items-center justify-center bg-background">
+    <div className="karen-app-shell karen-workspace-grid flex h-screen w-full items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
         <Loader2 className="h-7 w-7 animate-spin" />
         <span>Checking Karen installation…</span>

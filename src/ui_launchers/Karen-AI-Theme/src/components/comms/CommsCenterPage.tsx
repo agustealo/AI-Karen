@@ -167,7 +167,7 @@ export default function CommsCenterPage() {
   return (
     <div className="space-y-6">
         <div>
-            <h2 className="text-2xl font-semibold tracking-tight">Communications Center</h2>
+            <h2 className="karen-page-title">Communications Center</h2>
             <p className="text-sm text-muted-foreground">
             A central hub for updates from KAREN, automation logs, system alerts, and generated notes.
             </p>

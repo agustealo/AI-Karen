@@ -310,7 +310,7 @@ export default function SettingsDialog({
             </h2>
           </div>
 
-          <p className="max-w-2xl text-sm text-muted-foreground">
+          <p className="karen-page-description">
             Fine-tune Karen&apos;s intelligence, manage your personal data, and
             configure system runtime parameters.
           </p>

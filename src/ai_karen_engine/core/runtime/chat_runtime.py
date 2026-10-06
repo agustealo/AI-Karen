@@ -75,6 +75,15 @@ GATE_RESPONSES = (
     ApprovalRequiredResponse,
 )
 
+_RICH_RESULT_KEYS = (
+    "structured_content",
+    "actions",
+    "citations",
+    "sources",
+    "attachments",
+    "artifacts",
+)
+
 _CANONICAL_META_KEYS = (
     "requested_provider",
     "requested_model",
@@ -833,7 +842,7 @@ class ChatRuntime:
                 **{
                     key: value
                     for key, value in provider_meta.items()
-                    if key in _CANONICAL_META_KEYS
+                    if key in _CANONICAL_META_KEYS or key in _RICH_RESULT_KEYS
                 },
                 **({"trajectory_id": trajectory_id} if trajectory_id else {}),
             },
@@ -1778,6 +1787,11 @@ class ChatRuntime:
             status=status,
             metadata=md,
             structured_content=dict(normalized.get("structured_content") or {}),
+            actions=list(normalized.get("actions") or []),
+            citations=list(normalized.get("citations") or []),
+            sources=list(normalized.get("sources") or []),
+            attachments=list(normalized.get("attachments") or []),
+            artifacts=list(normalized.get("artifacts") or []),
         )
 
     def _normalize_graph_meta(
@@ -1787,7 +1801,7 @@ class ChatRuntime:
     ) -> Dict[str, Any]:
         raw = response_metadata or {}
         llm = raw.get("llm_metadata") or {}
-        return {
+        normalized = {
             "requested_provider": llm.get("requested_provider")
             or request.preferred_provider,
             "requested_model": llm.get("requested_model")
@@ -1801,6 +1815,11 @@ class ChatRuntime:
             "degradation_reason": llm.get("degradation_reason"),
             "llm": raw.get("llm"),
         }
+        for key in _RICH_RESULT_KEYS:
+            value = raw.get(key)
+            if value is not None:
+                normalized[key] = value
+        return normalized
 
     def _build_metadata(
         self,
@@ -1993,6 +2012,10 @@ class ChatRuntime:
                 value = llm.get(key)
                 if value is not None and key not in meta:
                     meta[key] = value
+        for key in _RICH_RESULT_KEYS:
+            value = chunk_meta.get(key)
+            if value is not None:
+                meta[key] = value
 
     def _build_stream_terminal_metadata(
         self,
@@ -2081,6 +2104,11 @@ class ChatRuntime:
                 if degraded
                 else "ok"
             ),
+            **{
+                key: provider_meta.get(key)
+                for key in _RICH_RESULT_KEYS
+                if provider_meta.get(key) is not None
+            },
         }
 
     @staticmethod

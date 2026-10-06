@@ -39,7 +39,7 @@ import AgentActivityPanel from './AgentActivityPanel';
 import ConversationContextRail from './ConversationContextRail';
 import DegradedModeBanner from './DegradedModeBanner';
 import RuntimeMetadataPanel from './RuntimeMetadataPanel';
-import RuntimeReceipt from './RuntimeReceipt';
+import RichResultWorkspace from './RichResultWorkspace';
 import CircuitBreakerWarning from './CircuitBreakerWarning';
 
 // Session Management Types
@@ -999,9 +999,23 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       requestId: asText(metadata.request_id),
       status,
       responseSource,
-      usedFallback: Boolean(metadata.used_fallback),
       degradedMode: Boolean(metadata.degraded_mode),
       degradedReason,
+      degradationType: asText(metadata.degradation_type),
+      latencyMs:
+        typeof metadata.latency_ms === 'number' && Number.isFinite(metadata.latency_ms)
+          ? metadata.latency_ms
+          : undefined,
+      providerAttempts: Array.isArray(metadata.provider_attempts)
+        ? metadata.provider_attempts as Array<{
+            provider: string;
+            model: string;
+            status: string;
+            error_type?: string;
+            error_message?: string;
+            latency_ms?: number;
+          }>
+        : [],
       showCircuitWarning: Boolean(metadata.circuit_breaker_open || metadata.dependency_degraded || degradedReason),
       rawMetadata: metadata,
     };
@@ -1566,20 +1580,48 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           );
         }
 
+        const richStructuredContent =
+          completedMetadata?.structured_content &&
+          typeof completedMetadata.structured_content === 'object' &&
+          !Array.isArray(completedMetadata.structured_content)
+            ? completedMetadata.structured_content as Record<string, unknown>
+            : {};
+        const richSources = Array.isArray(completedMetadata?.sources)
+          ? completedMetadata.sources as Citation[]
+          : [];
+        const richAttachments = Array.isArray(completedMetadata?.attachments)
+          ? completedMetadata.attachments as ChatMessage['attachments']
+          : [];
+        const richArtifacts = Array.isArray(completedMetadata?.artifacts)
+          ? completedMetadata.artifacts as ChatMessage['artifacts']
+          : [];
+        const richCitations = collectedCitations.length > 0
+          ? collectedCitations
+          : Array.isArray(completedMetadata?.citations)
+            ? completedMetadata.citations as Citation[]
+            : [];
+
         const streamAssistantMessage: ChatMessage = {
           id: streamResponse.correlationId || 'assistant-' + Date.now(),
           role: 'assistant',
           content: streamResponse.answer,
           timestamp: new Date(),
           status: 'completed',
+          structuredContent: richStructuredContent,
           actions: streamResponse.actions,
           metadata: {
             ...streamResponse.metadata,
-            citations: collectedCitations,
+            citations: richCitations,
+            sources: richSources,
+            attachments: richAttachments,
+            artifacts: richArtifacts,
             agentSteps: collectedAgentSteps,
             degradedMode: degradedModeSnapshot.active,
           },
-          citations: collectedCitations,
+          citations: richCitations,
+          sources: richSources,
+          attachments: richAttachments,
+          artifacts: richArtifacts,
         };
 
         setMessages((prev) => {
@@ -1660,6 +1702,10 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         status: 'completed',
         structuredContent: fallbackErrorResponse.structuredContent,
         actions: fallbackErrorResponse.actions,
+        citations: fallbackErrorResponse.citations,
+        sources: fallbackErrorResponse.sources,
+        attachments: fallbackErrorResponse.attachments,
+        artifacts: fallbackErrorResponse.artifacts,
         metadata: fallbackErrorResponse.metadata,
       } : null;
 
@@ -2079,8 +2125,21 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     }
   }, [shouldSubmitVoiceInput, input, isLoading, isAuthLoading, handleSubmit]);
 
+  const workspaceMessage = [...messages]
+    .reverse()
+    .find((message) =>
+      message.role === 'assistant' &&
+      (
+        Boolean(message.structuredContent && Object.keys(message.structuredContent).length) ||
+        Boolean(message.artifacts?.length) ||
+        Boolean(message.attachments?.length) ||
+        Boolean(message.sources?.length) ||
+        Boolean(message.citations?.length)
+      ),
+    );
+
   return (
-    <div data-testid="chat-root" className="flex min-h-0 flex-1">
+    <div data-testid="chat-root" className="flex min-h-0 flex-1 overflow-hidden">
       <div className="flex min-w-0 flex-1 flex-col">
       <StatusIndicators
         isBackendOffline={isBackendOffline}
@@ -2102,13 +2161,10 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         status={latestAssistantMetadata.status}
         responseSource={latestAssistantMetadata.responseSource}
         degradedMode={latestAssistantMetadata.degradedMode}
+        degradationType={latestAssistantMetadata.degradationType}
         degradationReason={latestAssistantMetadata.degradedReason}
-      />
-
-      <RuntimeReceipt
-        source={latestAssistantMetadata.responseSource}
-        usedFallback={latestAssistantMetadata.usedFallback}
-        degradedReason={latestAssistantMetadata.degradedReason}
+        providerAttempts={latestAssistantMetadata.providerAttempts}
+        latencyMs={latestAssistantMetadata.latencyMs}
       />
 
       <CircuitBreakerWarning
@@ -2194,6 +2250,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         streamingStatus={streamingStatus}
       />
       </div>
+
+      <RichResultWorkspace message={workspaceMessage} />
 
       <ConversationContextRail
         metadata={latestAssistantMetadata.rawMetadata}

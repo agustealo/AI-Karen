@@ -7,6 +7,32 @@ export interface AiData {
 
 import type { SuggestedAction } from '@/lib/agent-ui/service';
 
+export interface ChatAttachment {
+  id?: string;
+  name?: string;
+  filename?: string;
+  media_type?: string;
+  mime_type?: string;
+  url?: string;
+  path?: string;
+  size_bytes?: number;
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface ChatArtifact {
+  id?: string;
+  title?: string;
+  name?: string;
+  type?: string;
+  kind?: string;
+  content?: unknown;
+  url?: string;
+  path?: string;
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -21,6 +47,8 @@ export interface ChatMessage {
   status?: 'pending' | 'streaming' | 'completed' | 'failed';
   citations?: Citation[];
   sources?: Citation[];
+  attachments?: ChatAttachment[];
+  artifacts?: ChatArtifact[];
 }
 
 export interface Citation {

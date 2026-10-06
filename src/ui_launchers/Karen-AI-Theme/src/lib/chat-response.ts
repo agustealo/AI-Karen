@@ -1,4 +1,10 @@
-import type { ChatMessage, MessageResponse } from '@/lib/types';
+import type {
+  ChatArtifact,
+  ChatAttachment,
+  ChatMessage,
+  Citation,
+  MessageResponse,
+} from '@/lib/types';
 import { getDegradationReasonLabel } from '@/components/chat/const/constants';
 
 type PrimitiveMetadataValue = string | number | boolean | null | undefined;
@@ -35,6 +41,10 @@ type BackendChatEnvelope = {
   structured_content?: Record<string, unknown>;
   structuredContent?: Record<string, unknown>;
   actions?: SuggestedAction[];
+  citations?: unknown[];
+  sources?: unknown[];
+  attachments?: unknown[];
+  artifacts?: unknown[];
   metadata?: Record<string, unknown>;
   correlation_id?: string;
   request_id?: string;
@@ -54,6 +64,10 @@ export type NormalizedChatResponse = {
   structuredContent: Record<string, unknown>;
   actions: SuggestedAction[];
   metadata: Record<string, unknown>;
+  citations: Citation[];
+  sources: Citation[];
+  attachments: ChatAttachment[];
+  artifacts: ChatArtifact[];
   correlationId: string;
 };
 
@@ -251,6 +265,43 @@ const toProviderKey = (value?: unknown): string => {
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 };
+
+const normalizeCitationCollection = (value: unknown): Citation[] => {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item) => {
+    if (!isRecord(item)) return [];
+
+    const id = toCleanString(item.id);
+    const url = toCleanString(item.url);
+    const title = toCleanString(item.title);
+    const snippet = toCleanString(item.snippet);
+    const index = Number(item.index);
+
+    if (!id || !url || !title || !Number.isFinite(index)) {
+      return [];
+    }
+
+    return [{
+      id,
+      url,
+      title,
+      snippet,
+      index,
+      metadata: isRecord(item.metadata) ? item.metadata : undefined,
+    }];
+  });
+};
+
+const normalizeAttachmentCollection = (value: unknown): ChatAttachment[] =>
+  Array.isArray(value)
+    ? value.filter(isRecord).map((item) => ({ ...item } as ChatAttachment))
+    : [];
+
+const normalizeArtifactCollection = (value: unknown): ChatArtifact[] =>
+  Array.isArray(value)
+    ? value.filter(isRecord).map((item) => ({ ...item } as ChatArtifact))
+    : [];
 
 const firstNonEmpty = (...values: unknown[]): string => {
   for (const value of values) {
@@ -941,6 +992,10 @@ export function normalizeBackendChatResponse(
       raw.structured_content || raw.structuredContent || {},
     ),
     actions: Array.isArray(raw.actions) ? raw.actions : [],
+    citations: normalizeCitationCollection(raw.citations),
+    sources: normalizeCitationCollection(raw.sources),
+    attachments: normalizeAttachmentCollection(raw.attachments),
+    artifacts: normalizeArtifactCollection(raw.artifacts),
     metadata,
     correlationId,
   };
@@ -981,6 +1036,18 @@ export function normalizeConversationMessage(
     status: mapBackendStatusToMessageStatus(metadata.status),
     structuredContent: sanitizeStructuredContent(message.structured_content),
     actions: Array.isArray(message.actions) ? message.actions : [],
+    citations: Array.isArray(metadata.citations)
+      ? (metadata.citations as Citation[])
+      : [],
+    sources: Array.isArray(metadata.sources)
+      ? (metadata.sources as Citation[])
+      : [],
+    attachments: Array.isArray(metadata.attachments)
+      ? (metadata.attachments as ChatAttachment[])
+      : [],
+    artifacts: Array.isArray(metadata.artifacts)
+      ? (metadata.artifacts as ChatArtifact[])
+      : [],
     metadata,
   };
 }
