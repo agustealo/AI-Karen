@@ -82,6 +82,24 @@ def test_fake_planning_api_is_removed_and_not_mounted() -> None:
     assert "planning_router" not in routers
 
 
+def test_proactive_ranking_policy_is_central_config_owned() -> None:
+    service = _text(
+        "src/ai_karen_engine/core/intelligence/proactive/service.py"
+    )
+    repository = _text(
+        "src/ai_karen_engine/platform/personalization/proactive_repository.py"
+    )
+    cortex = _text("src/ai_karen_engine/core/cortex/context_stages.py")
+    config = _text("src/ai_karen_engine/config/proactive.py")
+
+    assert "get_proactive_continuity_settings" in config
+    assert "self._settings" in service
+    assert "get_proactive_continuity_settings" in repository
+    assert "get_proactive_continuity_settings" in cortex
+    assert "KARI_PROACTIVE_CONTINUITY_ENABLED" in config
+    assert "KARI_PROACTIVE_CONTINUITY_MAX_CANDIDATES" in config
+
+
 def test_proactive_repository_reads_only_current_governed_evidence() -> None:
     repository = _text(
         "src/ai_karen_engine/platform/personalization/proactive_repository.py"
