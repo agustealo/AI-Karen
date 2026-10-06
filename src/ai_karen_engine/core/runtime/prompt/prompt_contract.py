@@ -102,6 +102,7 @@ class PromptAssemblyRequest:
     persona: Dict[str, Any] = field(default_factory=dict)
     profile: Dict[str, Any] = field(default_factory=dict)
     memory_items: List[Dict[str, Any]] = field(default_factory=list)
+    continuity_items: List[Dict[str, Any]] = field(default_factory=list)
     cortex_intent: Dict[str, Any] = field(default_factory=dict)
     tool_contracts: List[Dict[str, Any]] = field(default_factory=list)
     workflow_context: Dict[str, Any] = field(default_factory=dict)
