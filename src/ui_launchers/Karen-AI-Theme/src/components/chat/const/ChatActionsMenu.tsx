@@ -8,8 +8,6 @@ import {
   Pencil,
   Plus,
   RefreshCw,
-  Search,
-  Share,
   Trash2,
 } from 'lucide-react';
 
@@ -56,9 +54,6 @@ interface ChatActionsMenuProps {
   onOpenHistory: () => void;
   onExportChat?: () => Promise<void> | void;
   onCopyChat?: () => Promise<void> | void;
-  onShareChat?: () => Promise<void> | void;
-  onClearChat?: () => Promise<void> | void;
-  onSearchInChat?: () => void;
 }
 
 const CLOSE_DELAY_MS = 140;
@@ -101,16 +96,12 @@ export function ChatActionsMenu({
   onOpenHistory,
   onExportChat,
   onCopyChat,
-  onShareChat,
-  onClearChat,
-  onSearchInChat,
 }: ChatActionsMenuProps) {
   const [open, setOpen] = useState(false);
   const [supportsHover, setSupportsHover] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [clearChatOpen, setClearChatOpen] = useState(false);
   const [isActionBusy, setIsActionBusy] = useState(false);
 
   const closeTimerRef = useRef<number | null>(null);
@@ -122,7 +113,7 @@ export function ChatActionsMenu({
   const canUseSessionActions = Boolean(currentSession) && !isLoadingSessions;
   const canRunAction = !isLoadingSessions && !isActionBusy;
   const canUseCurrentChatActions = canUseSessionActions && canRunAction;
-  const hasActionDialogOpen = renameOpen || deleteOpen || clearChatOpen;
+  const hasActionDialogOpen = renameOpen || deleteOpen;
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -364,46 +355,6 @@ export function ChatActionsMenu({
     );
   }, [canUseCurrentChatActions, closeMenu, onCopyChat, runAction]);
 
-  const handleShareChat = useCallback(async () => {
-    if (!onShareChat || !canUseCurrentChatActions) {
-      return;
-    }
-
-    await runAction(
-      async () => {
-        await onShareChat();
-        closeMenu();
-      },
-      'Unable to share chat',
-      'Karen could not share the current conversation.',
-    );
-  }, [canUseCurrentChatActions, closeMenu, onShareChat, runAction]);
-
-  const handleClearChat = useCallback(async () => {
-    if (!onClearChat || !currentSession || isActionBusy) {
-      return;
-    }
-
-    await runAction(
-      async () => {
-        await onClearChat();
-        setClearChatOpen(false);
-        closeMenu();
-      },
-      'Unable to clear chat',
-      'Karen could not clear the current conversation.',
-    );
-  }, [closeMenu, currentSession, isActionBusy, onClearChat, runAction]);
-
-  const handleSearchInChat = useCallback(() => {
-    if (!onSearchInChat || !canUseSessionActions || isActionBusy) {
-      return;
-    }
-
-    closeMenu();
-    onSearchInChat();
-  }, [canUseSessionActions, closeMenu, isActionBusy, onSearchInChat]);
-
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
@@ -441,11 +392,6 @@ export function ChatActionsMenu({
             handleOpenHistory();
             return;
 
-          case 'k':
-            event.preventDefault();
-            handleSearchInChat();
-            return;
-
           default:
             break;
         }
@@ -456,11 +402,6 @@ export function ChatActionsMenu({
           case 'c':
             event.preventDefault();
             void handleCopyChat();
-            return;
-
-          case 's':
-            event.preventDefault();
-            void handleShareChat();
             return;
 
           case 'e':
@@ -483,10 +424,8 @@ export function ChatActionsMenu({
     handleNewChat,
     handleRefresh,
     handleOpenHistory,
-    handleSearchInChat,
     handleStartRename,
     handleCopyChat,
-    handleShareChat,
     handleExport,
   ]);
 
@@ -581,39 +520,6 @@ export function ChatActionsMenu({
                 <span className="ml-auto text-xs text-muted-foreground">
                   Alt+C
                 </span>
-              </DropdownMenuItem>
-
-              <DropdownMenuItem
-                disabled={!canUseCurrentChatActions || !onShareChat}
-                onClick={() => void handleShareChat()}
-              >
-                <Share className="mr-2 h-4 w-4" />
-                <span>Share Chat</span>
-                <span className="ml-auto text-xs text-muted-foreground">
-                  Alt+S
-                </span>
-              </DropdownMenuItem>
-
-              <DropdownMenuItem
-                disabled={!canUseCurrentChatActions || !onSearchInChat}
-                onClick={handleSearchInChat}
-              >
-                <Search className="mr-2 h-4 w-4" />
-                <span>Search in Chat</span>
-                <span className="ml-auto text-xs text-muted-foreground">
-                  Ctrl+K
-                </span>
-              </DropdownMenuItem>
-
-              <DropdownMenuItem
-                disabled={!canUseCurrentChatActions || !onClearChat}
-                onClick={() => {
-                  setClearChatOpen(true);
-                  closeMenu();
-                }}
-              >
-                <RefreshCw className="mr-2 h-4 w-4" />
-                <span>Clear Chat</span>
               </DropdownMenuItem>
 
               <DropdownMenuItem
@@ -720,33 +626,6 @@ export function ChatActionsMenu({
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={clearChatOpen} onOpenChange={setClearChatOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Clear Current Chat?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This removes all messages from the current conversation but keeps
-              the chat session. You can still rename or delete the empty chat
-              later.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isActionBusy}>Cancel</AlertDialogCancel>
-
-            <AlertDialogAction
-              className="bg-warning hover:bg-warning/90"
-              onClick={(event) => {
-                event.preventDefault();
-                void handleClearChat();
-              }}
-              disabled={isActionBusy}
-            >
-              Clear Chat
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </>
   );
 }
