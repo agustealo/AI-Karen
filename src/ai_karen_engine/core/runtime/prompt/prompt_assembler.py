@@ -45,6 +45,7 @@ class PromptAssembler:
     ) -> PromptAssemblyResult:
         messages: List[Dict[str, Any]] = []
         included_memory_refs: List[str] = []
+        included_continuity_refs: List[str] = []
         included_tool_contracts: List[str] = []
         metadata: Dict[str, Any] = {}
 
@@ -89,6 +90,11 @@ class PromptAssembler:
             messages.extend(
                 self._build_continuity_messages(request.continuity_items)
             )
+            included_continuity_refs = [
+                str(item.get("id", ""))
+                for item in request.continuity_items
+                if item.get("id")
+            ]
 
         if request.messages:
             messages.extend(request.messages)
@@ -116,6 +122,7 @@ class PromptAssembler:
             prompt_version=request.prompt_version,
             prompt_hash=prompt_hash,
             included_memory_refs=included_memory_refs,
+            included_continuity_refs=included_continuity_refs,
             included_tool_contracts=included_tool_contracts,
             metadata=metadata,
         )
