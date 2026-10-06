@@ -206,7 +206,7 @@ function RailContent({
 
   return (
     <div className="space-y-3">
-      <Card className="border-primary/15 bg-card/80">
+      <Card className="karen-surface border-border/70 bg-card/72">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
             <Brain className="h-3.5 w-3.5 text-primary" />
@@ -261,7 +261,7 @@ function RailContent({
         </CardContent>
       </Card>
 
-      <Card className="border-primary/15 bg-card/80">
+      <Card className="karen-surface border-border/70 bg-card/72">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
             <Sparkles className="h-3.5 w-3.5 text-primary" />
@@ -358,7 +358,7 @@ function RailContent({
         </CardContent>
       </Card>
 
-      <Card className="border-primary/15 bg-card/80">
+      <Card className="karen-surface border-border/70 bg-card/72">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
             <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
@@ -428,13 +428,13 @@ export default function ConversationContextRail(
 ) {
   return (
     <aside
-      className="hidden w-[22rem] shrink-0 overflow-y-auto border-l border-border/70 bg-background/40 p-3 xl:block"
+      className="hidden w-[19rem] shrink-0 overflow-y-auto border-l border-border/70 bg-background/38 p-3 xl:block 2xl:w-[20rem]"
       aria-label="Conversation context and capabilities"
       data-testid="conversation-context-rail"
     >
       <div className="sticky top-0">
         <div className="mb-3 px-1">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          <p className="karen-panel-label text-foreground/90">
             Conversation intelligence
           </p>
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
