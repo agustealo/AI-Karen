@@ -62,7 +62,6 @@ class SafetyGateNode:
             if not evaluation.is_safe and evaluation.flagged_categories:
                 state["safety_status"] = "review_required"
                 state["safety_flags"] = evaluation.flagged_categories
-                state["requires_approval"] = True
                 warnings.append(
                     "Safety service flagged content for review: "
                     + ", ".join(evaluation.flagged_categories)
