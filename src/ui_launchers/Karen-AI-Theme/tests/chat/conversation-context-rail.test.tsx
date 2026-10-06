@@ -163,7 +163,7 @@ describe('ConversationContextRail', () => {
     expect(
       screen.getByText(/external action is approved and ready to resume/i),
     ).toBeTruthy();
-    expect(screen.getByText(/ready to resume/i)).toBeTruthy();
+    expect(screen.getByText('ready to resume')).toBeTruthy();
   });
 
   it('distinguishes unavailable approval truth from an empty approval list', () => {
