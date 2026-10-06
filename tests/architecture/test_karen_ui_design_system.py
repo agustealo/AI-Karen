@@ -113,3 +113,26 @@ def test_shared_status_and_selection_primitives_use_theme_tokens() -> None:
     assert "data-[state=checked]:bg-primary" in checkbox
     assert "transition-[margin,opa]" not in sidebar
     assert "KAREN Workspace" in sidebar
+
+
+def test_interaction_primitives_share_karen_surface_treatment() -> None:
+    dropdown = _read("components/ui/dropdown-menu.tsx")
+    menubar = _read("components/ui/menubar.tsx")
+    popover = _read("components/ui/popover.tsx")
+    tooltip = _read("components/ui/tooltip.tsx")
+    table = _read("components/ui/table.tsx")
+    slider = _read("components/ui/slider.tsx")
+    skeleton = _read("components/ui/skeleton.tsx")
+    toast = _read("components/ui/toast.tsx")
+    alert_dialog = _read("components/ui/alert-dialog.tsx")
+
+    assert "bg-popover/95" in dropdown
+    assert "bg-popover/95" in menubar
+    assert "bg-popover/95" in popover
+    assert "bg-popover/95" in tooltip
+    assert "font-mono" in table
+    assert "bg-muted/70" in slider
+    assert "bg-muted/70" in skeleton
+    assert "bg-card/95" in toast
+    assert "bg-card/95" in alert_dialog
+    assert 'MenubarShortcut.displayName = "MenubarShortcut"' in menubar
