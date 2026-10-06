@@ -266,6 +266,43 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 };
 
+const normalizeCitationCollection = (value: unknown): Citation[] => {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item) => {
+    if (!isRecord(item)) return [];
+
+    const id = toCleanString(item.id);
+    const url = toCleanString(item.url);
+    const title = toCleanString(item.title);
+    const snippet = toCleanString(item.snippet);
+    const index = Number(item.index);
+
+    if (!id || !url || !title || !Number.isFinite(index)) {
+      return [];
+    }
+
+    return [{
+      id,
+      url,
+      title,
+      snippet,
+      index,
+      metadata: isRecord(item.metadata) ? item.metadata : undefined,
+    }];
+  });
+};
+
+const normalizeAttachmentCollection = (value: unknown): ChatAttachment[] =>
+  Array.isArray(value)
+    ? value.filter(isRecord).map((item) => ({ ...item } as ChatAttachment))
+    : [];
+
+const normalizeArtifactCollection = (value: unknown): ChatArtifact[] =>
+  Array.isArray(value)
+    ? value.filter(isRecord).map((item) => ({ ...item } as ChatArtifact))
+    : [];
+
 const firstNonEmpty = (...values: unknown[]): string => {
   for (const value of values) {
     const cleaned = toCleanString(value);
