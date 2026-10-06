@@ -54,7 +54,16 @@ def build_context_requirements(
                         max(1, int(preliminary.memory_top_k or 1)),
                     ),
                     reason_codes=["cortex_continuity_context_requested"],
-                    metadata={"mode": "suggest_only"},
+                    metadata={
+                        "mode": "suggest_only",
+                        "current_domains": list(
+                            preliminary.policy_constraints.get(
+                                "current_domains",
+                                [],
+                            )
+                            or []
+                        ),
+                    },
                 )
             )
 
