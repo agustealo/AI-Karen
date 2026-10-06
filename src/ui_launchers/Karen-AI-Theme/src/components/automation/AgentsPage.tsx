@@ -219,7 +219,7 @@ export default function AgentsPage() {
             <h2 className="text-2xl font-semibold tracking-tight">
               Agent Runtime
             </h2>
-            <p className="max-w-3xl text-sm text-muted-foreground">
+            <p className="karen-page-description mt-1">
               Agent Medusa is KAREN&apos;s canonical multi-agent coordinator.
               Chat remains the execution entry point: CORTEX decides when
               specialist delegation is required, RuntimePolicy authorizes it,
