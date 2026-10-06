@@ -158,10 +158,9 @@ class ApprovalService:
         never grants policy by itself: it only enforces the human gate already
         required by the current CORTEX/RuntimePolicy decision.
         """
-        if not decision.requires_human_gate:
-            return None
-
         approval_id = str(request.metadata.get("approval_id") or "").strip()
+        if not decision.requires_human_gate and not approval_id:
+            return None
         if not approval_id:
             return await self.create_for_request(request, decision)
         try:
