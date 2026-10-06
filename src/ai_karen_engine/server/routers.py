@@ -21,6 +21,7 @@ from ai_karen_engine.api_routes.agents.runtime import router as agent_runtime_ro
 from ai_karen_engine.api_routes.artifacts import router as artifacts_router
 from ai_karen_engine.api_routes.auth.auth import router as auth_router
 from ai_karen_engine.api_routes.auth.privacy import router as privacy_router
+from ai_karen_engine.api_routes.automation.approvals import router as approvals_router
 from ai_karen_engine.api_routes.automation.cron import router as automation_cron_router
 from ai_karen_engine.api_routes.automation.jobs import router as automation_jobs_router
 from ai_karen_engine.api_routes.automation.scheduler import router as scheduler_router
@@ -118,6 +119,7 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     RouterSpec(ai_router, "/api/ai", ("ai",)),
     RouterSpec(agent_runtime_router, tags=("agent-runtime",)),
     RouterSpec(tasks_router, tags=("tasks",)),
+    RouterSpec(approvals_router, tags=("approvals",)),
     RouterSpec(automation_jobs_router, "/api", ("automation-jobs",)),
     RouterSpec(automation_cron_router, "/api", ("automation-cron",)),
     RouterSpec(automation_stats_router, "/api", ("automation-stats",)),
