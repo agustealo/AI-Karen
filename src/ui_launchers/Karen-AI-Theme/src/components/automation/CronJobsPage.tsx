@@ -187,7 +187,7 @@ export default function CronJobsPage() {
       <div className="flex items-center space-x-3">
         <Clock className="h-8 w-8 text-primary" />
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Cron Job Assignments</h2>
+          <h2 className="karen-page-title">Cron Job Assignments</h2>
           <p className="text-sm text-muted-foreground">
             Manage live scheduled automations executing on the backend.
           </p>
