@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.audit_logging import (
@@ -32,7 +33,7 @@ class ApprovalStateError(ApprovalError):
     """Approval cannot transition from its current state."""
 
 
-class ApprovalScopeError(PermissionError):
+class ApprovalScopeError(ApprovalError, PermissionError):
     """Approval does not match the request attempting to consume it."""
 
 
@@ -163,6 +164,10 @@ class ApprovalService:
         approval_id = str(request.metadata.get("approval_id") or "").strip()
         if not approval_id:
             return await self.create_for_request(request, decision)
+        try:
+            uuid.UUID(approval_id)
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ApprovalScopeError("Approval receipt is invalid") from exc
 
         current = await self._repository.get(
             approval_id,
