@@ -95,6 +95,13 @@ class ChatExecutionContext:
         )
         self.conversation_id = str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
 
+    def require_conversation_id(self) -> str:
+        """Return the canonical conversation identity established by this context."""
+        conversation_id = str(self.conversation_id or "").strip()
+        if not conversation_id:
+            raise ValueError("conversation_identity_incomplete:conversation_id")
+        return conversation_id
+
 
 @dataclass
 class ChatExecutionRequest:
