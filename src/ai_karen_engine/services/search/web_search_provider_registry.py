@@ -268,7 +268,12 @@ class WebSearchProviderRegistry:
             if descriptor and (not healthy_only or descriptor.health not in {"unhealthy", "degraded"}):
                 return requested
 
-        return candidates[0]
+        return max(
+            candidates,
+            key=lambda provider_id: int(
+                self.get_config(provider_id).get("priority", 0) or 0
+            ),
+        )
 
     def sorted_enabled(self, policy_permitted: Optional[Sequence[str]] = None) -> List[str]:
         """
