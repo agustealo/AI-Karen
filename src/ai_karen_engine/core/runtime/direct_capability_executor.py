@@ -203,7 +203,13 @@ class DirectCapabilityExecutor:
                         tool_name=tool_name,
                         parameters=self._tool_parameters(query, mode),
                         user_context={
+                            "request_id": (
+                                request.context.request_id
+                                or request.context.correlation_id
+                            ),
+                            "user_id": request.context.user_id,
                             "tenant_id": request.context.tenant_id,
+                            "session_id": request.context.session_id,
                             "conversation_id": request.context.conversation_id,
                             "correlation_id": request.context.correlation_id,
                             "allowed_capabilities": list(plan.allowed_capabilities),
