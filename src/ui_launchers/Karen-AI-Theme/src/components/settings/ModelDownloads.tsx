@@ -229,7 +229,7 @@ const retryInstallRevision = (
 
   const storageKey = String(job.storage_key || '').trim();
   if (!storageKey) {
-    return null;
+    throw new Error('The original download storage namespace cannot be verified. Revalidate the model through Advanced install options.');
   }
 
   const modelDirectory = `${owner}--${repository}`;
