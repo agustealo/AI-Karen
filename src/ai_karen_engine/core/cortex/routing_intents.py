@@ -1,9 +1,18 @@
 """CORTEX capability-routing contract."""
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     "time.current": {
         "triggers": ["what time", "current time", "time in", "timezone"],
+        "patterns": [
+            r"\bwhat\s+time\s+is\s+it\b",
+            r"\bwhat(?:'s|\s+is)\s+the\s+time\b",
+            r"\bcurrent\s+time\b",
+            r"\btime\s+(?:is\s+it\s+)?in\s+[\w\s,./+-]+$",
+            r"\btime\s+now\b",
+            r"\btimezone\s+(?:in|for|of)\b",
+        ],
         "required_capability": "time_query",
         "preferred_plugin": "time-query",
         "handler": "time_tool",
@@ -13,6 +22,15 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     },
     "search.general": {
         "triggers": ["search the internet", "look online", "find current", "latest", "web search"],
+        "patterns": [
+            r"\bsearch\s+(?:the\s+)?(?:web|internet|online)\b",
+            r"\bweb\s+search\b",
+            r"\blook\s+(?:it\s+)?up\s+online\b",
+            r"\blook\s+online\s+(?:for|at)\b",
+            r"\bfind\s+(?:the\s+)?(?:current|latest|today'?s?)\b",
+            r"\b(?:what|which)\s+is\s+the\s+(?:current|latest)\b",
+            r"\b(?:latest|current|today'?s?)\s+(?:news|updates?|results?|score|price|release|version)\b",
+        ],
         "required_capability": "web.search",
         "preferred_plugin": "intelligent-search",
         "handler": "web_search",
@@ -23,6 +41,12 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     },
     "search.weather": {
         "triggers": ["weather", "forecast", "temperature", "rain today"],
+        "patterns": [
+            r"\bweather\b",
+            r"\bforecast\b",
+            r"\btemperature\b",
+            r"\b(?:rain|snow|storm|precipitation)\s+(?:today|tonight|tomorrow|this\s+week)\b",
+        ],
         "required_capability": "web.search",
         "preferred_plugin": "intelligent-search",
         "handler": "web_search",
@@ -53,11 +77,14 @@ class CapabilityDecision:
 
 
 def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> CapabilityDecision:
-    q = query.lower().strip()
-    
-    # Check specialized capability routes first
+    q = " ".join(query.lower().split())
+
+    # Specialized routes use bounded intent patterns, not substring hits. This
+    # keeps deterministic fallback available when Intelligence is offline while
+    # avoiding hijacks such as "what time complexity..." or incidental "latest".
     for intent, config in CAPABILITY_ROUTES.items():
-        if any(trigger in q for trigger in config.get("triggers", [])):
+        patterns = config.get("patterns", [])
+        if any(re.search(pattern, q, flags=re.IGNORECASE) for pattern in patterns):
             return CapabilityDecision(
                 intent=intent,
                 confidence=confidence,
