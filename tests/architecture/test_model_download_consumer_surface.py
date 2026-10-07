@@ -25,6 +25,8 @@ def test_download_validation_resolves_metadata_even_with_explicit_channel() -> N
 
     assert "Metadata is consumer and policy truth" in source
     assert '"license": info.license' in source
+    assert '"license_url": (' in source
+    assert 'f"https://huggingface.co/{model_id}"' in source
     assert '"total_size": info.total_size' in source
     assert '"description": info.description' in source
     assert "if channel is None:" in source
@@ -76,7 +78,10 @@ def test_recommended_models_are_config_driven_and_first_run_visible() -> None:
     assert '@router.get("/download/recommendations"' in route
     assert "Karen Recommended" in ui
     assert "Install Essentials" in ui
-    assert "Accept recommended model licenses" in ui
+    assert "Model licenses are accepted per model" in ui
+    assert "Review license" in ui
+    assert "recommendedLicenseAcceptances" in ui
+    assert '"license_url"' in config
 
 
 def test_model_library_root_is_backend_owned_and_user_configurable() -> None:
