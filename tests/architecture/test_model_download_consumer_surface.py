@@ -89,6 +89,9 @@ def test_recommended_models_are_config_driven_and_first_run_visible() -> None:
     assert "recommendationAcceptanceKey" in ui
     assert "item.resolved_revision || null" in ui
     assert "validation?.metadata.resolved_revision" in ui
+    assert "validationGenerationRef" in ui
+    assert "validationGeneration !== validationGenerationRef.current" in ui
+    assert "(validation.revision || '') === revision.trim()" in ui
     assert "void validateDownload(checked)" in ui
     assert "item.gated" in ui
     assert "(item.license || item.gated)" in ui
@@ -157,3 +160,14 @@ def test_model_runtime_telemetry_surfaces_existing_native_capabilities() -> None
         "disk_usage",
     ):
         assert token in ui
+
+
+def test_huggingface_license_metadata_uses_canonical_sdk_field() -> None:
+    source = (
+        ROOT
+        / "src/ai_karen_engine/core/model_runtime/management/model_orchestrator_service.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'getattr(remote, "card_data", None)' in source
+    assert 'getattr(remote, "cardData", None)' in source
+    assert 'license=card_data.get("license")' in source
