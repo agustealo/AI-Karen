@@ -206,7 +206,7 @@ def test_retry_preserves_install_alias_and_reviewed_revision() -> None:
     assert "revision: retryInstallRevision(job, storageSettings?.models_root)" in ui
     assert "validated_revision: retryValidatedRevision(job)" in ui
     assert "job.channel_id === 'core_spacy'" in ui
-    assert "const rootPrefix = `${normalizedRoot}/`;" in ui
+    assert "normalizedRoot === '/' ? '/'" in ui
     assert "normalizedPath.startsWith(rootPrefix)" in ui
     assert "const installPrefix = `${storageKey}/${modelDirectory}/`;" in ui
     assert "relativePath.startsWith(installPrefix)" in ui
