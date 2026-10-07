@@ -84,6 +84,15 @@ _RICH_RESULT_KEYS = (
     "artifacts",
 )
 
+_CONSUMER_TELEMETRY_KEYS = (
+    "agent_consensus",
+    "counterfactuals",
+    "execution_spans",
+    "vector_health",
+    "prompt_telemetry",
+    "usage",
+)
+
 _CANONICAL_META_KEYS = (
     "requested_provider",
     "requested_model",
@@ -155,7 +164,9 @@ class ChatRuntime:
                 ),
             )
 
+        decision_started = time.perf_counter()
         decision = await self._decide(request)
+        cortex_duration_ms = (time.perf_counter() - decision_started) * 1000.0
         await self._record_user_behavior_observation(request, decision)
         self._emitter.emit(
             RuntimeEventType.CORTEX_DECISION,
@@ -207,6 +218,13 @@ class ChatRuntime:
 
         memory_recall_meta: Dict[str, Any] = {}
         provider_meta: Dict[str, Any] = {}
+        runtime_spans: List[Dict[str, Any]] = [
+            {
+                "name": "cortex_decision",
+                "duration_ms": cortex_duration_ms,
+                "source": "runtime_observed",
+            }
+        ]
         if decision.memory_recall_required:
             memory_recall_meta = await self._consume_resolved_memory(request, decision)
             trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
@@ -220,6 +238,15 @@ class ChatRuntime:
                 decision,
                 memory_recall_meta,
             )
+            memory_latency_ms = float(memory_recall_meta.get("memory_latency_ms") or 0.0)
+            if memory_latency_ms > 0:
+                runtime_spans.append(
+                    {
+                        "name": "memory_recall",
+                        "duration_ms": memory_latency_ms,
+                        "source": "runtime_evidence_resolver",
+                    }
+                )
 
         try:
             if decision.topology.value == "reasoning":
@@ -313,8 +340,21 @@ class ChatRuntime:
                 ),
             )
 
+        provider_meta["execution_spans"] = [
+            *runtime_spans,
+            *list(provider_meta.get("execution_spans") or []),
+        ]
+
         if decision.memory_write_allowed:
+            persistence_started = time.perf_counter()
             await self._persist_memory(request, text, memory_recall_meta, plan)
+            provider_meta["execution_spans"].append(
+                {
+                    "name": "memory_persistence",
+                    "duration_ms": (time.perf_counter() - persistence_started) * 1000.0,
+                    "source": "runtime_observed",
+                }
+            )
 
         latency_ms = (time.time() - start) * 1000.0
         await self._record_trajectory_completion(
@@ -416,7 +456,9 @@ class ChatRuntime:
             )
             return
 
+        decision_started = time.perf_counter()
         decision = await self._decide(request)
+        cortex_duration_ms = (time.perf_counter() - decision_started) * 1000.0
         await self._record_user_behavior_observation(request, decision)
         plan = self._build_authorized_plan(request, decision)
         approval_gate = await self._resolve_human_approval_gate(request, decision)
@@ -483,6 +525,13 @@ class ChatRuntime:
         sequence += 1
 
         memory_recall_meta: Dict[str, Any] = {}
+        runtime_spans: List[Dict[str, Any]] = [
+            {
+                "name": "cortex_decision",
+                "duration_ms": cortex_duration_ms,
+                "source": "runtime_observed",
+            }
+        ]
         if decision.memory_recall_required:
             memory_recall_meta = await self._consume_resolved_memory(request, decision)
             trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
@@ -496,6 +545,15 @@ class ChatRuntime:
                 decision,
                 memory_recall_meta,
             )
+            memory_latency_ms = float(memory_recall_meta.get("memory_latency_ms") or 0.0)
+            if memory_latency_ms > 0:
+                runtime_spans.append(
+                    {
+                        "name": "memory_recall",
+                        "duration_ms": memory_latency_ms,
+                        "source": "runtime_evidence_resolver",
+                    }
+                )
 
         streamed_text = ""
         provider_meta: Dict[str, Any] = {}
@@ -668,13 +726,26 @@ class ChatRuntime:
                 )
                 sequence += 1
 
+        provider_meta["execution_spans"] = [
+            *runtime_spans,
+            *list(provider_meta.get("execution_spans") or []),
+        ]
+
         memory_persistence_failed = False
         if decision.memory_write_allowed and streamed_text:
+            persistence_started = time.perf_counter()
             await self._persist_memory(
                 request,
                 streamed_text,
                 memory_recall_meta,
                 plan,
+            )
+            provider_meta["execution_spans"].append(
+                {
+                    "name": "memory_persistence",
+                    "duration_ms": (time.perf_counter() - persistence_started) * 1000.0,
+                    "source": "runtime_observed",
+                }
             )
             memory_persistence_failed = (
                 memory_recall_meta.get("memory_persistence_status") == "failed"
@@ -686,11 +757,19 @@ class ChatRuntime:
             reason="generation_incomplete",
         )
         if streamed_text and generation_error is None:
+            transcript_started = time.perf_counter()
             transcript_result = await self._persist_transcript(
                 request,
                 streamed_text,
                 provider_meta,
                 trajectory_id=trajectory.trajectory_id,
+            )
+            provider_meta["execution_spans"].append(
+                {
+                    "name": "transcript_persistence",
+                    "duration_ms": (time.perf_counter() - transcript_started) * 1000.0,
+                    "source": "runtime_observed",
+                }
             )
         transcript_meta = transcript_result.to_metadata()
         transcript_persistence_failed = transcript_result.status in {
@@ -2126,6 +2205,10 @@ class ChatRuntime:
                 if value is not None and key not in meta:
                     meta[key] = value
         for key in _RICH_RESULT_KEYS:
+            value = chunk_meta.get(key)
+            if value is not None:
+                meta[key] = value
+        for key in _CONSUMER_TELEMETRY_KEYS:
             value = chunk_meta.get(key)
             if value is not None:
                 meta[key] = value
