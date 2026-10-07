@@ -30,7 +30,7 @@ def test_core_memory_resolution_has_no_construction_authority() -> None:
     assert "create_memory_service_factory" not in lazy
     assert 'name="memory_service"' not in lazy
     assert "create_unified_memory_service" not in lazy
-    assert "resolve_memory_runtime" in lazy
+    assert "resolve_memory_runtime" not in lazy
     assert "resolve_memory_runtime" in deps
     assert 'return await _resolve_service("memory_service")' not in deps
 
