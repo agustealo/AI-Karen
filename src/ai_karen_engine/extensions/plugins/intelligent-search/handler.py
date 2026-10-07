@@ -60,7 +60,12 @@ class WebSearchDispatcher(ExtensionBase):
 
         try:
             self._default_mode = self._read_manifest_setting("default_mode") or "general"
-            self._internet_service = InternetCapabilityService()
+            manifest_search = self._read_manifest_setting("search")
+            self._internet_service = InternetCapabilityService(
+                search_settings=manifest_search
+                if isinstance(manifest_search, dict)
+                else None
+            )
 
             # Pre-initialize handlers to set up search clients
             for mode, handler_class in MODE_HANDLER_MAP.items():
