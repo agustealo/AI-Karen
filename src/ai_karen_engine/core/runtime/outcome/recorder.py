@@ -110,7 +110,7 @@ class OutcomeRecorder:
                 "user_id": ctx.user_id,
                 "session_id": ctx.session_id,
                 "conversation_id": ctx.conversation_id,
-                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "recorded_at": datetime.now(timezone.utc),
                 "source": "runtime.execution",
             }
         )
@@ -216,7 +216,7 @@ class OutcomeRecorder:
                 "session_id": ctx.session_id,
                 "conversation_id": ctx.conversation_id,
                 "message_id": message_id,
-                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "recorded_at": datetime.now(timezone.utc),
                 "source": "user.feedback",
             }
         )
