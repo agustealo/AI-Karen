@@ -9,7 +9,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"\bwhat\s+time\s+is\s+it\b",
             r"\bwhat(?:'s|\s+is)\s+the\s+time\b",
             r"\bcurrent\s+time\b",
-            r"\btime\s+(?:is\s+it\s+)?in\s+[\w\s,./+-]+$",
+            r"^time\s+in\s+[\w\s,./+-]+\??$",
             r"\btime\s+now\b",
             r"\btimezone\s+(?:in|for|of)\b",
         ],
@@ -51,7 +51,6 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"\btemperature\s+(?:in|at|outside|today|tonight|tomorrow)\b",
             r"\b(?:will|is|does)\s+it\s+(?:rain|snow)\b",
             r"\b(?:rain|snow|storm|precipitation)\s+(?:today|tonight|tomorrow|this\s+week)\b",
-            r"^[\w.'’,-]+(?:[\s,]+[\w.'’,-]+)*\s+(?:weather|forecast)\??$",
         ],
         "required_capability": "web.search",
         "preferred_plugin": "intelligent-search",
@@ -62,6 +61,49 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "allow_llm_only": False,
     },
 }
+
+
+_NON_LOCATION_WEATHER_TERMS = {
+    "affect",
+    "affects",
+    "business",
+    "compare",
+    "describe",
+    "discuss",
+    "economic",
+    "economics",
+    "economist",
+    "economists",
+    "explain",
+    "financial",
+    "how",
+    "market",
+    "population",
+    "revenue",
+    "sales",
+    "why",
+}
+
+
+def _looks_like_location_first_weather(query: str) -> bool:
+    raw = " ".join((query or "").strip().split()).rstrip("?")
+    match = re.fullmatch(
+        r"(?P<location>[\w.'’,-]+(?:[\s,]+[\w.'’,-]+)*)\s+(?:weather|forecast)",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return False
+
+    location = match.group("location").strip(" ,")
+    if not location or len(location) > 160:
+        return False
+
+    words = {
+        token.lower()
+        for token in re.findall(r"[A-Za-z]+", location)
+    }
+    return bool(words) and not bool(words & _NON_LOCATION_WEATHER_TERMS)
 
 
 @dataclass(slots=True)
@@ -90,7 +132,13 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
     # avoiding hijacks such as "what time complexity..." or incidental "latest".
     for intent, config in CAPABILITY_ROUTES.items():
         patterns = config.get("patterns", [])
-        if any(re.search(pattern, q, flags=re.IGNORECASE) for pattern in patterns):
+        matched = any(
+            re.search(pattern, q, flags=re.IGNORECASE)
+            for pattern in patterns
+        )
+        if intent == "search.weather":
+            matched = matched or _looks_like_location_first_weather(query)
+        if matched:
             return CapabilityDecision(
                 intent=intent,
                 confidence=confidence,
