@@ -91,9 +91,14 @@ def _looks_like_location_phrase(value: str) -> bool:
     if not tokens:
         return False
 
-    # A one-token place shorthand such as "Detroit" is useful and bounded.
+    # A one-token shorthand must look like a proper place name. This keeps
+    # "Detroit weather" while rejecting conceptual subjects such as
+    # "election forecast" or "time in literature".
     if len(tokens) == 1:
-        return tokens[0].lower() not in _CONCEPTUAL_TIME_SUBJECTS
+        return (
+            tokens[0].lower() not in _CONCEPTUAL_TIME_SUBJECTS
+            and tokens[0][:1].isupper()
+        )
 
     # Comma-delimited place strings and title-cased proper names are positive
     # location shapes. Lowercase conceptual phrases are deliberately rejected.
