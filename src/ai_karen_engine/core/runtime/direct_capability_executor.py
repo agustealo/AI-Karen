@@ -59,11 +59,29 @@ class DirectCapabilityResult:
                 "required_capability",
                 "target",
                 "next_action",
+                "provider",
+                "search_providers",
+                "crawl_provider",
             )
             if self.payload.get(key) is not None
         }
+        payload_metadata = self.payload.get("metadata")
+        payload_metadata = (
+            payload_metadata if isinstance(payload_metadata, dict) else {}
+        )
+        reported_provider = str(
+            self.payload.get("provider")
+            or payload_metadata.get("provider")
+            or ""
+        ).strip()
+        actual_provider = (
+            reported_provider
+            if reported_provider and reported_provider != "none"
+            else self.source_id
+        )
         return {
-            "actual_provider": self.source_id,
+            "actual_provider": actual_provider,
+            "capability_executor": self.source_id,
             "actual_model": None,
             "runtime_engine": "direct_capability",
             "response_source": self.source or "capability_unavailable",
