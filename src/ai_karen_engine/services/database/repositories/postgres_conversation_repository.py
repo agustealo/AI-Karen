@@ -70,10 +70,10 @@ class PostgresConversationRepository(ConversationRepository):
                     text(
                         f"""
                         INSERT INTO {self._conversation_table}
-                            (conversation_id, tenant_id, user_id, title, is_active,
+                            (conversation_id, tenant_id, user_id, session_id, title, is_active,
                              summary, tags, conversation_metadata, created_at, updated_at)
                         VALUES
-                            (:id, :tenant_id, :user_id, :title, :is_active,
+                            (:id, :tenant_id, :user_id, :session_id, :title, :is_active,
                              :summary, :tags, :metadata, :created_at, :updated_at)
                         """
                     ),
@@ -81,6 +81,7 @@ class PostgresConversationRepository(ConversationRepository):
                         "id": conversation.id,
                         "tenant_id": conversation.tenant_id,
                         "user_id": conversation.user_id,
+                        "session_id": conversation.session_id,
                         "title": conversation.title,
                         "is_active": conversation.is_active,
                         "summary": conversation.summary,
@@ -113,7 +114,7 @@ class PostgresConversationRepository(ConversationRepository):
                 result = await session.execute(
                     text(
                         f"""
-                        SELECT conversation_id, tenant_id, user_id, title, is_active,
+                        SELECT conversation_id, tenant_id, user_id, session_id, title, is_active,
                                summary, tags, conversation_metadata, created_at, updated_at
                         FROM {self._conversation_table}
                         WHERE conversation_id = :id AND tenant_id = :tenant_id
@@ -147,12 +148,12 @@ class PostgresConversationRepository(ConversationRepository):
                 result = await session.execute(
                     text(
                         f"""
-                        SELECT conversation_id, tenant_id, user_id, title, is_active,
+                        SELECT conversation_id, tenant_id, user_id, session_id, title, is_active,
                                summary, tags, conversation_metadata, created_at, updated_at
                         FROM {self._conversation_table}
                         WHERE tenant_id = :tenant_id
                           AND user_id = :user_id
-                          AND (conversation_metadata::jsonb ->> 'session_id') = :session_id
+                          AND session_id = :session_id
                         ORDER BY updated_at DESC
                         LIMIT 1
                         """
@@ -200,7 +201,7 @@ class PostgresConversationRepository(ConversationRepository):
 
             where = " AND ".join(clauses)
             sql = f"""
-                SELECT conversation_id, tenant_id, user_id, title, is_active,
+                SELECT conversation_id, tenant_id, user_id, session_id, title, is_active,
                        summary, tags, conversation_metadata, created_at, updated_at
                 FROM {self._conversation_table}
                 WHERE {where}
@@ -278,7 +279,8 @@ class PostgresConversationRepository(ConversationRepository):
                     text(
                         f"""
                         UPDATE {self._conversation_table}
-                        SET title = :title,
+                        SET session_id = :session_id,
+                            title = :title,
                             is_active = :is_active,
                             summary = :summary,
                             tags = :tags,
@@ -290,6 +292,7 @@ class PostgresConversationRepository(ConversationRepository):
                     {
                         "id": conversation.id,
                         "tenant_id": conversation.tenant_id,
+                        "session_id": conversation.session_id,
                         "title": conversation.title,
                         "is_active": conversation.is_active,
                         "summary": conversation.summary,
@@ -564,6 +567,7 @@ class PostgresConversationRepository(ConversationRepository):
             id=str(row.conversation_id),
             tenant_id=str(row.tenant_id) if row.tenant_id else "",
             user_id=str(row.user_id) if row.user_id else "",
+            session_id=str(row.session_id) if row.session_id else None,
             title=row.title,
             is_active=row.is_active if row.is_active is not None else True,
             summary=row.summary,
