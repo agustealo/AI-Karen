@@ -30,6 +30,7 @@ from ai_karen_engine.core.model_runtime.management.model_orchestrator_service im
     E_INVALID,
     E_LICENSE,
     E_PERM,
+    E_VERIFY,
     ModelOrchestratorError,
     ModelOrchestratorService,
 )
