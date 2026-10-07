@@ -47,15 +47,16 @@ def build_prompt_token_insight(
     input_tokens = provider_input if provider_input is not None else estimated_input
     output_tokens = provider_output
     consumed = provider_total
-    if consumed is None and input_tokens is not None:
-        consumed = input_tokens + (output_tokens or 0)
+    if consumed is None and input_tokens is not None and output_tokens is not None:
+        consumed = input_tokens + output_tokens
 
     prompt_budget_headroom = None
     if prompt_budget is not None and input_tokens is not None:
         prompt_budget_headroom = max(0, prompt_budget - input_tokens)
 
+    model_context_usage_complete = consumed is not None
     model_context_headroom = None
-    if model_context_window is not None and consumed is not None:
+    if model_context_window is not None and model_context_usage_complete:
         model_context_headroom = max(0, model_context_window - consumed)
 
     source = "provider_reported" if provider_input is not None else "prompt_estimate"
@@ -87,13 +88,13 @@ def build_prompt_token_insight(
             else None
         ),
         "model_context_available": (
-            model_context_window is not None and consumed is not None
+            model_context_window is not None and model_context_usage_complete
         ),
         "model_context_window_tokens": model_context_window,
         "model_context_headroom_tokens": model_context_headroom,
         "model_context_used_percent": (
             round((consumed / model_context_window) * 100.0, 1)
-            if model_context_window and consumed is not None
+            if model_context_window and model_context_usage_complete
             else None
         ),
         "model_context_source": model_context_source or "unavailable",
