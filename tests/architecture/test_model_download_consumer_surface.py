@@ -49,3 +49,59 @@ def test_model_downloads_surface_is_guided_and_runtime_truthful() -> None:
     assert "Search the live model catalog" in source
     assert "JSON.stringify(discoveryProgress" in source
     assert "Technical discovery details" in source
+
+
+def test_recommended_models_are_config_driven_and_first_run_visible() -> None:
+    config = (ROOT / "config_assets/model_download_recommendations.json").read_text(
+        encoding="utf-8"
+    )
+    control = CONTROL.read_text(encoding="utf-8")
+    route = ROUTE.read_text(encoding="utf-8")
+    ui = UI.read_text(encoding="utf-8")
+
+    for model_id in (
+        "spacy/en_core_web_sm",
+        "distilbert/distilbert-base-uncased",
+        "Qwen/Qwen3-0.6B",
+    ):
+        assert model_id in config
+
+    assert '"core_spacy": ModelDownloadChannel(' in control
+    assert 'if channel.id == "core_spacy":' in control
+    assert '@router.get("/download/recommendations"' in route
+    assert "Karen Recommended" in ui
+    assert "Install Essentials" in ui
+    assert "Accept recommended model licenses" in ui
+
+
+def test_model_library_root_is_backend_owned_and_user_configurable() -> None:
+    control = CONTROL.read_text(encoding="utf-8")
+    route = ROUTE.read_text(encoding="utf-8")
+    ui = UI.read_text(encoding="utf-8")
+
+    assert "async def update_models_root(" in control
+    assert "Model library folder cannot change while downloads are active" in control
+    assert 'update_config(' in control
+    assert '@router.put("/download/storage"' in route
+    assert "Model Library Folder" in ui
+    assert "KAREN_MODELS_ROOT" in ui
+
+
+def test_legacy_thread_downloader_is_retired() -> None:
+    assert not (
+        ROOT
+        / "src/ai_karen_engine/core/model_runtime/discovery/model_library_service.py"
+    ).exists()
+    assert not (
+        ROOT
+        / "src/ai_karen_engine/integrations/README_MODEL_DOWNLOAD_MANAGER.md"
+    ).exists()
+
+
+def test_distilbert_resolves_canonical_download_layout() -> None:
+    source = (
+        ROOT
+        / "src/ai_karen_engine/core/intelligence/ml/encoders/distilbert.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'local_root.glob(f"*--{model_name}/main")' in source
