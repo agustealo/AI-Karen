@@ -574,6 +574,11 @@ class ModelDownloadControlService:
                 "storage_key": info.storage_key,
                 "tags": info.tags,
                 "license": info.license,
+                "license_url": (
+                    f"https://huggingface.co/{model_id}"
+                    if info.license
+                    else None
+                ),
                 "description": info.description,
                 "total_size": info.total_size,
                 "downloads": info.downloads,
