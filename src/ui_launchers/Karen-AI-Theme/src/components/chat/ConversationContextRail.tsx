@@ -73,6 +73,9 @@ interface CapabilityReceipt {
   requiresHumanGate: boolean;
   requiresResumability: boolean;
   workflowId?: string;
+  workflowVersion?: string;
+  policyDecisionId?: string;
+  policyReasonCodes: string[];
 }
 
 interface ExecutionUsage {
@@ -98,6 +101,14 @@ interface PlatformResourceSnapshot {
   disk: PlatformResourceMetric;
 }
 
+interface ProviderAttemptInsight {
+  provider?: string;
+  model?: string;
+  status?: string;
+  latencyMs?: number;
+  errorType?: string;
+}
+
 interface RuntimeInsight {
   requestedProvider?: string;
   requestedModel?: string;
@@ -112,7 +123,7 @@ interface RuntimeInsight {
   usedFallback: boolean;
   degradedMode: boolean;
   degradationReason?: string;
-  providerAttempts: number;
+  providerAttempts: ProviderAttemptInsight[];
   transcriptPersistenceStatus?: string;
   memoryPersistenceStatus?: string;
   correlationId?: string;
@@ -192,6 +203,9 @@ const normalizeCapabilityReceipt = (metadata: JsonRecord): CapabilityReceipt => 
     requiresHumanGate: receipt.requires_human_gate === true,
     requiresResumability: receipt.requires_resumability === true,
     workflowId: asString(receipt.workflow_id) || undefined,
+    workflowVersion: asString(receipt.workflow_version) || undefined,
+    policyDecisionId: asString(receipt.policy_decision_id) || undefined,
+    policyReasonCodes: asStringArray(receipt.policy_reason_codes),
   };
 };
 
@@ -270,8 +284,21 @@ const normalizeExecutionUsage = (
 
 const normalizeRuntimeInsight = (metadata: JsonRecord): RuntimeInsight => {
   const attempts = Array.isArray(metadata.provider_attempts)
-    ? metadata.provider_attempts.length
-    : 0;
+    ? metadata.provider_attempts
+        .map((raw): ProviderAttemptInsight | null => {
+          const attempt = asRecord(raw);
+          const provider = asString(attempt.provider) || undefined;
+          const model = asString(attempt.model) || undefined;
+          const status = asString(attempt.status) || undefined;
+          const latencyMs = asNumber(attempt.latency_ms);
+          const errorType = asString(attempt.error_type) || undefined;
+          if (!provider && !model && !status && latencyMs === undefined && !errorType) {
+            return null;
+          }
+          return { provider, model, status, latencyMs, errorType };
+        })
+        .filter((item): item is ProviderAttemptInsight => item !== null)
+    : [];
 
   return {
     requestedProvider: asString(metadata.requested_provider) || undefined,
@@ -597,9 +624,9 @@ function RailContent({
                   {runtime.runtimeEngine}
                 </Badge>
               )}
-              {runtime.providerAttempts > 0 && (
+              {runtime.providerAttempts.length > 0 && (
                 <Badge variant="outline" className="text-[9px]">
-                  {runtime.providerAttempts} provider attempt{runtime.providerAttempts === 1 ? '' : 's'}
+                  {runtime.providerAttempts.length} provider attempt{runtime.providerAttempts.length === 1 ? '' : 's'}
                 </Badge>
               )}
               {runtime.usedFallback && (
@@ -608,6 +635,50 @@ function RailContent({
                 </Badge>
               )}
             </div>
+
+            {runtime.providerAttempts.length > 0 && (
+              <div className="rounded-lg border border-border/60 bg-background/30 p-2.5">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="karen-panel-label text-[8px]">Provider route</p>
+                  <span className="text-[8px] text-muted-foreground">
+                    {runtime.providerAttempts.length} hop{runtime.providerAttempts.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  {runtime.providerAttempts.slice(0, 4).map((attempt, index) => (
+                    <div
+                      key={`${attempt.provider || 'provider'}:${attempt.model || 'model'}:${index}`}
+                      className="flex items-center gap-2 text-[9px]"
+                    >
+                      <span
+                        className={[
+                          'h-1.5 w-1.5 shrink-0 rounded-full',
+                          attempt.status === 'success'
+                            ? 'bg-emerald-500'
+                            : attempt.status === 'failed' || attempt.errorType
+                              ? 'bg-amber-500'
+                              : 'bg-muted-foreground/50',
+                        ].join(' ')}
+                      />
+                      <span className="min-w-0 flex-1 truncate">
+                        {attempt.provider || 'unknown provider'}
+                        {attempt.model ? ` · ${attempt.model}` : ''}
+                      </span>
+                      {attempt.status && (
+                        <span className="shrink-0 text-muted-foreground">
+                          {attempt.status}
+                        </span>
+                      )}
+                      {attempt.latencyMs !== undefined && (
+                        <span className="w-12 shrink-0 text-right font-mono text-muted-foreground">
+                          {Math.round(attempt.latencyMs)} ms
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {runtime.degradationReason && (
               <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2 text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
@@ -762,9 +833,30 @@ function RailContent({
               {capabilities.workflowId && (
                 <Badge variant="outline" className="max-w-full truncate text-[9px]">
                   workflow {capabilities.workflowId}
+                  {capabilities.workflowVersion ? ` · ${capabilities.workflowVersion}` : ''}
                 </Badge>
               )}
             </div>
+
+            {(capabilities.policyDecisionId || capabilities.policyReasonCodes.length > 0) && (
+              <div className="rounded-lg border border-border/60 bg-background/30 p-2.5">
+                <p className="karen-panel-label text-[8px]">Policy lineage</p>
+                {capabilities.policyDecisionId && (
+                  <p className="mt-1 truncate font-mono text-[8px] text-muted-foreground">
+                    {capabilities.policyDecisionId}
+                  </p>
+                )}
+                {capabilities.policyReasonCodes.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {capabilities.policyReasonCodes.slice(0, 5).map((reason) => (
+                      <Badge key={reason} variant="outline" className="text-[8px]">
+                        {reason.replace(/_/g, ' ')}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
