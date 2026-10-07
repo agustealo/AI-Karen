@@ -879,3 +879,40 @@ def test_first_run_config_honors_search_environment_override_without_persisting_
     assert loaded["search"]["wikipedia"]["priority"] == 500
     assert persisted["search"]["duckduckgo"]["enabled"] is True
     assert persisted["search"]["wikipedia"]["priority"] == 85
+
+
+def test_current_time_question_forms_route_live() -> None:
+    plain = resolve_capability_decision("What is the current time?")
+    tokyo = resolve_capability_decision("What's the current time in Tokyo?")
+
+    assert plain.intent == "time.current"
+    assert plain.requires_live_data is True
+    assert tokyo.intent == "time.current"
+    assert tokyo.requires_live_data is True
+
+
+def test_bare_freshness_nouns_accept_bounded_subject_suffixes() -> None:
+    ukraine = resolve_capability_decision("Latest news about Ukraine")
+    lions = resolve_capability_decision("Latest score for the Lions")
+    bitcoin = resolve_capability_decision("Current price of Bitcoin")
+    version_control = resolve_capability_decision(
+        "Current version control strategy"
+    )
+
+    assert ukraine.intent == "search.general"
+    assert lions.intent == "search.general"
+    assert bitcoin.intent == "search.general"
+    assert version_control.intent == "general.chat"
+
+
+def test_location_shorthand_allows_lowercase_name_connectors() -> None:
+    rio = resolve_capability_decision("Rio de Janeiro weather")
+    isle = resolve_capability_decision("Isle of Man weather")
+    rio_time = resolve_capability_decision("time in Rio de Janeiro")
+
+    assert rio.intent == "search.weather"
+    assert rio.requires_live_data is True
+    assert isle.intent == "search.weather"
+    assert isle.requires_live_data is True
+    assert rio_time.intent == "time.current"
+    assert rio_time.requires_live_data is True
