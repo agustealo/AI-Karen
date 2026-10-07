@@ -107,6 +107,19 @@ class PromptRuntimeService:
                 "policy": "hierarchical_prompt_truncation",
             }
         )
+        assembly_result.metadata["consumer_token_telemetry"] = {
+            "estimated_input_tokens": final_estimate.total_tokens,
+            "token_budget": working_request.token_budget,
+            "breakdown": {
+                "system": final_estimate.system_tokens,
+                "memory": final_estimate.memory_tokens,
+                "tools": final_estimate.tool_tokens,
+                "messages": final_estimate.message_tokens,
+                "overhead": final_estimate.overhead_tokens,
+            },
+            "context_policy": dict(assembly_result.metadata["context_policy"]),
+            "source": "prompt_runtime_estimate",
+        }
 
         if validate_schema and prompt_definition and prompt_definition.output_schema:
             validation_result = self.registry.validate_output_schema(
