@@ -181,6 +181,7 @@ class RuntimeEvidenceResolver:
                 "memory_resolver_id": self.MEMORY_RESOLVER_ID,
                 "memory_response_source": result.get("source", "neuro_recall"),
                 "memory_provenance": tuple(result.get("provenance") or ()),
+                "memory_retrieval_health": dict(result.get("retrieval_health") or {}),
             }
         )
         self._emitter.emit(
