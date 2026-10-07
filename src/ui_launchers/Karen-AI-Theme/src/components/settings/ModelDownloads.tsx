@@ -167,6 +167,7 @@ type RecommendedModel = {
   license_url?: string | null;
   gated?: boolean;
   resolved_revision?: string | null;
+  metadata_verified?: boolean;
   include_patterns?: string[] | null;
   capabilities: string[];
   app_consumers: string[];
@@ -1085,6 +1086,18 @@ export default function ModelDownloads({
     async (item: RecommendedModel) => {
       if (item.installed) return;
 
+      if (
+        policy?.require_license_acceptance &&
+        item.metadata_verified === false
+      ) {
+        toast({
+          title: 'Model access terms could not be verified',
+          description: `Refresh ${item.label} when the model source is reachable before installing it.`,
+          variant: 'destructive',
+        });
+        return;
+      }
+
       const licenseRequired = Boolean(
         policy?.require_license_acceptance && item.gated,
       );
@@ -1147,6 +1160,22 @@ export default function ModelDownloads({
       (item) => item.tier === 'essential' && !item.installed,
     );
     if (essentials.length === 0) return;
+
+    const unverifiedEssentials = essentials.filter(
+      (item) =>
+        policy?.require_license_acceptance &&
+        item.metadata_verified === false,
+    );
+    if (unverifiedEssentials.length > 0) {
+      toast({
+        title: 'Essential model access terms could not be verified',
+        description: `Refresh before installing all essentials: ${unverifiedEssentials
+          .map((item) => item.label)
+          .join(', ')}.`,
+        variant: 'destructive',
+      });
+      return;
+    }
 
     const missingAcceptances = essentials.filter(
       (item) =>
@@ -1522,6 +1551,16 @@ export default function ModelDownloads({
                     Used by: {item.app_consumers.join(', ')}
                   </div>
 
+                  {policy?.require_license_acceptance &&
+                    item.metadata_verified === false && (
+                      <div className="mt-3 rounded-xl border border-border/50 bg-muted/20 p-3 text-xs">
+                        <div className="font-semibold">Access terms unavailable</div>
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          Karen could not verify this model&apos;s current license or gated-access state. Refresh when the model source is reachable before installation.
+                        </p>
+                      </div>
+                    )}
+
                   {(item.license || item.gated) && (
                     <div className="mt-3 rounded-xl border border-border/50 bg-background/50 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1592,7 +1631,15 @@ export default function ModelDownloads({
                     variant={item.installed ? 'outline' : 'default'}
                     size="sm"
                     className="mt-4 w-full"
-                    disabled={item.installed || installingRecommended[item.id] || downloadsBlocked}
+                    disabled={
+                      item.installed ||
+                      installingRecommended[item.id] ||
+                      downloadsBlocked ||
+                      Boolean(
+                        policy?.require_license_acceptance &&
+                          item.metadata_verified === false,
+                      )
+                    }
                     onClick={() => void installRecommendedModel(item)}
                   >
                     {item.installed ? (
@@ -1602,6 +1649,9 @@ export default function ModelDownloads({
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
                         Queueing...
                       </>
+                    ) : policy?.require_license_acceptance &&
+                      item.metadata_verified === false ? (
+                      'Verification unavailable'
                     ) : (
                       <>
                         <Download className="mr-2 h-4 w-4" aria-hidden="true" />
