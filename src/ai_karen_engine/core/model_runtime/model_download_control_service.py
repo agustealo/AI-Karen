@@ -580,7 +580,7 @@ class ModelDownloadControlService:
                 "license_url": (
                     f"https://huggingface.co/{model_id}/tree/"
                     f"{quote(str(info.revision or revision or 'main'), safe='')}"
-                    if info.license
+                    if info.license or info.gated
                     else None
                 ),
                 "description": info.description,
@@ -1110,9 +1110,11 @@ class ModelDownloadControlService:
             try:
                 info = await self._orchestrator.get_model_info(model_id)
                 item["license"] = info.license
+                resolved_revision = info.revision or "main"
                 item["license_url"] = (
-                    f"https://huggingface.co/{model_id}"
-                    if info.license
+                    f"https://huggingface.co/{model_id}/tree/"
+                    f"{quote(str(resolved_revision), safe='')}"
+                    if info.license or info.gated
                     else None
                 )
                 item["gated"] = bool(info.gated)
