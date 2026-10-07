@@ -1575,6 +1575,10 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           preferred_model: preferredModel,
           temperature: 0.7,
           max_tokens: undefined,
+          timezone:
+            typeof Intl !== 'undefined'
+              ? Intl.DateTimeFormat().resolvedOptions().timeZone || undefined
+              : undefined,
           stream: true,
         };
 

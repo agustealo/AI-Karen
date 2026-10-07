@@ -13,7 +13,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     },
     "search.general": {
         "triggers": ["search the internet", "look online", "find current", "latest", "web search"],
-        "required_capability": "internet_search",
+        "required_capability": "web.search",
         "preferred_plugin": "intelligent-search",
         "handler": "web_search",
         "plugin_mode": "general",
@@ -23,7 +23,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     },
     "search.weather": {
         "triggers": ["weather", "forecast", "temperature", "rain today"],
-        "required_capability": "internet_search",
+        "required_capability": "web.search",
         "preferred_plugin": "intelligent-search",
         "handler": "web_search",
         "plugin_mode": "weather",

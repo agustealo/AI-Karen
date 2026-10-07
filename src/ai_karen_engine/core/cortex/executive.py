@@ -5,6 +5,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.intelligence import get_intelligence_runtime
+from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
 from ai_karen_engine.core.reasoning.contracts import normalize_reasoning_modes
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
@@ -78,8 +79,11 @@ class CortexExecutionDecider:
             analysis["workflow_required"] = True
 
         if tool_requirements or plugin_candidates:
-            graph_required = True
-            reason_codes.append("tool_or_plugin_requirements")
+            if analysis.get("direct_capability", False):
+                reason_codes.append("direct_capability_request")
+            else:
+                graph_required = True
+                reason_codes.append("tool_or_plugin_requirements")
         if analysis.get("workflow_required") or analysis.get("agent_delegation"):
             graph_required = True
             reason_codes.append("workflow_capability")
@@ -182,6 +186,7 @@ class CortexExecutionDecider:
                 "current_domains": list(analysis.get("topics", []) or []),
                 "max_model_calls": max_model_calls,
                 "max_steps": max_steps,
+                "direct_capability": bool(analysis.get("direct_capability", False)),
             }
         )
 
@@ -235,6 +240,8 @@ class CortexExecutionDecider:
         if not text or not text.strip():
             return self._default_analysis()
 
+        capability_decision = resolve_capability_decision(text)
+
         try:
             analysis = await self._intelligence.analyze(
                 text,
@@ -248,6 +255,16 @@ class CortexExecutionDecider:
             memory_policy = self._infer_memory_policy_from_analysis(analysis)
             workflow = self._infer_workflow_from_analysis(analysis)
             risk_level = self._assess_risk_level(analysis)
+
+            capability_decision = resolve_capability_decision(
+                text,
+                confidence=float(confidence),
+            )
+            direct_capability = self._apply_direct_capability_route(
+                capability_decision,
+                topology=topology,
+                capabilities=capabilities,
+            )
             raw_modes = getattr(analysis, "reasoning_modes", []) or []
             if isinstance(raw_modes, str):
                 raw_modes = [raw_modes]
@@ -273,8 +290,17 @@ class CortexExecutionDecider:
                     topology.setdefault("tool_requirements", []).append(tool)
 
             return {
-                "intent": intent_value,
-                "intent_confidence": confidence,
+                "intent": (
+                    capability_decision.intent
+                    if direct_capability
+                    else intent_value
+                ),
+                "intent_confidence": (
+                    max(float(confidence), float(capability_decision.confidence))
+                    if direct_capability
+                    else confidence
+                ),
+                "direct_capability": direct_capability,
                 "task_complexity": getattr(analysis, "task_complexity", "simple"),
                 "topics": list(getattr(analysis, "topics", []) or []),
                 "memory_relevance": getattr(analysis, "memory_relevance", 0.0),
@@ -320,7 +346,65 @@ class CortexExecutionDecider:
             }
         except Exception as exc:
             logger.warning("CORTEX analysis failed, using safe defaults: %s", exc)
-            return self._default_analysis()
+            fallback = self._default_analysis()
+            topology = {
+                "tool_requirements": fallback["tool_requirements"],
+                "plugin_candidates": fallback["plugin_candidates"],
+            }
+            capabilities = {
+                "required": fallback["required_capabilities"],
+                "forbidden": fallback["forbidden_capabilities"],
+            }
+            direct_capability = self._apply_direct_capability_route(
+                capability_decision,
+                topology=topology,
+                capabilities=capabilities,
+            )
+            if direct_capability:
+                fallback["intent"] = capability_decision.intent
+                fallback["intent_confidence"] = float(
+                    capability_decision.confidence
+                )
+                fallback["direct_capability"] = True
+            return fallback
+
+    @staticmethod
+    def _apply_direct_capability_route(
+        capability_decision: Any,
+        *,
+        topology: Dict[str, Any],
+        capabilities: Dict[str, Any],
+    ) -> bool:
+        if not capability_decision.requires_tool:
+            return False
+
+        preferred_plugin = str(
+            capability_decision.preferred_plugin or ""
+        ).strip()
+        handler = str(capability_decision.handler or "").strip()
+        required_capability = str(
+            capability_decision.capability or ""
+        ).strip()
+
+        plugin_candidates = topology.setdefault("plugin_candidates", [])
+        if preferred_plugin and preferred_plugin not in plugin_candidates:
+            plugin_candidates.append(preferred_plugin)
+
+        # Time Query is the governed time authority. Do not invent a parallel
+        # time tool because the compatibility route still exposes an old label.
+        tool_requirements = topology.setdefault("tool_requirements", [])
+        if (
+            handler
+            and capability_decision.intent != "time.current"
+            and handler not in tool_requirements
+        ):
+            tool_requirements.append(handler)
+
+        required = capabilities.setdefault("required", [])
+        if required_capability and required_capability not in required:
+            required.append(required_capability)
+
+        return True
 
     def _default_analysis(self) -> Dict[str, Any]:
         return {
@@ -332,6 +416,7 @@ class CortexExecutionDecider:
             "topology_signals": {},
             "risk_signals": {"categories": [], "score": 0.0},
             "capability_hints": {},
+            "direct_capability": False,
             "tool_requirements": [],
             "plugin_candidates": [],
             "required_capabilities": [],

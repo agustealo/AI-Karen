@@ -760,11 +760,18 @@ class ToolService:
     def _generate_cache_key(self, tool_input: ToolInput) -> str:
         """Generate cache key for tool input."""
         # Create deterministic key from tool name and parameters
+        user_context = dict(tool_input.user_context or {})
         key_data = {
             "tool_name": tool_input.tool_name,
-            "parameters": tool_input.parameters
+            "parameters": tool_input.parameters,
+            "user_id": str(tool_input.user_id or ""),
+            "tenant_id": str(user_context.get("tenant_id") or ""),
+            "session_id": str(tool_input.session_id or ""),
         }
-        return f"{tool_input.tool_name}:{hash(json.dumps(key_data, sort_keys=True))}"
+        return (
+            f"{tool_input.tool_name}:"
+            f"{hash(json.dumps(key_data, sort_keys=True, default=str))}"
+        )
     
     def _cleanup_cache(self):
         """Clean up expired cache entries."""
