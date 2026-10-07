@@ -2104,7 +2104,12 @@ export default function ModelDownloads({
                       disabled={validating}
                       onCheckedChange={(checked) => {
                         setAcceptLicense(checked);
-                        void validateDownload(checked);
+                        void validateDownload(
+                          checked,
+                          String(
+                            validation?.metadata.resolved_revision || '',
+                          ).trim() || null,
+                        );
                       }}
                     />
                   </div>
