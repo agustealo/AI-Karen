@@ -105,6 +105,8 @@ def test_recommended_models_are_config_driven_and_first_run_visible() -> None:
     assert 'item["metadata_verified"] = False' in control
     assert "Verification unavailable" in ui
     assert "Access terms unavailable" in ui
+    assert "I accept the ${String(validation.metadata.license)} license" in ui
+    assert "I accept these required model access terms" in ui
     assert 'item["gated"] = bool(info.gated)' in control
     assert "if info.license or info.gated" in control
     assert 'f"https://huggingface.co/{model_id}/tree/"' in control
