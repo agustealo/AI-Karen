@@ -148,13 +148,27 @@ class DirectCapabilityExecutor:
                     allowed_capabilities=list(plan.allowed_capabilities),
                     forbidden_capabilities=list(decision.forbidden_capabilities),
                 )
-                plugin_ok = plugin_result.status is ExecutionStatus.COMPLETED
+                payload = self._normalize_payload(plugin_result.result)
+                plugin_ok = (
+                    plugin_result.status is ExecutionStatus.COMPLETED
+                    and self._payload_succeeded(decision.intent, payload)
+                )
+                plugin_error = (
+                    plugin_result.error
+                    or payload.get("error")
+                    or payload.get("reason")
+                    or (
+                        None
+                        if plugin_ok
+                        else "capability_returned_no_live_data"
+                    )
+                )
                 attempts.append(
                     {
                         "type": "plugin",
                         "id": preferred_plugin,
                         "status": "success" if plugin_ok else "failed",
-                        "error": plugin_result.error,
+                        "error": plugin_error,
                         "latency_ms": (
                             time.perf_counter() - plugin_started
                         )
@@ -162,7 +176,6 @@ class DirectCapabilityExecutor:
                     }
                 )
                 if plugin_ok:
-                    payload = self._normalize_payload(plugin_result.result)
                     return self._success(
                         started,
                         decision.intent,
@@ -222,20 +235,34 @@ class DirectCapabilityExecutor:
                         or request.context.correlation_id,
                     )
                 )
+                payload = self._normalize_payload(tool_result.result)
+                tool_ok = bool(
+                    tool_result.success
+                    and self._payload_succeeded(decision.intent, payload)
+                )
+                tool_error = (
+                    tool_result.error
+                    or payload.get("error")
+                    or payload.get("reason")
+                    or (
+                        None
+                        if tool_ok
+                        else "capability_returned_no_live_data"
+                    )
+                )
                 attempts.append(
                     {
                         "type": "tool",
                         "id": tool_name,
-                        "status": "success" if tool_result.success else "failed",
-                        "error": tool_result.error,
+                        "status": "success" if tool_ok else "failed",
+                        "error": tool_error,
                         "latency_ms": (
                             time.perf_counter() - tool_started
                         )
                         * 1000.0,
                     }
                 )
-                if tool_result.success:
-                    payload = self._normalize_payload(tool_result.result)
+                if tool_ok:
                     return self._success(
                         started,
                         decision.intent,
@@ -271,6 +298,28 @@ class DirectCapabilityExecutor:
         if isinstance(value, dict):
             return dict(value)
         return {"value": value}
+
+    @staticmethod
+    def _payload_succeeded(intent: str, payload: Dict[str, Any]) -> bool:
+        if str(payload.get("status") or "").lower() in {"error", "failed"}:
+            return False
+        if payload.get("error"):
+            return False
+
+        if intent == "time.current":
+            return any(
+                payload.get(key) not in (None, "")
+                for key in ("value", "formatted", "time", "iso")
+            )
+
+        if intent in {"search.weather", "search.general"}:
+            return bool(
+                payload.get("extractedData")
+                or payload.get("results")
+                or payload.get("sources")
+            )
+
+        return bool(payload)
 
     def _success(
         self,
