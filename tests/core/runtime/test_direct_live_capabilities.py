@@ -20,6 +20,7 @@ from ai_karen_engine.core.runtime.direct_capability_executor import (
     DirectCapabilityExecutor,
 )
 from ai_karen_engine.services.plugin_service import ExecutionStatus
+from ai_karen_engine.services.tooling.tool_service import ToolInput, ToolService
 from ai_karen_engine.tools.web_search_tool import WebSearchTool
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
@@ -331,6 +332,29 @@ async def test_web_search_tool_forwards_runtime_scope_and_plan() -> None:
     assert context.tenant_id == TENANT_ID
     assert context.session_id == "session-1"
     assert context.conversation_id == CONVERSATION_ID
+
+
+
+
+def test_tool_cache_key_is_scoped_by_tenant_user_and_session() -> None:
+    service = ToolService()
+
+    first = ToolInput(
+        tool_name="web_search",
+        parameters={"query": "weather Detroit", "mode": "weather"},
+        user_context={"tenant_id": "tenant-a"},
+        user_id="user-a",
+        session_id="session-a",
+    )
+    second = ToolInput(
+        tool_name="web_search",
+        parameters={"query": "weather Detroit", "mode": "weather"},
+        user_context={"tenant_id": "tenant-b"},
+        user_id="user-b",
+        session_id="session-b",
+    )
+
+    assert service._generate_cache_key(first) != service._generate_cache_key(second)
 
 
 async def _weather_decision():
