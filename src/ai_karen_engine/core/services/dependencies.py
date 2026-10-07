@@ -175,23 +175,6 @@ async def get_persona_service() -> Any:
     return await _resolve_service("persona_service", factory)
 
 
-async def get_conversation_service() -> Any:
-    async def factory() -> Any:
-        from ai_karen_engine.database.client import MultiTenantPostgresClient
-        from ai_karen_engine.database.conversation_manager import ConversationManager
-        from ai_karen_engine.services.memory.conversation_service import ConversationService
-
-        memory_service = await get_memory_service()
-
-        base_manager = ConversationManager(db_client=MultiTenantPostgresClient())
-        return ConversationService(
-            base_conversation_manager=cast(Any, base_manager),
-            memory_service=memory_service,
-        )
-
-    return await _resolve_service("conversation_service", factory)
-
-
 async def get_plugin_service() -> Any:
     """Resolve plugin capability without triggering UI materialization."""
 
@@ -243,7 +226,6 @@ Config_Dep = Depends(get_current_config)
 LangGraphOrchestrator_Dep = Depends(get_langgraph_orchestrator_service)
 MemoryService_Dep = Depends(get_memory_service)
 ProfileService_Dep = Depends(get_profile_service)
-ConversationService_Dep = Depends(get_conversation_service)
 PluginService_Dep = Depends(get_plugin_service)
 ToolService_Dep = Depends(get_tool_service)
 AnalyticsService_Dep = Depends(get_analytics_service)
