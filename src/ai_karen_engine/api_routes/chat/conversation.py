@@ -237,7 +237,7 @@ def _canonical_snapshot_to_response(
         updated_at=conversation.updated_at.isoformat(),
         message_count=len(messages),
         last_message_at=last_message_at,
-        session_id=metadata.get("session_id"),
+        session_id=conversation.session_id,
         ui_context=dict(metadata.get("ui_context", {}) or {}),
         ai_insights=dict(metadata.get("ai_insights", {}) or {}),
         user_settings=dict(metadata.get("user_settings", {}) or {}),
@@ -418,7 +418,6 @@ async def create_conversation(
             context,
             metadata_updates={
                 "ui_source": request.ui_source.value,
-                "session_id": request.session_id,
                 "user_settings": request.user_settings or {},
                 "ui_context": request.ui_context or {},
                 "priority": request.priority.value,
