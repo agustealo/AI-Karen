@@ -91,6 +91,8 @@ def test_recommended_models_are_config_driven_and_first_run_visible() -> None:
     assert '"license_url"' in config
     assert 'item["license"] = info.license' in control
     assert 'item["gated"] = bool(info.gated)' in control
+    assert "if info.license or info.gated" in control
+    assert 'f"https://huggingface.co/{model_id}/tree/"' in control
 
 
 def test_model_library_root_is_backend_owned_and_user_configurable() -> None:
