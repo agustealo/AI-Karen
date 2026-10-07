@@ -132,6 +132,7 @@ type DownloadValidation = {
   channel_id: string;
   model_id: string;
   revision?: string | null;
+  requested_revision?: string | null;
   storage_key?: string | null;
   install_path?: string | null;
   detected_runtime?: string | null;
@@ -749,7 +750,7 @@ export default function ModelDownloads({
     Boolean(modelId.trim()) &&
     validation?.allowed === true &&
     validation.model_id === modelId.trim() &&
-    (validation.revision || '') === revision.trim() &&
+    (validation.requested_revision || '') === revision.trim() &&
     !startingDownload &&
     !channelBlocked &&
     !downloadsBlocked;
@@ -803,9 +804,14 @@ export default function ModelDownloads({
     }
   }, [loadState]);
 
-  const validateDownload = useCallback(async (licenseAccepted = acceptLicense) => {
+  const validateDownload = useCallback(async (
+    licenseAccepted = acceptLicense,
+    reviewedRevision?: string | null,
+  ) => {
     const requestedModelId = modelId.trim();
     const requestedRevision = revision.trim();
+    const revisionForValidation =
+      String(reviewedRevision || '').trim() || requestedRevision;
     const validationGeneration = ++validationGenerationRef.current;
 
     if (!requestedModelId) {
@@ -824,7 +830,7 @@ export default function ModelDownloads({
         ENDPOINTS.validate,
         {
           model_id: requestedModelId,
-          revision: requestedRevision || null,
+          revision: revisionForValidation || null,
           channel_id: currentChannel?.id || null,
           trust_remote_code: trustRemoteCode,
           accept_license: licenseAccepted,
@@ -837,7 +843,10 @@ export default function ModelDownloads({
         return;
       }
 
-      setValidation(response);
+      setValidation({
+        ...response,
+        requested_revision: requestedRevision || null,
+      });
 
       toast({
         title: response.allowed ? 'Validation passed' : 'Validation blocked',
@@ -908,10 +917,9 @@ export default function ModelDownloads({
         status: string;
       }>(ENDPOINTS.download, {
         model_id: requestedModelId,
-        revision:
-          String(validation?.metadata.resolved_revision || '').trim() ||
-          revision.trim() ||
-          null,
+        revision: revision.trim() || null,
+        validated_revision:
+          String(validation?.metadata.resolved_revision || '').trim() || null,
         channel_id: currentChannel?.id || null,
         include_patterns: parseCsvList(includePatterns),
         exclude_patterns: parseCsvList(excludePatterns),
@@ -1121,7 +1129,8 @@ export default function ModelDownloads({
       try {
         await apiClient.post(ENDPOINTS.download, {
           model_id: item.model_id,
-          revision: item.resolved_revision || null,
+          revision: null,
+          validated_revision: item.resolved_revision || null,
           channel_id: item.channel_id,
           include_patterns: item.include_patterns || [],
           exclude_patterns: [],
@@ -1201,7 +1210,8 @@ export default function ModelDownloads({
         );
         await apiClient.post(ENDPOINTS.download, {
           model_id: item.model_id,
-          revision: item.resolved_revision || null,
+          revision: null,
+          validated_revision: item.resolved_revision || null,
           channel_id: item.channel_id,
           include_patterns: item.include_patterns || [],
           exclude_patterns: [],
