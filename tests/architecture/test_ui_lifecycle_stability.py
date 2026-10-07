@@ -87,7 +87,8 @@ def test_transient_session_load_failure_preserves_conversation_identity() -> Non
     load = chat.split("// Load a specific session", 1)[1].split(
         "// Refresh sessions list", 1
     )[0]
-    transient = load.split(
+    outer_catch = load.rsplit("    } catch (err) {", 1)[1]
+    transient = outer_catch.split(
         "if (err instanceof ApiError && err.status === 404)", 1
     )[1].split("} finally {", 1)[0]
 
