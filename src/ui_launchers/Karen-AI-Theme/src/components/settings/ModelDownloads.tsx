@@ -187,15 +187,38 @@ type RecommendedModelsResponse = {
   essential_total: number;
 };
 
-const retryInstallRevision = (job: DownloadJob): string | null => {
+const IMMUTABLE_MODEL_REVISION = /^[0-9a-f]{40,64}$/i;
+
+const retryValidatedRevision = (job: DownloadJob): string | null => {
+  const revision = String(job.revision || '').trim();
+  return IMMUTABLE_MODEL_REVISION.test(revision) ? revision : null;
+};
+
+const retryInstallRevision = (
+  job: DownloadJob,
+  modelsRoot?: string | null,
+): string | null => {
   if (job.channel_id === 'core_spacy') {
     return null;
   }
 
+  const persistedRevision = String(job.revision || '').trim();
+  if (persistedRevision && !IMMUTABLE_MODEL_REVISION.test(persistedRevision)) {
+    return persistedRevision === 'main' ? null : persistedRevision;
+  }
+
   const normalizedPath = String(job.install_path || '')
-    .replace(/\\/g, '/')
+    .replace(/\\\\/g, '/')
     .replace(/\/+$/, '');
-  if (!normalizedPath) {
+  const normalizedRoot = String(modelsRoot || '')
+    .replace(/\\\\/g, '/')
+    .replace(/\/+$/, '');
+  if (!normalizedPath || !normalizedRoot) {
+    return null;
+  }
+
+  const rootPrefix = `${normalizedRoot}/`;
+  if (!normalizedPath.startsWith(rootPrefix)) {
     return null;
   }
 
@@ -204,19 +227,19 @@ const retryInstallRevision = (job: DownloadJob): string | null => {
     return null;
   }
 
-  const modelDirectory = `${owner}--${repository}`;
   const storageKey = String(job.storage_key || '').trim();
   if (!storageKey) {
     return null;
   }
 
-  const marker = `/${storageKey}/${modelDirectory}/`;
-  const markerIndex = normalizedPath.indexOf(marker);
-  if (markerIndex < 0) {
+  const modelDirectory = `${owner}--${repository}`;
+  const relativePath = normalizedPath.slice(rootPrefix.length);
+  const installPrefix = `${storageKey}/${modelDirectory}/`;
+  if (!relativePath.startsWith(installPrefix)) {
     return null;
   }
 
-  const installAlias = normalizedPath.slice(markerIndex + marker.length);
+  const installAlias = relativePath.slice(installPrefix.length);
   return installAlias && installAlias !== 'main' ? installAlias : null;
 };
 
@@ -1046,8 +1069,8 @@ export default function ModelDownloads({
       try {
         await apiClient.post(ENDPOINTS.download, {
           model_id: job.model_id,
-          revision: retryInstallRevision(job),
-          validated_revision: job.revision || null,
+          revision: retryInstallRevision(job, storageSettings?.models_root),
+          validated_revision: retryValidatedRevision(job),
           channel_id: job.channel_id || null,
           include_patterns: job.include_patterns || [],
           exclude_patterns: job.exclude_patterns || [],
@@ -1075,7 +1098,7 @@ export default function ModelDownloads({
         });
       }
     },
-    [refreshAll, toast],
+    [refreshAll, storageSettings?.models_root, toast],
   );
 
   const removeInstalledModel = useCallback(
