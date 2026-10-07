@@ -86,7 +86,10 @@ def test_recommended_models_are_config_driven_and_first_run_visible() -> None:
     assert "recommendedLicenseAcceptances" in ui
     assert "void validateDownload(checked)" in ui
     assert "item.gated" in ui
+    assert "(item.license || item.gated)" in ui
+    assert "Restricted model access" in ui
     assert '"license_url"' in config
+    assert 'item["license"] = info.license' in control
     assert 'item["gated"] = bool(info.gated)' in control
 
 
