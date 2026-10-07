@@ -40,7 +40,7 @@ describe('ConversationContextRail', () => {
     );
 
     expect(screen.getByText('Follow up on the interview')).toBeTruthy();
-    expect(screen.getByText('primary')).toBeTruthy();
+    expect(screen.getByText('primary continuity')).toBeTruthy();
     expect(screen.getByText('calendar.lookup')).toBeTruthy();
     expect(screen.getByText('calendar')).toBeTruthy();
     expect(screen.getByText('planner')).toBeTruthy();

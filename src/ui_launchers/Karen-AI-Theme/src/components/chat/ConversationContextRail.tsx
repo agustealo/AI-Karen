@@ -62,6 +62,25 @@ interface ExecutionUsage {
   providers: string[];
 }
 
+interface RecallInsight {
+  id: string;
+  content: string;
+  relevance?: number;
+  confidence?: number;
+}
+
+interface TurnIntelligence {
+  intent?: string;
+  intentConfidence?: number;
+  recallStatus?: string;
+  recallCount: number;
+  recalled: RecallInsight[];
+  memoryFormationStatus?: string;
+  memoryCandidateCount: number;
+  memoryAdmittedCount: number;
+  memoryPersistedCount: number;
+}
+
 const asRecord = (value: unknown): JsonRecord =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? (value as JsonRecord)
@@ -142,7 +161,10 @@ const normalizeContinuity = (metadata: JsonRecord): {
   return { candidates, ambiguous };
 };
 
-const normalizeExecutionUsage = (steps: AgentStepEvent[]): ExecutionUsage => {
+const normalizeExecutionUsage = (
+  steps: AgentStepEvent[],
+  responseMetadata: JsonRecord,
+): ExecutionUsage => {
   const tools: string[] = [];
   const plugins: string[] = [];
   const providers: string[] = [];
@@ -163,10 +185,47 @@ const normalizeExecutionUsage = (steps: AgentStepEvent[]): ExecutionUsage => {
     if (provider) providers.push(provider);
   }
 
+  const actualProvider = asString(responseMetadata.actual_provider);
+  const actualModel = asString(responseMetadata.actual_model);
+  if (actualProvider) {
+    providers.push(actualModel ? `${actualProvider} · ${actualModel}` : actualProvider);
+  }
+
   return {
     tools: unique(tools),
     plugins: unique(plugins),
     providers: unique(providers),
+  };
+};
+
+const normalizeTurnIntelligence = (metadata: JsonRecord): TurnIntelligence => {
+  const memoryContext = asRecord(metadata.memory_context);
+  const rawRecall = Array.isArray(memoryContext.recall) ? memoryContext.recall : [];
+  const recalled = rawRecall
+    .map((raw): RecallInsight | null => {
+      const item = asRecord(raw);
+      const id = asString(item.id);
+      const content = asString(item.content);
+      if (!content) return null;
+      return {
+        id: id || content.slice(0, 48),
+        content,
+        relevance: asNumber(item.relevance),
+        confidence: asNumber(item.confidence),
+      };
+    })
+    .filter((item): item is RecallInsight => item !== null);
+
+  return {
+    intent: asString(metadata.intent) || undefined,
+    intentConfidence: asNumber(metadata.intent_confidence),
+    recallStatus: asString(metadata.memory_recall_status) || undefined,
+    recallCount: asNumber(metadata.memory_recall_count) ?? recalled.length,
+    recalled,
+    memoryFormationStatus: asString(metadata.memory_formation_status) || undefined,
+    memoryCandidateCount: asNumber(metadata.memory_candidate_count) ?? 0,
+    memoryAdmittedCount: asNumber(metadata.memory_admitted_count) ?? 0,
+    memoryPersistedCount: asNumber(metadata.memory_persisted_count) ?? 0,
   };
 };
 
@@ -193,9 +252,13 @@ function RailContent({
     () => normalizeCapabilityReceipt(metadata || {}),
     [metadata],
   );
+  const turnIntelligence = useMemo(
+    () => normalizeTurnIntelligence(metadata || {}),
+    [metadata],
+  );
   const usage = useMemo(
-    () => normalizeExecutionUsage(agentSteps),
-    [agentSteps],
+    () => normalizeExecutionUsage(agentSteps, metadata || {}),
+    [agentSteps, metadata],
   );
 
   const hasCapabilityTruth =
@@ -229,12 +292,83 @@ function RailContent({
             Now
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2">
-          {continuity.candidates.length === 0 ? (
-            <EmptyTruth>
-              No continuity candidates were reported for this turn.
-            </EmptyTruth>
-          ) : (
+        <CardContent className="space-y-3">
+          {(turnIntelligence.intent || turnIntelligence.recallStatus) && (
+            <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5">
+              <p className="karen-panel-label text-[9px]">Turn understanding</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {turnIntelligence.intent && (
+                  <Badge variant="secondary" className="text-[9px]">
+                    {turnIntelligence.intent.replace(/_/g, ' ')}
+                  </Badge>
+                )}
+                {confidenceLabel(turnIntelligence.intentConfidence) && (
+                  <Badge variant="outline" className="text-[9px]">
+                    {confidenceLabel(turnIntelligence.intentConfidence)} intent confidence
+                  </Badge>
+                )}
+                {turnIntelligence.recallStatus && (
+                  <Badge variant="outline" className="text-[9px]">
+                    memory {turnIntelligence.recallStatus.replace(/_/g, ' ')}
+                  </Badge>
+                )}
+              </div>
+            </div>
+          )}
+
+          {turnIntelligence.recalled.length > 0 && (
+            <div className="space-y-2">
+              <p className="karen-panel-label text-[9px]">
+                Context recalled ({turnIntelligence.recallCount})
+              </p>
+              {turnIntelligence.recalled.slice(0, 4).map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-lg border border-border/70 bg-background/40 p-2.5"
+                >
+                  <p className="text-xs leading-relaxed">{item.content}</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {confidenceLabel(item.relevance) && (
+                      <Badge variant="outline" className="text-[9px]">
+                        {confidenceLabel(item.relevance)} relevance
+                      </Badge>
+                    )}
+                    {confidenceLabel(item.confidence) && (
+                      <Badge variant="outline" className="text-[9px]">
+                        {confidenceLabel(item.confidence)} confidence
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {(turnIntelligence.memoryFormationStatus ||
+            turnIntelligence.memoryCandidateCount > 0 ||
+            turnIntelligence.memoryPersistedCount > 0) && (
+            <div className="rounded-lg border border-border/70 bg-background/40 p-2.5">
+              <p className="karen-panel-label text-[9px]">Learning this turn</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {turnIntelligence.memoryFormationStatus && (
+                  <Badge variant="outline" className="text-[9px]">
+                    {turnIntelligence.memoryFormationStatus.replace(/_/g, ' ')}
+                  </Badge>
+                )}
+                <Badge variant="outline" className="text-[9px]">
+                  {turnIntelligence.memoryCandidateCount} candidates
+                </Badge>
+                <Badge variant="outline" className="text-[9px]">
+                  {turnIntelligence.memoryAdmittedCount} admitted
+                </Badge>
+                <Badge variant="outline" className="text-[9px]">
+                  {turnIntelligence.memoryPersistedCount} persisted
+                </Badge>
+              </div>
+            </div>
+          )}
+
+          {continuity.candidates.length > 0 ? (
             continuity.candidates.map((candidate) => (
               <div
                 key={candidate.id}
@@ -250,7 +384,7 @@ function RailContent({
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {candidate.primary && (
                         <Badge variant="secondary" className="text-[9px]">
-                          primary
+                          primary continuity
                         </Badge>
                       )}
                       {candidate.sourceType && (
@@ -273,6 +407,13 @@ function RailContent({
                 </div>
               </div>
             ))
+          ) : (
+            turnIntelligence.recalled.length === 0 &&
+            !turnIntelligence.intent && (
+              <EmptyTruth>
+                No memory, intent, or continuity insight was reported for this turn.
+              </EmptyTruth>
+            )
           )}
         </CardContent>
       </Card>
@@ -488,7 +629,7 @@ export default function ConversationContextRail(
             Conversation intelligence
           </p>
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-            Canonical continuity, permissions, and execution activity for this turn.
+            What Karen understood, remembered, learned, and actually used for this turn.
           </p>
         </div>
         <RailContent {...props} />
