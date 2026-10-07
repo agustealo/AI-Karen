@@ -1,15 +1,23 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
   AlertTriangle,
   Bot,
   Brain,
+  Cpu,
+  Database,
   CheckCircle2,
   ChevronRight,
   Clock3,
+  Gauge,
+  GitBranch,
+  MemoryStick,
   PlugZap,
+  Route,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Wrench,
 } from 'lucide-react';
@@ -17,6 +25,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import type { AgentStepEvent } from '@/lib/types';
+import { apiClient } from '@/lib/api';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -60,6 +69,45 @@ interface ExecutionUsage {
   tools: string[];
   plugins: string[];
   providers: string[];
+}
+
+interface PlatformResourceMetric {
+  available: boolean;
+  usage_percent?: number | null;
+  used_bytes?: number | null;
+  available_bytes?: number | null;
+  total_bytes?: number | null;
+}
+
+interface PlatformResourceSnapshot {
+  timestamp: number;
+  cpu: PlatformResourceMetric;
+  memory: PlatformResourceMetric;
+  gpu: PlatformResourceMetric;
+  vram: PlatformResourceMetric;
+  disk: PlatformResourceMetric;
+}
+
+interface RuntimeInsight {
+  requestedProvider?: string;
+  requestedModel?: string;
+  actualProvider?: string;
+  actualModel?: string;
+  runtimeEngine?: string;
+  locality?: string;
+  responseSource?: string;
+  mode?: string;
+  latencyMs?: number;
+  fallbackLevel: number;
+  usedFallback: boolean;
+  degradedMode: boolean;
+  degradationReason?: string;
+  providerAttempts: number;
+  transcriptPersistenceStatus?: string;
+  memoryPersistenceStatus?: string;
+  correlationId?: string;
+  requestId?: string;
+  trajectoryId?: string;
 }
 
 interface RecallInsight {
@@ -198,6 +246,37 @@ const normalizeExecutionUsage = (
   };
 };
 
+const normalizeRuntimeInsight = (metadata: JsonRecord): RuntimeInsight => {
+  const attempts = Array.isArray(metadata.provider_attempts)
+    ? metadata.provider_attempts.length
+    : 0;
+
+  return {
+    requestedProvider: asString(metadata.requested_provider) || undefined,
+    requestedModel: asString(metadata.requested_model) || undefined,
+    actualProvider: asString(metadata.actual_provider) || undefined,
+    actualModel: asString(metadata.actual_model) || undefined,
+    runtimeEngine: asString(metadata.runtime_engine) || undefined,
+    locality: asString(metadata.locality) || undefined,
+    responseSource: asString(metadata.response_source) || undefined,
+    mode: asString(metadata.mode) || undefined,
+    latencyMs: asNumber(metadata.latency_ms),
+    fallbackLevel: asNumber(metadata.fallback_level) ?? 0,
+    usedFallback:
+      metadata.used_fallback === true || (asNumber(metadata.fallback_level) ?? 0) > 0,
+    degradedMode: metadata.degraded_mode === true,
+    degradationReason: asString(metadata.degradation_reason) || undefined,
+    providerAttempts: attempts,
+    transcriptPersistenceStatus:
+      asString(metadata.transcript_persistence_status) || undefined,
+    memoryPersistenceStatus:
+      asString(metadata.memory_persistence_status) || undefined,
+    correlationId: asString(metadata.correlation_id) || undefined,
+    requestId: asString(metadata.request_id) || undefined,
+    trajectoryId: asString(metadata.trajectory_id) || undefined,
+  };
+};
+
 const normalizeTurnIntelligence = (metadata: JsonRecord): TurnIntelligence => {
   const memoryContext = asRecord(metadata.memory_context);
   const rawRecall = Array.isArray(memoryContext.recall) ? memoryContext.recall : [];
@@ -233,6 +312,21 @@ const confidenceLabel = (value?: number): string | null => {
   if (value === undefined) return null;
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 };
+
+const formatBytes = (value?: number | null): string => {
+  if (!value || value <= 0) return 'Unavailable';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let amount = value;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit += 1;
+  }
+  return `${amount >= 10 || unit === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`;
+};
+
+const percentLabel = (value?: number | null): string =>
+  value == null ? 'Unavailable' : `${Math.round(value)}%`;
 
 const EmptyTruth = ({ children }: { children: React.ReactNode }) => (
   <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>
