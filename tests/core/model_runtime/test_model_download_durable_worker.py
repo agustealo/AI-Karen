@@ -579,7 +579,7 @@ async def test_validation_fails_closed_when_access_metadata_is_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_start_download_pins_resolved_validation_revision(
+async def test_start_download_pins_reviewed_sha_but_keeps_main_install_slot(
     tmp_path: Path,
 ) -> None:
     repository = FakeModelDownloadRepository()
@@ -599,12 +599,45 @@ async def test_start_download_pins_resolved_validation_revision(
     job = await service.start_download(
         {
             "model_id": "test-owner/test-model",
+            "revision": None,
+            "validated_revision": "resolved-sha-123",
             "channel_id": "core_runtime_transformers",
         },
         {"user_id": "test-user"},
     )
 
     assert job["revision"] == "resolved-sha-123"
+    assert Path(job["install_path"]).name == "main"
     service._orchestrator.get_model_info.assert_awaited_once()
     call = service._orchestrator.get_model_info.await_args
+    assert call.args[1] == "resolved-sha-123"
     assert call.kwargs["refresh_remote"] is True
+
+
+@pytest.mark.asyncio
+async def test_start_download_rejects_changed_reviewed_revision(
+    tmp_path: Path,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    service._orchestrator.get_model_info = AsyncMock(
+        return_value=ModelInfo(
+            model_id="test-owner/test-model",
+            owner="test-owner",
+            repository="test-model",
+            storage_key="transformers",
+            license=None,
+            gated=False,
+            revision="different-sha",
+        )
+    )
+
+    with pytest.raises(ModelOrchestratorError, match="revision changed"):
+        await service.start_download(
+            {
+                "model_id": "test-owner/test-model",
+                "validated_revision": "reviewed-sha",
+                "channel_id": "core_runtime_transformers",
+            },
+            {"user_id": "test-user"},
+        )
