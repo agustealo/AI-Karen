@@ -14,6 +14,9 @@ const AUTH_FAILURE_MESSAGE =
 const NETWORK_FAILURE_MESSAGE =
   'Karen could not reach the chat service. Check your connection and try again.';
 
+const NO_ACTIVE_MODEL_PROVIDERS_MESSAGE =
+  'Karen could not find an active model provider. Check local model availability or provider configuration and try again.';
+
 const cleanString = (value: unknown): string => {
   return typeof value === 'string' ? value.trim() : '';
 };
@@ -138,7 +141,7 @@ const getStatusMessage = (status: number, fallbackDetail: string): string => {
       fallbackDetail.toLowerCase().includes('no configured provider could generate a response') ||
       fallbackDetail.toLowerCase().includes('expression engine is currently inactive')
     ) {
-      return NO_ACTIVE_CLOUD_PROVIDERS_MESSAGE;
+      return NO_ACTIVE_MODEL_PROVIDERS_MESSAGE;
     }
 
     return fallbackDetail || DEFAULT_DEGRADED_MESSAGE;
@@ -201,7 +204,7 @@ export const getDegradedResponseMessage = (error: unknown): string => {
         message.toLowerCase().includes('no configured provider could generate a response') ||
         message.toLowerCase().includes('expression engine is currently inactive')
       ) {
-        return NO_ACTIVE_CLOUD_PROVIDERS_MESSAGE;
+        return NO_ACTIVE_MODEL_PROVIDERS_MESSAGE;
       }
       return message;
     }
@@ -213,7 +216,7 @@ export const getDegradedResponseMessage = (error: unknown): string => {
       message.toLowerCase().includes('no configured provider could generate a response') ||
       message.toLowerCase().includes('expression engine is currently inactive')
     ) {
-      return NO_ACTIVE_CLOUD_PROVIDERS_MESSAGE;
+      return NO_ACTIVE_MODEL_PROVIDERS_MESSAGE;
     }
     return message;
   }
