@@ -504,8 +504,8 @@ class DirectCapabilityExecutor:
     @staticmethod
     def _extract_time_location(query: str) -> Optional[str]:
         patterns = (
-            r"\btime\s+(?:is\s+it\s+)?in\s+(.+?)[?!.]*$",
-            r"\bcurrent\s+time\s+in\s+(.+?)[?!.]*$",
+            r"\btime\s+(?:is\s+it\s+)?(?:in|for)\s+(.+?)[?!.]*$",
+            r"\bcurrent\s+time\s+(?:in|for)\s+(.+?)[?!.]*$",
         )
         for pattern in patterns:
             match = re.search(pattern, query, flags=re.IGNORECASE)
