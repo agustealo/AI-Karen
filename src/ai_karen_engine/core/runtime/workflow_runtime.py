@@ -42,7 +42,7 @@ class WorkflowRuntime:
         plan: Optional[AuthorizedExecutionPlan] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         ctx = request.context
-        conversation_id = ctx.conversation_id or _normalize(ctx.session_id)
+        conversation_id = ctx.require_conversation_id()
         config = self._build_config(request, ctx, conversation_id, decision, plan)
 
         orchestrator = await self._get_orchestrator()
@@ -61,7 +61,7 @@ class WorkflowRuntime:
         plan: Optional[AuthorizedExecutionPlan] = None,
     ) -> AsyncIterator[_SharedChatStreamChunk]:
         ctx = request.context
-        conversation_id = ctx.conversation_id or _normalize(ctx.session_id)
+        conversation_id = ctx.require_conversation_id()
         config = self._build_config(request, ctx, conversation_id, decision, plan)
 
         try:
@@ -388,12 +388,6 @@ class WorkflowRuntime:
         if isinstance(chunk, str):
             return chunk, {}
         return "", {}
-
-
-def _normalize(session_id: Optional[str]) -> str:
-    from ai_karen_engine.utils.chat_helpers import normalize_session_id
-
-    return normalize_session_id(session_id)
 
 
 def _dataclass_dict(value: Any) -> Dict[str, Any]:
