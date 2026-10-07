@@ -21,7 +21,6 @@ from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
 )
 from ai_karen_engine.core.services.dependencies import (
     bypass_user_context_func,
-    get_conversation_service,
     get_current_tenant_id,
 )
 from ai_karen_engine.database.conversation_manager import MessageRole
@@ -33,7 +32,6 @@ from ai_karen_engine.services.error_response_schemas import (
 )
 from ai_karen_engine.services.memory.conversation_service import (
     ConversationPriority,
-    ConversationService,
     UISource,
 )
 from ai_karen_engine.utils.dependency_checks import import_fastapi, import_pydantic
@@ -53,16 +51,6 @@ def _require_user_id(user_ctx: Dict[str, Any]) -> str:
     if not isinstance(user_id, str) or not user_id.strip():
         raise HTTPException(status_code=401, detail="Missing authenticated user id")
     return user_id.strip()
-
-
-def _has_admin_role(user_ctx: Dict[str, Any]) -> bool:
-    roles = user_ctx.get("roles") or []
-    return any(str(role).strip().lower() == "admin" for role in roles)
-
-
-def _require_admin_role(user_ctx: Dict[str, Any]) -> None:
-    if not _has_admin_role(user_ctx):
-        raise HTTPException(status_code=403, detail="Administrator role required")
 
 
 def _raise_not_found(*, message: str, user_message: str, details: Dict[str, Any]) -> None:
@@ -197,23 +185,7 @@ class ConversationListResponse(BaseModel):
     has_more: bool
 
 
-class AnalyticsResponse(BaseModel):
-    total_conversations: int
-    active_conversations: int
-    recent_conversations_7d: int
-    total_messages: int
-    avg_messages_per_conversation: float
-    conversations_by_ui_source: Dict[str, int]
-    conversations_by_priority: Dict[str, int]
-    conversations_with_tags: int
-    average_tags_per_conversation: float
-    conversations_with_summaries: int
-    most_common_tags: Dict[str, int]
-    web_ui_metrics: Dict[str, Any]
-    metrics: Dict[str, Any]
 
-
-get_current_tenant = get_current_tenant_id
 
 
 def _canonical_message_to_response(message: Any) -> MessageResponse:
@@ -298,68 +270,6 @@ async def health_check() -> Dict[str, str]:
         "service": "conversation",
         "timestamp": datetime.utcnow().isoformat(),
     }
-
-
-@router.get("/analytics", response_model=AnalyticsResponse)
-async def get_analytics(
-    user_id: Optional[str] = Query(None, description="Filter by user ID"),
-    time_range_start: Optional[datetime] = Query(None, description="Start of time range"),
-    time_range_end: Optional[datetime] = Query(None, description="End of time range"),
-    conversation_service: ConversationService = Depends(get_conversation_service),
-    tenant_id: str = Depends(get_current_tenant_id),
-    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
-):
-    try:
-        authenticated_user_id = _require_user_id(user_ctx)
-        time_range = (
-            (time_range_start, time_range_end)
-            if time_range_start and time_range_end
-            else None
-        )
-        if user_id and user_id != authenticated_user_id:
-            _require_admin_role(user_ctx)
-        target_user_id = user_id or authenticated_user_id
-        analytics = await conversation_service.get_conversation_analytics(
-            tenant_id=tenant_id,
-            user_id=target_user_id,
-            time_range=time_range,
-        )
-        return AnalyticsResponse(**analytics)
-    except HTTPException:
-        raise
-    except Exception as error:
-        logger.exception("Failed to get conversation analytics", error=str(error))
-        _raise_service_error(
-            error=error,
-            user_message="Failed to get conversation analytics. Please try again.",
-        )
-
-
-@router.get("/stats")
-async def get_conversation_stats(
-    tenant_id: str = Depends(get_current_tenant),
-    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
-    conversation_service: ConversationService = Depends(get_conversation_service),
-):
-    try:
-        user_id = _require_user_id(user_ctx)
-        stats = await conversation_service.base_manager.get_conversation_stats(
-            tenant_id,
-            user_id,
-        )
-        return {
-            "base_stats": stats,
-            "web_ui_metrics": conversation_service.get_metrics(),
-            "tenant_id": tenant_id,
-        }
-    except HTTPException:
-        raise
-    except Exception as error:
-        logger.exception("Failed to get conversation stats", error=str(error))
-        _raise_service_error(
-            error=error,
-            user_message="Failed to get conversation statistics. Please try again.",
-        )
 
 
 @router.get("/by-session/{session_id}", response_model=ConversationResponse)
