@@ -85,12 +85,15 @@ class ChatExecutionContext:
     def __post_init__(self) -> None:
         if self.conversation_id or not self.session_id:
             return
+        tenant_id = str(self.tenant_id or "").strip()
+        if not tenant_id:
+            return
         normalized_session_id = normalize_session_id(self.session_id)
         identity = ":".join(
             (
                 "ai-karen",
                 "conversation",
-                str(self.tenant_id or ""),
+                tenant_id,
                 normalized_session_id,
             )
         )
