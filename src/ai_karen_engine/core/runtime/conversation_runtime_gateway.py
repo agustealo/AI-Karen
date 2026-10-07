@@ -132,7 +132,7 @@ class ConversationRuntimeGateway:
         first_user_message: str,
     ) -> str:
         """Ensure the authenticated user owns the tenant-scoped conversation."""
-        self._require_identity(context)
+        self._require_scope_identity(context)
         conversation_id = resolve_runtime_conversation_id(context)
 
         existing = await self._repository.get_conversation(
@@ -189,7 +189,7 @@ class ConversationRuntimeGateway:
         memory formation and exists so thin API/session surfaces can share the
         same canonical repository authority as ChatRuntime.
         """
-        self._require_identity(context)
+        self._require_session_identity(context)
         conversation_id = await self.ensure_conversation(
             context,
             first_user_message=title,
@@ -250,7 +250,7 @@ class ConversationRuntimeGateway:
         *,
         message_limit: int = 100,
     ) -> ConversationSnapshot:
-        self._require_identity(context)
+        self._require_session_identity(context)
         session_id = str(context.session_id or "").strip()
         if not session_id:
             raise ValueError("conversation_identity_incomplete:session_id")
@@ -275,7 +275,7 @@ class ConversationRuntimeGateway:
         offset: int,
         message_limit: int = 100,
     ) -> tuple[ConversationSnapshot, ...]:
-        self._require_identity(context)
+        self._require_scope_identity(context)
         result = await self._repository.list_conversations(
             ConversationQuery(
                 tenant_id=context.tenant_id,
@@ -314,7 +314,7 @@ class ConversationRuntimeGateway:
         *,
         active_only: bool,
     ) -> int:
-        self._require_identity(context)
+        self._require_scope_identity(context)
         result = await self._repository.count_conversations(
             ConversationQuery(
                 tenant_id=context.tenant_id,
@@ -373,7 +373,7 @@ class ConversationRuntimeGateway:
         context: ChatExecutionContext,
     ) -> Conversation:
         """Return one canonical conversation only when tenant/user ownership matches."""
-        self._require_message_identity(context)
+        self._require_conversation_identity(context)
         conversation_id = resolve_runtime_conversation_id(context)
         existing = await self._repository.get_conversation(
             conversation_id,
@@ -445,6 +445,7 @@ class ConversationRuntimeGateway:
         conversation-management requests that intentionally persist a single
         user-authored message. It never invokes semantic-memory formation.
         """
+        self._require_message_identity(context)
         existing = await self.require_owned_conversation(context)
         conversation_id = str(existing.id)
         message_content = str(content or "").strip()
@@ -492,7 +493,7 @@ class ConversationRuntimeGateway:
         """
         conversation_id = resolve_runtime_conversation_id(context)
         try:
-            self._require_identity(context)
+            self._require_scope_identity(context)
             existing = await self._repository.get_conversation(
                 conversation_id,
                 context.tenant_id,
@@ -585,6 +586,7 @@ class ConversationRuntimeGateway:
         This method must only be called after response generation has completed.
         It deliberately performs no semantic-memory formation.
         """
+        self._require_request_identity(context)
         conversation_id = resolve_runtime_conversation_id(context)
         user_text = str(user_text or "").strip()
         assistant_text = str(assistant_text or "").strip()
@@ -767,37 +769,46 @@ class ConversationRuntimeGateway:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
 
     @staticmethod
-    def _require_message_identity(context: ChatExecutionContext) -> None:
+    def _require_scope_identity(context: ChatExecutionContext) -> None:
         missing = [
             name
             for name, value in (
                 ("tenant_id", context.tenant_id),
                 ("user_id", context.user_id),
-                ("conversation_id", context.conversation_id),
-                ("request_id", context.request_id),
             )
             if not str(value or "").strip()
         ]
         if missing:
             raise ValueError(
-                "transcript_message_identity_incomplete:" + ",".join(missing)
+                "conversation_scope_identity_incomplete:" + ",".join(missing)
             )
 
-    @staticmethod
-    def _require_identity(context: ChatExecutionContext) -> None:
-        missing = [
-            name
-            for name, value in (
-                ("tenant_id", context.tenant_id),
-                ("user_id", context.user_id),
-                ("session_id", context.session_id),
-                ("request_id", context.request_id),
-            )
-            if not str(value or "").strip()
-        ]
-        if missing:
+    @classmethod
+    def _require_session_identity(cls, context: ChatExecutionContext) -> None:
+        cls._require_scope_identity(context)
+        if not str(context.session_id or "").strip():
+            raise ValueError("conversation_session_identity_incomplete:session_id")
+
+    @classmethod
+    def _require_conversation_identity(cls, context: ChatExecutionContext) -> None:
+        cls._require_scope_identity(context)
+        if not str(context.conversation_id or "").strip():
             raise ValueError(
-                "transcript_identity_incomplete:" + ",".join(missing)
+                "conversation_identity_incomplete:conversation_id"
+            )
+
+    @classmethod
+    def _require_request_identity(cls, context: ChatExecutionContext) -> None:
+        cls._require_scope_identity(context)
+        if not str(context.request_id or "").strip():
+            raise ValueError("conversation_request_identity_incomplete:request_id")
+
+    @classmethod
+    def _require_message_identity(cls, context: ChatExecutionContext) -> None:
+        cls._require_conversation_identity(context)
+        if not str(context.request_id or "").strip():
+            raise ValueError(
+                "transcript_message_identity_incomplete:request_id"
             )
 
 
