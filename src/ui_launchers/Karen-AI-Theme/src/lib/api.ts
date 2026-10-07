@@ -75,7 +75,7 @@ export interface Citation {
 export interface AssistStreamCallbacks {
   onStatus?: (message: string, metadata?: Record<string, unknown>) => void;
   onContent?: (token: string) => void;
-  onError?: (message: string) => void;
+  onError?: (message: string, metadata?: Record<string, unknown>) => void;
   onComplete?: (metadata?: Record<string, unknown>, content?: string) => void;
   onDone?: () => void;
   onMetrics?: (metrics: StreamingMetrics) => void;
@@ -1043,7 +1043,7 @@ class ApiClient {
               break;
             case 'error':
               cleanup();
-              callbacks?.onError?.(parsed.content);
+              callbacks?.onError?.(parsed.content, parsed.metadata);
               return;
             case 'warning':
               callbacks?.onStatus?.(parsed.content, parsed.metadata);
