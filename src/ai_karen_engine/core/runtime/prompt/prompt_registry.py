@@ -90,6 +90,17 @@ class PromptRegistry:
         self._load_registry()
         self._ensure_builtin_prompts()
     
+    @staticmethod
+    def _storage_key(prompt_id: str, version: PromptVersion) -> str:
+        return f"{prompt_id}@{version}"
+
+    def _sync_default_flags(self, prompt_id: str) -> None:
+        active_version = self._active_versions.get(prompt_id)
+        for version, storage_key in self._version_index.get(prompt_id, {}).items():
+            prompt = self._prompts.get(storage_key)
+            if prompt is not None:
+                prompt.is_default = version == active_version
+
     def _load_registry(self):
         """Load prompts from registry storage."""
         registry_file = self.registry_path / "registry.json"
@@ -100,23 +111,41 @@ class PromptRegistry:
             with open(registry_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             
-            # Load prompts
+            # Load each prompt version as a distinct immutable registry entry.
             for prompt_data in data.get("prompts", []):
                 prompt = PromptDefinition(**prompt_data)
-                self._prompts[prompt.prompt_id] = prompt
-                
-                # Index versions
-                if prompt.prompt_id not in self._version_index:
-                    self._version_index[prompt.prompt_id] = {}
-                
                 version = prompt.parsed_version
-                self._version_index[prompt.prompt_id][version] = prompt.prompt_id
-                
-                # Track active versions
+                storage_key = self._storage_key(prompt.prompt_id, version)
+                self._prompts[storage_key] = prompt
+                self._version_index.setdefault(prompt.prompt_id, {})[version] = (
+                    storage_key
+                )
                 if prompt.is_default:
                     self._active_versions[prompt.prompt_id] = version
-            
-            logger.info(f"Loaded {len(self._prompts)} prompts from registry")
+
+            for prompt_id, version_text in dict(
+                data.get("active_versions") or {}
+            ).items():
+                try:
+                    version = PromptVersion.parse(str(version_text))
+                except ValueError:
+                    logger.warning(
+                        "Ignoring invalid active prompt version %s=%s",
+                        prompt_id,
+                        version_text,
+                    )
+                    continue
+                if version in self._version_index.get(prompt_id, {}):
+                    self._active_versions[prompt_id] = version
+
+            for prompt_id in self._version_index:
+                if prompt_id not in self._active_versions:
+                    versions = self._version_index[prompt_id]
+                    if versions:
+                        self._active_versions[prompt_id] = max(versions)
+                self._sync_default_flags(prompt_id)
+
+            logger.info(f"Loaded {len(self._prompts)} prompt versions from registry")
         
         except Exception as e:
             logger.error(f"Failed to load registry: {e}")
@@ -125,7 +154,7 @@ class PromptRegistry:
     def _ensure_builtin_prompts(self) -> None:
         """Install immutable built-in prompt contracts required by core runtime."""
         prompt_id = "karen.chat.default"
-        if prompt_id in self._prompts:
+        if prompt_id in self._version_index:
             return
 
         prompt = PromptDefinition(
@@ -143,10 +172,12 @@ class PromptRegistry:
                 "purpose": "canonical_chat",
             },
         )
-        self._prompts[prompt.prompt_id] = prompt
         version = prompt.parsed_version
-        self._version_index.setdefault(prompt.prompt_id, {})[version] = prompt.prompt_id
+        storage_key = self._storage_key(prompt.prompt_id, version)
+        self._prompts[storage_key] = prompt
+        self._version_index.setdefault(prompt.prompt_id, {})[version] = storage_key
         self._active_versions[prompt.prompt_id] = version
+        self._sync_default_flags(prompt.prompt_id)
 
     def _save_registry(self):
         """Save prompts to registry storage."""
@@ -182,18 +213,17 @@ class PromptRegistry:
             if new_version in existing_versions:
                 raise VersionConflictError(f"Version {new_version} already exists for prompt {prompt.prompt_id}")
         
-        # Add to registry
-        self._prompts[prompt.prompt_id] = prompt
-        
-        # Update version index
-        if prompt.prompt_id not in self._version_index:
-            self._version_index[prompt.prompt_id] = {}
-        
-        self._version_index[prompt.prompt_id][prompt.parsed_version] = prompt.prompt_id
-        
-        # Set as active if marked as default
-        if prompt.is_default:
-            self._active_versions[prompt.prompt_id] = prompt.parsed_version
+        # Add each semantic version as a distinct registry record.
+        version = prompt.parsed_version
+        storage_key = self._storage_key(prompt.prompt_id, version)
+        self._prompts[storage_key] = prompt
+        self._version_index.setdefault(prompt.prompt_id, {})[version] = storage_key
+
+        # Set as active if marked as default. If this is the first version,
+        # make it active so unversioned reads are deterministic.
+        if prompt.is_default or prompt.prompt_id not in self._active_versions:
+            self._active_versions[prompt.prompt_id] = version
+        self._sync_default_flags(prompt.prompt_id)
         
         # Save registry
         self._save_registry()
@@ -204,30 +234,21 @@ class PromptRegistry:
     def get_prompt(self, prompt_id: str, version: Optional[str] = None) -> PromptDefinition:
         """Get a prompt definition by ID and optional version."""
         
-        if prompt_id not in self._prompts:
+        versions = self._version_index.get(prompt_id)
+        if not versions:
             raise PromptNotFoundError(f"Prompt {prompt_id} not found")
-        
+
         if version is None:
-            # Get active version
-            if prompt_id in self._active_versions:
-                active_version = self._active_versions[prompt_id]
-                return self._prompts[prompt_id]
-            else:
-                # Get the latest version
-                versions = self._version_index[prompt_id]
-                if versions:
-                    latest_version = max(versions.keys())
-                    return self._prompts[versions[latest_version]]
-                else:
-                    raise PromptNotFoundError(f"No versions found for prompt {prompt_id}")
+            resolved_version = self._active_versions.get(prompt_id) or max(versions)
         else:
-            # Get specific version
-            parsed_version = PromptVersion.parse(version)
-            if prompt_id in self._version_index and parsed_version in self._version_index[prompt_id]:
-                prompt_id_key = self._version_index[prompt_id][parsed_version]
-                return self._prompts[prompt_id_key]
-            else:
-                raise PromptNotFoundError(f"Version {version} not found for prompt {prompt_id}")
+            resolved_version = PromptVersion.parse(version)
+
+        storage_key = versions.get(resolved_version)
+        if storage_key is None:
+            raise PromptNotFoundError(
+                f"Version {version or resolved_version} not found for prompt {prompt_id}"
+            )
+        return self._prompts[storage_key]
     
     def list_prompts(self) -> List[PromptDefinition]:
         """List all prompt definitions."""
@@ -243,9 +264,9 @@ class PromptRegistry:
     def set_active_version(self, prompt_id: str, version: str) -> bool:
         """Set the active version for a prompt."""
         
-        if prompt_id not in self._prompts:
+        if prompt_id not in self._version_index:
             raise PromptNotFoundError(f"Prompt {prompt_id} not found")
-        
+
         parsed_version = PromptVersion.parse(version)
         if prompt_id not in self._version_index or parsed_version not in self._version_index[prompt_id]:
             raise PromptNotFoundError(f"Version {version} not found for prompt {prompt_id}")
@@ -253,11 +274,7 @@ class PromptRegistry:
         # Update active version
         self._active_versions[prompt_id] = parsed_version
         
-        # Update prompt's is_default flag
-        for prompt in self._prompts.values():
-            if prompt.prompt_id == prompt_id:
-                prompt.is_default = (prompt.parsed_version == parsed_version)
-                break
+        self._sync_default_flags(prompt_id)
         
         # Save registry
         self._save_registry()
@@ -268,12 +285,13 @@ class PromptRegistry:
     def retire_prompt(self, prompt_id: str, version: Optional[str] = None) -> bool:
         """Retire a prompt or version."""
         
-        if prompt_id not in self._prompts:
+        if prompt_id not in self._version_index:
             raise PromptNotFoundError(f"Prompt {prompt_id} not found")
-        
+
         if version is None:
-            # Retire entire prompt
-            del self._prompts[prompt_id]
+            # Retire every stored semantic version for this prompt.
+            for storage_key in self._version_index[prompt_id].values():
+                self._prompts.pop(storage_key, None)
             self._version_index.pop(prompt_id, None)
             self._active_versions.pop(prompt_id, None)
             logger.info(f"Retired prompt: {prompt_id}")
@@ -281,17 +299,21 @@ class PromptRegistry:
             # Retire specific version
             parsed_version = PromptVersion.parse(version)
             if prompt_id in self._version_index and parsed_version in self._version_index[prompt_id]:
-                del self._version_index[prompt_id][parsed_version]
-                
-                # Update active version if this was the active one
-                if prompt_id in self._active_versions and self._active_versions[prompt_id] == parsed_version:
-                    # Find next best version
+                storage_key = self._version_index[prompt_id].pop(parsed_version)
+                self._prompts.pop(storage_key, None)
+
+                # Update active version if this was the active one.
+                if self._active_versions.get(prompt_id) == parsed_version:
                     remaining_versions = self._version_index[prompt_id]
                     if remaining_versions:
-                        self._active_versions[prompt_id] = max(remaining_versions.keys())
+                        self._active_versions[prompt_id] = max(remaining_versions)
                     else:
-                        del self._active_versions[prompt_id]
-                
+                        self._active_versions.pop(prompt_id, None)
+                if not self._version_index[prompt_id]:
+                    self._version_index.pop(prompt_id, None)
+                else:
+                    self._sync_default_flags(prompt_id)
+
                 logger.info(f"Retired prompt version: {prompt_id} {version}")
             else:
                 raise PromptNotFoundError(f"Version {version} not found for prompt {prompt_id}")
