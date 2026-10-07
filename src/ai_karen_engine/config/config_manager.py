@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from dotenv import load_dotenv
 import logging
 
+from ai_karen_engine.config.web_search import build_provider_configs
+
 CONFIG_PATH = Path(
     os.getenv("KARI_CONFIG_FILE", "config_assets/config.json")
 ).absolute()
@@ -249,6 +251,7 @@ class AIKarenConfig:
     ml: MLConfig = field(default_factory=MLConfig)
     web_ui: WebUIConfig = field(default_factory=WebUIConfig)
     agent_runtime: AgentRuntimeConfig = field(default_factory=AgentRuntimeConfig)
+    search: Dict[str, Any] = field(default_factory=build_provider_configs)
     expression: Dict[str, Any] = field(default_factory=dict)
     default_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     spacy_model: str = "en_core_web_sm"
@@ -301,6 +304,7 @@ DEFAULT_CONFIG = {
         "timeout": 30,
         "max_retries": 3,
     },
+    "search": build_provider_configs(),
     "agent_runtime": {
         "max_agent_steps": 5,
         "max_tool_invocations": 10,
