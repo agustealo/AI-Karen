@@ -89,6 +89,8 @@ def test_recommended_models_are_config_driven_and_first_run_visible() -> None:
     assert "recommendationAcceptanceKey" in ui
     assert "item.resolved_revision || null" in ui
     assert "validation?.metadata.resolved_revision" in ui
+    assert "validated_revision:" in ui
+    assert "revision: null" in ui
     assert "validationGenerationRef" in ui
     assert "validationGeneration !== validationGenerationRef.current" in ui
     assert "(validation.revision || '') === revision.trim()" in ui
@@ -175,3 +177,17 @@ def test_huggingface_license_metadata_uses_canonical_sdk_field() -> None:
     assert 'getattr(remote, "card_data", None)' in source
     assert 'getattr(remote, "cardData", None)' in source
     assert 'license=card_data.get("license")' in source
+
+
+def test_model_license_acceptance_revalidates_reviewed_revision() -> None:
+    ui = UI.read_text(encoding="utf-8")
+    control = CONTROL.read_text(encoding="utf-8")
+
+    assert "reviewedRevision?: string | null" in ui
+    assert "revisionForValidation" in ui
+    assert "validateDownload(" in ui
+    assert "validation?.metadata.resolved_revision" in ui
+    assert 'request.get("validated_revision")' in control
+    assert "validation_revision = reviewed_revision or revision" in control
+    assert "Validated model revision changed before queueing" in control
+    assert "install_path = self._build_install_path(" in control
