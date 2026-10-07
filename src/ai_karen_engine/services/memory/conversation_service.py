@@ -49,6 +49,7 @@ from ai_karen_engine.database.conversation_manager import (
     MessageRole,
     normalize_user_id,
 )
+from ai_karen_engine.database.id_types import coerce_tenant_id
 from ai_karen_engine.database.models import TenantConversation
 from ai_karen_engine.database.client import MultiTenantPostgresClient
 
@@ -1007,7 +1008,8 @@ class ConversationService:
             async with self.db_client.get_async_session() as session:
                 # Use cast to Any to satisfy Pylance which is confused about SQLA entities
                 query = select(cast(Any, TenantConversation)).where(
-                    TenantConversation.session_id == str(session_id)
+                    TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
+                    TenantConversation.session_id == str(session_id),
                 )
 
                 if user_id:
@@ -1084,7 +1086,8 @@ class ConversationService:
             async with self.db_client.get_async_session() as session:
                 result = await session.execute(
                     select(cast(Any, TenantConversation)).where(
-                        TenantConversation.id == target_id
+                        TenantConversation.id == target_id,
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
                     )
                 )
                 db_conversation = result.scalar_one_or_none()
@@ -1221,7 +1224,10 @@ class ConversationService:
             async with self.db_client.get_async_session() as session:
                 await session.execute(
                     update(TenantConversation)
-                    .where(TenantConversation.id == uuid.UUID(conversation_id))
+                    .where(
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
+                    )
                     .values(ui_context=ui_context, updated_at=datetime.utcnow())
                 )
                 await session.commit()
@@ -1244,7 +1250,10 @@ class ConversationService:
             async with self.db_client.get_async_session() as session:
                 await session.execute(
                     update(TenantConversation)
-                    .where(TenantConversation.id == uuid.UUID(conversation_id))
+                    .where(
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
+                    )
                     .values(ai_insights=ai_insights, updated_at=datetime.utcnow())
                 )
                 await session.commit()
@@ -1268,6 +1277,7 @@ class ConversationService:
         try:
             session_info = {
                 "session_id": session_id,
+                "tenant_id": str(coerce_tenant_id(tenant_id)),
                 "user_id": user_id,
                 "ui_source": ui_source.value,
                 "created_at": datetime.utcnow(),
@@ -1300,6 +1310,7 @@ class ConversationService:
                     update(TenantConversation)
                     .where(
                         and_(
+                            TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
                             TenantConversation.session_id == session_id,
                             TenantConversation.user_id == normalized_user_id,
                         )
@@ -1334,17 +1345,28 @@ class ConversationService:
         """Update session activity timestamp and data."""
         try:
             if session_id in self.active_sessions:
-                if session_id in self.active_sessions:
-                    session_info = self.active_sessions[session_id]
-                    session_info["last_activity"] = datetime.utcnow()
-                    if activity_data and isinstance(session_info.get("data"), dict):
-                        session_info["data"].update(activity_data)
+                session_info = self.active_sessions[session_id]
+                session_info["last_activity"] = datetime.utcnow()
+                if activity_data and isinstance(session_info.get("data"), dict):
+                    session_info["data"].update(activity_data)
 
-                # Update database
+                tenant_id = session_info.get("tenant_id")
+                user_id = session_info.get("user_id")
+                if not tenant_id or not user_id:
+                    logger.warning(
+                        "Session activity update rejected because cached identity is incomplete"
+                    )
+                    return False
+
+                # Update database through cached authenticated session scope.
                 async with self.db_client.get_async_session() as session:
                     await session.execute(
                         update(TenantConversation)
-                        .where(TenantConversation.session_id == session_id)
+                        .where(
+                            TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
+                            TenantConversation.session_id == session_id,
+                            TenantConversation.user_id == normalize_user_id(user_id),
+                        )
                         .values(
                             ui_context=func.jsonb_set(
                                 TenantConversation.ui_context,
@@ -1501,7 +1523,8 @@ class ConversationService:
             async with self.db_client.get_async_session() as session:
                 result = await session.execute(
                     select(cast(Any, TenantConversation.ui_context)).where(
-                        TenantConversation.id == uuid.UUID(conversation_id)
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
                     )
                 )
                 current_context = result.scalar_one_or_none() or {}
@@ -1531,7 +1554,10 @@ class ConversationService:
                 # Update database
                 await session.execute(
                     update(TenantConversation)
-                    .where(TenantConversation.id == uuid.UUID(conversation_id))
+                    .where(
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
+                    )
                     .values(ui_context=current_context, updated_at=datetime.utcnow())
                 )
                 await session.commit()
@@ -1557,7 +1583,8 @@ class ConversationService:
             async with self.db_client.get_async_session() as session:
                 result = await session.execute(
                     select(cast(Any, TenantConversation.ui_context)).where(
-                        TenantConversation.id == uuid.UUID(conversation_id)
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
                     )
                 )
                 ui_context = result.scalar_one_or_none() or {}
@@ -1663,7 +1690,10 @@ class ConversationService:
                 # Update TenantConversation with enhanced web UI integration
                 await session.execute(
                     update(TenantConversation)
-                    .where(TenantConversation.id == uuid.UUID(conversation_id))
+                    .where(
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
+                    )
                     .values(
                         session_id=session_id,
                         ui_context=ui_context,
@@ -1697,7 +1727,10 @@ class ConversationService:
             async with self.db_client.get_async_session() as session:
                 await session.execute(
                     update(TenantConversation)
-                    .where(TenantConversation.id == uuid.UUID(conversation_id))
+                    .where(
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
+                    )
                     .values(tags=list(new_tags), updated_at=datetime.utcnow())
                 )
                 await session.commit()
@@ -1722,7 +1755,9 @@ class ConversationService:
             # Add web UI specific analytics
             async with self.db_client.get_async_session() as session:
                 # Base query conditions
-                query_conditions = []
+                query_conditions = [
+                    TenantConversation.tenant_id == coerce_tenant_id(tenant_id)
+                ]
                 if user_id:
                     query_conditions.append(
                         TenantConversation.user_id == normalize_user_id(user_id)
@@ -1830,7 +1865,10 @@ class ConversationService:
             async with self.db_client.get_async_session() as session:
                 await session.execute(
                     update(TenantConversation)
-                    .where(TenantConversation.id == uuid.UUID(conversation_id))
+                    .where(
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
+                    )
                     .values(
                         session_id=session_id,
                         ui_context=ui_context,
@@ -1854,7 +1892,8 @@ class ConversationService:
             async with self.db_client.get_async_session() as session:
                 result = await session.execute(
                     select(TenantConversation).where(
-                        TenantConversation.id == uuid.UUID(conversation_id)
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
                     )
                 )
 
@@ -2056,7 +2095,8 @@ class ConversationService:
                     # Get current ai_insights
                     result = await session.execute(
                         select(cast(Any, TenantConversation.ai_insights)).where(
-                            TenantConversation.id == uuid.UUID(conversation_id)
+                            TenantConversation.id == uuid.UUID(conversation_id),
+                            TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
                         )
                     )
                     current_insights = result.scalar() or {}
@@ -2069,7 +2109,10 @@ class ConversationService:
 
                     await session.execute(
                         update(TenantConversation)
-                        .where(TenantConversation.id == uuid.UUID(conversation_id))
+                        .where(
+                            TenantConversation.id == uuid.UUID(conversation_id),
+                            TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
+                        )
                         .values(ai_insights=current_insights)
                     )
                     await session.commit()
@@ -2107,7 +2150,10 @@ class ConversationService:
             async with self.db_client.get_async_session() as session:
                 await session.execute(
                     update(TenantConversation)
-                    .where(TenantConversation.id == uuid.UUID(conversation_id))
+                    .where(
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
+                    )
                     .values(summary=summary, updated_at=datetime.utcnow())
                 )
                 await session.commit()
