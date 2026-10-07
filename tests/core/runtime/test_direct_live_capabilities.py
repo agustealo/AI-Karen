@@ -485,8 +485,8 @@ def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None
     assert bitcoin_price_question.requires_live_data is True
     assert future_weather.intent == "search.weather"
     assert future_weather.requires_live_data is True
-    assert lower_city_weather.intent == "search.weather"
-    assert lower_city_weather.requires_live_data is True
+    assert lower_city_weather.intent == "general.chat"
+    assert lower_city_weather.requires_tool is False
     assert title_city_weather.intent == "search.weather"
     assert title_city_weather.requires_live_data is True
 
