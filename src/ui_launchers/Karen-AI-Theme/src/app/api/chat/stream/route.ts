@@ -41,10 +41,10 @@ export async function POST(request: NextRequest) {
     let lastProxyError: unknown = null;
     let attemptedUrl = primaryUpstreamUrl;
 
-    for (const upstreamUrl of candidateUrls) {
+    for (const [index, upstreamUrl] of candidateUrls.entries()) {
       attemptedUrl = upstreamUrl;
       try {
-        upstream = await fetch(upstreamUrl, {
+        const candidateResponse = await fetch(upstreamUrl, {
           method: 'POST',
           headers,
           body: rawBody,
@@ -54,6 +54,16 @@ export async function POST(request: NextRequest) {
           // @ts-expect-error Node/undici extension supported in Next runtime.
           duplex: 'half',
         });
+
+        const hasMoreCandidates = index < candidateUrls.length - 1;
+        if (candidateResponse.status === 404 && hasMoreCandidates) {
+          console.warn(
+            `[StreamProxy] Canonical stream route missing at ${upstreamUrl}; trying next backend target.`,
+          );
+          continue;
+        }
+
+        upstream = candidateResponse;
         break;
       } catch (proxyError) {
         lastProxyError = proxyError;
@@ -66,7 +76,9 @@ export async function POST(request: NextRequest) {
           ? new Error(
               `All upstream targets failed. Last target: ${attemptedUrl}. Last error: ${lastProxyError.message}`,
             )
-          : new Error(`All upstream targets failed. Last target: ${attemptedUrl}.`)
+          : new Error(
+              `Canonical chat stream route was unavailable on every backend target. Last target: ${attemptedUrl}.`,
+            )
       );
     }
 
