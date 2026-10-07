@@ -493,6 +493,9 @@ def load_config() -> Dict[str, Any]:
             return cfg
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             cfg = json.load(f)
+        # Normalize legacy/default structure before env application so a
+        # KARI_SEARCH override is honored even on pre-migration installs.
+        cfg = validate_config(cfg)
         load_env_override(cfg)
         cfg = validate_config(cfg)
         notify_observers(cfg)
