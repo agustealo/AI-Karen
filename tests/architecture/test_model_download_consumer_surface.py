@@ -34,11 +34,11 @@ def test_model_downloads_surface_is_guided_and_runtime_truthful() -> None:
     source = UI.read_text(encoding="utf-8")
 
     for token in (
-        "Find a Model",
+        "Explore Model Catalog",
         "Automatic (recommended)",
         "Advanced install options",
         "validation?.allowed === true",
-        "Local Model Health",
+        "Discovery Health",
         "Retry download",
         "Remove {model.name || model.id}",
         "setInterval(() =>",
@@ -46,9 +46,14 @@ def test_model_downloads_surface_is_guided_and_runtime_truthful() -> None:
     ):
         assert token in source
 
-    assert "Search the live model catalog" in source
+    assert "Search live Hugging Face metadata" in source
     assert "JSON.stringify(discoveryProgress" in source
     assert "Technical discovery details" in source
+    assert "Model acquisition & inventory" in source
+    assert "Download Safety & Policy" in source
+    assert "Download Pipeline" in source
+    assert "Installed Model Inventory" in source
+    assert "Model Channels" in source
 
 
 def test_recommended_models_are_config_driven_and_first_run_visible() -> None:
