@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping, Optional, Sequence
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -550,3 +551,27 @@ async def test_valid_lease_publishes_and_completes_inside_repository_guard(
     assert repository.publication_guards == 1
     assert repository.complete_calls == 1
     assert repository.jobs[job_id]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_validation_fails_closed_when_access_metadata_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    await service.update_policy({"require_license_acceptance": True})
+    service._orchestrator.get_model_info = AsyncMock(
+        side_effect=RuntimeError("metadata unavailable")
+    )
+
+    validation = await service.validate_download(
+        model_id="test-owner/test-model",
+        channel_id="core_runtime_transformers",
+    )
+
+    assert validation.allowed is False
+    assert validation.license_required is False
+    assert any(
+        "could not be verified" in reason
+        for reason in validation.blocking_reasons
+    )
