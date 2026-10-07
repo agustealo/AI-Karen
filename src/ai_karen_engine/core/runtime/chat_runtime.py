@@ -1896,6 +1896,15 @@ class ChatRuntime:
             "requires_resumability": bool(decision.requires_resumability),
             "workflow_id": decision.workflow_id,
             "workflow_version": decision.workflow_version,
+            "execution_topology": topology,
+            "reasoning_modes": list(plan.reasoning_modes),
+            "execution_budget": {
+                "max_duration_ms": plan.budget.max_duration_ms,
+                "max_model_calls": plan.budget.max_model_calls,
+                "max_tool_calls": plan.budget.max_tool_calls,
+                "max_reasoning_steps": plan.budget.max_reasoning_steps,
+                "max_output_tokens": plan.budget.max_output_tokens,
+            },
             "policy_reason_codes": list(decision.policy_reason_codes),
         }
 
