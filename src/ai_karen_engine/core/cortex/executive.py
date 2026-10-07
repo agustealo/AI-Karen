@@ -5,6 +5,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.intelligence import get_intelligence_runtime
+from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
 from ai_karen_engine.core.reasoning.contracts import normalize_reasoning_modes
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
@@ -78,8 +79,11 @@ class CortexExecutionDecider:
             analysis["workflow_required"] = True
 
         if tool_requirements or plugin_candidates:
-            graph_required = True
-            reason_codes.append("tool_or_plugin_requirements")
+            if analysis.get("direct_capability", False):
+                reason_codes.append("direct_capability_request")
+            else:
+                graph_required = True
+                reason_codes.append("tool_or_plugin_requirements")
         if analysis.get("workflow_required") or analysis.get("agent_delegation"):
             graph_required = True
             reason_codes.append("workflow_capability")
@@ -182,6 +186,7 @@ class CortexExecutionDecider:
                 "current_domains": list(analysis.get("topics", []) or []),
                 "max_model_calls": max_model_calls,
                 "max_steps": max_steps,
+                "direct_capability": bool(analysis.get("direct_capability", False)),
             }
         )
 
@@ -248,6 +253,39 @@ class CortexExecutionDecider:
             memory_policy = self._infer_memory_policy_from_analysis(analysis)
             workflow = self._infer_workflow_from_analysis(analysis)
             risk_level = self._assess_risk_level(analysis)
+
+            capability_decision = resolve_capability_decision(
+                text,
+                confidence=float(confidence),
+            )
+            direct_capability = bool(capability_decision.requires_tool)
+            if direct_capability:
+                preferred_plugin = str(
+                    capability_decision.preferred_plugin or ""
+                ).strip()
+                handler = str(capability_decision.handler or "").strip()
+                required_capability = str(
+                    capability_decision.capability or ""
+                ).strip()
+
+                if preferred_plugin and preferred_plugin not in topology["plugin_candidates"]:
+                    topology["plugin_candidates"].append(preferred_plugin)
+
+                # Time Query is a governed plugin authority. Do not invent a
+                # parallel time tool simply because the compatibility route
+                # still exposes a historical handler label.
+                if (
+                    handler
+                    and capability_decision.intent != "time.current"
+                    and handler not in topology["tool_requirements"]
+                ):
+                    topology["tool_requirements"].append(handler)
+
+                if (
+                    required_capability
+                    and required_capability not in capabilities["required"]
+                ):
+                    capabilities["required"].append(required_capability)
             raw_modes = getattr(analysis, "reasoning_modes", []) or []
             if isinstance(raw_modes, str):
                 raw_modes = [raw_modes]
@@ -273,8 +311,17 @@ class CortexExecutionDecider:
                     topology.setdefault("tool_requirements", []).append(tool)
 
             return {
-                "intent": intent_value,
-                "intent_confidence": confidence,
+                "intent": (
+                    capability_decision.intent
+                    if direct_capability
+                    else intent_value
+                ),
+                "intent_confidence": (
+                    max(float(confidence), float(capability_decision.confidence))
+                    if direct_capability
+                    else confidence
+                ),
+                "direct_capability": direct_capability,
                 "task_complexity": getattr(analysis, "task_complexity", "simple"),
                 "topics": list(getattr(analysis, "topics", []) or []),
                 "memory_relevance": getattr(analysis, "memory_relevance", 0.0),
@@ -332,6 +379,7 @@ class CortexExecutionDecider:
             "topology_signals": {},
             "risk_signals": {"categories": [], "score": 0.0},
             "capability_hints": {},
+            "direct_capability": False,
             "tool_requirements": [],
             "plugin_candidates": [],
             "required_capabilities": [],
