@@ -1278,7 +1278,7 @@ export default function ModelDownloads({
                 <div
                   key={item.id}
                   className={[
-                    'rounded-xl border p-4',
+                    'rounded-2xl border p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md',
                     item.installed
                       ? 'border-emerald-500/30 bg-emerald-500/5'
                       : 'border-border/50 bg-muted/10',
@@ -1500,16 +1500,19 @@ export default function ModelDownloads({
       </Card>
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <Card className="border-border/50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <Shield className="h-4 w-4 text-primary" aria-hidden="true" />
-              Download Safety Panel
-            </CardTitle>
-            <CardDescription>
-              Master gate first, then category switches, then channel-specific
-              overrides.
-            </CardDescription>
+        <Card className="overflow-hidden border-border/50 shadow-sm">
+          <CardHeader className="border-b border-border/40 bg-muted/10">
+            <div className="flex items-start gap-3">
+              <SectionIcon>
+                <ShieldCheck className="h-5 w-5" aria-hidden="true" />
+              </SectionIcon>
+              <div>
+                <CardTitle className="text-lg">Download Safety & Policy</CardTitle>
+                <CardDescription className="mt-1">
+                  Master gate, model-channel isolation, license enforcement, and executor limits.
+                </CardDescription>
+              </div>
+            </div>
           </CardHeader>
 
           <CardContent className="space-y-4">
@@ -1869,15 +1872,24 @@ export default function ModelDownloads({
         </Card>
       </div>
 
-      <Card className="border-border/50">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <RefreshCw className="h-4 w-4 text-primary" aria-hidden="true" />
-            Download Queue
-          </CardTitle>
-          <CardDescription>
-            Active and historical model download jobs from the control plane.
-          </CardDescription>
+      <Card className="overflow-hidden border-border/50 shadow-sm">
+        <CardHeader className="border-b border-border/40 bg-muted/10">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <SectionIcon tone={activeJobs.length ? 'positive' : 'primary'}>
+                <Workflow className="h-5 w-5" aria-hidden="true" />
+              </SectionIcon>
+              <div>
+                <CardTitle className="text-lg">Download Pipeline</CardTitle>
+                <CardDescription className="mt-1">
+                  Durable queue state, progress, controls, retry signals, and execution metadata.
+                </CardDescription>
+              </div>
+            </div>
+            <Badge variant="outline" className="shrink-0">
+              {activeJobs.length} active
+            </Badge>
+          </div>
         </CardHeader>
         <CardContent>
           {jobs.length === 0 ? (
@@ -2007,15 +2019,19 @@ export default function ModelDownloads({
       </Card>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Card className="border-border/50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <HardDrive className="h-4 w-4 text-primary" aria-hidden="true" />
-              Installed Models
-            </CardTitle>
-            <CardDescription>
-              Inventory of locally cached model artifacts.
-            </CardDescription>
+        <Card className="overflow-hidden border-border/50 shadow-sm">
+          <CardHeader className="border-b border-border/40 bg-muted/10">
+            <div className="flex items-start gap-3">
+              <SectionIcon tone="secondary">
+                <Boxes className="h-5 w-5" aria-hidden="true" />
+              </SectionIcon>
+              <div>
+                <CardTitle className="text-lg">Installed Model Inventory</CardTitle>
+                <CardDescription className="mt-1">
+                  Models discovered locally and eligible for Karen&apos;s runtime stack.
+                </CardDescription>
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="space-y-3">
@@ -2138,15 +2154,19 @@ export default function ModelDownloads({
         </Card>
 
         <div className="space-y-6">
-          <Card className="border-border/50">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <CheckCircle2 className="h-4 w-4 text-primary" aria-hidden="true" />
-                Local Model Health
-              </CardTitle>
-              <CardDescription>
-                What Karen can currently see in the local model inventory.
-              </CardDescription>
+          <Card className="overflow-hidden border-border/50 shadow-sm">
+            <CardHeader className="border-b border-border/40 bg-muted/10">
+              <div className="flex items-start gap-3">
+                <SectionIcon tone="positive">
+                  <Gauge className="h-5 w-5" aria-hidden="true" />
+                </SectionIcon>
+                <div>
+                  <CardTitle className="text-lg">Discovery Health</CardTitle>
+                  <CardDescription className="mt-1">
+                    Live local inventory visibility and discovery-engine state.
+                  </CardDescription>
+                </div>
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-2 sm:grid-cols-2">
@@ -2185,15 +2205,19 @@ export default function ModelDownloads({
             </CardContent>
           </Card>
 
-          <Card className="border-border/50">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <HardDrive className="h-4 w-4 text-primary" aria-hidden="true" />
-                Channel Structure
-              </CardTitle>
-              <CardDescription>
-                Download channel groupings and gated storage roots.
-              </CardDescription>
+          <Card className="overflow-hidden border-border/50 shadow-sm">
+            <CardHeader className="border-b border-border/40 bg-muted/10">
+              <div className="flex items-start gap-3">
+                <SectionIcon>
+                  <Workflow className="h-5 w-5" aria-hidden="true" />
+                </SectionIcon>
+                <div>
+                  <CardTitle className="text-lg">Model Channels</CardTitle>
+                  <CardDescription className="mt-1">
+                    Runtime families, plugin model silos, storage roots, and admin-gated channels.
+                  </CardDescription>
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
