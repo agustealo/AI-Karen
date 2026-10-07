@@ -69,11 +69,12 @@ class ChatExecutionContext:
     through provider, memory, plugin, and persistence. When ingress has not
     assigned a conversation yet, the context derives one stable UUID from the
     tenant and session exactly once so every downstream owner observes the
-    same durable identity.
+    same durable identity. Tenant scope is never synthesized; missing tenant
+    identity remains empty so authenticated/runtime guards can fail closed.
     """
 
     user_id: str
-    tenant_id: str = "default"
+    tenant_id: str = ""
     session_id: Optional[str] = None
     conversation_id: Optional[str] = None
     request_id: Optional[str] = None
@@ -89,7 +90,7 @@ class ChatExecutionContext:
             (
                 "ai-karen",
                 "conversation",
-                str(self.tenant_id or "default"),
+                str(self.tenant_id or ""),
                 normalized_session_id,
             )
         )
