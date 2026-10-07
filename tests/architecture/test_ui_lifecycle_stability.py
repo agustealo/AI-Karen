@@ -106,6 +106,34 @@ def test_chat_exports_canonical_conversation_identity_truthfully() -> None:
     assert "Session ID: ${currentSession.id}" not in chat
 
 
+def test_chat_copy_requires_second_user_gesture_after_server_confirmation() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    copy = chat.split("const handleCopyChat = useCallback", 1)[1].split(
+        "// Handle external message injection", 1
+    )[0]
+
+    assert "durableCopyTranscriptRef.current" in copy
+    assert "Choose Copy again to copy the confirmed server transcript." in copy
+    assert copy.index("fetchDurableTranscriptForTransfer()") < copy.index("Choose Copy again")
+    assert copy.index("const durableMessages = preparedCopy.messages") < copy.index(
+        "navigator.clipboard.writeText(text)"
+    )
+
+
+def test_chat_transfer_uses_confirmed_server_transcript_only() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    transfer = chat.split(
+        "const fetchDurableTranscriptForTransfer", 1
+    )[1].split("// Handle external message injection", 1)[0]
+
+    assert "apiClient.get<ConversationResponse>(" in transfer
+    assert "/api/conversations/${currentSession.id}" in transfer
+    assert "nothing was exported or copied" in transfer
+    assert transfer.count("for (const message of durableMessages)") == 2
+    assert "for (const message of messages)" not in transfer
+
 def test_chat_ui_preserves_durable_conversation_lifecycle_authority() -> None:
     chat = _read("components/chat/ChatInterface.tsx")
 
