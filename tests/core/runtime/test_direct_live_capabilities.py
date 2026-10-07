@@ -24,6 +24,7 @@ from ai_karen_engine.services.plugin_service import ExecutionStatus
 from ai_karen_engine.services.search.web_search_client import WebSearchClient
 from ai_karen_engine.services.tooling.internet_capability_service import (
     InternetCapabilityService,
+    InternetSearchRequest,
 )
 from ai_karen_engine.services.tooling.tool_service import ToolInput, ToolService
 from ai_karen_engine.tools.web_search_tool import WebSearchTool
@@ -643,3 +644,39 @@ def test_runtime_config_asset_owns_web_search_provider_settings() -> None:
     assert "search" not in legacy_settings.get("plugins", {}).get(
         "intelligent-search", {}
     )
+
+
+@pytest.mark.asyncio
+async def test_search_discovery_reports_actual_provider_provenance() -> None:
+    class FakeSearchClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def search(self, **kwargs):
+            del kwargs
+            return SimpleNamespace(
+                provider="wikipedia",
+                results=[
+                    SimpleNamespace(
+                        url="https://en.wikipedia.org/wiki/Detroit"
+                    )
+                ],
+            )
+
+    service = InternetCapabilityService(search_client=FakeSearchClient())
+    request = InternetSearchRequest.from_payload("Detroit", {})
+
+    urls, providers = await service._get_relevant_urls(
+        ["Detroit"],
+        {},
+        request,
+        3,
+    )
+
+    assert urls == ["https://en.wikipedia.org/wiki/Detroit"]
+    assert providers == ["wikipedia"]
+    assert service._provider_name(providers) == "wikipedia"
+    assert service._provider_name(["wikipedia", "duckduckgo"]) == "multi_search"
