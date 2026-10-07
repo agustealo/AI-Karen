@@ -116,6 +116,20 @@ class DirectCapabilityExecutor:
         mode = str(route.get("plugin_mode") or "").strip() or None
         attempts: List[Dict[str, Any]] = []
 
+        # Search capabilities prefer the production web_search tool because it
+        # carries the AuthorizedExecutionPlan and scoped runtime identity into
+        # InternetCapabilityService. The plugin remains an authorized fallback.
+        if tool_name and tool_name in set(plan.allowed_tools):
+            if await ActionExecutionGate.authorize(plan, tool_name):
+                if not await meter.consume_tool_call():
+                    return self._unavailable(
+                        started,
+                        capability,
+                        tool_name,
+                        "Execution budget exhausted before tool execution.",
+                        attempts,
+                    )
+
         if preferred_plugin and preferred_plugin in set(plan.allowed_plugins):
             if await ActionExecutionGate.authorize(plan, preferred_plugin):
                 if not await meter.consume_tool_call():
@@ -198,80 +212,6 @@ class DirectCapabilityExecutor:
                 reason,
                 attempts,
             )
-
-        if tool_name and tool_name in set(plan.allowed_tools):
-            if await ActionExecutionGate.authorize(plan, tool_name):
-                if not await meter.consume_tool_call():
-                    return self._unavailable(
-                        started,
-                        capability,
-                        tool_name,
-                        "Execution budget exhausted before tool execution.",
-                        attempts,
-                    )
-
-                tool_started = time.perf_counter()
-                tool_result = await get_tool_service().execute_tool(
-                    ToolInput(
-                        tool_name=tool_name,
-                        parameters=self._tool_parameters(query, mode),
-                        user_context={
-                            "request_id": (
-                                request.context.request_id
-                                or request.context.correlation_id
-                            ),
-                            "user_id": request.context.user_id,
-                            "tenant_id": request.context.tenant_id,
-                            "session_id": request.context.session_id,
-                            "conversation_id": request.context.conversation_id,
-                            "correlation_id": request.context.correlation_id,
-                            "allowed_capabilities": list(plan.allowed_capabilities),
-                            "authorized_plan": plan,
-                            "policy_decision_id": plan.policy_decision_id,
-                        },
-                        user_id=request.context.user_id,
-                        session_id=request.context.session_id,
-                        request_id=request.context.request_id
-                        or request.context.correlation_id,
-                    )
-                )
-                payload = self._normalize_payload(tool_result.result)
-                tool_ok = bool(
-                    tool_result.success
-                    and self._payload_succeeded(decision.intent, payload)
-                )
-                tool_error = (
-                    tool_result.error
-                    or payload.get("error")
-                    or payload.get("reason")
-                    or (
-                        None
-                        if tool_ok
-                        else "capability_returned_no_live_data"
-                    )
-                )
-                attempts.append(
-                    {
-                        "type": "tool",
-                        "id": tool_name,
-                        "status": "success" if tool_ok else "failed",
-                        "error": tool_error,
-                        "latency_ms": (
-                            time.perf_counter() - tool_started
-                        )
-                        * 1000.0,
-                    }
-                )
-                if tool_ok:
-                    return self._success(
-                        started,
-                        decision.intent,
-                        query,
-                        payload,
-                        source="tool",
-                        source_id=tool_name,
-                        attempts=attempts,
-                    )
 
         target = preferred_plugin or tool_name or capability or "live capability"
         reason = self._last_attempt_error(
