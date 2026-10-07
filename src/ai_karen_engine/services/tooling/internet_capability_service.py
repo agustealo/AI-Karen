@@ -743,19 +743,12 @@ class InternetCapabilityService:
                 raise RuntimeError("Configured search_client_factory returned None.")
             return client
 
-        settings: Dict[str, Any] = {}
         if self.provider_registry is not None:
-            settings = {
-                "search": {
-                    name: self.provider_registry.get_config(name)
-                    for name in self.provider_registry.descriptors
-                }
-            }
+            return WebSearchClient(registry=self.provider_registry)
 
-        # Canonical production default. The provider registry remains the source
-        # of truth for availability/priority; callers can still inject a client
-        # or factory for tests and specialized runtimes.
-        return WebSearchClient(settings=settings)
+        # Canonical production default. The client owns a fresh canonical
+        # registry only when the runtime did not inject one explicitly.
+        return WebSearchClient()
 
     async def _authorize(
         self,
