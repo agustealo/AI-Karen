@@ -94,7 +94,13 @@ class DirectCapabilityExecutor:
 
     def can_handle(self, decision: ExecutionDecision) -> bool:
         route = CAPABILITY_ROUTES.get(str(decision.intent or ""))
-        return bool(route and route.get("requires_live_data"))
+        if not route or not route.get("requires_live_data"):
+            return False
+        if decision.is_graph_required:
+            return False
+        return bool(
+            decision.policy_constraints.get("direct_capability", False)
+        )
 
     async def execute(
         self,
