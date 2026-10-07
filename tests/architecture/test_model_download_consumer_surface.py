@@ -204,5 +204,7 @@ def test_retry_preserves_install_alias_and_reviewed_revision() -> None:
     assert "validated_revision: job.revision || null" in ui
     assert "job.channel_id === 'core_spacy'" in ui
     assert "const modelDirectory = `${owner}--${repository}`;" in ui
-    assert "segments.slice(modelDirectoryIndex + 1).join('/')" in ui
+    assert "const storageKey = String(job.storage_key || '').trim();" in ui
+    assert "const marker = `/${storageKey}/${modelDirectory}/`;" in ui
+    assert "normalizedPath.slice(markerIndex + marker.length)" in ui
     assert "E_VERIFY," in control
