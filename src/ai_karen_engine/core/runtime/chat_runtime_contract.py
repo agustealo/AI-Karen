@@ -279,7 +279,7 @@ class CanonicalChatRequest(BaseModel):
     message_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Stable user message identifier")
     attachments: List[Dict[str, Any]] = Field(default_factory=list, description="Associated file or media links")
     include_context: bool = Field(True, description="Whether to perform RAG recall")
-    metadata: Dict[str, Any] = Field(default_factory=list, description="Additional request-specific metadata")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional request-specific metadata")
     streaming: bool = Field(False, description="Whether to return a stream generator")
     stream: bool = Field(False, description="Alias for streaming")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Request creation timestamp")
