@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -306,6 +306,29 @@ class PostgresTrajectoryStore(TrajectoryStore):
         raise TrajectoryStoreError("stored learning-lineage payload is not an object")
 
     @staticmethod
+    def _normalize_datetime(value: Any) -> datetime | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return None
+            if normalized.endswith("Z"):
+                normalized = f"{normalized[:-1]}+00:00"
+            try:
+                parsed = datetime.fromisoformat(normalized)
+            except ValueError as exc:
+                raise TrajectoryStoreError(
+                    "learning timestamp must be an ISO-8601 value"
+                ) from exc
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        raise TrajectoryStoreError(
+            "learning timestamp must be a datetime, ISO-8601 string, or null"
+        )
+
+    @staticmethod
     def _trajectory_params(
         trajectory: ExecutionTrajectory,
         tenant_id: str,
@@ -318,11 +341,11 @@ class PostgresTrajectoryStore(TrajectoryStore):
             "session_id": trajectory.session_id,
             "tenant_id": tenant_id,
             "user_id": str(trajectory.user_id or ""),
-            "started_at": trajectory.started_at.isoformat(),
-            "completed_at": (
-                trajectory.completed_at.isoformat()
-                if trajectory.completed_at is not None
-                else None
+            "started_at": PostgresTrajectoryStore._normalize_datetime(
+                trajectory.started_at
+            ),
+            "completed_at": PostgresTrajectoryStore._normalize_datetime(
+                trajectory.completed_at
             ),
             "execution_status": trajectory.execution_status,
             "policy_decision_id": trajectory.policy_decision_id,
@@ -466,7 +489,9 @@ class PostgresTrajectoryStore(TrajectoryStore):
             "tenant_id": tenant_id,
             "user_id": str(snapshot.user_id or ""),
             "feature_version": snapshot.feature_version,
-            "created_at": snapshot.created_at.isoformat(),
+            "created_at": PostgresTrajectoryStore._normalize_datetime(
+                snapshot.created_at
+            ),
             "payload": json.dumps(snapshot.to_dict(), default=str),
         }
 
@@ -639,7 +664,9 @@ class PostgresTrajectoryStore(TrajectoryStore):
             "behavior_policy_version": observation.behavior_policy_version,
             "chosen_action": observation.chosen_action,
             "ope_eligible": observation.ope_eligible,
-            "created_at": observation.created_at.isoformat(),
+            "created_at": PostgresTrajectoryStore._normalize_datetime(
+                observation.created_at
+            ),
             "payload": json.dumps(observation.to_dict(), default=str),
         }
 
