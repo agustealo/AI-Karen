@@ -662,9 +662,13 @@ class ModelDownloadControlService:
             )
         model_id = str(request.get("model_id") or "").strip()
         revision = request.get("revision")
+        reviewed_revision = str(
+            request.get("validated_revision") or ""
+        ).strip() or None
+        validation_revision = reviewed_revision or revision
         validation = await self.validate_download(
             model_id=model_id,
-            revision=revision,
+            revision=validation_revision,
             channel_id=request.get("channel_id"),
             trust_remote_code=bool(request.get("trust_remote_code", False)),
             accept_license=bool(request.get("accept_license", False)),
@@ -679,7 +683,22 @@ class ModelDownloadControlService:
             )
         resolved_revision = (
             str(validation.metadata.get("resolved_revision") or "").strip()
-            or revision
+            or validation_revision
+        )
+        if reviewed_revision and resolved_revision != reviewed_revision:
+            raise ModelOrchestratorError(
+                E_VERIFY,
+                "Validated model revision changed before queueing",
+                {
+                    "reviewed_revision": reviewed_revision,
+                    "resolved_revision": resolved_revision,
+                },
+            )
+        install_channel = self._channels.get(validation.channel_id)
+        install_path = self._build_install_path(
+            install_channel,
+            model_id,
+            revision,
         )
         job = ModelDownloadJob(
             job_id=f"mdl-{uuid.uuid4()}",
@@ -696,7 +715,7 @@ class ModelDownloadControlService:
             force_redownload=bool(request.get("force_redownload", False)),
             detected_runtime=validation.detected_runtime,
             detected_modality=validation.detected_modality,
-            install_path=validation.install_path,
+            install_path=str(install_path),
             message="Queued for download",
         )
         row = await self._repository.create_job(
