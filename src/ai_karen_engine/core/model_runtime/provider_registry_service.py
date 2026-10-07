@@ -121,7 +121,10 @@ class ProviderRegistryService:
         "builtin_transformers": "builtin_transformers",
         "lm_studio": "lmstudio-desktop",
         "lmstudio": "lmstudio-desktop",
+        "lmstudio_desktop": "lmstudio-desktop",
+        "llamacpp_server": "llamacpp-server",
         "ollama": "ollama-local",
+        "ollama_local": "ollama-local",
     }
 
     def __init__(self):
