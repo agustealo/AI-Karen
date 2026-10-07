@@ -176,7 +176,8 @@ class PromptRegistry:
                 except (TypeError, ValueError) as exc:
                     skipped_records += 1
                     logger.warning(
-                        "Ignoring invalid persisted prompt record index=%s prompt_id=%s version=%s error=%s",
+                        "Ignoring invalid persisted prompt record index=%s "
+                        "prompt_id=%s version=%s error=%s",
                         index,
                         prompt_id or "<unknown>",
                         raw_version or "<missing>",
