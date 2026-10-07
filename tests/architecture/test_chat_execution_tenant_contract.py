@@ -25,3 +25,16 @@ def test_chat_ingress_and_approval_resume_supply_authoritative_tenant() -> None:
     assert "tenant_id=tenant_id" in ingress
     assert 'tenant_id == "default"' in approvals
     assert "tenant_id=tenant_id" in approvals
+
+
+def test_missing_tenant_does_not_derive_conversation_identity() -> None:
+    contract = CONTRACT.read_text(encoding="utf-8")
+
+    post_init = contract.split("def __post_init__(self) -> None:", 1)[1].split(
+        "def require_conversation_id", 1
+    )[0]
+
+    assert 'tenant_id = str(self.tenant_id or "").strip()' in post_init
+    assert "if not tenant_id:" in post_init
+    assert "return" in post_init
+    assert '"conversation",' in post_init
