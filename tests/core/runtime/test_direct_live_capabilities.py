@@ -916,3 +916,18 @@ def test_location_shorthand_allows_lowercase_name_connectors() -> None:
     assert isle.requires_live_data is True
     assert rio_time.intent == "time.current"
     assert rio_time.requires_live_data is True
+
+
+def test_freshness_contractions_and_right_now_clock_forms_route_live() -> None:
+    latest_release = resolve_capability_decision(
+        "What's the latest Python release?"
+    )
+    latest_news = resolve_capability_decision("What's the latest news?")
+    right_now = resolve_capability_decision("What time is it right now?")
+
+    assert latest_release.intent == "search.general"
+    assert latest_release.requires_live_data is True
+    assert latest_news.intent == "search.general"
+    assert latest_news.requires_live_data is True
+    assert right_now.intent == "time.current"
+    assert right_now.requires_live_data is True
