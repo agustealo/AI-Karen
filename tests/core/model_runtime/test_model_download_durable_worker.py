@@ -641,3 +641,39 @@ async def test_start_download_rejects_changed_reviewed_revision(
             },
             {"user_id": "test-user"},
         )
+
+
+@pytest.mark.asyncio
+async def test_reported_license_requires_acknowledgment_even_when_ungated(
+    tmp_path: Path,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    service._orchestrator.get_model_info = AsyncMock(
+        return_value=ModelInfo(
+            model_id="test-owner/test-model",
+            owner="test-owner",
+            repository="test-model",
+            storage_key="transformers",
+            license="Apache-2.0",
+            gated=False,
+            revision="license-sha",
+        )
+    )
+
+    blocked = await service.validate_download(
+        model_id="test-owner/test-model",
+        channel_id="core_runtime_transformers",
+        accept_license=False,
+    )
+    allowed = await service.validate_download(
+        model_id="test-owner/test-model",
+        channel_id="core_runtime_transformers",
+        accept_license=True,
+    )
+
+    assert blocked.license_required is True
+    assert blocked.allowed is False
+    assert "License acceptance is required" in blocked.blocking_reasons[0]
+    assert allowed.license_required is True
+    assert allowed.allowed is True
