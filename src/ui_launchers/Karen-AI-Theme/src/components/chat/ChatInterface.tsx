@@ -326,6 +326,37 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
     setIsLoadingSessions(true);
     setError(null);
 
+    const preserveRequestedSession = (message: string) => {
+      const existingSession =
+        currentSessionRef.current?.id === sessionId
+          ? currentSessionRef.current
+          : sessionsRef.current.find((session) => session.id === sessionId);
+
+      const preservedSession: Session = existingSession
+        ? { ...existingSession, isActive: true }
+        : {
+            id: sessionId,
+            title: 'Current Chat',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            messageCount: 0,
+            isActive: true,
+          };
+
+      setCurrentSession(preservedSession);
+      setSessions((prev) => {
+        const exists = prev.some((session) => session.id === sessionId);
+        return exists
+          ? prev.map((session) => ({
+              ...session,
+              isActive: session.id === sessionId,
+            }))
+          : [preservedSession, ...prev.map((session) => ({ ...session, isActive: false }))];
+      });
+      persistActiveSessionId(sessionId);
+      setError(message);
+    };
+
     try {
       const MAX_ATTEMPTS = 3;
       let conversationResponse: ConversationResponse | null = null;
@@ -393,35 +424,9 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
       })));
     } catch (err) {
       if (err instanceof ApiError && err.status === 429) {
-        const existingSession =
-          currentSessionRef.current?.id === sessionId
-            ? currentSessionRef.current
-            : sessionsRef.current.find((session) => session.id === sessionId);
-
-        const preservedSession: Session = existingSession
-          ? { ...existingSession, isActive: true }
-          : {
-              id: sessionId,
-              title: 'Current Chat',
-              createdAt: new Date(),
-              updatedAt: new Date(),
-              messageCount: 0,
-              isActive: true,
-            };
-
-        setCurrentSession(preservedSession);
-        setSessions((prev) => {
-          const exists = prev.some((session) => session.id === sessionId);
-          const next = exists
-            ? prev.map((session) => ({
-                ...session,
-                isActive: session.id === sessionId,
-              }))
-            : [preservedSession, ...prev.map((session) => ({ ...session, isActive: false }))];
-          return next;
-        });
-        persistActiveSessionId(sessionId);
-        setError('Session service is temporarily rate limited. Keeping your current chat available.');
+        preserveRequestedSession(
+          'Session service is temporarily rate limited. Keeping your current chat available.',
+        );
         console.warn('Session load was rate-limited; preserving the requested conversation.');
         return;
       }
@@ -437,13 +442,11 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
         return;
       }
 
-      console.error('Failed to load session:', err);
-      setError('Failed to load session. Starting fresh chat.');
-      try {
-        await createNewSession();
-      } catch {
-        // createNewSession already exposes truthful failure state.
-      }
+      console.warn('Session load failed transiently; preserving the requested conversation.', err);
+      preserveRequestedSession(
+        'Session service is temporarily unavailable. Keeping your current chat available.',
+      );
+      return;
     } finally {
       setIsLoadingSessions(false);
     }
@@ -2044,7 +2047,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     const lines: string[] = [
       `# ${safeTitle}`,
       '',
-      `Session ID: ${currentSession.id}`,
+      `Conversation ID: ${currentSession.id}`,
       `Exported: ${new Date().toISOString()}`,
       '',
     ];
@@ -2091,7 +2094,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     const lines: string[] = [
       `${currentSession.title || 'Chat Conversation'}`,
       '',
-      `Session ID: ${currentSession.id}`,
+      `Conversation ID: ${currentSession.id}`,
       `Copied: ${new Date().toISOString()}`,
       '',
     ];
