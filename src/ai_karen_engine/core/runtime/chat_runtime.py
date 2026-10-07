@@ -2088,6 +2088,27 @@ class ChatRuntime:
                 "memory_persistence_status",
                 "skipped",
             ),
+            "memory_context": dict(
+                memory_recall_meta.get("memory_context") or {"recall": []}
+            ),
+            "memory_candidate_count": int(
+                memory_recall_meta.get("memory_candidate_count") or 0
+            ),
+            "memory_admitted_count": int(
+                memory_recall_meta.get("memory_admitted_count") or 0
+            ),
+            "memory_persisted_count": int(
+                memory_recall_meta.get("memory_persisted_count") or 0
+            ),
+            "memory_formation_status": memory_recall_meta.get(
+                "memory_formation_status",
+                "skipped",
+            ),
+            "memory_formation_reason": memory_recall_meta.get(
+                "memory_formation_reason"
+            ),
+            "intent": decision.intent,
+            "intent_confidence": decision.intent_confidence,
             "transcript_persistence_status": transcript_meta.get(
                 "transcript_persistence_status",
                 "skipped",
