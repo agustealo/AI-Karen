@@ -25,6 +25,7 @@ def test_download_validation_resolves_metadata_even_with_explicit_channel() -> N
 
     assert "Metadata is consumer and policy truth" in source
     assert '"license": info.license' in source
+    assert '"gated": bool(info.gated)' in source
     assert '"license_url": (' in source
     assert 'f"https://huggingface.co/{model_id}"' in source
     assert '"total_size": info.total_size' in source
@@ -82,7 +83,9 @@ def test_recommended_models_are_config_driven_and_first_run_visible() -> None:
     assert "Review license" in ui
     assert "recommendedLicenseAcceptances" in ui
     assert "void validateDownload(checked)" in ui
+    assert "item.gated" in ui
     assert '"license_url"' in config
+    assert 'item["gated"] = bool(info.gated)' in control
 
 
 def test_model_library_root_is_backend_owned_and_user_configurable() -> None:
