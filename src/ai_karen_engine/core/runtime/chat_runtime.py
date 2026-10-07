@@ -31,6 +31,7 @@ from ai_karen_engine.core.runtime.composition import (
     RuntimeComposition,
     get_runtime_composition,
 )
+from ai_karen_engine.core.runtime.consumer_insights import build_consumer_insights
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
     ConversationRuntimeGateway,
     TranscriptPersistenceResult,
@@ -1363,14 +1364,15 @@ class ChatRuntime:
 
         ctx = request.context
         gateway = self._composition.expression_gateway
+        prompt_messages, prompt_telemetry = await self._assemble_prompt_with_telemetry(
+            request,
+            decision,
+            memory_recall_meta,
+        )
         task = ExpressionTask(
             task_id=f"expr_{ctx.correlation_id}",
             kind="chat",
-            messages=await self._assemble_prompt(
-                request,
-                decision,
-                memory_recall_meta,
-            ),
+            messages=prompt_messages,
             response_mode="text",
             required_capabilities=list(decision.required_capabilities),
             forbidden_capabilities=list(decision.forbidden_capabilities),
@@ -1441,8 +1443,29 @@ class ChatRuntime:
             "degradation_reason": result.degradation_reason,
             "degradation_type": (result.metadata or {}).get("degradation_type"),
             "provider_attempts": getattr(result, "attempts", []) or [],
+            "usage": dict((result.metadata or {}).get("usage") or {}),
+            "prompt_telemetry": prompt_telemetry,
+            "execution_spans": [
+                {
+                    "name": "prompt_assembly",
+                    "duration_ms": prompt_telemetry.get("assembly_duration_ms", 0.0),
+                    "source": "runtime_observed",
+                },
+                {
+                    "name": "provider_generation",
+                    "duration_ms": result.latency_ms,
+                    "source": "expression_gateway",
+                },
+            ],
             "provenance": provenance,
         }
+        normalized["consumer_insights"] = build_consumer_insights(
+            prompt_telemetry=prompt_telemetry,
+            provider_usage=normalized["usage"],
+            execution_spans=normalized["execution_spans"],
+            total_latency_ms=result.latency_ms
+            + float(prompt_telemetry.get("assembly_duration_ms") or 0.0),
+        )
         return result.text, normalized
 
     async def _run_simple_stream(
@@ -1704,7 +1727,21 @@ class ChatRuntime:
         decision: ExecutionDecision,
         memory_context: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """Assemble prompt using canonical PromptRuntime."""
+        """Backward-compatible prompt message projection."""
+        messages, _ = await self._assemble_prompt_with_telemetry(
+            request,
+            decision,
+            memory_context,
+        )
+        return messages
+
+    async def _assemble_prompt_with_telemetry(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        memory_context: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """Assemble prompt and preserve PromptRuntime-owned consumer telemetry."""
         from ai_karen_engine.core.runtime.prompt import (
             PromptAssemblyRequest,
             get_prompt_runtime_service,
@@ -1746,8 +1783,15 @@ class ChatRuntime:
             messages=[dict(msg) for msg in request.messages],
         )
 
+        assembly_started = time.perf_counter()
         result = await get_prompt_runtime_service().assemble_prompt(assembly_request)
-        return result.messages
+        prompt_telemetry = dict(
+            (result.metadata or {}).get("consumer_token_telemetry") or {}
+        )
+        prompt_telemetry["assembly_duration_ms"] = (
+            time.perf_counter() - assembly_started
+        ) * 1000.0
+        return result.messages, prompt_telemetry
 
     def _extract_user_message(self, messages: List[Dict[str, Any]]) -> str:
         """Extract the latest user message."""
@@ -1865,6 +1909,15 @@ class ChatRuntime:
                 for k, v in normalized.items()
                 if k not in _CANONICAL_META_KEYS
             }
+        )
+        md.extra["consumer_insights"] = build_consumer_insights(
+            prompt_telemetry=normalized.get("prompt_telemetry"),
+            provider_usage=normalized.get("usage"),
+            execution_spans=normalized.get("execution_spans"),
+            total_latency_ms=latency_ms,
+            vector_health=normalized.get("vector_health"),
+            counterfactuals=normalized.get("counterfactuals"),
+            agent_consensus=normalized.get("agent_consensus"),
         )
         return md
 
@@ -2114,6 +2167,15 @@ class ChatRuntime:
             ),
             "memory_formation_reason": memory_recall_meta.get(
                 "memory_formation_reason"
+            ),
+            "consumer_insights": build_consumer_insights(
+                prompt_telemetry=provider_meta.get("prompt_telemetry"),
+                provider_usage=provider_meta.get("usage"),
+                execution_spans=provider_meta.get("execution_spans"),
+                total_latency_ms=latency_ms,
+                vector_health=provider_meta.get("vector_health"),
+                counterfactuals=provider_meta.get("counterfactuals"),
+                agent_consensus=provider_meta.get("agent_consensus"),
             ),
             "intent": decision.intent,
             "intent_confidence": decision.intent_confidence,
