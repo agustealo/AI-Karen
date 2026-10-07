@@ -15,7 +15,6 @@ from urllib.parse import quote_plus
 import aiohttp
 from bs4 import BeautifulSoup
 
-from ai_karen_engine.services.search.web_search_defaults import build_provider_configs
 from ai_karen_engine.services.search.web_search_provider_registry import (
     WebSearchProviderDescriptor,
     WebSearchProviderRegistry,
