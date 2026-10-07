@@ -828,10 +828,9 @@ class ChatRuntimeControlPlane:
         if mode == RuntimeMode.MAINTENANCE:
             return self._build_maintenance_response()
         elif mode == RuntimeMode.EMERGENCY_FALLBACK:
-            # Chat emergency static is owned by the provider/router fallback path.
-            # A failed dependency snapshot must degrade chat, not bypass every live
-            # provider attempt. Routes still catch orchestrator setup failures and
-            # return emergency static only after execution paths fail.
+            # Emergency mode is a control-plane state only. A failed dependency
+            # snapshot must not bypass live provider attempts or manufacture
+            # assistant output.
             logger.warning(
                 "Runtime is marked emergency_fallback; allowing chat route/provider fallback to execute",
                 extra={
