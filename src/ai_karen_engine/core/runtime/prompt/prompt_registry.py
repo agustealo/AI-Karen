@@ -101,20 +101,130 @@ class PromptRegistry:
             if prompt is not None:
                 prompt.is_default = version == active_version
 
+    @staticmethod
+    def _normalize_persisted_version(version_text: Any) -> str:
+        """Normalize known legacy persisted versions at the storage boundary.
+
+        Runtime prompt contracts remain strict semantic versions (vX.Y.Z).
+        Older registries emitted vX or vX.Y; migrate only those deterministic
+        legacy forms and reject anything ambiguous or malformed.
+        """
+        raw = str(version_text or "").strip()
+        try:
+            return str(PromptVersion.parse(raw))
+        except ValueError:
+            clean = raw.lower().lstrip("v")
+            parts = clean.split(".") if clean else []
+            if not parts or len(parts) > 2 or not all(part.isdigit() for part in parts):
+                raise
+
+            normalized_parts = [int(part) for part in parts]
+            while len(normalized_parts) < 3:
+                normalized_parts.append(0)
+            return str(PromptVersion(*normalized_parts))
+
+    @staticmethod
+    def _parse_persisted_datetime(value: Any) -> Optional[datetime]:
+        """Restore persisted ISO datetimes without weakening the runtime contract."""
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            return value
+        if not isinstance(value, str):
+            raise ValueError(f"Invalid persisted datetime type: {type(value).__name__}")
+        return datetime.fromisoformat(value)
+
+    @staticmethod
+    def _serialize_prompt(prompt: PromptDefinition) -> Dict[str, Any]:
+        """Serialize a prompt definition with stable persistence types."""
+        data = dict(prompt.__dict__)
+        status = data.get("status")
+        if isinstance(status, PromptLifecycleStatus):
+            data["status"] = status.value
+        for field_name in ("created_at", "deprecated_at"):
+            value = data.get(field_name)
+            if isinstance(value, datetime):
+                data[field_name] = value.isoformat()
+        return data
+
+    @classmethod
+    def _deserialize_prompt(cls, prompt_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize persistence-only types before constructing the strict contract."""
+        data = dict(prompt_data)
+
+        raw_status = data.get("status")
+        if raw_status is not None and not isinstance(raw_status, PromptLifecycleStatus):
+            data["status"] = PromptLifecycleStatus(str(raw_status))
+
+        for field_name in ("created_at", "deprecated_at"):
+            if field_name in data:
+                data[field_name] = cls._parse_persisted_datetime(data[field_name])
+
+        return data
+
     def _load_registry(self):
-        """Load prompts from registry storage."""
+        """Load prompts from registry storage.
+
+        Invalid individual prompt records are quarantined in memory so one
+        stale legacy entry cannot take down PromptRuntime and therefore normal
+        chat execution. Corrupt registry JSON or an invalid top-level schema
+        still fails closed because the storage boundary itself is unreadable.
+        """
         registry_file = self.registry_path / "registry.json"
         if not registry_file.exists():
             return
-        
+
         try:
             with open(registry_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            
+
+            prompt_records = data.get("prompts", [])
+            if not isinstance(prompt_records, list):
+                raise RegistryError("Prompt registry 'prompts' must be a list")
+
+            skipped_records = 0
+            migrated_records = 0
+
             # Load each prompt version as a distinct immutable registry entry.
-            for prompt_data in data.get("prompts", []):
-                prompt = PromptDefinition(**prompt_data)
-                version = prompt.parsed_version
+            for index, prompt_data in enumerate(prompt_records):
+                if not isinstance(prompt_data, dict):
+                    skipped_records += 1
+                    logger.warning(
+                        "Ignoring invalid persisted prompt record index=%s: expected object",
+                        index,
+                    )
+                    continue
+
+                raw_prompt = dict(prompt_data)
+                prompt_id = str(raw_prompt.get("prompt_id") or "")
+                raw_version = str(raw_prompt.get("version") or "")
+                try:
+                    raw_prompt = self._deserialize_prompt(raw_prompt)
+                    normalized_version = self._normalize_persisted_version(raw_version)
+                    if normalized_version != raw_version:
+                        raw_prompt["version"] = normalized_version
+                        migrated_records += 1
+                        logger.warning(
+                            "Migrating legacy persisted prompt version prompt_id=%s from=%s to=%s",
+                            prompt_id or "<unknown>",
+                            raw_version,
+                            normalized_version,
+                        )
+
+                    prompt = PromptDefinition(**raw_prompt)
+                    version = prompt.parsed_version
+                except (TypeError, ValueError) as exc:
+                    skipped_records += 1
+                    logger.warning(
+                        "Ignoring invalid persisted prompt record index=%s "
+                        "prompt_id=%s version=%s error=%s",
+                        index,
+                        prompt_id or "<unknown>",
+                        raw_version or "<missing>",
+                        exc,
+                    )
+                    continue
+
                 storage_key = self._storage_key(prompt.prompt_id, version)
                 self._prompts[storage_key] = prompt
                 self._version_index.setdefault(prompt.prompt_id, {})[version] = (
@@ -127,7 +237,8 @@ class PromptRegistry:
                 data.get("active_versions") or {}
             ).items():
                 try:
-                    version = PromptVersion.parse(str(version_text))
+                    normalized_version = self._normalize_persisted_version(version_text)
+                    version = PromptVersion.parse(normalized_version)
                 except ValueError:
                     logger.warning(
                         "Ignoring invalid active prompt version %s=%s",
@@ -145,8 +256,15 @@ class PromptRegistry:
                         self._active_versions[prompt_id] = max(versions)
                 self._sync_default_flags(prompt_id)
 
-            logger.info(f"Loaded {len(self._prompts)} prompt versions from registry")
-        
+            logger.info(
+                "Loaded %s prompt versions from registry migrated=%s quarantined=%s",
+                len(self._prompts),
+                migrated_records,
+                skipped_records,
+            )
+
+        except RegistryError:
+            raise
         except Exception as e:
             logger.error(f"Failed to load registry: {e}")
             raise RegistryError(f"Failed to load registry: {e}")
@@ -185,8 +303,14 @@ class PromptRegistry:
         
         try:
             data = {
-                "prompts": [prompt.__dict__ for prompt in self._prompts.values()],
-                "active_versions": {pid: str(version) for pid, version in self._active_versions.items()},
+                "prompts": [
+                    self._serialize_prompt(prompt)
+                    for prompt in self._prompts.values()
+                ],
+                "active_versions": {
+                    prompt_id: str(version)
+                    for prompt_id, version in self._active_versions.items()
+                },
                 "updated_at": datetime.utcnow().isoformat(),
             }
             
