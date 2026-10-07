@@ -199,12 +199,15 @@ def test_retry_preserves_install_alias_and_reviewed_revision() -> None:
     ui = UI.read_text(encoding="utf-8")
     control = CONTROL.read_text(encoding="utf-8")
 
-    assert "const retryInstallRevision = (job: DownloadJob)" in ui
-    assert "revision: retryInstallRevision(job)" in ui
-    assert "validated_revision: job.revision || null" in ui
+    assert "const IMMUTABLE_MODEL_REVISION = /^[0-9a-f]{40,64}$/i;" in ui
+    assert "const retryValidatedRevision = (job: DownloadJob)" in ui
+    assert "const retryInstallRevision = (" in ui
+    assert "persistedRevision && !IMMUTABLE_MODEL_REVISION.test(persistedRevision)" in ui
+    assert "revision: retryInstallRevision(job, storageSettings?.models_root)" in ui
+    assert "validated_revision: retryValidatedRevision(job)" in ui
     assert "job.channel_id === 'core_spacy'" in ui
-    assert "const modelDirectory = `${owner}--${repository}`;" in ui
-    assert "const storageKey = String(job.storage_key || '').trim();" in ui
-    assert "const marker = `/${storageKey}/${modelDirectory}/`;" in ui
-    assert "normalizedPath.slice(markerIndex + marker.length)" in ui
+    assert "const rootPrefix = `${normalizedRoot}/`;" in ui
+    assert "normalizedPath.startsWith(rootPrefix)" in ui
+    assert "const installPrefix = `${storageKey}/${modelDirectory}/`;" in ui
+    assert "relativePath.startsWith(installPrefix)" in ui
     assert "E_VERIFY," in control
