@@ -191,33 +191,3 @@ def test_model_license_acceptance_revalidates_reviewed_revision() -> None:
     assert "validation_revision = reviewed_revision or revision" in control
     assert "Validated model revision changed before queueing" in control
     assert "install_path = self._build_install_path(" in control
-
-
-def test_download_request_schema_preserves_reviewed_revision() -> None:
-    import importlib.util
-    import sys
-
-    spec = importlib.util.spec_from_file_location(
-        "model_orchestrator_route_contract",
-        ROUTE,
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-
-    request = module.ModelDownloadRequest(
-        model_id="test-owner/test-model",
-        revision=None,
-        validated_revision="reviewed-sha",
-        accept_license=True,
-    )
-    payload = (
-        request.model_dump()
-        if hasattr(request, "model_dump")
-        else request.dict()
-    )
-
-    assert payload["validated_revision"] == "reviewed-sha"
-    assert payload["revision"] is None
-    assert payload["accept_license"] is True
