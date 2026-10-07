@@ -207,6 +207,8 @@ class DirectCapabilityExecutor:
                             "conversation_id": request.context.conversation_id,
                             "correlation_id": request.context.correlation_id,
                             "allowed_capabilities": list(plan.allowed_capabilities),
+                            "authorized_plan": plan,
+                            "policy_decision_id": plan.policy_decision_id,
                         },
                         user_id=request.context.user_id,
                         session_id=request.context.session_id,
