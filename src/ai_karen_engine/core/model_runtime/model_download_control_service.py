@@ -1124,6 +1124,7 @@ class ModelDownloadControlService:
                     model_id,
                     refresh_remote=self._policy.require_license_acceptance,
                 )
+                item["metadata_verified"] = True
                 item["license"] = info.license
                 resolved_revision = info.revision or "main"
                 item["resolved_revision"] = resolved_revision
@@ -1140,6 +1141,7 @@ class ModelDownloadControlService:
                     model_id,
                     exc,
                 )
+                item["metadata_verified"] = False
                 item["gated"] = bool(item.get("gated", False))
                 item["resolved_revision"] = None
 
