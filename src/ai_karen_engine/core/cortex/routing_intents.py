@@ -51,7 +51,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"\btemperature\s+(?:in|at|outside|today|tonight|tomorrow)\b",
             r"\b(?:will|is|does)\s+it\s+(?:rain|snow)\b",
             r"\b(?:rain|snow|storm|precipitation)\s+(?:today|tonight|tomorrow|this\s+week)\b",
-            r"^[\\w.'’,-]+(?:[\\s,]+[\\w.'’,-]+){0,4}\\s+(?:weather|forecast)\\??$",
+            r"^[\w.'’,-]+(?:[\s,]+[\w.'’,-]+){0,4}\s+(?:weather|forecast)\??$",
         ],
         "required_capability": "web.search",
         "preferred_plugin": "intelligent-search",
