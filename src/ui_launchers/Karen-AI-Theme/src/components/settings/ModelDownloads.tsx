@@ -185,19 +185,22 @@ type ModelStorageSettings = {
   env_override: boolean;
 };
 
+type PlatformResourceMetric = {
+  available: boolean;
+  usage_percent?: number | null;
+  used_bytes?: number | null;
+  available_bytes?: number | null;
+  total_bytes?: number | null;
+};
+
 type ModelRuntimeTelemetry = {
   resources: {
-    available: boolean;
-    cpu_percent?: number | null;
-    memory_percent?: number | null;
-    memory_available_bytes?: number | null;
-    memory_used_bytes?: number | null;
-    disk_percent?: number | null;
-    disk_free_bytes?: number | null;
-    gpu_percent?: number | null;
-    gpu_memory_percent?: number | null;
-    process_count?: number | null;
-    thread_count?: number | null;
+    timestamp: number;
+    cpu: PlatformResourceMetric;
+    memory: PlatformResourceMetric;
+    gpu: PlatformResourceMetric;
+    vram: PlatformResourceMetric;
+    disk: PlatformResourceMetric;
   };
   storage: {
     disk_usage?: {
@@ -723,7 +726,9 @@ export default function ModelDownloads({
   const modelStorageBytes =
     storageSummary?.model_storage?.total_size_bytes ?? 0;
   const diskFreeBytes =
-    storageSummary?.disk_usage?.free_bytes ?? resourceSummary?.disk_free_bytes ?? 0;
+    storageSummary?.disk_usage?.free_bytes ??
+    resourceSummary?.disk.available_bytes ??
+    0;
 
   const hasEndpointErrors = Object.keys(endpointErrors).length > 0;
   const channelBlocked = isAdminOnlyChannelBlocked(currentChannel, adminMode);
@@ -1302,12 +1307,12 @@ export default function ModelDownloads({
             <div className="rounded-xl border border-border/40 bg-background/40 p-3">
               <div className="flex items-center justify-between">
                 <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-muted-foreground">CPU</span>
-                <span className="text-xs font-semibold">{resourceSummary?.cpu_percent != null ? `${resourceSummary.cpu_percent.toFixed(0)}%` : 'Unavailable'}</span>
+                <span className="text-xs font-semibold">{resourceSummary?.cpu.usage_percent != null ? `${resourceSummary.cpu.usage_percent.toFixed(0)}%` : 'Unavailable'}</span>
               </div>
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
                 <div
                   className="h-full rounded-full bg-primary transition-all"
-                  style={{ width: `${Math.min(100, Math.max(0, resourceSummary?.cpu_percent ?? 0))}%` }}
+                  style={{ width: `${Math.min(100, Math.max(0, resourceSummary?.cpu.usage_percent ?? 0))}%` }}
                 />
               </div>
             </div>
@@ -1315,12 +1320,12 @@ export default function ModelDownloads({
             <div className="rounded-xl border border-border/40 bg-background/40 p-3">
               <div className="flex items-center justify-between">
                 <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-muted-foreground">Memory</span>
-                <span className="text-xs font-semibold">{resourceSummary?.memory_percent != null ? `${resourceSummary.memory_percent.toFixed(0)}%` : 'Unavailable'}</span>
+                <span className="text-xs font-semibold">{resourceSummary?.memory.usage_percent != null ? `${resourceSummary.memory.usage_percent.toFixed(0)}%` : 'Unavailable'}</span>
               </div>
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
                 <div
                   className="h-full rounded-full bg-primary transition-all"
-                  style={{ width: `${Math.min(100, Math.max(0, resourceSummary?.memory_percent ?? 0))}%` }}
+                  style={{ width: `${Math.min(100, Math.max(0, resourceSummary?.memory.usage_percent ?? 0))}%` }}
                 />
               </div>
             </div>
@@ -1329,15 +1334,15 @@ export default function ModelDownloads({
               <div className="flex items-center justify-between">
                 <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-muted-foreground">GPU / VRAM</span>
                 <span className="text-xs font-semibold">
-                  {resourceSummary?.gpu_percent != null
-                    ? `${resourceSummary.gpu_percent.toFixed(0)}% / ${(resourceSummary.gpu_memory_percent ?? 0).toFixed(0)}%`
+                  {resourceSummary?.gpu.usage_percent != null
+                    ? `${resourceSummary.gpu.usage_percent.toFixed(0)}% / ${(resourceSummary.vram.usage_percent ?? 0).toFixed(0)}%`
                     : 'Unavailable'}
                 </span>
               </div>
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
                 <div
                   className="h-full rounded-full bg-primary transition-all"
-                  style={{ width: `${Math.min(100, Math.max(0, resourceSummary?.gpu_memory_percent ?? 0))}%` }}
+                  style={{ width: `${Math.min(100, Math.max(0, resourceSummary?.vram.usage_percent ?? 0))}%` }}
                 />
               </div>
             </div>
