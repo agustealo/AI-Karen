@@ -795,7 +795,7 @@ export default function ModelDownloads({
     }
   }, [loadState]);
 
-  const validateDownload = useCallback(async () => {
+  const validateDownload = useCallback(async (licenseAccepted = acceptLicense) => {
     const requestedModelId = modelId.trim();
 
     if (!requestedModelId) {
@@ -817,7 +817,7 @@ export default function ModelDownloads({
           revision: revision.trim() || null,
           channel_id: currentChannel?.id || null,
           trust_remote_code: trustRemoteCode,
-          accept_license: acceptLicense,
+          accept_license: licenseAccepted,
           include_patterns: parseCsvList(includePatterns),
           exclude_patterns: parseCsvList(excludePatterns),
         },
@@ -2003,7 +2003,11 @@ export default function ModelDownloads({
                     <Switch
                       id="accept-model-license"
                       checked={acceptLicense}
-                      onCheckedChange={setAcceptLicense}
+                      disabled={validating}
+                      onCheckedChange={(checked) => {
+                        setAcceptLicense(checked);
+                        void validateDownload(checked);
+                      }}
                     />
                   </div>
                 </div>
