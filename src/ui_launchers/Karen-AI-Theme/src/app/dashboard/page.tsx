@@ -383,7 +383,7 @@ export default function DashboardPage() {
   return (
     <AuthWrapper>
       <SidebarProvider>
-        <div className="karen-app-shell flex h-screen w-full flex-col overflow-hidden bg-background text-foreground">
+        <div className="karen-app-shell flex h-dvh min-h-0 w-full flex-col overflow-hidden bg-background text-foreground">
           <header className="z-30 flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-background/80 px-3 backdrop-blur-xl md:px-4">
             <div className="flex items-center space-x-3">
               <AppSidebarTrigger className="mr-1 md:mr-2" />
@@ -425,7 +425,7 @@ export default function DashboardPage() {
             </Sheet>
           </header>
 
-          <div className="flex flex-1">
+          <div className="flex min-h-0 flex-1 overflow-hidden">
             <Sidebar
               variant="sidebar"
               collapsible="icon"
@@ -583,7 +583,16 @@ export default function DashboardPage() {
             <SidebarInset className="karen-workspace-grid flex min-h-0 flex-1 flex-col bg-transparent">
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 md:p-3">
                 <div className="karen-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
-                  {backendGate ?? currentViewContent}
+                  <div
+                    data-testid="workspace-scroll-region"
+                    className={
+                      backendStatus !== "ready" || activeMainView !== "chat"
+                        ? "min-h-0 flex-1 overflow-y-auto overscroll-contain"
+                        : "flex min-h-0 flex-1 flex-col overflow-hidden"
+                    }
+                  >
+                    {backendGate ?? currentViewContent}
+                  </div>
                 </div>
               </div>
             </SidebarInset>
