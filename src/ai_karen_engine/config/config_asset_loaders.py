@@ -125,3 +125,20 @@ def load_deployment_config() -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"Failed to load deployment config from {config_path}: {e}")
     return {}
+
+
+def load_model_download_recommendations() -> Dict[str, Any]:
+    """Load canonical consumer model download recommendations."""
+    config_path = Path("config_assets/model_download_recommendations.json")
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+                return payload if isinstance(payload, dict) else {}
+        except Exception as exc:
+            logger.warning(
+                "Failed to load model download recommendations from %s: %s",
+                config_path,
+                exc,
+            )
+    return {}
