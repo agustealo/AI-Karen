@@ -914,6 +914,120 @@ export default function ModelDownloads({
     setValidation(null);
   }, []);
 
+  const installRecommendedModel = useCallback(
+    async (item: RecommendedModel) => {
+      if (item.installed) return;
+      if (policy?.require_license_acceptance && !acceptLicense) {
+        toast({
+          title: 'Accept the model license first',
+          description: 'Use the license switch in the install panel before installing recommended models.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      setInstallingRecommended((current) => ({ ...current, [item.id]: true }));
+      try {
+        await apiClient.post(ENDPOINTS.download, {
+          model_id: item.model_id,
+          channel_id: item.channel_id,
+          include_patterns: item.include_patterns || [],
+          exclude_patterns: [],
+          trust_remote_code: false,
+          accept_license: acceptLicense,
+        });
+        toast({
+          title: 'Recommended model queued',
+          description: `${item.label} is queued for installation.`,
+        });
+        await refreshAll();
+      } catch (error) {
+        toast({
+          title: `Unable to install ${item.label}`,
+          description: getErrorMessage(error, 'Karen could not queue this recommended model.'),
+          variant: 'destructive',
+        });
+      } finally {
+        setInstallingRecommended((current) => {
+          const next = { ...current };
+          delete next[item.id];
+          return next;
+        });
+      }
+    },
+    [acceptLicense, policy?.require_license_acceptance, refreshAll, toast],
+  );
+
+  const installEssentialModels = useCallback(async () => {
+    const essentials = (recommendations?.recommendations ?? []).filter(
+      (item) => item.tier === 'essential' && !item.installed,
+    );
+    if (essentials.length === 0) return;
+    if (policy?.require_license_acceptance && !acceptLicense) {
+      toast({
+        title: 'Accept the model licenses first',
+        description: 'Karen will not silently accept third-party model licenses on your behalf.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setInstallingEssentials(true);
+    try {
+      for (const item of essentials) {
+        await apiClient.post(ENDPOINTS.download, {
+          model_id: item.model_id,
+          channel_id: item.channel_id,
+          include_patterns: item.include_patterns || [],
+          exclude_patterns: [],
+          trust_remote_code: false,
+          accept_license: acceptLicense,
+        });
+      }
+      toast({
+        title: 'Karen essentials queued',
+        description: `${essentials.length} required local model${essentials.length === 1 ? '' : 's'} queued.`,
+      });
+      await refreshAll();
+    } catch (error) {
+      toast({
+        title: 'Unable to queue all essentials',
+        description: getErrorMessage(error, 'One or more essential model downloads could not be queued.'),
+        variant: 'destructive',
+      });
+      await refreshAll();
+    } finally {
+      setInstallingEssentials(false);
+    }
+  }, [acceptLicense, policy?.require_license_acceptance, recommendations, refreshAll, toast]);
+
+  const saveModelsRoot = useCallback(async () => {
+    const nextRoot = modelsRootDraft.trim();
+    if (!nextRoot || nextRoot === storageSettings?.models_root) return;
+    setSavingModelsRoot(true);
+    try {
+      const response = await apiClient.put<ModelStorageSettings>(
+        ENDPOINTS.storage,
+        { models_root: nextRoot },
+      );
+      setStorageSettings(response);
+      setModelsRootDraft(response.models_root);
+      toast({
+        title: 'Model library folder updated',
+        description: `New model downloads will use ${response.models_root}.`,
+      });
+      await refreshAll();
+    } catch (error) {
+      toast({
+        title: 'Unable to change model library folder',
+        description: getErrorMessage(error, 'Karen could not update the model library folder.'),
+        variant: 'destructive',
+      });
+    } finally {
+      setSavingModelsRoot(false);
+    }
+  }, [modelsRootDraft, refreshAll, storageSettings?.models_root, toast]);
+
   const renderPolicyRow = (
     label: string,
     description: string,
@@ -995,6 +1109,127 @@ export default function ModelDownloads({
           </div>
         </CardHeader>
       </Card>
+
+      {recommendations && (
+        <Card className="border-border/50">
+          <CardHeader>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <CheckCircle2 className="h-4 w-4 text-primary" aria-hidden="true" />
+                  Karen Recommended
+                </CardTitle>
+                <CardDescription>
+                  First-run local models Karen is explicitly built to use.
+                </CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant={recommendations.essential_ready ? 'secondary' : 'outline'}>
+                  {recommendations.essential_installed}/{recommendations.essential_total} essentials ready
+                </Badge>
+                {!recommendations.essential_ready && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => void installEssentialModels()}
+                    disabled={installingEssentials || downloadsBlocked}
+                  >
+                    {installingEssentials ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Download className="mr-2 h-4 w-4" aria-hidden="true" />
+                    )}
+                    Install Essentials
+                  </Button>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {policy?.require_license_acceptance && (
+              <div className="flex items-start justify-between gap-4 rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
+                <div>
+                  <div className="text-sm font-semibold">Accept recommended model licenses</div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Required before Karen queues curated third-party models. License names are shown on each card.
+                  </p>
+                </div>
+                <Switch checked={acceptLicense} onCheckedChange={setAcceptLicense} />
+              </div>
+            )}
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {recommendations.recommendations.map((item) => (
+                <div
+                  key={item.id}
+                  className={[
+                    'rounded-xl border p-4',
+                    item.installed
+                      ? 'border-emerald-500/30 bg-emerald-500/5'
+                      : 'border-border/50 bg-muted/10',
+                  ].join(' ')}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-sm font-semibold">{item.label}</span>
+                        <Badge variant={item.tier === 'essential' ? 'secondary' : 'outline'} className="text-[9px]">
+                          {item.tier}
+                        </Badge>
+                      </div>
+                      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                        {item.purpose}
+                      </p>
+                    </div>
+                    {item.installed && (
+                      <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" aria-label="Installed" />
+                    )}
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    <Badge variant="outline" className="text-[9px]">
+                      {formatBytes(item.approximate_size_bytes)}
+                    </Badge>
+                    {item.license && (
+                      <Badge variant="outline" className="text-[9px]">{item.license}</Badge>
+                    )}
+                    {item.expected_runtime && (
+                      <Badge variant="outline" className="text-[9px]">{item.expected_runtime}</Badge>
+                    )}
+                  </div>
+
+                  <div className="mt-3 text-[10px] text-muted-foreground">
+                    Used by: {item.app_consumers.join(', ')}
+                  </div>
+
+                  <Button
+                    type="button"
+                    variant={item.installed ? 'outline' : 'default'}
+                    size="sm"
+                    className="mt-4 w-full"
+                    disabled={item.installed || installingRecommended[item.id] || downloadsBlocked}
+                    onClick={() => void installRecommendedModel(item)}
+                  >
+                    {item.installed ? (
+                      'Installed'
+                    ) : installingRecommended[item.id] ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+                        Queueing...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="mr-2 h-4 w-4" aria-hidden="true" />
+                        Install
+                      </>
+                    )}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="border-border/50">
         <CardHeader>
@@ -1091,6 +1326,52 @@ export default function ModelDownloads({
                 );
               })}
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/50">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <HardDrive className="h-4 w-4 text-primary" aria-hidden="true" />
+            Model Library Folder
+          </CardTitle>
+          <CardDescription>
+            Choose where Karen stores downloaded local models. Active downloads must finish or be cancelled before changing folders.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input
+              aria-label="Model library folder"
+              value={modelsRootDraft}
+              onChange={(event) => setModelsRootDraft(event.target.value)}
+              placeholder="/path/to/karen-models"
+              disabled={storageSettings?.env_override}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void saveModelsRoot()}
+              disabled={
+                savingModelsRoot ||
+                !modelsRootDraft.trim() ||
+                modelsRootDraft.trim() === storageSettings?.models_root ||
+                storageSettings?.env_override
+              }
+            >
+              {savingModelsRoot ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Save className="mr-2 h-4 w-4" aria-hidden="true" />
+              )}
+              Save Folder
+            </Button>
+          </div>
+          {storageSettings?.env_override && (
+            <p className="text-xs text-muted-foreground">
+              This folder is locked by KAREN_MODELS_ROOT. Change that environment setting to move the library.
+            </p>
           )}
         </CardContent>
       </Card>
