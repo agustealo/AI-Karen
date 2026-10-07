@@ -187,6 +187,22 @@ type RecommendedModelsResponse = {
   essential_total: number;
 };
 
+const retryInstallRevision = (job: DownloadJob): string | null => {
+  if (job.channel_id === 'core_spacy') {
+    return null;
+  }
+
+  const normalizedPath = String(job.install_path || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '');
+  if (!normalizedPath) {
+    return null;
+  }
+
+  const installAlias = normalizedPath.split('/').pop() || '';
+  return installAlias && installAlias !== 'main' ? installAlias : null;
+};
+
 type ModelStorageSettings = {
   models_root: string;
   runtime_registry_root: string;
@@ -1013,7 +1029,8 @@ export default function ModelDownloads({
       try {
         await apiClient.post(ENDPOINTS.download, {
           model_id: job.model_id,
-          revision: job.revision || null,
+          revision: retryInstallRevision(job),
+          validated_revision: job.revision || null,
           channel_id: job.channel_id || null,
           include_patterns: job.include_patterns || [],
           exclude_patterns: job.exclude_patterns || [],
