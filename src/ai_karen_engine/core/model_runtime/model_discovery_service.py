@@ -260,6 +260,15 @@ class ModelDiscoveryService:
         self._lock = threading.RLock()
         self._async_lock = asyncio.Lock()
 
+    def set_primary_root(self, root: Path | str) -> None:
+        """Update the canonical discovery root after an admin storage change."""
+        with self._lock:
+            self._config["model_root"] = str(root)
+            self._config["model_roots"] = [str(root)]
+            self._models = []
+            self._status = DiscoveryStatus.IDLE
+            self._progress = DiscoveryProgress(status=DiscoveryStatus.IDLE)
+
     def _primary_root(self) -> Path:
         model_root = self._config.get("model_root")
         if model_root:
