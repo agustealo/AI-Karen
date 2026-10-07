@@ -63,11 +63,17 @@ class IntelligentErrorHandlerMiddleware(BaseHTTPMiddleware):
             if forwarded_for
             else (request.client.host if request.client else "unknown")
         )
+        correlation_id = (
+            request.headers.get("x-correlation-id")
+            or request.headers.get("x-request-id")
+            or "unknown"
+        )
         return {
             "ip_address": ip_address,
             "user_agent": request.headers.get("user-agent", ""),
             "path": request.url.path,
             "method": request.method,
+            "correlation_id": correlation_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -136,6 +142,8 @@ class IntelligentErrorHandlerMiddleware(BaseHTTPMiddleware):
             )
 
             error_payload: Dict[str, object] = {
+                "error_type": error_type,
+                "correlation_id": request_meta["correlation_id"],
                 "title": analysis.title,
                 "category": analysis.category,
                 "severity": analysis.severity,
@@ -152,7 +160,9 @@ class IntelligentErrorHandlerMiddleware(BaseHTTPMiddleware):
             if self.debug_mode and traceback_str:
                 error_payload["traceback"] = traceback_str
 
-            headers: Dict[str, str] = {}
+            headers: Dict[str, str] = {
+                "X-Correlation-Id": request_meta["correlation_id"],
+            }
             if analysis.retry_after:
                 headers["Retry-After"] = str(analysis.retry_after)
 
