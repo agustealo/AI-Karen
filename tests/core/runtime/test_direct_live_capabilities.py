@@ -93,7 +93,7 @@ async def test_cortex_weather_is_direct_governed_capability() -> None:
     assert decision.intent == "search.weather"
     assert decision.graph_required is False
     assert decision.topology is ExecutionTopology.DIRECT
-    assert "internet_search" in decision.required_capabilities
+    assert "web.search" in decision.required_capabilities
     assert "web_search" in decision.tool_requirements
     assert "intelligent-search" in decision.plugin_candidates
     assert "direct_capability_request" in decision.reason_codes
@@ -178,7 +178,7 @@ async def test_weather_falls_back_to_authorized_web_tool_when_plugin_fails() -> 
     plan = _plan(
         tools=["web_search"],
         plugins=["intelligent-search"],
-        capabilities=["internet_search"],
+        capabilities=["web.search"],
     )
     meter = ExecutionBudgetMeter(plan.budget)
     meter.start()
@@ -248,7 +248,7 @@ async def test_missing_live_capability_returns_actionable_continuation() -> None
     executor = DirectCapabilityExecutor()
     request = _request("What's the weather in Detroit?")
     decision = await _weather_decision()
-    plan = _plan(capabilities=["internet_search"])
+    plan = _plan(capabilities=["web.search"])
     meter = ExecutionBudgetMeter(plan.budget)
     meter.start()
 
@@ -276,7 +276,7 @@ async def test_web_search_tool_forwards_runtime_scope_and_plan() -> None:
 
     plan = _plan(
         tools=["web_search"],
-        capabilities=["internet_search"],
+        capabilities=["web.search"],
     )
 
     result = await tool._execute(
@@ -293,7 +293,7 @@ async def test_web_search_tool_forwards_runtime_scope_and_plan() -> None:
             "session_id": "session-1",
             "conversation_id": CONVERSATION_ID,
             "policy_decision_id": "policy-1",
-            "allowed_capabilities": ["internet_search"],
+            "allowed_capabilities": ["web.search"],
             "authorized_plan": plan,
         },
     )
