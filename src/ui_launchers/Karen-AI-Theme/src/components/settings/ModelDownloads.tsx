@@ -428,9 +428,53 @@ export default function ModelDownloads({
     setLoading(false);
   }, [toast]);
 
+  const loadCatalog = useCallback(async (query: string) => {
+    setCatalogLoading(true);
+    setCatalogError(null);
+    try {
+      const params = new URLSearchParams({ limit: '24' });
+      const trimmed = query.trim();
+      if (trimmed.length >= 2) {
+        params.set('query', trimmed);
+      }
+      const response = await apiClient.get<ModelCatalogItem[]>(
+        `/api/models/catalog?${params.toString()}`,
+      );
+      setCatalog(Array.isArray(response) ? response : []);
+    } catch (error) {
+      setCatalog([]);
+      setCatalogError(
+        getErrorMessage(error, 'Karen could not load the model catalog.'),
+      );
+    } finally {
+      setCatalogLoading(false);
+    }
+  }, []);
+
+  const refreshJobsOnly = useCallback(async () => {
+    try {
+      const response = await apiClient.get<DownloadJob[]>(ENDPOINTS.jobs);
+      setJobs(Array.isArray(response) ? response : []);
+    } catch (error) {
+      setEndpointErrors((current) => ({
+        ...current,
+        jobs: getErrorMessage(error, 'Download jobs endpoint failed.'),
+      }));
+    }
+  }, []);
+
   useEffect(() => {
     void loadState();
-  }, [loadState]);
+    void loadCatalog('');
+  }, [loadCatalog, loadState]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadCatalog(catalogQuery);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [catalogQuery, loadCatalog]);
+
 
   useEffect(() => {
     setValidation(null);
@@ -461,6 +505,18 @@ export default function ModelDownloads({
       ).length,
     [jobs],
   );
+
+  useEffect(() => {
+    if (queueCount === 0) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void refreshJobsOnly();
+    }, 3000);
+
+    return () => window.clearInterval(interval);
+  }, [queueCount, refreshJobsOnly]);
 
   const installedModels = useMemo(
     () => sortProviderModels((installed?.models ?? []) as RuntimeProviderModel[]),
@@ -723,6 +779,87 @@ export default function ModelDownloads({
     },
     [refreshAll, toast],
   );
+
+  const retryJob = useCallback(
+    async (job: DownloadJob) => {
+      setRetryingJobs((current) => ({ ...current, [job.job_id]: true }));
+      try {
+        await apiClient.post(ENDPOINTS.download, {
+          model_id: job.model_id,
+          revision: job.revision || null,
+          channel_id: job.channel_id || null,
+          include_patterns: job.include_patterns || [],
+          exclude_patterns: job.exclude_patterns || [],
+          trust_remote_code: job.trust_remote_code,
+          accept_license: job.license_accepted,
+          pin: job.pin,
+          force_redownload: true,
+        });
+        await refreshAll();
+        toast({
+          title: 'Retry queued',
+          description: `${job.model_id} has been queued for a clean retry.`,
+        });
+      } catch (error) {
+        toast({
+          title: 'Retry failed',
+          description: getErrorMessage(error, 'Karen could not retry this model download.'),
+          variant: 'destructive',
+        });
+      } finally {
+        setRetryingJobs((current) => {
+          const next = { ...current };
+          delete next[job.job_id];
+          return next;
+        });
+      }
+    },
+    [refreshAll, toast],
+  );
+
+  const removeInstalledModel = useCallback(
+    async (modelId: string) => {
+      if (
+        typeof window !== 'undefined' &&
+        !window.confirm(
+          `Remove ${modelId} from Karen and delete its local model files?`,
+        )
+      ) {
+        return;
+      }
+
+      setRemovingModels((current) => ({ ...current, [modelId]: true }));
+      try {
+        await apiClient.delete(
+          `/api/models/remove/${encodeModelPath(modelId)}?delete_files=true`,
+        );
+        await refreshAll();
+        toast({
+          title: 'Model removed',
+          description: `${modelId} was removed from the local runtime inventory.`,
+        });
+      } catch (error) {
+        toast({
+          title: 'Unable to remove model',
+          description: getErrorMessage(error, 'Karen could not remove this model.'),
+          variant: 'destructive',
+        });
+      } finally {
+        setRemovingModels((current) => {
+          const next = { ...current };
+          delete next[modelId];
+          return next;
+        });
+      }
+    },
+    [refreshAll, toast],
+  );
+
+  const chooseCatalogModel = useCallback((item: ModelCatalogItem) => {
+    setModelId(item.model_id);
+    setRevision('');
+    setValidation(null);
+  }, []);
 
   const renderPolicyRow = (
     label: string,
