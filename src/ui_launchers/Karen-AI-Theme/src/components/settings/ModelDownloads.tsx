@@ -1107,7 +1107,7 @@ export default function ModelDownloads({
       }
 
       const licenseRequired = Boolean(
-        policy?.require_license_acceptance && item.gated,
+        policy?.require_license_acceptance && (item.license || item.gated),
       );
       const acceptanceKey = recommendationAcceptanceKey(item);
       const licenseAccepted = Boolean(
@@ -1188,7 +1188,7 @@ export default function ModelDownloads({
 
     const missingAcceptances = essentials.filter(
       (item) =>
-        Boolean(policy?.require_license_acceptance && item.gated) &&
+        Boolean(policy?.require_license_acceptance && (item.license || item.gated)) &&
         !recommendedLicenseAcceptances[recommendationAcceptanceKey(item)],
     );
     if (missingAcceptances.length > 0) {
@@ -1206,7 +1206,7 @@ export default function ModelDownloads({
     try {
       for (const item of essentials) {
         const licenseRequired = Boolean(
-          policy?.require_license_acceptance && item.gated,
+          policy?.require_license_acceptance && (item.license || item.gated),
         );
         await apiClient.post(ENDPOINTS.download, {
           model_id: item.model_id,
@@ -1512,7 +1512,7 @@ export default function ModelDownloads({
               <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
                 <div className="text-sm font-semibold">Model licenses are accepted per model</div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Karen only asks for acceptance when a model reports a license. Review the license or source from that model&apos;s card, then accept that specific license before queueing it.
+                  Karen requires per-model acknowledgment when a model reports a license or gated access. Review the license or source from that model&apos;s card, then accept those exact terms before queueing it.
                 </p>
               </div>
             )}
@@ -1609,7 +1609,7 @@ export default function ModelDownloads({
                         )}
                       </div>
 
-                      {policy?.require_license_acceptance && item.gated && (
+                      {policy?.require_license_acceptance && (item.license || item.gated) && (
                         <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/40 pt-3">
                           <Label
                             htmlFor={`accept-license-${item.id}`}
