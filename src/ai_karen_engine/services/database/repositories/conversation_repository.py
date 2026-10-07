@@ -17,6 +17,7 @@ class Conversation:
     id: str
     tenant_id: str
     user_id: str
+    session_id: Optional[str] = None
     title: Optional[str] = None
     is_active: bool = True
     created_at: datetime = field(default_factory=datetime.utcnow)
