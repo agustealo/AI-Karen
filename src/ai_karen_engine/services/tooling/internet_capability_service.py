@@ -36,6 +36,7 @@ from prometheus_client import Counter, Histogram
 from ..search.search_query_planner import SearchQueryPlanner
 from ..search.search_result_processor import SearchResultProcessor
 from ..search.web_search_provider_registry import WebSearchProviderRegistry
+from ..search.web_search_client import WebSearchClient
 from ...core.runtime.contracts import ActionExecutionGate, AuthorizedExecutionPlan, ExecutionBudget, ExecutionContext
 from ...core.runtime.policy.runtime_policy import PolicyEvaluationRequest, RuntimePolicyEnforcer
 from ...integrations.web.crawl4ai_integration import Crawl4AIIntegration
@@ -742,7 +743,7 @@ class InternetCapabilityService:
                 raise RuntimeError("Configured search_client_factory returned None.")
             return client
 
-        settings = {}
+        settings: Dict[str, Any] = {}
         if self.provider_registry is not None:
             settings = {
                 "search": {
@@ -750,10 +751,11 @@ class InternetCapabilityService:
                     for name in self.provider_registry.descriptors
                 }
             }
-        raise RuntimeError(
-            "No internet search client is configured. "
-            "Inject search_client/search_client_factory or provider_registry."
-        )
+
+        # Canonical production default. The provider registry remains the source
+        # of truth for availability/priority; callers can still inject a client
+        # or factory for tests and specialized runtimes.
+        return WebSearchClient(settings=settings)
 
     async def _authorize(
         self,
