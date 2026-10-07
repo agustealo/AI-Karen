@@ -389,11 +389,16 @@ def test_live_capability_patterns_do_not_hijack_unrelated_prompts() -> None:
     incidental_latest = resolve_capability_decision(
         "Explain why our latest refactor changed the cache key."
     )
+    temperature_scaling = resolve_capability_decision(
+        "Explain temperature scaling for classifier calibration."
+    )
 
     assert time_complexity.intent == "general.chat"
     assert time_complexity.requires_tool is False
     assert incidental_latest.intent == "general.chat"
     assert incidental_latest.requires_tool is False
+    assert temperature_scaling.intent == "general.chat"
+    assert temperature_scaling.requires_tool is False
 
 
 def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None:
