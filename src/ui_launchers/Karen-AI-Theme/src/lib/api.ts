@@ -110,11 +110,38 @@ class ApiClient {
       const record = payload as Record<string, unknown>;
       const preferredKeys = ['user_message', 'message', 'detail', 'error'];
 
+      let preferredMessage = '';
       for (const key of preferredKeys) {
         const value = record[key];
         if (typeof value === 'string' && value.trim()) {
-          return value.trim();
+          preferredMessage = value.trim();
+          break;
         }
+      }
+
+      const nestedError =
+        record.error && typeof record.error === 'object'
+          ? (record.error as Record<string, unknown>)
+          : null;
+      const errorType =
+        nestedError && typeof nestedError.error_type === 'string'
+          ? nestedError.error_type.trim()
+          : '';
+      const correlationId =
+        nestedError && typeof nestedError.correlation_id === 'string'
+          ? nestedError.correlation_id.trim()
+          : '';
+
+      if (preferredMessage) {
+        const diagnosticParts = [
+          errorType ? `type=${errorType}` : '',
+          correlationId && correlationId !== 'unknown'
+            ? `correlation=${correlationId}`
+            : '',
+        ].filter(Boolean);
+        return diagnosticParts.length
+          ? `${preferredMessage} [${diagnosticParts.join(', ')}]`
+          : preferredMessage;
       }
 
       try {
