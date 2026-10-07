@@ -197,8 +197,12 @@ def test_model_license_acceptance_revalidates_reviewed_revision() -> None:
 
 def test_retry_preserves_install_alias_and_reviewed_revision() -> None:
     ui = UI.read_text(encoding="utf-8")
+    control = CONTROL.read_text(encoding="utf-8")
 
     assert "const retryInstallRevision = (job: DownloadJob)" in ui
     assert "revision: retryInstallRevision(job)" in ui
     assert "validated_revision: job.revision || null" in ui
     assert "job.channel_id === 'core_spacy'" in ui
+    assert "const modelDirectory = `${owner}--${repository}`;" in ui
+    assert "segments.slice(modelDirectoryIndex + 1).join('/')" in ui
+    assert "E_VERIFY," in control
