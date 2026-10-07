@@ -409,10 +409,17 @@ class ModelOrchestratorService:
         summaries.sort(key=keyf, reverse=reverse)
         return summaries[:limit]
 
-    async def get_model_info(self, model_id: str, revision: Optional[str] = None, **_: Any) -> ModelInfo:
+    async def get_model_info(
+        self,
+        model_id: str,
+        revision: Optional[str] = None,
+        *,
+        refresh_remote: bool = False,
+        **_: Any,
+    ) -> ModelInfo:
         owner, repo = self._split_model_id(model_id)
         entry = self._registry.get(model_id)
-        if entry is not None and "gated" in entry:
+        if not refresh_remote and entry is not None and "gated" in entry:
             files = list(entry.get("files") or [])
             total_size = int(entry.get("total_size") or 0)
             return ModelInfo(
@@ -482,7 +489,7 @@ class ModelOrchestratorService:
             description=getattr(remote, "cardData", {}).get("model_description")
             if isinstance(getattr(remote, "cardData", None), dict)
             else None,
-            revision=revision or getattr(remote, "sha", None),
+            revision=getattr(remote, "sha", None) or revision,
         )
 
     async def download_model(self, request: Union[DownloadRequest, str], **kwargs: Any) -> DownloadResult:
@@ -558,7 +565,7 @@ class ModelOrchestratorService:
                 license=card_data.get("license"),
                 gated=bool(getattr(remote, "gated", False)),
                 description=card_data.get("model_description"),
-                revision=req.revision or getattr(remote, "sha", None),
+                revision=getattr(remote, "sha", None) or req.revision,
             )
         except Exception as exc:
             logger.warning(
