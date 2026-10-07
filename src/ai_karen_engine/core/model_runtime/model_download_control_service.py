@@ -1096,9 +1096,28 @@ class ModelDownloadControlService:
             model_id = str(item.get("model_id") or "").strip()
             if not model_id:
                 continue
+
             entry = await self._orchestrator.snapshot_registry_entry(model_id)
             install_path = str((entry or {}).get("install_path") or "")
             installed = bool(entry and install_path and Path(install_path).exists())
+
+            # Enrich curated recommendations with the same canonical metadata
+            # authority used by validation. Config provides the curated model
+            # choice; remote/local model metadata provides license and gating truth.
+            try:
+                info = await self._orchestrator.get_model_info(model_id)
+                if info.license:
+                    item["license"] = info.license
+                    item["license_url"] = f"https://huggingface.co/{model_id}"
+                item["gated"] = bool(info.gated)
+            except Exception as exc:
+                logger.info(
+                    "model_download_recommendation_metadata_unavailable model_id=%s error=%s",
+                    model_id,
+                    exc,
+                )
+                item["gated"] = bool(item.get("gated", False))
+
             item["installed"] = installed
             item["install_path"] = install_path or None
             item["status"] = "installed" if installed else "available"
