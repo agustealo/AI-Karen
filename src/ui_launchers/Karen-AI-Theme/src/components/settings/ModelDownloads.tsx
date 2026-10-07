@@ -210,14 +210,13 @@ const retryInstallRevision = (
   const normalizedPath = String(job.install_path || '')
     .replace(/\\/g, '/')
     .replace(/\/+$/, '');
-  const normalizedRoot = String(modelsRoot || '')
-    .replace(/\\/g, '/')
-    .replace(/\/+$/, '');
+  const rootPath = String(modelsRoot || '').replace(/\\/g, '/');
+  const normalizedRoot = rootPath.replace(/\/+$/, '') || (rootPath.startsWith('/') ? '/' : '');
   if (!normalizedPath || !normalizedRoot) {
     throw new Error('The original download location cannot be verified. Revalidate the model through Advanced install options.');
   }
 
-  const rootPrefix = `${normalizedRoot}/`;
+  const rootPrefix = normalizedRoot === '/' ? '/' : `${normalizedRoot}/`;
   if (!normalizedPath.startsWith(rootPrefix)) {
     throw new Error('The model library folder has changed since this job. Revalidate the model through Advanced install options before retrying.');
   }
