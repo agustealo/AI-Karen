@@ -170,7 +170,7 @@ class SqlApprovalRepository:
                       AND user_id = CAST(:user_id AS uuid)
                       AND status IN ('pending', 'approved')
                       AND (
-                            :conversation_id IS NULL
+                            CAST(:conversation_id AS uuid) IS NULL
                             OR conversation_id = CAST(:conversation_id AS uuid)
                       )
                     ORDER BY created_at DESC
