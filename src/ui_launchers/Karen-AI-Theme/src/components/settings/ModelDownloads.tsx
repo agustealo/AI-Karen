@@ -165,6 +165,7 @@ type RecommendedModel = {
   approximate_size_bytes?: number | null;
   license?: string | null;
   license_url?: string | null;
+  gated?: boolean;
   include_patterns?: string[] | null;
   capabilities: string[];
   app_consumers: string[];
@@ -1068,7 +1069,7 @@ export default function ModelDownloads({
       if (item.installed) return;
 
       const licenseRequired = Boolean(
-        policy?.require_license_acceptance && item.license,
+        policy?.require_license_acceptance && item.gated,
       );
       const licenseAccepted = Boolean(
         recommendedLicenseAcceptances[item.id],
@@ -1130,7 +1131,7 @@ export default function ModelDownloads({
 
     const missingAcceptances = essentials.filter(
       (item) =>
-        Boolean(policy?.require_license_acceptance && item.license) &&
+        Boolean(policy?.require_license_acceptance && item.gated) &&
         !recommendedLicenseAcceptances[item.id],
     );
     if (missingAcceptances.length > 0) {
@@ -1148,7 +1149,7 @@ export default function ModelDownloads({
     try {
       for (const item of essentials) {
         const licenseRequired = Boolean(
-          policy?.require_license_acceptance && item.license,
+          policy?.require_license_acceptance && item.gated,
         );
         await apiClient.post(ENDPOINTS.download, {
           model_id: item.model_id,
@@ -1527,13 +1528,13 @@ export default function ModelDownloads({
                         )}
                       </div>
 
-                      {policy?.require_license_acceptance && (
+                      {policy?.require_license_acceptance && item.gated && (
                         <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/40 pt-3">
                           <Label
                             htmlFor={`accept-license-${item.id}`}
                             className="text-xs font-medium"
                           >
-                            I accept the {item.license} license for {item.label}
+                            I accept the required access terms for {item.label}
                           </Label>
                           <Switch
                             id={`accept-license-${item.id}`}
