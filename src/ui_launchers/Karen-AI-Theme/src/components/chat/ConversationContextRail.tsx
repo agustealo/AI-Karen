@@ -56,6 +56,15 @@ interface ContinuityCandidate {
 }
 
 interface CapabilityReceipt {
+  executionTopology?: string;
+  reasoningModes: string[];
+  executionBudget?: {
+    maxDurationMs?: number;
+    maxModelCalls?: number;
+    maxToolCalls?: number;
+    maxReasoningSteps?: number;
+    maxOutputTokens?: number;
+  };
   allowedCapabilities: string[];
   forbiddenCapabilities: string[];
   allowedTools: string[];
@@ -162,7 +171,19 @@ const unique = (values: string[]): string[] => {
 const normalizeCapabilityReceipt = (metadata: JsonRecord): CapabilityReceipt => {
   const receipt = asRecord(metadata.capability_receipt);
 
+  const budget = asRecord(receipt.execution_budget);
   return {
+    executionTopology: asString(receipt.execution_topology) || undefined,
+    reasoningModes: asStringArray(receipt.reasoning_modes),
+    executionBudget: Object.keys(budget).length
+      ? {
+          maxDurationMs: asNumber(budget.max_duration_ms),
+          maxModelCalls: asNumber(budget.max_model_calls),
+          maxToolCalls: asNumber(budget.max_tool_calls),
+          maxReasoningSteps: asNumber(budget.max_reasoning_steps),
+          maxOutputTokens: asNumber(budget.max_output_tokens),
+        }
+      : undefined,
     allowedCapabilities: asStringArray(receipt.allowed_capabilities),
     forbiddenCapabilities: asStringArray(receipt.forbidden_capabilities),
     allowedTools: asStringArray(receipt.allowed_tools),
@@ -363,6 +384,9 @@ function RailContent({
   );
 
   const hasCapabilityTruth =
+    Boolean(capabilities.executionTopology) ||
+    capabilities.reasoningModes.length > 0 ||
+    Boolean(capabilities.executionBudget) ||
     capabilities.allowedCapabilities.length > 0 ||
     capabilities.forbiddenCapabilities.length > 0 ||
     capabilities.allowedTools.length > 0 ||
@@ -669,6 +693,78 @@ function RailContent({
                 </div>
               </>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {(capabilities.executionTopology ||
+        capabilities.executionBudget ||
+        capabilities.reasoningModes.length > 0 ||
+        capabilities.requiresResumability ||
+        capabilities.workflowId) && (
+        <Card className="karen-surface overflow-hidden border-border/70 bg-card/70">
+          <CardHeader className="border-b border-border/50 bg-muted/10 pb-2">
+            <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider">
+              <span className="flex items-center gap-2">
+                <Gauge className="h-3.5 w-3.5 text-primary" />
+                Execution envelope
+              </span>
+              {capabilities.executionTopology && (
+                <Badge variant="outline" className="text-[9px]">
+                  {capabilities.executionTopology}
+                </Badge>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2.5 pt-3">
+            {capabilities.executionBudget && (
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                  <p className="text-[8px] uppercase tracking-wide text-muted-foreground">Model calls</p>
+                  <p className="mt-1 text-xs font-semibold">
+                    {capabilities.executionBudget.maxModelCalls ?? 'n/a'}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                  <p className="text-[8px] uppercase tracking-wide text-muted-foreground">Tool calls</p>
+                  <p className="mt-1 text-xs font-semibold">
+                    {capabilities.executionBudget.maxToolCalls ?? 'n/a'}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                  <p className="text-[8px] uppercase tracking-wide text-muted-foreground">Reasoning steps</p>
+                  <p className="mt-1 text-xs font-semibold">
+                    {capabilities.executionBudget.maxReasoningSteps ?? 'n/a'}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                  <p className="text-[8px] uppercase tracking-wide text-muted-foreground">Output budget</p>
+                  <p className="mt-1 text-xs font-semibold">
+                    {capabilities.executionBudget.maxOutputTokens
+                      ? `${capabilities.executionBudget.maxOutputTokens.toLocaleString()} tokens`
+                      : 'n/a'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-1.5">
+              {capabilities.reasoningModes.map((mode) => (
+                <Badge key={mode} variant="secondary" className="text-[9px]">
+                  {mode.replace(/_/g, ' ')}
+                </Badge>
+              ))}
+              {capabilities.requiresResumability && (
+                <Badge variant="outline" className="text-[9px]">
+                  resumable
+                </Badge>
+              )}
+              {capabilities.workflowId && (
+                <Badge variant="outline" className="max-w-full truncate text-[9px]">
+                  workflow {capabilities.workflowId}
+                </Badge>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}
