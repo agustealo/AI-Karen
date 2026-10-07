@@ -914,22 +914,112 @@ function RailContent({
 export default function ConversationContextRail(
   props: ConversationContextRailProps,
 ) {
+  const [systemResources, setSystemResources] =
+    useState<PlatformResourceSnapshot | null>(null);
+  const [resourcesLoadState, setResourcesLoadState] = useState<
+    'idle' | 'loading' | 'ready' | 'unavailable'
+  >('idle');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshResources = async () => {
+      if (!cancelled && resourcesLoadState === 'idle') {
+        setResourcesLoadState('loading');
+      }
+      try {
+        const snapshot = await apiClient.get<PlatformResourceSnapshot>(
+          '/api/system/resources',
+        );
+        if (!cancelled) {
+          setSystemResources(snapshot);
+          setResourcesLoadState('ready');
+        }
+      } catch {
+        if (!cancelled) {
+          setSystemResources(null);
+          setResourcesLoadState('unavailable');
+        }
+      }
+    };
+
+    void refreshResources();
+    const timer = window.setInterval(() => {
+      void refreshResources();
+    }, 15000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [resourcesLoadState]);
+
+  const metadata = props.metadata || {};
+  const runtime = normalizeRuntimeInsight(metadata);
+  const hasTurnTruth =
+    Boolean(runtime.actualProvider) ||
+    Boolean(asString(metadata.intent)) ||
+    Boolean(asNumber(metadata.memory_recall_count)) ||
+    Boolean(runtime.trajectoryId);
+
   return (
     <aside
-      className="hidden w-[19rem] shrink-0 overflow-y-auto border-l border-border/70 bg-background/40 p-3 xl:block 2xl:w-[20rem]"
-      aria-label="Conversation context and capabilities"
+      className="hidden w-[21rem] shrink-0 overflow-y-auto border-l border-border/70 bg-background/45 p-3 xl:block 2xl:w-[22rem]"
+      aria-label="Conversation intelligence deck"
       data-testid="conversation-context-rail"
     >
-      <div className="sticky top-0">
-        <div className="mb-3 px-1">
-          <p className="karen-panel-label text-foreground/90">
-            Conversation intelligence
-          </p>
-          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-            What Karen understood, remembered, learned, and actually used for this turn.
-          </p>
+      <div className="sticky top-0 space-y-3">
+        <div className="sticky top-0 z-10 rounded-2xl border border-border/70 bg-card/90 p-3 shadow-sm backdrop-blur-xl">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-2.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 text-primary">
+                <Brain className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+                  Conversation Intelligence
+                </p>
+                <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                  Turn context, runtime dispatch, memory, policy, resources, and execution truth.
+                </p>
+              </div>
+            </div>
+            <span
+              className={[
+                'mt-1 h-2 w-2 shrink-0 rounded-full',
+                hasTurnTruth ? 'bg-emerald-500' : 'bg-muted-foreground/40',
+              ].join(' ')}
+              aria-label={hasTurnTruth ? 'Turn intelligence available' : 'Awaiting turn intelligence'}
+            />
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-1.5 border-t border-border/50 pt-2.5">
+            {runtime.actualProvider && (
+              <Badge variant="secondary" className="text-[8px]">
+                {runtime.actualProvider}
+              </Badge>
+            )}
+            {runtime.latencyMs !== undefined && (
+              <Badge variant="outline" className="text-[8px]">
+                {Math.round(runtime.latencyMs)} ms
+              </Badge>
+            )}
+            <Badge variant="outline" className="text-[8px]">
+              resources {resourcesLoadState === 'ready' ? 'live' : resourcesLoadState}
+            </Badge>
+            {runtime.degradedMode && (
+              <Badge variant="outline" className="text-[8px]">
+                degraded
+              </Badge>
+            )}
+          </div>
         </div>
-        <RailContent {...props} />
+
+        <RailContent
+          {...props}
+          systemResources={systemResources}
+          resourcesLoadState={resourcesLoadState}
+        />
       </div>
     </aside>
   );
