@@ -1261,15 +1261,27 @@ export default function ModelDownloads({
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             <MetricTile
               icon={<Download className="h-4 w-4" aria-hidden="true" />}
-              label="Queue"
-              value={activeJobs.length ? `${activeJobs.length} active` : 'Idle'}
-              detail={failedJobs ? `${failedJobs} recent failure${failedJobs === 1 ? '' : 's'}` : 'No active failures'}
+              label="Worker slots"
+              value={
+                workerSummary
+                  ? `${workerSummary.max_concurrent_downloads - workerSummary.available_slots}/${workerSummary.max_concurrent_downloads} active`
+                  : activeJobs.length
+                    ? `${activeJobs.length} active`
+                    : 'Idle'
+              }
+              detail={
+                workerSummary
+                  ? `${workerSummary.available_slots} slot${workerSummary.available_slots === 1 ? '' : 's'} available`
+                  : failedJobs
+                    ? `${failedJobs} recent failure${failedJobs === 1 ? '' : 's'}`
+                    : 'No active failures'
+              }
             />
             <MetricTile
               icon={<Database className="h-4 w-4" aria-hidden="true" />}
-              label="Local inventory"
-              value={`${installedModels.length} installed`}
-              detail={storageSettings?.models_root || 'Model root loading'}
+              label="Model storage"
+              value={modelStorageBytes ? formatBytes(modelStorageBytes) : `${installedModels.length} installed`}
+              detail={diskFreeBytes ? `${formatBytes(diskFreeBytes)} free` : storageSettings?.models_root || 'Storage loading'}
             />
             <MetricTile
               icon={<BrainCircuit className="h-4 w-4" aria-hidden="true" />}
@@ -1283,6 +1295,71 @@ export default function ModelDownloads({
               value={discoveryStatus.replace(/_/g, ' ')}
               detail={String(discoveryStats.total_models ?? installedModels.length) + ' models indexed'}
             />
+          </div>
+
+          <div className="grid gap-3 border-t border-border/40 pt-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-border/40 bg-background/40 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-muted-foreground">CPU</span>
+                <span className="text-xs font-semibold">{resourceSummary ? `${resourceSummary.cpu_percent.toFixed(0)}%` : 'Unavailable'}</span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${Math.min(100, Math.max(0, resourceSummary?.cpu_percent ?? 0))}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border/40 bg-background/40 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-muted-foreground">Memory</span>
+                <span className="text-xs font-semibold">{resourceSummary ? `${resourceSummary.memory_percent.toFixed(0)}%` : 'Unavailable'}</span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${Math.min(100, Math.max(0, resourceSummary?.memory_percent ?? 0))}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border/40 bg-background/40 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-muted-foreground">GPU / VRAM</span>
+                <span className="text-xs font-semibold">
+                  {resourceSummary?.gpu_percent != null
+                    ? `${resourceSummary.gpu_percent.toFixed(0)}% / ${(resourceSummary.gpu_memory_percent ?? 0).toFixed(0)}%`
+                    : 'Unavailable'}
+                </span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${Math.min(100, Math.max(0, resourceSummary?.gpu_memory_percent ?? 0))}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border/40 bg-background/40 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-muted-foreground">Security</span>
+                <span className="text-xs font-semibold">
+                  {securitySummary?.runtime_admin_required ? 'Admin governed' : 'Unknown'}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {securitySummary?.require_license_acceptance && (
+                  <Badge variant="outline" className="h-4 px-1.5 text-[8px]">licenses</Badge>
+                )}
+                {securitySummary?.quarantine_failed_models && (
+                  <Badge variant="outline" className="h-4 px-1.5 text-[8px]">quarantine</Badge>
+                )}
+                <Badge variant="outline" className="h-4 px-1.5 text-[8px]">
+                  remote code {securitySummary?.trust_remote_code ? 'on' : 'off'}
+                </Badge>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -1559,6 +1636,39 @@ export default function ModelDownloads({
             <p className="text-xs text-muted-foreground">
               This folder is locked by KAREN_MODELS_ROOT. Change that environment setting to move the library.
             </p>
+          )}
+
+          {storageSummary?.disk_usage && (
+            <div className="rounded-xl border border-border/40 bg-muted/10 p-4">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold">Storage allocation</span>
+                <span className="text-muted-foreground">
+                  {formatBytes(storageSummary.disk_usage.used_bytes)} used · {formatBytes(storageSummary.disk_usage.free_bytes)} free
+                </span>
+              </div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${Math.min(100, Math.max(0, storageSummary.disk_usage.usage_percent ?? 0))}%` }}
+                />
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {Object.entries(storageSummary.model_storage?.by_library ?? {})
+                  .sort(([, a], [, b]) => (b.total_size_bytes ?? 0) - (a.total_size_bytes ?? 0))
+                  .slice(0, 8)
+                  .map(([library, stats]) => (
+                    <div key={library} className="rounded-lg border border-border/40 bg-background/40 p-2.5">
+                      <div className="truncate text-[9px] font-bold uppercase tracking-wide text-muted-foreground">
+                        {library.replace(/_/g, ' ')}
+                      </div>
+                      <div className="mt-1 text-sm font-semibold">{formatBytes(stats.total_size_bytes)}</div>
+                      <div className="text-[10px] text-muted-foreground">
+                        {stats.model_count ?? 0} model{stats.model_count === 1 ? '' : 's'}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>
