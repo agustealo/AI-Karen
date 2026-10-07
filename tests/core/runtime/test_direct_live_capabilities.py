@@ -19,6 +19,7 @@ from ai_karen_engine.core.runtime.contracts import (
 )
 from ai_karen_engine.core.runtime.direct_capability_executor import (
     DirectCapabilityExecutor,
+    DirectCapabilityResult,
 )
 from ai_karen_engine.services.plugin_service import ExecutionStatus
 from ai_karen_engine.services.search.web_search_client import WebSearchClient
@@ -680,3 +681,140 @@ async def test_search_discovery_reports_actual_provider_provenance() -> None:
     assert providers == ["wikipedia"]
     assert service._provider_name(providers) == "wikipedia"
     assert service._provider_name(["wikipedia", "duckduckgo"]) == "multi_search"
+
+
+def test_live_intent_patterns_reject_conceptual_suffixes_and_clock_complexity() -> None:
+    prompts = (
+        "What's the time complexity of binary search?",
+        "What is the time complexity of quicksort?",
+        "Explain current time complexity",
+        "Explain the current price elasticity model",
+        "What is the current version control strategy?",
+        "What is the current release process?",
+    )
+
+    for prompt in prompts:
+        decision = resolve_capability_decision(prompt)
+        assert decision.intent == "general.chat", prompt
+        assert decision.requires_tool is False, prompt
+
+
+def test_location_shorthand_supports_unicode_proper_names() -> None:
+    sao = resolve_capability_decision("São Paulo weather")
+    zurich = resolve_capability_decision("Zürich weather")
+
+    assert sao.intent == "search.weather"
+    assert sao.requires_live_data is True
+    assert zurich.intent == "search.weather"
+    assert zurich.requires_live_data is True
+
+
+@pytest.mark.asyncio
+async def test_search_provenance_survives_later_expanded_query_timeout() -> None:
+    class FakeSearchClient:
+        calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def search(self, **kwargs):
+            del kwargs
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(
+                    provider="wikipedia",
+                    results=[
+                        SimpleNamespace(
+                            url="https://en.wikipedia.org/wiki/Detroit"
+                        )
+                    ],
+                )
+            await asyncio.sleep(60)
+            raise AssertionError("unreachable")
+
+    service = InternetCapabilityService(search_client=FakeSearchClient())
+    request = InternetSearchRequest.from_payload("Detroit", {})
+    provider_sink: list[str] = []
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            service._get_relevant_urls(
+                ["Detroit", "Detroit Michigan"],
+                {},
+                request,
+                3,
+                provider_sink=provider_sink,
+            ),
+            timeout=0.02,
+        )
+
+    assert provider_sink == ["wikipedia"]
+
+
+def test_direct_capability_metadata_reports_search_provider_not_wrapper() -> None:
+    result = DirectCapabilityResult(
+        handled=True,
+        text="live",
+        success=True,
+        source="tool",
+        source_id="web_search",
+        payload={
+            "provider": "wikipedia",
+            "search_providers": ["wikipedia"],
+            "metadata": {
+                "provider": "wikipedia",
+                "crawl_provider": "crawl4ai",
+            },
+        },
+    )
+
+    metadata = result.normalized_metadata()
+
+    assert metadata["actual_provider"] == "wikipedia"
+    assert metadata["capability_executor"] == "web_search"
+    assert metadata["structured_content"]["provider"] == "wikipedia"
+    assert metadata["structured_content"]["search_providers"] == ["wikipedia"]
+
+
+def test_legacy_search_config_migration_precedes_environment_override(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    from ai_karen_engine.config import config_manager as config_module
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "plugins": {
+                    "intelligent-search": {
+                        "search": {
+                            "duckduckgo": {"enabled": True, "priority": 100}
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(config_module, "BACKUP_PATH", config_path.with_suffix(".bak"))
+    monkeypatch.setenv(
+        "KARI_SEARCH",
+        json.dumps(
+            {
+                "duckduckgo": {"enabled": False, "priority": 1},
+                "wikipedia": {"enabled": True, "priority": 500},
+            }
+        ),
+    )
+
+    loaded = config_module.load_config()
+
+    assert loaded["search"]["duckduckgo"]["enabled"] is False
+    assert loaded["search"]["wikipedia"]["enabled"] is True
+    assert "search" not in loaded["plugins"]["intelligent-search"]
