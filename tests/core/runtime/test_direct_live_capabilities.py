@@ -948,3 +948,14 @@ def test_ambiguous_single_subject_forecasts_do_not_hijack_weather() -> None:
     assert resolve_capability_decision("New York City forecast").intent == "general.chat"
     assert resolve_capability_decision("forecast in Detroit").intent == "search.weather"
     assert resolve_capability_decision("United States election forecast").intent == "general.chat"
+
+
+def test_weather_shorthand_punctuation_and_conceptual_guard() -> None:
+    for query in ("Detroit weather.", "New York City weather!"):
+        assert resolve_capability_decision(query).intent == "search.weather"
+    for query in ("Weather vs climate", "Weather stripping installation instructions"):
+        assert resolve_capability_decision(query).intent == "general.chat"
+
+
+def test_clock_for_target_is_detected_by_executor() -> None:
+    assert DirectCapabilityExecutor._extract_time_location("What time is it for Tokyo?") == "Tokyo"
