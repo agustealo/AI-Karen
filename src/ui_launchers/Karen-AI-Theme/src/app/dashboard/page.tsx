@@ -584,6 +584,7 @@ export default function DashboardPage() {
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 md:p-3">
                 <div className="karen-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
                   <div
+                    key={activeMainView}
                     data-testid="workspace-scroll-region"
                     className={
                       backendStatus !== "ready" || activeMainView !== "chat"
