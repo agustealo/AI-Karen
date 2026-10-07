@@ -574,6 +574,7 @@ class ModelDownloadControlService:
                 "storage_key": info.storage_key,
                 "tags": info.tags,
                 "license": info.license,
+                "gated": bool(info.gated),
                 "license_url": (
                     f"https://huggingface.co/{model_id}"
                     if info.license
@@ -608,7 +609,11 @@ class ModelDownloadControlService:
         if include_patterns and exclude_patterns:
             warnings.append("Both include and exclude patterns are set; include rules win in the executor")
 
-        license_required = bool(metadata.get("license")) if self._policy.require_license_acceptance else False
+        license_required = (
+            bool(metadata.get("gated"))
+            if self._policy.require_license_acceptance
+            else False
+        )
         if license_required and not accept_license:
             blocking.append("License acceptance is required for this model")
 
