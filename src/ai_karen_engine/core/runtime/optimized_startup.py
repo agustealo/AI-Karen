@@ -184,54 +184,33 @@ class OptimizedStartup:
     async def _initialize_lightweight_services(
         self, settings: Any, report: Dict[str, Any]
     ) -> None:
-        """Initialize lightweight services that don't consume much resources."""
-        logger.info("💡 Initializing lightweight services")
-
-        lightweight_services = {
+        """Report application-owned lightweight services without fabricating init."""
+        del settings
+        application_owned_services = {
             "plugin_loader",
             "metrics_collector",
             "request_validator",
             "middleware_stack",
         }
 
-        for service_name in lightweight_services:
-            try:
-                # Initialize lightweight service
-                await self._init_lightweight_service(service_name, settings)
-                self._initialized_services.add(service_name)
-
-                report["services"][service_name] = {
-                    "status": "initialized",
-                    "initialized": True,
-                    "deferred": False,
-                }
-
-            except Exception as e:
-                logger.warning(
-                    f"Failed to initialize lightweight service {service_name}: {e}"
-                )
-                report["warnings"].append(f"Lightweight service {service_name}: {e}")
-
-        logger.info("✅ Lightweight services initialized")
-
-    async def _setup_resource_monitoring(self, report: Dict[str, Any]) -> None:
-        """Setup resource monitoring."""
-        logger.info("🔍 Setting up resource monitoring")
-
-        try:
-            # Resource monitoring is handled by the lazy service registry
-            # Just need to enable it
-            report["services"]["resource_monitoring"] = {
-                "status": "initialized",
-                "initialized": True,
+        for service_name in application_owned_services:
+            report["services"][service_name] = {
+                "status": "application_owned",
+                "initialized": False,
                 "deferred": False,
             }
 
-            logger.info("✅ Resource monitoring enabled")
+        logger.info(
+            "Lightweight services remain owned by canonical application bootstrap"
+        )
 
-        except Exception as e:
-            logger.error(f"Failed to setup resource monitoring: {e}")
-            report["errors"].append(f"Resource monitoring: {e}")
+    async def _setup_resource_monitoring(self, report: Dict[str, Any]) -> None:
+        """Report resource-monitor ownership without fabricating activation."""
+        report["services"]["resource_monitoring"] = {
+            "status": "lazy_registry_owned",
+            "initialized": False,
+            "deferred": True,
+        }
 
     async def _init_database(self, report: Dict[str, Any]) -> None:
         """Initialize database connection (lightweight)."""
@@ -275,19 +254,12 @@ class OptimizedStartup:
             raise
 
     async def _init_health_service(self, report: Dict[str, Any]) -> None:
-        """Initialize health service (lightweight)."""
-        try:
-            # Health service is typically lightweight
-            self._initialized_services.add("health_service")
-            report["services"]["health_service"] = {
-                "status": "initialized",
-                "initialized": True,
-                "deferred": False,
-            }
-
-        except Exception as e:
-            logger.error(f"Health service initialization failed: {e}")
-            raise
+        """Record canonical health ownership without claiming synthetic startup."""
+        report["services"]["health_service"] = {
+            "status": "application_owned",
+            "initialized": False,
+            "deferred": False,
+        }
 
     async def _init_extension_health_monitor(self, report: Dict[str, Any]) -> None:
         """Initialize extension health monitor (lightweight)."""
@@ -321,15 +293,6 @@ class OptimizedStartup:
             # Don't raise - this is not critical for core functionality
             report["warnings"] = report.get("warnings", [])
             report["warnings"].append(f"Extension health monitor: {e}")
-
-    async def _init_lightweight_service(self, service_name: str, settings: Any) -> None:
-        """Initialize a lightweight service."""
-        # Placeholder for lightweight service initialization
-        # In practice, these would call the actual service initializers
-        logger.debug(f"Initializing lightweight service: {service_name}")
-
-        # Simulate minimal initialization time
-        await asyncio.sleep(0.01)
 
     async def shutdown(self) -> None:
         """Shutdown all services."""
