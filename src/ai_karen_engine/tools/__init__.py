@@ -22,6 +22,7 @@ from ai_karen_engine.tools.http_client_tool import HTTPClientTool
 from ai_karen_engine.tools.filesystem_tool import FileSystemTool
 from ai_karen_engine.tools.text_processing_tool import TextProcessingTool
 from ai_karen_engine.tools.data_analysis_tool import DataAnalysisTool
+from ai_karen_engine.tools.system_resources_tool import SystemResourcesTool
 from ai_karen_engine.tools.web_search_tool import (
     WebSearchTool,
     get_production_tools,
@@ -36,6 +37,7 @@ __all__ = [
     "FileSystemTool",
     "TextProcessingTool",
     "DataAnalysisTool",
+    "SystemResourcesTool",
     "WebSearchTool",
     "get_production_tools",
     "register_production_tools",
