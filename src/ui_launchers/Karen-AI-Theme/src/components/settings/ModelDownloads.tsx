@@ -1225,87 +1225,94 @@ export default function ModelDownloads({
               />
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="revision">Revision</Label>
-              <Input
-                id="revision"
-                placeholder="main, commit SHA, or tag"
-                value={revision}
-                onChange={(event) => setRevision(event.target.value)}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="channel">Channel</Label>
-              <Select value={currentChannel?.id || ''} onValueChange={setChannelId}>
-                <SelectTrigger id="channel">
-                  <SelectValue placeholder="Select download channel" />
-                </SelectTrigger>
-                <SelectContent>
-                  {channels.map((channel) => (
-                    <SelectItem key={channel.id} value={channel.id}>
-                      {channel.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {currentChannel && (
-                <p className="text-xs text-muted-foreground">
-                  {currentChannel.description} Storage root:{' '}
-                  <span className="font-mono">{currentChannel.storage_key}</span>
-                </p>
-              )}
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="include-patterns">Include patterns</Label>
-                <Input
-                  id="include-patterns"
-                  placeholder="*.safetensors, *.json"
-                  value={includePatterns}
-                  onChange={(event) => setIncludePatterns(event.target.value)}
-                />
+            <div className="flex items-start justify-between gap-4 rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
+              <div className="space-y-1">
+                <div className="text-sm font-semibold">Accept model license</div>
+                <div className="text-xs text-muted-foreground">
+                  Karen will tell you during validation when acceptance is required.
+                </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="exclude-patterns">Exclude patterns</Label>
-                <Input
-                  id="exclude-patterns"
-                  placeholder="*.bin, *.msgpack"
-                  value={excludePatterns}
-                  onChange={(event) => setExcludePatterns(event.target.value)}
-                />
-              </div>
+              <Switch checked={acceptLicense} onCheckedChange={setAcceptLicense} />
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="flex items-start justify-between gap-4 rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
-                <div className="space-y-1">
-                  <div className="text-sm font-semibold">Accept license</div>
-                  <div className="text-xs text-muted-foreground">
-                    Required when policy marks the model as gated.
+            <details className="rounded-xl border border-border/50 bg-muted/10">
+              <summary className="cursor-pointer px-4 py-3 text-sm font-semibold">
+                Advanced install options
+              </summary>
+              <div className="space-y-4 border-t border-border/40 p-4">
+                <div className="space-y-2">
+                  <Label htmlFor="revision">Revision</Label>
+                  <Input
+                    id="revision"
+                    placeholder="main, commit SHA, or tag"
+                    value={revision}
+                    onChange={(event) => setRevision(event.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="channel">Runtime channel</Label>
+                  <Select
+                    value={channelId || '__auto__'}
+                    onValueChange={(value) =>
+                      setChannelId(value === '__auto__' ? '' : value)
+                    }
+                  >
+                    <SelectTrigger id="channel">
+                      <SelectValue placeholder="Automatic" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__auto__">Automatic (recommended)</SelectItem>
+                      {channels.map((channel) => (
+                        <SelectItem key={channel.id} value={channel.id}>
+                          {channel.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {currentChannel
+                      ? currentChannel.description
+                      : 'Karen will infer the safest compatible runtime channel from model metadata.'}
+                  </p>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="include-patterns">Include files</Label>
+                    <Input
+                      id="include-patterns"
+                      placeholder="*.safetensors, *.json"
+                      value={includePatterns}
+                      onChange={(event) => setIncludePatterns(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="exclude-patterns">Exclude files</Label>
+                    <Input
+                      id="exclude-patterns"
+                      placeholder="*.bin, *.msgpack"
+                      value={excludePatterns}
+                      onChange={(event) => setExcludePatterns(event.target.value)}
+                    />
                   </div>
                 </div>
-                <Switch checked={acceptLicense} onCheckedChange={setAcceptLicense} />
-              </div>
 
-              <div className="flex items-start justify-between gap-4 rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
-                <div className="space-y-1">
-                  <div className="text-sm font-semibold">trust_remote_code</div>
-                  <div className="text-xs text-muted-foreground">
-                    {adminMode
-                      ? 'Admin-controlled execution of remote code.'
-                      : 'Locked off until admin enables it.'}
+                <div className="flex items-start justify-between gap-4 rounded-xl border border-border/50 bg-background/40 px-4 py-3">
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold">Allow remote model code</div>
+                    <div className="text-xs text-muted-foreground">
+                      Off by default. Only enable for a model you explicitly trust and when runtime policy permits it.
+                    </div>
                   </div>
+                  <Switch
+                    checked={trustRemoteCode}
+                    disabled={!adminMode}
+                    onCheckedChange={setTrustRemoteCode}
+                  />
                 </div>
-                <Switch
-                  checked={trustRemoteCode}
-                  disabled={!adminMode}
-                  onCheckedChange={setTrustRemoteCode}
-                />
               </div>
-            </div>
+            </details>
 
             {validation && (
               <div
@@ -1324,11 +1331,37 @@ export default function ModelDownloads({
                   )}
                   {validation.allowed ? 'Validation passed' : 'Validation blocked'}
                 </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {validation.install_path
-                    ? `Install path: ${validation.install_path}`
-                    : 'No install path resolved.'}
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-lg border border-border/40 bg-background/40 p-2 text-xs">
+                    <span className="text-muted-foreground">Runtime</span>
+                    <div className="mt-1 font-semibold">
+                      {validation.detected_runtime || 'Not resolved'}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-border/40 bg-background/40 p-2 text-xs">
+                    <span className="text-muted-foreground">Model size</span>
+                    <div className="mt-1 font-semibold">
+                      {formatBytes(Number(validation.metadata.total_size || 0))}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-border/40 bg-background/40 p-2 text-xs">
+                    <span className="text-muted-foreground">License</span>
+                    <div className="mt-1 font-semibold">
+                      {String(validation.metadata.license || 'Not reported')}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-border/40 bg-background/40 p-2 text-xs">
+                    <span className="text-muted-foreground">Install location</span>
+                    <div className="mt-1 truncate font-mono text-[10px]" title={validation.install_path || ''}>
+                      {validation.install_path || 'Not resolved'}
+                    </div>
+                  </div>
                 </div>
+                {validation.metadata.description ? (
+                  <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                    {String(validation.metadata.description)}
+                  </p>
+                ) : null}
                 {validation.warnings.length > 0 && (
                   <p className="mt-2 text-xs text-muted-foreground">
                     {validation.warnings.join(' • ')}
@@ -1448,6 +1481,23 @@ export default function ModelDownloads({
                         <Square className="h-4 w-4" aria-hidden="true" />
                         <span className="sr-only">Cancel</span>
                       </Button>
+                      {(job.status === 'failed' || job.status === 'cancelled') && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          disabled={retryingJobs[job.job_id]}
+                          onClick={() => void retryJob(job)}
+                        >
+                          {retryingJobs[job.job_id] ? (
+                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                          )}
+                          <span className="sr-only">Retry download</span>
+                        </Button>
+                      )}
                     </div>
                   </div>
 
@@ -1467,6 +1517,27 @@ export default function ModelDownloads({
                       <span className="capitalize">{job.status.replace('_', ' ')}</span>
                     </div>
                   </div>
+                  <div className="mt-3 flex flex-wrap gap-1.5 text-[9px]">
+                    {job.detected_runtime && (
+                      <Badge variant="outline">{job.detected_runtime}</Badge>
+                    )}
+                    {job.detected_modality && (
+                      <Badge variant="outline">{job.detected_modality}</Badge>
+                    )}
+                    {job.result?.total_size ? (
+                      <Badge variant="outline">
+                        {formatBytes(Number(job.result.total_size))}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  {job.error && (
+                    <p className="mt-2 rounded-lg bg-destructive/10 p-2 text-xs text-destructive">
+                      {job.error}
+                    </p>
+                  )}
+                  {job.warnings.length > 0 && (
+                    <p className="mt-2 text-xs opacity-80">{job.warnings.join(' • ')}</p>
+                  )}
                 </div>
               ))}
             </div>
@@ -1510,6 +1581,21 @@ export default function ModelDownloads({
                             <span>{model.source || 'local'}</span>
                           </div>
                         </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          disabled={removingModels[model.id]}
+                          onClick={() => void removeInstalledModel(model.id)}
+                        >
+                          {removingModels[model.id] ? (
+                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" aria-hidden="true" />
+                          )}
+                          <span className="sr-only">Remove {model.name || model.id}</span>
+                        </Button>
                       </div>
                       <div className="mt-2 flex flex-wrap gap-1">
                         {safeStringList(model.capabilities).map((cap) => (
@@ -1555,6 +1641,21 @@ export default function ModelDownloads({
                             <span>{model.source || 'local'}</span>
                           </div>
                         </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          disabled={removingModels[model.id]}
+                          onClick={() => void removeInstalledModel(model.id)}
+                        >
+                          {removingModels[model.id] ? (
+                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" aria-hidden="true" />
+                          )}
+                          <span className="sr-only">Remove {model.name || model.id}</span>
+                        </Button>
                       </div>
                       <div className="mt-2 flex flex-wrap gap-1">
                         {safeStringList(model.capabilities).map((cap) => (
