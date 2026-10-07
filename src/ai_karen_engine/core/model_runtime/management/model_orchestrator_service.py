@@ -70,6 +70,7 @@ class ModelInfo:
     likes: Optional[int] = None
     tags: List[str] = field(default_factory=list)
     license: Optional[str] = None
+    gated: bool = False
     description: Optional[str] = None
     revision: Optional[str] = None
 
@@ -426,6 +427,7 @@ class ModelOrchestratorService:
                 likes=entry.get("likes"),
                 tags=list(entry.get("tags") or []),
                 license=entry.get("license"),
+                gated=bool(entry.get("gated", False)),
                 description=entry.get("description"),
                 revision=revision or entry.get("revision"),
             )
@@ -476,6 +478,7 @@ class ModelOrchestratorService:
             license=getattr(remote, "cardData", {}).get("license")
             if isinstance(getattr(remote, "cardData", None), dict)
             else None,
+            gated=bool(getattr(remote, "gated", False)),
             description=getattr(remote, "cardData", {}).get("model_description")
             if isinstance(getattr(remote, "cardData", None), dict)
             else None,
