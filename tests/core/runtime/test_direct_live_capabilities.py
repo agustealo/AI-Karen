@@ -474,8 +474,8 @@ def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None
     assert current_search.requires_live_data is True
     assert detroit_weather.intent == "search.weather"
     assert detroit_weather.requires_live_data is True
-    assert detroit_forecast.intent == "search.weather"
-    assert detroit_forecast.requires_live_data is True
+    assert detroit_forecast.intent == "general.chat"
+    assert detroit_forecast.requires_tool is False
     assert long_location_weather.intent == "search.weather"
     assert long_location_weather.requires_live_data is True
     assert bitcoin_price.intent == "search.general"
@@ -945,4 +945,6 @@ def test_ambiguous_single_subject_forecasts_do_not_hijack_weather() -> None:
         assert decision.requires_tool is False, prompt
 
     assert resolve_capability_decision("Detroit weather").intent == "search.weather"
-    assert resolve_capability_decision("New York City forecast").intent == "search.weather"
+    assert resolve_capability_decision("New York City forecast").intent == "general.chat"
+    assert resolve_capability_decision("forecast in Detroit").intent == "search.weather"
+    assert resolve_capability_decision("United States election forecast").intent == "general.chat"
