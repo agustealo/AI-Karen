@@ -210,4 +210,10 @@ def test_retry_preserves_install_alias_and_reviewed_revision() -> None:
     assert "normalizedPath.startsWith(rootPrefix)" in ui
     assert "const installPrefix = `${storageKey}/${modelDirectory}/`;" in ui
     assert "relativePath.startsWith(installPrefix)" in ui
+    assert ".replace(/\\\\/g, '/')" in ui
+    assert "The model library folder has changed since this job" in ui
+    assert "The original download location cannot be verified" in ui
+    assert "The original model install alias cannot be verified" in ui
+    assert "if (!retryValidatedRevision(job) && job.license_accepted)" in ui
+    assert "Review the current license and access terms" in ui
     assert "E_VERIFY," in control
