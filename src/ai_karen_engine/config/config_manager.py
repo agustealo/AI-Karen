@@ -7,6 +7,7 @@ Kari ConfigManager
 
 import os
 import json
+import copy
 import threading
 import shutil
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -487,8 +488,14 @@ def validate_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
 def load_config() -> Dict[str, Any]:
     with LOCK:
         if not CONFIG_PATH.exists():
-            cfg = DEFAULT_CONFIG.copy()
-            atomic_write(CONFIG_PATH, cfg)
+            persisted_cfg = copy.deepcopy(DEFAULT_CONFIG)
+            atomic_write(CONFIG_PATH, persisted_cfg)
+
+            # Environment values are runtime authority but should not be
+            # materialized into the newly created config asset.
+            cfg = validate_config(copy.deepcopy(persisted_cfg))
+            load_env_override(cfg)
+            cfg = validate_config(cfg)
             notify_observers(cfg)
             return cfg
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
