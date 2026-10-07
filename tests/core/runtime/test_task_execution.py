@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from ai_karen_engine.auth.models import UserData
@@ -64,6 +66,9 @@ async def test_task_execution_delegates_to_chat_runtime_with_trusted_identity(mo
     assert request.context.roles == ["member"]
     assert request.context.request_id == "request-ingress-1"
     assert request.context.correlation_id == "correlation-ingress-1"
+    assert str(uuid.UUID(request.context.session_id or "")) == request.context.session_id
+    assert str(uuid.UUID(request.context.conversation_id or "")) == request.context.conversation_id
+    assert not str(request.context.conversation_id).startswith("task:")
     assert request.preferred_provider is None
     assert request.preferred_model is None
     assert request.metadata["source"] == "saved_task"
@@ -109,6 +114,8 @@ async def test_task_execution_internal_call_uses_one_fallback_identity(monkeypat
     request = captured["request"]
     assert request.context.request_id
     assert request.context.correlation_id == request.context.request_id
+    assert str(uuid.UUID(request.context.session_id or "")) == request.context.session_id
+    assert str(uuid.UUID(request.context.conversation_id or "")) == request.context.conversation_id
 
 
 @pytest.mark.asyncio
