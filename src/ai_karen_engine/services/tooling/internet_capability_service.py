@@ -254,15 +254,28 @@ class InternetCapabilityService:
         if provider_registry is not None:
             self.provider_registry = provider_registry
         else:
-            configured_search = (
-                dict(search_settings)
-                if search_settings is not None
-                else get_config_value("search", {})
+            manifest_search = dict(search_settings or {})
+            runtime_search = get_config_value("search", {})
+            runtime_search = (
+                dict(runtime_search)
+                if isinstance(runtime_search, Mapping)
+                else {}
             )
+
+            # Manifest settings are plugin bootstrap defaults. Central runtime
+            # config is the operator authority and overrides them per provider.
+            configured_search: Dict[str, Any] = {
+                name: dict(value)
+                for name, value in manifest_search.items()
+                if isinstance(value, Mapping)
+            }
+            for name, value in runtime_search.items():
+                if not isinstance(value, Mapping):
+                    continue
+                configured_search.setdefault(name, {}).update(dict(value))
+
             self.provider_registry = WebSearchProviderRegistry(
                 settings={"search": configured_search}
-                if "search" not in configured_search
-                else configured_search
             )
         self.policy_enforcer = policy_enforcer
         self.action_gate = action_gate
