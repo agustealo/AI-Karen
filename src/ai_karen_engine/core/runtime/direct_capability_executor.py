@@ -69,6 +69,13 @@ class DirectCapabilityResult:
         payload_metadata = (
             payload_metadata if isinstance(payload_metadata, dict) else {}
         )
+        for key in ("provider", "search_providers", "crawl_provider"):
+            if (
+                presentation_payload.get(key) is None
+                and payload_metadata.get(key) is not None
+            ):
+                presentation_payload[key] = payload_metadata[key]
+
         reported_provider = str(
             self.payload.get("provider")
             or payload_metadata.get("provider")
