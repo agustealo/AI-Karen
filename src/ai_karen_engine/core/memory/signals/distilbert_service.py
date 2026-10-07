@@ -165,13 +165,12 @@ class DistilBertService:
             single_text = False
         valid_texts = [text for text in texts if text and text.strip()]
         if not valid_texts:
-            empty = [0.0] * self.config.embedding_dimension
-            return empty if single_text else [empty] * len(texts)
+            return [] if single_text else [[] for _ in texts]
         encodings = await self._encoder.encode_batch(valid_texts)
         embeddings = []
         for enc in encodings:
             if enc is None or not enc.vector:
-                embeddings.append([0.0] * self.config.embedding_dimension)
+                embeddings.append([])
             else:
                 vec = enc.vector
                 if normalize and not enc.fallback_used:
@@ -190,13 +189,25 @@ class DistilBertService:
         return IntentResult(intent="unknown", confidence=0.0, entities=[], processing_time=0.0, used_fallback=True)
 
     async def analyze_sentiment(self, text: str) -> SentimentResult:
-        return SentimentResult(sentiment="neutral", score=0.0, confidence=0.0, processing_time=0.0, used_fallback=True)
+        return SentimentResult(
+            sentiment="unknown",
+            score=0.0,
+            confidence=0.0,
+            processing_time=0.0,
+            used_fallback=True,
+        )
 
     async def tag_topics(self, text: str, max_topics: int = 5) -> TopicResult:
         return TopicResult(topics=[], topic_scores={}, processing_time=0.0, used_fallback=True)
 
     async def filter_safety(self, text: str) -> SafetyResult:
-        return SafetyResult(is_safe=True, safety_score=1.0, flagged_categories=[], processing_time=0.0, used_fallback=True)
+        return SafetyResult(
+            is_safe=False,
+            safety_score=0.0,
+            flagged_categories=["model_unavailable"],
+            processing_time=0.0,
+            used_fallback=True,
+        )
 
     async def batch_embeddings(self, texts: list[str], batch_size: int | None = None) -> list[list[float]]:
         result = await self.get_embeddings(texts)
@@ -205,17 +216,38 @@ class DistilBertService:
         return [result] if isinstance(result, list) else [[]]
 
     async def route_task(self, text: str) -> dict[str, Any]:
-        return {"recommended_handler": "main_llm", "confidence": 0.5, "reasoning": "Default routing", "safety_check": True, "classifications": {}}
+        return {
+            "recommended_handler": "unknown",
+            "confidence": 0.0,
+            "reasoning": "DistilBERT unavailable",
+            "safety_check": False,
+            "classifications": {},
+        }
 
-    async def enhance_context_understanding(self, text: str, conversation_history: list[str] | None = None) -> dict[str, Any]:
-        return {"current_sentiment": "neutral", "sentiment_score": 0.0, "main_topics": [], "user_intent": "unknown", "entities": [], "context_continuity": 0.5}
+    async def enhance_context_understanding(
+        self,
+        text: str,
+        conversation_history: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "current_sentiment": "unknown",
+            "sentiment_score": 0.0,
+            "main_topics": [],
+            "user_intent": "unknown",
+            "entities": [],
+            "context_continuity": 0.0,
+            "model_available": False,
+        }
 
     def get_health_status(self) -> DistilBertHealthStatus:
         try:
             loop = asyncio.get_event_loop()
             health = loop.run_until_complete(self._encoder.health())
             return DistilBertHealthStatus(
-                is_healthy=health.get("status") != "error",
+                is_healthy=(
+                    health.get("status") == "ready"
+                    and health.get("model_loaded", False)
+                ),
                 model_loaded=health.get("model_loaded", False),
                 fallback_mode=health.get("fallback_mode", False),
                 device=health.get("device", "unknown"),
