@@ -51,8 +51,32 @@ class _Repository(ConversationRepository):
             conversation
             for (tenant_id, _), conversation in self.conversations.items()
             if tenant_id == query.tenant_id
+            and (query.user_id is None or conversation.user_id == query.user_id)
+            and (query.is_active is None or conversation.is_active == query.is_active)
         ]
         return RepositoryResult(success=True, data=rows)
+
+    async def get_conversation_by_session(
+        self,
+        session_id: str,
+        tenant_id: str,
+        user_id: str,
+    ) -> RepositoryResult[Optional[Conversation]]:
+        for (row_tenant_id, _), conversation in self.conversations.items():
+            if (
+                row_tenant_id == tenant_id
+                and conversation.user_id == user_id
+                and conversation.session_id == session_id
+            ):
+                return RepositoryResult(success=True, data=conversation)
+        return RepositoryResult(success=True, data=None)
+
+    async def count_conversations(
+        self,
+        query: ConversationQuery,
+    ) -> RepositoryResult[int]:
+        listed = await self.list_conversations(query)
+        return RepositoryResult(success=True, data=len(listed.data or []))
 
     async def update_conversation(
         self, conversation: Conversation
@@ -416,7 +440,8 @@ async def test_session_snapshot_uses_canonical_repository_without_semantic_memor
 
     assert snapshot.conversation.tenant_id == "tenant-a"
     assert snapshot.conversation.user_id == "user-a"
-    assert snapshot.conversation.metadata["session_id"] == "presentation-session"
+    assert snapshot.conversation.session_id == "presentation-session"
+    assert "session_id" not in snapshot.conversation.metadata
     assert snapshot.messages == ()
 
 
@@ -465,10 +490,11 @@ async def test_conversation_update_requires_same_user_and_preserves_canonical_fi
         id=context.conversation_id or "",
         tenant_id=context.tenant_id,
         user_id=context.user_id,
+        session_id="session-a",
         title="Original",
         summary="Keep me",
         tags=["durable"],
-        metadata={"session_id": "session-a", "source": "chat_runtime"},
+        metadata={"source": "chat_runtime"},
     )
     repository.conversations[(context.tenant_id, original.id)] = original
     gateway = ConversationRuntimeGateway(repository=repository)
@@ -481,7 +507,8 @@ async def test_conversation_update_requires_same_user_and_preserves_canonical_fi
     assert updated.title == "Renamed"
     assert updated.summary == "Keep me"
     assert updated.tags == ["durable"]
-    assert updated.metadata["session_id"] == "session-a"
+    assert updated.session_id == "session-a"
+    assert "session_id" not in updated.metadata
 
     with pytest.raises(PermissionError, match="conversation_user_mismatch"):
         await gateway.update_conversation(
