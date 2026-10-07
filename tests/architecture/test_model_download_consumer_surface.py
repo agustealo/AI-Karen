@@ -34,6 +34,7 @@ def test_download_validation_resolves_metadata_even_with_explicit_channel() -> N
     assert '"total_size": info.total_size' in source
     assert '"description": info.description' in source
     assert "if channel is None:" in source
+    assert "Model access metadata could not be verified" in source
 
 
 def test_model_downloads_surface_is_guided_and_runtime_truthful() -> None:
