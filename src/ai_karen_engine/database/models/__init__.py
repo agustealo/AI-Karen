@@ -117,6 +117,7 @@ class TenantConversation(Base):
     __tablename__ = "conversations"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), nullable=False)
     title = Column(String(255))
     conversation_metadata = Column(JSON, default={})
@@ -136,6 +137,7 @@ class TenantConversation(Base):
     last_ai_response_id = Column(String(255))  # Track last AI response for continuity
 
     __table_args__ = (
+        Index("idx_conversation_tenant_user", "tenant_id", "user_id"),
         Index("idx_conversation_user", "user_id"),
         Index("idx_conversation_created", "created_at"),
         Index("idx_conversation_active", "is_active"),
