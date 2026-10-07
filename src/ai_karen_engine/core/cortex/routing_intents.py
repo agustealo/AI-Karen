@@ -7,7 +7,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "triggers": ["what time", "current time", "time in", "timezone"],
         "patterns": [
             r"^what\s+time\s+is\s+it(?:\s+(?:in|for)\s+.+)?[?!.]*$",
-            r"^what(?:'s|\s+is)\s+the\s+time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^what(?:'s|\s+is)\s+the\s+(?:current\s+)?time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^current\s+time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^time\s+now(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^timezone\s+(?:in|for|of)\s+.+[?!.]*$",
@@ -29,7 +29,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"^find\s+(?:the\s+)?(?:current|latest|today'?s?)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|updates?|results?|score|price|release|version|status|information)[?!.]*$",
             r"^(?:what|which)\s+is\s+the\s+(?:current|latest)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|update|result|score|price|release|version|status)[?!.]*$",
             r"^(?:what|which)\s+is\s+the\s+(?:current|latest)\s+(?:news|update|result|score|price|release|version|status)\s+(?:of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3}[?!.]*$",
-            r"^(?:latest|current|today'?s?)\s+(?:news|updates?|results?|score|price|release|version|status)[?!.]*$",
+            r"^(?:latest|current|today'?s?)\s+(?:news|updates?|results?|score|price|release|version|status)(?:\s+(?:about|of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3})?[?!.]*$",
         ],
         "required_capability": "web.search",
         "preferred_plugin": "intelligent-search",
@@ -77,6 +77,27 @@ _CONCEPTUAL_TIME_SUBJECTS = {
 }
 
 
+_LOCATION_CONNECTORS = {
+    "al",
+    "bin",
+    "da",
+    "das",
+    "de",
+    "del",
+    "do",
+    "dos",
+    "du",
+    "la",
+    "las",
+    "le",
+    "los",
+    "of",
+    "the",
+    "van",
+    "von",
+}
+
+
 def _looks_like_location_phrase(value: str) -> bool:
     raw = " ".join((value or "").strip().split()).strip(" ,")
     if not raw or len(raw) > 160:
@@ -115,7 +136,8 @@ def _looks_like_location_phrase(value: str) -> bool:
     return all(
         token[:1].isupper()
         or token[:1].lower() == token[:1].upper()
-        for token in tokens
+        or (index > 0 and token.lower() in _LOCATION_CONNECTORS)
+        for index, token in enumerate(tokens)
     )
 
 
