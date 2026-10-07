@@ -1725,7 +1725,7 @@ class ChatRuntime:
 
         assembly_request = PromptAssemblyRequest(
             prompt_id="karen.chat.default",
-            prompt_version="v1",
+            prompt_version="v1.0.0",
             memory_items=recall_items if decision.memory_recall_required else [],
             continuity_items=(
                 list(continuity_items)
