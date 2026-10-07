@@ -512,3 +512,24 @@ def test_web_search_registry_honors_configured_priority() -> None:
     )
 
     assert registry.select_provider() == "wikipedia"
+
+
+def test_runtime_search_config_overrides_manifest_bootstrap_defaults() -> None:
+    manifest_settings = {
+        "duckduckgo": {"enabled": True, "priority": 100},
+        "wikipedia": {"enabled": False, "priority": 85},
+    }
+    runtime_settings = {
+        "duckduckgo": {"enabled": False},
+        "wikipedia": {"enabled": True, "priority": 500},
+    }
+
+    with patch(
+        "ai_karen_engine.services.tooling.internet_capability_service.get_config_value",
+        return_value=runtime_settings,
+    ):
+        service = InternetCapabilityService(search_settings=manifest_settings)
+
+    assert service.provider_registry.is_enabled("duckduckgo") is False
+    assert service.provider_registry.is_enabled("wikipedia") is True
+    assert service.provider_registry.select_provider() == "wikipedia"
