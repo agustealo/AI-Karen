@@ -339,6 +339,7 @@ class InternetCapabilityService:
                     strategy,
                     request,
                     effective_max_urls,
+                    provider_sink=search_providers,
                 ),
                 timeout=effective_timeout,
             )
@@ -489,6 +490,7 @@ class InternetCapabilityService:
         strategy: Mapping[str, Any],
         request: InternetSearchRequest,
         max_urls: int,
+        provider_sink: Optional[List[str]] = None,
     ) -> Tuple[List[str], List[str]]:
         """
         Fetch unique URLs from the configured search provider.
@@ -499,7 +501,7 @@ class InternetCapabilityService:
 
         client = self._resolve_search_client()
         all_urls: List[str] = []
-        providers: List[str] = []
+        providers = provider_sink if provider_sink is not None else []
 
         for search_query in list(queries)[: self.max_expanded_queries]:
             try:
@@ -511,7 +513,11 @@ class InternetCapabilityService:
                     )
 
                 provider = str(getattr(response, "provider", "") or "").strip()
-                if provider and provider not in {"none", "unknown"}:
+                if (
+                    provider
+                    and provider not in {"none", "unknown"}
+                    and provider not in providers
+                ):
                     providers.append(provider)
 
                 for result in getattr(response, "results", []) or []:
