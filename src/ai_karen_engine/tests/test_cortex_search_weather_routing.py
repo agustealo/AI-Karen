@@ -4,7 +4,7 @@ from ai_karen_engine.core.cortex.routing_intents import (
 )
 
 
-def test_weather_routes_to_web.search():
+def test_weather_routes_to_web_search():
     decision = resolve_capability_decision("What's the weather in Westland, MI?")
     assert decision.intent == "search.weather"
     assert decision.capability == "web.search"
