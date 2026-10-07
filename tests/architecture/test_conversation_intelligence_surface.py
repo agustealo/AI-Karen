@@ -88,3 +88,18 @@ def test_conversation_intelligence_surfaces_authorized_execution_envelope() -> N
         "resumable",
     ):
         assert token in rail
+
+
+def test_conversation_intelligence_surfaces_provider_route_and_policy_lineage() -> None:
+    source = RAIL.read_text(encoding="utf-8")
+
+    for token in (
+        "Provider route",
+        "provider_attempts",
+        "attempt.latencyMs",
+        "Policy lineage",
+        "policy_decision_id",
+        "policy_reason_codes",
+        "workflowVersion",
+    ):
+        assert token in source
