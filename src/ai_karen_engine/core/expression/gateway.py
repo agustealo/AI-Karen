@@ -244,11 +244,10 @@ class ExpressionGateway:
 
                 has_text = bool(result.text and result.text.strip())
                 is_valid = validate_response_text(result.text) if has_text else False
-                has_model_source = bool(result.provider) and result.response_source not in {
-                    "emergency_static",
-                    "system_failure",
-                    "model_unavailable",
-                }
+                has_model_source = (
+                    bool(result.provider)
+                    and result.response_source != "model_unavailable"
+                )
 
                 if has_text and is_valid and has_model_source:
                     self.circuits.mark_success(f"expression.engine.{engine_id}")
