@@ -379,7 +379,7 @@ async def create_chat_response(
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
-@router.post("/stream")
+@router.post("/chat/stream")
 async def stream_chat_response(
     request: ChatStreamRequest,
     http_request: Request,
@@ -407,7 +407,7 @@ async def stream_chat_response(
             event="chat_stream_started",
             user_id=user_id,
             details={
-                "endpoint": "/api/stream",
+                "endpoint": "/api/chat/stream",
                 "correlation_id": correlation_id,
                 "response_id": response_id,
                 "session_id": session_id,
@@ -433,7 +433,7 @@ async def stream_chat_response(
     except ValueError as exc:
         structured_logger.log_error(
             error=str(exc),
-            endpoint="/api/stream",
+            endpoint="/api/chat/stream",
             user_id=str(user.get("user_id") or "unknown"),
             correlation_id=correlation_id,
             context="validation_error",
@@ -442,7 +442,7 @@ async def stream_chat_response(
     except Exception as exc:
         structured_logger.log_error(
             error=str(exc),
-            endpoint="/api/stream",
+            endpoint="/api/chat/stream",
             user_id=str(user.get("user_id") or "unknown"),
             correlation_id=correlation_id,
             context="unexpected_error",
