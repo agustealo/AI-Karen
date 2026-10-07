@@ -83,3 +83,34 @@ def test_execution_waterfall_only_accepts_observed_nonnegative_spans() -> None:
         {"name": "prompt_assembly", "duration_ms": 5.25, "source": "runtime_observed"},
         {"name": "provider_generation", "duration_ms": 21.5, "source": "expression_gateway"},
     ]
+
+
+def test_retrieval_health_and_reasoning_insights_preserve_authority() -> None:
+    insights = build_consumer_insights(
+        vector_health={
+            "available": True,
+            "authority": "neuro_recall",
+            "storage": "postgres_pgvector_fts",
+            "status": "healthy",
+            "hnsw_reported": False,
+            "vector_drift_reported": False,
+        },
+        counterfactuals={
+            "available": True,
+            "authority": "reasoning_executor",
+            "scenarios": [
+                {
+                    "id": "h1",
+                    "statement": "Alternative",
+                    "confidence": 0.7,
+                    "status": "supported",
+                }
+            ],
+        },
+    )
+
+    assert insights["vector_health"]["authority"] == "neuro_recall"
+    assert insights["vector_health"]["storage"] == "postgres_pgvector_fts"
+    assert insights["vector_health"]["hnsw_reported"] is False
+    assert insights["counterfactuals"]["authority"] == "reasoning_executor"
+    assert insights["agent_consensus"]["available"] is False
