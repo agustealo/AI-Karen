@@ -88,12 +88,21 @@ async def execute_task_definition(
         str(correlation_id or "").strip() or resolved_request_id
     )
     requested_agents = _requested_agents(task)
+    task_session_id = str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            (
+                f"ai-karen:saved-task-session:{task_id}"
+                if task_id
+                else f"ai-karen:task-execution:{resolved_request_id}"
+            ),
+        )
+    )
 
     context = ChatExecutionContext(
         user_id=user_id,
         tenant_id=tenant_id,
-        session_id=f"task:{task_id}" if task_id else None,
-        conversation_id=f"task:{task_id}" if task_id else None,
+        session_id=task_session_id,
         request_id=resolved_request_id,
         correlation_id=resolved_correlation_id,
         roles=list(user.roles or []),
