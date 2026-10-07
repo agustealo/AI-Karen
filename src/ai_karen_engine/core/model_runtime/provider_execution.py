@@ -26,6 +26,7 @@ class ProviderExecutionResult:
     model: str | None
     provider_id: str
     runtime_engine: str | None
+    usage: dict[str, int] | None = None
 
 
 class ProviderExecutionError(RuntimeError):
@@ -166,11 +167,23 @@ def _sync_openai_compatible_request(
         )
 
     actual_model = body.get("model") or request_model
+    raw_usage = body.get("usage")
+    usage = None
+    if isinstance(raw_usage, dict):
+        usage = {}
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = raw_usage.get(key)
+            if isinstance(value, int) and value >= 0:
+                usage[key] = value
+        if not usage:
+            usage = None
+
     return ProviderExecutionResult(
         text=text,
         model=str(actual_model) if actual_model else None,
         provider_id=endpoint.provider_id,
         runtime_engine=endpoint.runtime_engine.value,
+        usage=usage,
     )
 
 

@@ -31,6 +31,7 @@ from ai_karen_engine.core.runtime.composition import (
     RuntimeComposition,
     get_runtime_composition,
 )
+from ai_karen_engine.core.runtime.consumer_insights import build_consumer_insights
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
     ConversationRuntimeGateway,
     TranscriptPersistenceResult,
@@ -977,6 +978,9 @@ class ChatRuntime:
                 "memory_degradation_reason": context_meta.get(
                     "memory_degradation_reason"
                 ),
+                "memory_retrieval_health": dict(
+                    context_meta.get("memory_retrieval_health") or {}
+                ),
                 "memory_context": {"recall": recall_items},
                 "proactive_continuity": {"candidates": continuity_items},
                 "continuity_status": context_meta.get(
@@ -1363,14 +1367,15 @@ class ChatRuntime:
 
         ctx = request.context
         gateway = self._composition.expression_gateway
+        prompt_messages, prompt_telemetry = await self._assemble_prompt_with_telemetry(
+            request,
+            decision,
+            memory_recall_meta,
+        )
         task = ExpressionTask(
             task_id=f"expr_{ctx.correlation_id}",
             kind="chat",
-            messages=await self._assemble_prompt(
-                request,
-                decision,
-                memory_recall_meta,
-            ),
+            messages=prompt_messages,
             response_mode="text",
             required_capabilities=list(decision.required_capabilities),
             forbidden_capabilities=list(decision.forbidden_capabilities),
@@ -1441,8 +1446,29 @@ class ChatRuntime:
             "degradation_reason": result.degradation_reason,
             "degradation_type": (result.metadata or {}).get("degradation_type"),
             "provider_attempts": getattr(result, "attempts", []) or [],
+            "usage": dict((result.metadata or {}).get("usage") or {}),
+            "prompt_telemetry": prompt_telemetry,
+            "execution_spans": [
+                {
+                    "name": "prompt_assembly",
+                    "duration_ms": prompt_telemetry.get("assembly_duration_ms", 0.0),
+                    "source": "runtime_observed",
+                },
+                {
+                    "name": "provider_generation",
+                    "duration_ms": result.latency_ms,
+                    "source": "expression_gateway",
+                },
+            ],
             "provenance": provenance,
         }
+        normalized["consumer_insights"] = build_consumer_insights(
+            prompt_telemetry=prompt_telemetry,
+            provider_usage=normalized["usage"],
+            execution_spans=normalized["execution_spans"],
+            total_latency_ms=result.latency_ms
+            + float(prompt_telemetry.get("assembly_duration_ms") or 0.0),
+        )
         return result.text, normalized
 
     async def _run_simple_stream(
@@ -1613,7 +1639,9 @@ class ChatRuntime:
             budget=plan.budget,
         )
 
+        reasoning_started = time.perf_counter()
         result = await activation.executor.execute(canonical_request, plan, context)
+        reasoning_duration_ms = (time.perf_counter() - reasoning_started) * 1000.0
 
         consumed_model_calls = int(result.diagnostics.get("model_calls", 0) or 0)
         for _ in range(consumed_model_calls):
@@ -1660,8 +1688,37 @@ class ChatRuntime:
             "reasoning_modes": list(activation.reasoning_modes),
             "reasoning_model_calls": consumed_model_calls,
             "reasoning_steps": consumed_steps,
+            "execution_spans": [
+                {
+                    "name": "reasoning_executor",
+                    "duration_ms": reasoning_duration_ms,
+                    "source": "reasoning_executor",
+                }
+            ],
             **activation_meta,
         }
+        if "counterfactual" in activation.reasoning_modes and result.hypotheses:
+            provider_meta["counterfactuals"] = {
+                "available": True,
+                "authority": "reasoning_executor",
+                "reasoning_id": result.reasoning_id,
+                "scenarios": [
+                    {
+                        "id": hypothesis.hypothesis_id,
+                        "statement": hypothesis.statement,
+                        "confidence": hypothesis.confidence,
+                        "uncertainty": hypothesis.uncertainty,
+                        "status": hypothesis.status,
+                        "supporting_evidence_refs": list(
+                            hypothesis.supporting_evidence_refs
+                        ),
+                        "contradicting_evidence_refs": list(
+                            hypothesis.contradicting_evidence_refs
+                        ),
+                    }
+                    for hypothesis in result.hypotheses[:6]
+                ],
+            }
         return text, provider_meta
 
     async def _run_reasoning_stream(
@@ -1704,7 +1761,21 @@ class ChatRuntime:
         decision: ExecutionDecision,
         memory_context: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """Assemble prompt using canonical PromptRuntime."""
+        """Backward-compatible prompt message projection."""
+        messages, _ = await self._assemble_prompt_with_telemetry(
+            request,
+            decision,
+            memory_context,
+        )
+        return messages
+
+    async def _assemble_prompt_with_telemetry(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        memory_context: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """Assemble prompt and preserve PromptRuntime-owned consumer telemetry."""
         from ai_karen_engine.core.runtime.prompt import (
             PromptAssemblyRequest,
             get_prompt_runtime_service,
@@ -1746,8 +1817,15 @@ class ChatRuntime:
             messages=[dict(msg) for msg in request.messages],
         )
 
+        assembly_started = time.perf_counter()
         result = await get_prompt_runtime_service().assemble_prompt(assembly_request)
-        return result.messages
+        prompt_telemetry = dict(
+            (result.metadata or {}).get("consumer_token_telemetry") or {}
+        )
+        prompt_telemetry["assembly_duration_ms"] = (
+            time.perf_counter() - assembly_started
+        ) * 1000.0
+        return result.messages, prompt_telemetry
 
     def _extract_user_message(self, messages: List[Dict[str, Any]]) -> str:
         """Extract the latest user message."""
@@ -1825,6 +1903,17 @@ class ChatRuntime:
             value = raw.get(key)
             if value is not None:
                 normalized[key] = value
+        for key in (
+            "agent_consensus",
+            "counterfactuals",
+            "execution_spans",
+            "vector_health",
+            "prompt_telemetry",
+            "usage",
+        ):
+            value = raw.get(key)
+            if value is not None:
+                normalized[key] = value
         return normalized
 
     def _build_metadata(
@@ -1865,6 +1954,18 @@ class ChatRuntime:
                 for k, v in normalized.items()
                 if k not in _CANONICAL_META_KEYS
             }
+        )
+        md.extra["consumer_insights"] = build_consumer_insights(
+            prompt_telemetry=normalized.get("prompt_telemetry"),
+            provider_usage=normalized.get("usage"),
+            execution_spans=normalized.get("execution_spans"),
+            total_latency_ms=latency_ms,
+            vector_health=(
+                normalized.get("vector_health")
+                or (memory_meta or {}).get("memory_retrieval_health")
+            ),
+            counterfactuals=normalized.get("counterfactuals"),
+            agent_consensus=normalized.get("agent_consensus"),
         )
         return md
 
@@ -2114,6 +2215,18 @@ class ChatRuntime:
             ),
             "memory_formation_reason": memory_recall_meta.get(
                 "memory_formation_reason"
+            ),
+            "consumer_insights": build_consumer_insights(
+                prompt_telemetry=provider_meta.get("prompt_telemetry"),
+                provider_usage=provider_meta.get("usage"),
+                execution_spans=provider_meta.get("execution_spans"),
+                total_latency_ms=latency_ms,
+                vector_health=(
+                    provider_meta.get("vector_health")
+                    or memory_recall_meta.get("memory_retrieval_health")
+                ),
+                counterfactuals=provider_meta.get("counterfactuals"),
+                agent_consensus=provider_meta.get("agent_consensus"),
             ),
             "intent": decision.intent,
             "intent_confidence": decision.intent_confidence,

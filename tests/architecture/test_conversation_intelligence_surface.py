@@ -115,3 +115,24 @@ def test_runtime_metadata_panel_does_not_duplicate_desktop_deck() -> None:
     assert '<div className="xl:hidden">' in source
     assert "<RuntimeMetadataPanel" in source
     assert "<ConversationContextRail" in source
+
+
+def test_advanced_consumer_insights_use_canonical_owners() -> None:
+    runtime = RUNTIME.read_text(encoding="utf-8")
+    rail = RAIL.read_text(encoding="utf-8")
+    memory_runtime = (
+        ROOT / "src/ai_karen_engine/core/memory/memory_runtime_manager.py"
+    ).read_text(encoding="utf-8")
+    evidence = (
+        ROOT / "src/ai_karen_engine/core/runtime/evidence_resolver.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"authority": "neuro_recall"' in memory_runtime
+    assert '"storage": "postgres_pgvector_fts"' in memory_runtime
+    assert '"hnsw_reported": False' in memory_runtime
+    assert '"vector_drift_reported": False' in memory_runtime
+    assert '"memory_retrieval_health"' in evidence
+    assert '"authority": "reasoning_executor"' in runtime
+    assert '"counterfactuals"' in runtime
+    assert '"execution_spans"' in runtime
+    assert "Retrieval / vector health" in rail

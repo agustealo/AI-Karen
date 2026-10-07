@@ -68,6 +68,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             actual_provider = execution.provider_id
             actual_model = execution.model
             runtime_engine = execution.runtime_engine or "openai_compatible"
+            provider_usage = dict(execution.usage or {})
         except Exception as exc:
             logger.error(
                 "OpenAICompatibleEngine (%s) failed for %s: %s",
@@ -148,6 +149,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             ),
             "degradation_reason": degradation_reason,
             "provider_attempts": attempts,
+            "usage": provider_usage,
         }
 
         return ExpressionResult(
