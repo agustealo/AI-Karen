@@ -42,9 +42,14 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     "search.weather": {
         "triggers": ["weather", "forecast", "temperature", "rain today"],
         "patterns": [
-            r"\bweather\b",
-            r"\bforecast\b",
-            r"\btemperature\b",
+            r"\bwhat(?:'s|\s+is)\s+(?:the\s+)?weather\b",
+            r"\bhow(?:'s|\s+is)\s+(?:the\s+)?weather\b",
+            r"^weather\b",
+            r"\bweather\s+(?:in|for|today|tonight|tomorrow|this\s+week)\b",
+            r"\bforecast\s+(?:for|in|today|tonight|tomorrow|this\s+week)\b",
+            r"\b(?:current|today'?s?|tonight'?s?|tomorrow'?s?)\s+(?:weather|forecast|temperature)\b",
+            r"\btemperature\s+(?:in|at|outside|today|tonight|tomorrow)\b",
+            r"\b(?:will|is|does)\s+it\s+(?:rain|snow)\b",
             r"\b(?:rain|snow|storm|precipitation)\s+(?:today|tonight|tomorrow|this\s+week)\b",
         ],
         "required_capability": "web.search",
