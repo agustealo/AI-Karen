@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  ChartNoAxesColumnIncreasing,
   Bot,
   Brain,
   Cpu,
@@ -13,11 +14,15 @@ import {
   Clock3,
   Gauge,
   GitBranch,
+  Network,
   MemoryStick,
   PlugZap,
   Route,
+  Scale,
   ShieldAlert,
   Sparkles,
+  TimerReset,
+  UsersRound,
   Wrench,
 } from 'lucide-react';
 
@@ -409,6 +414,16 @@ function RailContent({
     () => normalizeRuntimeInsight(metadata || {}),
     [metadata],
   );
+  const consumerInsights = useMemo(
+    () => asRecord((metadata || {}).consumer_insights),
+    [metadata],
+  );
+  const tokenWindow = asRecord(consumerInsights.token_window);
+  const promptDecomposition = asRecord(consumerInsights.prompt_decomposition);
+  const vectorHealth = asRecord(consumerInsights.vector_health);
+  const counterfactuals = asRecord(consumerInsights.counterfactuals);
+  const agentConsensus = asRecord(consumerInsights.agent_consensus);
+  const executionWaterfall = asRecord(consumerInsights.execution_waterfall);
 
   const hasCapabilityTruth =
     Boolean(capabilities.executionTopology) ||
@@ -687,6 +702,202 @@ function RailContent({
             )}
           </CardContent>
         </Card>
+      )}
+
+      {Object.keys(consumerInsights).length > 0 && (
+        <>
+          <Card className="karen-surface overflow-hidden border-border/70 bg-card/70">
+            <CardHeader className="border-b border-border/50 bg-muted/10 pb-2">
+              <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider">
+                <span className="flex items-center gap-2">
+                  <ChartNoAxesColumnIncreasing className="h-3.5 w-3.5 text-primary" />
+                  Token window
+                </span>
+                <Badge variant="outline" className="text-[9px]">
+                  {asString(tokenWindow.source) || 'unavailable'}
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2.5 pt-3">
+              {tokenWindow.available === true ? (
+                <>
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                      <p className="text-[8px] uppercase text-muted-foreground">Input</p>
+                      <p className="mt-1 text-xs font-semibold">{asNumber(tokenWindow.input_tokens) ?? 0}</p>
+                    </div>
+                    <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                      <p className="text-[8px] uppercase text-muted-foreground">Headroom</p>
+                      <p className="mt-1 text-xs font-semibold">{asNumber(tokenWindow.context_headroom_tokens) ?? 0}</p>
+                    </div>
+                    <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                      <p className="text-[8px] uppercase text-muted-foreground">Used</p>
+                      <p className="mt-1 text-xs font-semibold">{asNumber(tokenWindow.context_used_percent) ?? 0}%</p>
+                    </div>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary"
+                      style={{
+                        width: `${Math.max(0, Math.min(100, asNumber(tokenWindow.context_used_percent) ?? 0))}%`,
+                      }}
+                    />
+                  </div>
+                  {(asNumber(tokenWindow.truncation_count) ?? 0) > 0 && (
+                    <p className="text-[9px] text-amber-600 dark:text-amber-400">
+                      {asNumber(tokenWindow.truncation_count)} prompt truncation event(s)
+                    </p>
+                  )}
+                </>
+              ) : (
+                <EmptyTruth>Token-window telemetry was not available for this turn.</EmptyTruth>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="karen-surface border-border/70 bg-card/70">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
+                <Brain className="h-3.5 w-3.5 text-primary" />
+                Prompt decomposition
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {promptDecomposition.available === true ? (
+                Object.entries(asRecord(promptDecomposition.sections)).map(([name, raw]) => {
+                  const section = asRecord(raw);
+                  const percent = asNumber(section.percent) ?? 0;
+                  return (
+                    <div key={name} className="space-y-1">
+                      <div className="flex items-center justify-between text-[9px]">
+                        <span className="capitalize text-muted-foreground">{name}</span>
+                        <span>{asNumber(section.tokens) ?? 0} · {percent}%</span>
+                      </div>
+                      <div className="h-1 overflow-hidden rounded-full bg-muted">
+                        <div className="h-full rounded-full bg-primary/70" style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} />
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <EmptyTruth>Prompt section accounting was not reported for this turn.</EmptyTruth>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="karen-surface border-border/70 bg-card/70">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider">
+                <span className="flex items-center gap-2">
+                  <Network className="h-3.5 w-3.5 text-primary" />
+                  Vector / HNSW health
+                </span>
+                <Badge variant="outline" className="text-[9px]">
+                  {vectorHealth.available === true ? 'reported' : 'not reported'}
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {vectorHealth.available === true ? (
+                <div className="grid grid-cols-2 gap-2 text-[10px]">
+                  {Object.entries(vectorHealth)
+                    .filter(([key]) => key !== 'available')
+                    .slice(0, 6)
+                    .map(([key, value]) => (
+                      <div key={key} className="rounded-lg border border-border/60 bg-background/40 p-2">
+                        <p className="text-[8px] uppercase text-muted-foreground">{key.replace(/_/g, ' ')}</p>
+                        <p className="mt-1 truncate font-semibold">{String(value)}</p>
+                      </div>
+                    ))}
+                </div>
+              ) : (
+                <EmptyTruth>
+                  {asString(vectorHealth.unavailable_reason).replace(/_/g, ' ') || 'Vector health is unavailable.'}
+                </EmptyTruth>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="karen-surface border-border/70 bg-card/70">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
+                <Scale className="h-3.5 w-3.5 text-primary" />
+                Counterfactual scenarios
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {counterfactuals.available === true ? (
+                <pre className="whitespace-pre-wrap text-[9px] text-muted-foreground">
+                  {JSON.stringify(counterfactuals, null, 2)}
+                </pre>
+              ) : (
+                <EmptyTruth>
+                  {asString(counterfactuals.unavailable_reason).replace(/_/g, ' ') || 'No counterfactual scenario was evaluated.'}
+                </EmptyTruth>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="karen-surface border-border/70 bg-card/70">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
+                <UsersRound className="h-3.5 w-3.5 text-primary" />
+                Agent consensus
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {agentConsensus.available === true ? (
+                <pre className="whitespace-pre-wrap text-[9px] text-muted-foreground">
+                  {JSON.stringify(agentConsensus, null, 2)}
+                </pre>
+              ) : (
+                <EmptyTruth>
+                  {asString(agentConsensus.unavailable_reason).replace(/_/g, ' ') || 'No multi-agent consensus was reported.'}
+                </EmptyTruth>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="karen-surface border-border/70 bg-card/70">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider">
+                <span className="flex items-center gap-2">
+                  <TimerReset className="h-3.5 w-3.5 text-primary" />
+                  Execution waterfall
+                </span>
+                {asNumber(executionWaterfall.total_latency_ms) !== undefined && (
+                  <span className="font-mono text-[9px] text-muted-foreground">
+                    {Math.round(asNumber(executionWaterfall.total_latency_ms) || 0)} ms
+                  </span>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {executionWaterfall.available === true && Array.isArray(executionWaterfall.spans) ? (
+                executionWaterfall.spans.slice(0, 8).map((raw, index) => {
+                  const span = asRecord(raw);
+                  const duration = asNumber(span.duration_ms) ?? 0;
+                  const total = asNumber(executionWaterfall.total_latency_ms) || duration || 1;
+                  return (
+                    <div key={`${asString(span.name) || 'span'}:${index}`} className="space-y-1">
+                      <div className="flex items-center justify-between gap-2 text-[9px]">
+                        <span className="truncate text-muted-foreground">{asString(span.name) || 'runtime span'}</span>
+                        <span className="shrink-0 font-mono">{Math.round(duration)} ms</span>
+                      </div>
+                      <div className="h-1 overflow-hidden rounded-full bg-muted">
+                        <div className="h-full rounded-full bg-primary/70" style={{ width: `${Math.max(2, Math.min(100, (duration / total) * 100))}%` }} />
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <EmptyTruth>
+                  {asString(executionWaterfall.unavailable_reason).replace(/_/g, ' ') || 'No execution spans were reported.'}
+                </EmptyTruth>
+              )}
+            </CardContent>
+          </Card>
+        </>
       )}
 
       {(resourcesLoadState !== 'idle' || systemResources) && (
