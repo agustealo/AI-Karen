@@ -82,6 +82,19 @@ class ChatRequest(BaseModel):
         max_length=100,
     )
     conversation_id: Optional[str] = Field(default=None, max_length=100)
+    timezone: Optional[str] = Field(default=None, max_length=100)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9_+\-/]+", normalized):
+            raise ValueError("Invalid timezone format")
+        return normalized
 
     @field_validator("messages")
     @classmethod
@@ -124,6 +137,19 @@ class ChatStreamRequest(BaseModel):
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=1)
     approval_id: Optional[str] = Field(default=None, max_length=64)
+    timezone: Optional[str] = Field(default=None, max_length=100)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9_+\-/]+", normalized):
+            raise ValueError("Invalid timezone format")
+        return normalized
 
     @field_validator("message")
     @classmethod
@@ -228,6 +254,7 @@ def _stream_execution_request(
         stream=True,
         metadata={
             "transport": "sse",
+            **({"user_timezone": request.timezone} if request.timezone else {}),
             **({"approval_id": request.approval_id} if request.approval_id else {}),
         },
     )
@@ -276,6 +303,7 @@ async def create_chat_response(
             stream=request.stream,
             metadata={
                 "transport": "http",
+                **({"user_timezone": request.timezone} if request.timezone else {}),
                 **({"approval_id": request.approval_id} if request.approval_id else {}),
             },
         )
