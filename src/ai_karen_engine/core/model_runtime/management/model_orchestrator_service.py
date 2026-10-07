@@ -471,6 +471,16 @@ class ModelOrchestratorService:
             total_size += size
             files.append({"path": path, "size": size})
 
+        card_data_raw = getattr(remote, "card_data", None)
+        if card_data_raw is None:
+            card_data_raw = getattr(remote, "cardData", None)
+        if isinstance(card_data_raw, Mapping):
+            card_data = dict(card_data_raw)
+        elif hasattr(card_data_raw, "to_dict"):
+            card_data = dict(card_data_raw.to_dict())
+        else:
+            card_data = {}
+
         return ModelInfo(
             model_id=model_id,
             owner=owner,
@@ -482,13 +492,9 @@ class ModelOrchestratorService:
             downloads=getattr(remote, "downloads", None),
             likes=getattr(remote, "likes", None),
             tags=list(getattr(remote, "tags", []) or []),
-            license=getattr(remote, "cardData", {}).get("license")
-            if isinstance(getattr(remote, "cardData", None), dict)
-            else None,
+            license=card_data.get("license"),
             gated=bool(getattr(remote, "gated", False)),
-            description=getattr(remote, "cardData", {}).get("model_description")
-            if isinstance(getattr(remote, "cardData", None), dict)
-            else None,
+            description=card_data.get("model_description"),
             revision=getattr(remote, "sha", None) or revision,
         )
 
@@ -548,11 +554,15 @@ class ModelOrchestratorService:
                 repo_id=req.model_id,
                 revision=req.revision,
             )
-            card_data = (
-                getattr(remote, "cardData", {})
-                if isinstance(getattr(remote, "cardData", None), dict)
-                else {}
-            )
+            card_data_raw = getattr(remote, "card_data", None)
+            if card_data_raw is None:
+                card_data_raw = getattr(remote, "cardData", None)
+            if isinstance(card_data_raw, Mapping):
+                card_data = dict(card_data_raw)
+            elif hasattr(card_data_raw, "to_dict"):
+                card_data = dict(card_data_raw.to_dict())
+            else:
+                card_data = {}
             remote_metadata = ModelInfo(
                 model_id=req.model_id,
                 owner=owner,
