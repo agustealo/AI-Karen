@@ -29,6 +29,7 @@ def test_download_validation_resolves_metadata_even_with_explicit_channel() -> N
     assert '"resolved_revision": info.revision or revision or "main"' in source
     assert '"license_url": (' in source
     assert 'f"https://huggingface.co/{model_id}/tree/"' in source
+    assert "if info.license or info.gated" in source
     assert "quote(str(info.revision or revision or 'main'), safe='')" in source
     assert '"total_size": info.total_size' in source
     assert '"description": info.description' in source
