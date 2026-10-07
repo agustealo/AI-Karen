@@ -57,7 +57,7 @@ class TokenEstimateError(RegistryError):
 class TokenEstimate:
     """Token estimation result."""
     
-    total_tokens: int
+    total_tokens: int = 0
     system_tokens: int = 0
     memory_tokens: int = 0
     tool_tokens: int = 0
@@ -87,6 +87,7 @@ class PromptRegistry:
         self._active_versions: Dict[str, PromptVersion] = {}
         
         self._load_registry()
+        self._ensure_builtin_prompts()
     
     def _load_registry(self):
         """Load prompts from registry storage."""
@@ -120,6 +121,32 @@ class PromptRegistry:
             logger.error(f"Failed to load registry: {e}")
             raise RegistryError(f"Failed to load registry: {e}")
     
+    def _ensure_builtin_prompts(self) -> None:
+        """Install immutable built-in prompt contracts required by core runtime."""
+        prompt_id = "karen.chat.default"
+        if prompt_id in self._prompts:
+            return
+
+        prompt = PromptDefinition(
+            prompt_id=prompt_id,
+            version="v1.0.0",
+            name="KAREN Default Chat",
+            description="Canonical prompt contract for normal KAREN chat assembly.",
+            system_instructions="",
+            token_budget=4096,
+            status=PromptLifecycleStatus.ACTIVE,
+            is_default=True,
+            metadata={
+                "source": "builtin",
+                "owner": "prompt_runtime",
+                "purpose": "canonical_chat",
+            },
+        )
+        self._prompts[prompt.prompt_id] = prompt
+        version = prompt.parsed_version
+        self._version_index.setdefault(prompt.prompt_id, {})[version] = prompt.prompt_id
+        self._active_versions[prompt.prompt_id] = version
+
     def _save_registry(self):
         """Save prompts to registry storage."""
         registry_file = self.registry_path / "registry.json"
