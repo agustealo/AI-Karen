@@ -312,6 +312,17 @@ class MemoryRuntimeManager:
             "degradation_reason": result.degradation_reason,
             "provenance": list(result.provenance),
             "latency_ms": result.latency_ms,
+            "retrieval_health": {
+                "available": True,
+                "authority": "neuro_recall",
+                "storage": "postgres_pgvector_fts",
+                "status": "degraded" if result.degraded else "healthy",
+                "latency_ms": result.latency_ms,
+                "result_count": len(formatted),
+                "provenance": list(result.provenance),
+                "hnsw_reported": False,
+                "vector_drift_reported": False,
+            },
         }
 
     async def inspect_memory_state(self, **kwargs: Any) -> dict[str, Any]:
