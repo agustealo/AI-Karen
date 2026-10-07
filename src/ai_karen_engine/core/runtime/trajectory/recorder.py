@@ -4,9 +4,9 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from src.ai_karen_engine.platform.observability.contracts import EventType as RuntimeEventType
-from src.ai_karen_engine.platform.observability import emit_event as _emit_event
-from src.ai_karen_engine.platform.observability.context import get_correlation_context as get_observability_context
+from ai_karen_engine.platform.observability.contracts import EventType as RuntimeEventType
+from ai_karen_engine.platform.observability import emit_event as _emit_event
+from ai_karen_engine.platform.observability.context import get_correlation_context as get_observability_context
 from ai_karen_engine.core.runtime.trajectory.contracts import (
     ExecutionTrajectory,
     PluginAction,
