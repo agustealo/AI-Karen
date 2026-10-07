@@ -38,6 +38,9 @@ from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
     get_conversation_runtime_gateway,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.direct_capability_executor import (
+    get_direct_capability_executor,
+)
 from ai_karen_engine.core.runtime.workflow_runtime import get_workflow_runtime
 from ai_karen_engine.core.runtime.runtime_fallback import build_runtime_fallback
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
@@ -222,7 +225,17 @@ class ChatRuntime:
             )
 
         try:
-            if decision.topology.value == "reasoning":
+            direct_executor = get_direct_capability_executor()
+            if direct_executor.can_handle(decision):
+                direct_result = await direct_executor.execute(
+                    request=request,
+                    decision=decision,
+                    plan=plan,
+                    meter=meter,
+                )
+                text = direct_result.text
+                provider_meta = direct_result.normalized_metadata()
+            elif decision.topology.value == "reasoning":
                 text, provider_meta = await self._run_reasoning(request, decision, plan, meter)
             elif decision.is_graph_required:
                 text, provider_meta = await self._run_graph(request, decision, plan, meter)
@@ -502,31 +515,42 @@ class ChatRuntime:
         generation_error: Optional[Exception] = None
         recovered_error_type: Optional[str] = None
 
+        direct_executor = get_direct_capability_executor()
         gen = (
-            self._run_reasoning_stream(
+            self._run_direct_capability_stream(
                 request,
                 decision,
                 plan,
                 meter,
                 _meta=provider_meta,
             )
-            if decision.topology.value == "reasoning"
+            if direct_executor.can_handle(decision)
             else (
-                self._run_graph_stream(
+                self._run_reasoning_stream(
                     request,
                     decision,
                     plan,
                     meter,
                     _meta=provider_meta,
                 )
-                if decision.is_graph_required
-                else self._run_simple_stream(
-                    request,
-                    decision,
-                    plan,
-                    meter,
-                    memory_recall_meta,
-                    _meta=provider_meta,
+                if decision.topology.value == "reasoning"
+                else (
+                    self._run_graph_stream(
+                        request,
+                        decision,
+                        plan,
+                        meter,
+                        _meta=provider_meta,
+                    )
+                    if decision.is_graph_required
+                    else self._run_simple_stream(
+                        request,
+                        decision,
+                        plan,
+                        meter,
+                        memory_recall_meta,
+                        _meta=provider_meta,
+                    )
                 )
             )
         )
@@ -1350,6 +1374,36 @@ class ChatRuntime:
                 "reasoning_modes": list(decision.reasoning_modes),
                 "max_model_calls": decision.max_model_calls,
                 "allowed_agents": allowed_agents,
+            },
+        )
+
+    async def _run_direct_capability_stream(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+        _meta: Optional[Dict[str, Any]] = None,
+    ) -> AsyncIterator[ChatStreamChunk]:
+        result = await get_direct_capability_executor().execute(
+            request=request,
+            decision=decision,
+            plan=plan,
+            meter=meter,
+        )
+        normalized = result.normalized_metadata()
+        if _meta is not None:
+            _meta.update(normalized)
+
+        yield ChatStreamChunk(
+            type=ChatStreamEventType.CONTENT,
+            content=result.text,
+            correlation_id=request.context.correlation_id,
+            metadata={
+                "execution_mode": "direct_capability",
+                "actual_provider": normalized.get("actual_provider"),
+                "response_source": normalized.get("response_source"),
+                "degraded_mode": normalized.get("degraded_mode", False),
             },
         )
 
