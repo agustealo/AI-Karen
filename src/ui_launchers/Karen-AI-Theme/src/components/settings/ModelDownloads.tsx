@@ -1149,54 +1149,94 @@ export default function ModelDownloads({
         </Alert>
       )}
 
-      <Card className="border-border/50 bg-gradient-to-br from-card via-card to-muted/20">
-        <CardHeader>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2 text-xl">
-                <HardDrive className="h-5 w-5 text-primary" aria-hidden="true" />
-                Model Downloads
-              </CardTitle>
-              <CardDescription>
-                Core download policy, plugin channel gates, queue state, and
-                installed model inventory.
-              </CardDescription>
+      <section className="overflow-hidden rounded-2xl border border-border/50 bg-gradient-to-br from-card via-card to-primary/[0.025] shadow-sm">
+        <div className="flex flex-col gap-5 p-5 lg:p-6">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+            <div className="max-w-3xl">
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                <span className="flex items-center gap-1.5 text-primary">
+                  <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                  Local Runtime
+                </span>
+                <span className="text-border">/</span>
+                <span>Model acquisition & inventory</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <SectionIcon>
+                  <ServerCog className="h-5 w-5" aria-hidden="true" />
+                </SectionIcon>
+                <div>
+                  <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+                    Model Downloads
+                  </h2>
+                  <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+                    Prepare Karen&apos;s local intelligence stack, manage trusted model
+                    sources, watch durable downloads, and keep installed runtimes healthy.
+                  </p>
+                </div>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <Badge variant="outline">{queueCount} queued</Badge>
-              <Badge variant="outline">{installedModels.length} installed</Badge>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => void refreshAll()}
-                disabled={refreshing}
-              >
-                {refreshing ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-                ) : (
-                  <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
-                )}
-                Refresh
-              </Button>
-            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="self-start rounded-xl bg-background/60 shadow-sm xl:self-auto"
+              onClick={() => void refreshAll()}
+              disabled={refreshing}
+            >
+              {refreshing ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
+              )}
+              Refresh runtime state
+            </Button>
           </div>
-        </CardHeader>
-      </Card>
+
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricTile
+              icon={<Download className="h-4 w-4" aria-hidden="true" />}
+              label="Queue"
+              value={activeJobs.length ? `${activeJobs.length} active` : 'Idle'}
+              detail={failedJobs ? `${failedJobs} recent failure${failedJobs === 1 ? '' : 's'}` : 'No active failures'}
+            />
+            <MetricTile
+              icon={<Database className="h-4 w-4" aria-hidden="true" />}
+              label="Local inventory"
+              value={`${installedModels.length} installed`}
+              detail={storageSettings?.models_root || 'Model root loading'}
+            />
+            <MetricTile
+              icon={<BrainCircuit className="h-4 w-4" aria-hidden="true" />}
+              label="Karen essentials"
+              value={essentialStatus}
+              detail="spaCy + semantic encoder"
+            />
+            <MetricTile
+              icon={<Activity className="h-4 w-4" aria-hidden="true" />}
+              label="Discovery"
+              value={discoveryStatus.replace(/_/g, ' ')}
+              detail={String(discoveryStats.total_models ?? installedModels.length) + ' models indexed'}
+            />
+          </div>
+        </div>
+      </section>
 
       {recommendations && (
-        <Card className="border-border/50">
-          <CardHeader>
+        <Card className="overflow-hidden border-border/50 shadow-sm">
+          <CardHeader className="border-b border-border/40 bg-muted/10">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <CheckCircle2 className="h-4 w-4 text-primary" aria-hidden="true" />
-                  Karen Recommended
-                </CardTitle>
-                <CardDescription>
-                  First-run local models Karen is explicitly built to use.
-                </CardDescription>
+              <div className="flex items-start gap-3">
+                <SectionIcon tone="positive">
+                  <Sparkles className="h-5 w-5" aria-hidden="true" />
+                </SectionIcon>
+                <div>
+                  <CardTitle className="text-lg">Karen Recommended</CardTitle>
+                  <CardDescription className="mt-1">
+                    First-run local models Karen is explicitly built to use.
+                  </CardDescription>
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant={recommendations.essential_ready ? 'secondary' : 'outline'}>
@@ -1306,16 +1346,20 @@ export default function ModelDownloads({
         </Card>
       )}
 
-      <Card className="border-border/50">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <Search className="h-4 w-4 text-primary" aria-hidden="true" />
-            Find a Model
-          </CardTitle>
-          <CardDescription>
-            Search the live model catalog, review the basics, then let Karen infer
-            the correct runtime channel before installation.
-          </CardDescription>
+      <Card className="overflow-hidden border-border/50 shadow-sm">
+        <CardHeader className="border-b border-border/40 bg-muted/10">
+          <div className="flex items-start gap-3">
+            <SectionIcon tone="secondary">
+              <Search className="h-5 w-5" aria-hidden="true" />
+            </SectionIcon>
+            <div>
+              <CardTitle className="text-lg">Explore Model Catalog</CardTitle>
+              <CardDescription className="mt-1">
+                Search live Hugging Face metadata, review model fit, and let Karen infer
+                the safest compatible runtime channel.
+              </CardDescription>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="relative">
@@ -1405,15 +1449,19 @@ export default function ModelDownloads({
         </CardContent>
       </Card>
 
-      <Card className="border-border/50">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <HardDrive className="h-4 w-4 text-primary" aria-hidden="true" />
-            Model Library Folder
-          </CardTitle>
-          <CardDescription>
-            Choose where Karen stores downloaded local models. Active downloads must finish or be cancelled before changing folders.
-          </CardDescription>
+      <Card className="overflow-hidden border-border/50 shadow-sm">
+        <CardHeader className="border-b border-border/40 bg-muted/10">
+          <div className="flex items-start gap-3">
+            <SectionIcon>
+              <FolderOpen className="h-5 w-5" aria-hidden="true" />
+            </SectionIcon>
+            <div>
+              <CardTitle className="text-lg">Model Library</CardTitle>
+              <CardDescription className="mt-1">
+                Choose where Karen stores downloaded local models. Active downloads must finish or be cancelled before moving the library.
+              </CardDescription>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-col gap-2 sm:flex-row">
