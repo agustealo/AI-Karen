@@ -57,8 +57,8 @@ ALLOWED_LIVE_FALLBACK_PROVIDERS = (set(BUILTIN_EXPRESSION_ENGINES) | set(LOCAL_P
 RUNTIME_DEGRADED_FALLBACK_ORDER = tuple(RuntimeProviderManager().get_runtime_fallback_chain())
 
 
-class _DummyMetric:
-    def labels(self, **_kwargs: Any) -> "_DummyMetric":
+class _NullMetric:
+    def labels(self, **_kwargs: Any) -> "_NullMetric":
         return self
 
     def inc(self, *_args: Any, **_kwargs: Any) -> None:
@@ -74,12 +74,12 @@ try:
     METRICS_ENABLED = True
 except Exception:
     METRICS_ENABLED = False
-    Counter = Histogram = _DummyMetric
+    Counter = Histogram = _NullMetric
 
 
 def _get_or_create_metric(name: str, factory) -> Any:
     if not METRICS_ENABLED:
-        return _DummyMetric()
+        return _NullMetric()
     if name in REGISTRY._names_to_collectors:
         return REGISTRY._names_to_collectors[name]
     return factory()
@@ -270,7 +270,14 @@ class ProviderRuntime:
 
         try:
             provider_info = self.registry.get_provider_info(provider_name)
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "provider model metadata lookup failed",
+                extra={
+                    "provider": provider_name,
+                    "error_type": type(exc).__name__,
+                },
+            )
             provider_info = None
 
         if provider_info:
