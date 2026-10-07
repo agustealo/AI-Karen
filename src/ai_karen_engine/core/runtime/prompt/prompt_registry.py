@@ -19,7 +19,7 @@ from enum import Enum
 try:
     from pydantic import BaseModel, ConfigDict, Field
 except ImportError:
-    from ai_karen_engine.pydantic_stub import BaseModel, ConfigModel, Field
+    from ai_karen_engine.pydantic_stub import BaseModel, ConfigDict, Field
 
 from ai_karen_engine.core.runtime.prompt.prompt_contract import (
     PromptDefinition,
@@ -29,6 +29,7 @@ from ai_karen_engine.core.runtime.prompt.prompt_contract import (
     PromptAssemblyResult,
     PromptTruncationEvent,
 )
+from ai_karen_engine.core.runtime.prompt.token_estimator import get_token_estimator
 
 logger = logging.getLogger("kari.runtime.prompt.registry")
 
@@ -411,14 +412,8 @@ class PromptRegistry:
             raise TokenEstimateError(f"Failed to estimate tokens: {e}")
     
     def _count_tokens(self, text: str) -> int:
-        """Count tokens in text (simplified implementation)."""
-        if not text:
-            return 0
-        
-        # Simple token estimation: split by whitespace and count words
-        # In production, use tiktoken or similar library
-        words = text.split()
-        return len(words)
+        """Delegate token estimation to the canonical prompt estimator."""
+        return get_token_estimator().estimate_text(text)
     
     def get_prompt_provenance(self, prompt_id: str, version: Optional[str] = None) -> Dict[str, Any]:
         """Get provenance information for a prompt."""
