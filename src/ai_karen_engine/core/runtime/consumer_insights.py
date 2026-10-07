@@ -37,9 +37,12 @@ def build_prompt_token_insight(
     provider_input = _safe_int(usage.get("prompt_tokens"))
     provider_output = _safe_int(usage.get("completion_tokens"))
     provider_total = _safe_int(usage.get("total_tokens"))
-    budget = _safe_int(prompt.get("token_budget"))
-    if budget is None:
-        budget = _safe_int(context.get("token_budget"))
+    prompt_budget = _safe_int(prompt.get("token_budget"))
+    if prompt_budget is None:
+        prompt_budget = _safe_int(context.get("token_budget"))
+
+    model_context_window = _safe_int(prompt.get("model_context_window_tokens"))
+    model_context_source = str(prompt.get("model_context_source") or "").strip() or None
 
     input_tokens = provider_input if provider_input is not None else estimated_input
     output_tokens = provider_output
@@ -47,12 +50,16 @@ def build_prompt_token_insight(
     if consumed is None and input_tokens is not None:
         consumed = input_tokens + (output_tokens or 0)
 
-    headroom = None
-    if budget is not None and input_tokens is not None:
-        headroom = max(0, budget - input_tokens)
+    prompt_budget_headroom = None
+    if prompt_budget is not None and input_tokens is not None:
+        prompt_budget_headroom = max(0, prompt_budget - input_tokens)
+
+    model_context_headroom = None
+    if model_context_window is not None and consumed is not None:
+        model_context_headroom = max(0, model_context_window - consumed)
 
     source = "provider_reported" if provider_input is not None else "prompt_estimate"
-    available = input_tokens is not None and budget is not None
+    available = input_tokens is not None and prompt_budget is not None
 
     total_breakdown = sum(
         max(0, _safe_int(breakdown.get(key)) or 0)
@@ -72,13 +79,24 @@ def build_prompt_token_insight(
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": consumed,
-        "context_budget_tokens": budget,
-        "context_headroom_tokens": headroom,
-        "context_used_percent": (
-            round((input_tokens / budget) * 100.0, 1)
-            if available and budget
+        "prompt_budget_tokens": prompt_budget,
+        "prompt_budget_headroom_tokens": prompt_budget_headroom,
+        "prompt_budget_used_percent": (
+            round((input_tokens / prompt_budget) * 100.0, 1)
+            if available and prompt_budget
             else None
         ),
+        "model_context_available": (
+            model_context_window is not None and consumed is not None
+        ),
+        "model_context_window_tokens": model_context_window,
+        "model_context_headroom_tokens": model_context_headroom,
+        "model_context_used_percent": (
+            round((consumed / model_context_window) * 100.0, 1)
+            if model_context_window and consumed is not None
+            else None
+        ),
+        "model_context_source": model_context_source or "unavailable",
         "truncation_count": _safe_int(context.get("truncation_count")) or 0,
         "decomposition": decomposition,
     }
