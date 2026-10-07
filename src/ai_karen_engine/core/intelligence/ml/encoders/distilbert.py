@@ -149,20 +149,40 @@ class DistilBertSemanticEncoder(SemanticEncoder):
                 self.config.transformers_cache_dir,
                 self.config.hf_home,
             )
+            if resolved is None:
+                logger.warning(
+                    "DistilBERT local model unavailable; using configured fallback mode",
+                    extra={
+                        "model_name": self.config.model_name,
+                        "local_model_root": self.config.local_model_root,
+                    },
+                )
+                return None, None
             if AutoTokenizer is None or AutoModel is None:
                 raise RuntimeError("Transformers library is unavailable")
-            tokenizer = AutoTokenizer.from_pretrained(resolved, local_files_only=True)
-            model = AutoModel.from_pretrained(resolved, local_files_only=True)
+            tokenizer = AutoTokenizer.from_pretrained(
+                resolved,
+                local_files_only=True,
+            )
+            model = AutoModel.from_pretrained(
+                resolved,
+                local_files_only=True,
+            )
             model.to(self.device)
             model.eval()
             for param in model.parameters():
                 param.requires_grad = False
             return tokenizer, model
         except Exception as exc:
-            logger.error("Failed to load DistilBERT model: %s", exc)
+            logger.error("Failed to load local DistilBERT model: %s", exc)
             return None, None
 
-    def _resolve_model_source(self, model_name: str, transformers_cache_dir: str, hf_home: str) -> str:
+    def _resolve_model_source(
+        self,
+        model_name: str,
+        transformers_cache_dir: str,
+        hf_home: str,
+    ) -> str | None:
         huggingface_hub_dir = _default_huggingface_hub_dir()
         candidate_dirs = [
             Path(self.config.local_model_root) / model_name,
@@ -181,7 +201,7 @@ class DistilBertSemanticEncoder(SemanticEncoder):
                     for snapshot in sorted(snapshots_dir.iterdir()):
                         if (snapshot / "config.json").exists():
                             return str(snapshot)
-        return model_name
+        return None
 
     async def encode(self, text: str) -> SemanticEncoding:
         if not text or not text.strip():
