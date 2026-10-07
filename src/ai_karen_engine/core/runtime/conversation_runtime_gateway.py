@@ -152,9 +152,9 @@ class ConversationRuntimeGateway:
                 id=conversation_id,
                 tenant_id=context.tenant_id,
                 user_id=context.user_id,
+                session_id=context.session_id,
                 title=(first_user_message.strip()[:120] or None),
                 metadata={
-                    "session_id": context.session_id,
                     "source": "chat_runtime",
                     "created_request_id": context.request_id,
                     "created_correlation_id": context.correlation_id,
