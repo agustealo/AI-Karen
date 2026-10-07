@@ -145,6 +145,38 @@ type ModelCatalogItem = {
   description?: string | null;
 };
 
+type RecommendedModel = {
+  id: string;
+  model_id: string;
+  label: string;
+  purpose: string;
+  tier: 'essential' | 'recommended' | string;
+  channel_id: string;
+  expected_runtime?: string | null;
+  approximate_size_bytes?: number | null;
+  license?: string | null;
+  include_patterns?: string[] | null;
+  capabilities: string[];
+  app_consumers: string[];
+  installed: boolean;
+  install_path?: string | null;
+  status: string;
+};
+
+type RecommendedModelsResponse = {
+  recommendations: RecommendedModel[];
+  essential_ready: boolean;
+  essential_installed: number;
+  essential_total: number;
+};
+
+type ModelStorageSettings = {
+  models_root: string;
+  runtime_registry_root: string;
+  registry_path: string;
+  env_override: boolean;
+};
+
 type InstalledModelsResponse = {
   models: Array<
     RuntimeProviderModel & {
@@ -177,6 +209,8 @@ const ENDPOINTS = {
   jobs: '/api/models/download/jobs?limit=50',
   installed: '/api/models/installed?force_refresh=false',
   discovery: '/api/models/discovery?force_refresh=false',
+  recommendations: '/api/models/download/recommendations',
+  storage: '/api/models/download/storage',
   catalog: '/api/models/catalog?limit=24',
   validate: '/api/models/download/validate',
   download: '/api/models/download',
@@ -335,6 +369,12 @@ export default function ModelDownloads({
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [removingModels, setRemovingModels] = useState<Record<string, boolean>>({});
   const [retryingJobs, setRetryingJobs] = useState<Record<string, boolean>>({});
+  const [recommendations, setRecommendations] = useState<RecommendedModelsResponse | null>(null);
+  const [storageSettings, setStorageSettings] = useState<ModelStorageSettings | null>(null);
+  const [modelsRootDraft, setModelsRootDraft] = useState('');
+  const [savingModelsRoot, setSavingModelsRoot] = useState(false);
+  const [installingRecommended, setInstallingRecommended] = useState<Record<string, boolean>>({});
+  const [installingEssentials, setInstallingEssentials] = useState(false);
 
   const [modelId, setModelId] = useState('');
   const [revision, setRevision] = useState('');
@@ -353,6 +393,8 @@ export default function ModelDownloads({
       jobsResult,
       installedResult,
       discoveryResult,
+      recommendationsResult,
+      storageResult,
     ] = await Promise.allSettled([
       apiClient.get<DownloadPolicy>(ENDPOINTS.policy),
       apiClient.get<{ policy: DownloadPolicy; channels: DownloadChannel[] }>(
@@ -361,6 +403,8 @@ export default function ModelDownloads({
       apiClient.get<DownloadJob[]>(ENDPOINTS.jobs),
       apiClient.get<InstalledModelsResponse>(ENDPOINTS.installed),
       apiClient.get<DiscoverySnapshot>(ENDPOINTS.discovery),
+      apiClient.get<RecommendedModelsResponse>(ENDPOINTS.recommendations),
+      apiClient.get<ModelStorageSettings>(ENDPOINTS.storage),
     ]);
 
     const nextErrors: EndpointErrors = {};
@@ -411,6 +455,15 @@ export default function ModelDownloads({
         discoveryResult.reason,
         'Model discovery endpoint failed.',
       );
+    }
+
+    if (recommendationsResult.status === 'fulfilled') {
+      setRecommendations(recommendationsResult.value);
+    }
+
+    if (storageResult.status === 'fulfilled') {
+      setStorageSettings(storageResult.value);
+      setModelsRootDraft(storageResult.value.models_root);
     }
 
     setEndpointErrors(nextErrors);
