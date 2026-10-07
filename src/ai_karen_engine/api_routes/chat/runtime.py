@@ -367,16 +367,6 @@ async def create_chat_response(
             context="validation_error",
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        structured_logger.log_error(
-            error=str(exc),
-            endpoint="/api/chat",
-            user_id=str(user.get("user_id") or "unknown"),
-            correlation_id=correlation_id,
-            context="unexpected_error",
-            details={"session_id": session_id},
-        )
-        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.post("/chat/stream")
@@ -439,16 +429,6 @@ async def stream_chat_response(
             context="validation_error",
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        structured_logger.log_error(
-            error=str(exc),
-            endpoint="/api/chat/stream",
-            user_id=str(user.get("user_id") or "unknown"),
-            correlation_id=correlation_id,
-            context="unexpected_error",
-            details={"duration_ms": (time.time() - start_time) * 1000.0},
-        )
-        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.post("/chat/approvals/{approval_id}/resume")
