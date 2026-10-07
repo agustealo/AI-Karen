@@ -225,9 +225,9 @@ class DistilBertSemanticEncoder(SemanticEncoder):
         start = time.time()
         try:
             if self.fallback_mode or not self.model:
-                embedding = await self._fallback_embedding(text)
+                embedding = []
                 used_fallback = True
-                model_id = "fallback"
+                model_id = "unavailable"
             else:
                 embedding = await self._generate_embedding(text)
                 used_fallback = False
@@ -247,12 +247,11 @@ class DistilBertSemanticEncoder(SemanticEncoder):
             self._error_count += 1
             self._last_error = str(exc)
             if not self.fallback_mode and self.config.enable_fallback:
-                embedding = await self._fallback_embedding(text)
                 latency = (time.time() - start) * 1000.0
                 return SemanticEncoding(
-                    vector=embedding,
-                    dimensions=len(embedding),
-                    model_id="fallback",
+                    vector=[],
+                    dimensions=0,
+                    model_id="unavailable",
                     model_version="current",
                     fallback_used=True,
                     latency_ms=latency,
@@ -286,27 +285,6 @@ class DistilBertSemanticEncoder(SemanticEncoder):
             with torch.no_grad():
                 return self.model(**inputs)
         return self.model(**inputs)
-
-    async def _fallback_embedding(self, text: str) -> list[float]:
-        hash_functions = [
-            lambda x: hashlib.md5(x.encode()).digest(),
-            lambda x: hashlib.sha1(x.encode()).digest(),
-            lambda x: hashlib.sha256(x.encode()).digest(),
-        ]
-        embedding = []
-        for hash_func in hash_functions:
-            hash_bytes = hash_func(text)
-            for i in range(0, len(hash_bytes), 4):
-                chunk = hash_bytes[i:i + 4]
-                if len(chunk) == 4:
-                    value = int.from_bytes(chunk, byteorder='big', signed=True)
-                    embedding.append(float(value) / (2**31))
-        target_dim = self.config.embedding_dimension
-        while len(embedding) < target_dim:
-            remaining = target_dim - len(embedding)
-            to_add = min(remaining, len(embedding))
-            embedding.extend(embedding[:to_add])
-        return embedding[:target_dim]
 
     def _normalize_embedding(self, embedding: list[float]) -> list[float]:
         arr = np.array(embedding)
