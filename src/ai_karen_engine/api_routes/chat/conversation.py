@@ -328,7 +328,10 @@ async def get_analytics(
     except HTTPException:
         raise
     except Exception as error:
-        logger.exception("Failed to get conversation analytics", error=str(error))
+        logger.exception(
+            "Failed to get conversation analytics",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to get conversation analytics. Please try again.",
@@ -355,7 +358,10 @@ async def get_conversation_stats(
     except HTTPException:
         raise
     except Exception as error:
-        logger.exception("Failed to get conversation stats", error=str(error))
+        logger.exception(
+            "Failed to get conversation stats",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to get conversation statistics. Please try again.",
@@ -396,7 +402,10 @@ async def get_conversation_by_session(
             user_message="Failed to get conversation. Please try again.",
         )
     except Exception as error:
-        logger.exception("Failed to get conversation by session", error=str(error))
+        logger.exception(
+            "Failed to get conversation by session",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to get conversation. Please try again.",
@@ -457,7 +466,10 @@ async def list_conversations(
     except HTTPException:
         raise
     except Exception as error:
-        logger.exception("Failed to list conversations", error=str(error))
+        logger.exception(
+            "Failed to list conversations",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to list conversations. Please try again.",
@@ -517,7 +529,10 @@ async def create_conversation(
     except HTTPException:
         raise
     except Exception as error:
-        logger.exception("Failed to create conversation", error=str(error))
+        logger.exception(
+            "Failed to create conversation",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to create conversation. Please try again.",
@@ -547,7 +562,10 @@ async def ensure_session_conversation(
     except HTTPException:
         raise
     except Exception as error:
-        logger.exception("Failed to ensure session conversation", error=str(error))
+        logger.exception(
+            "Failed to ensure session conversation",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to ensure conversation exists. Please try again.",
@@ -589,7 +607,10 @@ async def update_session_activity(
             user_message="Failed to update session activity. Please try again.",
         )
     except Exception as error:
-        logger.exception("Failed to update session activity", error=str(error))
+        logger.exception(
+            "Failed to update session activity",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to update session activity. Please try again.",
@@ -629,7 +650,10 @@ async def get_conversation(
             user_message="Failed to get conversation. Please try again.",
         )
     except Exception as error:
-        logger.exception("Failed to get conversation", error=str(error))
+        logger.exception(
+            "Failed to get conversation",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to get conversation. Please try again.",
@@ -673,7 +697,10 @@ async def add_message(
     except HTTPException:
         raise
     except Exception as error:
-        logger.exception("Failed to add message", error=str(error))
+        logger.exception(
+            "Failed to add message",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to add message to conversation. Please try again.",
@@ -715,7 +742,10 @@ async def update_ui_context(
             user_message="Failed to update UI context. Please try again.",
         )
     except Exception as error:
-        logger.exception("Failed to update UI context", error=str(error))
+        logger.exception(
+            "Failed to update UI context",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to update UI context. Please try again.",
@@ -759,7 +789,10 @@ async def add_tags(
             user_message="Failed to add tags to conversation. Please try again.",
         )
     except Exception as error:
-        logger.exception("Failed to add conversation tags", error=str(error))
+        logger.exception(
+            "Failed to add conversation tags",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to add tags to conversation. Please try again.",
@@ -796,13 +829,19 @@ async def update_conversation(
                 user_message="The requested conversation could not be found or updated.",
                 details={"conversation_id": conversation_id},
             )
-        logger.exception("Failed to update conversation", error=str(error))
+        logger.exception(
+            "Failed to update conversation",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to update conversation. Please try again.",
         )
     except Exception as error:
-        logger.exception("Failed to update conversation", error=str(error))
+        logger.exception(
+            "Failed to update conversation",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to update conversation. Please try again.",
@@ -837,13 +876,19 @@ async def delete_conversation(
                 user_message="The requested conversation could not be found or deleted.",
                 details={"conversation_id": conversation_id},
             )
-        logger.exception("Failed to delete conversation", error=str(error))
+        logger.exception(
+            "Failed to delete conversation",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to delete conversation. Please try again.",
         )
     except Exception as error:
-        logger.exception("Failed to delete conversation", error=str(error))
+        logger.exception(
+            "Failed to delete conversation",
+            extra={"error_type": type(error).__name__},
+        )
         _raise_service_error(
             error=error,
             user_message="Failed to delete conversation. Please try again.",
