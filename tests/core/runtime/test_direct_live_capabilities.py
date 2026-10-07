@@ -703,11 +703,20 @@ def test_live_intent_patterns_reject_conceptual_suffixes_and_clock_complexity() 
 def test_location_shorthand_supports_unicode_proper_names() -> None:
     sao = resolve_capability_decision("São Paulo weather")
     zurich = resolve_capability_decision("Zürich weather")
+    tokyo = resolve_capability_decision("東京 weather")
+    dubai = resolve_capability_decision("دبي weather")
+    tokyo_time = resolve_capability_decision("time in 東京")
 
     assert sao.intent == "search.weather"
     assert sao.requires_live_data is True
     assert zurich.intent == "search.weather"
     assert zurich.requires_live_data is True
+    assert tokyo.intent == "search.weather"
+    assert tokyo.requires_live_data is True
+    assert dubai.intent == "search.weather"
+    assert dubai.requires_live_data is True
+    assert tokyo_time.intent == "time.current"
+    assert tokyo_time.requires_live_data is True
 
 
 @pytest.mark.asyncio
@@ -763,10 +772,9 @@ def test_direct_capability_metadata_reports_search_provider_not_wrapper() -> Non
         source="tool",
         source_id="web_search",
         payload={
-            "provider": "wikipedia",
-            "search_providers": ["wikipedia"],
             "metadata": {
-                "provider": "wikipedia",
+                "provider": "multi_search",
+                "search_providers": ["wikipedia", "duckduckgo"],
                 "crawl_provider": "crawl4ai",
             },
         },
@@ -774,10 +782,14 @@ def test_direct_capability_metadata_reports_search_provider_not_wrapper() -> Non
 
     metadata = result.normalized_metadata()
 
-    assert metadata["actual_provider"] == "wikipedia"
+    assert metadata["actual_provider"] == "multi_search"
     assert metadata["capability_executor"] == "web_search"
-    assert metadata["structured_content"]["provider"] == "wikipedia"
-    assert metadata["structured_content"]["search_providers"] == ["wikipedia"]
+    assert metadata["structured_content"]["provider"] == "multi_search"
+    assert metadata["structured_content"]["search_providers"] == [
+        "wikipedia",
+        "duckduckgo",
+    ]
+    assert metadata["structured_content"]["crawl_provider"] == "crawl4ai"
 
 
 def test_legacy_search_config_migration_precedes_environment_override(
@@ -819,3 +831,22 @@ def test_legacy_search_config_migration_precedes_environment_override(
     assert loaded["search"]["duckduckgo"]["enabled"] is False
     assert loaded["search"]["wikipedia"]["enabled"] is True
     assert "search" not in loaded["plugins"]["intelligent-search"]
+
+
+def test_noun_first_freshness_questions_route_live_without_conceptual_hijacks() -> None:
+    latest_python = resolve_capability_decision(
+        "What is the latest version of Python?"
+    )
+    bitcoin_price = resolve_capability_decision(
+        "What is the current price of Bitcoin?"
+    )
+    version_control = resolve_capability_decision(
+        "What is the current version control strategy?"
+    )
+
+    assert latest_python.intent == "search.general"
+    assert latest_python.requires_live_data is True
+    assert bitcoin_price.intent == "search.general"
+    assert bitcoin_price.requires_live_data is True
+    assert version_control.intent == "general.chat"
+    assert version_control.requires_tool is False
