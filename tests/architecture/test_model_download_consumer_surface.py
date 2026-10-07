@@ -110,3 +110,28 @@ def test_distilbert_resolves_canonical_download_layout() -> None:
     ).read_text(encoding="utf-8")
 
     assert 'local_root.glob(f"*--{model_name}/main")' in source
+
+
+def test_model_runtime_telemetry_surfaces_existing_native_capabilities() -> None:
+    control = CONTROL.read_text(encoding="utf-8")
+    route = ROUTE.read_text(encoding="utf-8")
+    ui = UI.read_text(encoding="utf-8")
+
+    assert "async def get_runtime_telemetry(" in control
+    assert "monitor_resources_once()" in control
+    assert "ModelStorageMonitor(self.models_root)" in control
+    assert '"max_concurrent_downloads": concurrency_limit' in control
+    assert '"runtime_admin_required": True' in control
+
+    assert '@router.get("/download/telemetry"' in route
+
+    for token in (
+        "Worker slots",
+        "GPU / VRAM",
+        "Storage allocation",
+        "Admin governed",
+        "remote code",
+        "model_storage",
+        "disk_usage",
+    ):
+        assert token in ui
