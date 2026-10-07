@@ -113,7 +113,6 @@ const formatProviderLabel = (provider: unknown): string => {
   if (label === 'builtin vllm' || label === 'vllm') return 'vLLM';
   if (label === 'builtin transformers' || label === 'transformers') return 'Transformers';
   if (label === 'openai compatible') return 'OpenAI-compatible provider';
-  if (label === 'emergency static') return 'emergency fallback';
   return label.charAt(0).toUpperCase() + label.slice(1);
 };
 
