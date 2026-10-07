@@ -199,7 +199,19 @@ const retryInstallRevision = (job: DownloadJob): string | null => {
     return null;
   }
 
-  const installAlias = normalizedPath.split('/').pop() || '';
+  const [owner, repository] = job.model_id.split('/', 2);
+  if (!owner || !repository) {
+    return null;
+  }
+
+  const modelDirectory = `${owner}--${repository}`;
+  const segments = normalizedPath.split('/').filter(Boolean);
+  const modelDirectoryIndex = segments.lastIndexOf(modelDirectory);
+  if (modelDirectoryIndex < 0) {
+    return null;
+  }
+
+  const installAlias = segments.slice(modelDirectoryIndex + 1).join('/');
   return installAlias && installAlias !== 'main' ? installAlias : null;
 };
 
