@@ -13,9 +13,16 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
   AlertTriangle,
+  Boxes,
+  BrainCircuit,
   CheckCircle2,
+  Cpu,
+  Database,
   Download,
+  FolderOpen,
+  Gauge,
   HardDrive,
   Loader2,
   Pause,
@@ -24,10 +31,14 @@ import {
   RotateCcw,
   Save,
   Search,
+  ServerCog,
   Shield,
   ShieldAlert,
+  ShieldCheck,
+  Sparkles,
   Square,
   Trash2,
+  Workflow,
 } from 'lucide-react';
 
 import { apiClient, ApiError } from '@/lib/api';
@@ -345,6 +356,58 @@ function encodeModelPath(modelId: string): string {
     .join('/');
 }
 
+function SectionIcon({
+  children,
+  tone = 'primary',
+}: {
+  children: React.ReactNode;
+  tone?: 'primary' | 'secondary' | 'positive' | 'warning';
+}) {
+  const toneClass =
+    tone === 'secondary'
+      ? 'bg-cyan-500/10 text-cyan-500'
+      : tone === 'positive'
+        ? 'bg-emerald-500/10 text-emerald-500'
+        : tone === 'warning'
+          ? 'bg-amber-500/10 text-amber-500'
+          : 'bg-primary/10 text-primary';
+
+  return (
+    <div
+      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border/40 ${toneClass}`}
+    >
+      {children}
+    </div>
+  );
+}
+
+function MetricTile({
+  icon,
+  label,
+  value,
+  detail,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  detail?: string;
+}) {
+  return (
+    <div className="flex min-w-[138px] items-center gap-3 rounded-xl border border-border/40 bg-background/50 px-3 py-2.5 shadow-sm">
+      <div className="text-primary">{icon}</div>
+      <div className="min-w-0">
+        <div className="text-[9px] font-bold uppercase tracking-[0.16em] text-muted-foreground">
+          {label}
+        </div>
+        <div className="truncate text-sm font-semibold text-foreground">{value}</div>
+        {detail ? (
+          <div className="truncate text-[10px] text-muted-foreground">{detail}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export default function ModelDownloads({
   adminMode = false,
 }: ModelDownloadsProps) {
@@ -584,6 +647,18 @@ export default function ModelDownloads({
 
   const discoveryProgress = discovery?.progress ?? {};
   const discoveryStats = discovery?.statistics ?? {};
+  const activeJobs = jobs.filter((job) =>
+    ['queued', 'running', 'paused', 'pause_requested'].includes(job.status),
+  );
+  const failedJobs = jobs.filter((job) => job.status === 'failed').length;
+  const discoveryStatus = String(
+    discoveryStats.discovery_status ?? discoveryStats.status ?? 'unknown',
+  );
+  const essentialStatus = recommendations
+    ? recommendations.essential_ready
+      ? 'Ready'
+      : `${recommendations.essential_installed}/${recommendations.essential_total} ready`
+    : 'Loading';
 
   const hasEndpointErrors = Object.keys(endpointErrors).length > 0;
   const channelBlocked = isAdminOnlyChannelBlocked(currentChannel, adminMode);
