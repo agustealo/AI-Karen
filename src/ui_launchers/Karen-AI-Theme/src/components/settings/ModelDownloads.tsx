@@ -187,16 +187,17 @@ type ModelStorageSettings = {
 
 type ModelRuntimeTelemetry = {
   resources: {
-    cpu_percent: number;
-    memory_percent: number;
-    memory_available_bytes: number;
-    memory_used_bytes: number;
-    disk_percent: number;
-    disk_free_bytes: number;
+    available: boolean;
+    cpu_percent?: number | null;
+    memory_percent?: number | null;
+    memory_available_bytes?: number | null;
+    memory_used_bytes?: number | null;
+    disk_percent?: number | null;
+    disk_free_bytes?: number | null;
     gpu_percent?: number | null;
     gpu_memory_percent?: number | null;
-    process_count: number;
-    thread_count: number;
+    process_count?: number | null;
+    thread_count?: number | null;
   };
   storage: {
     disk_usage?: {
@@ -1301,7 +1302,7 @@ export default function ModelDownloads({
             <div className="rounded-xl border border-border/40 bg-background/40 p-3">
               <div className="flex items-center justify-between">
                 <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-muted-foreground">CPU</span>
-                <span className="text-xs font-semibold">{resourceSummary ? `${resourceSummary.cpu_percent.toFixed(0)}%` : 'Unavailable'}</span>
+                <span className="text-xs font-semibold">{resourceSummary?.cpu_percent != null ? `${resourceSummary.cpu_percent.toFixed(0)}%` : 'Unavailable'}</span>
               </div>
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
                 <div
@@ -1314,7 +1315,7 @@ export default function ModelDownloads({
             <div className="rounded-xl border border-border/40 bg-background/40 p-3">
               <div className="flex items-center justify-between">
                 <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-muted-foreground">Memory</span>
-                <span className="text-xs font-semibold">{resourceSummary ? `${resourceSummary.memory_percent.toFixed(0)}%` : 'Unavailable'}</span>
+                <span className="text-xs font-semibold">{resourceSummary?.memory_percent != null ? `${resourceSummary.memory_percent.toFixed(0)}%` : 'Unavailable'}</span>
               </div>
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
                 <div
