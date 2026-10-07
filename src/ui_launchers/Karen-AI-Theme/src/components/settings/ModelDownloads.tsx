@@ -534,9 +534,13 @@ export default function ModelDownloads({
 
   const hasEndpointErrors = Object.keys(endpointErrors).length > 0;
   const channelBlocked = isAdminOnlyChannelBlocked(currentChannel, adminMode);
-  const downloadsBlocked = Boolean(policy?.block_new_downloads);
+  const downloadsBlocked = Boolean(
+    policy && (!policy.master_enabled || policy.block_new_downloads),
+  );
   const canQueueDownload =
     Boolean(modelId.trim()) &&
+    validation?.allowed === true &&
+    validation.model_id === modelId.trim() &&
     !startingDownload &&
     !channelBlocked &&
     !downloadsBlocked;
