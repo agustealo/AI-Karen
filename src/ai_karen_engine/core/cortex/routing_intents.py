@@ -6,7 +6,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     "time.current": {
         "triggers": ["what time", "current time", "time in", "timezone"],
         "patterns": [
-            r"^what\s+time\s+is\s+it(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^what\s+time\s+is\s+it(?:\s+right\s+now)?(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^what(?:'s|\s+is)\s+the\s+(?:current\s+)?time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^current\s+time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^time\s+now(?:\s+(?:in|for)\s+.+)?[?!.]*$",
@@ -27,8 +27,8 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"\blook\s+(?:it\s+)?up\s+online\b",
             r"\blook\s+online\s+(?:for|at)\b",
             r"^find\s+(?:the\s+)?(?:current|latest|today'?s?)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|updates?|results?|score|price|release|version|status|information)[?!.]*$",
-            r"^(?:what|which)\s+is\s+the\s+(?:current|latest)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|update|result|score|price|release|version|status)[?!.]*$",
-            r"^(?:what|which)\s+is\s+the\s+(?:current|latest)\s+(?:news|update|result|score|price|release|version|status)\s+(?:of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3}[?!.]*$",
+            r"^(?:what(?:'s|\s+is)|which\s+is)\s+the\s+(?:current|latest)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|update|result|score|price|release|version|status)[?!.]*$",
+            r"^(?:what(?:'s|\s+is)|which\s+is)\s+the\s+(?:current|latest)\s+(?:news|update|result|score|price|release|version|status)\s+(?:of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3}[?!.]*$",
             r"^(?:latest|current|today'?s?)\s+(?:news|updates?|results?|score|price|release|version|status)(?:\s+(?:about|of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3})?[?!.]*$",
         ],
         "required_capability": "web.search",
