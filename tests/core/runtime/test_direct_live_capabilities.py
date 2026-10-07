@@ -413,6 +413,11 @@ def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None
     )
     detroit_weather = resolve_capability_decision("Detroit weather")
     detroit_forecast = resolve_capability_decision("Detroit forecast")
+    long_location_weather = resolve_capability_decision(
+        "New York City, New York, United States weather"
+    )
+    bitcoin_price = resolve_capability_decision("Find current Bitcoin price")
+    python_release = resolve_capability_decision("Find the latest Python release")
 
     assert current_time.intent == "time.current"
     assert current_time.requires_live_data is True
@@ -422,6 +427,12 @@ def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None
     assert detroit_weather.requires_live_data is True
     assert detroit_forecast.intent == "search.weather"
     assert detroit_forecast.requires_live_data is True
+    assert long_location_weather.intent == "search.weather"
+    assert long_location_weather.requires_live_data is True
+    assert bitcoin_price.intent == "search.general"
+    assert bitcoin_price.requires_live_data is True
+    assert python_release.intent == "search.general"
+    assert python_release.requires_live_data is True
 
 
 @pytest.mark.asyncio
@@ -465,3 +476,39 @@ def test_internet_capability_preserves_injected_provider_registry() -> None:
 
     assert client.registry is registry
     assert client.registry.select_provider() == "wikipedia"
+
+
+def test_default_internet_capability_uses_active_runtime_search_settings() -> None:
+    settings = {
+        "duckduckgo": {"enabled": False, "priority": 100},
+        "searxng": {"enabled": False, "priority": 95},
+        "brave_search_free": {"enabled": False, "priority": 91},
+        "mojeek": {"enabled": False, "priority": 88},
+        "startpage": {"enabled": False, "priority": 87},
+        "wikipedia": {"enabled": True, "priority": 200},
+    }
+
+    with patch(
+        "ai_karen_engine.services.tooling.internet_capability_service.get_config_value",
+        return_value=settings,
+    ):
+        service = InternetCapabilityService()
+
+    assert service.provider_registry.select_provider() == "wikipedia"
+
+
+def test_web_search_registry_honors_configured_priority() -> None:
+    from ai_karen_engine.services.search.web_search_provider_registry import (
+        WebSearchProviderRegistry,
+    )
+
+    registry = WebSearchProviderRegistry(
+        settings={
+            "search": {
+                "duckduckgo": {"enabled": True, "priority": 10},
+                "wikipedia": {"enabled": True, "priority": 500},
+            }
+        }
+    )
+
+    assert registry.select_provider() == "wikipedia"
