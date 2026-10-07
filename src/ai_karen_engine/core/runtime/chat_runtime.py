@@ -978,6 +978,9 @@ class ChatRuntime:
                 "memory_degradation_reason": context_meta.get(
                     "memory_degradation_reason"
                 ),
+                "memory_retrieval_health": dict(
+                    context_meta.get("memory_retrieval_health") or {}
+                ),
                 "memory_context": {"recall": recall_items},
                 "proactive_continuity": {"candidates": continuity_items},
                 "continuity_status": context_meta.get(
@@ -1636,7 +1639,9 @@ class ChatRuntime:
             budget=plan.budget,
         )
 
+        reasoning_started = time.perf_counter()
         result = await activation.executor.execute(canonical_request, plan, context)
+        reasoning_duration_ms = (time.perf_counter() - reasoning_started) * 1000.0
 
         consumed_model_calls = int(result.diagnostics.get("model_calls", 0) or 0)
         for _ in range(consumed_model_calls):
@@ -1683,8 +1688,37 @@ class ChatRuntime:
             "reasoning_modes": list(activation.reasoning_modes),
             "reasoning_model_calls": consumed_model_calls,
             "reasoning_steps": consumed_steps,
+            "execution_spans": [
+                {
+                    "name": "reasoning_executor",
+                    "duration_ms": reasoning_duration_ms,
+                    "source": "reasoning_executor",
+                }
+            ],
             **activation_meta,
         }
+        if "counterfactual" in activation.reasoning_modes and result.hypotheses:
+            provider_meta["counterfactuals"] = {
+                "available": True,
+                "authority": "reasoning_executor",
+                "reasoning_id": result.reasoning_id,
+                "scenarios": [
+                    {
+                        "id": hypothesis.hypothesis_id,
+                        "statement": hypothesis.statement,
+                        "confidence": hypothesis.confidence,
+                        "uncertainty": hypothesis.uncertainty,
+                        "status": hypothesis.status,
+                        "supporting_evidence_refs": list(
+                            hypothesis.supporting_evidence_refs
+                        ),
+                        "contradicting_evidence_refs": list(
+                            hypothesis.contradicting_evidence_refs
+                        ),
+                    }
+                    for hypothesis in result.hypotheses[:6]
+                ],
+            }
         return text, provider_meta
 
     async def _run_reasoning_stream(
@@ -1869,6 +1903,17 @@ class ChatRuntime:
             value = raw.get(key)
             if value is not None:
                 normalized[key] = value
+        for key in (
+            "agent_consensus",
+            "counterfactuals",
+            "execution_spans",
+            "vector_health",
+            "prompt_telemetry",
+            "usage",
+        ):
+            value = raw.get(key)
+            if value is not None:
+                normalized[key] = value
         return normalized
 
     def _build_metadata(
@@ -1915,7 +1960,10 @@ class ChatRuntime:
             provider_usage=normalized.get("usage"),
             execution_spans=normalized.get("execution_spans"),
             total_latency_ms=latency_ms,
-            vector_health=normalized.get("vector_health"),
+            vector_health=(
+                normalized.get("vector_health")
+                or (memory_meta or {}).get("memory_retrieval_health")
+            ),
             counterfactuals=normalized.get("counterfactuals"),
             agent_consensus=normalized.get("agent_consensus"),
         )
@@ -2173,7 +2221,10 @@ class ChatRuntime:
                 provider_usage=provider_meta.get("usage"),
                 execution_spans=provider_meta.get("execution_spans"),
                 total_latency_ms=latency_ms,
-                vector_health=provider_meta.get("vector_health"),
+                vector_health=(
+                    provider_meta.get("vector_health")
+                    or memory_recall_meta.get("memory_retrieval_health")
+                ),
                 counterfactuals=provider_meta.get("counterfactuals"),
                 agent_consensus=provider_meta.get("agent_consensus"),
             ),
