@@ -15,6 +15,7 @@ def test_dashboard_workspace_keeps_long_views_scrollable() -> None:
 
     assert "h-dvh min-h-0" in dashboard
     assert 'data-testid="workspace-scroll-region"' in dashboard
+    assert "key={activeMainView}" in dashboard
     assert 'activeMainView !== "chat"' in dashboard
     assert '"min-h-0 flex-1 overflow-y-auto overscroll-contain"' in dashboard
     assert '"flex min-h-0 flex-1 flex-col overflow-hidden"' in dashboard
