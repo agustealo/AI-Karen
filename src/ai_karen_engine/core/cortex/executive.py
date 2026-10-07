@@ -240,6 +240,8 @@ class CortexExecutionDecider:
         if not text or not text.strip():
             return self._default_analysis()
 
+        capability_decision = resolve_capability_decision(text)
+
         try:
             analysis = await self._intelligence.analyze(
                 text,
@@ -258,34 +260,11 @@ class CortexExecutionDecider:
                 text,
                 confidence=float(confidence),
             )
-            direct_capability = bool(capability_decision.requires_tool)
-            if direct_capability:
-                preferred_plugin = str(
-                    capability_decision.preferred_plugin or ""
-                ).strip()
-                handler = str(capability_decision.handler or "").strip()
-                required_capability = str(
-                    capability_decision.capability or ""
-                ).strip()
-
-                if preferred_plugin and preferred_plugin not in topology["plugin_candidates"]:
-                    topology["plugin_candidates"].append(preferred_plugin)
-
-                # Time Query is a governed plugin authority. Do not invent a
-                # parallel time tool simply because the compatibility route
-                # still exposes a historical handler label.
-                if (
-                    handler
-                    and capability_decision.intent != "time.current"
-                    and handler not in topology["tool_requirements"]
-                ):
-                    topology["tool_requirements"].append(handler)
-
-                if (
-                    required_capability
-                    and required_capability not in capabilities["required"]
-                ):
-                    capabilities["required"].append(required_capability)
+            direct_capability = self._apply_direct_capability_route(
+                capability_decision,
+                topology=topology,
+                capabilities=capabilities,
+            )
             raw_modes = getattr(analysis, "reasoning_modes", []) or []
             if isinstance(raw_modes, str):
                 raw_modes = [raw_modes]
@@ -367,7 +346,65 @@ class CortexExecutionDecider:
             }
         except Exception as exc:
             logger.warning("CORTEX analysis failed, using safe defaults: %s", exc)
-            return self._default_analysis()
+            fallback = self._default_analysis()
+            topology = {
+                "tool_requirements": fallback["tool_requirements"],
+                "plugin_candidates": fallback["plugin_candidates"],
+            }
+            capabilities = {
+                "required": fallback["required_capabilities"],
+                "forbidden": fallback["forbidden_capabilities"],
+            }
+            direct_capability = self._apply_direct_capability_route(
+                capability_decision,
+                topology=topology,
+                capabilities=capabilities,
+            )
+            if direct_capability:
+                fallback["intent"] = capability_decision.intent
+                fallback["intent_confidence"] = float(
+                    capability_decision.confidence
+                )
+                fallback["direct_capability"] = True
+            return fallback
+
+    @staticmethod
+    def _apply_direct_capability_route(
+        capability_decision: Any,
+        *,
+        topology: Dict[str, Any],
+        capabilities: Dict[str, Any],
+    ) -> bool:
+        if not capability_decision.requires_tool:
+            return False
+
+        preferred_plugin = str(
+            capability_decision.preferred_plugin or ""
+        ).strip()
+        handler = str(capability_decision.handler or "").strip()
+        required_capability = str(
+            capability_decision.capability or ""
+        ).strip()
+
+        plugin_candidates = topology.setdefault("plugin_candidates", [])
+        if preferred_plugin and preferred_plugin not in plugin_candidates:
+            plugin_candidates.append(preferred_plugin)
+
+        # Time Query is the governed time authority. Do not invent a parallel
+        # time tool because the compatibility route still exposes an old label.
+        tool_requirements = topology.setdefault("tool_requirements", [])
+        if (
+            handler
+            and capability_decision.intent != "time.current"
+            and handler not in tool_requirements
+        ):
+            tool_requirements.append(handler)
+
+        required = capabilities.setdefault("required", [])
+        if required_capability and required_capability not in required:
+            required.append(required_capability)
+
+        return True
 
     def _default_analysis(self) -> Dict[str, Any]:
         return {
