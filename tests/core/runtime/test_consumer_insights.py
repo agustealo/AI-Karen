@@ -80,6 +80,28 @@ def test_model_context_headroom_requires_explicit_runtime_window_truth() -> None
     assert insight["model_context_headroom_tokens"] == 6692
     assert insight["model_context_source"] == "model_registry"
 
+def test_model_context_headroom_fails_closed_without_output_usage() -> None:
+    insight = build_prompt_token_insight(
+        {
+            "estimated_input_tokens": 1000,
+            "token_budget": 4096,
+            "model_context_window_tokens": 8192,
+            "model_context_source": "model_registry",
+            "breakdown": {"messages": 1000},
+        },
+        {
+            "prompt_tokens": 1200,
+        },
+    )
+
+    assert insight["input_tokens"] == 1200
+    assert insight["output_tokens"] is None
+    assert insight["total_tokens"] is None
+    assert insight["model_context_available"] is False
+    assert insight["model_context_headroom_tokens"] is None
+    assert insight["model_context_used_percent"] is None
+
+
 def test_optional_advanced_insights_fail_closed_when_not_reported() -> None:
     insights = build_consumer_insights(total_latency_ms=42.0)
 
