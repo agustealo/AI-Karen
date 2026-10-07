@@ -547,6 +547,14 @@ async def remove_model(
         raise HTTPException(status_code=500, detail="Failed to remove model") from exc
 
 
+@router.get("/download/telemetry", response_model=Dict[str, Any])
+async def get_download_runtime_telemetry(
+    current_user: Any = Depends(get_current_user),
+):
+    del current_user
+    return await _control_service().get_runtime_telemetry()
+
+
 @router.get("/download/recommendations", response_model=Dict[str, Any])
 async def get_download_recommendations(
     current_user: Any = Depends(get_current_user),
