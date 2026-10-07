@@ -41,6 +41,27 @@ class DirectCapabilityResult:
     attempts: List[Dict[str, Any]] = field(default_factory=list)
 
     def normalized_metadata(self) -> Dict[str, Any]:
+        presentation_payload = {
+            key: self.payload.get(key)
+            for key in (
+                "query",
+                "mode",
+                "status",
+                "value",
+                "formatted",
+                "time",
+                "date",
+                "timezone",
+                "resolved_timezone",
+                "label",
+                "extractedData",
+                "insights",
+                "required_capability",
+                "target",
+                "next_action",
+            )
+            if self.payload.get(key) is not None
+        }
         return {
             "actual_provider": self.source_id,
             "actual_model": None,
@@ -50,7 +71,7 @@ class DirectCapabilityResult:
             "degraded_mode": self.degraded,
             "degradation_reason": self.error,
             "provider_attempts": list(self.attempts),
-            "structured_content": dict(self.payload),
+            "structured_content": presentation_payload,
             "sources": list(self.sources),
             "citations": list(self.citations),
             "execution_spans": [
