@@ -205,13 +205,18 @@ const retryInstallRevision = (job: DownloadJob): string | null => {
   }
 
   const modelDirectory = `${owner}--${repository}`;
-  const segments = normalizedPath.split('/').filter(Boolean);
-  const modelDirectoryIndex = segments.lastIndexOf(modelDirectory);
-  if (modelDirectoryIndex < 0) {
+  const storageKey = String(job.storage_key || '').trim();
+  if (!storageKey) {
     return null;
   }
 
-  const installAlias = segments.slice(modelDirectoryIndex + 1).join('/');
+  const marker = `/${storageKey}/${modelDirectory}/`;
+  const markerIndex = normalizedPath.indexOf(marker);
+  if (markerIndex < 0) {
+    return null;
+  }
+
+  const installAlias = normalizedPath.slice(markerIndex + marker.length);
   return installAlias && installAlias !== 'main' ? installAlias : null;
 };
 
