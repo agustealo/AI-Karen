@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -156,6 +157,27 @@ class PostgresOutcomeStore(OutcomeStore):
         )
 
     @staticmethod
+    def _normalize_recorded_at(value: Any) -> datetime | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return None
+            if normalized.endswith("Z"):
+                normalized = f"{normalized[:-1]}+00:00"
+            try:
+                parsed = datetime.fromisoformat(normalized)
+            except ValueError as exc:
+                raise OutcomeStoreError("recorded_at must be an ISO-8601 timestamp") from exc
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        raise OutcomeStoreError(
+            "recorded_at must be a datetime, ISO-8601 string, or null"
+        )
+
+    @staticmethod
     def _insert_params(
         payload: dict[str, Any],
         *,
@@ -174,7 +196,9 @@ class PostgresOutcomeStore(OutcomeStore):
             "tenant_id": tenant_id,
             "user_id": str(payload.get("user_id") or ""),
             "source": source,
-            "recorded_at": payload.get("recorded_at"),
+            "recorded_at": PostgresOutcomeStore._normalize_recorded_at(
+                payload.get("recorded_at")
+            ),
             "payload": json.dumps(payload, default=str),
         }
 
