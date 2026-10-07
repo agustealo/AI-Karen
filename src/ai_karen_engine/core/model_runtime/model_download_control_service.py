@@ -30,6 +30,8 @@ from ai_karen_engine.core.model_runtime.management.model_orchestrator_service im
     ModelOrchestratorService,
 )
 from ai_karen_engine.core.model_runtime.model_discovery_service import get_model_discovery_service
+from ai_karen_engine.core.runtime.resource_monitor import monitor_resources_once
+from ai_karen_engine.monitoring.model_storage_monitor import ModelStorageMonitor
 from ai_karen_engine.core.model_runtime.model_download_publication_recovery import (
     ModelDownloadPublicationJournal,
     ModelDownloadPublicationRecoveryRequired,
@@ -1095,6 +1097,58 @@ class ModelDownloadControlService:
             "essential_ready": bool(essential) and all(item["installed"] for item in essential),
             "essential_installed": sum(1 for item in essential if item["installed"]),
             "essential_total": len(essential),
+        }
+
+    async def get_runtime_telemetry(self) -> dict[str, Any]:
+        """Aggregate existing canonical resource and model-storage truth for Settings."""
+        await self.initialize()
+
+        resource_metrics = await monitor_resources_once()
+        storage_monitor = ModelStorageMonitor(self.models_root)
+        storage_summary = await asyncio.to_thread(storage_monitor.get_storage_summary)
+        jobs = await self._repository.list_jobs(limit=200)
+
+        active_statuses = {
+            "queued",
+            "running",
+            "promoting",
+            "paused",
+            "pause_requested",
+        }
+        active_jobs = [
+            row for row in jobs if str(row.get("status") or "") in active_statuses
+        ]
+        failed_jobs = [
+            row for row in jobs if str(row.get("status") or "") == "failed"
+        ]
+        concurrency_limit = await self.get_global_concurrency_limit()
+
+        return {
+            "resources": {
+                "cpu_percent": resource_metrics.cpu_percent,
+                "memory_percent": resource_metrics.memory_percent,
+                "memory_available_bytes": resource_metrics.memory_available,
+                "memory_used_bytes": resource_metrics.memory_used,
+                "disk_percent": resource_metrics.disk_percent,
+                "disk_free_bytes": resource_metrics.disk_free,
+                "gpu_percent": resource_metrics.gpu_percent,
+                "gpu_memory_percent": resource_metrics.gpu_memory_percent,
+                "process_count": resource_metrics.process_count,
+                "thread_count": resource_metrics.thread_count,
+            },
+            "storage": storage_summary,
+            "workers": {
+                "active_jobs": len(active_jobs),
+                "failed_jobs": len(failed_jobs),
+                "max_concurrent_downloads": concurrency_limit,
+                "available_slots": max(0, concurrency_limit - len(active_jobs)),
+            },
+            "security": {
+                "runtime_admin_required": True,
+                "trust_remote_code": self._policy.trust_remote_code,
+                "require_license_acceptance": self._policy.require_license_acceptance,
+                "quarantine_failed_models": self._policy.quarantine_failed_models,
+            },
         }
 
     async def get_storage_settings(self) -> dict[str, Any]:
