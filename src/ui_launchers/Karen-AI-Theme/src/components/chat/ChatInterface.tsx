@@ -1612,9 +1612,25 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
             collectedContent += token;
             setStreamedContent(collectedContent);
           },
-          onError: (message) => {
+          onError: (message, metadata) => {
             streamFailed = true;
-            streamFailureMessage = message || 'Streaming endpoint reported an error';
+            const errorType =
+              typeof metadata?.error_type === 'string'
+                ? metadata.error_type.trim()
+                : '';
+            const correlationId =
+              typeof metadata?.correlation_id === 'string'
+                ? metadata.correlation_id.trim()
+                : '';
+            const diagnosticParts = [
+              errorType ? `type=${errorType}` : '',
+              correlationId ? `correlation=${correlationId}` : '',
+            ].filter(Boolean);
+            const baseMessage =
+              message || 'Streaming endpoint reported an error';
+            streamFailureMessage = diagnosticParts.length
+              ? `${baseMessage} [${diagnosticParts.join(', ')}]`
+              : baseMessage;
             setProcessingStatus(streamFailureMessage);
           },
           onComplete: (metadata, content) => {
