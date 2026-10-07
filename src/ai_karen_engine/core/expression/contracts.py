@@ -23,7 +23,7 @@ class ExpressionTask:
 class ExpressionResult:
     task_id: str
     text: str
-    provider: str
+    provider: str | None
     model: str | None
     engine_id: str
     engine_mode: str
