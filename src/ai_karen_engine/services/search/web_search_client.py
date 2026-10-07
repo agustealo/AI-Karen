@@ -54,10 +54,15 @@ class WebSearchClient:
     WebSearchProviderRegistry instead of being hardcoded here.
     """
 
-    def __init__(self, settings: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self,
+        settings: Optional[Dict[str, Any]] = None,
+        *,
+        registry: Optional[WebSearchProviderRegistry] = None,
+    ) -> None:
         self.settings = settings or {}
         self.session: Optional[aiohttp.ClientSession] = None
-        self.registry = WebSearchProviderRegistry(settings=self.settings)
+        self.registry = registry or WebSearchProviderRegistry(settings=self.settings)
 
     async def __aenter__(self) -> "WebSearchClient":
         if not self.session:
