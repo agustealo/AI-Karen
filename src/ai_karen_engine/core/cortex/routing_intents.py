@@ -162,7 +162,7 @@ def _looks_like_location_first_weather(query: str) -> bool:
     suffix = raw[match.end("location"):].strip().lower()
     # A bare forecast is ambiguous (finance, elections, demand). Require a
     # preposition or explicit weather noun before using the weather executor.
-    if suffix == "forecast" and " " not in location.strip() and "," not in location:
+    if suffix == "forecast":
         return False
     return _looks_like_location_phrase(location)
 
