@@ -45,7 +45,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"\bwhat(?:'s|\s+is)\s+(?:the\s+)?weather\b",
             r"\bwhat\s+will\s+the\s+weather\s+be\s+(?:in|for)\s+.+$",
             r"\bhow(?:'s|\s+is)\s+(?:the\s+)?weather\b",
-            r"^weather\b",
+            r"^weather[?!.]*$",
             r"\bweather\s+(?:in|for|today|tonight|tomorrow|this\s+week)\b",
             r"\bforecast\s+(?:for|in|today|tonight|tomorrow|this\s+week)\b",
             r"\b(?:current|today'?s?|tonight'?s?|tomorrow'?s?)\s+(?:weather|forecast|temperature)\b",
@@ -150,7 +150,7 @@ def _looks_like_shorthand_time(query: str) -> bool:
 
 
 def _looks_like_location_first_weather(query: str) -> bool:
-    raw = " ".join((query or "").strip().split()).rstrip("?")
+    raw = " ".join((query or "").strip().split()).rstrip("?!.")
     match = re.fullmatch(
         r"(?P<location>.+?)\s+(?:weather|forecast)",
         raw,
