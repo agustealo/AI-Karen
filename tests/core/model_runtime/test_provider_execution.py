@@ -40,3 +40,20 @@ def test_registered_endpoint_url_remains_authoritative_without_runtime_override(
     )
 
     assert _resolve_base_url(endpoint) == "http://model.internal:9000/v1"
+
+
+def test_host_only_ollama_override_inherits_registered_openai_prefix(monkeypatch) -> None:
+    endpoint = _endpoint("ollama-local")
+    assert endpoint.base_url == "http://localhost:11434/v1"
+
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+
+    assert _resolve_base_url(endpoint) == "http://host.docker.internal:11434/v1"
+
+
+def test_explicit_ollama_override_path_remains_authoritative(monkeypatch) -> None:
+    endpoint = _endpoint("ollama-local")
+
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434/custom-openai/v1/")
+
+    assert _resolve_base_url(endpoint) == "http://ollama:11434/custom-openai/v1"

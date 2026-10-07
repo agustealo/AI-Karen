@@ -13,6 +13,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint
@@ -29,6 +30,42 @@ class ProviderExecutionResult:
 
 class ProviderExecutionError(RuntimeError):
     """Raised when a canonical provider endpoint cannot execute a request."""
+
+
+def _inherit_registered_api_path(
+    runtime_url: str,
+    registered_url: str | None,
+) -> str:
+    """Preserve the canonical API path when a runtime override only changes host.
+
+    Environment overrides commonly point at a Docker/host gateway origin.
+    Built-in OpenAI-compatible endpoints register their required API prefix
+    (for example /v1). Treat a host-only override as a host replacement
+    rather than silently dropping that prefix. Explicit override paths remain
+    authoritative.
+    """
+    normalized = runtime_url.rstrip("/")
+    if not registered_url:
+        return normalized
+
+    runtime_parts = urlsplit(normalized)
+    if runtime_parts.path not in {"", "/"}:
+        return normalized
+
+    registered_parts = urlsplit(registered_url.rstrip("/"))
+    registered_path = registered_parts.path.rstrip("/")
+    if not registered_path:
+        return normalized
+
+    return urlunsplit(
+        (
+            runtime_parts.scheme,
+            runtime_parts.netloc,
+            registered_path,
+            runtime_parts.query,
+            runtime_parts.fragment,
+        )
+    ).rstrip("/")
 
 
 def _resolve_base_url(endpoint: ProviderEndpoint) -> str | None:
@@ -48,7 +85,7 @@ def _resolve_base_url(endpoint: ProviderEndpoint) -> str | None:
     for env_name in env_names.get(endpoint.runtime_engine, ()):
         value = (os.getenv(env_name) or "").strip()
         if value:
-            return value.rstrip("/")
+            return _inherit_registered_api_path(value, endpoint.base_url)
 
     if endpoint.base_url:
         return endpoint.base_url.rstrip("/")

@@ -118,9 +118,10 @@ def test_static_conversation_get_routes_precede_dynamic_conversation_id_route() 
 
     dynamic_index = source.index('@router.get("/{conversation_id}"')
     assert source.index('@router.get("/health")') < dynamic_index
-    assert source.index('@router.get("/analytics"') < dynamic_index
-    assert source.index('@router.get("/stats")') < dynamic_index
     assert source.index('@router.get("/by-session/{session_id}"') < dynamic_index
+    assert source.index('@router.get("/ensure-session/{session_id}"') < dynamic_index
+    assert '@router.get("/analytics"' not in source
+    assert '@router.get("/stats")' not in source
 
 
 def _role_block(source: str, role: str, next_role: str) -> str:
@@ -236,14 +237,19 @@ def test_chat_ingress_preserves_canonical_conversation_identity() -> None:
     assert "conversation_id=request.conversation_id" in source
     assert "conversation_id=normalize_chat_session_id(session_id)" not in source
 
-def test_chat_runtime_has_no_second_session_to_conversation_identity_formula() -> None:
+def test_chat_runtime_uses_execution_context_as_conversation_identity_authority() -> None:
     runtime = (ROOT / "src/ai_karen_engine/core/runtime/chat_runtime.py").read_text(
         encoding="utf-8"
     )
+    contract = (
+        ROOT / "src/ai_karen_engine/core/runtime/chat_runtime_contract.py"
+    ).read_text(encoding="utf-8")
 
-    assert "def _canonical_conversation_id(context: ChatExecutionContext)" in runtime
+    assert "ctx.require_conversation_id()" in runtime
     assert "normalize_chat_session_id" not in runtime
-    assert 'raise ValueError("conversation_identity_incomplete:conversation_id")' in runtime
+    assert "def _canonical_conversation_id(" not in runtime
+    assert "def require_conversation_id(" in contract
+    assert "conversation_identity_incomplete:conversation_id" in contract
 
 
 
@@ -289,13 +295,9 @@ def test_canonical_conversation_list_reports_repository_total() -> None:
     assert "has_more=offset + len(snapshots) < total_count" in route
 
 
-def test_conversation_analytics_cannot_cross_user_without_admin_role() -> None:
+def test_conversation_routes_do_not_expose_legacy_cross_user_analytics_surface() -> None:
     source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
-    start = source.index("async def get_analytics(")
-    end = source.index("\n\n@router.get(\"/stats\")", start)
-    route = source[start:end]
 
-    assert "authenticated_user_id = _require_user_id(user_ctx)" in route
-    assert "if user_id and user_id != authenticated_user_id:" in route
-    assert "_require_admin_role(user_ctx)" in route
-    assert "target_user_id = user_id or authenticated_user_id" in route
+    assert '@router.get("/analytics"' not in source
+    assert "async def get_analytics(" not in source
+    assert "_require_admin_role" in source
