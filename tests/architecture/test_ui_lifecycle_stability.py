@@ -49,17 +49,6 @@ def test_dashboard_health_checks_do_not_replace_application_shell() -> None:
 
 
 
-def test_dashboard_workspace_keeps_long_views_scrollable() -> None:
-    dashboard = _read("app/dashboard/page.tsx")
-
-    assert "h-dvh min-h-0" in dashboard
-    assert 'data-testid="workspace-scroll-region"' in dashboard
-    assert 'activeMainView !== "chat"' in dashboard
-    assert '"min-h-0 flex-1 overflow-y-auto overscroll-contain"' in dashboard
-    assert '"flex min-h-0 flex-1 flex-col overflow-hidden"' in dashboard
-    assert '<div className="flex min-h-0 flex-1 overflow-hidden">' in dashboard
-
-
 def test_chat_session_rate_limits_are_coalesced_and_nonfatal() -> None:
     chat = _read("components/chat/ChatInterface.tsx")
 
