@@ -42,6 +42,8 @@ interface ConversationContextRailProps {
   agentSteps: AgentStepEvent[];
   approvals?: ApprovalAttentionItem[];
   approvalsLoadState?: 'idle' | 'loading' | 'ready' | 'unavailable';
+  systemResources?: PlatformResourceSnapshot | null;
+  resourcesLoadState?: 'idle' | 'loading' | 'ready' | 'unavailable';
 }
 
 interface ContinuityCandidate {
@@ -337,6 +339,8 @@ function RailContent({
   agentSteps,
   approvals = [],
   approvalsLoadState = 'idle',
+  systemResources = null,
+  resourcesLoadState = 'idle',
 }: ConversationContextRailProps) {
   const continuity = useMemo(
     () => normalizeContinuity(metadata || {}),
@@ -353,6 +357,10 @@ function RailContent({
   const usage = useMemo(
     () => normalizeExecutionUsage(agentSteps, metadata || {}),
     [agentSteps, metadata],
+  );
+  const runtime = useMemo(
+    () => normalizeRuntimeInsight(metadata || {}),
+    [metadata],
   );
 
   const hasCapabilityTruth =
@@ -383,7 +391,7 @@ function RailContent({
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
             <Brain className="h-3.5 w-3.5 text-primary" />
-            Now
+            Turn intelligence
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -512,11 +520,165 @@ function RailContent({
         </CardContent>
       </Card>
 
+      {(runtime.actualProvider ||
+        runtime.runtimeEngine ||
+        runtime.latencyMs !== undefined ||
+        runtime.degradedMode) && (
+        <Card className="karen-surface overflow-hidden border-border/70 bg-card/70">
+          <CardHeader className="border-b border-border/50 bg-muted/10 pb-2">
+            <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider">
+              <span className="flex items-center gap-2">
+                <Route className="h-3.5 w-3.5 text-primary" />
+                Runtime dispatch
+              </span>
+              <Badge
+                variant={runtime.degradedMode ? 'outline' : 'secondary'}
+                className="text-[9px]"
+              >
+                {runtime.degradedMode ? 'degraded' : 'healthy'}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2.5 pt-3">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                <p className="karen-panel-label text-[8px]">Provider</p>
+                <p className="mt-1 truncate text-xs font-semibold">
+                  {runtime.actualProvider || 'Unavailable'}
+                </p>
+                <p className="truncate text-[9px] text-muted-foreground">
+                  {runtime.actualModel || runtime.runtimeEngine || 'No model reported'}
+                </p>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                <p className="karen-panel-label text-[8px]">Turn latency</p>
+                <p className="mt-1 text-xs font-semibold">
+                  {runtime.latencyMs !== undefined
+                    ? `${Math.round(runtime.latencyMs)} ms`
+                    : 'Unavailable'}
+                </p>
+                <p className="text-[9px] text-muted-foreground">
+                  {runtime.mode || runtime.responseSource || 'runtime'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {runtime.locality && (
+                <Badge variant="outline" className="text-[9px]">
+                  {runtime.locality}
+                </Badge>
+              )}
+              {runtime.runtimeEngine && (
+                <Badge variant="outline" className="text-[9px]">
+                  {runtime.runtimeEngine}
+                </Badge>
+              )}
+              {runtime.providerAttempts > 0 && (
+                <Badge variant="outline" className="text-[9px]">
+                  {runtime.providerAttempts} provider attempt{runtime.providerAttempts === 1 ? '' : 's'}
+                </Badge>
+              )}
+              {runtime.usedFallback && (
+                <Badge variant="outline" className="text-[9px]">
+                  fallback L{runtime.fallbackLevel}
+                </Badge>
+              )}
+            </div>
+
+            {runtime.degradationReason && (
+              <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2 text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
+                {runtime.degradationReason.replace(/_/g, ' ')}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {(resourcesLoadState !== 'idle' || systemResources) && (
+        <Card className="karen-surface overflow-hidden border-border/70 bg-card/70">
+          <CardHeader className="border-b border-border/50 bg-muted/10 pb-2">
+            <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider">
+              <span className="flex items-center gap-2">
+                <Gauge className="h-3.5 w-3.5 text-primary" />
+                System resources
+              </span>
+              <Badge variant="outline" className="text-[9px]">
+                {resourcesLoadState === 'ready' ? 'live' : resourcesLoadState}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2.5 pt-3">
+            {!systemResources ? (
+              <EmptyTruth>
+                {resourcesLoadState === 'loading'
+                  ? 'Reading local system resources…'
+                  : 'System resource telemetry is unavailable.'}
+              </EmptyTruth>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-2 text-[10px]">
+                  <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                      <Cpu className="h-3 w-3" />
+                      CPU
+                    </div>
+                    <p className="mt-1 text-xs font-semibold">
+                      {percentLabel(systemResources.cpu.usage_percent)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                      <MemoryStick className="h-3 w-3" />
+                      RAM
+                    </div>
+                    <p className="mt-1 text-xs font-semibold">
+                      {percentLabel(systemResources.memory.usage_percent)}
+                    </p>
+                    <p className="text-[9px] text-muted-foreground">
+                      {formatBytes(systemResources.memory.available_bytes)} free
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                      <Activity className="h-3 w-3" />
+                      GPU / VRAM
+                    </div>
+                    <p className="mt-1 text-xs font-semibold">
+                      {systemResources.gpu.available
+                        ? `${percentLabel(systemResources.gpu.usage_percent)} / ${percentLabel(systemResources.vram.usage_percent)}`
+                        : 'Unavailable'}
+                    </p>
+                    {systemResources.vram.available && (
+                      <p className="text-[9px] text-muted-foreground">
+                        {formatBytes(systemResources.vram.available_bytes)} VRAM free
+                      </p>
+                    )}
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                      <Database className="h-3 w-3" />
+                      Disk
+                    </div>
+                    <p className="mt-1 text-xs font-semibold">
+                      {percentLabel(systemResources.disk.usage_percent)}
+                    </p>
+                    <p className="text-[9px] text-muted-foreground">
+                      {formatBytes(systemResources.disk.available_bytes)} free
+                    </p>
+                  </div>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <Card className="karen-surface border-border/70 bg-card/70">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
             <Sparkles className="h-3.5 w-3.5 text-primary" />
-            Can use
+            Guardrails & capabilities
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -613,7 +775,7 @@ function RailContent({
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
             <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
-            Used
+            Execution trace
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -646,12 +808,53 @@ function RailContent({
         </CardContent>
       </Card>
 
+      {(runtime.trajectoryId ||
+        runtime.correlationId ||
+        runtime.transcriptPersistenceStatus ||
+        runtime.memoryPersistenceStatus) && (
+        <Card className="karen-surface border-border/70 bg-card/70">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
+              <GitBranch className="h-3.5 w-3.5 text-primary" />
+              Provenance & persistence
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-[10px]">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                <p className="text-muted-foreground">Transcript</p>
+                <p className="mt-0.5 font-semibold">
+                  {(runtime.transcriptPersistenceStatus || 'unknown').replace(/_/g, ' ')}
+                </p>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-background/40 p-2">
+                <p className="text-muted-foreground">Memory write</p>
+                <p className="mt-0.5 font-semibold">
+                  {(runtime.memoryPersistenceStatus || 'unknown').replace(/_/g, ' ')}
+                </p>
+              </div>
+            </div>
+            {runtime.trajectoryId && (
+              <div className="flex items-center gap-2 truncate text-muted-foreground">
+                <GitBranch className="h-3 w-3 shrink-0" />
+                <span className="truncate">trajectory {runtime.trajectoryId}</span>
+              </div>
+            )}
+            {runtime.correlationId && (
+              <div className="truncate font-mono text-[9px] text-muted-foreground">
+                correlation {runtime.correlationId}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {needsAttention && (
         <Card className="border-amber-500/20 bg-amber-500/5">
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
               <AlertTriangle className="h-3.5 w-3.5" />
-              Needs you
+              Human attention
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-xs">
