@@ -532,19 +532,31 @@ class ModelDownloadControlService:
         metadata: dict[str, Any] = {}
         warnings: list[str] = []
         blocking: list[str] = []
+
+        # Metadata is consumer and policy truth, not merely a channel-inference aid.
+        # Resolve it even when the caller explicitly selected a channel so license,
+        # size, description, and popularity stay visible and enforceable.
+        try:
+            info = await self._orchestrator.get_model_info(model_id, revision)
+            metadata = {
+                "storage_key": info.storage_key,
+                "tags": info.tags,
+                "license": info.license,
+                "description": info.description,
+                "total_size": info.total_size,
+                "downloads": info.downloads,
+                "likes": info.likes,
+                "last_modified": (
+                    info.last_modified.isoformat()
+                    if info.last_modified is not None
+                    else None
+                ),
+            }
+        except Exception as exc:
+            warnings.append(f"Remote model metadata unavailable: {exc}")
+
         if channel is None:
-            try:
-                info = await self._orchestrator.get_model_info(model_id, revision)
-                metadata = {
-                    "storage_key": info.storage_key,
-                    "tags": info.tags,
-                    "license": info.license,
-                    "description": info.description,
-                }
-                channel = self._infer_channel(metadata | {"model_id": model_id})
-            except Exception as exc:
-                warnings.append(f"Remote model metadata unavailable: {exc}")
-                channel = self._infer_channel({"model_id": model_id})
+            channel = self._infer_channel(metadata | {"model_id": model_id})
 
         if self._policy.block_new_downloads:
             blocking.append("New downloads are blocked by policy")
