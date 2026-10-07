@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
+from urllib.parse import quote
 
 from ai_karen_engine.config.config_asset_loaders import (
     load_model_download_recommendations,
@@ -575,8 +576,10 @@ class ModelDownloadControlService:
                 "tags": info.tags,
                 "license": info.license,
                 "gated": bool(info.gated),
+                "resolved_revision": info.revision or revision or "main",
                 "license_url": (
-                    f"https://huggingface.co/{model_id}"
+                    f"https://huggingface.co/{model_id}/tree/"
+                    f"{quote(str(info.revision or revision or 'main'), safe='')}"
                     if info.license
                     else None
                 ),
