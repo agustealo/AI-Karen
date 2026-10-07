@@ -2328,23 +2328,25 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         isLocalRecoveryUnconfirmed={isLocalRecoveryUnconfirmed}
       />
 
-      <RuntimeMetadataPanel
-        requestedProvider={latestAssistantMetadata.requestedProvider}
-        actualProvider={latestAssistantMetadata.actualProvider}
-        requestedModel={latestAssistantMetadata.requestedModel}
-        actualModel={latestAssistantMetadata.actualModel}
-        runtimeEngine={latestAssistantMetadata.runtimeEngine}
-        fallbackLevel={latestAssistantMetadata.fallbackLevel}
-        correlationId={latestAssistantMetadata.correlationId}
-        requestId={latestAssistantMetadata.requestId}
-        status={latestAssistantMetadata.status}
-        responseSource={latestAssistantMetadata.responseSource}
-        degradedMode={latestAssistantMetadata.degradedMode}
-        degradationType={latestAssistantMetadata.degradationType}
-        degradationReason={latestAssistantMetadata.degradedReason}
-        providerAttempts={latestAssistantMetadata.providerAttempts}
-        latencyMs={latestAssistantMetadata.latencyMs}
-      />
+      <div className="xl:hidden">
+        <RuntimeMetadataPanel
+          requestedProvider={latestAssistantMetadata.requestedProvider}
+          actualProvider={latestAssistantMetadata.actualProvider}
+          requestedModel={latestAssistantMetadata.requestedModel}
+          actualModel={latestAssistantMetadata.actualModel}
+          runtimeEngine={latestAssistantMetadata.runtimeEngine}
+          fallbackLevel={latestAssistantMetadata.fallbackLevel}
+          correlationId={latestAssistantMetadata.correlationId}
+          requestId={latestAssistantMetadata.requestId}
+          status={latestAssistantMetadata.status}
+          responseSource={latestAssistantMetadata.responseSource}
+          degradedMode={latestAssistantMetadata.degradedMode}
+          degradationType={latestAssistantMetadata.degradationType}
+          degradationReason={latestAssistantMetadata.degradedReason}
+          providerAttempts={latestAssistantMetadata.providerAttempts}
+          latencyMs={latestAssistantMetadata.latencyMs}
+        />
+      </div>
 
       <CircuitBreakerWarning
         show={latestAssistantMetadata.showCircuitWarning}

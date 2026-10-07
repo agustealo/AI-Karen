@@ -184,8 +184,15 @@ class DistilBertSemanticEncoder(SemanticEncoder):
         hf_home: str,
     ) -> str | None:
         huggingface_hub_dir = _default_huggingface_hub_dir()
+        local_root = Path(self.config.local_model_root)
+        orchestrator_matches = sorted(
+            local_root.glob(f"*--{model_name}/main")
+        ) if "/" not in model_name else [
+            local_root / model_name.replace("/", "--") / "main"
+        ]
         candidate_dirs = [
             Path(self.config.local_model_root) / model_name,
+            *orchestrator_matches,
             Path(transformers_cache_dir) / model_name if transformers_cache_dir else None,
             Path(transformers_cache_dir) / "models--" / model_name if transformers_cache_dir else None,
             Path(transformers_cache_dir) / "hub" / f"models--{model_name.replace('/', '--')}" if transformers_cache_dir else None,

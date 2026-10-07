@@ -143,6 +143,10 @@ class DownloadPolicyUpdateRequest(BaseModel):
     max_concurrent_downloads: Optional[int] = Field(default=None, ge=1, le=8)
 
 
+class ModelStorageUpdateRequest(BaseModel):
+    models_root: str = Field(..., min_length=1, max_length=4096)
+
+
 class DownloadValidationRequest(BaseModel):
     model_id: str
     revision: Optional[str] = None
@@ -392,6 +396,48 @@ async def list_models(
         raise HTTPException(status_code=500, detail="Failed to list models") from exc
 
 
+@router.get("/catalog", response_model=List[ModelSummaryResponse])
+async def search_model_catalog(
+    query: Optional[str] = Query(None, min_length=2, max_length=200),
+    limit: int = Query(24, ge=1, le=100),
+    sort: str = Query("downloads"),
+    current_user: Any = Depends(get_current_user),
+):
+    """Browse the canonical remote/local model catalog without requiring an owner.
+
+    The orchestrator remains the source of truth for remote Hugging Face discovery
+    and local registry merging. This route only exposes a consumer-friendly
+    search surface over that existing authority.
+    """
+    del current_user
+    try:
+        models = await get_orchestrator_service().list_models(
+            owner="",
+            limit=limit,
+            search=(query or "").strip() or None,
+            sort=sort,
+            direction=-1,
+        )
+        return [
+            ModelSummaryResponse(
+                model_id=model.model_id,
+                last_modified=model.last_modified,
+                likes=model.likes,
+                downloads=model.downloads,
+                storage_key=model.storage_key,
+                tags=model.tags,
+                total_size=model.total_size,
+                description=model.description,
+            )
+            for model in models
+        ]
+    except ModelOrchestratorError as exc:
+        raise handle_orchestrator_error(exc) from exc
+    except Exception as exc:
+        logger.exception("Failed to search model catalog")
+        raise HTTPException(status_code=500, detail="Failed to search model catalog") from exc
+
+
 @router.get("/info/{model_id:path}", response_model=ModelInfoResponse)
 async def get_model_info(
     model_id: str,
@@ -499,6 +545,42 @@ async def remove_model(
         )
         logger.exception("Failed to remove model %s", model_id)
         raise HTTPException(status_code=500, detail="Failed to remove model") from exc
+
+
+@router.get("/download/telemetry", response_model=Dict[str, Any])
+async def get_download_runtime_telemetry(
+    current_user: Any = Depends(get_current_user),
+):
+    del current_user
+    return await _control_service().get_runtime_telemetry()
+
+
+@router.get("/download/recommendations", response_model=Dict[str, Any])
+async def get_download_recommendations(
+    current_user: Any = Depends(get_current_user),
+):
+    del current_user
+    return await _control_service().get_recommendations()
+
+
+@router.get("/download/storage", response_model=Dict[str, Any])
+async def get_download_storage(
+    current_user: Any = Depends(get_current_user),
+):
+    del current_user
+    return await _control_service().get_storage_settings()
+
+
+@router.put("/download/storage", response_model=Dict[str, Any])
+async def update_download_storage(
+    request: ModelStorageUpdateRequest,
+    current_user: Any = Depends(get_current_user),
+):
+    del current_user
+    try:
+        return await _control_service().update_models_root(request.models_root)
+    except ModelOrchestratorError as exc:
+        raise handle_orchestrator_error(exc) from exc
 
 
 @router.get("/download/channels", response_model=Dict[str, Any])

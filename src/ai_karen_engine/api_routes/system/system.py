@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ai_karen_engine.core.runtime.platform_resource_service import (
+    get_platform_resource_service,
+)
 from ai_karen_engine.utils.dependency_checks import import_fastapi, import_pydantic
 
 APIRouter, HTTPException = import_fastapi("APIRouter", "HTTPException")
@@ -33,3 +36,9 @@ def list_announcements(limit: int = 10) -> List[Announcement]:
     else:
         data = []
     return [Announcement(**a) for a in data[:limit]]
+
+
+@router.get("/resources")
+def get_system_resources() -> Dict[str, Any]:
+    """Return the canonical safe platform resource snapshot."""
+    return get_platform_resource_service().snapshot().as_dict()

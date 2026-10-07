@@ -56,6 +56,7 @@ from ai_karen_engine.api_routes.public.public import router as public_router
 from ai_karen_engine.api_routes.shared.error_response import router as error_response_router
 from ai_karen_engine.api_routes.system.events import router as events_router
 from ai_karen_engine.api_routes.system.settings import router as settings_router
+from ai_karen_engine.api_routes.system.system import router as system_router
 from ai_karen_engine.api_routes.tools.code_execution import router as code_execution_router
 from ai_karen_engine.api_routes.tools.tools import router as tool_router
 from ai_karen_engine.api_routes.users.persona import router as user_persona_router
@@ -156,6 +157,7 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     RouterSpec(performance_router, tags=("performance",)),
     RouterSpec(model_organization_router, tags=("model-organization",)),
     RouterSpec(settings_router),
+    RouterSpec(system_router, "/api/system", ("system",)),
     RouterSpec(model_settings_router, "/api", ("model-settings",)),
 )
 
