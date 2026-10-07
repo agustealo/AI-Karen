@@ -1059,6 +1059,7 @@ export default function ModelDownloads({
   const chooseCatalogModel = useCallback((item: ModelCatalogItem) => {
     setModelId(item.model_id);
     setRevision('');
+    setAcceptLicense(false);
     setValidation(null);
   }, []);
 
@@ -1957,19 +1958,63 @@ export default function ModelDownloads({
                 className="pl-9 font-mono text-xs"
                 placeholder="owner/repository"
                 value={modelId}
-                onChange={(event) => setModelId(event.target.value)}
+                onChange={(event) => {
+                  setModelId(event.target.value);
+                  setAcceptLicense(false);
+                  setValidation(null);
+                }}
                 />
               </div>
             </div>
 
-            <div className="flex items-start justify-between gap-4 rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
-              <div className="space-y-1">
-                <div className="text-sm font-semibold">Accept model license</div>
-                <div className="text-xs text-muted-foreground">
-                  Karen will tell you during validation when acceptance is required.
+            <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
+              {!validation ? (
+                <div>
+                  <div className="text-sm font-semibold">License review</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Validate the model first. Karen will show the reported license and only ask for acceptance when policy requires it.
+                  </div>
                 </div>
-              </div>
-              <Switch checked={acceptLicense} onCheckedChange={setAcceptLicense} />
+              ) : validation.license_required ? (
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold">
+                      {String(validation.metadata.license || 'Model')} license
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Review the reported license for this exact model before accepting it.
+                    </div>
+                    {validation.metadata.license_url ? (
+                      <a
+                        href={String(validation.metadata.license_url)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                      >
+                        Review license / model card
+                        <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                      </a>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="accept-model-license" className="text-xs font-medium">
+                      I accept this license
+                    </Label>
+                    <Switch
+                      id="accept-model-license"
+                      checked={acceptLicense}
+                      onCheckedChange={setAcceptLicense}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div className="text-sm font-semibold">No license acceptance required</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    This validation did not report a license gate for the selected model.
+                  </div>
+                </div>
+              )}
             </div>
 
             <details className="rounded-xl border border-border/50 bg-muted/10">
@@ -1983,7 +2028,11 @@ export default function ModelDownloads({
                     id="revision"
                     placeholder="main, commit SHA, or tag"
                     value={revision}
-                    onChange={(event) => setRevision(event.target.value)}
+                    onChange={(event) => {
+                      setRevision(event.target.value);
+                      setAcceptLicense(false);
+                      setValidation(null);
+                    }}
                   />
                 </div>
 
