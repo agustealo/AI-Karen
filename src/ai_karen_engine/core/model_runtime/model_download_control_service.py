@@ -570,7 +570,11 @@ class ModelDownloadControlService:
         # Resolve it even when the caller explicitly selected a channel so license,
         # size, description, and popularity stay visible and enforceable.
         try:
-            info = await self._orchestrator.get_model_info(model_id, revision)
+            info = await self._orchestrator.get_model_info(
+                model_id,
+                revision,
+                refresh_remote=self._policy.require_license_acceptance,
+            )
             metadata = {
                 "storage_key": info.storage_key,
                 "tags": info.tags,
@@ -673,10 +677,14 @@ class ModelDownloadControlService:
                 "; ".join(validation.blocking_reasons),
                 validation.to_dict(),
             )
+        resolved_revision = (
+            str(validation.metadata.get("resolved_revision") or "").strip()
+            or revision
+        )
         job = ModelDownloadJob(
             job_id=f"mdl-{uuid.uuid4()}",
             model_id=model_id,
-            revision=revision,
+            revision=resolved_revision,
             channel_id=validation.channel_id,
             storage_key=validation.storage_key,
             requested_by=str(user.get("user_id") or user.get("username") or "unknown"),
