@@ -4,6 +4,7 @@ import inspect
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -118,3 +119,38 @@ def test_registry_writer_contract_is_candidate_first_and_crash_durable() -> None
     publish = replace.rindex("self._registry = candidate")
     assert candidate < persist < publish
     assert 'exc.details.get("canonical_replaced")' in replace
+
+
+@pytest.mark.asyncio
+async def test_local_entry_without_gate_provenance_refreshes_remote_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    await service.replace_registry_entry(
+        "test-owner/test-model",
+        {
+            **_entry("main"),
+            "license": "custom",
+        },
+    )
+
+    remote = SimpleNamespace(
+        siblings=[],
+        library_name="transformers",
+        last_modified=None,
+        downloads=10,
+        likes=2,
+        tags=["text-generation"],
+        cardData={"license": "custom", "model_description": "gated test"},
+        gated=True,
+        sha="remote-sha",
+    )
+    api = SimpleNamespace(model_info=lambda **_: remote)
+    monkeypatch.setattr(service, "_get_hf_api", lambda: api)
+
+    info = await service.get_model_info("test-owner/test-model")
+
+    assert info.gated is True
+    assert info.license == "custom"
+    assert info.revision == "remote-sha"
