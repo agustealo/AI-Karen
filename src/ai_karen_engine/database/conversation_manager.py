@@ -16,7 +16,10 @@ from sqlalchemy import delete, func, select, update
 
 from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
 from ai_karen_engine.database.client import MultiTenantPostgresClient
-from ai_karen_engine.database.id_types import coerce_user_id as normalize_user_id
+from ai_karen_engine.database.id_types import (
+    coerce_tenant_id,
+    coerce_user_id as normalize_user_id,
+)
 from ai_karen_engine.database.memory_manager import MemoryManager, MemoryQuery
 from ai_karen_engine.database.models import TenantConversation, TenantMessage
 from ai_karen_engine.services.database.repositories import Message as CanonicalMessage
@@ -291,6 +294,7 @@ class ConversationManager:
             async with self.db_client.get_async_session() as session:
                 db_conversation = TenantConversation(
                     id=uuid.UUID(conversation_id),
+                    tenant_id=coerce_tenant_id(tenant_id),
                     user_id=normalized_user_id,
                     title=title,
                     conversation_metadata=metadata or {},
@@ -389,13 +393,15 @@ class ConversationManager:
     ) -> Conversation:
         """Ensure a durable conversation record exists for the supplied identifier."""
         normalized_user_id = coerce_user_id(user_id)
+        normalized_tenant_id = coerce_tenant_id(tenant_id)
         conversation_uuid = uuid.UUID(str(conversation_id))
         conversation_metadata = metadata or {}
 
         async with self.db_client.get_async_session() as session:
             result = await session.execute(
                 select(TenantConversation).where(
-                    TenantConversation.id == conversation_uuid
+                    TenantConversation.id == conversation_uuid,
+                    TenantConversation.tenant_id == normalized_tenant_id,
                 )
             )
             db_conversation = result.scalar_one_or_none()
@@ -403,6 +409,7 @@ class ConversationManager:
             if db_conversation is None:
                 db_conversation = TenantConversation(
                     id=conversation_uuid,
+                    tenant_id=normalized_tenant_id,
                     user_id=normalized_user_id,
                     title=title,
                     conversation_metadata=conversation_metadata,
@@ -434,7 +441,10 @@ class ConversationManager:
             if len(updates) > 1:
                 await session.execute(
                     update(TenantConversation)
-                    .where(TenantConversation.id == conversation_uuid)
+                    .where(
+                        TenantConversation.id == conversation_uuid,
+                        TenantConversation.tenant_id == normalized_tenant_id,
+                    )
                     .values(**updates)
                 )
                 await session.commit()
@@ -461,12 +471,13 @@ class ConversationManager:
         if not conversation_id:
             raise ValueError("conversation_id is required to persist a user message")
 
-        user_id = (
-            str(self._payload_value(request, "user_id") or "").strip() or "anonymous"
-        )
-        tenant_id = self._payload_value(
-            request, "tenant_id", "org_id", default="default"
-        )
+        user_id = str(self._payload_value(request, "user_id") or "").strip()
+        tenant_id = self._payload_value(request, "tenant_id", "org_id")
+        if not user_id:
+            raise ValueError("user_id is required to persist a conversation message")
+        if tenant_id is None or not str(tenant_id).strip():
+            raise ValueError("tenant_id is required to persist a conversation message")
+        tenant_id = coerce_tenant_id(tenant_id)
         metadata = dict(self._payload_value(request, "metadata", default={}) or {})
         title = (
             str(self._payload_value(request, "message", default="") or "").strip()[:120]
@@ -524,12 +535,13 @@ class ConversationManager:
         if not assistant_content:
             return {}
 
-        user_id = (
-            str(self._payload_value(request, "user_id") or "").strip() or "anonymous"
-        )
-        tenant_id = self._payload_value(
-            request, "tenant_id", "org_id", default="default"
-        )
+        user_id = str(self._payload_value(request, "user_id") or "").strip()
+        tenant_id = self._payload_value(request, "tenant_id", "org_id")
+        if not user_id:
+            raise ValueError("user_id is required to persist a conversation message")
+        if tenant_id is None or not str(tenant_id).strip():
+            raise ValueError("tenant_id is required to persist a conversation message")
+        tenant_id = coerce_tenant_id(tenant_id)
         response_metadata = dict(
             self._payload_value(response, "metadata", default={}) or {}
         )
@@ -675,7 +687,8 @@ class ConversationManager:
             async with self.db_client.get_async_session() as session:
                 result = await session.execute(
                     select(TenantConversation).where(
-                        TenantConversation.id == uuid.UUID(conversation_id)
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
                     )
                 )
 
@@ -796,7 +809,8 @@ class ConversationManager:
                 # Get current conversation
                 result = await session.execute(
                     select(TenantConversation).where(
-                        TenantConversation.id == uuid.UUID(conversation_id)
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
                     )
                 )
 
@@ -823,7 +837,10 @@ class ConversationManager:
 
                 await session.execute(
                     update(TenantConversation)
-                    .where(TenantConversation.id == db_conversation.id)
+                    .where(
+                        TenantConversation.id == db_conversation.id,
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
+                    )
                     .values(updated_at=datetime.utcnow())
                 )
 
@@ -910,7 +927,10 @@ class ConversationManager:
             async with self.db_client.get_async_session() as session:
                 query = (
                     select(TenantConversation)
-                    .where(TenantConversation.user_id == normalized_user_id)
+                    .where(
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
+                        TenantConversation.user_id == normalized_user_id,
+                    )
                     .order_by(TenantConversation.updated_at.desc())
                 )
 
@@ -1013,7 +1033,10 @@ class ConversationManager:
             async with self.db_client.get_async_session() as session:
                 await session.execute(
                     update(TenantConversation)
-                    .where(TenantConversation.id == uuid.UUID(conversation_id))
+                    .where(
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
+                    )
                     .values(**updates)
                 )
                 await session.commit()
@@ -1051,7 +1074,8 @@ class ConversationManager:
             async with self.db_client.get_async_session() as session:
                 await session.execute(
                     delete(TenantConversation).where(
-                        TenantConversation.id == uuid.UUID(conversation_id)
+                        TenantConversation.id == uuid.UUID(conversation_id),
+                        TenantConversation.tenant_id == coerce_tenant_id(tenant_id),
                     )
                 )
                 await session.commit()
