@@ -76,6 +76,9 @@ class EventType(str, Enum):
     PERSISTENCE_COMPLETED = "persistence.completed"
     PERSISTENCE_FAILED = "persistence.failed"
 
+    # Learning / trajectory lineage
+    LEARNING_RECORDING_FAILED = "learning.recording.failed"
+
 
 class ErrorCategory(str, Enum):
     """Structured error taxonomy for emitted events.
