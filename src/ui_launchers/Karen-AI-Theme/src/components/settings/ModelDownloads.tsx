@@ -939,6 +939,105 @@ export default function ModelDownloads({
         </CardHeader>
       </Card>
 
+      <Card className="border-border/50">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Search className="h-4 w-4 text-primary" aria-hidden="true" />
+            Find a Model
+          </CardTitle>
+          <CardDescription>
+            Search the live model catalog, review the basics, then let Karen infer
+            the correct runtime channel before installation.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="relative">
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <Input
+              aria-label="Search model catalog"
+              className="pl-9"
+              placeholder="Search models, for example Qwen, Llama, embedding..."
+              value={catalogQuery}
+              onChange={(event) => setCatalogQuery(event.target.value)}
+            />
+          </div>
+
+          {catalogError && (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+              <AlertTitle>Model catalog unavailable</AlertTitle>
+              <AlertDescription>{catalogError}</AlertDescription>
+            </Alert>
+          )}
+
+          {catalogLoading ? (
+            <div className="flex min-h-32 items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              Searching available models...
+            </div>
+          ) : catalog.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
+              No catalog results were returned. You can still enter an exact
+              Hugging Face model ID below.
+            </div>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {catalog.map((item) => {
+                const selected = item.model_id === modelId.trim();
+                return (
+                  <button
+                    key={item.model_id}
+                    type="button"
+                    onClick={() => chooseCatalogModel(item)}
+                    className={[
+                      'rounded-xl border p-4 text-left transition-colors',
+                      selected
+                        ? 'border-primary/50 bg-primary/5'
+                        : 'border-border/50 bg-muted/10 hover:bg-muted/30',
+                    ].join(' ')}
+                    aria-pressed={selected}
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold">
+                        {item.model_id}
+                      </div>
+                      <p className="mt-1 line-clamp-2 min-h-8 text-xs text-muted-foreground">
+                        {item.description || 'Model metadata is available from the canonical catalog.'}
+                      </p>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      <Badge variant="outline" className="text-[9px]">
+                        {compactCount(item.downloads)} downloads
+                      </Badge>
+                      <Badge variant="outline" className="text-[9px]">
+                        {compactCount(item.likes)} likes
+                      </Badge>
+                      {item.total_size ? (
+                        <Badge variant="outline" className="text-[9px]">
+                          {formatBytes(item.total_size)}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    {item.tags.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {item.tags.slice(0, 3).map((tag) => (
+                          <Badge key={tag} variant="secondary" className="text-[8px]">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
         <Card className="border-border/50">
           <CardHeader>
