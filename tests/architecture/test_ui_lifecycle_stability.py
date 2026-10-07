@@ -73,11 +73,37 @@ def test_chat_session_rate_limits_are_coalesced_and_nonfatal() -> None:
     )[0]
     assert "err.status === 429" in load
     assert "preserving the requested conversation" in load
+    assert "const preserveRequestedSession = (message: string)" in load
+    assert "setCurrentSession(preservedSession)" in load
     rate_limited_load = load.split(
         "if (err instanceof ApiError && err.status === 429)", 1
     )[1].split("if (err instanceof ApiError && err.status === 404)", 1)[0]
     assert "createNewSession" not in rate_limited_load
-    assert "setCurrentSession(preservedSession)" in rate_limited_load
+    assert "preserveRequestedSession(" in rate_limited_load
+
+def test_transient_session_load_failure_preserves_conversation_identity() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    load = chat.split("// Load a specific session", 1)[1].split(
+        "// Refresh sessions list", 1
+    )[0]
+    transient = load.split(
+        "if (err instanceof ApiError && err.status === 404)", 1
+    )[1].split("} finally {", 1)[0]
+
+    assert "Session load failed transiently; preserving the requested conversation." in transient
+    assert "preserveRequestedSession(" in transient
+    assert "Session service is temporarily unavailable. Keeping your current chat available." in transient
+    assert "await createNewSession()" not in transient
+    assert "Failed to load session. Starting fresh chat." not in load
+
+
+def test_chat_exports_canonical_conversation_identity_truthfully() -> None:
+    chat = _read("components/chat/ChatInterface.tsx")
+
+    assert chat.count("Conversation ID: ${currentSession.id}") == 2
+    assert "Session ID: ${currentSession.id}" not in chat
+
 
 def test_chat_ui_preserves_durable_conversation_lifecycle_authority() -> None:
     chat = _read("components/chat/ChatInterface.tsx")
