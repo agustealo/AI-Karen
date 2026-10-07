@@ -428,6 +428,16 @@ def load_env_override(cfg: Dict[str, Any]):
 
 
 def validate_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    # Compatibility migration: older installs stored provider settings under
+    # plugins.intelligent-search.search. Root search is now the sole authority.
+    plugins_cfg = cfg.get("plugins")
+    if isinstance(plugins_cfg, dict):
+        intelligent_search_cfg = plugins_cfg.get("intelligent-search")
+        if isinstance(intelligent_search_cfg, dict):
+            legacy_search = intelligent_search_cfg.pop("search", None)
+            if "search" not in cfg and isinstance(legacy_search, dict):
+                cfg["search"] = legacy_search
+
     # You can add Pydantic or marshmallow for full schema; basic fallback:
     for k, v in DEFAULT_CONFIG.items():
         if k not in cfg:
