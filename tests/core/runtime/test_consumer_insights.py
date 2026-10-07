@@ -32,7 +32,7 @@ def test_prompt_token_insight_prefers_provider_usage_over_estimate() -> None:
     assert insight["input_tokens"] == 1200
     assert insight["output_tokens"] == 300
     assert insight["total_tokens"] == 1500
-    assert insight["context_headroom_tokens"] == 2896
+    assert insight["prompt_budget_headroom_tokens"] == 2896
     assert insight["truncation_count"] == 1
     assert insight["decomposition"]["messages"]["percent"] == 50.0
 
@@ -51,8 +51,34 @@ def test_prompt_token_insight_labels_estimates_truthfully() -> None:
     assert insight["source"] == "prompt_estimate"
     assert insight["input_tokens"] == 512
     assert insight["output_tokens"] is None
-    assert insight["context_headroom_tokens"] == 1536
+    assert insight["prompt_budget_headroom_tokens"] == 1536
+    assert insight["model_context_available"] is False
+    assert insight["model_context_window_tokens"] is None
+    assert insight["model_context_source"] == "unavailable"
 
+
+
+def test_model_context_headroom_requires_explicit_runtime_window_truth() -> None:
+    insight = build_prompt_token_insight(
+        {
+            "estimated_input_tokens": 1000,
+            "token_budget": 4096,
+            "model_context_window_tokens": 8192,
+            "model_context_source": "model_registry",
+            "breakdown": {"messages": 1000},
+        },
+        {
+            "prompt_tokens": 1200,
+            "completion_tokens": 300,
+            "total_tokens": 1500,
+        },
+    )
+
+    assert insight["prompt_budget_headroom_tokens"] == 2896
+    assert insight["model_context_available"] is True
+    assert insight["model_context_window_tokens"] == 8192
+    assert insight["model_context_headroom_tokens"] == 6692
+    assert insight["model_context_source"] == "model_registry"
 
 def test_optional_advanced_insights_fail_closed_when_not_reported() -> None:
     insights = build_consumer_insights(total_latency_ms=42.0)
