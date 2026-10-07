@@ -60,12 +60,10 @@ class WebSearchDispatcher(ExtensionBase):
 
         try:
             self._default_mode = self._read_manifest_setting("default_mode") or "general"
-            manifest_search = self._read_manifest_setting("search")
-            self._internet_service = InternetCapabilityService(
-                search_settings=manifest_search
-                if isinstance(manifest_search, dict)
-                else None
-            )
+            # Search provider defaults/configuration are owned by the canonical
+            # search registry plus central runtime config. Do not create a
+            # second provider-config authority from legacy manifest metadata.
+            self._internet_service = InternetCapabilityService()
 
             # Pre-initialize handlers to set up search clients
             for mode, handler_class in MODE_HANDLER_MAP.items():
