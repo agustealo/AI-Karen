@@ -620,3 +620,26 @@ def test_legacy_plugin_search_config_migrates_to_root_authority() -> None:
     assert migrated["search"]["duckduckgo"]["enabled"] is False
     assert migrated["search"]["wikipedia"]["enabled"] is True
     assert "search" not in migrated["plugins"]["intelligent-search"]
+
+
+def test_runtime_config_asset_owns_web_search_provider_settings() -> None:
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    runtime_config = json.loads(
+        (root / "config_assets/config.json").read_text(encoding="utf-8")
+    )
+    legacy_settings = json.loads(
+        (
+            root
+            / "src/ai_karen_engine/config/settings.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert runtime_config["search"]["duckduckgo"]["priority"] == 100
+    assert runtime_config["search"]["wikipedia"]["enabled"] is True
+    assert "search" not in legacy_settings
+    assert "search" not in legacy_settings.get("plugins", {}).get(
+        "intelligent-search", {}
+    )
