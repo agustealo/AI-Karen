@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
@@ -20,6 +21,10 @@ from ai_karen_engine.core.runtime.direct_capability_executor import (
     DirectCapabilityExecutor,
 )
 from ai_karen_engine.services.plugin_service import ExecutionStatus
+from ai_karen_engine.services.search.web_search_client import WebSearchClient
+from ai_karen_engine.services.tooling.internet_capability_service import (
+    InternetCapabilityService,
+)
 from ai_karen_engine.services.tooling.tool_service import ToolInput, ToolService
 from ai_karen_engine.tools.web_search_tool import WebSearchTool
 
@@ -375,3 +380,48 @@ async def _time_decision():
     return await decider.decide(
         _request("What time is it in Detroit?")
     )
+
+
+def test_live_capability_patterns_do_not_hijack_unrelated_prompts() -> None:
+    time_complexity = resolve_capability_decision(
+        "What time complexity does binary search have?"
+    )
+    incidental_latest = resolve_capability_decision(
+        "Explain why our latest refactor changed the cache key."
+    )
+
+    assert time_complexity.intent == "general.chat"
+    assert time_complexity.requires_tool is False
+    assert incidental_latest.intent == "general.chat"
+    assert incidental_latest.requires_tool is False
+
+
+def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None:
+    current_time = resolve_capability_decision("What time is it in Detroit?")
+    current_search = resolve_capability_decision(
+        "Search the internet for the latest Python security release."
+    )
+
+    assert current_time.intent == "time.current"
+    assert current_time.requires_live_data is True
+    assert current_search.intent == "search.general"
+    assert current_search.requires_live_data is True
+
+
+@pytest.mark.asyncio
+async def test_direct_live_executor_never_preempts_required_workflow() -> None:
+    executor = DirectCapabilityExecutor()
+    decision = await _weather_decision()
+    decision.graph_required = True
+    decision.topology = ExecutionTopology.WORKFLOW
+
+    assert decision.policy_constraints["direct_capability"] is True
+    assert executor.can_handle(decision) is False
+
+
+def test_internet_capability_has_canonical_default_search_client() -> None:
+    service = InternetCapabilityService()
+    client = service._resolve_search_client()
+
+    assert isinstance(client, WebSearchClient)
+    assert client.registry.select_provider() is not None
