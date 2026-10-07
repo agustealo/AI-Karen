@@ -67,3 +67,11 @@ def test_model_orchestrator_router_is_admin_scoped_at_application_boundary():
     assert "model_orchestrator_router" in source
     assert "dependencies=(Depends(require_runtime_admin),)" in source
     assert "app.dependency_overrides[model_orchestrator_current_user] = require_runtime_admin" in source
+
+
+def test_download_route_preserves_reviewed_revision_contract():
+    source = ROUTE.read_text(encoding="utf-8")
+
+    assert "validated_revision: Optional[str]" in source
+    assert "_model_dump(download_request)" in source
+    assert "_control_service().start_download(" in source
