@@ -123,6 +123,45 @@ class PromptRegistry:
                 normalized_parts.append(0)
             return str(PromptVersion(*normalized_parts))
 
+    @staticmethod
+    def _parse_persisted_datetime(value: Any) -> Optional[datetime]:
+        """Restore persisted ISO datetimes without weakening the runtime contract."""
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            return value
+        if not isinstance(value, str):
+            raise ValueError(f"Invalid persisted datetime type: {type(value).__name__}")
+        return datetime.fromisoformat(value)
+
+    @staticmethod
+    def _serialize_prompt(prompt: PromptDefinition) -> Dict[str, Any]:
+        """Serialize a prompt definition with stable persistence types."""
+        data = dict(prompt.__dict__)
+        status = data.get("status")
+        if isinstance(status, PromptLifecycleStatus):
+            data["status"] = status.value
+        for field_name in ("created_at", "deprecated_at"):
+            value = data.get(field_name)
+            if isinstance(value, datetime):
+                data[field_name] = value.isoformat()
+        return data
+
+    @classmethod
+    def _deserialize_prompt(cls, prompt_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize persistence-only types before constructing the strict contract."""
+        data = dict(prompt_data)
+
+        raw_status = data.get("status")
+        if raw_status is not None and not isinstance(raw_status, PromptLifecycleStatus):
+            data["status"] = PromptLifecycleStatus(str(raw_status))
+
+        for field_name in ("created_at", "deprecated_at"):
+            if field_name in data:
+                data[field_name] = cls._parse_persisted_datetime(data[field_name])
+
+        return data
+
     def _load_registry(self):
         """Load prompts from registry storage.
 
@@ -160,6 +199,7 @@ class PromptRegistry:
                 prompt_id = str(raw_prompt.get("prompt_id") or "")
                 raw_version = str(raw_prompt.get("version") or "")
                 try:
+                    raw_prompt = self._deserialize_prompt(raw_prompt)
                     normalized_version = self._normalize_persisted_version(raw_version)
                     if normalized_version != raw_version:
                         raw_prompt["version"] = normalized_version
@@ -263,8 +303,14 @@ class PromptRegistry:
         
         try:
             data = {
-                "prompts": [prompt.__dict__ for prompt in self._prompts.values()],
-                "active_versions": {pid: str(version) for pid, version in self._active_versions.items()},
+                "prompts": [
+                    self._serialize_prompt(prompt)
+                    for prompt in self._prompts.values()
+                ],
+                "active_versions": {
+                    prompt_id: str(version)
+                    for prompt_id, version in self._active_versions.items()
+                },
                 "updated_at": datetime.utcnow().isoformat(),
             }
             
