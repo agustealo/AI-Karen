@@ -166,6 +166,7 @@ type RecommendedModel = {
   license?: string | null;
   license_url?: string | null;
   gated?: boolean;
+  resolved_revision?: string | null;
   include_patterns?: string[] | null;
   capabilities: string[];
   app_consumers: string[];
@@ -173,6 +174,9 @@ type RecommendedModel = {
   install_path?: string | null;
   status: string;
 };
+
+const recommendationAcceptanceKey = (item: RecommendedModel): string =>
+  `${item.id}:${item.resolved_revision || 'unresolved'}`;
 
 type RecommendedModelsResponse = {
   recommendations: RecommendedModel[];
@@ -895,7 +899,10 @@ export default function ModelDownloads({
         status: string;
       }>(ENDPOINTS.download, {
         model_id: requestedModelId,
-        revision: revision.trim() || null,
+        revision:
+          String(validation?.metadata.resolved_revision || '').trim() ||
+          revision.trim() ||
+          null,
         channel_id: currentChannel?.id || null,
         include_patterns: parseCsvList(includePatterns),
         exclude_patterns: parseCsvList(excludePatterns),
@@ -931,6 +938,7 @@ export default function ModelDownloads({
     modelId,
     refreshAll,
     revision,
+    validation,
     toast,
     trustRemoteCode,
   ]);
@@ -1071,8 +1079,9 @@ export default function ModelDownloads({
       const licenseRequired = Boolean(
         policy?.require_license_acceptance && item.gated,
       );
+      const acceptanceKey = recommendationAcceptanceKey(item);
       const licenseAccepted = Boolean(
-        recommendedLicenseAcceptances[item.id],
+        recommendedLicenseAcceptances[acceptanceKey],
       );
 
       if (licenseRequired && !licenseAccepted) {
@@ -1090,6 +1099,7 @@ export default function ModelDownloads({
       try {
         await apiClient.post(ENDPOINTS.download, {
           model_id: item.model_id,
+          revision: item.resolved_revision || null,
           channel_id: item.channel_id,
           include_patterns: item.include_patterns || [],
           exclude_patterns: [],
@@ -1132,7 +1142,7 @@ export default function ModelDownloads({
     const missingAcceptances = essentials.filter(
       (item) =>
         Boolean(policy?.require_license_acceptance && item.gated) &&
-        !recommendedLicenseAcceptances[item.id],
+        !recommendedLicenseAcceptances[recommendationAcceptanceKey(item)],
     );
     if (missingAcceptances.length > 0) {
       toast({
@@ -1153,12 +1163,15 @@ export default function ModelDownloads({
         );
         await apiClient.post(ENDPOINTS.download, {
           model_id: item.model_id,
+          revision: item.resolved_revision || null,
           channel_id: item.channel_id,
           include_patterns: item.include_patterns || [],
           exclude_patterns: [],
           trust_remote_code: false,
           accept_license: licenseRequired
-            ? Boolean(recommendedLicenseAcceptances[item.id])
+            ? Boolean(
+                recommendedLicenseAcceptances[recommendationAcceptanceKey(item)]
+              )
             : false,
         });
       }
@@ -1548,11 +1561,15 @@ export default function ModelDownloads({
                           </Label>
                           <Switch
                             id={`accept-license-${item.id}`}
-                            checked={Boolean(recommendedLicenseAcceptances[item.id])}
+                            checked={Boolean(
+                              recommendedLicenseAcceptances[
+                                recommendationAcceptanceKey(item)
+                              ],
+                            )}
                             onCheckedChange={(checked) =>
                               setRecommendedLicenseAcceptances((current) => ({
                                 ...current,
-                                [item.id]: checked,
+                                [recommendationAcceptanceKey(item)]: checked,
                               }))
                             }
                           />
