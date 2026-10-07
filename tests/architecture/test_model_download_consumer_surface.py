@@ -86,12 +86,16 @@ def test_recommended_models_are_config_driven_and_first_run_visible() -> None:
     assert "Model licenses are accepted per model" in ui
     assert "Review license" in ui
     assert "recommendedLicenseAcceptances" in ui
+    assert "recommendationAcceptanceKey" in ui
+    assert "item.resolved_revision || null" in ui
+    assert "validation?.metadata.resolved_revision" in ui
     assert "void validateDownload(checked)" in ui
     assert "item.gated" in ui
     assert "(item.license || item.gated)" in ui
     assert "Restricted model access" in ui
     assert '"license_url"' in config
     assert 'item["license"] = info.license' in control
+    assert 'item["resolved_revision"] = resolved_revision' in control
     assert 'item["gated"] = bool(info.gated)' in control
     assert "if info.license or info.gated" in control
     assert 'f"https://huggingface.co/{model_id}/tree/"' in control
