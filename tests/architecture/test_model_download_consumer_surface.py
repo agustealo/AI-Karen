@@ -214,6 +214,7 @@ def test_retry_preserves_install_alias_and_reviewed_revision() -> None:
     assert "The model library folder has changed since this job" in ui
     assert "The original download location cannot be verified" in ui
     assert "The original model install alias cannot be verified" in ui
+    assert "The original download storage namespace cannot be verified" in ui
     assert "if (!retryValidatedRevision(job) && job.license_accepted)" in ui
     assert "Review the current license and access terms" in ui
     assert "E_VERIFY," in control
