@@ -621,7 +621,7 @@ class ModelDownloadControlService:
             warnings.append("Both include and exclude patterns are set; include rules win in the executor")
 
         license_required = (
-            bool(metadata.get("gated"))
+            bool(metadata.get("license") or metadata.get("gated"))
             if self._policy.require_license_acceptance
             else False
         )
