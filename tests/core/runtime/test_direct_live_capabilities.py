@@ -392,6 +392,9 @@ def test_live_capability_patterns_do_not_hijack_unrelated_prompts() -> None:
     temperature_scaling = resolve_capability_decision(
         "Explain temperature scaling for classifier calibration."
     )
+    current_directory = resolve_capability_decision(
+        "What is the current directory?"
+    )
 
     assert time_complexity.intent == "general.chat"
     assert time_complexity.requires_tool is False
@@ -399,6 +402,8 @@ def test_live_capability_patterns_do_not_hijack_unrelated_prompts() -> None:
     assert incidental_latest.requires_tool is False
     assert temperature_scaling.intent == "general.chat"
     assert temperature_scaling.requires_tool is False
+    assert current_directory.intent == "general.chat"
+    assert current_directory.requires_tool is False
 
 
 def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None:
@@ -406,11 +411,17 @@ def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None
     current_search = resolve_capability_decision(
         "Search the internet for the latest Python security release."
     )
+    detroit_weather = resolve_capability_decision("Detroit weather")
+    detroit_forecast = resolve_capability_decision("Detroit forecast")
 
     assert current_time.intent == "time.current"
     assert current_time.requires_live_data is True
     assert current_search.intent == "search.general"
     assert current_search.requires_live_data is True
+    assert detroit_weather.intent == "search.weather"
+    assert detroit_weather.requires_live_data is True
+    assert detroit_forecast.intent == "search.weather"
+    assert detroit_forecast.requires_live_data is True
 
 
 @pytest.mark.asyncio
