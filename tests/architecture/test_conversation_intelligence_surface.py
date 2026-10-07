@@ -35,3 +35,31 @@ def test_conversation_intelligence_uses_terminal_provider_truth() -> None:
     assert "Learning this turn" in source
     assert "Turn understanding" in source
     assert "No tool, plugin, or provider activity has been reported for this turn." in source
+
+
+def test_conversation_intelligence_deck_surfaces_native_runtime_instruments() -> None:
+    source = RAIL.read_text(encoding="utf-8")
+
+    for token in (
+        "Conversation Intelligence",
+        "Runtime dispatch",
+        "System resources",
+        "Guardrails & capabilities",
+        "Execution trace",
+        "Provenance & persistence",
+        "Human attention",
+        "/api/system/resources",
+        "resources live",
+        "GPU / VRAM",
+        "transcript_persistence_status",
+        "trajectory_id",
+    ):
+        assert token in source
+
+
+def test_conversation_resource_polling_is_desktop_scoped() -> None:
+    source = RAIL.read_text(encoding="utf-8")
+
+    assert "window.matchMedia('(min-width: 1280px)')" in source
+    assert "window.setInterval" in source
+    assert "15000" in source
