@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   Database,
   Download,
+  ExternalLink,
   FolderOpen,
   Gauge,
   Loader2,
@@ -163,6 +164,7 @@ type RecommendedModel = {
   expected_runtime?: string | null;
   approximate_size_bytes?: number | null;
   license?: string | null;
+  license_url?: string | null;
   include_patterns?: string[] | null;
   capabilities: string[];
   app_consumers: string[];
@@ -490,6 +492,7 @@ export default function ModelDownloads({
   const [modelsRootDraft, setModelsRootDraft] = useState('');
   const [savingModelsRoot, setSavingModelsRoot] = useState(false);
   const [installingRecommended, setInstallingRecommended] = useState<Record<string, boolean>>({});
+  const [recommendedLicenseAcceptances, setRecommendedLicenseAcceptances] = useState<Record<string, boolean>>({});
   const [installingEssentials, setInstallingEssentials] = useState(false);
 
   const [modelId, setModelId] = useState('');
@@ -1062,10 +1065,20 @@ export default function ModelDownloads({
   const installRecommendedModel = useCallback(
     async (item: RecommendedModel) => {
       if (item.installed) return;
-      if (policy?.require_license_acceptance && !acceptLicense) {
+
+      const licenseRequired = Boolean(
+        policy?.require_license_acceptance && item.license,
+      );
+      const licenseAccepted = Boolean(
+        recommendedLicenseAcceptances[item.id],
+      );
+
+      if (licenseRequired && !licenseAccepted) {
         toast({
-          title: 'Accept the model license first',
-          description: 'Use the license switch in the install panel before installing recommended models.',
+          title: 'Review and accept this model license first',
+          description: item.license_url
+            ? `Open the ${item.license} license from this model card, then accept it before installation.`
+            : `${item.label} reports the ${item.license} license. Accept that license on this model card before installation.`,
           variant: 'destructive',
         });
         return;
@@ -1079,7 +1092,7 @@ export default function ModelDownloads({
           include_patterns: item.include_patterns || [],
           exclude_patterns: [],
           trust_remote_code: false,
-          accept_license: acceptLicense,
+          accept_license: licenseRequired ? licenseAccepted : false,
         });
         toast({
           title: 'Recommended model queued',
@@ -1100,7 +1113,12 @@ export default function ModelDownloads({
         });
       }
     },
-    [acceptLicense, policy?.require_license_acceptance, refreshAll, toast],
+    [
+      policy?.require_license_acceptance,
+      recommendedLicenseAcceptances,
+      refreshAll,
+      toast,
+    ],
   );
 
   const installEssentialModels = useCallback(async () => {
@@ -1108,10 +1126,18 @@ export default function ModelDownloads({
       (item) => item.tier === 'essential' && !item.installed,
     );
     if (essentials.length === 0) return;
-    if (policy?.require_license_acceptance && !acceptLicense) {
+
+    const missingAcceptances = essentials.filter(
+      (item) =>
+        Boolean(policy?.require_license_acceptance && item.license) &&
+        !recommendedLicenseAcceptances[item.id],
+    );
+    if (missingAcceptances.length > 0) {
       toast({
-        title: 'Accept the model licenses first',
-        description: 'Karen will not silently accept third-party model licenses on your behalf.',
+        title: 'Review the essential model licenses first',
+        description: `Accept the listed license on each essential model card before installing all essentials: ${missingAcceptances
+          .map((item) => item.label)
+          .join(', ')}.`,
         variant: 'destructive',
       });
       return;
@@ -1120,13 +1146,18 @@ export default function ModelDownloads({
     setInstallingEssentials(true);
     try {
       for (const item of essentials) {
+        const licenseRequired = Boolean(
+          policy?.require_license_acceptance && item.license,
+        );
         await apiClient.post(ENDPOINTS.download, {
           model_id: item.model_id,
           channel_id: item.channel_id,
           include_patterns: item.include_patterns || [],
           exclude_patterns: [],
           trust_remote_code: false,
-          accept_license: acceptLicense,
+          accept_license: licenseRequired
+            ? Boolean(recommendedLicenseAcceptances[item.id])
+            : false,
         });
       }
       toast({
@@ -1144,7 +1175,13 @@ export default function ModelDownloads({
     } finally {
       setInstallingEssentials(false);
     }
-  }, [acceptLicense, policy?.require_license_acceptance, recommendations, refreshAll, toast]);
+  }, [
+    policy?.require_license_acceptance,
+    recommendations,
+    recommendedLicenseAcceptances,
+    refreshAll,
+    toast,
+  ]);
 
   const saveModelsRoot = useCallback(async () => {
     const nextRoot = modelsRootDraft.trim();
@@ -1409,14 +1446,11 @@ export default function ModelDownloads({
           </CardHeader>
           <CardContent className="space-y-4">
             {policy?.require_license_acceptance && (
-              <div className="flex items-start justify-between gap-4 rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
-                <div>
-                  <div className="text-sm font-semibold">Accept recommended model licenses</div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Required before Karen queues curated third-party models. License names are shown on each card.
-                  </p>
-                </div>
-                <Switch checked={acceptLicense} onCheckedChange={setAcceptLicense} />
+              <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
+                <div className="text-sm font-semibold">Model licenses are accepted per model</div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Karen only asks for acceptance when a model reports a license. Review the license or source from that model&apos;s card, then accept that specific license before queueing it.
+                </p>
               </div>
             )}
 
@@ -1463,6 +1497,57 @@ export default function ModelDownloads({
                   <div className="mt-3 text-[10px] text-muted-foreground">
                     Used by: {item.app_consumers.join(', ')}
                   </div>
+
+                  {item.license && (
+                    <div className="mt-3 rounded-xl border border-border/50 bg-background/50 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-xs font-semibold">
+                            {item.license} license
+                          </div>
+                          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                            Review the reported license before accepting it for this model.
+                          </p>
+                        </div>
+                        {item.license_url ? (
+                          <a
+                            href={item.license_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                          >
+                            Review license
+                            <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                          </a>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">
+                            No license link reported
+                          </span>
+                        )}
+                      </div>
+
+                      {policy?.require_license_acceptance && (
+                        <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/40 pt-3">
+                          <Label
+                            htmlFor={`accept-license-${item.id}`}
+                            className="text-xs font-medium"
+                          >
+                            I accept the {item.license} license for {item.label}
+                          </Label>
+                          <Switch
+                            id={`accept-license-${item.id}`}
+                            checked={Boolean(recommendedLicenseAcceptances[item.id])}
+                            onCheckedChange={(checked) =>
+                              setRecommendedLicenseAcceptances((current) => ({
+                                ...current,
+                                [item.id]: checked,
+                              }))
+                            }
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   <Button
                     type="button"
