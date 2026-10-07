@@ -154,3 +154,10 @@ async def test_local_entry_without_gate_provenance_refreshes_remote_metadata(
     assert info.gated is True
     assert info.license == "custom"
     assert info.revision == "remote-sha"
+
+
+def test_unknown_gate_provenance_is_not_persisted_as_false() -> None:
+    source = inspect.getsource(ModelOrchestratorService.download_model)
+
+    assert 'if entry.get("gated") is None:' in source
+    assert 'entry.pop("gated", None)' in source
