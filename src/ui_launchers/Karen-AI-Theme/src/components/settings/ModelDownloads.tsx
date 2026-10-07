@@ -11,7 +11,7 @@
  * - UI must not invent runtime compatibility or model availability.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -507,6 +507,7 @@ export default function ModelDownloads({
   const [excludePatterns, setExcludePatterns] = useState('');
   const [acceptLicense, setAcceptLicense] = useState(false);
   const [trustRemoteCode, setTrustRemoteCode] = useState(false);
+  const validationGenerationRef = useRef(0);
 
   const loadState = useCallback(async () => {
     setLoading(true);
@@ -747,6 +748,7 @@ export default function ModelDownloads({
     Boolean(modelId.trim()) &&
     validation?.allowed === true &&
     validation.model_id === modelId.trim() &&
+    (validation.revision || '') === revision.trim() &&
     !startingDownload &&
     !channelBlocked &&
     !downloadsBlocked;
@@ -802,6 +804,8 @@ export default function ModelDownloads({
 
   const validateDownload = useCallback(async (licenseAccepted = acceptLicense) => {
     const requestedModelId = modelId.trim();
+    const requestedRevision = revision.trim();
+    const validationGeneration = ++validationGenerationRef.current;
 
     if (!requestedModelId) {
       toast({
@@ -819,7 +823,7 @@ export default function ModelDownloads({
         ENDPOINTS.validate,
         {
           model_id: requestedModelId,
-          revision: revision.trim() || null,
+          revision: requestedRevision || null,
           channel_id: currentChannel?.id || null,
           trust_remote_code: trustRemoteCode,
           accept_license: licenseAccepted,
@@ -827,6 +831,10 @@ export default function ModelDownloads({
           exclude_patterns: parseCsvList(excludePatterns),
         },
       );
+
+      if (validationGeneration !== validationGenerationRef.current) {
+        return;
+      }
 
       setValidation(response);
 
@@ -1066,6 +1074,7 @@ export default function ModelDownloads({
   );
 
   const chooseCatalogModel = useCallback((item: ModelCatalogItem) => {
+    validationGenerationRef.current += 1;
     setModelId(item.model_id);
     setRevision('');
     setAcceptLicense(false);
@@ -1987,6 +1996,7 @@ export default function ModelDownloads({
                 placeholder="owner/repository"
                 value={modelId}
                 onChange={(event) => {
+                  validationGenerationRef.current += 1;
                   setModelId(event.target.value);
                   setAcceptLicense(false);
                   setValidation(null);
@@ -2061,6 +2071,7 @@ export default function ModelDownloads({
                     placeholder="main, commit SHA, or tag"
                     value={revision}
                     onChange={(event) => {
+                      validationGenerationRef.current += 1;
                       setRevision(event.target.value);
                       setAcceptLicense(false);
                       setValidation(null);
