@@ -12,6 +12,7 @@ from ai_karen_engine.tools.http_client_tool import HTTPClientTool
 from ai_karen_engine.tools.filesystem_tool import FileSystemTool
 from ai_karen_engine.tools.text_processing_tool import TextProcessingTool
 from ai_karen_engine.tools.data_analysis_tool import DataAnalysisTool
+from ai_karen_engine.tools.system_resources_tool import SystemResourcesTool
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,8 @@ def get_production_tools() -> List[BaseTool]:
         HTTPClientTool(),
         FileSystemTool(),
         TextProcessingTool(),
-        DataAnalysisTool()
+        DataAnalysisTool(),
+        SystemResourcesTool()
     ]
 
 
