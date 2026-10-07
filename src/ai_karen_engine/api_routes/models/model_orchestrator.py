@@ -143,6 +143,10 @@ class DownloadPolicyUpdateRequest(BaseModel):
     max_concurrent_downloads: Optional[int] = Field(default=None, ge=1, le=8)
 
 
+class ModelStorageUpdateRequest(BaseModel):
+    models_root: str = Field(..., min_length=1, max_length=4096)
+
+
 class DownloadValidationRequest(BaseModel):
     model_id: str
     revision: Optional[str] = None
@@ -541,6 +545,34 @@ async def remove_model(
         )
         logger.exception("Failed to remove model %s", model_id)
         raise HTTPException(status_code=500, detail="Failed to remove model") from exc
+
+
+@router.get("/download/recommendations", response_model=Dict[str, Any])
+async def get_download_recommendations(
+    current_user: Any = Depends(get_current_user),
+):
+    del current_user
+    return await _control_service().get_recommendations()
+
+
+@router.get("/download/storage", response_model=Dict[str, Any])
+async def get_download_storage(
+    current_user: Any = Depends(get_current_user),
+):
+    del current_user
+    return await _control_service().get_storage_settings()
+
+
+@router.put("/download/storage", response_model=Dict[str, Any])
+async def update_download_storage(
+    request: ModelStorageUpdateRequest,
+    current_user: Any = Depends(get_current_user),
+):
+    del current_user
+    try:
+        return await _control_service().update_models_root(request.models_root)
+    except ModelOrchestratorError as exc:
+        raise handle_orchestrator_error(exc) from exc
 
 
 @router.get("/download/channels", response_model=Dict[str, Any])
