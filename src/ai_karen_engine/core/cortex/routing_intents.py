@@ -6,11 +6,11 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     "time.current": {
         "triggers": ["what time", "current time", "time in", "timezone"],
         "patterns": [
-            r"\bwhat\s+time\s+is\s+it\b",
-            r"\bwhat(?:'s|\s+is)\s+the\s+time\b",
-            r"\bcurrent\s+time\b",
-            r"\btime\s+now\b",
-            r"\btimezone\s+(?:in|for|of)\b",
+            r"^what\s+time\s+is\s+it(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^what(?:'s|\s+is)\s+the\s+time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^current\s+time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^time\s+now(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^timezone\s+(?:in|for|of)\s+.+[?!.]*$",
         ],
         "required_capability": "time_query",
         "preferred_plugin": "time-query",
@@ -26,9 +26,9 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"\bweb\s+search\b",
             r"\blook\s+(?:it\s+)?up\s+online\b",
             r"\blook\s+online\s+(?:for|at)\b",
-            r"\bfind\s+(?:the\s+)?(?:current|latest|today'?s?)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|updates?|results?|score|price|release|version|status|information)\b",
-            r"\b(?:what|which)\s+is\s+the\s+(?:current|latest)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|update|result|score|price|release|version|status)\b",
-            r"\b(?:latest|current|today'?s?)\s+(?:news|updates?|results?|score|price|release|version|status)\b",
+            r"^find\s+(?:the\s+)?(?:current|latest|today'?s?)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|updates?|results?|score|price|release|version|status|information)[?!.]*$",
+            r"^(?:what|which)\s+is\s+the\s+(?:current|latest)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|update|result|score|price|release|version|status)[?!.]*$",
+            r"^(?:latest|current|today'?s?)\s+(?:news|updates?|results?|score|price|release|version|status)[?!.]*$",
         ],
         "required_capability": "web.search",
         "preferred_plugin": "intelligent-search",
@@ -87,8 +87,12 @@ def _looks_like_location_phrase(value: str) -> bool:
     if re.fullmatch(r"(?:UTC|GMT)(?:[+-]\d{1,2}(?::\d{2})?)?", raw, re.IGNORECASE):
         return True
 
-    tokens = re.findall(r"[A-Za-z][A-Za-z.'’_-]*", raw)
-    if not tokens:
+    tokens = [
+        token.strip(".'’_-")
+        for token in re.split(r"[\s,]+", raw)
+        if token.strip(".'’_-")
+    ]
+    if not tokens or any(not token[0].isalpha() for token in tokens):
         return False
 
     # A one-token shorthand must look like a proper place name. This keeps
