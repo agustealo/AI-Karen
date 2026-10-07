@@ -790,7 +790,7 @@ function RailContent({
               <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider">
                 <span className="flex items-center gap-2">
                   <Network className="h-3.5 w-3.5 text-primary" />
-                  Vector / HNSW health
+                  Retrieval / vector health
                 </span>
                 <Badge variant="outline" className="text-[9px]">
                   {vectorHealth.available === true ? 'reported' : 'not reported'}
