@@ -936,3 +936,13 @@ def test_freshness_contractions_and_right_now_clock_forms_route_live() -> None:
     assert latest_news_about.requires_live_data is True
     assert right_now.intent == "time.current"
     assert right_now.requires_live_data is True
+
+
+def test_ambiguous_single_subject_forecasts_do_not_hijack_weather() -> None:
+    for prompt in ("Bitcoin forecast", "Ethereum forecast", "Demand forecast"):
+        decision = resolve_capability_decision(prompt)
+        assert decision.intent == "general.chat", prompt
+        assert decision.requires_tool is False, prompt
+
+    assert resolve_capability_decision("Detroit weather").intent == "search.weather"
+    assert resolve_capability_decision("New York City forecast").intent == "search.weather"
