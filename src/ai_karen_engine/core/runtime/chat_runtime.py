@@ -67,14 +67,6 @@ from ai_karen_engine.services.approvals import (
 
 logger = get_logger(__name__)
 
-def _canonical_conversation_id(context: ChatExecutionContext) -> str:
-    """Return the single conversation identity established by ingress/context."""
-    conversation_id = str(context.conversation_id or "").strip()
-    if not conversation_id:
-        raise ValueError("conversation_identity_incomplete:conversation_id")
-    return conversation_id
-
-
 GATE_RESPONSES = (
     MaintenanceResponse,
     EmergencyFallbackResponse,
@@ -247,7 +239,7 @@ class ChatRuntime:
                 status="error",
                 metadata={"error_code": "CHAT_EXECUTION_FAILED"},
             )
-            conversation_id = _canonical_conversation_id(ctx)
+            conversation_id = ctx.require_conversation_id()
             fallback = await build_runtime_fallback(
                 runtime=self,
                 request=request,
@@ -380,7 +372,7 @@ class ChatRuntime:
         sequence = 0
         request_id = ctx.request_id or str(uuid.uuid4())
         response_id = ctx.request_id or str(uuid.uuid4())
-        conversation_id = _canonical_conversation_id(ctx)
+        conversation_id = ctx.require_conversation_id()
 
         self._bind_observability_context(ctx)
         self._emitter.emit(
@@ -807,7 +799,7 @@ class ChatRuntime:
     ) -> TranscriptPersistenceResult:
         """Persist one completed turn through the canonical transcript owner."""
         ctx = request.context
-        conversation_id = _canonical_conversation_id(ctx)
+        conversation_id = ctx.require_conversation_id()
 
         try:
             uuid.UUID(str(ctx.tenant_id))
@@ -1833,7 +1825,7 @@ class ChatRuntime:
         memory_meta: Optional[Dict[str, Any]] = None,
     ) -> ChatRuntimeMetadata:
         ctx = request.context
-        conversation_id = _canonical_conversation_id(ctx)
+        conversation_id = ctx.require_conversation_id()
         md = ChatRuntimeMetadata(
             correlation_id=ctx.correlation_id,
             latency_ms=latency_ms,
@@ -2033,7 +2025,7 @@ class ChatRuntime:
         transcript_persistence_failed: bool = False,
     ) -> Dict[str, Any]:
         ctx = request.context
-        conversation_id = _canonical_conversation_id(ctx)
+        conversation_id = ctx.require_conversation_id()
         degraded = (
             provider_meta.get("degraded_mode", False)
             or memory_persistence_failed
