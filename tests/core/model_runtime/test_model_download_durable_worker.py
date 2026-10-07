@@ -12,6 +12,7 @@ import pytest
 from ai_karen_engine.config.model_download import ModelDownloadWorkerSettings
 from ai_karen_engine.core.model_runtime.management.model_orchestrator_service import (
     DownloadResult,
+    ModelInfo,
     ModelOrchestratorError,
     ModelOrchestratorService,
 )
@@ -575,3 +576,35 @@ async def test_validation_fails_closed_when_access_metadata_is_unavailable(
         "could not be verified" in reason
         for reason in validation.blocking_reasons
     )
+
+
+@pytest.mark.asyncio
+async def test_start_download_pins_resolved_validation_revision(
+    tmp_path: Path,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    service._orchestrator.get_model_info = AsyncMock(
+        return_value=ModelInfo(
+            model_id="test-owner/test-model",
+            owner="test-owner",
+            repository="test-model",
+            storage_key="transformers",
+            license=None,
+            gated=False,
+            revision="resolved-sha-123",
+        )
+    )
+
+    job = await service.start_download(
+        {
+            "model_id": "test-owner/test-model",
+            "channel_id": "core_runtime_transformers",
+        },
+        {"user_id": "test-user"},
+    )
+
+    assert job["revision"] == "resolved-sha-123"
+    service._orchestrator.get_model_info.assert_awaited_once()
+    call = service._orchestrator.get_model_info.await_args
+    assert call.kwargs["refresh_remote"] is True
