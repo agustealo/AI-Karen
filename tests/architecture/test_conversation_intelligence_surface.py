@@ -8,6 +8,10 @@ RAIL = (
     ROOT
     / "src/ui_launchers/Karen-AI-Theme/src/components/chat/ConversationContextRail.tsx"
 )
+CHAT = (
+    ROOT
+    / "src/ui_launchers/Karen-AI-Theme/src/components/chat/ChatInterface.tsx"
+)
 
 
 def test_stream_terminal_metadata_exposes_turn_intelligence_truth() -> None:
@@ -103,3 +107,11 @@ def test_conversation_intelligence_surfaces_provider_route_and_policy_lineage() 
         "workflowVersion",
     ):
         assert token in source
+
+
+def test_runtime_metadata_panel_does_not_duplicate_desktop_deck() -> None:
+    source = CHAT.read_text(encoding="utf-8")
+
+    assert '<div className="xl:hidden">' in source
+    assert "<RuntimeMetadataPanel" in source
+    assert "<ConversationContextRail" in source
