@@ -1120,9 +1120,13 @@ class ModelDownloadControlService:
             # authority used by validation. Config provides the curated model
             # choice; remote/local model metadata provides license and gating truth.
             try:
-                info = await self._orchestrator.get_model_info(model_id)
+                info = await self._orchestrator.get_model_info(
+                    model_id,
+                    refresh_remote=self._policy.require_license_acceptance,
+                )
                 item["license"] = info.license
                 resolved_revision = info.revision or "main"
+                item["resolved_revision"] = resolved_revision
                 item["license_url"] = (
                     f"https://huggingface.co/{model_id}/tree/"
                     f"{quote(str(resolved_revision), safe='')}"
@@ -1137,6 +1141,7 @@ class ModelDownloadControlService:
                     exc,
                 )
                 item["gated"] = bool(item.get("gated", False))
+                item["resolved_revision"] = None
 
             item["installed"] = installed
             item["install_path"] = install_path or None
