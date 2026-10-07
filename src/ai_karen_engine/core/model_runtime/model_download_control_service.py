@@ -595,6 +595,10 @@ class ModelDownloadControlService:
             }
         except Exception as exc:
             warnings.append(f"Remote model metadata unavailable: {exc}")
+            if self._policy.require_license_acceptance:
+                blocking.append(
+                    "Model access metadata could not be verified; retry when license/gating metadata is available"
+                )
 
         if channel is None:
             channel = self._infer_channel(metadata | {"model_id": model_id})
