@@ -441,3 +441,27 @@ def test_internet_capability_has_canonical_default_search_client() -> None:
 
     assert isinstance(client, WebSearchClient)
     assert client.registry.select_provider() is not None
+
+
+def test_internet_capability_preserves_injected_provider_registry() -> None:
+    from ai_karen_engine.services.search.web_search_provider_registry import (
+        WebSearchProviderDescriptor,
+        WebSearchProviderRegistry,
+    )
+
+    registry = WebSearchProviderRegistry(
+        settings={"search": {"wikipedia": {"enabled": True}}},
+        descriptors={
+            "wikipedia": WebSearchProviderDescriptor(
+                provider_id="wikipedia",
+                capabilities=("web.search",),
+                health="healthy",
+            )
+        },
+    )
+    service = InternetCapabilityService(provider_registry=registry)
+
+    client = service._resolve_search_client()
+
+    assert client.registry is registry
+    assert client.registry.select_provider() == "wikipedia"
