@@ -28,7 +28,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 from prometheus_client import Counter, Histogram
@@ -312,6 +312,7 @@ class InternetCapabilityService:
         urls: List[str] = []
         crawl_results: List[Dict[str, Any]] = []
         processed_chunks: List[Dict[str, Any]] = []
+        search_providers: List[str] = []
 
         logger.info(
             "internet_capability.started",
@@ -332,8 +333,13 @@ class InternetCapabilityService:
             effective_timeout = self._effective_timeout(request, budget)
             effective_max_urls = self._effective_max_urls(strategy, request, budget)
 
-            urls = await asyncio.wait_for(
-                self._get_relevant_urls(expanded_queries, strategy, request, effective_max_urls),
+            urls, search_providers = await asyncio.wait_for(
+                self._get_relevant_urls(
+                    expanded_queries,
+                    strategy,
+                    request,
+                    effective_max_urls,
+                ),
                 timeout=effective_timeout,
             )
 
@@ -387,6 +393,7 @@ class InternetCapabilityService:
                 degraded=degraded,
                 warnings=warnings,
                 execution_context=execution_context,
+                search_providers=search_providers,
             )
 
         except asyncio.TimeoutError:
@@ -415,6 +422,7 @@ class InternetCapabilityService:
                 degraded=True,
                 warnings=warnings,
                 execution_context=execution_context,
+                search_providers=search_providers,
             )
 
         except PermissionError as exc:
@@ -441,6 +449,7 @@ class InternetCapabilityService:
                 degraded=True,
                 warnings=warnings,
                 execution_context=execution_context,
+                search_providers=search_providers,
                 status="permission_denied",
             )
 
@@ -469,6 +478,7 @@ class InternetCapabilityService:
                 degraded=True,
                 warnings=warnings,
                 execution_context=execution_context,
+                search_providers=search_providers,
                 status="error",
             )
 
@@ -478,7 +488,7 @@ class InternetCapabilityService:
         strategy: Mapping[str, Any],
         request: InternetSearchRequest,
         max_urls: int,
-    ) -> List[str]:
+    ) -> Tuple[List[str], List[str]]:
         """
         Fetch unique URLs from the configured search provider.
 
@@ -488,6 +498,7 @@ class InternetCapabilityService:
 
         client = self._resolve_search_client()
         all_urls: List[str] = []
+        providers: List[str] = []
 
         for search_query in list(queries)[: self.max_expanded_queries]:
             try:
@@ -497,6 +508,10 @@ class InternetCapabilityService:
                         max_results=max_urls,
                         time_range=strategy.get("time_range"),
                     )
+
+                provider = str(getattr(response, "provider", "") or "").strip()
+                if provider and provider not in {"none", "unknown"}:
+                    providers.append(provider)
 
                 for result in getattr(response, "results", []) or []:
                     url = self._normalize_url(getattr(result, "url", None))
@@ -516,7 +531,8 @@ class InternetCapabilityService:
                 )
 
         unique_urls = list(dict.fromkeys(all_urls))
-        return unique_urls[:max_urls]
+        unique_providers = list(dict.fromkeys(providers))
+        return unique_urls[:max_urls], unique_providers
 
     async def _crawl_many(
         self,
@@ -594,6 +610,7 @@ class InternetCapabilityService:
         degraded: bool,
         warnings: Sequence[str],
         execution_context: ExecutionContext,
+        search_providers: Sequence[str] = (),
         status: str = "ok",
     ) -> Dict[str, Any]:
         execution_time_ms = int((time.perf_counter() - start_time) * 1000)
@@ -677,11 +694,13 @@ class InternetCapabilityService:
                 "expanded_queries": list(expanded_queries)[:5],
                 "source_count": len(sources),
                 "degraded": degraded,
-                "provider": self._provider_name(),
+                "provider": self._provider_name(search_providers),
+                "search_providers": list(search_providers),
+                "crawl_provider": "crawl4ai",
                 "correlation_id": execution_context.correlation_id,
                 "request_id": execution_context.request_id,
             },
-            "provider": self._provider_name(),
+            "provider": self._provider_name(search_providers),
             "liveSearch": { # NextJS UI prefers liveSearch camelCase often, keep both for compatibility
                 "mode": mode,
                 "query": request.query,
@@ -1441,8 +1460,13 @@ class InternetCapabilityService:
 
         return normalized
 
-    def _provider_name(self) -> str:
-        return "crawl4ai"
+    def _provider_name(self, search_providers: Sequence[str] = ()) -> str:
+        providers = list(dict.fromkeys(search_providers))
+        if not providers:
+            return "none"
+        if len(providers) == 1:
+            return providers[0]
+        return "multi_search"
 
 
 def _normalize_domain_list(value: Any) -> Optional[List[str]]:
