@@ -11,7 +11,7 @@
  * - UI must not invent runtime compatibility or model availability.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -360,7 +360,7 @@ function SectionIcon({
   children,
   tone = 'primary',
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   tone?: 'primary' | 'secondary' | 'positive' | 'warning';
 }) {
   const toneClass =
@@ -387,7 +387,7 @@ function MetricTile({
   value,
   detail,
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   label: string;
   value: string;
   detail?: string;
