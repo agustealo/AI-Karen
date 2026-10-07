@@ -119,6 +119,25 @@ async def test_cortex_time_uses_time_query_without_inventing_parallel_tool() -> 
 
 
 @pytest.mark.asyncio
+async def test_weather_route_survives_intelligence_analyzer_failure() -> None:
+    decider = CortexExecutionDecider(force_graph=False)
+    decider._intelligence = SimpleNamespace(
+        analyze=AsyncMock(side_effect=RuntimeError("model unavailable"))
+    )
+
+    decision = await decider.decide(
+        _request("What's the weather in Detroit?")
+    )
+
+    assert decision.intent == "search.weather"
+    assert decision.topology is ExecutionTopology.DIRECT
+    assert decision.graph_required is False
+    assert decision.required_capabilities == ["web.search"]
+    assert decision.tool_requirements == ["web_search"]
+    assert decision.plugin_candidates == ["intelligent-search"]
+
+
+@pytest.mark.asyncio
 async def test_direct_time_capability_executes_authorized_plugin() -> None:
     executor = DirectCapabilityExecutor()
     request = _request("What time is it in Detroit?")
@@ -171,7 +190,7 @@ async def test_direct_time_capability_executes_authorized_plugin() -> None:
 
 
 @pytest.mark.asyncio
-async def test_weather_falls_back_to_authorized_web_tool_when_plugin_fails() -> None:
+async def test_weather_prefers_authorized_web_tool_before_plugin() -> None:
     executor = DirectCapabilityExecutor()
     request = _request("What's the weather in Detroit?")
     decision = await _weather_decision()
@@ -186,9 +205,12 @@ async def test_weather_falls_back_to_authorized_web_tool_when_plugin_fails() -> 
     plugin_service = SimpleNamespace(
         execute_plugin=AsyncMock(
             return_value=SimpleNamespace(
-                status=ExecutionStatus.FAILED,
-                result=None,
-                error="plugin unavailable",
+                status=ExecutionStatus.COMPLETED,
+                result={
+                    "status": "ok",
+                    "results": [{"snippet": "plugin should not run"}],
+                },
+                error=None,
             )
         )
     )
@@ -234,7 +256,8 @@ async def test_weather_falls_back_to_authorized_web_tool_when_plugin_fails() -> 
     assert result.source == "tool"
     assert result.source_id == "web_search"
     assert "61°F" in result.text
-    assert len(result.attempts) == 2
+    assert len(result.attempts) == 1
+    plugin_service.execute_plugin.assert_not_awaited()
 
     tool_input = tool_service.execute_tool.await_args.args[0]
     assert tool_input.tool_name == "web_search"
