@@ -185,6 +185,56 @@ type ModelStorageSettings = {
   env_override: boolean;
 };
 
+type ModelRuntimeTelemetry = {
+  resources: {
+    cpu_percent: number;
+    memory_percent: number;
+    memory_available_bytes: number;
+    memory_used_bytes: number;
+    disk_percent: number;
+    disk_free_bytes: number;
+    gpu_percent?: number | null;
+    gpu_memory_percent?: number | null;
+    process_count: number;
+    thread_count: number;
+  };
+  storage: {
+    disk_usage?: {
+      total_bytes?: number;
+      used_bytes?: number;
+      free_bytes?: number;
+      usage_percent?: number;
+    };
+    model_storage?: {
+      total_models?: number;
+      total_size_bytes?: number;
+      total_pinned?: number;
+      libraries?: number;
+      by_library?: Record<
+        string,
+        {
+          model_count?: number;
+          total_size_bytes?: number;
+          pinned_count?: number;
+          pinned_size_bytes?: number;
+        }
+      >;
+    };
+  };
+  workers: {
+    active_jobs: number;
+    failed_jobs: number;
+    max_concurrent_downloads: number;
+    available_slots: number;
+  };
+  security: {
+    runtime_admin_required: boolean;
+    trust_remote_code: boolean;
+    require_license_acceptance: boolean;
+    quarantine_failed_models: boolean;
+  };
+};
+
 type InstalledModelsResponse = {
   models: Array<
     RuntimeProviderModel & {
@@ -219,6 +269,7 @@ const ENDPOINTS = {
   discovery: '/api/models/discovery?force_refresh=false',
   recommendations: '/api/models/download/recommendations',
   storage: '/api/models/download/storage',
+  telemetry: '/api/models/download/telemetry',
   catalog: '/api/models/catalog?limit=24',
   validate: '/api/models/download/validate',
   download: '/api/models/download',
@@ -431,6 +482,7 @@ export default function ModelDownloads({
   const [retryingJobs, setRetryingJobs] = useState<Record<string, boolean>>({});
   const [recommendations, setRecommendations] = useState<RecommendedModelsResponse | null>(null);
   const [storageSettings, setStorageSettings] = useState<ModelStorageSettings | null>(null);
+  const [runtimeTelemetry, setRuntimeTelemetry] = useState<ModelRuntimeTelemetry | null>(null);
   const [modelsRootDraft, setModelsRootDraft] = useState('');
   const [savingModelsRoot, setSavingModelsRoot] = useState(false);
   const [installingRecommended, setInstallingRecommended] = useState<Record<string, boolean>>({});
@@ -455,6 +507,7 @@ export default function ModelDownloads({
       discoveryResult,
       recommendationsResult,
       storageResult,
+      telemetryResult,
     ] = await Promise.allSettled([
       apiClient.get<DownloadPolicy>(ENDPOINTS.policy),
       apiClient.get<{ policy: DownloadPolicy; channels: DownloadChannel[] }>(
@@ -465,6 +518,7 @@ export default function ModelDownloads({
       apiClient.get<DiscoverySnapshot>(ENDPOINTS.discovery),
       apiClient.get<RecommendedModelsResponse>(ENDPOINTS.recommendations),
       apiClient.get<ModelStorageSettings>(ENDPOINTS.storage),
+      apiClient.get<ModelRuntimeTelemetry>(ENDPOINTS.telemetry),
     ]);
 
     const nextErrors: EndpointErrors = {};
@@ -524,6 +578,10 @@ export default function ModelDownloads({
     if (storageResult.status === 'fulfilled') {
       setStorageSettings(storageResult.value);
       setModelsRootDraft(storageResult.value.models_root);
+    }
+
+    if (telemetryResult.status === 'fulfilled') {
+      setRuntimeTelemetry(telemetryResult.value);
     }
 
     setEndpointErrors(nextErrors);
@@ -656,6 +714,15 @@ export default function ModelDownloads({
       ? 'Ready'
       : `${recommendations.essential_installed}/${recommendations.essential_total} ready`
     : 'Loading';
+
+  const resourceSummary = runtimeTelemetry?.resources;
+  const storageSummary = runtimeTelemetry?.storage;
+  const workerSummary = runtimeTelemetry?.workers;
+  const securitySummary = runtimeTelemetry?.security;
+  const modelStorageBytes =
+    storageSummary?.model_storage?.total_size_bytes ?? 0;
+  const diskFreeBytes =
+    storageSummary?.disk_usage?.free_bytes ?? resourceSummary?.disk_free_bytes ?? 0;
 
   const hasEndpointErrors = Object.keys(endpointErrors).length > 0;
   const channelBlocked = isAdminOnlyChannelBlocked(currentChannel, adminMode);
