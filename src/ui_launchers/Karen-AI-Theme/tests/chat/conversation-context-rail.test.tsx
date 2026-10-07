@@ -75,7 +75,7 @@ describe('ConversationContextRail', () => {
       />,
     );
 
-    expect(screen.getByText('Needs you')).toBeTruthy();
+    expect(screen.getByText('Human attention')).toBeTruthy();
     expect(
       screen.getByText(/more than one unfinished thread is plausible/i),
     ).toBeTruthy();
@@ -136,7 +136,7 @@ describe('ConversationContextRail', () => {
       />,
     );
 
-    expect(screen.getByText('Needs you')).toBeTruthy();
+    expect(screen.getByText('Human attention')).toBeTruthy();
     expect(
       screen.getByText(/external action is waiting for your decision/i),
     ).toBeTruthy();
@@ -176,7 +176,7 @@ describe('ConversationContextRail', () => {
       />,
     );
 
-    expect(screen.getByText('Needs you')).toBeTruthy();
+    expect(screen.getByText('Human attention')).toBeTruthy();
     expect(
       screen.getByText(/approval state is unavailable/i),
     ).toBeTruthy();
