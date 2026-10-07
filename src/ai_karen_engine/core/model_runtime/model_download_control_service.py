@@ -11,7 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
-from ai_karen_engine.config.config_asset_loaders import load_model_runtime_discovery_config
+from ai_karen_engine.config.config_asset_loaders import (
+    load_model_download_recommendations,
+    load_model_runtime_discovery_config,
+)
+from ai_karen_engine.config.config_manager import get_config_value, update_config
 from ai_karen_engine.config.model_download import (
     ModelDownloadWorkerSettings,
     load_model_download_worker_settings,
@@ -43,6 +47,16 @@ def _utc_now() -> str:
 
 
 def _load_orchestrator_settings() -> dict[str, Any]:
+    """Load canonical persisted model-download runtime settings.
+
+    The current config manager owns mutable installation-wide settings. The
+    legacy config_assets/settings.json path remains read-only compatibility
+    input for older installations.
+    """
+    configured = get_config_value("model_download", default={})
+    if isinstance(configured, dict) and configured:
+        return dict(configured)
+
     settings_path = Path("config_assets/settings.json")
     if not settings_path.exists():
         return {}
@@ -243,6 +257,15 @@ class ModelDownloadControlService:
                 model_families=("transformers", "causal-lm"),
                 modalities=("text",),
             ),
+            "core_spacy": ModelDownloadChannel(
+                id="core_spacy",
+                label="spaCy Language Models",
+                group="core_runtime",
+                storage_key="spacy",
+                description="spaCy pipelines used by Karen's linguistic intelligence layer.",
+                model_families=("spacy",),
+                modalities=("text",),
+            ),
             "core_embeddings": ModelDownloadChannel(
                 id="core_embeddings",
                 label="Embeddings",
@@ -419,6 +442,8 @@ class ModelDownloadControlService:
         tags = {str(tag).lower() for tag in (metadata.get("tags") or []) if str(tag).strip()}
         model_format = str(metadata.get("model_format") or "").lower()
         capabilities = {str(cap).lower() for cap in (metadata.get("capabilities") or []) if str(cap).strip()}
+        if source_family == "spacy" or "spacy" in tags:
+            return self._channels["core_spacy"]
         if model_format == "gguf" or "gguf" in tags:
             return self._channels["core_gguf_external"]
         if source_family in {"diffusers", "stable-diffusion", "flux"} or {"image-generation", "text-to-image"} & tags:
@@ -437,6 +462,9 @@ class ModelDownloadControlService:
 
     def _build_install_path(self, channel: ModelDownloadChannel, model_id: str, revision: Optional[str]) -> Path:
         owner, repo = model_id.split("/", 1)
+        if channel.id == "core_spacy":
+            # SpacyAnalyzer resolves models/spacy/<pipeline-name> directly.
+            return self.models_root / channel.storage_key / repo
         return self.models_root / channel.storage_key / f"{owner}--{repo}" / (revision or "main")
 
     def _job_payload(self, row: Mapping[str, Any]) -> dict[str, Any]:
@@ -1042,6 +1070,93 @@ class ModelDownloadControlService:
     def _safe_remove_tree(path: Path) -> None:
         if path.exists():
             shutil.rmtree(path, ignore_errors=True)
+
+    async def get_recommendations(self) -> dict[str, Any]:
+        """Return config-driven first-run recommendations with live install truth."""
+        config = load_model_download_recommendations()
+        recommendations: list[dict[str, Any]] = []
+        for raw in config.get("recommendations") or []:
+            if not isinstance(raw, Mapping):
+                continue
+            item = dict(raw)
+            model_id = str(item.get("model_id") or "").strip()
+            if not model_id:
+                continue
+            entry = await self._orchestrator.snapshot_registry_entry(model_id)
+            install_path = str((entry or {}).get("install_path") or "")
+            installed = bool(entry and install_path and Path(install_path).exists())
+            item["installed"] = installed
+            item["install_path"] = install_path or None
+            item["status"] = "installed" if installed else "available"
+            recommendations.append(item)
+        essential = [item for item in recommendations if item.get("tier") == "essential"]
+        return {
+            "recommendations": recommendations,
+            "essential_ready": bool(essential) and all(item["installed"] for item in essential),
+            "essential_installed": sum(1 for item in essential if item["installed"]),
+            "essential_total": len(essential),
+        }
+
+    async def get_storage_settings(self) -> dict[str, Any]:
+        return {
+            "models_root": str(self.models_root),
+            "runtime_registry_root": str(self.runtime_registry_root),
+            "registry_path": str(self._orchestrator.registry_path),
+            "env_override": bool(os.getenv("KAREN_MODELS_ROOT")),
+        }
+
+    async def update_models_root(self, requested_root: str) -> dict[str, Any]:
+        """Change the canonical model library for future downloads safely."""
+        value = str(requested_root or "").strip()
+        if not value:
+            raise ModelOrchestratorError(E_INVALID, "Model library folder is required")
+
+        active_jobs = await self._repository.list_jobs(limit=200)
+        active = [
+            row for row in active_jobs
+            if str(row.get("status") or "") in {
+                "queued", "running", "promoting", "paused", "pause_requested"
+            }
+        ]
+        if active:
+            raise ModelOrchestratorError(
+                E_PERM,
+                "Model library folder cannot change while downloads are active",
+                {"active_jobs": len(active)},
+            )
+
+        target = Path(value).expanduser()
+        if not target.is_absolute():
+            target = (Path.cwd() / target).resolve()
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            probe = target / ".karen-write-test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+        except OSError as exc:
+            raise ModelOrchestratorError(
+                E_DISK,
+                "Model library folder is not writable",
+                {"path": str(target), "error": str(exc)},
+            ) from exc
+
+        self.models_root = target
+        self._orchestrator.models_root = target
+        if hasattr(self._discovery_service, "set_primary_root"):
+            self._discovery_service.set_primary_root(target)
+
+        update_config(
+            {
+                "model_download": {
+                    "models_root": str(target),
+                    "runtime_registry_root": str(self.runtime_registry_root),
+                    "registry_path": str(self._orchestrator.registry_path),
+                    "max_concurrent_downloads": self._policy.max_concurrent_downloads,
+                }
+            }
+        )
+        logger.info("model_download_root_updated models_root=%s", target)
+        return await self.get_storage_settings()
 
     async def get_installed_models(self, force_refresh: bool = False) -> dict[str, Any]:
         models = await self._discovery_service.discover_all_models(force_refresh=force_refresh)
