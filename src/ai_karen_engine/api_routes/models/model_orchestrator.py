@@ -50,7 +50,11 @@ class ModelDownloadRequest(BaseModel):
     """Request payload for the canonical model-download control plane."""
 
     model_id: str = Field(..., description="Model identifier in owner/repo form")
-    revision: Optional[str] = Field(None, description="Model revision or commit hash")
+    revision: Optional[str] = Field(None, description="User-facing model revision/install alias")
+    validated_revision: Optional[str] = Field(
+        None,
+        description="Immutable model revision whose license/access terms were reviewed",
+    )
     channel_id: Optional[str] = Field(None, description="Download channel identifier")
     include_patterns: Optional[List[str]] = Field(None, description="File patterns to include")
     exclude_patterns: Optional[List[str]] = Field(None, description="File patterns to exclude")
