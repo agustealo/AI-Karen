@@ -609,6 +609,8 @@ class ModelOrchestratorService:
                 else (previous or {}).get("description")
             ),
         }
+        if entry.get("gated") is None:
+            entry.pop("gated", None)
         await self.replace_registry_entry(req.model_id, entry)
 
         return DownloadResult(
