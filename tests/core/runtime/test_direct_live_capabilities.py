@@ -923,11 +923,16 @@ def test_freshness_contractions_and_right_now_clock_forms_route_live() -> None:
         "What's the latest Python release?"
     )
     latest_news = resolve_capability_decision("What's the latest news?")
+    latest_news_about = resolve_capability_decision(
+        "What's the latest news about Ukraine?"
+    )
     right_now = resolve_capability_decision("What time is it right now?")
 
     assert latest_release.intent == "search.general"
     assert latest_release.requires_live_data is True
     assert latest_news.intent == "search.general"
     assert latest_news.requires_live_data is True
+    assert latest_news_about.intent == "search.general"
+    assert latest_news_about.requires_live_data is True
     assert right_now.intent == "time.current"
     assert right_now.requires_live_data is True
