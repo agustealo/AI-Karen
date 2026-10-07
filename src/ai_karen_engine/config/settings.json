@@ -149,47 +149,5 @@
     "fallback": {
       "last_model": "auto"
     }
-  },
-  "search": {
-    "duckduckgo": {
-      "enabled": true,
-      "priority": 100
-    },
-    "searxng": {
-      "enabled": true,
-      "priority": 95
-    },
-    "brave_search": {
-      "enabled": false,
-      "priority": 92,
-      "api_url": "https://api.search.brave.com/res/v1/web/search"
-    },
-    "brave_search_free": {
-      "enabled": true,
-      "priority": 91
-    },
-    "tavily": {
-      "enabled": false,
-      "api_key": null,
-      "priority": 90
-    },
-    "mojeek": {
-      "enabled": true,
-      "priority": 88
-    },
-    "wikipedia": {
-      "enabled": true,
-      "priority": 85
-    },
-    "startpage": {
-      "enabled": true,
-      "priority": 87
-    },
-    "google_custom_search": {
-      "enabled": false,
-      "api_key": null,
-      "cx_id": null,
-      "priority": 80
-    }
   }
 }
