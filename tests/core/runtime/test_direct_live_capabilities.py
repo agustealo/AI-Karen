@@ -551,3 +551,13 @@ def test_runtime_search_config_overrides_manifest_bootstrap_defaults() -> None:
     assert service.provider_registry.is_enabled("duckduckgo") is False
     assert service.provider_registry.is_enabled("wikipedia") is True
     assert service.provider_registry.select_provider() == "wikipedia"
+
+
+def test_web_search_defaults_are_registered_in_central_config() -> None:
+    from ai_karen_engine.config.config_manager import DEFAULT_CONFIG
+
+    search = DEFAULT_CONFIG["search"]
+
+    assert search["duckduckgo"]["enabled"] is True
+    assert search["duckduckgo"]["priority"] == 100
+    assert "searxng" in search
