@@ -850,3 +850,32 @@ def test_noun_first_freshness_questions_route_live_without_conceptual_hijacks() 
     assert bitcoin_price.requires_live_data is True
     assert version_control.intent == "general.chat"
     assert version_control.requires_tool is False
+
+
+def test_first_run_config_honors_search_environment_override_without_persisting_it(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    from ai_karen_engine.config import config_manager as config_module
+
+    config_path = tmp_path / "fresh-config.json"
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(config_module, "BACKUP_PATH", config_path.with_suffix(".bak"))
+    monkeypatch.setenv(
+        "KARI_SEARCH",
+        json.dumps(
+            {
+                "duckduckgo": {"enabled": False, "priority": 1},
+                "wikipedia": {"enabled": True, "priority": 500},
+            }
+        ),
+    )
+
+    loaded = config_module.load_config()
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert loaded["search"]["duckduckgo"]["enabled"] is False
+    assert loaded["search"]["wikipedia"]["priority"] == 500
+    assert persisted["search"]["duckduckgo"]["enabled"] is True
+    assert persisted["search"]["wikipedia"]["priority"] == 85
