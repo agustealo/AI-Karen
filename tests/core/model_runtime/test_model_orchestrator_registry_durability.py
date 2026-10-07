@@ -147,7 +147,7 @@ async def test_legacy_local_entry_remains_readable_offline_and_governed_refreshe
         downloads=10,
         likes=2,
         tags=["text-generation"],
-        cardData={"license": "custom", "model_description": "gated test"},
+        card_data={"license": "custom", "model_description": "gated test"},
         gated=True,
         sha="remote-sha",
     )
@@ -193,7 +193,7 @@ async def test_refresh_remote_overrides_cached_ungated_status(
         downloads=10,
         likes=2,
         tags=["text-generation"],
-        cardData={"license": "custom", "model_description": "now gated"},
+        card_data={"license": "custom", "model_description": "now gated"},
         gated=True,
         sha="fresh-sha",
     )
@@ -209,3 +209,39 @@ async def test_refresh_remote_overrides_cached_ungated_status(
     assert cached.gated is False
     assert refreshed.gated is True
     assert refreshed.revision == "fresh-sha"
+
+
+@pytest.mark.asyncio
+async def test_remote_model_info_reads_canonical_huggingface_card_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    remote = SimpleNamespace(
+        siblings=[],
+        library_name="transformers",
+        last_modified=None,
+        downloads=1,
+        likes=1,
+        tags=[],
+        card_data={
+            "license": "apache-2.0",
+            "model_description": "canonical metadata",
+        },
+        gated=False,
+        sha="canonical-sha",
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_hf_api",
+        lambda: SimpleNamespace(model_info=lambda **_: remote),
+    )
+
+    info = await service.get_model_info(
+        "test-owner/test-model",
+        refresh_remote=True,
+    )
+
+    assert info.license == "apache-2.0"
+    assert info.description == "canonical metadata"
+    assert info.revision == "canonical-sha"
