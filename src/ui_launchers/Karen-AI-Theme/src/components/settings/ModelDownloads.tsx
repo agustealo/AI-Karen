@@ -208,18 +208,18 @@ const retryInstallRevision = (
   }
 
   const normalizedPath = String(job.install_path || '')
-    .replace(/\\\\/g, '/')
+    .replace(/\\/g, '/')
     .replace(/\/+$/, '');
   const normalizedRoot = String(modelsRoot || '')
-    .replace(/\\\\/g, '/')
+    .replace(/\\/g, '/')
     .replace(/\/+$/, '');
   if (!normalizedPath || !normalizedRoot) {
-    return null;
+    throw new Error('The original download location cannot be verified. Revalidate the model through Advanced install options.');
   }
 
   const rootPrefix = `${normalizedRoot}/`;
   if (!normalizedPath.startsWith(rootPrefix)) {
-    return null;
+    throw new Error('The model library folder has changed since this job. Revalidate the model through Advanced install options before retrying.');
   }
 
   const [owner, repository] = job.model_id.split('/', 2);
@@ -236,7 +236,7 @@ const retryInstallRevision = (
   const relativePath = normalizedPath.slice(rootPrefix.length);
   const installPrefix = `${storageKey}/${modelDirectory}/`;
   if (!relativePath.startsWith(installPrefix)) {
-    return null;
+    throw new Error('The original model install alias cannot be verified. Revalidate the model through Advanced install options.');
   }
 
   const installAlias = relativePath.slice(installPrefix.length);
@@ -1067,6 +1067,9 @@ export default function ModelDownloads({
     async (job: DownloadJob) => {
       setRetryingJobs((current) => ({ ...current, [job.job_id]: true }));
       try {
+        if (!retryValidatedRevision(job) && job.license_accepted) {
+          throw new Error('This older download used a mutable model revision. Review the current license and access terms through Advanced install options before retrying.');
+        }
         await apiClient.post(ENDPOINTS.download, {
           model_id: job.model_id,
           revision: retryInstallRevision(job, storageSettings?.models_root),
