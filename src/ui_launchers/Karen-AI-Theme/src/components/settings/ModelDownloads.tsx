@@ -1499,8 +1499,8 @@ export default function ModelDownloads({
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <Card className="overflow-hidden border-border/50 shadow-sm">
+      <div className="grid gap-6 lg:grid-cols-12">
+        <Card className="overflow-hidden border-border/50 shadow-sm lg:col-span-7">
           <CardHeader className="border-b border-border/40 bg-muted/10">
             <div className="flex items-start gap-3">
               <SectionIcon>
@@ -1647,15 +1647,19 @@ export default function ModelDownloads({
           </CardContent>
         </Card>
 
-        <Card className="border-border/50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <Download className="h-4 w-4 text-primary" aria-hidden="true" />
-              Start Download
-            </CardTitle>
-            <CardDescription>
-              Validate first, then queue the model through the control plane.
-            </CardDescription>
+        <Card className="overflow-hidden border-border/50 shadow-sm lg:col-span-5">
+          <CardHeader className="border-b border-border/40 bg-muted/10">
+            <div className="flex items-start gap-3">
+              <SectionIcon tone="secondary">
+                <Download className="h-5 w-5" aria-hidden="true" />
+              </SectionIcon>
+              <div>
+                <CardTitle className="text-lg">Install a Model</CardTitle>
+                <CardDescription className="mt-1">
+                  Validate compatibility, license, runtime, and destination before queueing.
+                </CardDescription>
+              </div>
+            </div>
           </CardHeader>
 
           <CardContent className="space-y-4">
@@ -1681,12 +1685,16 @@ export default function ModelDownloads({
 
             <div className="space-y-2">
               <Label htmlFor="model-id">Hugging Face model ID</Label>
-              <Input
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                <Input
                 id="model-id"
-                placeholder="owner/repo"
+                className="pl-9 font-mono text-xs"
+                placeholder="owner/repository"
                 value={modelId}
                 onChange={(event) => setModelId(event.target.value)}
-              />
+                />
+              </div>
             </div>
 
             <div className="flex items-start justify-between gap-4 rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
@@ -1903,7 +1911,7 @@ export default function ModelDownloads({
                 <div
                   key={job.job_id}
                   className={[
-                    'rounded-xl border p-4 shadow-sm transition-colors',
+                    'relative overflow-hidden rounded-xl border p-4 shadow-sm transition-colors',
                     statusTone(job.status),
                   ].join(' ')}
                 >
@@ -2045,7 +2053,7 @@ export default function ModelDownloads({
                   {vllmInstalledModels.map((model, idx) => (
                     <div
                       key={`${model.id}-${idx}`}
-                      className="rounded-xl border border-border/50 bg-muted/20 p-3"
+                      className="rounded-xl border border-border/50 bg-muted/10 p-3 shadow-sm transition-colors hover:bg-muted/20"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1 space-y-1">
@@ -2104,7 +2112,7 @@ export default function ModelDownloads({
                   {otherInstalledModels.map((model, idx) => (
                     <div
                       key={`${model.id}-${idx}`}
-                      className="rounded-xl border border-border/50 bg-muted/20 p-3"
+                      className="rounded-xl border border-border/50 bg-muted/10 p-3 shadow-sm transition-colors hover:bg-muted/20"
                     >
 
                       <div className="flex items-start justify-between gap-2">
@@ -2230,7 +2238,7 @@ export default function ModelDownloads({
                       {channelsInGroup.map((channel) => (
                         <div
                           key={channel.id}
-                          className="rounded-lg border border-border/40 bg-muted/10 p-2 text-xs"
+                          className="rounded-xl border border-border/40 bg-muted/10 p-3 text-xs transition-colors hover:bg-muted/20"
                         >
                           <div className="flex items-center justify-between font-semibold">
                             <span>{channel.label}</span>
