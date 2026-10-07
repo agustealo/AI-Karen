@@ -1117,9 +1117,11 @@ export default function ModelDownloads({
       if (licenseRequired && !licenseAccepted) {
         toast({
           title: 'Review and accept this model license first',
-          description: item.license_url
-            ? `Open the ${item.license} license from this model card, then accept it before installation.`
-            : `${item.label} reports the ${item.license} license. Accept that license on this model card before installation.`,
+          description: item.license
+            ? item.license_url
+              ? `Open the ${item.license} license from this model card, then accept it before installation.`
+              : `${item.label} reports the ${item.license} license. Accept that license on this model card before installation.`
+            : 'Review the model source terms, then accept the required gated-access terms before installation.',
           variant: 'destructive',
         });
         return;
@@ -1193,8 +1195,8 @@ export default function ModelDownloads({
     );
     if (missingAcceptances.length > 0) {
       toast({
-        title: 'Review the essential model licenses first',
-        description: `Accept the listed license on each essential model card before installing all essentials: ${missingAcceptances
+        title: 'Review the essential model terms first',
+        description: `Accept the required license or gated-access terms on each essential model card before installing all essentials: ${missingAcceptances
           .map((item) => item.label)
           .join(', ')}.`,
         variant: 'destructive',
@@ -2096,7 +2098,9 @@ export default function ModelDownloads({
                   </div>
                   <div className="flex items-center gap-2">
                     <Label htmlFor="accept-model-license" className="text-xs font-medium">
-                      I accept this license
+                      {validation.metadata.license
+                        ? `I accept the ${String(validation.metadata.license)} license`
+                        : 'I accept these required model access terms'}
                     </Label>
                     <Switch
                       id="accept-model-license"
