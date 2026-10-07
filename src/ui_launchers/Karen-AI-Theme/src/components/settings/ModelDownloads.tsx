@@ -1681,25 +1681,46 @@ export default function ModelDownloads({
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-lg">
                 <CheckCircle2 className="h-4 w-4 text-primary" aria-hidden="true" />
-                Discovery Snapshot
+                Local Model Health
               </CardTitle>
               <CardDescription>
-                Real-time backend inventory scan progress.
+                What Karen can currently see in the local model inventory.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <div className="text-xs font-semibold">Discovery Progress</div>
-                <pre className="overflow-auto rounded-lg bg-muted/50 p-3 text-[10px] font-mono leading-relaxed">
-                  {JSON.stringify(discoveryProgress, null, 2)}
-                </pre>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {Object.entries(discoveryStats)
+                  .slice(0, 6)
+                  .map(([key, value]) => (
+                    <div
+                      key={key}
+                      className="rounded-lg border border-border/50 bg-muted/20 p-3"
+                    >
+                      <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {key.replace(/_/g, ' ')}
+                      </div>
+                      <div className="mt-1 text-sm font-semibold">
+                        {typeof value === 'object'
+                          ? 'Available'
+                          : String(value ?? 'Unknown')}
+                      </div>
+                    </div>
+                  ))}
               </div>
-              <div className="space-y-2">
-                <div className="text-xs font-semibold">Discovery Statistics</div>
-                <pre className="overflow-auto rounded-lg bg-muted/50 p-3 text-[10px] font-mono leading-relaxed">
-                  {JSON.stringify(discoveryStats, null, 2)}
-                </pre>
-              </div>
+
+              <details className="rounded-lg border border-border/50 bg-muted/10">
+                <summary className="cursor-pointer px-3 py-2 text-xs font-semibold">
+                  Technical discovery details
+                </summary>
+                <div className="space-y-3 border-t border-border/40 p-3">
+                  <pre className="overflow-auto rounded-lg bg-background/50 p-3 text-[10px] font-mono leading-relaxed">
+                    {JSON.stringify(discoveryProgress, null, 2)}
+                  </pre>
+                  <pre className="overflow-auto rounded-lg bg-background/50 p-3 text-[10px] font-mono leading-relaxed">
+                    {JSON.stringify(discoveryStats, null, 2)}
+                  </pre>
+                </div>
+              </details>
             </CardContent>
           </Card>
 
