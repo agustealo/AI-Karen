@@ -392,6 +392,48 @@ async def list_models(
         raise HTTPException(status_code=500, detail="Failed to list models") from exc
 
 
+@router.get("/catalog", response_model=List[ModelSummaryResponse])
+async def search_model_catalog(
+    query: Optional[str] = Query(None, min_length=2, max_length=200),
+    limit: int = Query(24, ge=1, le=100),
+    sort: str = Query("downloads"),
+    current_user: Any = Depends(get_current_user),
+):
+    """Browse the canonical remote/local model catalog without requiring an owner.
+
+    The orchestrator remains the source of truth for remote Hugging Face discovery
+    and local registry merging. This route only exposes a consumer-friendly
+    search surface over that existing authority.
+    """
+    del current_user
+    try:
+        models = await get_orchestrator_service().list_models(
+            owner="",
+            limit=limit,
+            search=(query or "").strip() or None,
+            sort=sort,
+            direction=-1,
+        )
+        return [
+            ModelSummaryResponse(
+                model_id=model.model_id,
+                last_modified=model.last_modified,
+                likes=model.likes,
+                downloads=model.downloads,
+                storage_key=model.storage_key,
+                tags=model.tags,
+                total_size=model.total_size,
+                description=model.description,
+            )
+            for model in models
+        ]
+    except ModelOrchestratorError as exc:
+        raise handle_orchestrator_error(exc) from exc
+    except Exception as exc:
+        logger.exception("Failed to search model catalog")
+        raise HTTPException(status_code=500, detail="Failed to search model catalog") from exc
+
+
 @router.get("/info/{model_id:path}", response_model=ModelInfoResponse)
 async def get_model_info(
     model_id: str,
