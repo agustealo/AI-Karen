@@ -419,7 +419,7 @@ class ModelOrchestratorService:
     ) -> ModelInfo:
         owner, repo = self._split_model_id(model_id)
         entry = self._registry.get(model_id)
-        if not refresh_remote and entry is not None and "gated" in entry:
+        if not refresh_remote and entry is not None:
             files = list(entry.get("files") or [])
             total_size = int(entry.get("total_size") or 0)
             return ModelInfo(
