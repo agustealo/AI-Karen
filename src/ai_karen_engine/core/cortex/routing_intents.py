@@ -28,6 +28,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"\blook\s+online\s+(?:for|at)\b",
             r"^find\s+(?:the\s+)?(?:current|latest|today'?s?)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|updates?|results?|score|price|release|version|status|information)[?!.]*$",
             r"^(?:what|which)\s+is\s+the\s+(?:current|latest)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|update|result|score|price|release|version|status)[?!.]*$",
+            r"^(?:what|which)\s+is\s+the\s+(?:current|latest)\s+(?:news|update|result|score|price|release|version|status)\s+(?:of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3}[?!.]*$",
             r"^(?:latest|current|today'?s?)\s+(?:news|updates?|results?|score|price|release|version|status)[?!.]*$",
         ],
         "required_capability": "web.search",
@@ -101,14 +102,21 @@ def _looks_like_location_phrase(value: str) -> bool:
     if len(tokens) == 1:
         return (
             tokens[0].lower() not in _CONCEPTUAL_TIME_SUBJECTS
-            and tokens[0][:1].isupper()
+            and (
+                tokens[0][:1].isupper()
+                or tokens[0][:1].lower() == tokens[0][:1].upper()
+            )
         )
 
     # Comma-delimited place strings and title-cased proper names are positive
     # location shapes. Lowercase conceptual phrases are deliberately rejected.
     if "," in raw:
         return True
-    return all(token[:1].isupper() for token in tokens)
+    return all(
+        token[:1].isupper()
+        or token[:1].lower() == token[:1].upper()
+        for token in tokens
+    )
 
 
 def _looks_like_shorthand_time(query: str) -> bool:
