@@ -122,7 +122,7 @@ def test_registry_writer_contract_is_candidate_first_and_crash_durable() -> None
 
 
 @pytest.mark.asyncio
-async def test_local_entry_without_gate_provenance_refreshes_remote_metadata(
+async def test_legacy_local_entry_remains_readable_offline_and_governed_refreshes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -134,6 +134,11 @@ async def test_local_entry_without_gate_provenance_refreshes_remote_metadata(
             "license": "custom",
         },
     )
+
+    local_info = await service.get_model_info("test-owner/test-model")
+    assert local_info.gated is False
+    assert local_info.license == "custom"
+    assert local_info.revision == "main"
 
     remote = SimpleNamespace(
         siblings=[],
@@ -149,11 +154,14 @@ async def test_local_entry_without_gate_provenance_refreshes_remote_metadata(
     api = SimpleNamespace(model_info=lambda **_: remote)
     monkeypatch.setattr(service, "_get_hf_api", lambda: api)
 
-    info = await service.get_model_info("test-owner/test-model")
+    refreshed = await service.get_model_info(
+        "test-owner/test-model",
+        refresh_remote=True,
+    )
 
-    assert info.gated is True
-    assert info.license == "custom"
-    assert info.revision == "remote-sha"
+    assert refreshed.gated is True
+    assert refreshed.license == "custom"
+    assert refreshed.revision == "remote-sha"
 
 
 def test_unknown_gate_provenance_is_not_persisted_as_false() -> None:
