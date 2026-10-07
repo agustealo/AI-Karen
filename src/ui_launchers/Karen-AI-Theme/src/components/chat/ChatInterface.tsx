@@ -1009,6 +1009,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   const sessionIdRef = useRef(currentSession?.id || createSessionId());
   const submitInFlightRef = useRef(false);
   const restoredSessionNoticeRef = useRef<string | null>(null);
+  const durableCopyTranscriptRef = useRef<{ conversationId: string; messages: ChatMessage[] } | null>(null);
   const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const { pendingMessages, popMessage } = useMessageInjection();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -2028,6 +2029,32 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     handleSubmit();
   }, [handleSubmit]);
 
+  const fetchDurableTranscriptForTransfer = useCallback(async (): Promise<ChatMessage[] | null> => {
+    if (!currentSession) {
+      return null;
+    }
+
+    try {
+      const conversation = await apiClient.get<ConversationResponse>(
+        `/api/conversations/${currentSession.id}`,
+      );
+      return (conversation.messages || []).map(normalizeConversationMessage);
+    } catch (error) {
+      console.warn('Durable transcript confirmation failed:', error);
+      toast({
+        title: 'Transcript unavailable',
+        description:
+          'KAREN could not confirm the durable server transcript, so nothing was exported or copied.',
+        variant: 'destructive',
+      });
+      return null;
+    }
+  }, [currentSession, toast]);
+
+  useEffect(() => {
+    durableCopyTranscriptRef.current = null;
+  }, [currentSession?.id, messages]);
+
   const handleExportCurrentChat = useCallback(async () => {
     if (!currentSession) {
       toast({
@@ -2035,6 +2062,11 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         description: 'Select or start a chat before exporting.',
         variant: 'destructive',
       });
+      return;
+    }
+
+    const durableMessages = await fetchDurableTranscriptForTransfer();
+    if (!durableMessages) {
       return;
     }
 
@@ -2052,7 +2084,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       '',
     ];
 
-    for (const message of messages) {
+    for (const message of durableMessages) {
       const roleLabel = message.role === 'assistant' ? 'Karen' : message.role === 'user' ? 'User' : 'System';
       const when = message.timestamp instanceof Date
         ? message.timestamp.toISOString()
@@ -2079,7 +2111,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       title: 'Chat exported',
       description: `Saved ${slug}.md`,
     });
-  }, [currentSession, messages, toast]);
+  }, [currentSession, fetchDurableTranscriptForTransfer, toast]);
 
   const handleCopyChat = useCallback(async () => {
     if (!currentSession) {
@@ -2091,6 +2123,27 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       return;
     }
 
+    const preparedCopy = durableCopyTranscriptRef.current;
+    if (!preparedCopy || preparedCopy.conversationId !== currentSession.id) {
+      const durableMessages = await fetchDurableTranscriptForTransfer();
+      if (!durableMessages) {
+        return;
+      }
+
+      durableCopyTranscriptRef.current = {
+        conversationId: currentSession.id,
+        messages: durableMessages,
+      };
+      toast({
+        title: 'Transcript ready',
+        description: 'Choose Copy again to copy the confirmed server transcript.',
+      });
+      return;
+    }
+
+    const durableMessages = preparedCopy.messages;
+    durableCopyTranscriptRef.current = null;
+
     const lines: string[] = [
       `${currentSession.title || 'Chat Conversation'}`,
       '',
@@ -2099,7 +2152,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       '',
     ];
 
-    for (const message of messages) {
+    for (const message of durableMessages) {
       const roleLabel = message.role === 'assistant' ? 'Karen' : message.role === 'user' ? 'User' : 'System';
       const when = message.timestamp instanceof Date
         ? message.timestamp.toLocaleString()
@@ -2137,7 +2190,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       }
       document.body.removeChild(textArea);
     }
-  }, [currentSession, messages, toast]);
+  }, [currentSession, fetchDurableTranscriptForTransfer, toast]);
 
   // Handle external message injection (e.g. from plugins)
   useEffect(() => {
