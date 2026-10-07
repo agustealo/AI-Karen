@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "recommendations": [
+    {
+      "id": "spacy-english-core",
+      "model_id": "spacy/en_core_web_sm",
+      "label": "spaCy English Core",
+      "purpose": "Language parsing, entities, key phrases, sentence structure, and linguistic signals.",
+      "tier": "essential",
+      "channel_id": "core_spacy",
+      "expected_runtime": "spacy",
+      "approximate_size_bytes": 29360128,
+      "license": "MIT",
+      "capabilities": [
+        "linguistic-analysis",
+        "ner",
+        "parsing"
+      ],
+      "app_consumers": [
+        "SpacyAnalyzer"
+      ],
+      "recommended": true
+    },
+    {
+      "id": "distilbert-semantic-encoder",
+      "model_id": "distilbert/distilbert-base-uncased",
+      "label": "DistilBERT Semantic Encoder",
+      "purpose": "Local semantic encoding used by Karen's intelligence and memory signal pipeline.",
+      "tier": "essential",
+      "channel_id": "core_runtime_transformers",
+      "expected_runtime": "transformers_direct",
+      "approximate_size_bytes": 280000000,
+      "license": "Apache-2.0",
+      "include_patterns": [
+        "config.json",
+        "model.safetensors",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.txt"
+      ],
+      "capabilities": [
+        "semantic-encoding",
+        "embeddings"
+      ],
+      "app_consumers": [
+        "DistilBertSemanticEncoder"
+      ],
+      "recommended": true
+    },
+    {
+      "id": "qwen3-lightweight-chat",
+      "model_id": "Qwen/Qwen3-0.6B",
+      "label": "Qwen3 0.6B Local Chat",
+      "purpose": "Optional lightweight local chat model for basic offline responses and fallback coverage.",
+      "tier": "recommended",
+      "channel_id": "core_runtime_transformers",
+      "expected_runtime": "vllm",
+      "approximate_size_bytes": 1520000000,
+      "license": "Apache-2.0",
+      "capabilities": [
+        "chat",
+        "text-generation",
+        "local-inference"
+      ],
+      "app_consumers": [
+        "ChatRuntime"
+      ],
+      "recommended": true
+    }
+  ]
+}
