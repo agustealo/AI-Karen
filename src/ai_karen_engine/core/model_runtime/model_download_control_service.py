@@ -21,6 +21,9 @@ from ai_karen_engine.config.model_download import (
     load_model_download_worker_settings,
 )
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.runtime.platform_resource_service import (
+    get_platform_resource_service,
+)
 from ai_karen_engine.core.model_runtime.management.model_orchestrator_service import (
     DownloadRequest,
     E_INVALID,
@@ -1099,48 +1102,13 @@ class ModelDownloadControlService:
         }
 
     async def get_runtime_telemetry(self) -> dict[str, Any]:
-        """Aggregate existing canonical resource and model-storage truth for Settings."""
+        """Compose model-download telemetry from canonical platform and model owners."""
         await self.initialize()
 
-        resource_payload: dict[str, Any] = {
-            "available": False,
-            "cpu_percent": None,
-            "memory_percent": None,
-            "memory_available_bytes": None,
-            "memory_used_bytes": None,
-            "disk_percent": None,
-            "disk_free_bytes": None,
-            "gpu_percent": None,
-            "gpu_memory_percent": None,
-            "process_count": None,
-            "thread_count": None,
-        }
-        try:
-            # Optional monitoring must never become a hard dependency of the
-            # durable model-download authority or application boot path.
-            from ai_karen_engine.core.runtime.resource_monitor import (
-                monitor_resources_once,
-            )
-
-            resource_metrics = await monitor_resources_once()
-            resource_payload.update(
-                {
-                    "available": True,
-                    "cpu_percent": resource_metrics.cpu_percent,
-                    "memory_percent": resource_metrics.memory_percent,
-                    "memory_available_bytes": resource_metrics.memory_available,
-                    "memory_used_bytes": resource_metrics.memory_used,
-                    "disk_percent": resource_metrics.disk_percent,
-                    "disk_free_bytes": resource_metrics.disk_free,
-                    "gpu_percent": resource_metrics.gpu_percent,
-                    "gpu_memory_percent": resource_metrics.gpu_memory_percent,
-                    "process_count": resource_metrics.process_count,
-                    "thread_count": resource_metrics.thread_count,
-                }
-            )
-        except Exception as exc:
-            logger.debug("Optional model runtime resource telemetry unavailable: %s", exc)
-
+        resource_snapshot = await asyncio.to_thread(
+            get_platform_resource_service().snapshot,
+            disk_path=self.models_root,
+        )
         storage_monitor = ModelStorageMonitor(self.models_root)
         storage_summary = await asyncio.to_thread(storage_monitor.get_storage_summary)
         jobs = await self._repository.list_jobs(limit=200)
@@ -1161,7 +1129,7 @@ class ModelDownloadControlService:
         concurrency_limit = await self.get_global_concurrency_limit()
 
         return {
-            "resources": resource_payload,
+            "resources": resource_snapshot.as_dict(),
             "storage": storage_summary,
             "workers": {
                 "active_jobs": len(active_jobs),
