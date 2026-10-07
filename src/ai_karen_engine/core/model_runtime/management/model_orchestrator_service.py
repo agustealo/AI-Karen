@@ -412,7 +412,7 @@ class ModelOrchestratorService:
     async def get_model_info(self, model_id: str, revision: Optional[str] = None, **_: Any) -> ModelInfo:
         owner, repo = self._split_model_id(model_id)
         entry = self._registry.get(model_id)
-        if entry is not None:
+        if entry is not None and "gated" in entry:
             files = list(entry.get("files") or [])
             total_size = int(entry.get("total_size") or 0)
             return ModelInfo(
@@ -532,6 +532,41 @@ class ModelOrchestratorService:
         files, total_size = await asyncio.to_thread(self._walk_files, install_path)
         duration = time.perf_counter() - start
         previous = await self.snapshot_registry_entry(req.model_id)
+
+        remote_metadata: Optional[ModelInfo] = None
+        try:
+            api = self._get_hf_api()
+            remote = await asyncio.to_thread(
+                api.model_info,
+                repo_id=req.model_id,
+                revision=req.revision,
+            )
+            card_data = (
+                getattr(remote, "cardData", {})
+                if isinstance(getattr(remote, "cardData", None), dict)
+                else {}
+            )
+            remote_metadata = ModelInfo(
+                model_id=req.model_id,
+                owner=owner,
+                repository=repo,
+                storage_key=getattr(remote, "library_name", None) or storage_key,
+                last_modified=getattr(remote, "last_modified", None),
+                downloads=getattr(remote, "downloads", None),
+                likes=getattr(remote, "likes", None),
+                tags=list(getattr(remote, "tags", []) or []),
+                license=card_data.get("license"),
+                gated=bool(getattr(remote, "gated", False)),
+                description=card_data.get("model_description"),
+                revision=req.revision or getattr(remote, "sha", None),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Remote model metadata refresh failed after download for %s: %s",
+                req.model_id,
+                exc,
+            )
+
         entry = {
             "model_id": req.model_id,
             "owner": owner,
@@ -543,11 +578,36 @@ class ModelOrchestratorService:
             "total_size": total_size,
             "pinned": bool(req.pin),
             "last_modified": datetime.now(timezone.utc).isoformat(),
-            "downloads": int((previous or {}).get("downloads") or 0),
-            "likes": (previous or {}).get("likes"),
-            "tags": list((previous or {}).get("tags") or []),
-            "license": (previous or {}).get("license"),
-            "description": (previous or {}).get("description"),
+            "downloads": (
+                remote_metadata.downloads
+                if remote_metadata and remote_metadata.downloads is not None
+                else int((previous or {}).get("downloads") or 0)
+            ),
+            "likes": (
+                remote_metadata.likes
+                if remote_metadata
+                else (previous or {}).get("likes")
+            ),
+            "tags": (
+                list(remote_metadata.tags)
+                if remote_metadata
+                else list((previous or {}).get("tags") or [])
+            ),
+            "license": (
+                remote_metadata.license
+                if remote_metadata
+                else (previous or {}).get("license")
+            ),
+            "gated": (
+                remote_metadata.gated
+                if remote_metadata
+                else (previous or {}).get("gated")
+            ),
+            "description": (
+                remote_metadata.description
+                if remote_metadata
+                else (previous or {}).get("description")
+            ),
         }
         await self.replace_registry_entry(req.model_id, entry)
 
