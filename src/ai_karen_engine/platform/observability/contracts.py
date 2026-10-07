@@ -78,6 +78,8 @@ class EventType(str, Enum):
 
     # Learning / trajectory lineage
     LEARNING_RECORDING_FAILED = "learning.recording.failed"
+    LEARNING_FEATURE_SNAPSHOT_RECORDED = "learning.feature_snapshot.recorded"
+    LEARNING_DECISION_OBSERVATION_RECORDED = "learning.decision_observation.recorded"
 
 
 class ErrorCategory(str, Enum):
