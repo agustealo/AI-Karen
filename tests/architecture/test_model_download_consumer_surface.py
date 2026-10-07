@@ -26,8 +26,10 @@ def test_download_validation_resolves_metadata_even_with_explicit_channel() -> N
     assert "Metadata is consumer and policy truth" in source
     assert '"license": info.license' in source
     assert '"gated": bool(info.gated)' in source
+    assert '"resolved_revision": info.revision or revision or "main"' in source
     assert '"license_url": (' in source
-    assert 'f"https://huggingface.co/{model_id}"' in source
+    assert 'f"https://huggingface.co/{model_id}/tree/"' in source
+    assert "quote(str(info.revision or revision or 'main'), safe='')" in source
     assert '"total_size": info.total_size' in source
     assert '"description": info.description' in source
     assert "if channel is None:" in source
