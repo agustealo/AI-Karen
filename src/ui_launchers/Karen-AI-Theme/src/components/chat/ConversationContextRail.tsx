@@ -17,7 +17,6 @@ import {
   PlugZap,
   Route,
   ShieldAlert,
-  ShieldCheck,
   Sparkles,
   Wrench,
 } from 'lucide-react';
@@ -922,11 +921,15 @@ export default function ConversationContextRail(
 
   useEffect(() => {
     let cancelled = false;
+    if (!window.matchMedia('(min-width: 1280px)').matches) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setResourcesLoadState('loading');
 
     const refreshResources = async () => {
-      if (!cancelled && resourcesLoadState === 'idle') {
-        setResourcesLoadState('loading');
-      }
       try {
         const snapshot = await apiClient.get<PlatformResourceSnapshot>(
           '/api/system/resources',
@@ -952,7 +955,7 @@ export default function ConversationContextRail(
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [resourcesLoadState]);
+  }, []);
 
   const metadata = props.metadata || {};
   const runtime = normalizeRuntimeInsight(metadata);
