@@ -158,7 +158,13 @@ def _looks_like_location_first_weather(query: str) -> bool:
     )
     if not match:
         return False
-    return _looks_like_location_phrase(match.group("location"))
+    location = match.group("location")
+    suffix = raw[match.end("location"):].strip().lower()
+    # A bare forecast is ambiguous (finance, elections, demand). Require a
+    # preposition or explicit weather noun before using the weather executor.
+    if suffix == "forecast" and " " not in location.strip() and "," not in location:
+        return False
+    return _looks_like_location_phrase(location)
 
 
 @dataclass(slots=True)
