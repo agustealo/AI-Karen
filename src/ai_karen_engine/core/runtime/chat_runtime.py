@@ -2204,6 +2204,10 @@ class ChatRuntime:
                 value = llm.get(key)
                 if value is not None and key not in meta:
                     meta[key] = value
+            for key in _CONSUMER_TELEMETRY_KEYS:
+                value = llm.get(key)
+                if value is not None:
+                    meta[key] = value
         for key in _RICH_RESULT_KEYS:
             value = chunk_meta.get(key)
             if value is not None:
