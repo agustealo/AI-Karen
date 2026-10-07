@@ -376,7 +376,6 @@ async def stream_chat_response(
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     """Validate SSE input and delegate streaming execution to ChatRuntime."""
-    start_time = time.time()
     correlation_id = http_request.headers.get("X-Correlation-Id", str(uuid.uuid4()))
     response_id = str(uuid.uuid4())
     structured_logger = get_structured_logger()
