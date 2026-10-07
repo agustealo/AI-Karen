@@ -13,10 +13,12 @@ def test_canonical_conversation_reload_is_tenant_and_user_scoped() -> None:
     source = CONVERSATION_ROUTE.read_text(encoding="utf-8")
 
     assert '@router.get("/by-session/{session_id}"' in source
-    assert "get_web_ui_conversation_by_session(" in source
+    assert "get_owned_snapshot_by_session(" in source
+    assert "get_conversation_runtime_gateway" in source
     assert "tenant_id=tenant_id" in source
     assert "user_id = _require_user_id(user_ctx)" in source
     assert "user_id=user_id" in source
+    assert "get_web_ui_conversation_by_session(" not in source
     assert "get_current_tenant_id" in source
     assert "bypass_user_context_func" in source
 

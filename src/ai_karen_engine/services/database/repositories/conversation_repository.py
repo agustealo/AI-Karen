@@ -75,6 +75,22 @@ class ConversationRepository(Repository):
         """List conversations matching query filters."""
 
     @abstractmethod
+    async def get_conversation_by_session(
+        self,
+        session_id: str,
+        tenant_id: str,
+        user_id: str,
+    ) -> RepositoryResult[Optional[Conversation]]:
+        """Retrieve one tenant/user-owned conversation by runtime session id."""
+
+    @abstractmethod
+    async def count_conversations(
+        self,
+        query: ConversationQuery,
+    ) -> RepositoryResult[int]:
+        """Count conversations matching the same tenant/user filters as list."""
+
+    @abstractmethod
     async def update_conversation(self, conversation: Conversation) -> RepositoryResult[bool]:
         """Update conversation metadata, title, tags, etc."""
 

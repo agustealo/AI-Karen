@@ -17,6 +17,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionCont
 from ai_karen_engine.persistence.postgres import get_postgres_engine
 from ai_karen_engine.services.database.repositories import (
     Conversation,
+    ConversationQuery,
     ConversationRepository,
     Message,
     RepositoryFactory,
@@ -221,14 +222,157 @@ class ConversationRuntimeGateway:
             messages=tuple(messages_result.data or []),
         )
 
-    async def update_conversation(
+    async def get_owned_snapshot(
         self,
         context: ChatExecutionContext,
         *,
-        title: Optional[str] = None,
-        is_active: Optional[bool] = None,
+        message_limit: int = 100,
+    ) -> ConversationSnapshot:
+        conversation = await self.require_owned_conversation(context)
+        messages_result = await self._repository.get_messages(
+            str(conversation.id),
+            context.tenant_id,
+            limit=max(0, int(message_limit)),
+            offset=0,
+        )
+        if not messages_result.success:
+            raise RuntimeError(
+                messages_result.error or "conversation_history_read_failed"
+            )
+        return ConversationSnapshot(
+            conversation=conversation,
+            messages=tuple(messages_result.data or []),
+        )
+
+    async def get_owned_snapshot_by_session(
+        self,
+        context: ChatExecutionContext,
+        *,
+        message_limit: int = 100,
+    ) -> ConversationSnapshot:
+        self._require_identity(context)
+        session_id = str(context.session_id or "").strip()
+        if not session_id:
+            raise ValueError("conversation_identity_incomplete:session_id")
+        result = await self._repository.get_conversation_by_session(
+            session_id,
+            context.tenant_id,
+            context.user_id,
+        )
+        if not result.success:
+            raise RuntimeError(result.error or "conversation_lookup_failed")
+        if result.data is None:
+            raise RuntimeError("conversation_not_found")
+        scoped = replace(context, conversation_id=str(result.data.id))
+        return await self.get_owned_snapshot(scoped, message_limit=message_limit)
+
+    async def list_owned_snapshots(
+        self,
+        context: ChatExecutionContext,
+        *,
+        active_only: bool,
+        limit: int,
+        offset: int,
+        message_limit: int = 100,
+    ) -> tuple[ConversationSnapshot, ...]:
+        self._require_identity(context)
+        result = await self._repository.list_conversations(
+            ConversationQuery(
+                tenant_id=context.tenant_id,
+                user_id=context.user_id,
+                is_active=True if active_only else None,
+                limit=max(1, int(limit)),
+                offset=max(0, int(offset)),
+            )
+        )
+        if not result.success:
+            raise RuntimeError(result.error or "conversation_list_failed")
+
+        snapshots = []
+        for conversation in result.data or []:
+            messages_result = await self._repository.get_messages(
+                str(conversation.id),
+                context.tenant_id,
+                limit=max(0, int(message_limit)),
+                offset=0,
+            )
+            if not messages_result.success:
+                raise RuntimeError(
+                    messages_result.error or "conversation_history_read_failed"
+                )
+            snapshots.append(
+                ConversationSnapshot(
+                    conversation=conversation,
+                    messages=tuple(messages_result.data or []),
+                )
+            )
+        return tuple(snapshots)
+
+    async def count_owned_conversations(
+        self,
+        context: ChatExecutionContext,
+        *,
+        active_only: bool,
+    ) -> int:
+        self._require_identity(context)
+        result = await self._repository.count_conversations(
+            ConversationQuery(
+                tenant_id=context.tenant_id,
+                user_id=context.user_id,
+                is_active=True if active_only else None,
+            )
+        )
+        if not result.success:
+            raise RuntimeError(result.error or "conversation_count_failed")
+        return int(result.data or 0)
+
+    async def update_conversation_metadata(
+        self,
+        context: ChatExecutionContext,
+        *,
+        metadata_updates: Optional[Dict[str, Any]] = None,
+        tags_to_add: Optional[list[str]] = None,
     ) -> Conversation:
-        """Update one tenant/user-owned canonical conversation."""
+        existing = await self.require_owned_conversation(context)
+        metadata = dict(existing.metadata or {})
+        metadata.update(dict(metadata_updates or {}))
+        tags = list(existing.tags or [])
+        for tag in tags_to_add or []:
+            normalized = str(tag).strip()
+            if normalized and normalized not in tags:
+                tags.append(normalized)
+
+        updated = replace(
+            existing,
+            metadata=metadata,
+            tags=tags,
+            updated_at=datetime.utcnow(),
+        )
+        result = await self._repository.update_conversation(updated)
+        if not result.success:
+            raise RuntimeError(result.error or "conversation_update_failed")
+        if result.data is not True:
+            raise RuntimeError("conversation_not_found")
+        return updated
+
+    async def touch_session_conversation(
+        self,
+        context: ChatExecutionContext,
+    ) -> Conversation:
+        snapshot = await self.get_owned_snapshot_by_session(context, message_limit=0)
+        updated = replace(snapshot.conversation, updated_at=datetime.utcnow())
+        result = await self._repository.update_conversation(updated)
+        if not result.success:
+            raise RuntimeError(result.error or "conversation_update_failed")
+        if result.data is not True:
+            raise RuntimeError("conversation_not_found")
+        return updated
+
+    async def require_owned_conversation(
+        self,
+        context: ChatExecutionContext,
+    ) -> Conversation:
+        """Return one canonical conversation only when tenant/user ownership matches."""
         self._require_message_identity(context)
         conversation_id = resolve_runtime_conversation_id(context)
         existing = await self._repository.get_conversation(
@@ -241,17 +385,28 @@ class ConversationRuntimeGateway:
             raise RuntimeError("conversation_not_found")
         if str(existing.data.user_id) != str(context.user_id):
             raise PermissionError("conversation_user_mismatch")
+        return existing.data
 
-        next_title = existing.data.title
+    async def update_conversation(
+        self,
+        context: ChatExecutionContext,
+        *,
+        title: Optional[str] = None,
+        is_active: Optional[bool] = None,
+    ) -> Conversation:
+        """Update one tenant/user-owned canonical conversation."""
+        existing = await self.require_owned_conversation(context)
+
+        next_title = existing.title
         if title is not None:
             next_title = str(title).strip()
             if not next_title:
                 raise ValueError("conversation_title_empty")
 
         updated = replace(
-            existing.data,
+            existing,
             title=next_title,
-            is_active=existing.data.is_active if is_active is None else bool(is_active),
+            is_active=existing.is_active if is_active is None else bool(is_active),
             updated_at=datetime.utcnow(),
         )
         result = await self._repository.update_conversation(updated)
@@ -263,18 +418,8 @@ class ConversationRuntimeGateway:
 
     async def delete_conversation(self, context: ChatExecutionContext) -> bool:
         """Delete one tenant/user-owned canonical conversation."""
-        self._require_message_identity(context)
-        conversation_id = resolve_runtime_conversation_id(context)
-        existing = await self._repository.get_conversation(
-            conversation_id,
-            context.tenant_id,
-        )
-        if not existing.success:
-            raise RuntimeError(existing.error or "conversation_lookup_failed")
-        if existing.data is None:
-            raise RuntimeError("conversation_not_found")
-        if str(existing.data.user_id) != str(context.user_id):
-            raise PermissionError("conversation_user_mismatch")
+        existing = await self.require_owned_conversation(context)
+        conversation_id = str(existing.id)
 
         result = await self._repository.delete_conversation(
             conversation_id,
@@ -300,22 +445,11 @@ class ConversationRuntimeGateway:
         conversation-management requests that intentionally persist a single
         user-authored message. It never invokes semantic-memory formation.
         """
-        self._require_message_identity(context)
-        conversation_id = resolve_runtime_conversation_id(context)
+        existing = await self.require_owned_conversation(context)
+        conversation_id = str(existing.id)
         message_content = str(content or "").strip()
         if not message_content:
             raise ValueError("conversation_message_empty")
-
-        existing = await self._repository.get_conversation(
-            conversation_id,
-            context.tenant_id,
-        )
-        if not existing.success:
-            raise RuntimeError(existing.error or "conversation_lookup_failed")
-        if existing.data is None:
-            raise RuntimeError("conversation_not_found")
-        if str(existing.data.user_id) != str(context.user_id):
-            raise PermissionError("conversation_user_mismatch")
 
         message_id = self._message_id(
             context=context,

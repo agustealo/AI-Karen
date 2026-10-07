@@ -72,6 +72,38 @@ class _DurableConversationRepository(ConversationRepository):
         ]
         return RepositoryResult(success=True, data=rows[: query.limit])
 
+    async def get_conversation_by_session(
+        self,
+        session_id: str,
+        tenant_id: str,
+        user_id: str,
+    ) -> RepositoryResult[Optional[Conversation]]:
+        rows = [
+            conversation
+            for conversation in self.conversations.values()
+            if conversation.tenant_id == tenant_id
+            and conversation.user_id == user_id
+            and str((conversation.metadata or {}).get("session_id") or "") == session_id
+        ]
+        rows.sort(key=lambda conversation: conversation.updated_at, reverse=True)
+        return RepositoryResult(success=True, data=rows[0] if rows else None)
+
+    async def count_conversations(
+        self,
+        query: ConversationQuery,
+    ) -> RepositoryResult[int]:
+        rows = [
+            conversation
+            for conversation in self.conversations.values()
+            if conversation.tenant_id == query.tenant_id
+            and (query.user_id is None or conversation.user_id == query.user_id)
+            and (
+                query.is_active is None
+                or conversation.is_active is query.is_active
+            )
+        ]
+        return RepositoryResult(success=True, data=len(rows))
+
     async def update_conversation(
         self,
         conversation: Conversation,
