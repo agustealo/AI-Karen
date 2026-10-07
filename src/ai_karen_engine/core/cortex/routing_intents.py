@@ -9,7 +9,6 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"\bwhat\s+time\s+is\s+it\b",
             r"\bwhat(?:'s|\s+is)\s+the\s+time\b",
             r"\bcurrent\s+time\b",
-            r"^time\s+in\s+[\w\s,./+-]+\??$",
             r"\btime\s+now\b",
             r"\btimezone\s+(?:in|for|of)\b",
         ],
@@ -28,7 +27,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"\blook\s+(?:it\s+)?up\s+online\b",
             r"\blook\s+online\s+(?:for|at)\b",
             r"\bfind\s+(?:the\s+)?(?:current|latest|today'?s?)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|updates?|results?|score|price|release|version|status|information)\b",
-            r"\b(?:what|which)\s+is\s+the\s+(?:current|latest)\s+(?:news|update|result|score|price|release|version|status)\b",
+            r"\b(?:what|which)\s+is\s+the\s+(?:current|latest)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|update|result|score|price|release|version|status)\b",
             r"\b(?:latest|current|today'?s?)\s+(?:news|updates?|results?|score|price|release|version|status)\b",
         ],
         "required_capability": "web.search",
@@ -43,6 +42,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "triggers": ["weather", "forecast", "temperature", "rain today"],
         "patterns": [
             r"\bwhat(?:'s|\s+is)\s+(?:the\s+)?weather\b",
+            r"\bwhat\s+will\s+the\s+weather\s+be\s+(?:in|for)\s+.+$",
             r"\bhow(?:'s|\s+is)\s+(?:the\s+)?weather\b",
             r"^weather\b",
             r"\bweather\s+(?:in|for|today|tonight|tomorrow|this\s+week)\b",
@@ -63,47 +63,63 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
 }
 
 
-_NON_LOCATION_WEATHER_TERMS = {
-    "affect",
-    "affects",
-    "business",
-    "compare",
-    "describe",
-    "discuss",
-    "economic",
-    "economics",
-    "economist",
-    "economists",
-    "explain",
-    "financial",
-    "how",
-    "market",
-    "population",
-    "revenue",
-    "sales",
-    "why",
+_CONCEPTUAL_TIME_SUBJECTS = {
+    "literature",
+    "mechanics",
+    "physics",
+    "systems",
+    "computing",
+    "philosophy",
+    "music",
+    "history",
+    "theory",
 }
+
+
+def _looks_like_location_phrase(value: str) -> bool:
+    raw = " ".join((value or "").strip().split()).strip(" ,")
+    if not raw or len(raw) > 160:
+        return False
+
+    # IANA timezone and common UTC/GMT offset forms are explicit clock targets.
+    if re.fullmatch(r"[A-Za-z_]+/[A-Za-z_+-]+", raw):
+        return True
+    if re.fullmatch(r"(?:UTC|GMT)(?:[+-]\d{1,2}(?::\d{2})?)?", raw, re.IGNORECASE):
+        return True
+
+    tokens = re.findall(r"[A-Za-z][A-Za-z.'’_-]*", raw)
+    if not tokens:
+        return False
+
+    # A one-token place shorthand such as "Detroit" is useful and bounded.
+    if len(tokens) == 1:
+        return tokens[0].lower() not in _CONCEPTUAL_TIME_SUBJECTS
+
+    # Comma-delimited place strings and title-cased proper names are positive
+    # location shapes. Lowercase conceptual phrases are deliberately rejected.
+    if "," in raw:
+        return True
+    return all(token[:1].isupper() for token in tokens)
+
+
+def _looks_like_shorthand_time(query: str) -> bool:
+    raw = " ".join((query or "").strip().split()).rstrip("?")
+    match = re.fullmatch(r"time\s+in\s+(?P<location>.+)", raw, flags=re.IGNORECASE)
+    if not match:
+        return False
+    return _looks_like_location_phrase(match.group("location"))
 
 
 def _looks_like_location_first_weather(query: str) -> bool:
     raw = " ".join((query or "").strip().split()).rstrip("?")
     match = re.fullmatch(
-        r"(?P<location>[\w.'’,-]+(?:[\s,]+[\w.'’,-]+)*)\s+(?:weather|forecast)",
+        r"(?P<location>.+?)\s+(?:weather|forecast)",
         raw,
         flags=re.IGNORECASE,
     )
     if not match:
         return False
-
-    location = match.group("location").strip(" ,")
-    if not location or len(location) > 160:
-        return False
-
-    words = {
-        token.lower()
-        for token in re.findall(r"[A-Za-z]+", location)
-    }
-    return bool(words) and not bool(words & _NON_LOCATION_WEATHER_TERMS)
+    return _looks_like_location_phrase(match.group("location"))
 
 
 @dataclass(slots=True)
@@ -136,6 +152,8 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
             re.search(pattern, q, flags=re.IGNORECASE)
             for pattern in patterns
         )
+        if intent == "time.current":
+            matched = matched or _looks_like_shorthand_time(query)
         if intent == "search.weather":
             matched = matched or _looks_like_location_first_weather(query)
         if matched:
