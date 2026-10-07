@@ -395,6 +395,15 @@ def test_live_capability_patterns_do_not_hijack_unrelated_prompts() -> None:
     current_directory = resolve_capability_decision(
         "What is the current directory?"
     )
+    distributed_time = resolve_capability_decision(
+        "Explain time in distributed systems"
+    )
+    economics_forecast = resolve_capability_decision(
+        "How do economists forecast?"
+    )
+    economic_forecast = resolve_capability_decision(
+        "economic forecast"
+    )
 
     assert time_complexity.intent == "general.chat"
     assert time_complexity.requires_tool is False
@@ -404,10 +413,17 @@ def test_live_capability_patterns_do_not_hijack_unrelated_prompts() -> None:
     assert temperature_scaling.requires_tool is False
     assert current_directory.intent == "general.chat"
     assert current_directory.requires_tool is False
+    assert distributed_time.intent == "general.chat"
+    assert distributed_time.requires_tool is False
+    assert economics_forecast.intent == "general.chat"
+    assert economics_forecast.requires_tool is False
+    assert economic_forecast.intent == "general.chat"
+    assert economic_forecast.requires_tool is False
 
 
 def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None:
     current_time = resolve_capability_decision("What time is it in Detroit?")
+    shorthand_time = resolve_capability_decision("time in Detroit")
     current_search = resolve_capability_decision(
         "Search the internet for the latest Python security release."
     )
@@ -421,6 +437,8 @@ def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None
 
     assert current_time.intent == "time.current"
     assert current_time.requires_live_data is True
+    assert shorthand_time.intent == "time.current"
+    assert shorthand_time.requires_live_data is True
     assert current_search.intent == "search.general"
     assert current_search.requires_live_data is True
     assert detroit_weather.intent == "search.weather"
