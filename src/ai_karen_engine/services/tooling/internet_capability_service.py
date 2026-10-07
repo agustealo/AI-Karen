@@ -37,6 +37,7 @@ from ..search.search_query_planner import SearchQueryPlanner
 from ..search.search_result_processor import SearchResultProcessor
 from ..search.web_search_provider_registry import WebSearchProviderRegistry
 from ..search.web_search_client import WebSearchClient
+from ...config.config_manager import get_config_value
 from ...core.runtime.contracts import ActionExecutionGate, AuthorizedExecutionPlan, ExecutionBudget, ExecutionContext
 from ...core.runtime.policy.runtime_policy import PolicyEvaluationRequest, RuntimePolicyEnforcer
 from ...integrations.web.crawl4ai_integration import Crawl4AIIntegration
@@ -239,6 +240,7 @@ class InternetCapabilityService:
         search_client: Optional[AsyncSearchClient] = None,
         search_client_factory: Optional[Any] = None,
         provider_registry: Optional[WebSearchProviderRegistry] = None,
+        search_settings: Optional[Mapping[str, Any]] = None,
         policy_enforcer: Optional[RuntimePolicyEnforcer] = None,
         action_gate: Optional[ActionExecutionGate] = None,
         default_max_urls: int = 5,
@@ -249,7 +251,19 @@ class InternetCapabilityService:
         self.processor = processor or SearchResultProcessor()
         self.search_client = search_client
         self.search_client_factory = search_client_factory
-        self.provider_registry = provider_registry or WebSearchProviderRegistry()
+        if provider_registry is not None:
+            self.provider_registry = provider_registry
+        else:
+            configured_search = (
+                dict(search_settings)
+                if search_settings is not None
+                else get_config_value("search", {})
+            )
+            self.provider_registry = WebSearchProviderRegistry(
+                settings={"search": configured_search}
+                if "search" not in configured_search
+                else configured_search
+            )
         self.policy_enforcer = policy_enforcer
         self.action_gate = action_gate
         self.default_max_urls = max(1, min(int(default_max_urls), 25))
