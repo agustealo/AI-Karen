@@ -63,3 +63,28 @@ def test_conversation_resource_polling_is_desktop_scoped() -> None:
     assert "window.matchMedia('(min-width: 1280px)')" in source
     assert "window.setInterval" in source
     assert "15000" in source
+
+
+def test_conversation_intelligence_surfaces_authorized_execution_envelope() -> None:
+    runtime = RUNTIME.read_text(encoding="utf-8")
+    rail = RAIL.read_text(encoding="utf-8")
+
+    for token in (
+        '"execution_budget": {',
+        '"max_model_calls": plan.budget.max_model_calls',
+        '"max_tool_calls": plan.budget.max_tool_calls',
+        '"max_reasoning_steps": plan.budget.max_reasoning_steps',
+        '"max_output_tokens": plan.budget.max_output_tokens',
+        '"reasoning_modes": list(plan.reasoning_modes)',
+    ):
+        assert token in runtime
+
+    for token in (
+        "Execution envelope",
+        "Model calls",
+        "Tool calls",
+        "Reasoning steps",
+        "Output budget",
+        "resumable",
+    ):
+        assert token in rail
