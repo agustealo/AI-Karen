@@ -379,7 +379,6 @@ export default function ModelDownloads({
         ? channelsResult.value.channels
         : [];
       setChannels(nextChannels);
-      setChannelId((current) => current || nextChannels[0]?.id || '');
     } else {
       nextErrors.channels = getErrorMessage(
         channelsResult.reason,
@@ -491,10 +490,7 @@ export default function ModelDownloads({
   const groupedChannels = useMemo(() => groupChannels(channels), [channels]);
 
   const currentChannel = useMemo(
-    () =>
-      channels.find((channel) => channel.id === channelId) ??
-      channels[0] ??
-      null,
+    () => channels.find((channel) => channel.id === channelId) ?? null,
     [channels, channelId],
   );
 
