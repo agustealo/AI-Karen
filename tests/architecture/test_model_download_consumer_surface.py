@@ -81,6 +81,7 @@ def test_recommended_models_are_config_driven_and_first_run_visible() -> None:
     assert "Model licenses are accepted per model" in ui
     assert "Review license" in ui
     assert "recommendedLicenseAcceptances" in ui
+    assert "void validateDownload(checked)" in ui
     assert '"license_url"' in config
 
 
