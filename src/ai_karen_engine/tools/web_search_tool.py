@@ -8,6 +8,10 @@ from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.services.tooling.tool_service import BaseTool, ToolMetadata, ToolCategory, ToolParameter, List
 from ai_karen_engine.services.tooling.internet_capability_service import InternetCapabilityService
+from ai_karen_engine.core.runtime.contracts import (
+    AuthorizedExecutionPlan,
+    ExecutionContext,
+)
 from ai_karen_engine.tools.http_client_tool import HTTPClientTool
 from ai_karen_engine.tools.filesystem_tool import FileSystemTool
 from ai_karen_engine.tools.text_processing_tool import TextProcessingTool
@@ -78,11 +82,43 @@ class WebSearchTool(BaseTool):
         mode = parameters.get("mode", "general")
         max_urls = parameters.get("max_urls", 5)
 
+        raw_context = dict(context or {})
+        authorized_plan = raw_context.get("authorized_plan")
+        if not isinstance(authorized_plan, AuthorizedExecutionPlan):
+            authorized_plan = None
+
+        execution_context = ExecutionContext(
+            request_id=str(raw_context.get("request_id") or ""),
+            correlation_id=str(raw_context.get("correlation_id") or ""),
+            user_id=str(raw_context.get("user_id") or ""),
+            tenant_id=str(raw_context.get("tenant_id") or ""),
+            session_id=raw_context.get("session_id"),
+            conversation_id=raw_context.get("conversation_id"),
+            policy_decision_id=(
+                authorized_plan.policy_decision_id
+                if authorized_plan is not None
+                else raw_context.get("policy_decision_id")
+            ),
+            allowed_capabilities=list(
+                raw_context.get("allowed_capabilities") or []
+            ),
+            budget=(
+                authorized_plan.budget
+                if authorized_plan is not None
+                else None
+            ),
+        )
+
         service = self._get_service()
-        result = await service.execute(query, config_override={
-            "mode": mode,
-            "max_urls": max_urls
-        })
+        result = await service.execute(
+            query,
+            config_override={
+                "mode": mode,
+                "max_urls": max_urls,
+            },
+            context=execution_context,
+            authorized_plan=authorized_plan,
+        )
 
         return result
 
