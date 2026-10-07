@@ -358,6 +358,7 @@ class InternetCapabilityService:
                     degraded=True,
                     warnings=warnings,
                     execution_context=execution_context,
+                    search_providers=search_providers,
                 )
 
             crawl_results = await asyncio.wait_for(
