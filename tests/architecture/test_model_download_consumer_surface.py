@@ -118,7 +118,7 @@ def test_model_runtime_telemetry_surfaces_existing_native_capabilities() -> None
     ui = UI.read_text(encoding="utf-8")
 
     assert "async def get_runtime_telemetry(" in control
-    assert "monitor_resources_once()" in control
+    assert "get_platform_resource_service().snapshot" in control
     assert "ModelStorageMonitor(self.models_root)" in control
     assert '"max_concurrent_downloads": concurrency_limit' in control
     assert '"runtime_admin_required": True' in control
