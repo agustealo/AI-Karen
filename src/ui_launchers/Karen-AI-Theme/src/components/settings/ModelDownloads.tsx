@@ -1500,15 +1500,19 @@ export default function ModelDownloads({
                     Used by: {item.app_consumers.join(', ')}
                   </div>
 
-                  {item.license && (
+                  {(item.license || item.gated) && (
                     <div className="mt-3 rounded-xl border border-border/50 bg-background/50 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
                           <div className="text-xs font-semibold">
-                            {item.license} license
+                            {item.license
+                              ? `${item.license} license`
+                              : 'Restricted model access'}
                           </div>
                           <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                            Review the reported license before accepting it for this model.
+                            {item.license
+                              ? 'Review the reported license for this model.'
+                              : 'This model is gated by its source even though no license label was reported.'}
                           </p>
                         </div>
                         {item.license_url ? (
@@ -1518,13 +1522,19 @@ export default function ModelDownloads({
                             rel="noreferrer"
                             className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
                           >
-                            Review license
+                            Review model terms
                             <ExternalLink className="h-3 w-3" aria-hidden="true" />
                           </a>
                         ) : (
-                          <span className="text-[10px] text-muted-foreground">
-                            No license link reported
-                          </span>
+                          <a
+                            href={`https://huggingface.co/${item.model_id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                          >
+                            Review model source
+                            <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                          </a>
                         )}
                       </div>
 
