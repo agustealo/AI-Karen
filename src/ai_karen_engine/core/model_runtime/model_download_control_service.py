@@ -694,7 +694,7 @@ class ModelDownloadControlService:
                     "resolved_revision": resolved_revision,
                 },
             )
-        install_channel = self._channels.get(validation.channel_id)
+        install_channel = self._channels[validation.channel_id]
         install_path = self._build_install_path(
             install_channel,
             model_id,
