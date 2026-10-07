@@ -1109,9 +1109,12 @@ class ModelDownloadControlService:
             # choice; remote/local model metadata provides license and gating truth.
             try:
                 info = await self._orchestrator.get_model_info(model_id)
-                if info.license:
-                    item["license"] = info.license
-                    item["license_url"] = f"https://huggingface.co/{model_id}"
+                item["license"] = info.license
+                item["license_url"] = (
+                    f"https://huggingface.co/{model_id}"
+                    if info.license
+                    else None
+                )
                 item["gated"] = bool(info.gated)
             except Exception as exc:
                 logger.info(
