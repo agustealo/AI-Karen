@@ -404,6 +404,13 @@ def test_live_capability_patterns_do_not_hijack_unrelated_prompts() -> None:
     economic_forecast = resolve_capability_decision(
         "economic forecast"
     )
+    quantum_time = resolve_capability_decision("time in quantum mechanics")
+    literature_time = resolve_capability_decision("time in literature")
+    election_forecast = resolve_capability_decision("election forecast")
+    demand_forecast = resolve_capability_decision("demand forecast")
+    us_election_forecast = resolve_capability_decision(
+        "United States election forecast"
+    )
 
     assert time_complexity.intent == "general.chat"
     assert time_complexity.requires_tool is False
@@ -419,6 +426,16 @@ def test_live_capability_patterns_do_not_hijack_unrelated_prompts() -> None:
     assert economics_forecast.requires_tool is False
     assert economic_forecast.intent == "general.chat"
     assert economic_forecast.requires_tool is False
+    assert quantum_time.intent == "general.chat"
+    assert quantum_time.requires_tool is False
+    assert literature_time.intent == "general.chat"
+    assert literature_time.requires_tool is False
+    assert election_forecast.intent == "general.chat"
+    assert election_forecast.requires_tool is False
+    assert demand_forecast.intent == "general.chat"
+    assert demand_forecast.requires_tool is False
+    assert us_election_forecast.intent == "general.chat"
+    assert us_election_forecast.requires_tool is False
 
 
 def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None:
@@ -434,6 +451,17 @@ def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None
     )
     bitcoin_price = resolve_capability_decision("Find current Bitcoin price")
     python_release = resolve_capability_decision("Find the latest Python release")
+    latest_python_question = resolve_capability_decision(
+        "What is the latest Python release?"
+    )
+    bitcoin_price_question = resolve_capability_decision(
+        "Which is the current Bitcoin price?"
+    )
+    future_weather = resolve_capability_decision(
+        "What will the weather be in Detroit?"
+    )
+    lower_city_weather = resolve_capability_decision("detroit weather")
+    title_city_weather = resolve_capability_decision("New York City weather")
 
     assert current_time.intent == "time.current"
     assert current_time.requires_live_data is True
@@ -451,6 +479,16 @@ def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None
     assert bitcoin_price.requires_live_data is True
     assert python_release.intent == "search.general"
     assert python_release.requires_live_data is True
+    assert latest_python_question.intent == "search.general"
+    assert latest_python_question.requires_live_data is True
+    assert bitcoin_price_question.intent == "search.general"
+    assert bitcoin_price_question.requires_live_data is True
+    assert future_weather.intent == "search.weather"
+    assert future_weather.requires_live_data is True
+    assert lower_city_weather.intent == "search.weather"
+    assert lower_city_weather.requires_live_data is True
+    assert title_city_weather.intent == "search.weather"
+    assert title_city_weather.requires_live_data is True
 
 
 @pytest.mark.asyncio
@@ -561,3 +599,24 @@ def test_web_search_defaults_are_registered_in_central_config() -> None:
     assert search["duckduckgo"]["enabled"] is True
     assert search["duckduckgo"]["priority"] == 100
     assert "searxng" in search
+
+
+def test_legacy_plugin_search_config_migrates_to_root_authority() -> None:
+    from ai_karen_engine.config.config_manager import validate_config
+
+    cfg = {
+        "plugins": {
+            "intelligent-search": {
+                "search": {
+                    "duckduckgo": {"enabled": False, "priority": 1},
+                    "wikipedia": {"enabled": True, "priority": 500},
+                }
+            }
+        }
+    }
+
+    migrated = validate_config(cfg)
+
+    assert migrated["search"]["duckduckgo"]["enabled"] is False
+    assert migrated["search"]["wikipedia"]["enabled"] is True
+    assert "search" not in migrated["plugins"]["intelligent-search"]
