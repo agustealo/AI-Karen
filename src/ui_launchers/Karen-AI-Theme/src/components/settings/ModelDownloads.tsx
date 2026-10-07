@@ -21,10 +21,13 @@ import {
   Pause,
   Play,
   RefreshCw,
+  RotateCcw,
   Save,
+  Search,
   Shield,
   ShieldAlert,
   Square,
+  Trash2,
 } from 'lucide-react';
 
 import { apiClient, ApiError } from '@/lib/api';
@@ -131,6 +134,17 @@ type DownloadValidation = {
   metadata: Record<string, unknown>;
 };
 
+type ModelCatalogItem = {
+  model_id: string;
+  last_modified?: string | null;
+  likes?: number | null;
+  downloads?: number | null;
+  storage_key?: string | null;
+  tags: string[];
+  total_size?: number | null;
+  description?: string | null;
+};
+
 type InstalledModelsResponse = {
   models: Array<
     RuntimeProviderModel & {
@@ -163,6 +177,7 @@ const ENDPOINTS = {
   jobs: '/api/models/download/jobs?limit=50',
   installed: '/api/models/installed?force_refresh=false',
   discovery: '/api/models/discovery?force_refresh=false',
+  catalog: '/api/models/catalog?limit=24',
   validate: '/api/models/download/validate',
   download: '/api/models/download',
 };
@@ -284,6 +299,18 @@ function safeStringList(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 }
 
+function compactCount(value?: number | null): string {
+  if (!value || value < 1) return '0';
+  return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+}
+
+function encodeModelPath(modelId: string): string {
+  return modelId
+    .split('/')
+    .map((part) => encodeURIComponent(part))
+    .join('/');
+}
+
 export default function ModelDownloads({
   adminMode = false,
 }: ModelDownloadsProps) {
@@ -302,6 +329,12 @@ export default function ModelDownloads({
   const [validating, setValidating] = useState(false);
   const [busyJobs, setBusyJobs] = useState<Record<string, boolean>>({});
   const [validation, setValidation] = useState<DownloadValidation | null>(null);
+  const [catalog, setCatalog] = useState<ModelCatalogItem[]>([]);
+  const [catalogQuery, setCatalogQuery] = useState('');
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [removingModels, setRemovingModels] = useState<Record<string, boolean>>({});
+  const [retryingJobs, setRetryingJobs] = useState<Record<string, boolean>>({});
 
   const [modelId, setModelId] = useState('');
   const [revision, setRevision] = useState('');
