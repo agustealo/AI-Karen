@@ -462,7 +462,7 @@ services:
       # Default to a host-installed Ollama reachable through Docker's host gateway.
       # If you run the optional in-stack Ollama service, override this to
       # http://ollama:11434 instead.
-      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}"
       KAREN_BUILTIN_VLLM_ENABLED: "${KAREN_BUILTIN_VLLM_ENABLED:-true}"
       KAREN_BUILTIN_VLLM_BASE_URL: "${KAREN_BUILTIN_VLLM_BASE_URL:-http://vllm:8000/v1}"
       KAREN_BUILTIN_VLLM_HEALTH_URL: "${KAREN_BUILTIN_VLLM_HEALTH_URL:-http://vllm:8000/health}"
