@@ -1,31 +1,23 @@
 from __future__ import annotations
+
 from .base import BaseExpressionEngine
-from ..contracts import ExpressionResult, ExpressionTask
+from ..contracts import EngineHealth, ExpressionResult, ExpressionTask
+from ..errors import EngineUnavailableError
+
 
 class DisabledEngine(BaseExpressionEngine):
-    engine_id = 'disabled'
+    """Truthful adapter for a deliberately unavailable expression engine."""
+
+    engine_id = "disabled"
+
     async def generate(self, task: ExpressionTask) -> ExpressionResult:
-        return ExpressionResult(
-            task_id=task.task_id, 
-            text='No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.', 
-            provider=None, 
-            model=None, 
-            engine_id=self.engine_id, 
-            engine_mode='emergency_static', 
-            runtime_engine=None, 
-            response_source='emergency_static', 
-            attempts=[], 
-            skipped=[], 
-            latency_ms=0.0, 
-            degraded=True, 
-            degradation_reason='fallback_exhausted',
-            metadata={
-                'actual_provider': None,
-                'actual_model': None,
-                'response_source': 'emergency_static',
-                'fallback_level': 99,
-                'degraded_mode': True,
-                'degradation_type': 'fallback_exhausted',
-                'degradation_reason': 'No active cloud providers are configured. Built-in runtimes may still be available in Model Settings.',
-            }
+        raise EngineUnavailableError("Expression engine is disabled")
+
+    async def health(self) -> EngineHealth:
+        return EngineHealth(
+            engine_id=self.engine_id,
+            status="disabled",
+            capabilities=[],
+            models=[],
+            reason="Expression engine is disabled",
         )
