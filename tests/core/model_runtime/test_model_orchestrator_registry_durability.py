@@ -161,3 +161,43 @@ def test_unknown_gate_provenance_is_not_persisted_as_false() -> None:
 
     assert 'if entry.get("gated") is None:' in source
     assert 'entry.pop("gated", None)' in source
+
+
+@pytest.mark.asyncio
+async def test_refresh_remote_overrides_cached_ungated_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    await service.replace_registry_entry(
+        "test-owner/test-model",
+        {
+            **_entry("main"),
+            "license": None,
+            "gated": False,
+        },
+    )
+
+    remote = SimpleNamespace(
+        siblings=[],
+        library_name="transformers",
+        last_modified=None,
+        downloads=10,
+        likes=2,
+        tags=["text-generation"],
+        cardData={"license": "custom", "model_description": "now gated"},
+        gated=True,
+        sha="fresh-sha",
+    )
+    api = SimpleNamespace(model_info=lambda **_: remote)
+    monkeypatch.setattr(service, "_get_hf_api", lambda: api)
+
+    cached = await service.get_model_info("test-owner/test-model")
+    refreshed = await service.get_model_info(
+        "test-owner/test-model",
+        refresh_remote=True,
+    )
+
+    assert cached.gated is False
+    assert refreshed.gated is True
+    assert refreshed.revision == "fresh-sha"
