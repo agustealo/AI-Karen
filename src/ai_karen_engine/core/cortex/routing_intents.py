@@ -11,8 +11,8 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"^current\s+time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^time\s+now(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^timezone\s+(?:in|for|of)\s+.+[?!.]*$",
-            r"^(?:please\s+)?(?:could|would|can)\s+you\s+(?:please\s+)?tell\s+me\s+(?:what\s+time\s+it\s+is|the\s+(?:current\s+)?time)(?:\s+(?:in|for)\s+.+)?[?!.]*$",
-            r"^(?:please\s+)?tell\s+me\s+(?:what\s+time\s+it\s+is|the\s+(?:current\s+)?time)(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^(?:please\s+)?(?:could|would|can)\s+you\s+(?:please\s+)?tell\s+me\s+(?:what\s+time\s+it\s+is|what\s+time\s+is\s+it|the\s+(?:current\s+)?time)(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^(?:please\s+)?tell\s+me\s+(?:what\s+time\s+it\s+is|what\s+time\s+is\s+it|the\s+(?:current\s+)?time)(?:\s+(?:in|for)\s+.+)?[?!.]*$",
         ],
         "required_capability": "time_query",
         "preferred_plugin": "time-query",
@@ -206,7 +206,7 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
     # A user's private resource is not a public search target, even when a
     # sentence contains a freshness word such as "latest" or "update".
     private_update = bool(re.search(
-        r"\b(?:my|our|your|his|her|their|its|private|internal|confidential)\b", q
+        r"\b(?:my|our|your|his|her|their|its|mine|ours|yours|hers|theirs|private|internal|confidential)\b", q
     )) and bool(re.search(r"\b(?:update|updates|status)\b", q))
 
     # Specialized routes use bounded intent patterns, not substring hits. This
