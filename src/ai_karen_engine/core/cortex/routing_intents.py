@@ -7,6 +7,8 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "triggers": ["what time", "current time", "time in", "timezone"],
         "patterns": [
             r"^what\s+time\s+is\s+it(?:\s+right\s+now)?(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^(?:(?:please\s+)?tell\s+me|can\s+you\s+(?:please\s+)?tell\s+me)\s+what\s+time\s+it\s+is(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^(?:please\s+)?tell\s+me\s+what\s+time\s+is\s+it(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^what(?:'s|\s+is)\s+the\s+(?:current\s+)?time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^current\s+time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^time\s+now(?:\s+(?:in|for)\s+.+)?[?!.]*$",
@@ -43,6 +45,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "triggers": ["weather", "forecast", "temperature", "rain today"],
         "patterns": [
             r"^what(?:'s|\s+is)\s+(?:the\s+)?weather(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^what(?:'s|\s+is)\s+the\s+forecast(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"\bwhat\s+will\s+the\s+weather\s+be\s+(?:in|for)\s+.+$",
             r"^how(?:'s|\s+is)\s+(?:the\s+)?weather(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^what(?:'s|\s+is)\s+(?:the\s+)?weather\s+forecast(?:\s+(?:in|for)\s+.+)?[?!.]*$",
