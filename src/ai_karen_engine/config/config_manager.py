@@ -580,6 +580,27 @@ def update_config(update: Dict[str, Any]) -> Dict[str, Any]:
         return cfg
 
 
+def get_shipped_settings() -> Dict[str, Any]:
+    """Read packaged defaults without writing to or replacing runtime configuration.
+
+    The legacy plugin settings live in this packaged file, whereas
+    get_config_value reads the mutable KARI_CONFIG_FILE runtime document.
+    Runtime values must be applied as overrides by the consuming registry.
+    """
+    settings_path = Path(__file__).resolve().parent / "settings.json"
+    try:
+        with settings_path.open("r", encoding="utf-8") as settings_file:
+            settings = json.load(settings_file)
+    except (OSError, ValueError) as exc:
+        logging.getLogger(__name__).warning(
+            "Shipped settings unavailable or invalid: %s", type(exc).__name__
+        )
+        return {}
+    if not isinstance(settings, dict):
+        return {}
+    return settings
+
+
 def get_config_value(key: str, default=None) -> Any:
     cfg = load_config()
     return cfg.get(key, default)
