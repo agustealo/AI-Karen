@@ -92,9 +92,7 @@ class WebSearchClient:
                 error="Empty query",
             )
 
-        selected = self.registry.select_provider(
-            requested=provider,
-        )
+        selected = self.registry.select_provider(requested=provider)
         if not selected:
             return SearchResponse(
                 query=query,
@@ -103,22 +101,50 @@ class WebSearchClient:
                 error="No enabled search providers are configured.",
             )
 
-        try:
-            return await self._search_with_provider(
-                selected,
-                query,
-                max_results,
-                time_range,
-                **kwargs,
-            )
-        except Exception as exc:
-            logger.warning("Provider %s failed: %s", selected, exc, exc_info=True)
-            return SearchResponse(
-                query=query,
-                results=[],
-                provider=selected,
-                error=str(exc),
-            )
+        candidates = [selected] + [
+            candidate
+            for candidate in self.registry.sorted_enabled()
+            if candidate != selected
+            and self.registry.select_provider(requested=candidate) == candidate
+        ]
+        last_response: Optional[SearchResponse] = None
+        for candidate in candidates:
+            try:
+                response = await self._search_with_provider(
+                    candidate,
+                    query,
+                    max_results,
+                    time_range,
+                    **kwargs,
+                )
+                last_response = response
+                if response.results and not response.error:
+                    return response
+                logger.warning(
+                    "Search provider %s returned no usable results: %s",
+                    candidate,
+                    response.error or "empty results",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Provider %s failed: %s",
+                    candidate,
+                    exc,
+                    exc_info=True,
+                )
+                last_response = SearchResponse(
+                    query=query,
+                    results=[],
+                    provider=candidate,
+                    error=str(exc),
+                )
+
+        return last_response or SearchResponse(
+            query=query,
+            results=[],
+            provider="none",
+            error="All enabled search providers failed.",
+        )
 
     async def _search_with_provider(
         self,
