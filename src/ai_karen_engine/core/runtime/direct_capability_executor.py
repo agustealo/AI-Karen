@@ -513,7 +513,7 @@ class DirectCapabilityExecutor:
         for pattern in patterns:
             match = re.search(pattern, query, flags=re.IGNORECASE)
             if match:
-                location = re.sub(r"\\s+right\\s+now$", "", match.group(1), flags=re.IGNORECASE).strip(" ,")
+                location = re.sub(r"\s+right\s+now$", "", match.group(1), flags=re.IGNORECASE).strip(" ,")
                 if location:
                     return location
         return None
