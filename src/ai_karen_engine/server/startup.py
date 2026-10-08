@@ -540,11 +540,10 @@ async def initialize_extension_kernel(settings: Any) -> None:
         from ai_karen_engine.services.plugin_service import (
             get_plugin_service,
             initialize_plugin_service,
+            _CANONICAL_PLUGIN_ROOT,
         )
 
-        plugin_dirs = getattr(settings, "plugin_dirs", None) or [
-            "src/ai_karen_engine/extensions/plugins"
-        ]
+        plugin_dirs = getattr(settings, "plugin_dirs", None) or [_CANONICAL_PLUGIN_ROOT]
         roots = [Path(directory) for directory in plugin_dirs]
         resolved_roots = {root.resolve() for root in roots}
         if len(resolved_roots) != 1:
@@ -559,7 +558,7 @@ async def initialize_extension_kernel(settings: Any) -> None:
             active_root = Path(
                 service.core_plugins_path
                 or service.marketplace_path
-                or "src/ai_karen_engine/extensions/plugins"
+                or _CANONICAL_PLUGIN_ROOT
             )
             if active_root.resolve() != root.resolve():
                 raise RuntimeError(
