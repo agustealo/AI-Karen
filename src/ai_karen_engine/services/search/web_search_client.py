@@ -7,6 +7,7 @@ Provider configurations are sourced from central defaults and caller settings.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
@@ -110,14 +111,21 @@ class WebSearchClient:
                 error="No enabled search providers are configured.",
             )
         last_response: Optional[SearchResponse] = None
+        # The enclosing InternetCapabilityService has a 30-second search deadline.
+        # Reserve a fair share for every eligible fallback instead of allowing
+        # one stalled provider to consume the entire outer request budget.
+        per_provider_timeout = 30.0 / len(candidates)
         for candidate in candidates:
             try:
-                response = await self._search_with_provider(
-                    candidate,
-                    query,
-                    max_results,
-                    time_range,
-                    **kwargs,
+                response = await asyncio.wait_for(
+                    self._search_with_provider(
+                        candidate,
+                        query,
+                        max_results,
+                        time_range,
+                        **kwargs,
+                    ),
+                    timeout=per_provider_timeout,
                 )
                 last_response = response
                 if response.results and not response.error:
