@@ -7,6 +7,7 @@ Kari ConfigManager
 
 import os
 import json
+import copy
 import threading
 import shutil
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -15,6 +16,8 @@ from enum import Enum
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 import logging
+
+from ai_karen_engine.config.web_search import build_provider_configs
 
 CONFIG_PATH = Path(
     os.getenv("KARI_CONFIG_FILE", "config_assets/config.json")
@@ -249,6 +252,7 @@ class AIKarenConfig:
     ml: MLConfig = field(default_factory=MLConfig)
     web_ui: WebUIConfig = field(default_factory=WebUIConfig)
     agent_runtime: AgentRuntimeConfig = field(default_factory=AgentRuntimeConfig)
+    search: Dict[str, Any] = field(default_factory=build_provider_configs)
     expression: Dict[str, Any] = field(default_factory=dict)
     default_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     spacy_model: str = "en_core_web_sm"
@@ -301,6 +305,7 @@ DEFAULT_CONFIG = {
         "timeout": 30,
         "max_retries": 3,
     },
+    "search": build_provider_configs(),
     "agent_runtime": {
         "max_agent_steps": 5,
         "max_tool_invocations": 10,
@@ -424,6 +429,16 @@ def load_env_override(cfg: Dict[str, Any]):
 
 
 def validate_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    # Compatibility migration: older installs stored provider settings under
+    # plugins.intelligent-search.search. Root search is now the sole authority.
+    plugins_cfg = cfg.get("plugins")
+    if isinstance(plugins_cfg, dict):
+        intelligent_search_cfg = plugins_cfg.get("intelligent-search")
+        if isinstance(intelligent_search_cfg, dict):
+            legacy_search = intelligent_search_cfg.pop("search", None)
+            if "search" not in cfg and isinstance(legacy_search, dict):
+                cfg["search"] = legacy_search
+
     # You can add Pydantic or marshmallow for full schema; basic fallback:
     for k, v in DEFAULT_CONFIG.items():
         if k not in cfg:
@@ -473,12 +488,21 @@ def validate_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
 def load_config() -> Dict[str, Any]:
     with LOCK:
         if not CONFIG_PATH.exists():
-            cfg = DEFAULT_CONFIG.copy()
-            atomic_write(CONFIG_PATH, cfg)
+            persisted_cfg = copy.deepcopy(DEFAULT_CONFIG)
+            atomic_write(CONFIG_PATH, persisted_cfg)
+
+            # Environment values are runtime authority but should not be
+            # materialized into the newly created config asset.
+            cfg = validate_config(copy.deepcopy(persisted_cfg))
+            load_env_override(cfg)
+            cfg = validate_config(cfg)
             notify_observers(cfg)
             return cfg
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             cfg = json.load(f)
+        # Normalize legacy/default structure before env application so a
+        # KARI_SEARCH override is honored even on pre-migration installs.
+        cfg = validate_config(cfg)
         load_env_override(cfg)
         cfg = validate_config(cfg)
         notify_observers(cfg)
