@@ -70,6 +70,7 @@ class ModelInfo:
     likes: Optional[int] = None
     tags: List[str] = field(default_factory=list)
     license: Optional[str] = None
+    gated: bool = False
     description: Optional[str] = None
     revision: Optional[str] = None
 
@@ -408,10 +409,17 @@ class ModelOrchestratorService:
         summaries.sort(key=keyf, reverse=reverse)
         return summaries[:limit]
 
-    async def get_model_info(self, model_id: str, revision: Optional[str] = None, **_: Any) -> ModelInfo:
+    async def get_model_info(
+        self,
+        model_id: str,
+        revision: Optional[str] = None,
+        *,
+        refresh_remote: bool = False,
+        **_: Any,
+    ) -> ModelInfo:
         owner, repo = self._split_model_id(model_id)
         entry = self._registry.get(model_id)
-        if entry is not None:
+        if not refresh_remote and entry is not None:
             files = list(entry.get("files") or [])
             total_size = int(entry.get("total_size") or 0)
             return ModelInfo(
@@ -426,6 +434,7 @@ class ModelOrchestratorService:
                 likes=entry.get("likes"),
                 tags=list(entry.get("tags") or []),
                 license=entry.get("license"),
+                gated=bool(entry.get("gated", False)),
                 description=entry.get("description"),
                 revision=revision or entry.get("revision"),
             )
@@ -462,6 +471,16 @@ class ModelOrchestratorService:
             total_size += size
             files.append({"path": path, "size": size})
 
+        card_data_raw = getattr(remote, "card_data", None)
+        if card_data_raw is None:
+            card_data_raw = getattr(remote, "cardData", None)
+        if isinstance(card_data_raw, Mapping):
+            card_data = dict(card_data_raw)
+        elif hasattr(card_data_raw, "to_dict"):
+            card_data = dict(card_data_raw.to_dict())
+        else:
+            card_data = {}
+
         return ModelInfo(
             model_id=model_id,
             owner=owner,
@@ -473,13 +492,10 @@ class ModelOrchestratorService:
             downloads=getattr(remote, "downloads", None),
             likes=getattr(remote, "likes", None),
             tags=list(getattr(remote, "tags", []) or []),
-            license=getattr(remote, "cardData", {}).get("license")
-            if isinstance(getattr(remote, "cardData", None), dict)
-            else None,
-            description=getattr(remote, "cardData", {}).get("model_description")
-            if isinstance(getattr(remote, "cardData", None), dict)
-            else None,
-            revision=revision or getattr(remote, "sha", None),
+            license=card_data.get("license"),
+            gated=bool(getattr(remote, "gated", False)),
+            description=card_data.get("model_description"),
+            revision=getattr(remote, "sha", None) or revision,
         )
 
     async def download_model(self, request: Union[DownloadRequest, str], **kwargs: Any) -> DownloadResult:
@@ -529,6 +545,45 @@ class ModelOrchestratorService:
         files, total_size = await asyncio.to_thread(self._walk_files, install_path)
         duration = time.perf_counter() - start
         previous = await self.snapshot_registry_entry(req.model_id)
+
+        remote_metadata: Optional[ModelInfo] = None
+        try:
+            api = self._get_hf_api()
+            remote = await asyncio.to_thread(
+                api.model_info,
+                repo_id=req.model_id,
+                revision=req.revision,
+            )
+            card_data_raw = getattr(remote, "card_data", None)
+            if card_data_raw is None:
+                card_data_raw = getattr(remote, "cardData", None)
+            if isinstance(card_data_raw, Mapping):
+                card_data = dict(card_data_raw)
+            elif hasattr(card_data_raw, "to_dict"):
+                card_data = dict(card_data_raw.to_dict())
+            else:
+                card_data = {}
+            remote_metadata = ModelInfo(
+                model_id=req.model_id,
+                owner=owner,
+                repository=repo,
+                storage_key=getattr(remote, "library_name", None) or storage_key,
+                last_modified=getattr(remote, "last_modified", None),
+                downloads=getattr(remote, "downloads", None),
+                likes=getattr(remote, "likes", None),
+                tags=list(getattr(remote, "tags", []) or []),
+                license=card_data.get("license"),
+                gated=bool(getattr(remote, "gated", False)),
+                description=card_data.get("model_description"),
+                revision=getattr(remote, "sha", None) or req.revision,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Remote model metadata refresh failed after download for %s: %s",
+                req.model_id,
+                exc,
+            )
+
         entry = {
             "model_id": req.model_id,
             "owner": owner,
@@ -540,12 +595,39 @@ class ModelOrchestratorService:
             "total_size": total_size,
             "pinned": bool(req.pin),
             "last_modified": datetime.now(timezone.utc).isoformat(),
-            "downloads": int((previous or {}).get("downloads") or 0),
-            "likes": (previous or {}).get("likes"),
-            "tags": list((previous or {}).get("tags") or []),
-            "license": (previous or {}).get("license"),
-            "description": (previous or {}).get("description"),
+            "downloads": (
+                remote_metadata.downloads
+                if remote_metadata and remote_metadata.downloads is not None
+                else int((previous or {}).get("downloads") or 0)
+            ),
+            "likes": (
+                remote_metadata.likes
+                if remote_metadata
+                else (previous or {}).get("likes")
+            ),
+            "tags": (
+                list(remote_metadata.tags)
+                if remote_metadata
+                else list((previous or {}).get("tags") or [])
+            ),
+            "license": (
+                remote_metadata.license
+                if remote_metadata
+                else (previous or {}).get("license")
+            ),
+            "gated": (
+                remote_metadata.gated
+                if remote_metadata
+                else (previous or {}).get("gated")
+            ),
+            "description": (
+                remote_metadata.description
+                if remote_metadata
+                else (previous or {}).get("description")
+            ),
         }
+        if entry.get("gated") is None:
+            entry.pop("gated", None)
         await self.replace_registry_entry(req.model_id, entry)
 
         return DownloadResult(

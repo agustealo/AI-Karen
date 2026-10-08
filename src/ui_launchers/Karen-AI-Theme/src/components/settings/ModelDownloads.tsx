@@ -11,7 +11,7 @@
  * - UI must not invent runtime compatibility or model availability.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   Database,
   Download,
+  ExternalLink,
   FolderOpen,
   Gauge,
   Loader2,
@@ -131,6 +132,7 @@ type DownloadValidation = {
   channel_id: string;
   model_id: string;
   revision?: string | null;
+  requested_revision?: string | null;
   storage_key?: string | null;
   install_path?: string | null;
   detected_runtime?: string | null;
@@ -163,6 +165,10 @@ type RecommendedModel = {
   expected_runtime?: string | null;
   approximate_size_bytes?: number | null;
   license?: string | null;
+  license_url?: string | null;
+  gated?: boolean;
+  resolved_revision?: string | null;
+  metadata_verified?: boolean;
   include_patterns?: string[] | null;
   capabilities: string[];
   app_consumers: string[];
@@ -171,11 +177,69 @@ type RecommendedModel = {
   status: string;
 };
 
+const recommendationAcceptanceKey = (item: RecommendedModel): string =>
+  `${item.id}:${item.resolved_revision || 'unresolved'}`;
+
 type RecommendedModelsResponse = {
   recommendations: RecommendedModel[];
   essential_ready: boolean;
   essential_installed: number;
   essential_total: number;
+};
+
+const IMMUTABLE_MODEL_REVISION = /^[0-9a-f]{40,64}$/i;
+
+const retryValidatedRevision = (job: DownloadJob): string | null => {
+  const revision = String(job.revision || '').trim();
+  return IMMUTABLE_MODEL_REVISION.test(revision) ? revision : null;
+};
+
+const retryInstallRevision = (
+  job: DownloadJob,
+  modelsRoot?: string | null,
+): string | null => {
+  if (job.channel_id === 'core_spacy') {
+    return null;
+  }
+
+  const persistedRevision = String(job.revision || '').trim();
+  if (persistedRevision && !IMMUTABLE_MODEL_REVISION.test(persistedRevision)) {
+    return persistedRevision === 'main' ? null : persistedRevision;
+  }
+
+  const normalizedPath = String(job.install_path || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '');
+  const rootPath = String(modelsRoot || '').replace(/\\/g, '/');
+  const normalizedRoot = rootPath.replace(/\/+$/, '') || (rootPath.startsWith('/') ? '/' : '');
+  if (!normalizedPath || !normalizedRoot) {
+    throw new Error('The original download location cannot be verified. Revalidate the model through Advanced install options.');
+  }
+
+  const rootPrefix = normalizedRoot === '/' ? '/' : `${normalizedRoot}/`;
+  if (!normalizedPath.startsWith(rootPrefix)) {
+    throw new Error('The model library folder has changed since this job. Revalidate the model through Advanced install options before retrying.');
+  }
+
+  const [owner, repository] = job.model_id.split('/', 2);
+  if (!owner || !repository) {
+    return null;
+  }
+
+  const storageKey = String(job.storage_key || '').trim();
+  if (!storageKey) {
+    throw new Error('The original download storage namespace cannot be verified. Revalidate the model through Advanced install options.');
+  }
+
+  const modelDirectory = `${owner}--${repository}`;
+  const relativePath = normalizedPath.slice(rootPrefix.length);
+  const installPrefix = `${storageKey}/${modelDirectory}/`;
+  if (!relativePath.startsWith(installPrefix)) {
+    throw new Error('The original model install alias cannot be verified. Revalidate the model through Advanced install options.');
+  }
+
+  const installAlias = relativePath.slice(installPrefix.length);
+  return installAlias && installAlias !== 'main' ? installAlias : null;
 };
 
 type ModelStorageSettings = {
@@ -490,6 +554,7 @@ export default function ModelDownloads({
   const [modelsRootDraft, setModelsRootDraft] = useState('');
   const [savingModelsRoot, setSavingModelsRoot] = useState(false);
   const [installingRecommended, setInstallingRecommended] = useState<Record<string, boolean>>({});
+  const [recommendedLicenseAcceptances, setRecommendedLicenseAcceptances] = useState<Record<string, boolean>>({});
   const [installingEssentials, setInstallingEssentials] = useState(false);
 
   const [modelId, setModelId] = useState('');
@@ -499,6 +564,7 @@ export default function ModelDownloads({
   const [excludePatterns, setExcludePatterns] = useState('');
   const [acceptLicense, setAcceptLicense] = useState(false);
   const [trustRemoteCode, setTrustRemoteCode] = useState(false);
+  const validationGenerationRef = useRef(0);
 
   const loadState = useCallback(async () => {
     setLoading(true);
@@ -739,6 +805,7 @@ export default function ModelDownloads({
     Boolean(modelId.trim()) &&
     validation?.allowed === true &&
     validation.model_id === modelId.trim() &&
+    (validation.requested_revision || '') === revision.trim() &&
     !startingDownload &&
     !channelBlocked &&
     !downloadsBlocked;
@@ -792,8 +859,15 @@ export default function ModelDownloads({
     }
   }, [loadState]);
 
-  const validateDownload = useCallback(async () => {
+  const validateDownload = useCallback(async (
+    licenseAccepted = acceptLicense,
+    reviewedRevision?: string | null,
+  ) => {
     const requestedModelId = modelId.trim();
+    const requestedRevision = revision.trim();
+    const revisionForValidation =
+      String(reviewedRevision || '').trim() || requestedRevision;
+    const validationGeneration = ++validationGenerationRef.current;
 
     if (!requestedModelId) {
       toast({
@@ -811,16 +885,23 @@ export default function ModelDownloads({
         ENDPOINTS.validate,
         {
           model_id: requestedModelId,
-          revision: revision.trim() || null,
+          revision: revisionForValidation || null,
           channel_id: currentChannel?.id || null,
           trust_remote_code: trustRemoteCode,
-          accept_license: acceptLicense,
+          accept_license: licenseAccepted,
           include_patterns: parseCsvList(includePatterns),
           exclude_patterns: parseCsvList(excludePatterns),
         },
       );
 
-      setValidation(response);
+      if (validationGeneration !== validationGenerationRef.current) {
+        return;
+      }
+
+      setValidation({
+        ...response,
+        requested_revision: requestedRevision || null,
+      });
 
       toast({
         title: response.allowed ? 'Validation passed' : 'Validation blocked',
@@ -892,6 +973,8 @@ export default function ModelDownloads({
       }>(ENDPOINTS.download, {
         model_id: requestedModelId,
         revision: revision.trim() || null,
+        validated_revision:
+          String(validation?.metadata.resolved_revision || '').trim() || null,
         channel_id: currentChannel?.id || null,
         include_patterns: parseCsvList(includePatterns),
         exclude_patterns: parseCsvList(excludePatterns),
@@ -927,6 +1010,7 @@ export default function ModelDownloads({
     modelId,
     refreshAll,
     revision,
+    validation,
     toast,
     trustRemoteCode,
   ]);
@@ -982,9 +1066,13 @@ export default function ModelDownloads({
     async (job: DownloadJob) => {
       setRetryingJobs((current) => ({ ...current, [job.job_id]: true }));
       try {
+        if (!retryValidatedRevision(job) && job.license_accepted) {
+          throw new Error('This older download used a mutable model revision. Review the current license and access terms through Advanced install options before retrying.');
+        }
         await apiClient.post(ENDPOINTS.download, {
           model_id: job.model_id,
-          revision: job.revision || null,
+          revision: retryInstallRevision(job, storageSettings?.models_root),
+          validated_revision: retryValidatedRevision(job),
           channel_id: job.channel_id || null,
           include_patterns: job.include_patterns || [],
           exclude_patterns: job.exclude_patterns || [],
@@ -1012,7 +1100,7 @@ export default function ModelDownloads({
         });
       }
     },
-    [refreshAll, toast],
+    [refreshAll, storageSettings?.models_root, toast],
   );
 
   const removeInstalledModel = useCallback(
@@ -1054,18 +1142,45 @@ export default function ModelDownloads({
   );
 
   const chooseCatalogModel = useCallback((item: ModelCatalogItem) => {
+    validationGenerationRef.current += 1;
     setModelId(item.model_id);
     setRevision('');
+    setAcceptLicense(false);
     setValidation(null);
   }, []);
 
   const installRecommendedModel = useCallback(
     async (item: RecommendedModel) => {
       if (item.installed) return;
-      if (policy?.require_license_acceptance && !acceptLicense) {
+
+      if (
+        policy?.require_license_acceptance &&
+        item.metadata_verified === false
+      ) {
         toast({
-          title: 'Accept the model license first',
-          description: 'Use the license switch in the install panel before installing recommended models.',
+          title: 'Model access terms could not be verified',
+          description: `Refresh ${item.label} when the model source is reachable before installing it.`,
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      const licenseRequired = Boolean(
+        policy?.require_license_acceptance && (item.license || item.gated),
+      );
+      const acceptanceKey = recommendationAcceptanceKey(item);
+      const licenseAccepted = Boolean(
+        recommendedLicenseAcceptances[acceptanceKey],
+      );
+
+      if (licenseRequired && !licenseAccepted) {
+        toast({
+          title: 'Review and accept this model license first',
+          description: item.license
+            ? item.license_url
+              ? `Open the ${item.license} license from this model card, then accept it before installation.`
+              : `${item.label} reports the ${item.license} license. Accept that license on this model card before installation.`
+            : 'Review the model source terms, then accept the required gated-access terms before installation.',
           variant: 'destructive',
         });
         return;
@@ -1075,11 +1190,13 @@ export default function ModelDownloads({
       try {
         await apiClient.post(ENDPOINTS.download, {
           model_id: item.model_id,
+          revision: null,
+          validated_revision: item.resolved_revision || null,
           channel_id: item.channel_id,
           include_patterns: item.include_patterns || [],
           exclude_patterns: [],
           trust_remote_code: false,
-          accept_license: acceptLicense,
+          accept_license: licenseRequired ? licenseAccepted : false,
         });
         toast({
           title: 'Recommended model queued',
@@ -1100,7 +1217,12 @@ export default function ModelDownloads({
         });
       }
     },
-    [acceptLicense, policy?.require_license_acceptance, refreshAll, toast],
+    [
+      policy?.require_license_acceptance,
+      recommendedLicenseAcceptances,
+      refreshAll,
+      toast,
+    ],
   );
 
   const installEssentialModels = useCallback(async () => {
@@ -1108,10 +1230,34 @@ export default function ModelDownloads({
       (item) => item.tier === 'essential' && !item.installed,
     );
     if (essentials.length === 0) return;
-    if (policy?.require_license_acceptance && !acceptLicense) {
+
+    const unverifiedEssentials = essentials.filter(
+      (item) =>
+        policy?.require_license_acceptance &&
+        item.metadata_verified === false,
+    );
+    if (unverifiedEssentials.length > 0) {
       toast({
-        title: 'Accept the model licenses first',
-        description: 'Karen will not silently accept third-party model licenses on your behalf.',
+        title: 'Essential model access terms could not be verified',
+        description: `Refresh before installing all essentials: ${unverifiedEssentials
+          .map((item) => item.label)
+          .join(', ')}.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const missingAcceptances = essentials.filter(
+      (item) =>
+        Boolean(policy?.require_license_acceptance && (item.license || item.gated)) &&
+        !recommendedLicenseAcceptances[recommendationAcceptanceKey(item)],
+    );
+    if (missingAcceptances.length > 0) {
+      toast({
+        title: 'Review the essential model terms first',
+        description: `Accept the required license or gated-access terms on each essential model card before installing all essentials: ${missingAcceptances
+          .map((item) => item.label)
+          .join(', ')}.`,
         variant: 'destructive',
       });
       return;
@@ -1120,13 +1266,22 @@ export default function ModelDownloads({
     setInstallingEssentials(true);
     try {
       for (const item of essentials) {
+        const licenseRequired = Boolean(
+          policy?.require_license_acceptance && (item.license || item.gated),
+        );
         await apiClient.post(ENDPOINTS.download, {
           model_id: item.model_id,
+          revision: null,
+          validated_revision: item.resolved_revision || null,
           channel_id: item.channel_id,
           include_patterns: item.include_patterns || [],
           exclude_patterns: [],
           trust_remote_code: false,
-          accept_license: acceptLicense,
+          accept_license: licenseRequired
+            ? Boolean(
+                recommendedLicenseAcceptances[recommendationAcceptanceKey(item)]
+              )
+            : false,
         });
       }
       toast({
@@ -1144,7 +1299,13 @@ export default function ModelDownloads({
     } finally {
       setInstallingEssentials(false);
     }
-  }, [acceptLicense, policy?.require_license_acceptance, recommendations, refreshAll, toast]);
+  }, [
+    policy?.require_license_acceptance,
+    recommendations,
+    recommendedLicenseAcceptances,
+    refreshAll,
+    toast,
+  ]);
 
   const saveModelsRoot = useCallback(async () => {
     const nextRoot = modelsRootDraft.trim();
@@ -1409,14 +1570,11 @@ export default function ModelDownloads({
           </CardHeader>
           <CardContent className="space-y-4">
             {policy?.require_license_acceptance && (
-              <div className="flex items-start justify-between gap-4 rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
-                <div>
-                  <div className="text-sm font-semibold">Accept recommended model licenses</div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Required before Karen queues curated third-party models. License names are shown on each card.
-                  </p>
-                </div>
-                <Switch checked={acceptLicense} onCheckedChange={setAcceptLicense} />
+              <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
+                <div className="text-sm font-semibold">Model licenses are accepted per model</div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Karen requires per-model acknowledgment when a model reports a license or gated access. Review the license or source from that model&apos;s card, then accept those exact terms before queueing it.
+                </p>
               </div>
             )}
 
@@ -1464,12 +1622,95 @@ export default function ModelDownloads({
                     Used by: {item.app_consumers.join(', ')}
                   </div>
 
+                  {policy?.require_license_acceptance &&
+                    item.metadata_verified === false && (
+                      <div className="mt-3 rounded-xl border border-border/50 bg-muted/20 p-3 text-xs">
+                        <div className="font-semibold">Access terms unavailable</div>
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          Karen could not verify this model&apos;s current license or gated-access state. Refresh when the model source is reachable before installation.
+                        </p>
+                      </div>
+                    )}
+
+                  {(item.license || item.gated) && (
+                    <div className="mt-3 rounded-xl border border-border/50 bg-background/50 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-xs font-semibold">
+                            {item.license
+                              ? `${item.license} license`
+                              : 'Restricted model access'}
+                          </div>
+                          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                            {item.license
+                              ? 'Review the reported license for this model.'
+                              : 'This model is gated by its source even though no license label was reported.'}
+                          </p>
+                        </div>
+                        {item.license_url ? (
+                          <a
+                            href={item.license_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                          >
+                            Review model terms
+                            <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                          </a>
+                        ) : (
+                          <a
+                            href={`https://huggingface.co/${item.model_id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                          >
+                            Review model source
+                            <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                          </a>
+                        )}
+                      </div>
+
+                      {policy?.require_license_acceptance && (item.license || item.gated) && (
+                        <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/40 pt-3">
+                          <Label
+                            htmlFor={`accept-license-${item.id}`}
+                            className="text-xs font-medium"
+                          >
+                            I accept the required access terms for {item.label}
+                          </Label>
+                          <Switch
+                            id={`accept-license-${item.id}`}
+                            checked={Boolean(
+                              recommendedLicenseAcceptances[
+                                recommendationAcceptanceKey(item)
+                              ],
+                            )}
+                            onCheckedChange={(checked) =>
+                              setRecommendedLicenseAcceptances((current) => ({
+                                ...current,
+                                [recommendationAcceptanceKey(item)]: checked,
+                              }))
+                            }
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <Button
                     type="button"
                     variant={item.installed ? 'outline' : 'default'}
                     size="sm"
                     className="mt-4 w-full"
-                    disabled={item.installed || installingRecommended[item.id] || downloadsBlocked}
+                    disabled={
+                      item.installed ||
+                      installingRecommended[item.id] ||
+                      downloadsBlocked ||
+                      Boolean(
+                        policy?.require_license_acceptance &&
+                          item.metadata_verified === false,
+                      )
+                    }
                     onClick={() => void installRecommendedModel(item)}
                   >
                     {item.installed ? (
@@ -1479,6 +1720,9 @@ export default function ModelDownloads({
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
                         Queueing...
                       </>
+                    ) : policy?.require_license_acceptance &&
+                      item.metadata_verified === false ? (
+                      'Verification unavailable'
                     ) : (
                       <>
                         <Download className="mr-2 h-4 w-4" aria-hidden="true" />
@@ -1872,19 +2116,75 @@ export default function ModelDownloads({
                 className="pl-9 font-mono text-xs"
                 placeholder="owner/repository"
                 value={modelId}
-                onChange={(event) => setModelId(event.target.value)}
+                onChange={(event) => {
+                  validationGenerationRef.current += 1;
+                  setModelId(event.target.value);
+                  setAcceptLicense(false);
+                  setValidation(null);
+                }}
                 />
               </div>
             </div>
 
-            <div className="flex items-start justify-between gap-4 rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
-              <div className="space-y-1">
-                <div className="text-sm font-semibold">Accept model license</div>
-                <div className="text-xs text-muted-foreground">
-                  Karen will tell you during validation when acceptance is required.
+            <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
+              {!validation ? (
+                <div>
+                  <div className="text-sm font-semibold">License review</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Validate the model first. Karen will show the reported license and only ask for acceptance when policy requires it.
+                  </div>
                 </div>
-              </div>
-              <Switch checked={acceptLicense} onCheckedChange={setAcceptLicense} />
+              ) : validation.license_required ? (
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold">
+                      {String(validation.metadata.license || 'Model')} license
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Review the reported license for this exact model before accepting it.
+                    </div>
+                    {validation.metadata.license_url ? (
+                      <a
+                        href={String(validation.metadata.license_url)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                      >
+                        Review license / model card
+                        <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                      </a>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="accept-model-license" className="text-xs font-medium">
+                      {validation.metadata.license
+                        ? `I accept the ${String(validation.metadata.license)} license`
+                        : 'I accept these required model access terms'}
+                    </Label>
+                    <Switch
+                      id="accept-model-license"
+                      checked={acceptLicense}
+                      disabled={validating}
+                      onCheckedChange={(checked) => {
+                        setAcceptLicense(checked);
+                        void validateDownload(
+                          checked,
+                          String(
+                            validation?.metadata.resolved_revision || '',
+                          ).trim() || null,
+                        );
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div className="text-sm font-semibold">No license acceptance required</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    This validation did not report a license gate for the selected model.
+                  </div>
+                </div>
+              )}
             </div>
 
             <details className="rounded-xl border border-border/50 bg-muted/10">
@@ -1898,7 +2198,12 @@ export default function ModelDownloads({
                     id="revision"
                     placeholder="main, commit SHA, or tag"
                     value={revision}
-                    onChange={(event) => setRevision(event.target.value)}
+                    onChange={(event) => {
+                      validationGenerationRef.current += 1;
+                      setRevision(event.target.value);
+                      setAcceptLicense(false);
+                      setValidation(null);
+                    }}
                   />
                 </div>
 

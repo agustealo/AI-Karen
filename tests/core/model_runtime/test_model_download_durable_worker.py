@@ -5,12 +5,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping, Optional, Sequence
+from unittest.mock import AsyncMock
 
 import pytest
 
 from ai_karen_engine.config.model_download import ModelDownloadWorkerSettings
 from ai_karen_engine.core.model_runtime.management.model_orchestrator_service import (
     DownloadResult,
+    ModelInfo,
     ModelOrchestratorError,
     ModelOrchestratorService,
 )
@@ -295,6 +297,19 @@ def _service(tmp_path: Path, repository: FakeModelDownloadRepository) -> ModelDo
 async def test_jobs_are_repository_backed_without_process_local_lifecycle_authority(tmp_path: Path) -> None:
     repository = FakeModelDownloadRepository()
     service = _service(tmp_path, repository)
+    # The lifecycle test is intentionally offline. Supply verified, ungated
+    # repository metadata rather than bypassing the production consent gate.
+    service._orchestrator.get_model_info = AsyncMock(
+        return_value=ModelInfo(
+            model_id="test-owner/test-model",
+            owner="test-owner",
+            repository="test-model",
+            storage_key="transformers",
+            license=None,
+            gated=False,
+            revision="test-resolved-sha",
+        )
+    )
 
     job = await service.start_download(
         {
@@ -550,3 +565,128 @@ async def test_valid_lease_publishes_and_completes_inside_repository_guard(
     assert repository.publication_guards == 1
     assert repository.complete_calls == 1
     assert repository.jobs[job_id]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_validation_fails_closed_when_access_metadata_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    await service.update_policy({"require_license_acceptance": True})
+    service._orchestrator.get_model_info = AsyncMock(
+        side_effect=RuntimeError("metadata unavailable")
+    )
+
+    validation = await service.validate_download(
+        model_id="test-owner/test-model",
+        channel_id="core_runtime_transformers",
+    )
+
+    assert validation.allowed is False
+    assert validation.license_required is False
+    assert any(
+        "could not be verified" in reason
+        for reason in validation.blocking_reasons
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_download_pins_reviewed_sha_but_keeps_main_install_slot(
+    tmp_path: Path,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    service._orchestrator.get_model_info = AsyncMock(
+        return_value=ModelInfo(
+            model_id="test-owner/test-model",
+            owner="test-owner",
+            repository="test-model",
+            storage_key="transformers",
+            license=None,
+            gated=False,
+            revision="resolved-sha-123",
+        )
+    )
+
+    job = await service.start_download(
+        {
+            "model_id": "test-owner/test-model",
+            "revision": None,
+            "validated_revision": "resolved-sha-123",
+            "channel_id": "core_runtime_transformers",
+        },
+        {"user_id": "test-user"},
+    )
+
+    assert job["revision"] == "resolved-sha-123"
+    assert Path(job["install_path"]).name == "main"
+    service._orchestrator.get_model_info.assert_awaited_once()
+    call = service._orchestrator.get_model_info.await_args
+    assert call.args[1] == "resolved-sha-123"
+    assert call.kwargs["refresh_remote"] is True
+
+
+@pytest.mark.asyncio
+async def test_start_download_rejects_changed_reviewed_revision(
+    tmp_path: Path,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    service._orchestrator.get_model_info = AsyncMock(
+        return_value=ModelInfo(
+            model_id="test-owner/test-model",
+            owner="test-owner",
+            repository="test-model",
+            storage_key="transformers",
+            license=None,
+            gated=False,
+            revision="different-sha",
+        )
+    )
+
+    with pytest.raises(ModelOrchestratorError, match="revision changed"):
+        await service.start_download(
+            {
+                "model_id": "test-owner/test-model",
+                "validated_revision": "reviewed-sha",
+                "channel_id": "core_runtime_transformers",
+            },
+            {"user_id": "test-user"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_reported_license_requires_acknowledgment_even_when_ungated(
+    tmp_path: Path,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    service._orchestrator.get_model_info = AsyncMock(
+        return_value=ModelInfo(
+            model_id="test-owner/test-model",
+            owner="test-owner",
+            repository="test-model",
+            storage_key="transformers",
+            license="Apache-2.0",
+            gated=False,
+            revision="license-sha",
+        )
+    )
+
+    blocked = await service.validate_download(
+        model_id="test-owner/test-model",
+        channel_id="core_runtime_transformers",
+        accept_license=False,
+    )
+    allowed = await service.validate_download(
+        model_id="test-owner/test-model",
+        channel_id="core_runtime_transformers",
+        accept_license=True,
+    )
+
+    assert blocked.license_required is True
+    assert blocked.allowed is False
+    assert "License acceptance is required" in blocked.blocking_reasons[0]
+    assert allowed.license_required is True
+    assert allowed.allowed is True

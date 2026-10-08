@@ -11,6 +11,7 @@
       "expected_runtime": "spacy",
       "approximate_size_bytes": 29360128,
       "license": "MIT",
+      "license_url": "https://github.com/explosion/spacy-models/releases",
       "capabilities": [
         "linguistic-analysis",
         "ner",
@@ -31,6 +32,7 @@
       "expected_runtime": "transformers_direct",
       "approximate_size_bytes": 280000000,
       "license": "Apache-2.0",
+      "license_url": "https://huggingface.co/distilbert/distilbert-base-uncased/blob/main/LICENSE",
       "include_patterns": [
         "config.json",
         "model.safetensors",
@@ -57,6 +59,7 @@
       "expected_runtime": "vllm",
       "approximate_size_bytes": 1520000000,
       "license": "Apache-2.0",
+      "license_url": "https://huggingface.co/Qwen/Qwen3-0.6B",
       "capabilities": [
         "chat",
         "text-generation",

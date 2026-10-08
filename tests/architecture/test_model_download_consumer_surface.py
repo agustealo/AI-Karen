@@ -25,9 +25,16 @@ def test_download_validation_resolves_metadata_even_with_explicit_channel() -> N
 
     assert "Metadata is consumer and policy truth" in source
     assert '"license": info.license' in source
+    assert '"gated": bool(info.gated)' in source
+    assert '"resolved_revision": info.revision or revision or "main"' in source
+    assert '"license_url": (' in source
+    assert 'f"https://huggingface.co/{model_id}/tree/"' in source
+    assert "if info.license or info.gated" in source
+    assert "quote(str(info.revision or revision or 'main'), safe='')" in source
     assert '"total_size": info.total_size' in source
     assert '"description": info.description' in source
     assert "if channel is None:" in source
+    assert "Model access metadata could not be verified" in source
 
 
 def test_model_downloads_surface_is_guided_and_runtime_truthful() -> None:
@@ -76,7 +83,33 @@ def test_recommended_models_are_config_driven_and_first_run_visible() -> None:
     assert '@router.get("/download/recommendations"' in route
     assert "Karen Recommended" in ui
     assert "Install Essentials" in ui
-    assert "Accept recommended model licenses" in ui
+    assert "Model licenses are accepted per model" in ui
+    assert "Review license" in ui
+    assert "recommendedLicenseAcceptances" in ui
+    assert "recommendationAcceptanceKey" in ui
+    assert "item.resolved_revision || null" in ui
+    assert "validation?.metadata.resolved_revision" in ui
+    assert "validated_revision:" in ui
+    assert "revision: null" in ui
+    assert "validationGenerationRef" in ui
+    assert "validationGeneration !== validationGenerationRef.current" in ui
+    assert "(validation.requested_revision || '') === revision.trim()" in ui
+    assert "reviewedRevision?: string | null" in ui
+    assert "item.gated" in ui
+    assert "(item.license || item.gated)" in ui
+    assert "Restricted model access" in ui
+    assert '"license_url"' in config
+    assert 'item["license"] = info.license' in control
+    assert 'item["resolved_revision"] = resolved_revision' in control
+    assert 'item["metadata_verified"] = True' in control
+    assert 'item["metadata_verified"] = False' in control
+    assert "Verification unavailable" in ui
+    assert "Access terms unavailable" in ui
+    assert "I accept the ${String(validation.metadata.license)} license" in ui
+    assert "I accept these required model access terms" in ui
+    assert 'item["gated"] = bool(info.gated)' in control
+    assert "if info.license or info.gated" in control
+    assert 'f"https://huggingface.co/{model_id}/tree/"' in control
 
 
 def test_model_library_root_is_backend_owned_and_user_configurable() -> None:
@@ -135,3 +168,53 @@ def test_model_runtime_telemetry_surfaces_existing_native_capabilities() -> None
         "disk_usage",
     ):
         assert token in ui
+
+
+def test_huggingface_license_metadata_uses_canonical_sdk_field() -> None:
+    source = (
+        ROOT
+        / "src/ai_karen_engine/core/model_runtime/management/model_orchestrator_service.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'getattr(remote, "card_data", None)' in source
+    assert 'getattr(remote, "cardData", None)' in source
+    assert 'license=card_data.get("license")' in source
+
+
+def test_model_license_acceptance_revalidates_reviewed_revision() -> None:
+    ui = UI.read_text(encoding="utf-8")
+    control = CONTROL.read_text(encoding="utf-8")
+
+    assert "reviewedRevision?: string | null" in ui
+    assert "revisionForValidation" in ui
+    assert "validateDownload(" in ui
+    assert "validation?.metadata.resolved_revision" in ui
+    assert 'request.get("validated_revision")' in control
+    assert "validation_revision = reviewed_revision or revision" in control
+    assert "Validated model revision changed before queueing" in control
+    assert "install_path = self._build_install_path(" in control
+
+
+def test_retry_preserves_install_alias_and_reviewed_revision() -> None:
+    ui = UI.read_text(encoding="utf-8")
+    control = CONTROL.read_text(encoding="utf-8")
+
+    assert "const IMMUTABLE_MODEL_REVISION = /^[0-9a-f]{40,64}$/i;" in ui
+    assert "const retryValidatedRevision = (job: DownloadJob)" in ui
+    assert "const retryInstallRevision = (" in ui
+    assert "persistedRevision && !IMMUTABLE_MODEL_REVISION.test(persistedRevision)" in ui
+    assert "revision: retryInstallRevision(job, storageSettings?.models_root)" in ui
+    assert "validated_revision: retryValidatedRevision(job)" in ui
+    assert "job.channel_id === 'core_spacy'" in ui
+    assert "normalizedRoot === '/' ? '/'" in ui
+    assert "normalizedPath.startsWith(rootPrefix)" in ui
+    assert "const installPrefix = `${storageKey}/${modelDirectory}/`;" in ui
+    assert "relativePath.startsWith(installPrefix)" in ui
+    assert ".replace(/\\\\/g, '/')" in ui
+    assert "The model library folder has changed since this job" in ui
+    assert "The original download location cannot be verified" in ui
+    assert "The original model install alias cannot be verified" in ui
+    assert "The original download storage namespace cannot be verified" in ui
+    assert "if (!retryValidatedRevision(job) && job.license_accepted)" in ui
+    assert "Review the current license and access terms" in ui
+    assert "E_VERIFY," in control

@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
+from urllib.parse import quote
 
 from ai_karen_engine.config.config_asset_loaders import (
     load_model_download_recommendations,
@@ -29,6 +30,7 @@ from ai_karen_engine.core.model_runtime.management.model_orchestrator_service im
     E_INVALID,
     E_LICENSE,
     E_PERM,
+    E_VERIFY,
     ModelOrchestratorError,
     ModelOrchestratorService,
 )
@@ -569,11 +571,23 @@ class ModelDownloadControlService:
         # Resolve it even when the caller explicitly selected a channel so license,
         # size, description, and popularity stay visible and enforceable.
         try:
-            info = await self._orchestrator.get_model_info(model_id, revision)
+            info = await self._orchestrator.get_model_info(
+                model_id,
+                revision,
+                refresh_remote=self._policy.require_license_acceptance,
+            )
             metadata = {
                 "storage_key": info.storage_key,
                 "tags": info.tags,
                 "license": info.license,
+                "gated": bool(info.gated),
+                "resolved_revision": info.revision or revision or "main",
+                "license_url": (
+                    f"https://huggingface.co/{model_id}/tree/"
+                    f"{quote(str(info.revision or revision or 'main'), safe='')}"
+                    if info.license or info.gated
+                    else None
+                ),
                 "description": info.description,
                 "total_size": info.total_size,
                 "downloads": info.downloads,
@@ -586,6 +600,10 @@ class ModelDownloadControlService:
             }
         except Exception as exc:
             warnings.append(f"Remote model metadata unavailable: {exc}")
+            if self._policy.require_license_acceptance:
+                blocking.append(
+                    "Model access metadata could not be verified; retry when license/gating metadata is available"
+                )
 
         if channel is None:
             channel = self._infer_channel(metadata | {"model_id": model_id})
@@ -603,7 +621,11 @@ class ModelDownloadControlService:
         if include_patterns and exclude_patterns:
             warnings.append("Both include and exclude patterns are set; include rules win in the executor")
 
-        license_required = bool(metadata.get("license")) if self._policy.require_license_acceptance else False
+        license_required = (
+            bool(metadata.get("license") or metadata.get("gated"))
+            if self._policy.require_license_acceptance
+            else False
+        )
         if license_required and not accept_license:
             blocking.append("License acceptance is required for this model")
 
@@ -641,9 +663,13 @@ class ModelDownloadControlService:
             )
         model_id = str(request.get("model_id") or "").strip()
         revision = request.get("revision")
+        reviewed_revision = str(
+            request.get("validated_revision") or ""
+        ).strip() or None
+        validation_revision = reviewed_revision or revision
         validation = await self.validate_download(
             model_id=model_id,
-            revision=revision,
+            revision=validation_revision,
             channel_id=request.get("channel_id"),
             trust_remote_code=bool(request.get("trust_remote_code", False)),
             accept_license=bool(request.get("accept_license", False)),
@@ -656,10 +682,29 @@ class ModelDownloadControlService:
                 "; ".join(validation.blocking_reasons),
                 validation.to_dict(),
             )
+        resolved_revision = (
+            str(validation.metadata.get("resolved_revision") or "").strip()
+            or validation_revision
+        )
+        if reviewed_revision and resolved_revision != reviewed_revision:
+            raise ModelOrchestratorError(
+                E_VERIFY,
+                "Validated model revision changed before queueing",
+                {
+                    "reviewed_revision": reviewed_revision,
+                    "resolved_revision": resolved_revision,
+                },
+            )
+        install_channel = self._channels[validation.channel_id]
+        install_path = self._build_install_path(
+            install_channel,
+            model_id,
+            revision,
+        )
         job = ModelDownloadJob(
             job_id=f"mdl-{uuid.uuid4()}",
             model_id=model_id,
-            revision=revision,
+            revision=resolved_revision,
             channel_id=validation.channel_id,
             storage_key=validation.storage_key,
             requested_by=str(user.get("user_id") or user.get("username") or "unknown"),
@@ -671,7 +716,7 @@ class ModelDownloadControlService:
             force_redownload=bool(request.get("force_redownload", False)),
             detected_runtime=validation.detected_runtime,
             detected_modality=validation.detected_modality,
-            install_path=validation.install_path,
+            install_path=str(install_path),
             message="Queued for download",
         )
         row = await self._repository.create_job(
@@ -1086,9 +1131,40 @@ class ModelDownloadControlService:
             model_id = str(item.get("model_id") or "").strip()
             if not model_id:
                 continue
+
             entry = await self._orchestrator.snapshot_registry_entry(model_id)
             install_path = str((entry or {}).get("install_path") or "")
             installed = bool(entry and install_path and Path(install_path).exists())
+
+            # Enrich curated recommendations with the same canonical metadata
+            # authority used by validation. Config provides the curated model
+            # choice; remote/local model metadata provides license and gating truth.
+            try:
+                info = await self._orchestrator.get_model_info(
+                    model_id,
+                    refresh_remote=self._policy.require_license_acceptance,
+                )
+                item["metadata_verified"] = True
+                item["license"] = info.license
+                resolved_revision = info.revision or "main"
+                item["resolved_revision"] = resolved_revision
+                item["license_url"] = (
+                    f"https://huggingface.co/{model_id}/tree/"
+                    f"{quote(str(resolved_revision), safe='')}"
+                    if info.license or info.gated
+                    else None
+                )
+                item["gated"] = bool(info.gated)
+            except Exception as exc:
+                logger.info(
+                    "model_download_recommendation_metadata_unavailable model_id=%s error=%s",
+                    model_id,
+                    exc,
+                )
+                item["metadata_verified"] = False
+                item["gated"] = bool(item.get("gated", False))
+                item["resolved_revision"] = None
+
             item["installed"] = installed
             item["install_path"] = install_path or None
             item["status"] = "installed" if installed else "available"
