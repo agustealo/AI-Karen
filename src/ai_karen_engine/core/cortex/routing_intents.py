@@ -47,7 +47,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"^how(?:'s|\s+is)\s+(?:the\s+)?weather(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^what(?:'s|\s+is)\s+(?:the\s+)?weather\s+forecast(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^weather[?!.]*$",
-            r"^weather\\s+forecast\\s+(?:for|in)\\s+.+[?!.]*$",
+            r"^weather\s+forecast\s+(?:for|in)\s+.+[?!.]*$",
             r"\bweather\s+(?:in|for|today|tonight|tomorrow|this\s+week)\b",
             r"^forecast\s+(?:today|tonight|tomorrow|this\s+week)[?!.]*$",
             r"\b(?:current|today'?s?|tonight'?s?|tomorrow'?s?)\s+(?:weather|forecast|temperature)\b",
