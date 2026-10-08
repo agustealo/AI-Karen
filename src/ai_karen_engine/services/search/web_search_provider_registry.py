@@ -226,6 +226,18 @@ class WebSearchProviderRegistry:
                 }
             )
 
+    def _priority(self, provider_id: str) -> int:
+        raw = self.get_config(provider_id).get("priority", 0)
+        try:
+            return int(raw or 0)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Ignoring invalid web search provider priority for %s: %r",
+                provider_id,
+                raw,
+            )
+            return 0
+
     def select_provider(
         self,
         requested: Optional[str] = None,
@@ -268,12 +280,7 @@ class WebSearchProviderRegistry:
             if descriptor and (not healthy_only or descriptor.health not in {"unhealthy", "degraded"}):
                 return requested
 
-        return max(
-            candidates,
-            key=lambda provider_id: int(
-                self.get_config(provider_id).get("priority", 0) or 0
-            ),
-        )
+        return max(candidates, key=self._priority)
 
     def sorted_enabled(self, policy_permitted: Optional[Sequence[str]] = None) -> List[str]:
         """
@@ -282,8 +289,7 @@ class WebSearchProviderRegistry:
         permitted = set(policy_permitted or self.descriptors.keys())
 
         def sort_key(provider_id: str) -> int:
-            config = self.get_config(provider_id)
-            return int(config.get("priority", 0) or 0)
+            return self._priority(provider_id)
 
         return sorted(
             [
