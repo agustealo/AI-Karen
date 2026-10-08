@@ -325,7 +325,7 @@ type DiscoverySnapshot = {
 };
 
 type EndpointErrors = Partial<
-  Record<'policy' | 'channels' | 'jobs' | 'installed' | 'discovery', string>
+  Record<'policy' | 'channels' | 'jobs' | 'installed' | 'discovery' | 'recommendations', string>
 >;
 
 interface ModelDownloadsProps {
