@@ -291,6 +291,32 @@ class ModelOrchestratorService:
         return owner, repo
 
     @staticmethod
+    def _validate_downloaded_artifacts(
+        files: List[Dict[str, Union[str, int]]],
+        total_size: int,
+        *,
+        storage_key: str,
+        model_id: str,
+        revision: Optional[str] = None,
+    ) -> None:
+        if not files or total_size <= 0:
+            raise ModelOrchestratorError(
+                E_VERIFY,
+                "Downloaded model has no usable files",
+                {"model_id": model_id, "revision": revision},
+            )
+        if storage_key == "spacy":
+            available = {entry["path"] for entry in files if int(entry["size"]) > 0}
+            required = {"config.cfg", "meta.json", "tokenizer"}
+            missing = sorted(required - available)
+            if missing:
+                raise ModelOrchestratorError(
+                    E_VERIFY,
+                    "Downloaded spaCy pipeline is incomplete",
+                    {"model_id": req.model_id, "missing_files": missing},
+                )
+
+    @staticmethod
     def _walk_files(root: Path) -> Tuple[List[Dict[str, Union[str, int]]], int]:
         files: List[Dict[str, Union[str, int]]] = []
         total = 0
@@ -546,22 +572,10 @@ class ModelOrchestratorService:
         # A successful transport response is not proof of a usable model.
         # Reject empty snapshots and incomplete spaCy pipelines before
         # writing the canonical registry entry or publishing a successful job.
-        if not files or total_size <= 0:
-            raise ModelOrchestratorError(
-                E_VERIFY,
-                "Downloaded model has no usable files",
-                {"model_id": req.model_id, "revision": req.revision},
-            )
-        if storage_key == "spacy":
-            available = {entry["path"] for entry in files if int(entry["size"]) > 0}
-            required = {"config.cfg", "meta.json", "tokenizer"}
-            missing = sorted(required - available)
-            if missing:
-                raise ModelOrchestratorError(
-                    E_VERIFY,
-                    "Downloaded spaCy pipeline is incomplete",
-                    {"model_id": req.model_id, "missing_files": missing},
-                )
+        self._validate_downloaded_artifacts(
+            files, total_size, storage_key=storage_key, model_id=req.model_id,
+            revision=req.revision,
+        )
         duration = time.perf_counter() - start
         previous = await self.snapshot_registry_entry(req.model_id)
 
