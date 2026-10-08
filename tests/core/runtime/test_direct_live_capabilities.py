@@ -1064,3 +1064,24 @@ def test_time_location_extraction_strips_punctuated_right_now() -> None:
     )
 
     assert location == "Tokyo"
+
+
+def test_polite_clock_location_is_forwarded_to_world_time() -> None:
+    for prompt in (
+        "Please tell me the time in Tokyo",
+        "Can you tell me what time it is in Tokyo?",
+        "Tell me the current time in New York",
+    ):
+        assert resolve_capability_decision(prompt).intent == "time.current"
+        location = DirectCapabilityExecutor._extract_time_location(prompt)
+        assert location in {"Tokyo", "New York"}, (prompt, location)
+
+
+def test_private_status_queries_do_not_trigger_external_search() -> None:
+    for prompt in (
+        "What is the current status of my order?",
+        "What is the current status of deployment 123?",
+        "Find current status of my account",
+        "Latest update on my private project",
+    ):
+        assert resolve_capability_decision(prompt).intent != "search.general", prompt
