@@ -47,3 +47,11 @@ def test_discovery_cannot_create_shadow_catalog_or_swallow_scan_errors() -> None
     assert 'raise FileNotFoundError(' in discovery
     assert 'self.logger.exception("Extension discovery failed")' in discovery
     assert 'self.logger.exception("Failed to scan extension directories")' in discovery
+
+
+def test_legacy_loader_cannot_create_shadow_plugin_root() -> None:
+    loader = (
+        ENGINE / "extensions/platform/core/host/loader.py"
+    ).read_text(encoding="utf-8")
+    assert "self.extensions_dir.mkdir(" not in loader
+    assert "Configured extensions directory unavailable:" in loader
