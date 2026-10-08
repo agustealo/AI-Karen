@@ -1146,7 +1146,11 @@ class ModelDownloadControlService:
                 )
                 item["metadata_verified"] = True
                 item["verification_state"] = "verified"
-                item["verification_source"] = "model_registry" if installed else "remote_model_metadata"
+                item["verification_source"] = (
+                    "remote_model_metadata"
+                    if self._policy.require_license_acceptance or entry is None
+                    else "model_registry"
+                )
                 item["verification_error"] = None
                 item["license"] = info.license
                 resolved_revision = info.revision or "main"
