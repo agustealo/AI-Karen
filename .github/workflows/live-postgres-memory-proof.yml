@@ -1,0 +1,67 @@
+name: Live PostgreSQL Profile Memory Proof
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-postgres-memory-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  profile-memory-postgres:
+    name: profile-memory-postgres
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: src
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/ai_karen
+      KAREN_TEST_POSTGRES_MEMORY: "1"
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ai_karen
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ai_karen"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+      - name: Install canonical memory runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/ci/chat.txt
+      - name: Initialize isolated memory ledger tables
+        run: |
+          python - <<'PY'
+          import asyncio
+          from ai_karen_engine.persistence.postgres import get_postgres_engine
+          from ai_karen_engine.platform.memory.postgres.ledger_models import Base, MemoryEvent, ProfileFact
+
+          async def prepare():
+              engine = get_postgres_engine().async_engine
+              async with engine.begin() as conn:
+                  await conn.run_sync(
+                      Base.metadata.create_all,
+                      tables=[MemoryEvent.__table__, ProfileFact.__table__],
+                  )
+          asyncio.run(prepare())
+          PY
+      - name: Prove live name recall, tenant isolation, and consent revocation
+        run: pytest tests/integration/test_live_profile_memory_roundtrip.py -q -rs
