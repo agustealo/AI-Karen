@@ -121,7 +121,8 @@ async def get_current_user(request: Request):
             "user_id": "dev-user",
             "email": "dev-user@karen.ai",
             "user_type": "developer",
-            "permissions": ["extension:*", "admin:*"],
+            "roles": ["super_admin"],
+            "permissions": ["*"],
             "tenant_id": "dev-tenant",
             "authenticated": True,
         }
@@ -137,22 +138,29 @@ async def get_current_user(request: Request):
 
 
 async def require_extension_catalog_access(request: Request) -> dict[str, Any]:
-    """Fail closed for catalog reads; the frontend cannot authorize itself."""
+    """Authenticate and authorize catalog reads through canonical RBAC."""
     user = await get_current_user(request)
-    # Authenticated middleware principals carry a user ID and tenant context;
-    # only development-bypass identities use an explicit authenticated flag.
     if (
         not isinstance(user, dict)
         or user.get("authenticated") is False
         or not user.get("user_id")
         or user.get("user_id") == "guest"
+        or not user.get("tenant_id")
     ):
         raise HTTPException(status_code=401, detail="Authentication required")
-    permissions = user.get("permissions") or []
-    if not isinstance(permissions, (list, tuple, set)):
-        raise HTTPException(status_code=403, detail="Extension catalog access denied")
-    allowed = {"extension:read", "extension:list", "extension:*", "admin:*"}
-    if not allowed.intersection(permissions):
+
+    from ai_karen_engine.auth.rbac_middleware import Permission, RBACManager
+
+    rbac = RBACManager()
+    granted = rbac.has_permission(user, Permission.READ)
+    rbac.audit_access_attempt(
+        user,
+        Permission.READ,
+        "extension_catalog",
+        granted,
+        request=request,
+    )
+    if not granted:
         raise HTTPException(status_code=403, detail="Extension catalog access denied")
     return user
 
@@ -163,7 +171,7 @@ async def list_extensions_root(user: dict[str, Any] = Depends(require_extension_
     if not manager:
         raise HTTPException(status_code=503, detail="Extension catalog unavailable")
     try:
-        return await manager.refresh_extensions()
+        return await manager.refresh_extensions(user_context=user)
     except Exception:
         logger.exception("Extension catalog refresh failed")
         raise HTTPException(status_code=503, detail="Extension catalog unavailable")
@@ -176,7 +184,7 @@ async def list_extensions(user: dict[str, Any] = Depends(require_extension_catal
     if not manager:
         raise HTTPException(status_code=503, detail="Extension catalog unavailable")
     try:
-        return await manager.refresh_extensions()
+        return await manager.refresh_extensions(user_context=user)
     except Exception:
         logger.exception("Extension catalog refresh failed")
         raise HTTPException(status_code=503, detail="Extension catalog unavailable")
