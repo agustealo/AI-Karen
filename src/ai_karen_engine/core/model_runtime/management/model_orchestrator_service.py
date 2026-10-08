@@ -539,10 +539,16 @@ class ModelOrchestratorService:
                     for artifact in candidate.iterdir():
                         destination = install_path / artifact.name
                         if destination.exists() or destination.is_symlink():
-                            raise ModelOrchestratorError(
-                                E_VERIFY,
-                                "Nested spaCy model conflicts with the publication root",
-                            )
+                            # A packaged snapshot can have repository-level
+                            # metadata differing from the loadable pipeline.
+                            # Only replace ordinary metadata files, never
+                            # pipeline directories or symlink targets.
+                            if artifact.name not in {"meta.json", "config.cfg"} or not destination.is_file() or destination.is_symlink():
+                                raise ModelOrchestratorError(
+                                    E_VERIFY,
+                                    "Nested spaCy model conflicts with the publication root",
+                                )
+                            destination.unlink()
                         shutil.move(str(artifact), str(destination))
                     # Verify the precise path that will be published.
                     loaded_root = spacy.load(install_path)
