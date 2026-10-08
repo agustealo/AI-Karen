@@ -386,6 +386,7 @@ class CortexExecutionDecider:
             "what is my birthplace", "what's my birthplace",
             "what is my hometown", "what's my hometown",
             "what is my name", "what's my name", "whats my name",
+            "hats my name", "hat's my name",
             "what do you remember about me", "what do you know about me",
             "what did i tell you about", "i already told you",
         )

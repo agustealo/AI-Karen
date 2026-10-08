@@ -170,3 +170,14 @@ def test_conjunction_separates_origin_from_residence_without_splitting_place_nam
     assert locations["residence_location"] == "NYC"
     assert locations["origin_location"] == "Jamaica"
     assert locations["birthplace"] == "Trinidad and Tobago"
+
+
+def test_truncated_name_question_activates_governed_profile_recall() -> None:
+    from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+    from ai_karen_engine.platform.memory.postgres.profile_retriever import PostgresProfileRecallRetriever
+
+    for question in ("hats my name?", "hat's my name?", "What's my name?"):
+        assert CortexExecutionDecider._personal_recall_query(question)
+        assert PostgresProfileRecallRetriever._looks_like_profile_query(question)
+
+    assert not CortexExecutionDecider._personal_recall_query("hats on sale")
