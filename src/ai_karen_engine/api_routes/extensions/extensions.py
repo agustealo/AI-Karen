@@ -82,6 +82,7 @@ class ExtensionStatusAPI(BaseModel):
     purpose: str | None = Field(default=None)
     category: str = Field(default="integration")
     has_component: bool = Field(default=False)
+    rbac: Dict[str, Any] = Field(default_factory=dict)
 
 
 # Pydantic model for install request
@@ -112,20 +113,18 @@ async def get_current_user(request: Request):
     if not AUTH_AVAILABLE:
         return {"user_id": "guest", "authenticated": False}
 
+    state_user = getattr(request.state, "user", None)
+    if isinstance(state_user, dict):
+        return state_user
+
     if (
         auth_config
         and hasattr(auth_config, "should_bypass_auth")
         and auth_config.should_bypass_auth()
     ):
-        return {
-            "user_id": "dev-user",
-            "email": "dev-user@karen.ai",
-            "user_type": "developer",
-            "roles": ["super_admin"],
-            "permissions": ["*"],
-            "tenant_id": "dev-tenant",
-            "authenticated": True,
-        }
+        context = auth_config.get_dev_user_context()
+        return context
+
 
     if _real_get_current_user:
         try:
