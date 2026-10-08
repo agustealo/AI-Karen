@@ -100,8 +100,8 @@ class ExtensionDiscoveryService:
         self._dependency_graph: Dict[str, Set[str]] = {}
         self._category_index: Dict[str, List[str]] = {}
 
-        # Ensure extensions directory exists
-        self.extensions_dir.mkdir(parents=True, exist_ok=True)
+        # Discovery is read-only. A missing configured root is an error, not
+        # an invitation to create an empty shadow plugin catalog.
 
         self.logger.info(
             f"Extension discovery service initialized for {self.extensions_dir}"
@@ -128,7 +128,9 @@ class ExtensionDiscoveryService:
                 self.logger.error(
                     f"Extensions directory does not exist: {self.extensions_dir}"
                 )
-                return {}
+                raise FileNotFoundError(
+                    f"Extensions directory does not exist: {self.extensions_dir}"
+                )
 
             # Check cache
             if not force_refresh and self._discovered_extensions:
@@ -152,7 +154,7 @@ class ExtensionDiscoveryService:
                 try:
                     metadata = await self._analyze_extension(extension_dir)
 
-                    if metadata or include_invalid:
+                    if metadata is not None:
                         self._discovered_extensions[metadata.name] = metadata
 
                         # Update indexes
@@ -186,9 +188,9 @@ class ExtensionDiscoveryService:
 
             return self._discovered_extensions
 
-        except Exception as e:
-            self.logger.error(f"Extension discovery failed: {e}")
-            return {}
+        except Exception:
+            self.logger.exception("Extension discovery failed")
+            raise
 
     async def _scan_extension_directories(self) -> List[Path]:
         """
@@ -232,9 +234,9 @@ class ExtensionDiscoveryService:
             
             return extension_dirs
 
-        except Exception as e:
-            self.logger.error(f"Failed to scan extension directories: {e}")
-            return []
+        except Exception:
+            self.logger.exception("Failed to scan extension directories")
+            raise
 
     async def _analyze_extension(
         self, extension_dir: Path
