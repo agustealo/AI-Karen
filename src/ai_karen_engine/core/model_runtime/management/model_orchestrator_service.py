@@ -543,6 +543,25 @@ class ModelOrchestratorService:
             ) from exc
 
         files, total_size = await asyncio.to_thread(self._walk_files, install_path)
+        # A successful transport response is not proof of a usable model.
+        # Reject empty snapshots and incomplete spaCy pipelines before
+        # writing the canonical registry entry or publishing a successful job.
+        if not files or total_size <= 0:
+            raise ModelOrchestratorError(
+                E_VERIFY,
+                "Downloaded model has no usable files",
+                {"model_id": req.model_id, "revision": req.revision},
+            )
+        if storage_key == "spacy":
+            available = {entry["path"] for entry in files if int(entry["size"]) > 0}
+            required = {"config.cfg", "meta.json", "tokenizer"}
+            missing = sorted(required - available)
+            if missing:
+                raise ModelOrchestratorError(
+                    E_VERIFY,
+                    "Downloaded spaCy pipeline is incomplete",
+                    {"model_id": req.model_id, "missing_files": missing},
+                )
         duration = time.perf_counter() - start
         previous = await self.snapshot_registry_entry(req.model_id)
 
