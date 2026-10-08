@@ -600,9 +600,19 @@ def test_weather_forecast_questions_do_not_hijack_business_planning() -> None:
     assert resolve_capability_decision(
         "forecast for next quarter"
     ).intent == "general.chat"
+    # A bare "forecast for" target is ambiguous even when title-cased.
     assert resolve_capability_decision(
         "forecast for New York"
+    ).intent == "general.chat"
+    assert resolve_capability_decision(
+        "forecast in New York"
     ).intent == "search.weather"
+    for prompt in (
+        "Forecast for Sales Growth",
+        "Forecast for Next Quarter",
+        "Forecast for Q4 Revenue",
+    ):
+        assert resolve_capability_decision(prompt).intent == "general.chat", prompt
 
 
 def test_time_plugin_resolves_article_led_location() -> None:
