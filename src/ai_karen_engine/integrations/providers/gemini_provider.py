@@ -523,6 +523,12 @@ class GeminiProvider(LLMProviderBase):
             if not candidates and normalized.startswith("gemini-2.5-pro"):
                 candidates = [name for name in discovered if name.startswith("gemini-2.5-pro")]
 
+            if not candidates and ("gemini-3" in normalized or normalized.startswith("gemini-3")):
+                candidates = [name for name in discovered if "gemini-3" in name or name.startswith("gemini-3")]
+
+            if not candidates and ("flash" in normalized or "medium" in normalized):
+                candidates = [name for name in discovered if "flash" in name]
+
             if candidates:
                 resolved = sorted(
                     candidates,
@@ -738,6 +744,34 @@ class GeminiProvider(LLMProviderBase):
             return text
 
         except Exception as ex:
+            error_str = str(ex).lower()
+            is_capacity_issue = (
+                "503" in error_str
+                or "capacity" in error_str
+                or "service unavailable" in error_str
+                or "resource exhausted" in error_str
+            )
+            if is_capacity_issue and model_name and model_name != DEFAULT_GEMINI_MODEL:
+                fallback_target = DEFAULT_GEMINI_MODEL
+                logger.warning(
+                    "Primary Gemini model '%s' unavailable due to capacity/503. Retrying with fallback model '%s'.",
+                    model_name,
+                    fallback_target,
+                )
+                try:
+                    fallback_model = self.genai.GenerativeModel(fallback_target)
+                    fallback_response = fallback_model.generate_content(
+                        prompt,
+                        generation_config=generation_config,
+                        safety_settings=safety_settings,
+                        request_options={"timeout": self.timeout},
+                    )
+                    fallback_text = self._extract_response_text(fallback_response)
+                    record_llm_metric("generate_text", time.time() - t0, True, "gemini")
+                    return fallback_text
+                except Exception as fallback_ex:
+                    logger.error("Fallback model '%s' also failed: %s", fallback_target, fallback_ex)
+
             record_llm_metric(
                 "generate_text",
                 time.time() - t0,
@@ -808,6 +842,41 @@ class GeminiProvider(LLMProviderBase):
             )
 
         except Exception as ex:
+            error_str = str(ex).lower()
+            is_capacity_issue = (
+                "503" in error_str
+                or "capacity" in error_str
+                or "service unavailable" in error_str
+                or "resource exhausted" in error_str
+            )
+            if is_capacity_issue and model_name and model_name != DEFAULT_GEMINI_MODEL:
+                fallback_target = DEFAULT_GEMINI_MODEL
+                logger.warning(
+                    "Primary Gemini model '%s' stream unavailable due to capacity/503. Retrying with fallback model '%s'.",
+                    model_name,
+                    fallback_target,
+                )
+                try:
+                    fallback_model = self.genai.GenerativeModel(fallback_target)
+                    fallback_stream = fallback_model.generate_content(
+                        prompt,
+                        generation_config=generation_config,
+                        safety_settings=safety_settings,
+                        stream=True,
+                        request_options={"timeout": self.timeout},
+                    )
+                    fallback_yielded = False
+                    for chunk in fallback_stream:
+                        chunk_text = self._extract_stream_chunk_text(chunk)
+                        if chunk_text:
+                            fallback_yielded = True
+                            yield chunk_text
+                    if fallback_yielded:
+                        record_llm_metric("stream_generate", time.time() - t0, True, "gemini")
+                        return
+                except Exception as fallback_ex:
+                    logger.error("Fallback streaming model '%s' also failed: %s", fallback_target, fallback_ex)
+
             record_llm_metric(
                 "stream_generate",
                 time.time() - t0,

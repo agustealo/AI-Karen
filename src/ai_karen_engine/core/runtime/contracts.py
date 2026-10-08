@@ -450,4 +450,9 @@ class ActionExecutionGate:
             return True
         if not plan.allowed_capabilities:
             return False
-        return any(cap in plan.allowed_capabilities for cap in ["*", action])
+        normalized_action = action.replace("_", ".").replace(":", ".")
+        normalized_caps = {cap.replace("_", ".").replace(":", ".") for cap in plan.allowed_capabilities}
+        return any(
+            cap in plan.allowed_capabilities or cap in normalized_caps
+            for cap in ["*", action, normalized_action]
+        )
