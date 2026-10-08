@@ -1,10 +1,11 @@
-name: Web pnpm 11 Install Proof
+name: Web pnpm 11 Build Proof
 
 on:
   pull_request:
     branches: [main]
     paths:
       - 'src/ui_launchers/Karen-AI-Theme/package.json'
+      - 'src/ui_launchers/Karen-AI-Theme/next.config.ts'
       - 'src/ui_launchers/Karen-AI-Theme/package-lock.json'
       - 'src/ui_launchers/Karen-AI-Theme/pnpm-workspace.yaml'
       - '.github/workflows/web-pnpm-install-proof.yml'
@@ -16,7 +17,7 @@ permissions:
 jobs:
   pnpm-native-dependencies:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: src/ui_launchers/Karen-AI-Theme
@@ -38,3 +39,5 @@ jobs:
         run: |
           pnpm exec next --version
           pnpm exec tsc --version
+      - name: Build actual Next.js application with pnpm
+        run: pnpm exec next build
