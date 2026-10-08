@@ -51,3 +51,18 @@ async def test_emergency_fallback_passes_scoped_memory_to_prompt_path():
     assert result.answer == "Your name is Alex."
     assert runtime.memory_meta["memory_context"]["recall"] == [fact]
     assert result.metadata.degraded_mode is True
+
+
+def test_recovered_ollama_provider_is_not_claimed_distinct_without_registry_proof():
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatRuntimeMetadata
+    # Metadata keeps the requested and actual identifiers separate; display
+    # name differences alone do not prove a backend or engine change.
+    meta = ChatRuntimeMetadata(
+        requested_provider="ollama",
+        actual_provider="ollama-local",
+        requested_model="deepseek-r1:1.5b",
+        actual_model="deepseek-r1:1.5b",
+        degraded_mode=True,
+    )
+    assert meta.requested_provider != meta.actual_provider
+    assert meta.requested_model == meta.actual_model
