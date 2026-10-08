@@ -47,6 +47,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"^how(?:'s|\s+is)\s+(?:the\s+)?weather(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^what(?:'s|\s+is)\s+(?:the\s+)?weather\s+forecast(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^weather[?!.]*$",
+            r"^weather\\s+forecast\\s+(?:for|in)\\s+.+[?!.]*$",
             r"\bweather\s+(?:in|for|today|tonight|tomorrow|this\s+week)\b",
             r"^forecast\s+(?:today|tonight|tomorrow|this\s+week)[?!.]*$",
             r"\b(?:current|today'?s?|tonight'?s?|tomorrow'?s?)\s+(?:weather|forecast|temperature)\b",
@@ -242,10 +243,9 @@ def _looks_like_forecast_target(query: str) -> bool:
         return True
     if re.fullmatch(r"(?:UTC|GMT)(?:[+-]\d{1,2}(?::\d{2})?)?", location, re.IGNORECASE):
         return True
-    return bool(re.fullmatch(
-        r"[A-Za-z][A-Za-z .'-]+,\s*[A-Za-z][A-Za-z .'-]+",
-        location,
-    ))
+    # Neither comma punctuation nor title case proves geographic intent.
+    # Explicit weather-forecast grammar is handled by the weather patterns.
+    return False
 
 
 def _looks_like_location_first_weather(query: str) -> bool:
