@@ -95,8 +95,29 @@ class PluginPermissionResolver:
         self._check_tenant_isolation(manifest, tenant, tenant_id, result)
         if result.denied_permissions:
             return result
+        # Expand inherited roles using the canonical RBAC role graph.
+        from ai_karen_engine.auth.rbac_middleware import Role, ROLE_PERMISSIONS
+
+        expanded_roles: Set[str] = set()
+        for role_name in user_roles or []:
+            try:
+                role = Role(str(role_name).lower())
+            except ValueError:
+                continue
+            seen: Set[Role] = set()
+            while role not in seen:
+                seen.add(role)
+                expanded_roles.add(role.value)
+                parent = ROLE_PERMISSIONS.get(role)
+                if parent is None or parent.inherits_from is None:
+                    break
+                role = parent.inherits_from
+        if "super_admin" in expanded_roles:
+            expanded_roles.update({"admin", "developer", "user"})
+        if "admin" in expanded_roles:
+            expanded_roles.update({"developer", "user"})
         result.allowed = True
-        self._check_rbac_eligibility(manifest, rbac, user_roles or [], result)
+        self._check_rbac_eligibility(manifest, rbac, sorted(expanded_roles), result)
         return result
 
     def resolve(
