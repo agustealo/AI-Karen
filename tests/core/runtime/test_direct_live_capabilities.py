@@ -588,3 +588,37 @@ def test_clock_for_target_rejects_non_locations_but_in_shorthand_is_case_insensi
     assert resolve_capability_decision("forecast in the hague").intent == "search.weather"
     assert resolve_capability_decision("the hague weather").intent == "search.weather"
     assert resolve_capability_decision("What time is it for the meeting?").intent == "general.chat"
+
+
+def test_weather_forecast_questions_do_not_hijack_business_planning() -> None:
+    assert resolve_capability_decision(
+        "What is the weather forecast for Detroit?"
+    ).intent == "search.weather"
+    assert resolve_capability_decision(
+        "forecast for sales growth"
+    ).intent == "general.chat"
+    assert resolve_capability_decision(
+        "forecast for next quarter"
+    ).intent == "general.chat"
+    assert resolve_capability_decision(
+        "forecast for New York"
+    ).intent == "search.weather"
+
+
+def test_time_plugin_resolves_article_led_location() -> None:
+    import importlib.util
+    from pathlib import Path
+
+    base_file = (
+        Path(__file__).resolve().parents[3]
+        / "src/ai_karen_engine/extensions/plugins/time-query/handlers/base.py"
+    )
+    spec = importlib.util.spec_from_file_location("karen_time_query_base", base_file)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    import sys
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    resolved = module.TimeHandlerBase.resolve_timezone("the hague")
+    assert resolved["success"] is True
+    assert resolved["timezone"] == "Europe/Amsterdam"
