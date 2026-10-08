@@ -580,3 +580,6 @@ def test_clock_for_target_rejects_non_locations_but_in_shorthand_is_case_insensi
 
     assert resolve_capability_decision("What time is it for Tokyo?").intent == "time.current"
     assert resolve_capability_decision("What time is it for New York?").intent == "time.current"
+    assert resolve_capability_decision("What time is it for The Hague?").intent == "time.current"
+    assert resolve_capability_decision("forecast in The Hague").intent == "search.weather"
+    assert resolve_capability_decision("The Hague weather").intent == "search.weather"
