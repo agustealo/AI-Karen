@@ -51,6 +51,11 @@ async def test_emergency_fallback_passes_scoped_memory_to_prompt_path():
     assert result.answer == "Your name is Alex."
     assert runtime.memory_meta["memory_context"]["recall"] == [fact]
     assert result.metadata.degraded_mode is True
+    recovery = result.metadata.extra["recovery"]
+    assert recovery["occurred"] is True
+    assert recovery["actual_response_healthy"] is True
+    assert recovery["provider_identity_verified"] is False
+    assert recovery["model_changed"] is False
 
 
 def test_recovered_ollama_provider_is_not_claimed_distinct_without_registry_proof():
