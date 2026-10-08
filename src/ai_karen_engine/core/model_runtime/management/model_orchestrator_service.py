@@ -501,14 +501,6 @@ class ModelOrchestratorService:
     @staticmethod
     def _verify_spacy_pipeline(install_path: Path) -> None:
         """Reject incomplete or incompatible spaCy artifacts before publication."""
-        try:
-            import spacy
-        except ImportError as exc:
-            raise ModelOrchestratorError(
-                E_COMPAT,
-                "spaCy must be installed to verify a spaCy model",
-            ) from exc
-
         # Hugging Face snapshots can contain an unpacked model or a package
         # directory. Only consider bounded, local direct descendants.
         candidates = [install_path]
@@ -525,6 +517,13 @@ class ModelOrchestratorService:
         for candidate in candidates:
             if not (candidate / "config.cfg").is_file() or not (candidate / "meta.json").is_file():
                 continue
+            try:
+                import spacy
+            except ImportError as exc:
+                raise ModelOrchestratorError(
+                    E_COMPAT,
+                    "spaCy must be installed to verify a spaCy model",
+                ) from exc
             try:
                 nlp = spacy.load(candidate)
                 if not nlp.pipe_names:
