@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from .web_search_defaults import build_provider_configs
+from ai_karen_engine.config.web_search import build_provider_configs
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +268,12 @@ class WebSearchProviderRegistry:
             if descriptor and (not healthy_only or descriptor.health not in {"unhealthy", "degraded"}):
                 return requested
 
-        return candidates[0]
+        return max(
+            candidates,
+            key=lambda provider_id: int(
+                self.get_config(provider_id).get("priority", 0) or 0
+            ),
+        )
 
     def sorted_enabled(self, policy_permitted: Optional[Sequence[str]] = None) -> List[str]:
         """
