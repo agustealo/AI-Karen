@@ -134,8 +134,23 @@ async def get_current_user(request: Request):
     return {"user_id": "guest", "authenticated": False}
 
 
+
+
+async def require_extension_catalog_access(request: Request) -> dict[str, Any]:
+    """Fail closed for catalog reads; the frontend cannot authorize itself."""
+    user = await get_current_user(request)
+    if not isinstance(user, dict) or not user.get("authenticated"):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    permissions = user.get("permissions") or []
+    if not isinstance(permissions, (list, tuple, set)):
+        raise HTTPException(status_code=403, detail="Extension catalog access denied")
+    allowed = {"extension:read", "extension:list", "extension:*", "admin:*"}
+    if not allowed.intersection(permissions):
+        raise HTTPException(status_code=403, detail="Extension catalog access denied")
+    return user
+
 @router.get("/", response_model=List[ExtensionStatusAPI])
-async def list_extensions_root():
+async def list_extensions_root(user: dict[str, Any] = Depends(require_extension_catalog_access)):
     """List all extensions and their status (root endpoint)."""
     manager = get_extension_manager()
     if not manager:
@@ -148,7 +163,7 @@ async def list_extensions_root():
 
 
 @router.get("/list", response_model=List[ExtensionStatusAPI])
-async def list_extensions():
+async def list_extensions(user: dict[str, Any] = Depends(require_extension_catalog_access)):
     """List all extensions and their status."""
     manager = get_extension_manager()
     if not manager:
