@@ -762,29 +762,50 @@ async def test_recommendation_verified_metadata_overrides_curated_license(
     assert item["resolved_revision"] == "0123456789abcdef0123456789abcdef01234567"
 
 
-def test_model_file_integrity_checks_cover_spacy_artifacts(tmp_path: Path) -> None:
+def test_spacy_snapshot_requires_real_pipeline_deserialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     root = tmp_path / "pipeline"
     root.mkdir()
     files, total_size = ModelOrchestratorService._walk_files(root)
-    assert files == []
-    assert total_size == 0
     with pytest.raises(ModelOrchestratorError, match="no usable files"):
         ModelOrchestratorService._validate_downloaded_artifacts(
-            files, total_size, storage_key="spacy", model_id="spacy/en_core_web_sm"
+            files, total_size, storage_key="spacy",
+            model_id="spacy/en_core_web_sm", install_path=root,
         )
+
     for filename in ("config.cfg", "meta.json", "tokenizer"):
         (root / filename).write_text("content", encoding="utf-8")
     files, total_size = ModelOrchestratorService._walk_files(root)
-    assert total_size > 0
-    assert {"config.cfg", "meta.json", "tokenizer"} <= {
-        entry["path"] for entry in files if entry["size"] > 0
-    }
-    ModelOrchestratorService._validate_downloaded_artifacts(
-        files, total_size, storage_key="spacy", model_id="spacy/en_core_web_sm"
+
+    def reject_partial_model(_path: str) -> None:
+        raise ValueError("missing tok2vec/model and vocab")
+
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(sys.modules, "spacy", SimpleNamespace(load=reject_partial_model))
+    with pytest.raises(ModelOrchestratorError, match="failed to load"):
+        ModelOrchestratorService._validate_downloaded_artifacts(
+            files, total_size, storage_key="spacy",
+            model_id="spacy/en_core_web_sm", install_path=root,
+        )
+
+    loaded: list[str] = []
+    monkeypatch.setitem(
+        sys.modules, "spacy",
+        SimpleNamespace(load=lambda path: loaded.append(path)),
     )
+    ModelOrchestratorService._validate_downloaded_artifacts(
+        files, total_size, storage_key="spacy",
+        model_id="spacy/en_core_web_sm", install_path=root,
+    )
+    assert loaded == [str(root)]
+
     (root / "tokenizer").unlink()
     partial, partial_size = ModelOrchestratorService._walk_files(root)
     with pytest.raises(ModelOrchestratorError, match="incomplete"):
         ModelOrchestratorService._validate_downloaded_artifacts(
-            partial, partial_size, storage_key="spacy", model_id="spacy/en_core_web_sm"
+            partial, partial_size, storage_key="spacy",
+            model_id="spacy/en_core_web_sm", install_path=root,
         )
