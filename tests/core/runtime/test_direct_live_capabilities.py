@@ -1123,3 +1123,19 @@ def test_polite_find_current_queries_route_to_live_search() -> None:
         "Could you please find the latest Python version?",
     ):
         assert resolve_capability_decision(query).intent == "search.general"
+
+
+def test_bare_tell_me_clock_and_possessive_private_updates() -> None:
+    from ai_karen_engine.core.runtime.direct_capability_executor import DirectCapabilityExecutor
+
+    query = "Tell me the current time in New York"
+    assert resolve_capability_decision(query).intent == "time.current"
+    assert DirectCapabilityExecutor._extract_time_location(query) == "New York"
+
+    for query in (
+        "Latest update on his private project",
+        "Latest update on her order",
+        "Latest update on their account",
+        "Latest update on its deployment",
+    ):
+        assert resolve_capability_decision(query).intent == "general.chat"
