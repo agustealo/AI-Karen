@@ -181,3 +181,15 @@ def test_truncated_name_question_activates_governed_profile_recall() -> None:
         assert PostgresProfileRecallRetriever._looks_like_profile_query(question)
 
     assert not CortexExecutionDecider._personal_recall_query("hats on sale")
+
+
+def test_profile_recall_prioritizes_explicit_question_attribute() -> None:
+    from ai_karen_engine.platform.memory.postgres.profile_retriever import PostgresProfileRecallRetriever
+
+    retriever = PostgresProfileRecallRetriever()
+    assert retriever._preferred_attribute("What's my name?") == "preferred_name"
+    assert retriever._preferred_attribute("hats my name?") == "preferred_name"
+    assert retriever._preferred_attribute("Where am I from?") == "origin_location"
+    assert retriever._preferred_attribute("Where was I born?") == "birthplace"
+    assert retriever._preferred_attribute("Where do I live?") == "residence_location"
+    assert retriever._preferred_attribute("What's the weather?") is None

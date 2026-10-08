@@ -6,7 +6,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import case, or_, select
 
 from ai_karen_engine.core.memory.neuro import decide_activation_mode
 from ai_karen_engine.core.memory.types import (
@@ -35,6 +35,7 @@ class PostgresProfileRecallRetriever:
         except ValueError:
             return []
 
+        preferred_attribute = self._preferred_attribute(query.text or "")
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         top_k = min(max(int(query.top_k or 10), 1), 50)
         async with async_transaction_scope(tenant_id=str(query.tenant_id)) as session:
@@ -51,12 +52,36 @@ class PostgresProfileRecallRetriever:
                     # Superseded facts must never compete with the active value.
                     ProfileFact.valid_to.is_(None),
                 )
-                .order_by(ProfileFact.confidence.desc(), ProfileFact.updated_at.desc())
+                .order_by(
+                    *(
+                        [case((ProfileFact.attribute == preferred_attribute, 0), else_=1)]
+                        if preferred_attribute else []
+                    ),
+                    ProfileFact.confidence.desc(),
+                    ProfileFact.updated_at.desc(),
+                )
                 .limit(top_k)
             )
             rows = (await session.execute(stmt)).scalars().all()
 
         return [self._entry(row, query) for row in rows]
+
+    @staticmethod
+    def _preferred_attribute(text: str) -> str | None:
+        """Prioritize the explicit question target before applying top-k."""
+        q = " ".join(str(text).casefold().replace("’", "'").split())
+        if any(cue in q for cue in (
+            "what's my name", "what is my name", "whats my name",
+            "hats my name", "hat's my name", "remember my name",
+        )):
+            return "preferred_name"
+        if any(cue in q for cue in ("where am i from", "where i'm from", "where im from")):
+            return "origin_location"
+        if "where was i born" in q or "my birthplace" in q:
+            return "birthplace"
+        if "where do i live" in q or "where i live" in q:
+            return "residence_location"
+        return None
 
     @staticmethod
     def _looks_like_profile_query(text: str) -> bool:
