@@ -132,7 +132,7 @@ class MemoryFormationEvaluator:
         else:
             sensitivity = (
                 MemorySensitivity.CONFIDENTIAL
-                if explicit and is_identity
+                if explicit and signal.signal_type == "identity_fact"
                 else MemorySensitivity.INTERNAL
             )
 
