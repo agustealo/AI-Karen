@@ -123,9 +123,8 @@ class DirectCapabilityExecutor:
             return False
         if decision.is_graph_required:
             return False
-        return bool(
-            decision.policy_constraints.get("direct_capability", False)
-        )
+        policy_constraints = getattr(decision, "policy_constraints", {}) or {}
+        return bool(policy_constraints.get("direct_capability", False))
 
     async def execute(
         self,
