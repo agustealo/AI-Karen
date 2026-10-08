@@ -367,3 +367,69 @@ async def test_explicit_location_still_obeys_privacy_restrictions():
     assert result["persisted"] == 0
     assert result["reason"] == "privacy_sensitive_interaction"
     assert vault.calls == []
+
+
+@pytest.mark.asyncio
+async def test_mixed_sensitive_message_only_persists_safe_candidate():
+    class _TwoSignalPipeline:
+        async def process_text(self, **kwargs):
+            return ExtractionResult(
+                signals=[
+                    MemorySignal(
+                        text="I'm from Jamaica",
+                        signal_type="profile_fact",
+                        confidence=0.98,
+                        metadata={
+                            "explicit_user_statement": True,
+                            "category": "location",
+                            "attribute": "origin_location",
+                            "normalized_value": "Jamaica",
+                        },
+                    ),
+                    MemorySignal(
+                        text="My email is private@example.com",
+                        signal_type="profile_fact",
+                        confidence=0.98,
+                        metadata={
+                            "explicit_user_statement": True,
+                            "category": "contact",
+                            "attribute": "email",
+                            "normalized_value": "private@example.com",
+                        },
+                    ),
+                ],
+                status="success",
+            )
+
+    class _CandidatePrivacy:
+        def extract_safe_metadata(self, value):
+            sensitive = "@" in value
+            return {
+                "contains_pii": sensitive,
+                "pii_types": ["email"] if sensitive else [],
+            }
+
+    vault = _Vault()
+    projector = _Projector()
+    service = MemoryFormationService(
+        vault_factory=lambda tenant_id: vault,
+        derived_projector=projector,
+        evaluator=MemoryFormationEvaluator(
+            signal_pipeline=_TwoSignalPipeline(),
+            worthiness_scorer=_UnavailableScorer(),
+            privacy_classifier=_CandidatePrivacy(),
+        ),
+    )
+
+    result = await service.process_interaction(
+        text="I'm from Jamaica. My email is private@example.com",
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id="00000000-0000-0000-0000-000000000002",
+        policy_context={"memory_write_authorized": True},
+    )
+
+    assert result["persisted"] == 1
+    assert result["admitted"] == 1
+    assert len(vault.calls) == 1
+    assert vault.calls[0][0].metadata.custom["attribute"] == "origin_location"
+    assert len(projector.calls) == 1
