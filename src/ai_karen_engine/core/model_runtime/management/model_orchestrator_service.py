@@ -298,6 +298,7 @@ class ModelOrchestratorService:
         storage_key: str,
         model_id: str,
         revision: Optional[str] = None,
+        install_path: Optional[Path] = None,
     ) -> None:
         if not files or total_size <= 0:
             raise ModelOrchestratorError(
@@ -315,6 +316,22 @@ class ModelOrchestratorService:
                     "Downloaded spaCy pipeline is incomplete",
                     {"model_id": model_id, "missing_files": missing},
                 )
+            if install_path is None:
+                raise ModelOrchestratorError(
+                    E_VERIFY, "spaCy validation requires a staged model path",
+                    {"model_id": model_id},
+                )
+            try:
+                import spacy
+
+                # Structural files are insufficient: verify every configured
+                # pipeline component can actually be deserialized by spaCy.
+                spacy.load(str(install_path))
+            except Exception as exc:
+                raise ModelOrchestratorError(
+                    E_VERIFY, "Downloaded spaCy pipeline failed to load",
+                    {"model_id": model_id, "error_type": type(exc).__name__},
+                ) from exc
 
     @staticmethod
     def _walk_files(root: Path) -> Tuple[List[Dict[str, Union[str, int]]], int]:
@@ -572,9 +589,10 @@ class ModelOrchestratorService:
         # A successful transport response is not proof of a usable model.
         # Reject empty snapshots and incomplete spaCy pipelines before
         # writing the canonical registry entry or publishing a successful job.
-        self._validate_downloaded_artifacts(
+        await asyncio.to_thread(
+            self._validate_downloaded_artifacts,
             files, total_size, storage_key=storage_key, model_id=req.model_id,
-            revision=req.revision,
+            revision=req.revision, install_path=install_path,
         )
         duration = time.perf_counter() - start
         previous = await self.snapshot_registry_entry(req.model_id)
