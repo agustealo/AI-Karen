@@ -311,6 +311,8 @@ class TimeHandlerBase:
         "portugal": "Europe/Lisbon",
         "lisbon": "Europe/Lisbon",
         "netherlands": "Europe/Amsterdam",
+        "the hague": "Europe/Amsterdam",
+        "hague": "Europe/Amsterdam",
         "amsterdam": "Europe/Amsterdam",
         "switzerland": "Europe/Zurich",
         "zurich": "Europe/Zurich",
