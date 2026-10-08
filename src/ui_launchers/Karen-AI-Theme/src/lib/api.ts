@@ -471,6 +471,12 @@ class ApiClient {
             headers['Authorization'] = `Bearer ${accessToken}`;
           }
         } else if (this.isTokenExpired(accessToken)) {
+          const hasRefreshToken = typeof window !== 'undefined' && Boolean(localStorage.getItem('refresh_token'));
+          if (!hasRefreshToken) {
+            console.warn('[ApiClient] Access token expired and no refresh token present');
+            this.invalidateAuthSession('session_invalid');
+            return headers;
+          }
           console.log('[ApiClient] Access token expired, attempting refresh');
           try {
             await this.refreshAccessToken();
@@ -525,7 +531,7 @@ class ApiClient {
 
   private async refreshAccessToken(): Promise<void> {
     try {
-      const refreshToken = localStorage.getItem('refresh_token');
+      const refreshToken = typeof window !== 'undefined' ? localStorage.getItem('refresh_token') : null;
       if (!refreshToken) throw new Error('No refresh token available');
 
       const sendRefresh = async (baseUrl: string | null): Promise<Response> =>
@@ -562,7 +568,10 @@ class ApiClient {
       localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
       this.clearSessionWarningFlag();
     } catch (error) {
-      if (this.isTransientError(error)) {
+      const isMissingToken = error instanceof Error && error.message === 'No refresh token available';
+      if (isMissingToken) {
+        console.warn('[ApiClient] Token refresh skipped: No refresh token in storage.');
+      } else if (this.isTransientError(error)) {
         console.warn('[ApiClient] Token refresh temporarily unavailable:', error);
       } else {
         console.error('[ApiClient] Token refresh failed:', error);
@@ -613,47 +622,52 @@ class ApiClient {
       response = await send(fallbackBaseUrl);
     }
 
-    // 401 Handling - Only redirect to login as last resort
+    // 401 Handling - Only attempt refresh if request was authenticated and refresh token is present
     if (response.status === 401) {
-      const hasTriedRefresh = localStorage.getItem(this.TOKEN_REFRESH_ATTEMPTED_KEY) === 'true';
-
-      if (!hasTriedRefresh) {
-        console.log('[ApiClient] 401 received, attempting token refresh');
-        localStorage.setItem(this.TOKEN_REFRESH_ATTEMPTED_KEY, 'true');
-
-        try {
-          await this.refreshAccessToken();
-          // Retry the original request with new token
-          response = await send(preferredBaseUrl);
-          if (this.shouldRetryWithDirectBackend(response, fallbackBaseUrl) ||
-              this.shouldRetryMissingApiRoute(endpoint, response, fallbackBaseUrl)) {
-            response = await send(fallbackBaseUrl);
-          }
-
-          // Clear the refresh attempt flag on success
-          if (response.ok) {
-            localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
-          }
-        } catch (refreshError) {
-          if (this.isTransientError(refreshError)) {
-            console.warn('[ApiClient] Token refresh failed due to transient/degraded state. Preserving auth state.');
-            // Let it fall through to the normal error handling below, don't clear auth
-            localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
-          } else {
-            console.warn('[ApiClient] Token refresh failed for 401, redirecting to login:', refreshError);
-            localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
-
-            this.invalidateAuthSession('refresh_failed');
-            return undefined as T;
-          }
-        }
+      if (skipAuth) {
+        console.warn('[ApiClient] Unauthenticated request received 401:', endpoint);
       } else {
-        // Already tried refresh, this is a genuine auth failure
-        console.warn('[ApiClient] 401 after refresh attempt, redirecting to login');
-        localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
+        const hasRefreshToken = typeof window !== 'undefined' && Boolean(localStorage.getItem('refresh_token'));
+        const hasTriedRefresh = localStorage.getItem(this.TOKEN_REFRESH_ATTEMPTED_KEY) === 'true';
 
-        this.invalidateAuthSession('terminal_401');
-        return undefined as T;
+        if (hasRefreshToken && !hasTriedRefresh) {
+          console.log('[ApiClient] 401 received, attempting token refresh');
+          localStorage.setItem(this.TOKEN_REFRESH_ATTEMPTED_KEY, 'true');
+
+          try {
+            await this.refreshAccessToken();
+            // Retry the original request with new token
+            response = await send(preferredBaseUrl);
+            if (this.shouldRetryWithDirectBackend(response, fallbackBaseUrl) ||
+                this.shouldRetryMissingApiRoute(endpoint, response, fallbackBaseUrl)) {
+              response = await send(fallbackBaseUrl);
+            }
+
+            // Clear the refresh attempt flag on success
+            if (response.ok) {
+              localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
+            }
+          } catch (refreshError) {
+            if (this.isTransientError(refreshError)) {
+              console.warn('[ApiClient] Token refresh failed due to transient/degraded state. Preserving auth state.');
+              // Let it fall through to the normal error handling below, don't clear auth
+              localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
+            } else {
+              console.warn('[ApiClient] Token refresh failed for 401, redirecting to login:', refreshError);
+              localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
+
+              this.invalidateAuthSession('refresh_failed');
+              return undefined as T;
+            }
+          }
+        } else {
+          // Already tried refresh or no refresh token available
+          console.warn('[ApiClient] 401 received with no refresh token or after terminal refresh attempt');
+          localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
+
+          this.invalidateAuthSession('terminal_401');
+          return undefined as T;
+        }
       }
     } else {
       // Clear refresh attempt flag on non-401 responses
