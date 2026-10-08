@@ -1,0 +1,53 @@
+"""Emergency model recovery must retain previously authorized memory evidence."""
+
+from types import SimpleNamespace
+
+import pytest
+
+from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.runtime_fallback import build_runtime_fallback
+
+
+@pytest.mark.asyncio
+async def test_emergency_fallback_passes_scoped_memory_to_prompt_path():
+    class Runtime:
+        def __init__(self):
+            self.memory_meta = None
+
+        async def _run_simple(self, request, decision, plan, meter, memory_meta=None):
+            self.memory_meta = memory_meta
+            assert decision.memory_recall_required
+            return "Your name is Alex.", {
+                "actual_provider": "ollama-local",
+                "actual_model": "deepseek-r1:1.5b",
+                "response_source": "model",
+            }
+
+    runtime = Runtime()
+    fact = {"id": "saved-name", "content": "name: Alex"}
+    request = SimpleNamespace(
+        context=SimpleNamespace(
+            request_id="test-request",
+            user_id="test-user",
+            tenant_id="test-tenant",
+        ),
+        metadata={"memory_context": {"recall": [fact]}},
+        max_tokens=256,
+        preferred_provider="ollama",
+        preferred_model="deepseek-r1:1.5b",
+    )
+    result = await build_runtime_fallback(
+        runtime=runtime,
+        request=request,
+        failure=RuntimeError("primary provider unavailable"),
+        correlation_id="test-correlation",
+        conversation_id="test-conversation",
+        decision=ExecutionDecision(
+            memory_recall_required=True,
+            memory_top_k=10,
+        ),
+    )
+    assert result is not None
+    assert result.answer == "Your name is Alex."
+    assert runtime.memory_meta["memory_context"]["recall"] == [fact]
+    assert result.metadata.degraded_mode is True
