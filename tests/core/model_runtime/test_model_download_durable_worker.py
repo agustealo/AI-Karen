@@ -690,3 +690,41 @@ async def test_reported_license_requires_acknowledgment_even_when_ungated(
     assert "License acceptance is required" in blocked.blocking_reasons[0]
     assert allowed.license_required is True
     assert allowed.allowed is True
+
+
+def test_spacy_snapshot_rejects_missing_pipeline(tmp_path: Path) -> None:
+    model_path = tmp_path / "downloaded"
+    model_path.mkdir()
+    (model_path / "README.md").write_text("not a model", encoding="utf-8")
+    with pytest.raises(ModelOrchestratorError, match="loadable pipeline"):
+        ModelOrchestratorService._verify_spacy_pipeline(model_path)
+
+
+def test_spacy_snapshot_accepts_valid_nested_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import Mock
+    import sys
+    model_path = tmp_path / "downloaded"
+    nested = model_path / "package" / "model-version"
+    nested.mkdir(parents=True)
+    (nested / "config.cfg").write_text("[nlp]", encoding="utf-8")
+    (nested / "meta.json").write_text("{}", encoding="utf-8")
+    loader = Mock(return_value=Mock(pipe_names=["tok2vec", "ner"]))
+    monkeypatch.setitem(sys.modules, "spacy", Mock(load=loader))
+    ModelOrchestratorService._verify_spacy_pipeline(model_path)
+    loader.assert_called_once_with(nested)
+
+
+def test_spacy_snapshot_rejects_empty_component_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import Mock
+    import sys
+    model_path = tmp_path / "downloaded"
+    model_path.mkdir()
+    (model_path / "config.cfg").write_text("[nlp]", encoding="utf-8")
+    (model_path / "meta.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setitem(sys.modules, "spacy", Mock(load=Mock(return_value=Mock(pipe_names=[]))))
+    with pytest.raises(ModelOrchestratorError, match="loadable pipeline"):
+        ModelOrchestratorService._verify_spacy_pipeline(model_path)
