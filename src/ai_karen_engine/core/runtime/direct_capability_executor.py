@@ -508,7 +508,7 @@ class DirectCapabilityExecutor:
             r"^(?:current\s+time|time\s+now)\s+(?:in|for)\s+(.+?)[?!.]*$",
             r"^timezone\s+(?:in|for|of)\s+(.+?)[?!.]*$",
             r"^time\s+in\s+(.+?)[?!.]*$",
-            r"^(?:please\s+)?(?:can\s+you\s+(?:please\s+)?)?tell\s+me\s+(?:what\s+time\s+it\s+is|what\s+time\s+is\s+it|the\s+(?:current\s+)?time)\s+(?:in|for)\s+(.+?)[?!.]*$",
+            r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+(?:please\s+)?)?tell\s+me\s+(?:what\s+time\s+it\s+is|what\s+time\s+is\s+it|the\s+(?:current\s+)?time)\s+(?:in|for)\s+(.+?)[?!.]*$",
         )
         for pattern in patterns:
             match = re.search(pattern, query, flags=re.IGNORECASE)
