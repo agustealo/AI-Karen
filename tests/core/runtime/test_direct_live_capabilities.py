@@ -959,3 +959,33 @@ def test_weather_shorthand_punctuation_and_conceptual_guard() -> None:
 
 def test_clock_for_target_is_detected_by_executor() -> None:
     assert DirectCapabilityExecutor._extract_time_location("What time is it for Tokyo?") == "Tokyo"
+
+
+def test_explanatory_weather_questions_do_not_preempt_chat() -> None:
+    for query in (
+        "How is weather data collected?",
+        "What's weather modeling?",
+        "How's the weather different from climate?",
+    ):
+        assert resolve_capability_decision(query).intent == "general.chat", query
+
+    for query in (
+        "How is the weather?",
+        "What's the weather in Detroit?",
+        "How's the weather for Tokyo?",
+    ):
+        assert resolve_capability_decision(query).intent == "search.weather", query
+
+
+def test_routed_targeted_clock_forms_preserve_plugin_destination() -> None:
+    for query in (
+        "Timezone in Tokyo",
+        "time now in Tokyo",
+        "What time is it right now in Tokyo?",
+        "What's the current time in Tokyo?",
+        "current time for Tokyo",
+    ):
+        assert resolve_capability_decision(query).intent == "time.current", query
+        assert DirectCapabilityExecutor._extract_time_location(query) == "Tokyo", query
+
+    assert DirectCapabilityExecutor._extract_time_location("What time is it right now?") is None
