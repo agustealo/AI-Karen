@@ -255,6 +255,15 @@ class InternetCapabilityService:
             self.provider_registry = provider_registry
         else:
             manifest_search = dict(search_settings or {})
+            plugins_config = get_config_value("plugins", {})
+            legacy_plugin_search: Dict[str, Any] = {}
+            if isinstance(plugins_config, Mapping):
+                intelligent_search = plugins_config.get("intelligent-search", {})
+                if isinstance(intelligent_search, Mapping):
+                    legacy_search = intelligent_search.get("search", {})
+                    if isinstance(legacy_search, Mapping):
+                        legacy_plugin_search = dict(legacy_search)
+
             runtime_search = get_config_value("search", {})
             runtime_search = (
                 dict(runtime_search)
@@ -262,8 +271,15 @@ class InternetCapabilityService:
                 else {}
             )
 
-            # Manifest settings are plugin bootstrap defaults. Central runtime
-            # config is the operator authority and overrides them per provider.
+            # Compatibility order: manifest bootstrap < shipped legacy plugin
+            # section < canonical top-level runtime config. This keeps existing
+            # operator settings effective without making the plugin a new owner.
+            for name, value in legacy_plugin_search.items():
+                if isinstance(value, Mapping):
+                    manifest_search.setdefault(name, {}).update(dict(value))
+
+            # Manifest/settings bootstrap defaults are overridden by the
+            # canonical runtime search config per provider.
             configured_search: Dict[str, Any] = {
                 name: dict(value)
                 for name, value in manifest_search.items()
