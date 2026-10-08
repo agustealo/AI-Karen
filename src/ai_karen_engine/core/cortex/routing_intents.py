@@ -135,7 +135,16 @@ def _looks_like_location_phrase(value: str) -> bool:
 
     lowered = [token.lower() for token in tokens]
     if lowered[0] in _NON_LOCATION_LEADERS:
-        return False
+        # Preserve proper place names that legitimately begin with an article,
+        # such as "The Hague", while rejecting conversational noun phrases such
+        # as "the meeting" or "the algorithm".
+        article_led_place = (
+            lowered[0] == "the"
+            and len(tokens) > 1
+            and any(token[:1].isupper() for token in tokens[1:])
+        )
+        if not article_led_place:
+            return False
     if len(tokens) == 1:
         return lowered[0] not in _CONCEPTUAL_TIME_SUBJECTS
 
