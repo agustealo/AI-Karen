@@ -59,11 +59,36 @@ class DirectCapabilityResult:
                 "required_capability",
                 "target",
                 "next_action",
+                "provider",
+                "search_providers",
+                "crawl_provider",
             )
             if self.payload.get(key) is not None
         }
+        payload_metadata = self.payload.get("metadata")
+        payload_metadata = (
+            payload_metadata if isinstance(payload_metadata, dict) else {}
+        )
+        for key in ("provider", "search_providers", "crawl_provider"):
+            if (
+                presentation_payload.get(key) is None
+                and payload_metadata.get(key) is not None
+            ):
+                presentation_payload[key] = payload_metadata[key]
+
+        reported_provider = str(
+            self.payload.get("provider")
+            or payload_metadata.get("provider")
+            or ""
+        ).strip()
+        actual_provider = (
+            reported_provider
+            if reported_provider and reported_provider != "none"
+            else self.source_id
+        )
         return {
-            "actual_provider": self.source_id,
+            "actual_provider": actual_provider,
+            "capability_executor": self.source_id,
             "actual_model": None,
             "runtime_engine": "direct_capability",
             "response_source": self.source or "capability_unavailable",
@@ -94,7 +119,12 @@ class DirectCapabilityExecutor:
 
     def can_handle(self, decision: ExecutionDecision) -> bool:
         route = CAPABILITY_ROUTES.get(str(decision.intent or ""))
-        return bool(route and route.get("requires_live_data"))
+        if not route or not route.get("requires_live_data"):
+            return False
+        if decision.is_graph_required:
+            return False
+        policy_constraints = getattr(decision, "policy_constraints", {}) or {}
+        return bool(policy_constraints.get("direct_capability", False))
 
     async def execute(
         self,
@@ -473,13 +503,21 @@ class DirectCapabilityExecutor:
     @staticmethod
     def _extract_time_location(query: str) -> Optional[str]:
         patterns = (
-            r"\btime\s+(?:is\s+it\s+)?in\s+(.+?)[?!.]*$",
-            r"\bcurrent\s+time\s+in\s+(.+?)[?!.]*$",
+            r"^what\s+time\s+is\s+it(?:\s+right\s+now)?\s+(?:in|for)\s+(.+?)[?!.]*$",
+            r"^what(?:'s|\s+is)\s+the\s+(?:current\s+)?time\s+(?:in|for)\s+(.+?)[?!.]*$",
+            r"^(?:current\s+time|time\s+now)\s+(?:in|for)\s+(.+?)[?!.]*$",
+            r"^timezone\s+(?:in|for|of)\s+(.+?)[?!.]*$",
+            r"^time\s+in\s+(.+?)[?!.]*$",
         )
         for pattern in patterns:
             match = re.search(pattern, query, flags=re.IGNORECASE)
             if match:
-                location = match.group(1).strip(" ,")
+                location = re.sub(
+                    r"[,;:]?\s*right\s+now$",
+                    "",
+                    match.group(1),
+                    flags=re.IGNORECASE,
+                ).strip(" ,")
                 if location:
                     return location
         return None
