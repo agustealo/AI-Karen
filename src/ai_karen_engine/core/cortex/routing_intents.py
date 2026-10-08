@@ -240,10 +240,10 @@ def _looks_like_forecast_target(query: str) -> bool:
     # "forecast in X" and "weather forecast for X" remain available.
     if re.fullmatch(r"[A-Za-z_]+/[A-Za-z_+-]+", location):
         return True
-    if re.fullmatch(r"(?:UTC|GMT)(?:[+-]\\d{1,2}(?::\\d{2})?)?", location, re.IGNORECASE):
+    if re.fullmatch(r"(?:UTC|GMT)(?:[+-]\d{1,2}(?::\d{2})?)?", location, re.IGNORECASE):
         return True
     return bool(re.fullmatch(
-        r"[A-Za-z][A-Za-z .'-]+,\\s*[A-Za-z][A-Za-z .'-]+",
+        r"[A-Za-z][A-Za-z .'-]+,\s*[A-Za-z][A-Za-z .'-]+",
         location,
     ))
 
