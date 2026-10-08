@@ -630,9 +630,14 @@ class ModelDownloadControlService:
             blocking.append("License acceptance is required for this model")
 
         install_path = self._build_install_path(channel, model_id, revision)
-        detected_runtime = "local_gguf" if channel.id == "core_gguf_external" else (
-            "transformers_direct" if channel.id in {"core_embeddings", "core_rerankers", "core_onnx"} else "vllm"
-        )
+        runtime_by_channel = {
+            "core_spacy": "spacy",
+            "core_gguf_external": "local_gguf",
+            "core_embeddings": "transformers_direct",
+            "core_rerankers": "transformers_direct",
+            "core_onnx": "transformers_direct",
+        }
+        detected_runtime = runtime_by_channel.get(channel.id, "vllm")
         detected_modality = next(iter(channel.modalities), "text")
         return ModelDownloadValidation(
             allowed=not blocking,
