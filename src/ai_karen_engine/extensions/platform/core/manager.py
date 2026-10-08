@@ -109,6 +109,15 @@ class ExtensionCoreManager:
             "menu_contributions": list(
                 getattr(getattr(manifest, "ui", None), "menu_contributions", []) or []
             ),
+            "rbac": {
+                "allowed_roles": [
+                    getattr(role, "value", str(role))
+                    for role in (getattr(getattr(manifest, "rbac", None), "allowed_roles", []) or [])
+                ],
+                "default_enabled": bool(
+                    getattr(getattr(manifest, "rbac", None), "default_enabled", False)
+                ),
+            },
         }
 
     async def refresh_registry(self) -> Dict[str, Any]:
@@ -177,13 +186,39 @@ class ExtensionCoreManager:
             for record in await service.list_plugins()
         ]
 
-    async def refresh_extensions(self) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _catalog_record_visible(
+        record: Dict[str, Any], user_context: Dict[str, Any]
+    ) -> bool:
+        from ai_karen_engine.extensions.platform.core.governance.permission_resolver import (
+            PluginPermissionResolver,
+        )
+
+        manifest = record.get("manifest")
+        if manifest is None:
+            return False
+        resolver = PluginPermissionResolver()
+        result = resolver.can_view_catalog(
+            manifest,
+            tenant_id=user_context.get("tenant_id"),
+            user_id=user_context.get("user_id"),
+            user_roles=list(user_context.get("roles") or []),
+        )
+        return result.allowed
+
+    async def refresh_extensions(
+        self, *, user_context: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         service = await self._ensure_service()
         await service.refresh_plugins()
-        return [
-            self._status_from_record(record)
-            for record in await service.list_plugins()
-        ]
+        records = await service.list_plugins()
+        if user_context is not None:
+            records = [
+                record
+                for record in records
+                if self._catalog_record_visible(record, user_context)
+            ]
+        return [self._status_from_record(record) for record in records]
 
     def health_summary(self) -> Dict[str, Any]:
         service = self._service()
