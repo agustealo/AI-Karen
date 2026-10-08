@@ -1,0 +1,41 @@
+name: Recharts 3 Compatibility Burn
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/ui_launchers/Karen-AI-Theme/src/components/ui/chart.tsx'
+      - 'src/ui_launchers/Karen-AI-Theme/package.json'
+      - 'src/ui_launchers/Karen-AI-Theme/package-lock.json'
+      - '.github/workflows/recharts-v3-compatibility.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recharts-v3-compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: src/ui_launchers/Karen-AI-Theme
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Activate pnpm 11.5.0
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.5.0 --activate
+      - name: Install existing locked dependencies
+        run: |
+          pnpm import
+          pnpm install --frozen-lockfile
+      - name: Install Recharts 3 in disposable CI workspace
+        run: pnpm add --save-exact recharts@3.10.1
+      - name: Typecheck Recharts 3 integration
+        run: pnpm exec tsc --noEmit --pretty false
+      - name: Build production UI with Recharts 3
+        run: pnpm exec next build
