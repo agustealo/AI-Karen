@@ -519,3 +519,60 @@ async def test_web_search_client_falls_back_to_next_enabled_provider() -> None:
     assert result.provider == "wikipedia"
     assert result.results
     assert client._search_with_provider.await_count == 2
+
+
+def test_default_search_uses_registry_priority_when_provider_not_requested() -> None:
+    from ai_karen_engine.services.search.web_search_provider_registry import (
+        WebSearchProviderRegistry,
+    )
+
+    registry = WebSearchProviderRegistry(
+        settings={
+            "search": {
+                "duckduckgo": {"enabled": True, "priority": 1},
+                "wikipedia": {"enabled": True, "priority": 200},
+            }
+        }
+    )
+    client = WebSearchClient(registry=registry)
+
+    assert client.registry.sorted_enabled()[0] == "wikipedia"
+
+
+def test_runtime_search_settings_fall_back_to_existing_plugin_section() -> None:
+    plugin_settings = {
+        "intelligent-search": {
+            "search": {
+                "duckduckgo": {"enabled": False, "priority": 1},
+                "wikipedia": {"enabled": True, "priority": 500},
+            }
+        }
+    }
+
+    with patch(
+        "ai_karen_engine.services.tooling.internet_capability_service.get_config_value",
+        side_effect=lambda key, default=None: (
+            plugin_settings if key == "plugins" else default
+        ),
+    ):
+        service = InternetCapabilityService()
+
+    assert service.provider_registry.is_enabled("duckduckgo") is False
+    assert service.provider_registry.is_enabled("wikipedia") is True
+    assert service.provider_registry.sorted_enabled()[0] == "wikipedia"
+
+
+def test_clock_for_target_rejects_non_locations_but_in_shorthand_is_case_insensitive() -> None:
+    assert resolve_capability_decision("time in detroit").intent == "time.current"
+    assert resolve_capability_decision("forecast in detroit").intent == "search.weather"
+    assert resolve_capability_decision("detroit weather").intent == "search.weather"
+
+    for prompt in (
+        "What time is it for lunch?",
+        "What time is it for work?",
+        "What time is it for the meeting?",
+    ):
+        decision = resolve_capability_decision(prompt)
+        assert decision.intent == "general.chat", prompt
+
+    assert resolve_capability_decision("What time is it for Tokyo?").intent == "time.current"
