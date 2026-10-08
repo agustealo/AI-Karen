@@ -106,7 +106,7 @@ export default function AutomationOverviewPage() {
           <div>
             <h2 className="karen-page-title">Automation Overview</h2>
             <p className="karen-page-description mt-1">
-              Monitor tenant-scoped tasks, jobs, and schedules owned by KAREN's automation runtime.
+              Monitor tenant-scoped tasks, jobs, and schedules owned by KAREN&apos;s automation runtime.
             </p>
           </div>
         </div>
