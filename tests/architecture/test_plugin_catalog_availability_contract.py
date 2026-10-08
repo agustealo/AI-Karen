@@ -64,3 +64,13 @@ def test_canonical_plugin_root_does_not_depend_on_working_directory() -> None:
     assert 'Path(__file__).resolve().parents[1] / "extensions" / "plugins"' in service
     assert 'self.extensions_dir else _CANONICAL_PLUGIN_ROOT' in manager
     assert 'Path(__file__).resolve().parent / "plugins"' in kernel
+
+
+def test_plugin_startup_and_dependency_share_configured_catalog_root() -> None:
+    startup = (ENGINE / "server/startup.py").read_text(encoding="utf-8")
+    dependencies = (ENGINE / "core/services/dependencies.py").read_text(encoding="utf-8")
+    assert 'or [_CANONICAL_PLUGIN_ROOT]' in startup
+    assert 'or _CANONICAL_PLUGIN_ROOT' in startup
+    assert 'expected_path = Path("src/ai_karen_engine/extensions/plugins")' not in dependencies
+    assert 'service = get_plugin_service_impl()' in dependencies
+    assert 'await service.discover_plugins()' in dependencies
