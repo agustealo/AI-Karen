@@ -112,7 +112,7 @@ describe('Manifest Validator', () => {
         permissions: ['user', 'admin']
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'weather-query');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'weather-query');
       
       expect(result).toEqual({
         valid: false,
@@ -128,7 +128,7 @@ describe('Manifest Validator', () => {
         permissions: ['user', 'admin']
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'weather-query');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'weather-query');
       
       expect(result).toEqual({
         valid: false,
@@ -144,7 +144,7 @@ describe('Manifest Validator', () => {
         permissions: ['user', 'admin']
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'weather-query');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'weather-query');
       
       expect(result).toEqual({
         valid: false,
@@ -160,7 +160,7 @@ describe('Manifest Validator', () => {
         slots: ['sidebar.plugins']
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'weather-query');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'weather-query');
       
       expect(result).toEqual({
         valid: false,
@@ -177,7 +177,7 @@ describe('Manifest Validator', () => {
         permissions: ['user', 'admin']
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'weather-query');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'weather-query');
       
       expect(result).toEqual({
         valid: false,
@@ -194,7 +194,7 @@ describe('Manifest Validator', () => {
         permissions: ['user', 'admin']
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'weather-query');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'weather-query');
       
       expect(result).toEqual({
         valid: false,
@@ -211,7 +211,7 @@ describe('Manifest Validator', () => {
         permissions: ['user', 'admin']
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'weather-query');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'weather-query');
       
       expect(result).toEqual({
         valid: false,
@@ -228,7 +228,7 @@ describe('Manifest Validator', () => {
         permissions: 'user'
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'weather-query');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'weather-query');
       
       expect(result).toEqual({
         valid: false,
@@ -246,7 +246,7 @@ describe('Manifest Validator', () => {
         order: 'not-a-number'
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'weather-query');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'weather-query');
       
       expect(result).toEqual({
         valid: false,
@@ -263,7 +263,7 @@ describe('Manifest Validator', () => {
         permissions: ['user', 'admin']
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'weather-query');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'weather-query');
       
       expect(result).toEqual({
         valid: false,
@@ -280,7 +280,7 @@ describe('Manifest Validator', () => {
         permissions: ['user', 123]
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'weather-query');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'weather-query');
       
       expect(result).toEqual({
         valid: false,
@@ -297,7 +297,7 @@ describe('Manifest Validator', () => {
         permissions: ['user', 'admin']
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'weather-query');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'weather-query');
       
       expect(result).toEqual({
         valid: false,
@@ -364,7 +364,7 @@ describe('Manifest Validator', () => {
         permissions: 'not-an-array'
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'weather-query');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'weather-query');
       
       expect(result.valid).toBe(false);
       if (!result.valid) {
@@ -380,7 +380,7 @@ describe('Manifest Validator', () => {
         permissions: ['user', 'admin']
       };
 
-      const result = validateRawManifest(invalidManifest as any as UIManifest, 'test-plugin');
+      const result = validateRawManifest(invalidManifest as unknown as UIManifest, 'test-plugin');
       
       expect(result.valid).toBe(false);
       if (!result.valid) {
