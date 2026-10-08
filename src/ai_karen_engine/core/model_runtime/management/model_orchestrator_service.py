@@ -295,7 +295,11 @@ class ModelOrchestratorService:
         files: List[Dict[str, Union[str, int]]] = []
         total = 0
         for p in root.rglob("*"):
-            if not p.is_file():
+            if not p.is_file() or p.is_symlink():
+                continue
+            # Hugging Face local_dir bookkeeping is not model content.
+            relative = p.relative_to(root)
+            if relative.parts[:2] == (".cache", "huggingface"):
                 continue
             try:
                 size = p.stat().st_size
@@ -529,6 +533,21 @@ class ModelOrchestratorService:
                 if not nlp.pipe_names:
                     errors.append("no pipeline components")
                     continue
+                if candidate != install_path:
+                    # The consumer loads the published root, not this nested
+                    # package path. Normalize the verified payload in staging.
+                    for artifact in candidate.iterdir():
+                        destination = install_path / artifact.name
+                        if destination.exists() or destination.is_symlink():
+                            raise ModelOrchestratorError(
+                                E_VERIFY,
+                                "Nested spaCy model conflicts with the publication root",
+                            )
+                        shutil.move(str(artifact), str(destination))
+                    # Verify the precise path that will be published.
+                    loaded_root = spacy.load(install_path)
+                    if not loaded_root.pipe_names:
+                        raise ModelOrchestratorError(E_VERIFY, "Published spaCy root has no pipeline components")
                 return
             except (OSError, ValueError, ImportError) as exc:
                 errors.append(type(exc).__name__)
@@ -582,6 +601,8 @@ class ModelOrchestratorService:
                 {"model_id": req.model_id, "revision": req.revision, "error": str(exc)},
             ) from exc
 
+        if req.storage_key == "spacy":
+            await asyncio.to_thread(self._verify_spacy_pipeline, install_path)
         files, total_size = await asyncio.to_thread(self._walk_files, install_path)
         if not files or total_size <= 0:
             raise ModelOrchestratorError(
@@ -589,10 +610,6 @@ class ModelOrchestratorService:
                 "Downloaded model artifact is empty; refusing registry publication",
                 {"model_id": req.model_id, "revision": req.revision},
             )
-        if req.storage_key == "spacy":
-            # A downloaded snapshot is not equivalent to a runnable spaCy
-            # pipeline. Validate it before allowing the worker to promote it.
-            await asyncio.to_thread(self._verify_spacy_pipeline, install_path)
         duration = time.perf_counter() - start
         previous = await self.snapshot_registry_entry(req.model_id)
 
