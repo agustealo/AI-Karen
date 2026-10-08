@@ -910,3 +910,11 @@ def test_downloaded_snapshot_rejects_unreadable_subtrees(
     with pytest.raises(ModelOrchestratorError, match="could not be fully inspected"):
         ModelOrchestratorService._reject_snapshot_symlinks(root)
 
+def test_downloaded_snapshot_rejects_symlink_root(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "config.cfg").write_text("[nlp]", encoding="utf-8")
+    root = tmp_path / "snapshot"
+    root.symlink_to(real, target_is_directory=True)
+    with pytest.raises(ModelOrchestratorError, match="root is a symlink"):
+        ModelOrchestratorService._reject_snapshot_symlinks(root)
