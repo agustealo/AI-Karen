@@ -261,6 +261,7 @@ class ExtensionManifest(BaseModel):
     permissions: ExtensionPermissions = Field(default_factory=ExtensionPermissions)
     resources: ExtensionResources = Field(default_factory=ExtensionResources)
     rbac: ExtensionRBAC = Field(default_factory=ExtensionRBAC)
+    governance: Dict[str, Any] = Field(default_factory=dict)
 
     # Hook points (from base.py)
     hook_points: List[HookPoint] = Field(default_factory=list)
@@ -321,6 +322,7 @@ class ExtensionManifest(BaseModel):
             "permissions",
             "resources",
             "rbac",
+            "governance",
             "hook_points",
             "prompt_files",
             "config_schema",
