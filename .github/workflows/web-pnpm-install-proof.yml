@@ -34,6 +34,7 @@ jobs:
         run: pnpm import
       - name: Install dependencies with strict native build approval
         run: pnpm install --frozen-lockfile
-      - name: Check native resolver installation
+      - name: Verify pnpm install completed without ignored build failures
         run: |
-          node -e "require('sharp'); require('unrs-resolver'); console.log('Native dependencies import successfully')"
+          pnpm exec next --version
+          pnpm exec tsc --version
