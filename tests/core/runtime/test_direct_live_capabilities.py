@@ -636,3 +636,62 @@ def test_time_plugin_resolves_article_led_location() -> None:
     resolved = module.TimeHandlerBase.resolve_timezone("the hague")
     assert resolved["success"] is True
     assert resolved["timezone"] == "Europe/Amsterdam"
+
+
+def test_shipped_search_settings_are_loaded_from_real_settings_file() -> None:
+    from ai_karen_engine.config.config_manager import get_shipped_settings
+
+    shipped = get_shipped_settings()
+    assert shipped["plugins"]["intelligent-search"]["search"]["duckduckgo"]["enabled"] is True
+
+
+def test_shipped_search_settings_respect_runtime_provider_overrides() -> None:
+    from ai_karen_engine.config.config_manager import get_shipped_settings
+
+    shipped = get_shipped_settings()
+    base = shipped["plugins"]["intelligent-search"]["search"]["duckduckgo"]
+    assert base["priority"] == 100
+    with patch(
+        "ai_karen_engine.services.tooling.internet_capability_service.get_config_value",
+        side_effect=lambda key, default=None: (
+            {"intelligent-search": {"search": {"duckduckgo": {"enabled": False}}}}
+            if key == "plugins"
+            else default
+        ),
+    ):
+        service = InternetCapabilityService()
+    config = service.provider_registry.get_config("duckduckgo")
+    assert config["enabled"] is False
+    assert config["priority"] == base["priority"]
+
+
+@pytest.mark.asyncio
+async def test_search_fallback_reserves_provider_time_before_outer_deadline() -> None:
+    import asyncio
+
+    from ai_karen_engine.services.search.web_search_client import SearchResponse
+    from ai_karen_engine.services.search.web_search_provider_registry import (
+        WebSearchProviderRegistry,
+    )
+
+    client = WebSearchClient(
+        registry=WebSearchProviderRegistry(
+            settings={"search": {
+                "duckduckgo": {"enabled": True, "priority": 100},
+                "wikipedia": {"enabled": True, "priority": 90},
+            }}
+        )
+    )
+    async def fake_provider(provider, query, max_results, time_range, **kwargs):
+        if provider == "duckduckgo":
+            raise asyncio.TimeoutError()
+        return SearchResponse(
+            query=query,
+            provider=provider,
+            results=[SimpleNamespace(title="Detroit", url="https://en.wikipedia.org/wiki/Detroit", snippet="Detroit")],
+        )
+
+    client._search_with_provider = AsyncMock(side_effect=fake_provider)
+    response = await client.search("Detroit weather")
+    assert response.provider == "wikipedia"
+    assert client._search_with_provider.await_count == 2
