@@ -297,6 +297,19 @@ def _service(tmp_path: Path, repository: FakeModelDownloadRepository) -> ModelDo
 async def test_jobs_are_repository_backed_without_process_local_lifecycle_authority(tmp_path: Path) -> None:
     repository = FakeModelDownloadRepository()
     service = _service(tmp_path, repository)
+    # The lifecycle test is intentionally offline. Supply verified, ungated
+    # repository metadata rather than bypassing the production consent gate.
+    service._orchestrator.get_model_info = AsyncMock(
+        return_value=ModelInfo(
+            model_id="test-owner/test-model",
+            owner="test-owner",
+            repository="test-model",
+            storage_key="transformers",
+            license=None,
+            gated=False,
+            revision="test-resolved-sha",
+        )
+    )
 
     job = await service.start_download(
         {
