@@ -120,11 +120,11 @@ const nextConfig: NextConfig = {
     if (fs.existsSync(pluginsDir)) {
       // Plugin repo exists, alias @plugins to it (note: no slash after @)
       config.resolve.alias['@plugins'] = pluginsDir;
-      console.log('🧩 [PluginLoader] Aliasing @plugins to src/plugin_repo');
+      // The webpack hook runs per compiler and rebuild; no per-pass logging.
     } else {
       // Fallback to plugin_host for safe require.context
       config.resolve.alias['@plugins'] = path.resolve(__dirname, 'src/plugin_host');
-      console.log('🧩 [PluginLoader] src/plugin_repo missing, aliasing @plugins to plugin_host');
+      // Keep compatibility alias without repeating a rebuild-time warning.
     }
 
     // 2. Gracefully handle optional legacy plugins that may not be installed.
@@ -135,7 +135,7 @@ const nextConfig: NextConfig = {
       if (!config.resolve) config.resolve = {};
       if (!config.resolve.alias) config.resolve.alias = {};
       config.resolve.alias['@/plugins/data_connector/ui/DataConnectorPluginPage'] = false;
-      console.log('🧩 [PluginLoader] karen-data-connector not strictly found, marked as optional (normal for missing plugin).');
+      // Optional plugin absence is represented by the alias, not a warning.
     }
 
     return config;
