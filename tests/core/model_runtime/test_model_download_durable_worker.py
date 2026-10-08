@@ -839,3 +839,30 @@ def test_spacy_nested_pipeline_replaces_packaging_metadata(
     assert (root / "config.cfg").is_file()
     assert (root / "ner").is_dir()
     assert loader.call_args_list[-1].args == (root,)
+
+
+def test_downloaded_snapshot_rejects_symlink_file_before_publication(tmp_path: Path) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    target = root / "config.cfg"
+    target.write_text("[nlp]", encoding="utf-8")
+    (root / "linked.cfg").symlink_to(target)
+    with pytest.raises(ModelOrchestratorError, match="contains a symlink"):
+        ModelOrchestratorService._reject_snapshot_symlinks(root)
+
+
+def test_downloaded_snapshot_rejects_symlink_directory_before_publication(tmp_path: Path) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    real = root / "components"
+    real.mkdir()
+    (root / "component-link").symlink_to(real, target_is_directory=True)
+    with pytest.raises(ModelOrchestratorError, match="contains a symlink"):
+        ModelOrchestratorService._reject_snapshot_symlinks(root)
+
+
+def test_downloaded_snapshot_accepts_regular_artifacts(tmp_path: Path) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    (root / "config.cfg").write_text("[nlp]", encoding="utf-8")
+    ModelOrchestratorService._reject_snapshot_symlinks(root)
