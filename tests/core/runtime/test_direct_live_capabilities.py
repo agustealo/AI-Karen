@@ -1006,3 +1006,21 @@ def test_trailing_right_now_is_not_part_of_clock_location() -> None:
     query = "What time is it in Tokyo right now?"
     assert resolve_capability_decision(query).intent == "time.current"
     assert DirectCapabilityExecutor._extract_time_location(query) == "Tokyo"
+
+
+def test_forecast_period_labels_do_not_route_to_weather() -> None:
+    q4 = resolve_capability_decision("Forecast for Q4")
+    fiscal = resolve_capability_decision("forecast for FY2027")
+
+    assert q4.intent == "general.chat"
+    assert q4.requires_tool is False
+    assert fiscal.intent == "general.chat"
+    assert fiscal.requires_tool is False
+
+
+def test_time_location_extraction_strips_punctuated_right_now() -> None:
+    location = DirectCapabilityExecutor._extract_time_location(
+        "What time is it in Tokyo, right now?"
+    )
+
+    assert location == "Tokyo"
