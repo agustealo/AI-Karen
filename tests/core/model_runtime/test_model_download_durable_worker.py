@@ -745,3 +745,27 @@ def test_hf_cache_only_is_not_a_downloaded_model(tmp_path: Path) -> None:
     files, total = ModelOrchestratorService._walk_files(tmp_path)
     assert [file["path"] for file in files] == ["config.json"]
     assert total == 2
+
+
+def test_spacy_nested_pipeline_replaces_packaging_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import Mock
+    import sys
+
+    root = tmp_path / "snapshot"
+    pipeline = root / "package" / "version"
+    pipeline.mkdir(parents=True)
+    (root / "meta.json").write_text('{"name":"packaging"}', encoding="utf-8")
+    (pipeline / "meta.json").write_text('{"name":"pipeline"}', encoding="utf-8")
+    (pipeline / "config.cfg").write_text("[nlp]", encoding="utf-8")
+    (pipeline / "ner").mkdir()
+    loader = Mock(return_value=Mock(pipe_names=["ner"]))
+    monkeypatch.setitem(sys.modules, "spacy", Mock(load=loader))
+
+    ModelOrchestratorService._verify_spacy_pipeline(root)
+
+    assert (root / "meta.json").read_text(encoding="utf-8") == '{"name":"pipeline"}'
+    assert (root / "config.cfg").is_file()
+    assert (root / "ner").is_dir()
+    assert loader.call_args_list[-1].args == (root,)
