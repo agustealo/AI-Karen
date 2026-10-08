@@ -38,3 +38,5 @@ jobs:
         run: |
           pnpm exec next --version
           pnpm exec tsc --version
+      - name: Verify web lint command
+        run: pnpm lint
