@@ -196,25 +196,14 @@ async def get_plugin_service() -> Any:
     """Resolve plugin capability without triggering UI materialization."""
 
     async def factory() -> Any:
-        from pathlib import Path
-
         from ai_karen_engine.services.plugin_service import (
             get_plugin_service as get_plugin_service_impl,
-            initialize_plugin_service,
         )
 
-        expected_path = Path("src/ai_karen_engine/extensions/plugins")
+        # Startup owns configured plugin-root initialization. API dependencies
+        # must reuse the same singleton, never reinitialize it with a relative
+        # default that overrides a user-configured plugin directory.
         service = get_plugin_service_impl()
-        if (
-            not getattr(service, "initialized", False)
-            or getattr(service, "marketplace_path", None) != expected_path
-            or getattr(service, "core_plugins_path", None) != expected_path
-        ):
-            return await initialize_plugin_service(
-                marketplace_path=expected_path,
-                core_plugins_path=expected_path,
-                auto_discover=True,
-            )
         await service.discover_plugins()
         await service.validate_and_register_all_discovered()
         return service

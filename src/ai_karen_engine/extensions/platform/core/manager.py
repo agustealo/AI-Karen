@@ -43,18 +43,22 @@ async def initialize_plugin_service(**kwargs: Any) -> "PluginService":
 class ExtensionCoreManager:
     """Read/catalog facade backed by the canonical plugin runtime."""
 
-    extensions_dir: str = "src/ai_karen_engine/extensions/plugins"
+    extensions_dir: Optional[str] = None
 
     def __post_init__(self) -> None:
-        self._root = Path(self.extensions_dir)
+        from ai_karen_engine.services.plugin_service import _CANONICAL_PLUGIN_ROOT
+
+        self._root = Path(self.extensions_dir) if self.extensions_dir else _CANONICAL_PLUGIN_ROOT
 
     def _service(self) -> "PluginService":
+        from ai_karen_engine.services.plugin_service import _CANONICAL_PLUGIN_ROOT
+
         service = get_plugin_service()
         if service.initialized:
             active_root = Path(
                 service.core_plugins_path
                 or service.marketplace_path
-                or "src/ai_karen_engine/extensions/plugins"
+                or _CANONICAL_PLUGIN_ROOT
             )
             if active_root.resolve() != self._root.resolve():
                 raise RuntimeError(

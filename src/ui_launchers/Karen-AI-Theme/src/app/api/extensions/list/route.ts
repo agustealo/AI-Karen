@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { proxyToBackend } from '../../_lib/backend-proxy';
 
 export const runtime = 'nodejs';
@@ -12,10 +12,7 @@ export async function GET(request: NextRequest) {
     retryOnStatusCodes: [502, 503, 504],
   });
 
-  if (!proxied.ok) {
-    // Catalog failures must not block login/bootstrap flows.
-    return NextResponse.json([], { status: 200 });
-  }
-
+  // Preserve backend availability and authorization errors. Returning an
+  // empty 200 here misreports outages as an uninstalled plugin catalog.
   return proxied;
 }

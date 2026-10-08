@@ -139,12 +139,12 @@ async def list_extensions_root():
     """List all extensions and their status (root endpoint)."""
     manager = get_extension_manager()
     if not manager:
-        return []
+        raise HTTPException(status_code=503, detail="Extension catalog unavailable")
     try:
         return await manager.refresh_extensions()
-    except Exception as e:
-        logger.error(f"Error in list_extensions_root: {e}")
-        return []
+    except Exception:
+        logger.exception("Extension catalog refresh failed")
+        raise HTTPException(status_code=503, detail="Extension catalog unavailable")
 
 
 @router.get("/list", response_model=List[ExtensionStatusAPI])
@@ -152,12 +152,12 @@ async def list_extensions():
     """List all extensions and their status."""
     manager = get_extension_manager()
     if not manager:
-        return []
+        raise HTTPException(status_code=503, detail="Extension catalog unavailable")
     try:
         return await manager.refresh_extensions()
-    except Exception as e:
-        logger.error(f"Error in list_extensions: {e}")
-        return []
+    except Exception:
+        logger.exception("Extension catalog refresh failed")
+        raise HTTPException(status_code=503, detail="Extension catalog unavailable")
 
 
 @router.post("/install")

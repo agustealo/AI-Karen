@@ -31,7 +31,7 @@ from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 
 logger = logging.getLogger(__name__)
 _ENABLED_STATES = {"registered", "enabled", "loaded", "active"}
-_CANONICAL_PLUGIN_ROOT = Path("src/ai_karen_engine/extensions/plugins")
+_CANONICAL_PLUGIN_ROOT = Path(__file__).resolve().parents[1] / "extensions" / "plugins"
 
 
 class ExecutionMode(str, Enum):

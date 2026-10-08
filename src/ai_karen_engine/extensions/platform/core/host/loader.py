@@ -56,12 +56,12 @@ class ExtensionLoader:
         self._discovered_paths: Dict[str, Path] = {}
         self.dependency_resolver = DependencyResolver()
 
-        # Ensure the extensions directory exists
-        if not self.extensions_dir.exists():
-            logger.warning(
-                f"Extensions directory {self.extensions_dir} does not exist, creating it"
+        # Loading and discovery are read-only. Missing configured plugin roots
+        # must be visible, not silently turned into an empty shadow directory.
+        if not self.extensions_dir.is_dir():
+            raise FileNotFoundError(
+                f"Configured extensions directory unavailable: {self.extensions_dir}"
             )
-            self.extensions_dir.mkdir(parents=True, exist_ok=True)
 
     def discover_extensions(self) -> List[str]:
         """
