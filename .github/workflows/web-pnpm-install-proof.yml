@@ -1,0 +1,39 @@
+name: Web pnpm 11 Install Proof
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/ui_launchers/Karen-AI-Theme/package.json'
+      - 'src/ui_launchers/Karen-AI-Theme/package-lock.json'
+      - 'src/ui_launchers/Karen-AI-Theme/pnpm-workspace.yaml'
+      - '.github/workflows/web-pnpm-install-proof.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pnpm-native-dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: src/ui_launchers/Karen-AI-Theme
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Activate user-reported pnpm version
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.5.0 --activate
+          pnpm --version
+      - name: Import committed npm lock into ephemeral pnpm workspace
+        run: pnpm import
+      - name: Install dependencies with strict native build approval
+        run: pnpm install --frozen-lockfile
+      - name: Check native resolver installation
+        run: |
+          node -e "require('sharp'); require('unrs-resolver'); console.log('Native dependencies import successfully')"
