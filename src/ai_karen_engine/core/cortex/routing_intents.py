@@ -218,14 +218,22 @@ def _looks_like_shorthand_time(query: str) -> bool:
 
 def _looks_like_forecast_target(query: str) -> bool:
     raw = " ".join((query or "").strip().split()).rstrip("?!.")
-    match = re.fullmatch(r"forecast\s+(?:for|in)\s+(.+)", raw, re.IGNORECASE)
+    match = re.fullmatch(
+        r"forecast\s+(?P<relation>for|in)\s+(?P<location>.+)",
+        raw,
+        re.IGNORECASE,
+    )
     if not match:
         return False
-    location = match.group(1).strip()
-    # "forecast for" is ambiguous. Require a resolvable IANA zone or
-    # positively shaped proper place name rather than guessing from prose.
+    location = match.group("location").strip()
     if not _looks_like_location_phrase(location):
         return False
+
+    # "forecast in" explicitly names a location; casing is not significant.
+    # "forecast for" may describe business planning, so require a positively
+    # shaped proper name or an explicit timezone.
+    if match.group("relation").lower() == "in":
+        return True
     if re.fullmatch(r"[A-Za-z_]+/[A-Za-z_+-]+", location):
         return True
     tokens = location.split()
