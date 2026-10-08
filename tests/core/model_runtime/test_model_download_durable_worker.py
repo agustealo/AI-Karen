@@ -866,3 +866,21 @@ def test_downloaded_snapshot_accepts_regular_artifacts(tmp_path: Path) -> None:
     root.mkdir()
     (root / "config.cfg").write_text("[nlp]", encoding="utf-8")
     ModelOrchestratorService._reject_snapshot_symlinks(root)
+
+
+def test_downloaded_snapshot_rejects_unreadable_subtrees(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+
+    root = tmp_path / "snapshot"
+    root.mkdir()
+
+    def broken_walk(path: Path, *, followlinks: bool, onerror: Any):
+        assert followlinks is False
+        onerror(PermissionError("unreadable component directory"))
+        yield str(path), [], []
+
+    monkeypatch.setattr(os, "walk", broken_walk)
+    with pytest.raises(ModelOrchestratorError, match="could not be fully inspected"):
+        ModelOrchestratorService._reject_snapshot_symlinks(root)
