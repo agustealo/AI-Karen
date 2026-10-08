@@ -338,13 +338,13 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
   }, [fetchCatalog]);
 
   const getPluginsWithUI = useCallback(() => {
-    const userRoles = user?.permissions || [];
+    const userRoles = user?.roles || [];
     return state.plugins.filter((p) => {
       // Must be enabled, have UI, and pass prompt-first validation
       if (!p.enabled || !p.has_gui || !p.promptFirstValid) return false;
 
       // Must pass RBAC check
-      if (p.allowedRoles.length === 0) return true;
+      if (p.allowedRoles.length === 0) return false;
       return p.allowedRoles.some((role) => userRoles.includes(role));
     });
   }, [state.plugins, user?.permissions]);
@@ -356,7 +356,7 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
 
   const getContributionsByZone = useCallback(
     (zone: string) => {
-      const userRoles = user?.permissions || [];
+      const userRoles = user?.roles || [];
       const contributions: MenuContribution[] = [];
 
       state.plugins.forEach((p) => {
@@ -429,7 +429,7 @@ export function usePluginHealth(pluginId: string) {
   const frontendMountState = mount?.state || 'idle';
   const errorMessage = mount?.errorMessage;
   
-  const userRoles = user?.permissions || [];
+  const userRoles = user?.roles || [];
   const allowedRoles = entry?.allowedRoles || [];
   const permissionVisible = allowedRoles.length === 0 || userRoles.some((r) => allowedRoles.includes(r));
 
