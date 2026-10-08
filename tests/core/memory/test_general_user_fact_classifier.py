@@ -156,3 +156,17 @@ def test_postgres_profile_retriever_recognizes_origin_queries() -> None:
     assert PostgresProfileRecallRetriever._looks_like_profile_query("Where am I from?")
     assert PostgresProfileRecallRetriever._looks_like_profile_query("Where do I live?")
     assert not PostgresProfileRecallRetriever._looks_like_profile_query("Weather in Detroit")
+
+
+def test_conjunction_separates_origin_from_residence_without_splitting_place_name() -> None:
+    facts = classify_general_user_facts(
+        "I live in NYC and I'm from Jamaica. I was born in Trinidad and Tobago."
+    )
+    locations = {
+        fact.metadata.get("attribute"): fact.metadata.get("normalized_value")
+        for fact in facts
+        if fact.metadata.get("category") == "location"
+    }
+    assert locations["residence_location"] == "NYC"
+    assert locations["origin_location"] == "Jamaica"
+    assert locations["birthplace"] == "Trinidad and Tobago"
