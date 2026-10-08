@@ -505,7 +505,16 @@ class ModelOrchestratorService:
     @staticmethod
     def _reject_snapshot_symlinks(root: Path) -> None:
         """Reject symlink artifacts before validation or durable publication."""
-        for directory, directories, files in os.walk(root, followlinks=False):
+        def reject_traversal_error(error: OSError) -> None:
+            raise ModelOrchestratorError(
+                E_VERIFY,
+                "Downloaded model snapshot could not be fully inspected",
+                {"error_type": type(error).__name__},
+            ) from error
+
+        for directory, directories, files in os.walk(
+            root, followlinks=False, onerror=reject_traversal_error
+        ):
             for name in directories + files:
                 path = Path(directory) / name
                 if path.is_symlink():
