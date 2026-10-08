@@ -28,7 +28,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 from prometheus_client import Counter, Histogram
@@ -36,6 +36,8 @@ from prometheus_client import Counter, Histogram
 from ..search.search_query_planner import SearchQueryPlanner
 from ..search.search_result_processor import SearchResultProcessor
 from ..search.web_search_provider_registry import WebSearchProviderRegistry
+from ..search.web_search_client import WebSearchClient
+from ...config.config_manager import get_config_value
 from ...core.runtime.contracts import ActionExecutionGate, AuthorizedExecutionPlan, ExecutionBudget, ExecutionContext
 from ...core.runtime.policy.runtime_policy import PolicyEvaluationRequest, RuntimePolicyEnforcer
 from ...integrations.web.crawl4ai_integration import Crawl4AIIntegration
@@ -238,6 +240,7 @@ class InternetCapabilityService:
         search_client: Optional[AsyncSearchClient] = None,
         search_client_factory: Optional[Any] = None,
         provider_registry: Optional[WebSearchProviderRegistry] = None,
+        search_settings: Optional[Mapping[str, Any]] = None,
         policy_enforcer: Optional[RuntimePolicyEnforcer] = None,
         action_gate: Optional[ActionExecutionGate] = None,
         default_max_urls: int = 5,
@@ -248,7 +251,32 @@ class InternetCapabilityService:
         self.processor = processor or SearchResultProcessor()
         self.search_client = search_client
         self.search_client_factory = search_client_factory
-        self.provider_registry = provider_registry or WebSearchProviderRegistry()
+        if provider_registry is not None:
+            self.provider_registry = provider_registry
+        else:
+            manifest_search = dict(search_settings or {})
+            runtime_search = get_config_value("search", {})
+            runtime_search = (
+                dict(runtime_search)
+                if isinstance(runtime_search, Mapping)
+                else {}
+            )
+
+            # Manifest settings are plugin bootstrap defaults. Central runtime
+            # config is the operator authority and overrides them per provider.
+            configured_search: Dict[str, Any] = {
+                name: dict(value)
+                for name, value in manifest_search.items()
+                if isinstance(value, Mapping)
+            }
+            for name, value in runtime_search.items():
+                if not isinstance(value, Mapping):
+                    continue
+                configured_search.setdefault(name, {}).update(dict(value))
+
+            self.provider_registry = WebSearchProviderRegistry(
+                settings={"search": configured_search}
+            )
         self.policy_enforcer = policy_enforcer
         self.action_gate = action_gate
         self.default_max_urls = max(1, min(int(default_max_urls), 25))
@@ -284,6 +312,7 @@ class InternetCapabilityService:
         urls: List[str] = []
         crawl_results: List[Dict[str, Any]] = []
         processed_chunks: List[Dict[str, Any]] = []
+        search_providers: List[str] = []
 
         logger.info(
             "internet_capability.started",
@@ -304,8 +333,14 @@ class InternetCapabilityService:
             effective_timeout = self._effective_timeout(request, budget)
             effective_max_urls = self._effective_max_urls(strategy, request, budget)
 
-            urls = await asyncio.wait_for(
-                self._get_relevant_urls(expanded_queries, strategy, request, effective_max_urls),
+            urls, search_providers = await asyncio.wait_for(
+                self._get_relevant_urls(
+                    expanded_queries,
+                    strategy,
+                    request,
+                    effective_max_urls,
+                    provider_sink=search_providers,
+                ),
                 timeout=effective_timeout,
             )
 
@@ -324,6 +359,7 @@ class InternetCapabilityService:
                     degraded=True,
                     warnings=warnings,
                     execution_context=execution_context,
+                    search_providers=search_providers,
                 )
 
             crawl_results = await asyncio.wait_for(
@@ -359,6 +395,7 @@ class InternetCapabilityService:
                 degraded=degraded,
                 warnings=warnings,
                 execution_context=execution_context,
+                search_providers=search_providers,
             )
 
         except asyncio.TimeoutError:
@@ -387,6 +424,7 @@ class InternetCapabilityService:
                 degraded=True,
                 warnings=warnings,
                 execution_context=execution_context,
+                search_providers=search_providers,
             )
 
         except PermissionError as exc:
@@ -413,6 +451,7 @@ class InternetCapabilityService:
                 degraded=True,
                 warnings=warnings,
                 execution_context=execution_context,
+                search_providers=search_providers,
                 status="permission_denied",
             )
 
@@ -441,6 +480,7 @@ class InternetCapabilityService:
                 degraded=True,
                 warnings=warnings,
                 execution_context=execution_context,
+                search_providers=search_providers,
                 status="error",
             )
 
@@ -450,7 +490,8 @@ class InternetCapabilityService:
         strategy: Mapping[str, Any],
         request: InternetSearchRequest,
         max_urls: int,
-    ) -> List[str]:
+        provider_sink: Optional[List[str]] = None,
+    ) -> Tuple[List[str], List[str]]:
         """
         Fetch unique URLs from the configured search provider.
 
@@ -460,6 +501,7 @@ class InternetCapabilityService:
 
         client = self._resolve_search_client()
         all_urls: List[str] = []
+        providers = provider_sink if provider_sink is not None else []
 
         for search_query in list(queries)[: self.max_expanded_queries]:
             try:
@@ -469,6 +511,14 @@ class InternetCapabilityService:
                         max_results=max_urls,
                         time_range=strategy.get("time_range"),
                     )
+
+                provider = str(getattr(response, "provider", "") or "").strip()
+                if (
+                    provider
+                    and provider not in {"none", "unknown"}
+                    and provider not in providers
+                ):
+                    providers.append(provider)
 
                 for result in getattr(response, "results", []) or []:
                     url = self._normalize_url(getattr(result, "url", None))
@@ -488,7 +538,8 @@ class InternetCapabilityService:
                 )
 
         unique_urls = list(dict.fromkeys(all_urls))
-        return unique_urls[:max_urls]
+        unique_providers = list(dict.fromkeys(providers))
+        return unique_urls[:max_urls], unique_providers
 
     async def _crawl_many(
         self,
@@ -566,6 +617,7 @@ class InternetCapabilityService:
         degraded: bool,
         warnings: Sequence[str],
         execution_context: ExecutionContext,
+        search_providers: Sequence[str] = (),
         status: str = "ok",
     ) -> Dict[str, Any]:
         execution_time_ms = int((time.perf_counter() - start_time) * 1000)
@@ -649,11 +701,13 @@ class InternetCapabilityService:
                 "expanded_queries": list(expanded_queries)[:5],
                 "source_count": len(sources),
                 "degraded": degraded,
-                "provider": self._provider_name(),
+                "provider": self._provider_name(search_providers),
+                "search_providers": list(search_providers),
+                "crawl_provider": "crawl4ai",
                 "correlation_id": execution_context.correlation_id,
                 "request_id": execution_context.request_id,
             },
-            "provider": self._provider_name(),
+            "provider": self._provider_name(search_providers),
             "liveSearch": { # NextJS UI prefers liveSearch camelCase often, keep both for compatibility
                 "mode": mode,
                 "query": request.query,
@@ -742,18 +796,12 @@ class InternetCapabilityService:
                 raise RuntimeError("Configured search_client_factory returned None.")
             return client
 
-        settings = {}
         if self.provider_registry is not None:
-            settings = {
-                "search": {
-                    name: self.provider_registry.get_config(name)
-                    for name in self.provider_registry.descriptors
-                }
-            }
-        raise RuntimeError(
-            "No internet search client is configured. "
-            "Inject search_client/search_client_factory or provider_registry."
-        )
+            return WebSearchClient(registry=self.provider_registry)
+
+        # Canonical production default. The client owns a fresh canonical
+        # registry only when the runtime did not inject one explicitly.
+        return WebSearchClient()
 
     async def _authorize(
         self,
@@ -1419,8 +1467,13 @@ class InternetCapabilityService:
 
         return normalized
 
-    def _provider_name(self) -> str:
-        return "crawl4ai"
+    def _provider_name(self, search_providers: Sequence[str] = ()) -> str:
+        providers = list(dict.fromkeys(search_providers))
+        if not providers:
+            return "none"
+        if len(providers) == 1:
+            return providers[0]
+        return "multi_search"
 
 
 def _normalize_domain_list(value: Any) -> Optional[List[str]]:
