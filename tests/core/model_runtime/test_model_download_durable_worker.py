@@ -768,6 +768,10 @@ def test_model_file_integrity_checks_cover_spacy_artifacts(tmp_path: Path) -> No
     files, total_size = ModelOrchestratorService._walk_files(root)
     assert files == []
     assert total_size == 0
+    with pytest.raises(ModelOrchestratorError, match="no usable files"):
+        ModelOrchestratorService._validate_downloaded_artifacts(
+            files, total_size, storage_key="spacy", model_id="spacy/en_core_web_sm"
+        )
     for filename in ("config.cfg", "meta.json", "tokenizer"):
         (root / filename).write_text("content", encoding="utf-8")
     files, total_size = ModelOrchestratorService._walk_files(root)
@@ -775,3 +779,12 @@ def test_model_file_integrity_checks_cover_spacy_artifacts(tmp_path: Path) -> No
     assert {"config.cfg", "meta.json", "tokenizer"} <= {
         entry["path"] for entry in files if entry["size"] > 0
     }
+    ModelOrchestratorService._validate_downloaded_artifacts(
+        files, total_size, storage_key="spacy", model_id="spacy/en_core_web_sm"
+    )
+    (root / "tokenizer").unlink()
+    partial, partial_size = ModelOrchestratorService._walk_files(root)
+    with pytest.raises(ModelOrchestratorError, match="incomplete"):
+        ModelOrchestratorService._validate_downloaded_artifacts(
+            partial, partial_size, storage_key="spacy", model_id="spacy/en_core_web_sm"
+        )
