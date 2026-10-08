@@ -48,7 +48,8 @@ class PostgresProfileRecallRetriever:
                     MemoryEvent.user_id == user_uuid,
                     MemoryEvent.consent_state == "granted",
                     or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
-                    or_(ProfileFact.valid_to.is_(None), ProfileFact.valid_to > now),
+                    # Superseded facts must never compete with the active value.
+                    ProfileFact.valid_to.is_(None),
                 )
                 .order_by(ProfileFact.confidence.desc(), ProfileFact.updated_at.desc())
                 .limit(top_k)
