@@ -16,9 +16,10 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   type ReactNode,
 } from 'react';
-import { apiClient } from '@/lib/api';
+import { apiClient, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
@@ -275,7 +276,9 @@ function normaliseEntry(raw: BackendPluginEntry): PluginCatalogEntry {
 // ─── Provider Component ───────────────────────────────────────────────────────
 
 export function PluginRegistryProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
+  const generation = useRef(0);
+  const identity = user ? `${user.tenant_id}:${user.user_id}:${[...(user.roles || []), ...(user.permissions || [])].sort().join(',')}` : null;
   const [state, setState] = useState<PluginRegistryState>({
     plugins: [],
     loading: true,
@@ -283,6 +286,11 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
   });
 
   const fetchCatalog = useCallback(async () => {
+    const requestGeneration = ++generation.current;
+    if (!identity || authLoading) {
+      setState({ plugins: [], loading: false, error: null });
+      return;
+    }
     setState((prev) => ({ ...prev, loading: true, error: null }));
     try {
       // The plugin catalog is tenant- and RBAC-scoped. Send the same
@@ -313,14 +321,17 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
         throw new Error('Plugin catalog unavailable: backend returned an invalid response.');
       }
 
+      if (requestGeneration !== generation.current) return;
       const normalised = raw.map(normaliseEntry);
       setState({ plugins: normalised, loading: false, error: null });
       console.log(`[PluginRegistry] Loaded ${normalised.length} plugins from backend.`);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to load plugin catalog';
-      setState((prev) => ({ ...prev, loading: false, error: message }));
+      if (requestGeneration !== generation.current) return;
+      const authorizationFailed = err instanceof ApiError && (err.status === 401 || err.status === 403);
+      setState((prev) => ({ ...prev, plugins: authorizationFailed ? [] : prev.plugins, loading: false, error: message }));
     }
-  }, []);
+  }, [identity, authLoading]);
 
   useEffect(() => {
     fetchCatalog();
