@@ -695,3 +695,23 @@ async def test_search_fallback_reserves_provider_time_before_outer_deadline() ->
     response = await client.search("Detroit weather")
     assert response.provider == "wikipedia"
     assert client._search_with_provider.await_count == 2
+
+
+def test_polite_clock_and_forecast_questions_use_direct_live_capabilities() -> None:
+    cases = {
+        "Can you tell me what time it is in Tokyo?": "time.current",
+        "Please tell me what time it is": "time.current",
+        "Tell me what time it is for New York": "time.current",
+        "What's the forecast in Detroit?": "search.weather",
+        "What is the forecast in Detroit?": "search.weather",
+        "What's the forecast today?": "search.weather",
+    }
+    for prompt, intent in cases.items():
+        assert resolve_capability_decision(prompt).intent == intent, prompt
+
+    for prompt in (
+        "Can you tell me what time complexity means?",
+        "Please tell me what time it is for lunch",
+        "What is the forecast for sales growth?",
+    ):
+        assert resolve_capability_decision(prompt).intent == "general.chat", prompt
