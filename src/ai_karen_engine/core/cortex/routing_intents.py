@@ -151,7 +151,7 @@ def _looks_like_shorthand_time(query: str) -> bool:
 
 def _looks_like_forecast_target(query: str) -> bool:
     raw = " ".join((query or "").strip().split()).rstrip("?!.")
-    match = re.fullmatch(r"forecast\\s+(?:for|in)\\s+(.+)", raw, re.IGNORECASE)
+    match = re.fullmatch(r"forecast\s+(?:for|in)\s+(.+)", raw, re.IGNORECASE)
     return bool(match and _looks_like_location_phrase(match.group(1)))
 
 
@@ -206,7 +206,11 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
         if intent == "time.current":
             matched = matched or _looks_like_shorthand_time(query)
         if intent == "search.weather":
-            matched = (\n                matched\n                or _looks_like_location_first_weather(query)\n                or _looks_like_forecast_target(query)\n            )
+            matched = (
+                matched
+                or _looks_like_location_first_weather(query)
+                or _looks_like_forecast_target(query)
+            )
         if matched:
             return CapabilityDecision(
                 intent=intent,
