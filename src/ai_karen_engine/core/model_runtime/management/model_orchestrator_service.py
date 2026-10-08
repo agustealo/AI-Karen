@@ -313,7 +313,7 @@ class ModelOrchestratorService:
                 raise ModelOrchestratorError(
                     E_VERIFY,
                     "Downloaded spaCy pipeline is incomplete",
-                    {"model_id": req.model_id, "missing_files": missing},
+                    {"model_id": model_id, "missing_files": missing},
                 )
 
     @staticmethod
