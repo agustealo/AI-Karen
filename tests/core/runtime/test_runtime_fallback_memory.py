@@ -55,6 +55,9 @@ async def test_emergency_fallback_passes_scoped_memory_to_prompt_path():
     assert recovery["occurred"] is True
     assert recovery["actual_response_healthy"] is True
     assert recovery["provider_identity_verified"] is False
+    assert recovery["same_provider_family"] is True
+    assert recovery["requested_provider_class"] == "local_openai_endpoint"
+    assert recovery["actual_provider_class"] == "local_openai_endpoint"
     assert recovery["model_changed"] is False
 
 
