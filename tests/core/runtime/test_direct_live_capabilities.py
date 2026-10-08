@@ -465,6 +465,21 @@ def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None
     )
     lower_city_weather = resolve_capability_decision("detroit weather")
     title_city_weather = resolve_capability_decision("New York City weather")
+    polite_time = resolve_capability_decision("Please tell me the time in Tokyo")
+    wrapped_time = resolve_capability_decision(
+        "Could you tell me what time it is in Tokyo?"
+    )
+    weather_like = resolve_capability_decision(
+        "What's the weather like in Detroit?"
+    )
+    forecast_question = resolve_capability_decision(
+        "What is the forecast for Detroit?"
+    )
+    latest_python_version = resolve_capability_decision("latest Python version")
+    latest_ukraine_news = resolve_capability_decision("latest news on Ukraine")
+    current_stock_price = resolve_capability_decision(
+        "current stock price for AAPL"
+    )
 
     assert current_time.intent == "time.current"
     assert current_time.requires_live_data is True
@@ -492,6 +507,13 @@ def test_live_capability_patterns_keep_explicit_requests_deterministic() -> None
     assert lower_city_weather.requires_tool is False
     assert title_city_weather.intent == "search.weather"
     assert title_city_weather.requires_live_data is True
+    assert polite_time.intent == "time.current"
+    assert wrapped_time.intent == "time.current"
+    assert weather_like.intent == "search.weather"
+    assert forecast_question.intent == "search.weather"
+    assert latest_python_version.intent == "search.general"
+    assert latest_ukraine_news.intent == "search.general"
+    assert current_stock_price.intent == "search.general"
 
 
 @pytest.mark.asyncio
@@ -571,6 +593,24 @@ def test_web_search_registry_honors_configured_priority() -> None:
     )
 
     assert registry.select_provider() == "wikipedia"
+
+
+def test_web_search_registry_invalid_priority_does_not_disable_search() -> None:
+    from ai_karen_engine.services.search.web_search_provider_registry import (
+        WebSearchProviderRegistry,
+    )
+
+    registry = WebSearchProviderRegistry(
+        settings={
+            "search": {
+                "duckduckgo": {"enabled": True, "priority": "high"},
+                "wikipedia": {"enabled": True, "priority": 20},
+            }
+        }
+    )
+
+    assert registry.select_provider() == "wikipedia"
+    assert registry.sorted_enabled()[0] == "wikipedia"
 
 
 def test_runtime_search_config_overrides_manifest_bootstrap_defaults() -> None:
