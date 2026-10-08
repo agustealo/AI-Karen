@@ -498,6 +498,47 @@ class ModelOrchestratorService:
             revision=getattr(remote, "sha", None) or revision,
         )
 
+    @staticmethod
+    def _verify_spacy_pipeline(install_path: Path) -> None:
+        """Reject incomplete or incompatible spaCy artifacts before publication."""
+        try:
+            import spacy
+        except ImportError as exc:
+            raise ModelOrchestratorError(
+                E_COMPAT,
+                "spaCy must be installed to verify a spaCy model",
+            ) from exc
+
+        # Hugging Face snapshots can contain an unpacked model or a package
+        # directory. Only consider bounded, local direct descendants.
+        candidates = [install_path]
+        candidates.extend(
+            child for child in install_path.iterdir() if child.is_dir() and not child.is_symlink()
+        )
+        candidates.extend(
+            grandchild
+            for child in tuple(candidates[1:])
+            for grandchild in child.iterdir()
+            if grandchild.is_dir() and not grandchild.is_symlink()
+        )
+        errors: list[str] = []
+        for candidate in candidates:
+            if not (candidate / "config.cfg").is_file() or not (candidate / "meta.json").is_file():
+                continue
+            try:
+                nlp = spacy.load(candidate)
+                if not nlp.pipe_names:
+                    errors.append("no pipeline components")
+                    continue
+                return
+            except (OSError, ValueError, ImportError) as exc:
+                errors.append(type(exc).__name__)
+        raise ModelOrchestratorError(
+            E_VERIFY,
+            "Downloaded spaCy snapshot does not contain a loadable pipeline",
+            {"error_types": errors, "install_path": str(install_path)},
+        )
+
     async def download_model(self, request: Union[DownloadRequest, str], **kwargs: Any) -> DownloadResult:
         req = DownloadRequest(model_id=request, **kwargs) if isinstance(request, str) else request
         owner, repo = self._split_model_id(req.model_id)
@@ -543,6 +584,16 @@ class ModelOrchestratorService:
             ) from exc
 
         files, total_size = await asyncio.to_thread(self._walk_files, install_path)
+        if not files or total_size <= 0:
+            raise ModelOrchestratorError(
+                E_VERIFY,
+                "Downloaded model artifact is empty; refusing registry publication",
+                {"model_id": req.model_id, "revision": req.revision},
+            )
+        if req.storage_key == "spacy":
+            # A downloaded snapshot is not equivalent to a runnable spaCy
+            # pipeline. Validate it before allowing the worker to promote it.
+            await asyncio.to_thread(self._verify_spacy_pipeline, install_path)
         duration = time.perf_counter() - start
         previous = await self.snapshot_registry_entry(req.model_id)
 
