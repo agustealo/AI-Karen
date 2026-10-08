@@ -760,3 +760,29 @@ async def test_recommendation_verified_metadata_overrides_curated_license(
     assert item["verification_error"] is None
     assert item["license"] == "MIT"
     assert item["resolved_revision"] == "0123456789abcdef0123456789abcdef01234567"
+
+
+@pytest.mark.asyncio
+async def test_spacy_download_validation_identifies_linguistic_runtime(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path, FakeModelDownloadRepository())
+    service._orchestrator.get_model_info = AsyncMock(return_value=ModelInfo(
+        model_id="spacy/en_core_web_sm",
+        owner="spacy",
+        repository="en_core_web_sm",
+        storage_key="spacy",
+        license="MIT",
+        gated=False,
+        revision="0123456789abcdef0123456789abcdef01234567",
+    ))
+    validation = await service.validate_download(
+        model_id="spacy/en_core_web_sm",
+        channel_id="core_spacy",
+        accept_license=True,
+    )
+    assert validation.allowed is True
+    assert validation.detected_runtime == "spacy"
+    assert validation.storage_key == "spacy"
+    assert Path(validation.install_path).parts[-2:] == ("spacy", "en_core_web_sm")
+    service._orchestrator.get_model_info.assert_awaited_once()
