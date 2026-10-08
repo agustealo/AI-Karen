@@ -505,6 +505,12 @@ class ModelOrchestratorService:
     @staticmethod
     def _reject_snapshot_symlinks(root: Path) -> None:
         """Reject symlink artifacts before validation or durable publication."""
+        if root.is_symlink():
+            raise ModelOrchestratorError(
+                E_VERIFY,
+                "Downloaded model snapshot root is a symlink",
+                {"path": str(root)},
+            )
         def reject_traversal_error(error: OSError) -> None:
             raise ModelOrchestratorError(
                 E_VERIFY,
