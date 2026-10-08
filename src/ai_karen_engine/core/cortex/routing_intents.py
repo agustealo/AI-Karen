@@ -47,7 +47,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"^how(?:'s|\s+is)\s+(?:the\s+)?weather(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^weather[?!.]*$",
             r"\bweather\s+(?:in|for|today|tonight|tomorrow|this\s+week)\b",
-            r"\bforecast\s+(?:for|in|today|tonight|tomorrow|this\s+week)\b",
+            r"^forecast\s+(?:today|tonight|tomorrow|this\s+week)[?!.]*$",
             r"\b(?:current|today'?s?|tonight'?s?|tomorrow'?s?)\s+(?:weather|forecast|temperature)\b",
             r"\btemperature\s+(?:in|at|outside|today|tonight|tomorrow)\b",
             r"\b(?:will|is|does)\s+it\s+(?:rain|snow)\b",
@@ -149,6 +149,12 @@ def _looks_like_shorthand_time(query: str) -> bool:
     return _looks_like_location_phrase(match.group("location"))
 
 
+def _looks_like_forecast_target(query: str) -> bool:
+    raw = " ".join((query or "").strip().split()).rstrip("?!.")
+    match = re.fullmatch(r"forecast\\s+(?:for|in)\\s+(.+)", raw, re.IGNORECASE)
+    return bool(match and _looks_like_location_phrase(match.group(1)))
+
+
 def _looks_like_location_first_weather(query: str) -> bool:
     raw = " ".join((query or "").strip().split()).rstrip("?!.")
     match = re.fullmatch(
@@ -200,7 +206,7 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
         if intent == "time.current":
             matched = matched or _looks_like_shorthand_time(query)
         if intent == "search.weather":
-            matched = matched or _looks_like_location_first_weather(query)
+            matched = (\n                matched\n                or _looks_like_location_first_weather(query)\n                or _looks_like_forecast_target(query)\n            )
         if matched:
             return CapabilityDecision(
                 intent=intent,
