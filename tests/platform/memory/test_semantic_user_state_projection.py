@@ -512,3 +512,52 @@ async def test_open_loop_projects_and_completion_closes_it(monkeypatch):
 
 def test_each_semantic_projection_also_keeps_episode_lineage():
     assert issubclass(MemoryEpisode, object)
+
+
+@pytest.mark.asyncio
+async def test_location_correction_supersedes_only_same_attribute(monkeypatch):
+    previous = ProfileFact(
+        fact_id=UUID("00000000-0000-0000-0000-000000000060"),
+        event_id=UUID("00000000-0000-0000-0000-000000000061"),
+        tenant_id=TENANT,
+        user_id=USER,
+        category="location",
+        attribute="origin_location",
+        value={"value": "Detroit", "text": "I'm from Detroit"},
+        confidence=0.98,
+        source_type="chat_user",
+        valid_from=datetime.utcnow(),
+    )
+    session = _Session([None, None, previous])
+    monkeypatch.setattr(projector_module, "async_transaction_scope", _scope(session))
+    projector = PostgresDerivedMemoryProjector(_ProjectionManager())
+    await projector._project_relational_views(
+        tenant_uuid=TENANT,
+        user_uuid=USER,
+        event_uuid=EVENT,
+        signal=MemorySignal(
+            text="I'm from Jamaica",
+            signal_type="profile_fact",
+            confidence=0.98,
+            metadata={
+                "category": "location",
+                "attribute": "origin_location",
+                "normalized_value": "Jamaica",
+                "semantic_class": "identity",
+            },
+        ),
+        confidence=0.98,
+        source_type="chat_user",
+        source_ref="conversation-2",
+        metadata={
+            "category": "location",
+            "attribute": "origin_location",
+            "normalized_value": "Jamaica",
+            "semantic_class": "identity",
+        },
+    )
+    facts = [value for value in session.added if isinstance(value, ProfileFact)]
+    assert len(facts) == 1
+    assert facts[0].value["value"] == "Jamaica"
+    assert facts[0].supersedes == previous.fact_id
+    assert previous.valid_to is not None

@@ -98,3 +98,75 @@ def test_relationship_requires_person_like_name() -> None:
         signal.metadata.get("category") == "relationship"
         for signal in signals
     )
+
+
+def test_location_facts_are_distinct_and_durable_candidates() -> None:
+    from ai_karen_engine.core.memory.signals.general_fact_classifier import (
+        classify_general_user_facts,
+    )
+
+    facts = classify_general_user_facts(
+        "I live in NYC, born in Jamaica. I'm currently in Detroit. I'm from Jamaica."
+    )
+    location = {
+        item.metadata.get("attribute"): item.metadata.get("normalized_value")
+        for item in facts
+        if item.metadata.get("category") == "location"
+    }
+    assert location == {
+        "residence_location": "NYC",
+        "birthplace": "Jamaica",
+        "current_location": "Detroit",
+        "origin_location": "Jamaica",
+    }
+    assert all(item.signal_type == "profile_fact" for item in facts if item.metadata.get("category") == "location")
+
+
+def test_location_language_does_not_promote_weather_queries_to_profile_facts() -> None:
+    from ai_karen_engine.core.memory.signals.general_fact_classifier import (
+        classify_general_user_facts,
+    )
+
+    assert not [
+        item for item in classify_general_user_facts("What's the weather in Detroit?")
+        if item.metadata.get("category") == "location"
+    ]
+
+
+def test_personal_recall_queries_include_location_and_correction() -> None:
+    from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+
+    for query in (
+        "Where am I from?",
+        "Where was I born?",
+        "Where do I live?",
+        "Where am I currently?",
+        "I already told you where I'm from",
+    ):
+        assert CortexExecutionDecider._personal_recall_query(query)
+
+    assert not CortexExecutionDecider._personal_recall_query("Weather in Detroit")
+
+
+def test_postgres_profile_retriever_recognizes_origin_queries() -> None:
+    from ai_karen_engine.platform.memory.postgres.profile_retriever import (
+        PostgresProfileRecallRetriever,
+    )
+
+    assert PostgresProfileRecallRetriever._looks_like_profile_query("Where am I from?")
+    assert PostgresProfileRecallRetriever._looks_like_profile_query("Where do I live?")
+    assert not PostgresProfileRecallRetriever._looks_like_profile_query("Weather in Detroit")
+
+
+def test_conjunction_separates_origin_from_residence_without_splitting_place_name() -> None:
+    facts = classify_general_user_facts(
+        "I live in NYC and I'm from Jamaica. I was born in Trinidad and Tobago."
+    )
+    locations = {
+        fact.metadata.get("attribute"): fact.metadata.get("normalized_value")
+        for fact in facts
+        if fact.metadata.get("category") == "location"
+    }
+    assert locations["residence_location"] == "NYC"
+    assert locations["origin_location"] == "Jamaica"
+    assert locations["birthplace"] == "Trinidad and Tobago"

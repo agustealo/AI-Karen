@@ -57,6 +57,26 @@ _TRAVEL = re.compile(
 )
 
 
+_LOCATION_PATTERNS = (
+    ("current_location", "current", re.compile(
+        r"(?i)\b(?:i(?:'m| am)\s+(?:currently|right now)\s+in|"
+        r"currently\s+i(?:'m| am)\s+in)\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
+    )),
+    ("residence_location", "residence", re.compile(
+        r"(?i)\bi\s+(?:live|reside)\s+in\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
+    )),
+    ("residence_location", "residence", re.compile(
+        r"(?i)\bi(?:'m| am)\s+based\s+in\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
+    )),
+    ("birthplace", "birthplace", re.compile(
+        r"(?i)\b(?:i\s+(?:was\s+)?born\s+in|born\s+in)\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
+    )),
+    ("origin_location", "origin", re.compile(
+        r"(?i)\bi(?:'m| am)\s+(?:originally\s+)?from\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
+    )),
+)
+
+
 def classify_general_user_facts(text: str) -> list[MemorySignal]:
     """Return high-confidence explicit facts without domain-specific persistence."""
 
@@ -65,6 +85,26 @@ def classify_general_user_facts(text: str) -> list[MemorySignal]:
         return []
 
     signals: list[MemorySignal] = []
+
+    for attribute, location_type, pattern in _LOCATION_PATTERNS:
+        for match in pattern.finditer(normalized):
+            value = _clean(match.group(1))
+            if not value:
+                continue
+            signals.append(
+                _profile_fact(
+                    text=match.group(0),
+                    category="location",
+                    attribute=attribute,
+                    value=value,
+                    semantic_class="identity" if location_type in {"birthplace", "origin"} else "location",
+                    confidence=0.98,
+                    extra={
+                        "location_type": location_type,
+                        "stability": "short_term" if location_type == "current" else "long_term",
+                    },
+                )
+            )
 
     relationship = _RELATIONSHIP.search(normalized)
     if relationship:

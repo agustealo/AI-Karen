@@ -48,7 +48,8 @@ class PostgresProfileRecallRetriever:
                     MemoryEvent.user_id == user_uuid,
                     MemoryEvent.consent_state == "granted",
                     or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
-                    or_(ProfileFact.valid_to.is_(None), ProfileFact.valid_to > now),
+                    # Superseded facts must never compete with the active value.
+                    ProfileFact.valid_to.is_(None),
                 )
                 .order_by(ProfileFact.confidence.desc(), ProfileFact.updated_at.desc())
                 .limit(top_k)
@@ -92,6 +93,20 @@ class PostgresProfileRecallRetriever:
             "my interests",
             "what am i interested in",
             "what do i follow",
+            "where am i from",
+            "where i'm from",
+            "where im from",
+            "where was i born",
+            "where do i live",
+            "where am i based",
+            "where am i currently",
+            "where am i right now",
+            "my birthplace",
+            "my hometown",
+            "current location",
+            "where i live",
+            "where i'm from",
+            "i already told you",
             "travel plan",
             "trip",
         )
@@ -100,7 +115,15 @@ class PostgresProfileRecallRetriever:
     @staticmethod
     def _entry(row: ProfileFact, query: MemoryQuery) -> MemoryEntry:
         value = row.value
-        rendered = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True)
+        if isinstance(value, dict) and "value" in value:
+            fact_value = value["value"]
+        else:
+            fact_value = value
+        rendered = (
+            fact_value
+            if isinstance(fact_value, str)
+            else json.dumps(fact_value, ensure_ascii=False, sort_keys=True)
+        )
         content = f"{row.attribute}: {rendered}"
         created_at = row.created_at or datetime.utcnow()
         metadata = MemoryMetadata(
