@@ -30,42 +30,30 @@ That means the UI does not invent provider health, model availability, memory st
 
 ## See KAREN
 
-These are **real browser captures of the real authenticated application**, captured from a sanitized demo installation. They are not generated dashboards or hand-built product mockups.
+The images below are **real browser captures of the real authenticated application** from a sanitized demo installation. They are not generated dashboards or hand-built mockups.
 
 <table>
   <tr>
-    <td width="50%">
-      <img src="docs/assets/screenshots/01-chat-runtime.png" alt="KAREN Chat and runtime intelligence" />
-      <br />
-      <strong>Chat & runtime intelligence</strong>
-    </td>
     <td width="50%">
       <img src="docs/assets/screenshots/02-agents-overview.png" alt="KAREN Agents overview" />
       <br />
       <strong>Agents overview</strong>
     </td>
-  </tr>
-  <tr>
     <td width="50%">
       <img src="docs/assets/screenshots/03-plugin-ecosystem.png" alt="KAREN Plugin ecosystem" />
       <br />
       <strong>Plugin ecosystem</strong>
     </td>
-    <td width="50%">
-      <img src="docs/assets/screenshots/04-comms-center.png" alt="KAREN Comms Center" />
-      <br />
-      <strong>Comms Center</strong>
-    </td>
   </tr>
 </table>
 
 <p align="center">
-  <img src="docs/assets/screenshots/05-settings-and-models.png" alt="KAREN settings and model management" width="82%" />
+  <img src="docs/assets/screenshots/04-comms-center.png" alt="KAREN Comms Center" width="82%" />
   <br />
-  <strong>Settings & model management</strong>
+  <strong>Comms Center</strong>
 </p>
 
-> **Screenshot provenance:** this gallery was captured on October 2, 2026 from a real running KAREN deployment at target revision `9980fb0bbcf52d162c53278d759c6632dc416a24` using a sanitized demo account. The application has continued to evolve since that capture, so these images are real product evidence but are **not** current-release visual signoff. The governed capture rail must recapture the gallery before consumer-release approval. See [screenshot provenance](docs/assets/screenshots/README.md).
+> **Screenshot provenance:** these previews come from the governed October 2, 2026 capture at target revision `9980fb0bbcf52d162c53278d759c6632dc416a24` using a sanitized demo account. Two images from that historical five-screen capture currently show failed/loading state and are deliberately **not promoted here**. The application has also evolved since that capture, so a fresh governed five-screen capture is still required before consumer-release visual signoff. See [screenshot provenance](docs/assets/screenshots/README.md).
 
 ## What you can do with KAREN
 
@@ -140,6 +128,7 @@ For the normal containerized setup:
 
 - Git
 - Docker with Docker Compose v2
+- Supabase CLI for the canonical local PostgreSQL stack
 - A modern browser
 
 Useful for development:
@@ -169,7 +158,27 @@ Copy-Item .env.example .env
 
 Review the resulting `.env` before startup. Replace secrets and configure only the providers/services you actually intend to use.
 
-### 3. Start KAREN
+### 3. Start the canonical local database and apply migrations
+
+KAREN's base Compose stack does **not** create PostgreSQL. For local development, the checked-in Supabase project owns the canonical PostgreSQL/pgvector database on port `54322`.
+
+Start it first:
+
+```bash
+supabase start
+```
+
+For a **fresh local installation**, apply the complete migration chain:
+
+```bash
+supabase db reset
+```
+
+`supabase db reset` is destructive to the local Supabase database. Use it for a new local installation or an intentional local reset, not against a database containing data you need to preserve.
+
+The schema authority is `supabase/migrations/`. KAREN runtime startup intentionally does not invent missing production auth/application tables.
+
+### 4. Start KAREN
 
 ```bash
 docker compose up -d
@@ -193,7 +202,7 @@ The API is available at:
 http://localhost:8000
 ```
 
-### 4. Confirm the backend is ready
+### 5. Confirm the backend is ready
 
 ```bash
 curl http://localhost:8000/health/live
@@ -203,7 +212,7 @@ curl http://localhost:8000/api/auth/first-run
 
 On a fresh installation, first-run should report that setup is required.
 
-### 5. Create the first owner
+### 6. Create the first owner
 
 Open:
 
@@ -230,7 +239,7 @@ curl -X POST http://localhost:8000/api/auth/first-run/setup \
 
 Replace those example credentials for any real installation.
 
-### 6. Configure your model/provider
+### 7. Configure your model/provider
 
 After signing in:
 
