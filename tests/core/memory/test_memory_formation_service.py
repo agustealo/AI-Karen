@@ -286,3 +286,84 @@ def test_memory_trust_provenance_defaults_to_derived_inference_origin():
     provenance = MemoryTrustProvenance()
 
     assert provenance.origin is MemoryOrigin.DERIVED_INFERENCE
+
+
+class _UnavailableScorer:
+    async def evaluate(self, text, signal_type):
+        raise RuntimeError("optional salience model unavailable")
+
+
+@pytest.mark.asyncio
+async def test_explicit_origin_survives_unavailable_salience_model():
+    signal = MemorySignal(
+        text="I'm from Jamaica",
+        signal_type="profile_fact",
+        confidence=0.98,
+        metadata={
+            "explicit_user_statement": True,
+            "category": "location",
+            "attribute": "origin_location",
+            "normalized_value": "Jamaica",
+        },
+    )
+    vault = _Vault()
+    evaluator = MemoryFormationEvaluator(
+        signal_pipeline=_Pipeline(signal),
+        worthiness_scorer=_UnavailableScorer(),
+        privacy_classifier=_PrivacyClassifier(),
+    )
+    service = MemoryFormationService(
+        vault_factory=lambda tenant_id: vault,
+        derived_projector=_Projector(),
+        evaluator=evaluator,
+    )
+
+    result = await service.process_interaction(
+        text=signal.text,
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id="00000000-0000-0000-0000-000000000002",
+        policy_context={"memory_write_authorized": True},
+    )
+
+    assert result["persisted"] == 1
+    assert vault.calls[0][0].metadata.custom["attribute"] == "origin_location"
+
+
+@pytest.mark.asyncio
+async def test_explicit_location_still_obeys_privacy_restrictions():
+    signal = MemorySignal(
+        text="I'm from Jamaica and my email is private@example.com",
+        signal_type="profile_fact",
+        confidence=0.98,
+        metadata={
+            "explicit_user_statement": True,
+            "category": "location",
+            "attribute": "origin_location",
+            "normalized_value": "Jamaica",
+        },
+    )
+    vault = _Vault()
+    evaluator = MemoryFormationEvaluator(
+        signal_pipeline=_Pipeline(signal),
+        worthiness_scorer=_UnavailableScorer(),
+        privacy_classifier=_PrivacyClassifier(
+            contains_pii=True,
+            pii_types=["email"],
+        ),
+    )
+    service = MemoryFormationService(
+        vault_factory=lambda tenant_id: vault,
+        derived_projector=_Projector(),
+        evaluator=evaluator,
+    )
+
+    result = await service.process_interaction(
+        text=signal.text,
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id="00000000-0000-0000-0000-000000000002",
+        policy_context={"memory_write_authorized": True},
+    )
+
+    assert result["persisted"] == 0
+    assert result["reason"] == "privacy_sensitive_interaction"
+    assert vault.calls == []
