@@ -1139,3 +1139,16 @@ def test_bare_tell_me_clock_and_possessive_private_updates() -> None:
         "Latest update on its deployment",
     ):
         assert resolve_capability_decision(query).intent == "general.chat"
+
+
+def test_inverted_tell_me_clock_and_standalone_private_updates() -> None:
+    from ai_karen_engine.core.runtime.direct_capability_executor import DirectCapabilityExecutor
+
+    query = "Tell me what time is it in Tokyo"
+    assert resolve_capability_decision(query).intent == "time.current"
+    assert DirectCapabilityExecutor._extract_time_location(query) == "Tokyo"
+
+    for query in ("Latest update on mine", "Latest update on ours",
+                  "Latest update on yours", "Latest update on hers",
+                  "Latest update on theirs"):
+        assert resolve_capability_decision(query).intent == "general.chat"
