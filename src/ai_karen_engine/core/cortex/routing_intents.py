@@ -28,7 +28,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"\bweb\s+search\b",
             r"\blook\s+(?:it\s+)?up\s+online\b",
             r"\blook\s+online\s+(?:for|at)\b",
-            r"^find\s+(?:the\s+)?(?:current|latest|today'?s?)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|results?|score|price|release|version|information)[?!.]*$",
+            r"^(?:(?:please\s+)?(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?find\s+(?:the\s+)?(?:current|latest|today'?s?)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|results?|score|price|release|version|information)[?!.]*$",
             r"^(?:what(?:'s|\s+is)|which\s+is)\s+the\s+(?:current|latest)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|result|score|price|release|version)[?!.]*$",
             r"^(?:what(?:'s|\s+is)|which\s+is)\s+the\s+(?:current|latest)\s+(?:news|result|score|price|release|version)\s+(?:about|of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3}[?!.]*$",
             r"^(?:latest|current|today'?s?)\s+(?:news|results?|score|price|release|version)(?:\s+(?:on|about|of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3})?[?!.]*$",
@@ -203,6 +203,11 @@ class CapabilityDecision:
 
 def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> CapabilityDecision:
     q = " ".join(query.lower().split())
+    # A user's private resource is not a public search target, even when a
+    # sentence contains a freshness word such as "latest" or "update".
+    private_update = bool(re.search(
+        r"\\b(?:my|our|your|private|internal|confidential)\\b", q
+    )) and bool(re.search(r"\\b(?:update|updates|status)\\b", q))
 
     # Specialized routes use bounded intent patterns, not substring hits. This
     # keeps deterministic fallback available when Intelligence is offline while
@@ -213,6 +218,8 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
             re.search(pattern, q, flags=re.IGNORECASE)
             for pattern in patterns
         )
+        if intent == "search.general" and private_update:
+            matched = False
         if intent == "time.current":
             matched = matched or _looks_like_shorthand_time(query)
         if intent == "search.weather":
