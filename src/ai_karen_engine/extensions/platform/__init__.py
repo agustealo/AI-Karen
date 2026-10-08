@@ -3,7 +3,7 @@
 The platform package is a namespace boundary for catalog, governance, UI, and
 compatibility surfaces. Importing it must not eagerly resolve the runtime-facing
 core exports: PluginKernel imports platform loader modules during canonical
-runtime construction, and an eager ``from .core import *`` both defeats the
+runtime construction, and eager wildcard imports both defeat the
 core package's lazy design and can create PluginKernel/PluginService cycles.
 
 Explicit historical attribute access such as ``platform.PluginManager`` remains
