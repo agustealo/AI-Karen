@@ -234,12 +234,17 @@ def _looks_like_forecast_target(query: str) -> bool:
     # shaped proper name or an explicit timezone.
     if match.group("relation").lower() == "in":
         return True
+    # Bare "forecast for X" is fundamentally ambiguous: title case alone
+    # cannot distinguish a city from a report heading (Sales Growth, Q4
+    # Revenue). Only explicitly geographic syntax is deterministic here.
+    # "forecast in X" and "weather forecast for X" remain available.
     if re.fullmatch(r"[A-Za-z_]+/[A-Za-z_+-]+", location):
         return True
-    tokens = location.split()
-    return bool(tokens and all(
-        token.lower() in _LOCATION_CONNECTORS or token[:1].isupper()
-        for token in tokens
+    if re.fullmatch(r"(?:UTC|GMT)(?:[+-]\\d{1,2}(?::\\d{2})?)?", location, re.IGNORECASE):
+        return True
+    return bool(re.fullmatch(
+        r"[A-Za-z][A-Za-z .'-]+,\\s*[A-Za-z][A-Za-z .'-]+",
+        location,
     ))
 
 
