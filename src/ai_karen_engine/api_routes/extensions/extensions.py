@@ -139,7 +139,14 @@ async def get_current_user(request: Request):
 async def require_extension_catalog_access(request: Request) -> dict[str, Any]:
     """Fail closed for catalog reads; the frontend cannot authorize itself."""
     user = await get_current_user(request)
-    if not isinstance(user, dict) or not user.get("authenticated"):
+    # Authenticated middleware principals carry a user ID and tenant context;
+    # only development-bypass identities use an explicit authenticated flag.
+    if (
+        not isinstance(user, dict)
+        or user.get("authenticated") is False
+        or not user.get("user_id")
+        or user.get("user_id") == "guest"
+    ):
         raise HTTPException(status_code=401, detail="Authentication required")
     permissions = user.get("permissions") or []
     if not isinstance(permissions, (list, tuple, set)):
