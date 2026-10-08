@@ -646,6 +646,11 @@ export default function ModelDownloads({
 
     if (recommendationsResult.status === 'fulfilled') {
       setRecommendations(recommendationsResult.value);
+    } else {
+      nextErrors.recommendations = getErrorMessage(
+        recommendationsResult.reason,
+        'Model source verification request failed.',
+      );
     }
 
     if (storageResult.status === 'fulfilled') {
