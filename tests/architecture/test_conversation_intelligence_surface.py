@@ -136,3 +136,30 @@ def test_advanced_consumer_insights_use_canonical_owners() -> None:
     assert '"counterfactuals"' in runtime
     assert '"execution_spans"' in runtime
     assert "Retrieval / vector health" in rail
+
+def test_advanced_consumer_insights_preserve_stream_telemetry_and_consumer_ui() -> None:
+    runtime = RUNTIME.read_text(encoding="utf-8")
+    rail = RAIL.read_text(encoding="utf-8")
+
+    assert "_CONSUMER_TELEMETRY_KEYS" in runtime
+    for token in (
+        '"agent_consensus"',
+        '"counterfactuals"',
+        '"execution_spans"',
+        '"vector_health"',
+        '"prompt_telemetry"',
+        '"usage"',
+        '"name": "cortex_decision"',
+        '"name": "memory_recall"',
+        '"name": "memory_persistence"',
+        '"name": "transcript_persistence"',
+    ):
+        assert token in runtime
+
+    assert "Token budget" in rail
+    assert "Budget headroom" in rail
+    assert "Model context window" in rail
+    assert "Model context limit was not reported" in rail
+    assert "JSON.stringify(counterfactuals" not in rail
+    assert "JSON.stringify(agentConsensus" not in rail
+

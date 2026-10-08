@@ -711,7 +711,7 @@ function RailContent({
               <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider">
                 <span className="flex items-center gap-2">
                   <ChartNoAxesColumnIncreasing className="h-3.5 w-3.5 text-primary" />
-                  Token window
+                  Token budget
                 </span>
                 <Badge variant="outline" className="text-[9px]">
                   {asString(tokenWindow.source) || 'unavailable'}
@@ -727,22 +727,40 @@ function RailContent({
                       <p className="mt-1 text-xs font-semibold">{asNumber(tokenWindow.input_tokens) ?? 0}</p>
                     </div>
                     <div className="rounded-lg border border-border/60 bg-background/40 p-2">
-                      <p className="text-[8px] uppercase text-muted-foreground">Headroom</p>
-                      <p className="mt-1 text-xs font-semibold">{asNumber(tokenWindow.context_headroom_tokens) ?? 0}</p>
+                      <p className="text-[8px] uppercase text-muted-foreground">Budget headroom</p>
+                      <p className="mt-1 text-xs font-semibold">{asNumber(tokenWindow.prompt_budget_headroom_tokens) ?? 0}</p>
                     </div>
                     <div className="rounded-lg border border-border/60 bg-background/40 p-2">
-                      <p className="text-[8px] uppercase text-muted-foreground">Used</p>
-                      <p className="mt-1 text-xs font-semibold">{asNumber(tokenWindow.context_used_percent) ?? 0}%</p>
+                      <p className="text-[8px] uppercase text-muted-foreground">Prompt used</p>
+                      <p className="mt-1 text-xs font-semibold">{asNumber(tokenWindow.prompt_budget_used_percent) ?? 0}%</p>
                     </div>
                   </div>
                   <div className="h-1.5 overflow-hidden rounded-full bg-muted">
                     <div
                       className="h-full rounded-full bg-primary"
                       style={{
-                        width: `${Math.max(0, Math.min(100, asNumber(tokenWindow.context_used_percent) ?? 0))}%`,
+                        width: `${Math.max(0, Math.min(100, asNumber(tokenWindow.prompt_budget_used_percent) ?? 0))}%`,
                       }}
                     />
                   </div>
+                  {tokenWindow.model_context_available === true ? (
+                    <div className="rounded-lg border border-border/60 bg-background/40 p-2 text-[9px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-muted-foreground">Model context window</span>
+                        <span className="font-mono">
+                          {asNumber(tokenWindow.model_context_headroom_tokens) ?? 0} tokens free
+                        </span>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between gap-2 text-[8px] text-muted-foreground">
+                        <span>{asNumber(tokenWindow.model_context_window_tokens) ?? 0} total</span>
+                        <span>{asNumber(tokenWindow.model_context_used_percent) ?? 0}% used</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-[9px] text-muted-foreground">
+                      Model context limit was not reported by the active model/runtime.
+                    </p>
+                  )}
                   {(asNumber(tokenWindow.truncation_count) ?? 0) > 0 && (
                     <p className="text-[9px] text-amber-600 dark:text-amber-400">
                       {asNumber(tokenWindow.truncation_count)} prompt truncation event(s)
@@ -750,7 +768,7 @@ function RailContent({
                   )}
                 </>
               ) : (
-                <EmptyTruth>Token-window telemetry was not available for this turn.</EmptyTruth>
+                <EmptyTruth>Prompt-budget telemetry was not available for this turn.</EmptyTruth>
               )}
             </CardContent>
           </Card>
@@ -826,10 +844,43 @@ function RailContent({
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {counterfactuals.available === true ? (
-                <pre className="whitespace-pre-wrap text-[9px] text-muted-foreground">
-                  {JSON.stringify(counterfactuals, null, 2)}
-                </pre>
+              {counterfactuals.available === true && Array.isArray(counterfactuals.scenarios) ? (
+                <div className="space-y-2">
+                  {counterfactuals.scenarios.slice(0, 6).map((raw, index) => {
+                    const scenario = asRecord(raw);
+                    const confidence = asNumber(scenario.confidence);
+                    const uncertainty = asNumber(scenario.uncertainty);
+                    return (
+                      <div
+                        key={asString(scenario.id) || `scenario:${index}`}
+                        className="rounded-lg border border-border/60 bg-background/40 p-2.5"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-[10px] font-medium leading-relaxed">
+                            {asString(scenario.statement) || 'Evaluated alternative'}
+                          </p>
+                          {asString(scenario.status) && (
+                            <Badge variant="outline" className="shrink-0 text-[8px]">
+                              {asString(scenario.status).replace(/_/g, ' ')}
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {confidence !== undefined && (
+                            <Badge variant="secondary" className="text-[8px]">
+                              {Math.round(confidence * 100)}% confidence
+                            </Badge>
+                          )}
+                          {uncertainty !== undefined && (
+                            <Badge variant="outline" className="text-[8px]">
+                              {Math.round(uncertainty * 100)}% uncertainty
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               ) : (
                 <EmptyTruth>
                   {asString(counterfactuals.unavailable_reason).replace(/_/g, ' ') || 'No counterfactual scenario was evaluated.'}
@@ -846,10 +897,38 @@ function RailContent({
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {agentConsensus.available === true ? (
-                <pre className="whitespace-pre-wrap text-[9px] text-muted-foreground">
-                  {JSON.stringify(agentConsensus, null, 2)}
-                </pre>
+              {agentConsensus.available === true && Array.isArray(agentConsensus.participants) ? (
+                <div className="space-y-2">
+                  {asString(agentConsensus.consensus_summary) && (
+                    <p className="rounded-lg border border-border/60 bg-background/40 p-2.5 text-[10px] leading-relaxed">
+                      {asString(agentConsensus.consensus_summary)}
+                    </p>
+                  )}
+                  {agentConsensus.participants.slice(0, 8).map((raw, index) => {
+                    const participant = asRecord(raw);
+                    const confidence = asNumber(participant.confidence);
+                    return (
+                      <div
+                        key={asString(participant.agent_id) || `agent:${index}`}
+                        className="flex items-start gap-2 rounded-lg border border-border/60 bg-background/40 p-2.5"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[10px] font-semibold">
+                            {asString(participant.role) || asString(participant.agent_id) || 'Agent'}
+                          </p>
+                          <p className="mt-1 text-[9px] leading-relaxed text-muted-foreground">
+                            {asString(participant.position) || 'No position summary reported.'}
+                          </p>
+                        </div>
+                        {confidence !== undefined && (
+                          <Badge variant="outline" className="shrink-0 text-[8px]">
+                            {Math.round(confidence * 100)}%
+                          </Badge>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               ) : (
                 <EmptyTruth>
                   {asString(agentConsensus.unavailable_reason).replace(/_/g, ' ') || 'No multi-agent consensus was reported.'}
