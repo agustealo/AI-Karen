@@ -25,7 +25,7 @@ test.describe('Intelligent Search - Crawl4AI Integration', () => {
 
   test('enabling crawl includes options in API request', async ({ page }) => {
     // Enable API interception
-    let requestBody: any = null;
+    let requestBody: Record<string, unknown> | null = null;
     await page.route('**/api/plugins/execute', async route => {
       const request = route.request();
       requestBody = await request.postDataJSON();
