@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+from ai_karen_engine.core.model_runtime.provider_policy import evaluate_provider_policy
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionResult,
@@ -108,11 +109,24 @@ async def build_runtime_fallback(
     # A recovered request is degraded because the primary execution failed,
     # not proof that the responding Ollama server is itself unhealthy.
     # Do not infer distinct backends from provider display-name differences.
+    requested_policy = evaluate_provider_policy(md.requested_provider)
+    actual_policy = evaluate_provider_policy(md.actual_provider)
+    same_provider_family = (
+        requested_policy.allowed
+        and actual_policy.allowed
+        and requested_policy.classification == actual_policy.classification
+        and requested_policy.classification in {
+            "local_openai_endpoint", "cloud_provider"
+        }
+    )
     md.extra["recovery"] = {
         "occurred": True,
         "reason": "primary_execution_failed",
         "failure_type": type(failure).__name__,
         "provider_identity_verified": False,
+        "same_provider_family": same_provider_family,
+        "requested_provider_class": requested_policy.classification,
+        "actual_provider_class": actual_policy.classification,
         "requested_provider": md.requested_provider,
         "actual_provider": md.actual_provider,
         "model_changed": (
