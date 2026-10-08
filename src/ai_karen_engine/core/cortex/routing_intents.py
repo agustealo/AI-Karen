@@ -32,6 +32,8 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"^(?:what(?:'s|\s+is)|which\s+is)\s+the\s+(?:current|latest)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|result|score|price|release|version)[?!.]*$",
             r"^(?:what(?:'s|\s+is)|which\s+is)\s+the\s+(?:current|latest)\s+(?:news|result|score|price|release|version)\s+(?:about|of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3}[?!.]*$",
             r"^(?:latest|current|today'?s?)\s+(?:news|results?|score|price|release|version)(?:\s+(?:on|about|of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3})?[?!.]*$",
+            r"^(?:latest|current)\s+(?:[A-Za-z][\w.+#-]*\s+){1,3}updates?[?!.]*$",
+            r"^(?:latest|current)\s+updates?\s+(?:on|about|for)\s+[A-Za-z][\w.+#-]*(?:\s+[A-Za-z][\w.+#-]*){0,3}[?!.]*$",
             r"^(?:latest|current)\s+(?:(?:[\w.+#-]+\s+){1,4})(?:news|results?|score|price|release|version)(?:\s+(?:on|about|of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3})?[?!.]*$",
         ],
         "required_capability": "web.search",
