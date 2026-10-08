@@ -713,7 +713,11 @@ def test_spacy_snapshot_accepts_valid_nested_pipeline(
     loader = Mock(return_value=Mock(pipe_names=["tok2vec", "ner"]))
     monkeypatch.setitem(sys.modules, "spacy", Mock(load=loader))
     ModelOrchestratorService._verify_spacy_pipeline(model_path)
-    loader.assert_called_once_with(nested)
+    assert loader.call_count == 2
+    assert loader.call_args_list[0].args == (nested,)
+    assert loader.call_args_list[1].args == (model_path,)
+    assert (model_path / "config.cfg").is_file()
+    assert (model_path / "meta.json").is_file()
 
 
 def test_spacy_snapshot_rejects_empty_component_pipeline(
@@ -728,3 +732,16 @@ def test_spacy_snapshot_rejects_empty_component_pipeline(
     monkeypatch.setitem(sys.modules, "spacy", Mock(load=Mock(return_value=Mock(pipe_names=[]))))
     with pytest.raises(ModelOrchestratorError, match="loadable pipeline"):
         ModelOrchestratorService._verify_spacy_pipeline(model_path)
+
+
+def test_hf_cache_only_is_not_a_downloaded_model(tmp_path: Path) -> None:
+    cache = tmp_path / ".cache" / "huggingface"
+    cache.mkdir(parents=True)
+    (cache / "download-state.json").write_text('{"cached":true}', encoding="utf-8")
+    files, total = ModelOrchestratorService._walk_files(tmp_path)
+    assert files == []
+    assert total == 0
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    files, total = ModelOrchestratorService._walk_files(tmp_path)
+    assert [file["path"] for file in files] == ["config.json"]
+    assert total == 2
