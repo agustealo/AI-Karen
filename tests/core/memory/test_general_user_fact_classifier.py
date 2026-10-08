@@ -131,3 +131,28 @@ def test_location_language_does_not_promote_weather_queries_to_profile_facts() -
         item for item in classify_general_user_facts("What's the weather in Detroit?")
         if item.metadata.get("category") == "location"
     ]
+
+
+def test_personal_recall_queries_include_location_and_correction() -> None:
+    from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+
+    for query in (
+        "Where am I from?",
+        "Where was I born?",
+        "Where do I live?",
+        "Where am I currently?",
+        "I already told you where I'm from",
+    ):
+        assert CortexExecutionDecider._personal_recall_query(query)
+
+    assert not CortexExecutionDecider._personal_recall_query("Weather in Detroit")
+
+
+def test_postgres_profile_retriever_recognizes_origin_queries() -> None:
+    from ai_karen_engine.platform.memory.postgres.profile_retriever import (
+        PostgresProfileRecallRetriever,
+    )
+
+    assert PostgresProfileRecallRetriever._looks_like_profile_query("Where am I from?")
+    assert PostgresProfileRecallRetriever._looks_like_profile_query("Where do I live?")
+    assert not PostgresProfileRecallRetriever._looks_like_profile_query("Weather in Detroit")
