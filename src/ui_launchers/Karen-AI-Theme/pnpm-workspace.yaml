@@ -1,0 +1,6 @@
+# pnpm 11 requires explicit review of dependency lifecycle scripts.
+# Allow only native runtime components used by the current web stack.
+# All other packages remain denied by default (strictDepBuilds).
+allowBuilds:
+  sharp: true
+  unrs-resolver: true
