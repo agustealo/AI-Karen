@@ -209,8 +209,9 @@ function isPromptFirstValid(entry: BackendPluginEntry): boolean {
 /** Normalises a raw backend entry into a PluginCatalogEntry. */
 function normaliseEntry(raw: BackendPluginEntry): PluginCatalogEntry {
   const id = raw.name;
-  // A plugin is considered enabled if it's 'active' or 'registered'
-  const enabled = raw.status === 'active' || raw.status === 'registered';
+  // The canonical runtime projects enabled plugins using the "enabled"
+  // lifecycle state; "active" and "registered" are compatible states.
+  const enabled = ['active', 'registered', 'enabled', 'loaded'].includes(raw.status);
   const has_gui =
     raw.capabilities?.provides_ui === true ||
     raw.ui?.has_component === true ||
