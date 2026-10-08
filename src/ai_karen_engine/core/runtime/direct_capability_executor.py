@@ -147,9 +147,13 @@ class DirectCapabilityExecutor:
         attempts: List[Dict[str, Any]] = []
 
         async def run_tool() -> Optional[DirectCapabilityResult]:
-            if not tool_name or tool_name not in set(plan.allowed_tools):
+            if not tool_name:
+                return None
+            if tool_name not in set(plan.allowed_tools):
+                attempts.append({"type": "tool", "id": tool_name, "status": "skipped", "error": "not_in_authorized_plan"})
                 return None
             if not await ActionExecutionGate.authorize(plan, tool_name):
+                attempts.append({"type": "tool", "id": tool_name, "status": "denied", "error": "execution_gate_denied"})
                 return None
             if not await meter.consume_tool_call():
                 return self._unavailable(
@@ -227,12 +231,13 @@ class DirectCapabilityExecutor:
             )
 
         async def run_plugin() -> Optional[DirectCapabilityResult]:
-            if (
-                not preferred_plugin
-                or preferred_plugin not in set(plan.allowed_plugins)
-            ):
+            if not preferred_plugin:
+                return None
+            if preferred_plugin not in set(plan.allowed_plugins):
+                attempts.append({"type": "plugin", "id": preferred_plugin, "status": "skipped", "error": "not_in_authorized_plan"})
                 return None
             if not await ActionExecutionGate.authorize(plan, preferred_plugin):
+                attempts.append({"type": "plugin", "id": preferred_plugin, "status": "denied", "error": "execution_gate_denied"})
                 return None
             if not await meter.consume_tool_call():
                 return self._unavailable(
@@ -426,12 +431,18 @@ class DirectCapabilityExecutor:
     ) -> DirectCapabilityResult:
         capability_label = capability or "live data"
         target_label = target or "the required capability"
-        text = (
-            f"I can handle that autonomously, but {target_label} could not run "
-            f"for this chat. Required capability: {capability_label}. "
-            "If web/plugin access is disabled, enable it and I can retry the "
-            "request directly."
-        )
+        denial = any(a.get("error") in {"not_in_authorized_plan", "execution_gate_denied"} for a in attempts)
+        execution_failed = any(a.get("status") == "failed" for a in attempts)
+        if execution_failed:
+            message = "The live data provider failed or returned no usable result."
+            next_action = "inspect_provider_attempts"
+        elif denial:
+            message = "The live capability was not authorized for this request."
+            next_action = "inspect_authorized_execution_plan"
+        else:
+            message = "No executable live capability is configured for this request."
+            next_action = "inspect_capability_registration"
+        text = f"I couldn't retrieve live information: {message} Required capability: {capability_label}."
         return DirectCapabilityResult(
             handled=True,
             text=text,
@@ -443,7 +454,7 @@ class DirectCapabilityExecutor:
             payload={
                 "required_capability": capability_label,
                 "target": target_label,
-                "next_action": "enable_or_authorize_capability",
+                "next_action": next_action,
             },
             latency_ms=(time.perf_counter() - started) * 1000.0,
             attempts=attempts,
