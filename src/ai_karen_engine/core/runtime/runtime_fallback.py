@@ -62,7 +62,16 @@ async def build_runtime_fallback(
     meter = ExecutionBudgetMeter(plan.budget)
     meter.start()
     try:
-        text, normalized = await runtime._run_simple(request, fallback_decision, plan, meter)
+        # Preserve the already-authorized, scoped memory evidence across provider
+        # recovery. Never perform a second, ungoverned recall in fallback.
+        memory_recall_meta = {
+            "memory_context": dict(
+                (request.metadata or {}).get("memory_context") or {"recall": []}
+            )
+        }
+        text, normalized = await runtime._run_simple(
+            request, fallback_decision, plan, meter, memory_recall_meta
+        )
     except Exception as fb_exc:  # pragma: no cover - defensive boundary
         logger.error(
             "Runtime fallback chain failed: %s",
