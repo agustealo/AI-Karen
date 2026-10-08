@@ -115,23 +115,6 @@
       "default_mode": "general",
       "default_provider": "duckduckgo",
       "max_urls": 5,
-      "search": {
-        "duckduckgo": {
-          "enabled": true,
-          "priority": 100
-        },
-        "tavily": {
-          "enabled": false,
-          "api_key": null,
-          "priority": 90
-        },
-        "google_custom_search": {
-          "enabled": false,
-          "api_key": null,
-          "cx_id": null,
-          "priority": 80
-        }
-      },
       "general": {
         "max_urls": 5,
         "depth": 1,

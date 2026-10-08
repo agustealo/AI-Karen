@@ -103,6 +103,27 @@ perms = load_permissions_config()
 # Returns dict with role_permissions or empty dict if file missing
 ```
 
+### Web Search Provider Configuration
+
+#### `web_search.py`
+**Purpose**: Canonical defaults and merge logic for live web-search providers.
+
+**Runtime authority**:
+- Shipped provider configuration lives at the root `search` key in `config_assets/config.json`.
+- `WebSearchProviderRegistry` consumes this canonical configuration for enablement, priority, endpoints, and provider selection.
+- Higher numeric `priority` wins among enabled, healthy, policy-permitted providers unless a permitted provider is explicitly requested.
+- Legacy `plugins.intelligent-search.search` configuration is migrated into root `search` during config validation and removed from the plugin section. New code must not write or read provider settings from the legacy location.
+- Plugin manifests do not own provider routing or availability.
+
+**Environment override**:
+`KARI_SEARCH` accepts a JSON object and overrides the root `search` configuration through the standard ConfigManager environment adapter. Example:
+
+```bash
+export KARI_SEARCH='{"duckduckgo":{"enabled":false},"wikipedia":{"enabled":true,"priority":200}}'
+```
+
+Provider credentials belong in validated runtime configuration or secret/environment adapters. Do not hardcode credentials in manifests, UI code, or search clients.
+
 ### Provider & Runtime Management
 
 #### `llm_provider_config.py`

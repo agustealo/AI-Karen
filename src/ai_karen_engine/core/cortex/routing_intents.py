@@ -1,9 +1,19 @@
 """CORTEX capability-routing contract."""
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     "time.current": {
         "triggers": ["what time", "current time", "time in", "timezone"],
+        "patterns": [
+            r"^what\s+time\s+is\s+it(?:\s+right\s+now)?(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^what(?:'s|\s+is)\s+the\s+(?:current\s+)?time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^current\s+time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^time\s+now(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^timezone\s+(?:in|for|of)\s+.+[?!.]*$",
+            r"^(?:please\s+)?(?:could|would|can)\s+you\s+(?:please\s+)?tell\s+me\s+(?:what\s+time\s+it\s+is|what\s+time\s+is\s+it|the\s+(?:current\s+)?time)(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^(?:please\s+)?tell\s+me\s+(?:what\s+time\s+it\s+is|what\s+time\s+is\s+it|the\s+(?:current\s+)?time)(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+        ],
         "required_capability": "time_query",
         "preferred_plugin": "time-query",
         "handler": "time_tool",
@@ -13,6 +23,19 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     },
     "search.general": {
         "triggers": ["search the internet", "look online", "find current", "latest", "web search"],
+        "patterns": [
+            r"\bsearch\s+(?:the\s+)?(?:web|internet|online)\b",
+            r"\bweb\s+search\b",
+            r"\blook\s+(?:it\s+)?up\s+online\b",
+            r"\blook\s+online\s+(?:for|at)\b",
+            r"^(?:(?:please\s+)?(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?find\s+(?:the\s+)?(?:current|latest|today'?s?)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|results?|score|price|release|version|information)[?!.]*$",
+            r"^(?:what(?:'s|\s+is)|which\s+is)\s+the\s+(?:current|latest)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|result|score|price|release|version)[?!.]*$",
+            r"^(?:what(?:'s|\s+is)|which\s+is)\s+the\s+(?:current|latest)\s+(?:news|result|score|price|release|version)\s+(?:about|of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3}[?!.]*$",
+            r"^(?:latest|current|today'?s?)\s+(?:news|results?|score|price|release|version)(?:\s+(?:on|about|of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3})?[?!.]*$",
+            r"^(?:latest|current)\s+(?:[A-Za-z][\w.+#-]*\s+){1,3}updates?[?!.]*$",
+            r"^(?:latest|current)\s+updates?\s+(?:on|about|for)\s+[A-Za-z][\w.+#-]*(?:\s+[A-Za-z][\w.+#-]*){0,3}[?!.]*$",
+            r"^(?:latest|current)\s+(?:(?:[\w.+#-]+\s+){1,4})(?:news|results?|score|price|release|version)(?:\s+(?:on|about|of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3})?[?!.]*$",
+        ],
         "required_capability": "web.search",
         "preferred_plugin": "intelligent-search",
         "handler": "web_search",
@@ -23,6 +46,20 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     },
     "search.weather": {
         "triggers": ["weather", "forecast", "temperature", "rain today"],
+        "patterns": [
+            r"^what(?:'s|\s+is)\s+(?:the\s+)?weather(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^what(?:'s|\s+is)\s+(?:the\s+)?weather\s+like(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^what(?:'s|\s+is)\s+(?:the\s+)?forecast(?:\s+(?:for|in)\s+.+)?[?!.]*$",
+            r"\bwhat\s+will\s+the\s+weather\s+be\s+(?:in|for)\s+.+$",
+            r"^how(?:'s|\s+is)\s+(?:the\s+)?weather(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^weather[?!.]*$",
+            r"\bweather\s+(?:in|for|today|tonight|tomorrow|this\s+week)\b",
+            r"^forecast\s+(?:today|tonight|tomorrow|this\s+week)[?!.]*$",
+            r"\b(?:current|today'?s?|tonight'?s?|tomorrow'?s?)\s+(?:weather|forecast|temperature)\b",
+            r"\btemperature\s+(?:in|at|outside|today|tonight|tomorrow)\b",
+            r"\b(?:will|is|does)\s+it\s+(?:rain|snow)\b",
+            r"\b(?:rain|snow|storm|precipitation)\s+(?:today|tonight|tomorrow|this\s+week)\b",
+        ],
         "required_capability": "web.search",
         "preferred_plugin": "intelligent-search",
         "handler": "web_search",
@@ -32,6 +69,118 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "allow_llm_only": False,
     },
 }
+
+
+_CONCEPTUAL_TIME_SUBJECTS = {
+    "literature",
+    "mechanics",
+    "physics",
+    "systems",
+    "computing",
+    "philosophy",
+    "music",
+    "history",
+    "theory",
+}
+
+
+_LOCATION_CONNECTORS = {
+    "al",
+    "bin",
+    "da",
+    "das",
+    "de",
+    "del",
+    "do",
+    "dos",
+    "du",
+    "la",
+    "las",
+    "le",
+    "los",
+    "of",
+    "the",
+    "van",
+    "von",
+}
+
+
+def _looks_like_location_phrase(value: str) -> bool:
+    raw = " ".join((value or "").strip().split()).strip(" ,")
+    if not raw or len(raw) > 160:
+        return False
+
+    # IANA timezone and common UTC/GMT offset forms are explicit clock targets.
+    if re.fullmatch(r"[A-Za-z_]+/[A-Za-z_+-]+", raw):
+        return True
+    if re.fullmatch(r"(?:UTC|GMT)(?:[+-]\d{1,2}(?::\d{2})?)?", raw, re.IGNORECASE):
+        return True
+
+    tokens = [
+        token.strip(".'’_-")
+        for token in re.split(r"[\s,]+", raw)
+        if token.strip(".'’_-")
+    ]
+    if not tokens or any(not token[0].isalpha() for token in tokens):
+        return False
+
+    if re.fullmatch(r"(?:Q[1-4]|FY\d{2,4})", raw, flags=re.IGNORECASE):
+        return False
+
+    # A one-token shorthand must look like a proper place name. This keeps
+    # "Detroit weather" while rejecting conceptual subjects such as
+    # "election forecast" or "time in literature".
+    if len(tokens) == 1:
+        return (
+            tokens[0].lower() not in _CONCEPTUAL_TIME_SUBJECTS
+            and (
+                tokens[0][:1].isupper()
+                or tokens[0][:1].lower() == tokens[0][:1].upper()
+            )
+        )
+
+    # Comma-delimited place strings and title-cased proper names are positive
+    # location shapes. Lowercase conceptual phrases are deliberately rejected.
+    if "," in raw:
+        return True
+    return all(
+        token[:1].isupper()
+        or token[:1].lower() == token[:1].upper()
+        or (index > 0 and token.lower() in _LOCATION_CONNECTORS)
+        for index, token in enumerate(tokens)
+    )
+
+
+def _looks_like_shorthand_time(query: str) -> bool:
+    raw = " ".join((query or "").strip().split()).rstrip("?")
+    match = re.fullmatch(r"time\s+in\s+(?P<location>.+)", raw, flags=re.IGNORECASE)
+    if not match:
+        return False
+    return _looks_like_location_phrase(match.group("location"))
+
+
+def _looks_like_forecast_target(query: str) -> bool:
+    raw = " ".join((query or "").strip().split()).rstrip("?!.")
+    match = re.fullmatch(r"forecast\s+(?:for|in)\s+(.+)", raw, re.IGNORECASE)
+    return bool(match and _looks_like_location_phrase(match.group(1)))
+
+
+def _looks_like_location_first_weather(query: str) -> bool:
+    raw = " ".join((query or "").strip().split()).rstrip("?!.")
+    match = re.fullmatch(
+        r"(?P<location>.+?)\s+(?:weather|forecast)",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return False
+    location = match.group("location")
+    suffix = raw[match.end("location"):].strip().lower()
+    # A bare forecast is ambiguous (finance, elections, demand). Require a
+    # preposition or explicit weather noun before using the weather executor.
+    if suffix == "forecast":
+        return False
+    return _looks_like_location_phrase(location)
 
 
 @dataclass(slots=True)
@@ -53,11 +202,33 @@ class CapabilityDecision:
 
 
 def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> CapabilityDecision:
-    q = query.lower().strip()
-    
-    # Check specialized capability routes first
+    q = " ".join(query.lower().split())
+    # A user's private resource is not a public search target, even when a
+    # sentence contains a freshness word such as "latest" or "update".
+    private_update = bool(re.search(
+        r"\b(?:my|our|your|his|her|their|its|mine|ours|yours|hers|theirs|private|internal|confidential)\b", q
+    )) and bool(re.search(r"\b(?:update|updates|status)\b", q))
+
+    # Specialized routes use bounded intent patterns, not substring hits. This
+    # keeps deterministic fallback available when Intelligence is offline while
+    # avoiding hijacks such as "what time complexity..." or incidental "latest".
     for intent, config in CAPABILITY_ROUTES.items():
-        if any(trigger in q for trigger in config.get("triggers", [])):
+        patterns = config.get("patterns", [])
+        matched = any(
+            re.search(pattern, q, flags=re.IGNORECASE)
+            for pattern in patterns
+        )
+        if intent == "search.general" and private_update:
+            matched = False
+        if intent == "time.current":
+            matched = matched or _looks_like_shorthand_time(query)
+        if intent == "search.weather":
+            matched = (
+                matched
+                or _looks_like_location_first_weather(query)
+                or _looks_like_forecast_target(query)
+            )
+        if matched:
             return CapabilityDecision(
                 intent=intent,
                 confidence=confidence,
