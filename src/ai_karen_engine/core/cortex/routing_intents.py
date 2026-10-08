@@ -162,6 +162,36 @@ def _explicit_location_target(query: str) -> Optional[str]:
     return location or None
 
 
+def _clock_target_is_location(query: str, target: str) -> bool:
+    if not _looks_like_location_phrase(target):
+        return False
+
+    raw = " ".join((query or "").strip().split()).rstrip("?!.")
+    relation = re.search(
+        r"\b(?P<relation>in|for|of)\s+.+$",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if not relation or relation.group("relation").lower() != "for":
+        return True
+
+    # "for" is ambiguous in ordinary English ("for lunch", "for work").
+    # Keep explicit zone forms, multi-word place names, and title-cased
+    # one-word place names; lowercase shorthand remains supported via "in".
+    if re.fullmatch(r"[A-Za-z_]+/[A-Za-z_+-]+", target):
+        return True
+    if re.fullmatch(
+        r"(?:UTC|GMT)(?:[+-]\d{1,2}(?::\d{2})?)?",
+        target,
+        re.IGNORECASE,
+    ):
+        return True
+    tokens = [token for token in re.split(r"[\s,]+", target) if token]
+    if len(tokens) > 1:
+        return True
+    return bool(tokens and tokens[0][:1].isupper())
+
+
 def _looks_like_shorthand_time(query: str) -> bool:
     raw = " ".join((query or "").strip().split()).rstrip("?")
     match = re.fullmatch(r"time\s+in\s+(?P<location>.+)", raw, flags=re.IGNORECASE)
@@ -228,7 +258,7 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
             matched = matched or _looks_like_shorthand_time(query)
             target = _explicit_location_target(query)
             if matched and target is not None:
-                matched = _looks_like_location_phrase(target)
+                matched = _clock_target_is_location(query, target)
         if intent == "search.weather":
             matched = (
                 matched
