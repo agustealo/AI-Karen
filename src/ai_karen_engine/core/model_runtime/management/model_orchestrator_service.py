@@ -503,6 +503,19 @@ class ModelOrchestratorService:
         )
 
     @staticmethod
+    def _reject_snapshot_symlinks(root: Path) -> None:
+        """Reject symlink artifacts before validation or durable publication."""
+        for directory, directories, files in os.walk(root, followlinks=False):
+            for name in directories + files:
+                path = Path(directory) / name
+                if path.is_symlink():
+                    raise ModelOrchestratorError(
+                        E_VERIFY,
+                        "Downloaded model snapshot contains a symlink",
+                        {"path": str(path.relative_to(root))},
+                    )
+
+    @staticmethod
     def _verify_spacy_pipeline(install_path: Path) -> None:
         """Reject incomplete or incompatible spaCy artifacts before publication."""
         # Hugging Face snapshots can contain an unpacked model or a package
@@ -607,6 +620,7 @@ class ModelOrchestratorService:
                 {"model_id": req.model_id, "revision": req.revision, "error": str(exc)},
             ) from exc
 
+        await asyncio.to_thread(self._reject_snapshot_symlinks, install_path)
         if req.storage_key == "spacy":
             await asyncio.to_thread(self._verify_spacy_pipeline, install_path)
         files, total_size = await asyncio.to_thread(self._walk_files, install_path)
