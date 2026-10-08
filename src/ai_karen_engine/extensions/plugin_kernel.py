@@ -40,7 +40,7 @@ from ai_karen_engine.extensions.platform.core.registry.plugin_registry import (
 from ai_karen_engine.extensions.registry import ExtensionRegistry
 
 logger = logging.getLogger("kari.extensions.plugin_kernel")
-_CANONICAL_PLUGIN_ROOT = Path("src/ai_karen_engine/extensions/plugins")
+_CANONICAL_PLUGIN_ROOT = Path(__file__).resolve().parent / "plugins"
 
 
 class RuntimeExtensionManifest(RuntimeExtensionManifestBase):
