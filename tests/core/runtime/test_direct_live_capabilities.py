@@ -607,6 +607,10 @@ def test_weather_forecast_questions_do_not_hijack_business_planning() -> None:
     assert resolve_capability_decision(
         "forecast in New York"
     ).intent == "search.weather"
+    assert resolve_capability_decision("weather forecast for Detroit").intent == "search.weather"
+    assert resolve_capability_decision("weather forecast in detroit").intent == "search.weather"
+    assert resolve_capability_decision("Forecast for Sales Growth, Next Quarter").intent == "general.chat"
+    assert resolve_capability_decision("Forecast for Revenue, Expenses").intent == "general.chat"
     for prompt in (
         "Forecast for Sales Growth",
         "Forecast for Next Quarter",
