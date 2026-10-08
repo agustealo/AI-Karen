@@ -26,6 +26,7 @@ from ai_karen_engine.extensions.platform.core.manifest import (
 )
 from ai_karen_engine.extensions.platform.core.governance.manifest_schema import (
     TenantIsolation,
+    TenantScope,
     SecretAccessRequirement,
     NetworkAccessRequirement,
 )
@@ -164,12 +165,12 @@ class PluginPermissionResolver:
         tenant_id: Optional[str],
         result: PermissionResolutionResult,
     ) -> None:
-        if tenant.scope == TenantIsolation.TenantScope.GLOBAL:
+        if tenant.scope == TenantScope.GLOBAL:
             result.resolution_notes.append("Global tenant scope is forbidden by governance")
             result.denied_permissions.append("tenant:global")
             return
 
-        if tenant.scope == TenantIsolation.TenantScope.MULTI:
+        if tenant.scope == TenantScope.MULTI:
             if tenant_id not in tenant.allowed_tenant_ids:
                 result.resolution_notes.append(
                     f"Tenant {tenant_id} not in allowed_tenant_ids"
@@ -177,7 +178,7 @@ class PluginPermissionResolver:
                 result.denied_permissions.append("tenant:access")
                 return
 
-        if tenant.scope == TenantIsolation.TenantScope.SINGLE:
+        if tenant.scope == TenantScope.SINGLE:
             if not tenant_id:
                 result.resolution_notes.append("Single-tenant plugin requires tenant_id")
                 result.denied_permissions.append("tenant:identify")
