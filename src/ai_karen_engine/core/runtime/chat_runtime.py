@@ -1955,6 +1955,13 @@ class ChatRuntime:
         prompt_telemetry = dict(
             (result.metadata or {}).get("consumer_token_telemetry") or {}
         )
+        # Record counts only; never log the user's recalled profile facts.
+        prompt_telemetry["memory_items_offered"] = (
+            len(recall_items) if decision.memory_recall_required else 0
+        )
+        prompt_telemetry["memory_recall_requested"] = bool(
+            decision.memory_recall_required
+        )
         prompt_telemetry["assembly_duration_ms"] = (
             time.perf_counter() - assembly_started
         ) * 1000.0
