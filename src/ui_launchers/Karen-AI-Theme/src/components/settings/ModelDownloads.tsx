@@ -1632,6 +1632,16 @@ export default function ModelDownloads({
                         <p className="mt-1 text-[10px] text-muted-foreground">
                           {item.verification_error || 'Karen could not verify the current model license or access restrictions. Check source connectivity and refresh before installation.'}
                         </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="mt-3"
+                          disabled={refreshing || loading}
+                          onClick={() => void refreshAll()}
+                        >
+                          {refreshing ? 'Checking source...' : 'Retry source verification'}
+                        </Button>
                       </div>
                     )}
 
