@@ -372,15 +372,11 @@ class PostgresDerivedMemoryProjector:
         ).scalar_one_or_none()
 
         valid_from = self._datetime(metadata.get("valid_from")) or datetime.utcnow()
-        current_value = (
-            current.value.get("value")
-            if current is not None and isinstance(current.value, dict)
-            else None
-        )
-        if current is not None and current_value == value.get("value"):
-            current.confidence = max(float(current.confidence or 0.0), confidence)
-            current.updated_at = datetime.utcnow()
-            return
+        # Every independently committed memory event has its own consent and
+        # deletion lifecycle. Reusing the previous profile row for an identical
+        # value would strand this new statement behind the old event's consent.
+        # Same-event replay is already idempotently guarded by existing_event.
+        # A new event must supersede the prior projection, even for equal values.
 
         supersedes = None
         if current is not None:
