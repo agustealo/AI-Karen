@@ -114,7 +114,15 @@ class PostgresProfileRecallRetriever:
     @staticmethod
     def _entry(row: ProfileFact, query: MemoryQuery) -> MemoryEntry:
         value = row.value
-        rendered = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True)
+        if isinstance(value, dict) and "value" in value:
+            fact_value = value["value"]
+        else:
+            fact_value = value
+        rendered = (
+            fact_value
+            if isinstance(fact_value, str)
+            else json.dumps(fact_value, ensure_ascii=False, sort_keys=True)
+        )
         content = f"{row.attribute}: {rendered}"
         created_at = row.created_at or datetime.utcnow()
         metadata = MemoryMetadata(
