@@ -32,3 +32,8 @@ def test_loader_requires_discovered_backend_registration() -> None:
     assert "throw new Error('Invalid plugin catalog response')" in loader
     assert "throw error;" in loader
     assert "If no catalog entry, assume it's valid" not in loader
+
+
+def test_frontend_recognizes_canonical_enabled_state() -> None:
+    registry = (WEB / "plugin_host/registry.tsx").read_text(encoding="utf-8")
+    assert "['active', 'registered', 'enabled', 'loaded'].includes(raw.status)" in registry
