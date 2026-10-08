@@ -77,6 +77,19 @@ _CONCEPTUAL_TIME_SUBJECTS = {
 }
 
 
+_NON_LOCATION_LEADERS = {
+    "a",
+    "an",
+    "my",
+    "our",
+    "the",
+    "their",
+    "this",
+    "that",
+    "your",
+}
+
+
 _LOCATION_CONNECTORS = {
     "al",
     "bin",
@@ -120,28 +133,33 @@ def _looks_like_location_phrase(value: str) -> bool:
     if re.fullmatch(r"(?:Q[1-4]|FY\d{2,4})", raw, flags=re.IGNORECASE):
         return False
 
-    # A one-token shorthand must look like a proper place name. This keeps
-    # "Detroit weather" while rejecting conceptual subjects such as
-    # "election forecast" or "time in literature".
+    lowered = [token.lower() for token in tokens]
+    if lowered[0] in _NON_LOCATION_LEADERS:
+        return False
     if len(tokens) == 1:
-        return (
-            tokens[0].lower() not in _CONCEPTUAL_TIME_SUBJECTS
-            and (
-                tokens[0][:1].isupper()
-                or tokens[0][:1].lower() == tokens[0][:1].upper()
-            )
-        )
+        return lowered[0] not in _CONCEPTUAL_TIME_SUBJECTS
 
-    # Comma-delimited place strings and title-cased proper names are positive
-    # location shapes. Lowercase conceptual phrases are deliberately rejected.
-    if "," in raw:
-        return True
-    return all(
-        token[:1].isupper()
-        or token[:1].lower() == token[:1].upper()
-        or (index > 0 and token.lower() in _LOCATION_CONNECTORS)
-        for index, token in enumerate(tokens)
+    if any(token in _CONCEPTUAL_TIME_SUBJECTS for token in lowered):
+        return False
+    return True
+
+
+def _explicit_location_target(query: str) -> Optional[str]:
+    raw = " ".join((query or "").strip().split()).rstrip("?!.")
+    match = re.search(
+        r"\b(?:in|for|of)\s+(?P<location>.+)$",
+        raw,
+        flags=re.IGNORECASE,
     )
+    if not match:
+        return None
+    location = re.sub(
+        r"[,\s]+right\s+now$",
+        "",
+        match.group("location"),
+        flags=re.IGNORECASE,
+    ).strip(" ,")
+    return location or None
 
 
 def _looks_like_shorthand_time(query: str) -> bool:
@@ -208,6 +226,9 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
         )
         if intent == "time.current":
             matched = matched or _looks_like_shorthand_time(query)
+            target = _explicit_location_target(query)
+            if matched and target is not None:
+                matched = _looks_like_location_phrase(target)
         if intent == "search.weather":
             matched = (
                 matched
