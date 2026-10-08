@@ -205,11 +205,15 @@ class MemoryFormationEvaluator:
             user_id=resolved_user,
         )
 
-        privacy_metadata = self._privacy_classifier.extract_safe_metadata(normalized)
-        contains_pii = bool(privacy_metadata.get("contains_pii", False))
+        # Determine consent per extracted fact, not from the entire user turn.
+        # Sensitive data in one clause must not contaminate unrelated facts.
+        contains_pii = bool(
+            self._privacy_classifier.extract_safe_metadata(normalized).get("contains_pii", False)
+        )
 
         admitted: list[AdmittedMemorySignal] = []
         for signal in extraction.signals:
+            privacy_metadata = self._privacy_classifier.extract_safe_metadata(signal.text)
             # Explicit first-person claims have deterministic confidence supplied by
             # the canonical semantic classifier. Preserve memory formation when
             # the optional salience model is unhealthy, without bypassing guards.
