@@ -37,3 +37,13 @@ def test_loader_requires_discovered_backend_registration() -> None:
 def test_frontend_recognizes_canonical_enabled_state() -> None:
     registry = (WEB / "plugin_host/registry.tsx").read_text(encoding="utf-8")
     assert "['active', 'registered', 'enabled', 'loaded'].includes(raw.status)" in registry
+
+
+def test_discovery_cannot_create_shadow_catalog_or_swallow_scan_errors() -> None:
+    discovery = (
+        ENGINE / "extensions/platform/core/registry/discovery.py"
+    ).read_text(encoding="utf-8")
+    assert "self.extensions_dir.mkdir(" not in discovery
+    assert 'raise FileNotFoundError(' in discovery
+    assert 'self.logger.exception("Extension discovery failed")' in discovery
+    assert 'self.logger.exception("Failed to scan extension directories")' in discovery
