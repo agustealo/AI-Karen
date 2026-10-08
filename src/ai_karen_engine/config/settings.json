@@ -67,7 +67,7 @@
     },
     "local_first_mode": true
   },
-  "last_selected_model": "auto",
+  "last_selected_model": "deepseek-r1:1.5b",
   "use_memory": true,
   "context_length": 512,
   "decay": 0.1,
@@ -125,8 +125,8 @@
       }
     }
   },
-  "provider": "builtin_transformers",
-  "model": "auto",
+  "provider": "ollama",
+  "model": "deepseek-r1:1.5b",
   "model_providers": {
     "builtin_transformers": {
       "last_model": "auto",
@@ -140,8 +140,8 @@
       "last_model": "gemini-2.5-flash"
     },
     "ollama": {
-      "last_model": "auto",
-      "base_url": "http://host.docker.internal:11434"
+      "last_model": "deepseek-r1:1.5b",
+      "base_url": "http://host.docker.internal:11434/v1"
     },
     "zai": {
       "last_model": "glm-4.5"
