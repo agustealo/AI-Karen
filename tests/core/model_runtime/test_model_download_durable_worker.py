@@ -760,3 +760,18 @@ async def test_recommendation_verified_metadata_overrides_curated_license(
     assert item["verification_error"] is None
     assert item["license"] == "MIT"
     assert item["resolved_revision"] == "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_model_file_integrity_checks_cover_spacy_artifacts(tmp_path: Path) -> None:
+    root = tmp_path / "pipeline"
+    root.mkdir()
+    files, total_size = ModelOrchestratorService._walk_files(root)
+    assert files == []
+    assert total_size == 0
+    for filename in ("config.cfg", "meta.json", "tokenizer"):
+        (root / filename).write_text("content", encoding="utf-8")
+    files, total_size = ModelOrchestratorService._walk_files(root)
+    assert total_size > 0
+    assert {"config.cfg", "meta.json", "tokenizer"} <= {
+        entry["path"] for entry in files if entry["size"] > 0
+    }
