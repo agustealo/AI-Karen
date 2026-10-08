@@ -2,10 +2,10 @@ import { vi, describe, it, expect } from 'vitest';
 
 // Mock the require object before anything else is imported
 vi.hoisted(() => {
-  if (typeof (globalThis as any).require === 'undefined') {
-    (globalThis as any).require = {};
+  if (typeof (globalThis as typeof globalThis & { require?: { context?: unknown } }).require === 'undefined') {
+    (globalThis as typeof globalThis & { require?: { context?: unknown } }).require = {};
   }
-  (globalThis as any).require.context = vi.fn(() => {
+  (globalThis as typeof globalThis & { require?: { context?: unknown } }).require.context = vi.fn(() => {
     const context = (key: string) => ({ default: () => null });
     context.keys = () => [] as string[];
     context.resolve = (key: string) => key;
@@ -31,9 +31,9 @@ vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react')>();
   return {
     ...actual,
-    lazy: vi.fn((importer: any) => {
-      const LazyComp = (props: any) => actual.createElement('div', null, 'Lazy Component');
-      (LazyComp as any).$$typeof = Symbol.for('react.lazy');
+    lazy: vi.fn((_importer: () => Promise<{ default: React.ComponentType }>) => {
+      const LazyComp = () => actual.createElement('div', null, 'Lazy Component');
+      (LazyComp as typeof LazyComp & { $typeof?: symbol }).$typeof = Symbol.for('react.lazy');
       return LazyComp;
     }),
   };
@@ -50,7 +50,7 @@ describe('Plugin Loader', () => {
   });
 
   it('should resolve components', () => {
-    (PLUGIN_IMPORT_MAP as any)['weather-query'] = vi.fn().mockResolvedValue({ default: () => null });
+    (PLUGIN_IMPORT_MAP as Record<string, () => Promise<{ default: () => null }>>)['weather-query'] = vi.fn().mockResolvedValue({ default: () => null });
     const component = resolvePluginComponent('weather-query', mockCatalog);
     expect(component).toBeTruthy();
   });
