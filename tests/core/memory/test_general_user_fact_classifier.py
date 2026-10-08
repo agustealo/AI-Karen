@@ -98,3 +98,36 @@ def test_relationship_requires_person_like_name() -> None:
         signal.metadata.get("category") == "relationship"
         for signal in signals
     )
+
+
+def test_location_facts_are_distinct_and_durable_candidates() -> None:
+    from ai_karen_engine.core.memory.signals.general_fact_classifier import (
+        classify_general_user_facts,
+    )
+
+    facts = classify_general_user_facts(
+        "I live in NYC, born in Jamaica. I'm currently in Detroit. I'm from Jamaica."
+    )
+    location = {
+        item.metadata.get("attribute"): item.metadata.get("normalized_value")
+        for item in facts
+        if item.metadata.get("category") == "location"
+    }
+    assert location == {
+        "residence_location": "NYC",
+        "birthplace": "Jamaica",
+        "current_location": "Detroit",
+        "origin_location": "Jamaica",
+    }
+    assert all(item.signal_type == "profile_fact" for item in facts if item.metadata.get("category") == "location")
+
+
+def test_location_language_does_not_promote_weather_queries_to_profile_facts() -> None:
+    from ai_karen_engine.core.memory.signals.general_fact_classifier import (
+        classify_general_user_facts,
+    )
+
+    assert not [
+        item for item in classify_general_user_facts("What's the weather in Detroit?")
+        if item.metadata.get("category") == "location"
+    ]
