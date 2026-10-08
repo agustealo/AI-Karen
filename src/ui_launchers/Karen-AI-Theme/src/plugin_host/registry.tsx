@@ -285,12 +285,32 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
   const fetchCatalog = useCallback(async () => {
     setState((prev) => ({ ...prev, loading: true, error: null }));
     try {
-      const raw = await apiClient.getUnauthenticated<BackendPluginEntry[]>('/api/extensions/list');
-      
-      if (!Array.isArray(raw)) {
-        console.error('[PluginRegistry] Expected array from /api/extensions/list, got:', raw);
-        setState({ plugins: [], loading: false, error: 'Invalid backend response' });
-        return;
+      // The plugin catalog is tenant- and RBAC-scoped. Send the same
+      // authenticated context as the other governed runtime endpoints.
+      const response = await apiClient.get<unknown>('/api/extensions/list');
+      const raw =
+        Array.isArray(response)
+          ? response
+          : response && typeof response === 'object'
+            ? (response as Record<string, unknown>).plugins ??
+              (response as Record<string, unknown>).extensions
+            : undefined;
+
+      // Missing content is not an empty catalog. Preserve the last known
+      // catalog while reporting a real backend contract failure.
+      if (
+        !Array.isArray(raw) ||
+        !raw.every(
+          (entry): entry is BackendPluginEntry =>
+            entry !== null &&
+            typeof entry === 'object' &&
+            typeof entry.name === 'string' &&
+            entry.name.length > 0 &&
+            typeof entry.status === 'string' &&
+            typeof entry.version === 'string',
+        )
+      ) {
+        throw new Error('Plugin catalog unavailable: backend returned an invalid response.');
       }
 
       const normalised = raw.map(normaliseEntry);
@@ -298,8 +318,7 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
       console.log(`[PluginRegistry] Loaded ${normalised.length} plugins from backend.`);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to load plugin catalog';
-      console.error('[PluginRegistry] Error fetching catalog:', err);
-      setState({ plugins: [], loading: false, error: message });
+      setState((prev) => ({ ...prev, loading: false, error: message }));
     }
   }, []);
 
