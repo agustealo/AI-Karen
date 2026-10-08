@@ -117,6 +117,9 @@ def _looks_like_location_phrase(value: str) -> bool:
     if not tokens or any(not token[0].isalpha() for token in tokens):
         return False
 
+    if re.fullmatch(r"(?:Q[1-4]|FY\d{2,4})", raw, flags=re.IGNORECASE):
+        return False
+
     # A one-token shorthand must look like a proper place name. This keeps
     # "Detroit weather" while rejecting conceptual subjects such as
     # "election forecast" or "time in literature".
