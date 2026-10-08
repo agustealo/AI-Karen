@@ -133,6 +133,7 @@ def test_chat_runtime_authorized_plan_binds_request_principal():
         max_steps=1,
         execution_mode=SimpleNamespace(value="direct"),
         policy_reason_codes=[],
+        policy_constraints={},
         risk_level=SimpleNamespace(value="low"),
         required_capabilities=[],
         memory_write_allowed=False,
