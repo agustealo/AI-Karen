@@ -206,8 +206,8 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
     # A user's private resource is not a public search target, even when a
     # sentence contains a freshness word such as "latest" or "update".
     private_update = bool(re.search(
-        r"\\b(?:my|our|your|private|internal|confidential)\\b", q
-    )) and bool(re.search(r"\\b(?:update|updates|status)\\b", q))
+        r"\b(?:my|our|your|private|internal|confidential)\b", q
+    )) and bool(re.search(r"\b(?:update|updates|status)\b", q))
 
     # Specialized routes use bounded intent patterns, not substring hits. This
     # keeps deterministic fallback available when Intelligence is offline while
