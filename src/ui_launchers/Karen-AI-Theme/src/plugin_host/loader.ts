@@ -116,7 +116,10 @@ async function fetchBackendCatalog(): Promise<LoaderPluginEntry[]> {
     })
     .then((response) => {
       // Handle both wrapped and direct array responses
-      const pluginsArray = Array.isArray(response) ? response : response.data?.plugins || [];
+      const pluginsArray = Array.isArray(response) ? response : response.data?.plugins;
+      if (!Array.isArray(pluginsArray)) {
+        throw new Error('Invalid plugin catalog response');
+      }
       cachedCatalog = pluginsArray.map((p) => ({
         name: p.name,
         status: p.status,
@@ -131,8 +134,9 @@ async function fetchBackendCatalog(): Promise<LoaderPluginEntry[]> {
     .catch((error) => {
       console.warn('[PluginLoader] Failed to fetch backend catalog:', error);
       catalogFetchPromise = null;
-      // Return empty catalog on error (will use static discovery only)
-      return [] as LoaderPluginEntry[];
+      // Preserve failure as failure: an empty list means a successfully
+      // discovered empty catalog, not a backend outage.
+      throw error;
     });
 
   return catalogFetchPromise;
@@ -177,13 +181,12 @@ export function resolvePluginEntries(
     (p) => normalizePluginId(p.name) === normalised
   );
 
-  // If no catalog entry, assume it's valid (fallback for development)
-  if (!entry) {
-    return [{ entry_id: 'default', component: normalised, zone: 'sidebar.plugins' }];
-  }
+  // The import map proves only bundling, not backend authorization or
+  // installation. A missing backend entry must never be treated as enabled.
+  if (!entry) return [];
 
   // Validate catalog entry
-  if (entry.status !== 'active') return [];
+  if (!['active', 'registered', 'enabled', 'loaded'].includes(entry.status)) return [];
   if (!entry.capabilities?.provides_ui) return [];
 
   if (entry.ui_entry_points && entry.ui_entry_points.length > 0) {
