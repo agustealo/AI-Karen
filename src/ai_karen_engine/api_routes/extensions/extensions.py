@@ -82,6 +82,7 @@ class ExtensionStatusAPI(BaseModel):
     purpose: str | None = Field(default=None)
     category: str = Field(default="integration")
     has_component: bool = Field(default=False)
+    rbac: Dict[str, Any] = Field(default_factory=dict)
 
 
 # Pydantic model for install request
@@ -112,19 +113,18 @@ async def get_current_user(request: Request):
     if not AUTH_AVAILABLE:
         return {"user_id": "guest", "authenticated": False}
 
+    state_user = getattr(request.state, "user", None)
+    if isinstance(state_user, dict):
+        return state_user
+
     if (
         auth_config
         and hasattr(auth_config, "should_bypass_auth")
         and auth_config.should_bypass_auth()
     ):
-        return {
-            "user_id": "dev-user",
-            "email": "dev-user@karen.ai",
-            "user_type": "developer",
-            "permissions": ["extension:*", "admin:*"],
-            "tenant_id": "dev-tenant",
-            "authenticated": True,
-        }
+        context = auth_config.get_dev_user_context()
+        return context
+
 
     if _real_get_current_user:
         try:
@@ -134,27 +134,56 @@ async def get_current_user(request: Request):
     return {"user_id": "guest", "authenticated": False}
 
 
+
+
+async def require_extension_catalog_access(request: Request) -> dict[str, Any]:
+    """Authenticate and authorize catalog reads through canonical RBAC."""
+    user = await get_current_user(request)
+    if (
+        not isinstance(user, dict)
+        or user.get("authenticated") is False
+        or not user.get("user_id")
+        or user.get("user_id") == "guest"
+        or not user.get("tenant_id")
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    from ai_karen_engine.auth.rbac_middleware import Permission, RBACManager
+
+    rbac = RBACManager()
+    granted = rbac.has_permission(user, Permission.READ)
+    rbac.audit_access_attempt(
+        user,
+        Permission.READ,
+        "extension_catalog",
+        granted,
+        request=request,
+    )
+    if not granted:
+        raise HTTPException(status_code=403, detail="Extension catalog access denied")
+    return user
+
 @router.get("/", response_model=List[ExtensionStatusAPI])
-async def list_extensions_root():
+async def list_extensions_root(user: dict[str, Any] = Depends(require_extension_catalog_access)):
     """List all extensions and their status (root endpoint)."""
     manager = get_extension_manager()
     if not manager:
         raise HTTPException(status_code=503, detail="Extension catalog unavailable")
     try:
-        return await manager.refresh_extensions()
+        return await manager.refresh_extensions(user_context=user)
     except Exception:
         logger.exception("Extension catalog refresh failed")
         raise HTTPException(status_code=503, detail="Extension catalog unavailable")
 
 
 @router.get("/list", response_model=List[ExtensionStatusAPI])
-async def list_extensions():
+async def list_extensions(user: dict[str, Any] = Depends(require_extension_catalog_access)):
     """List all extensions and their status."""
     manager = get_extension_manager()
     if not manager:
         raise HTTPException(status_code=503, detail="Extension catalog unavailable")
     try:
-        return await manager.refresh_extensions()
+        return await manager.refresh_extensions(user_context=user)
     except Exception:
         logger.exception("Extension catalog refresh failed")
         raise HTTPException(status_code=503, detail="Extension catalog unavailable")

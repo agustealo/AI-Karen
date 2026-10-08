@@ -14,6 +14,11 @@ vi.mock('@/lib/useAuth', () => ({
 
 // Mock apiClient to avoid actual network calls
 vi.mock('@/lib/api', () => ({
+  ApiError: class ApiError extends Error {
+    constructor(public status: number, message: string) {
+      super(message);
+    }
+  },
   default: {
     get: vi.fn()
   }

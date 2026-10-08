@@ -16,9 +16,10 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   type ReactNode,
 } from 'react';
-import { apiClient } from '@/lib/api';
+import { apiClient, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
@@ -275,7 +276,9 @@ function normaliseEntry(raw: BackendPluginEntry): PluginCatalogEntry {
 // ─── Provider Component ───────────────────────────────────────────────────────
 
 export function PluginRegistryProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
+  const generation = useRef(0);
+  const identity = user ? `${user.tenant_id}:${user.user_id}:${[...(user.roles || []), ...(user.permissions || [])].sort().join(',')}` : null;
   const [state, setState] = useState<PluginRegistryState>({
     plugins: [],
     loading: true,
@@ -283,38 +286,65 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
   });
 
   const fetchCatalog = useCallback(async () => {
+    const requestGeneration = ++generation.current;
+    if (!identity || authLoading) {
+      setState({ plugins: [], loading: false, error: null });
+      return;
+    }
     setState((prev) => ({ ...prev, loading: true, error: null }));
     try {
-      const raw = await apiClient.getUnauthenticated<BackendPluginEntry[]>('/api/extensions/list');
-      
-      if (!Array.isArray(raw)) {
-        console.error('[PluginRegistry] Expected array from /api/extensions/list, got:', raw);
-        setState({ plugins: [], loading: false, error: 'Invalid backend response' });
-        return;
+      // The plugin catalog is tenant- and RBAC-scoped. Send the same
+      // authenticated context as the other governed runtime endpoints.
+      const response = await apiClient.get<unknown>('/api/extensions/list');
+      const raw =
+        Array.isArray(response)
+          ? response
+          : response && typeof response === 'object'
+            ? (response as Record<string, unknown>).plugins ??
+              (response as Record<string, unknown>).extensions
+            : undefined;
+
+      // Missing content is not an empty catalog. Preserve the last known
+      // catalog while reporting a real backend contract failure.
+      if (
+        !Array.isArray(raw) ||
+        !raw.every(
+          (entry): entry is BackendPluginEntry =>
+            entry !== null &&
+            typeof entry === 'object' &&
+            typeof entry.name === 'string' &&
+            entry.name.length > 0 &&
+            typeof entry.status === 'string' &&
+            typeof entry.version === 'string',
+        )
+      ) {
+        throw new Error('Plugin catalog unavailable: backend returned an invalid response.');
       }
 
+      if (requestGeneration !== generation.current) return;
       const normalised = raw.map(normaliseEntry);
       setState({ plugins: normalised, loading: false, error: null });
       console.log(`[PluginRegistry] Loaded ${normalised.length} plugins from backend.`);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to load plugin catalog';
-      console.error('[PluginRegistry] Error fetching catalog:', err);
-      setState({ plugins: [], loading: false, error: message });
+      if (requestGeneration !== generation.current) return;
+      const authorizationFailed = err instanceof ApiError && (err.status === 401 || err.status === 403);
+      setState((prev) => ({ ...prev, plugins: authorizationFailed ? [] : prev.plugins, loading: false, error: message }));
     }
-  }, []);
+  }, [identity, authLoading]);
 
   useEffect(() => {
     fetchCatalog();
   }, [fetchCatalog]);
 
   const getPluginsWithUI = useCallback(() => {
-    const userRoles = user?.permissions || [];
+    const userRoles = user?.roles || [];
     return state.plugins.filter((p) => {
       // Must be enabled, have UI, and pass prompt-first validation
       if (!p.enabled || !p.has_gui || !p.promptFirstValid) return false;
 
       // Must pass RBAC check
-      if (p.allowedRoles.length === 0) return true;
+      if (p.allowedRoles.length === 0) return false;
       return p.allowedRoles.some((role) => userRoles.includes(role));
     });
   }, [state.plugins, user?.permissions]);
@@ -326,7 +356,7 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
 
   const getContributionsByZone = useCallback(
     (zone: string) => {
-      const userRoles = user?.permissions || [];
+      const userRoles = user?.roles || [];
       const contributions: MenuContribution[] = [];
 
       state.plugins.forEach((p) => {
@@ -399,7 +429,7 @@ export function usePluginHealth(pluginId: string) {
   const frontendMountState = mount?.state || 'idle';
   const errorMessage = mount?.errorMessage;
   
-  const userRoles = user?.permissions || [];
+  const userRoles = user?.roles || [];
   const allowedRoles = entry?.allowedRoles || [];
   const permissionVisible = allowedRoles.length === 0 || userRoles.some((r) => allowedRoles.includes(r));
 

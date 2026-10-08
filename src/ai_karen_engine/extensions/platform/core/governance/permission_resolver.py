@@ -26,6 +26,7 @@ from ai_karen_engine.extensions.platform.core.manifest import (
 )
 from ai_karen_engine.extensions.platform.core.governance.manifest_schema import (
     TenantIsolation,
+    TenantScope,
     SecretAccessRequirement,
     NetworkAccessRequirement,
 )
@@ -69,6 +70,56 @@ class PluginPermissionResolver:
     def __init__(self, policy_provider: Optional[Any] = None):
         self.policy_provider = policy_provider
         self._role_permissions: Dict[str, Set[str]] = self._default_role_permissions()
+
+    def can_view_catalog(
+        self,
+        manifest: ExtensionManifest,
+        *,
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        user_roles: Optional[List[str]] = None,
+    ) -> PermissionResolutionResult:
+        """Resolve catalog visibility without granting runtime capabilities.
+
+        Catalog discovery is governed by tenant isolation and manifest RBAC only.
+        Runtime permissions, secrets, tools, and network access remain subject to
+        the full resolve path when the plugin is actually invoked.
+        """
+        result = PermissionResolutionResult(
+            allowed=False,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            roles=list(user_roles or []),
+        )
+        tenant = self._coerce_tenant(manifest)
+        rbac = self._coerce_rbac(manifest)
+        self._check_tenant_isolation(manifest, tenant, tenant_id, result)
+        if result.denied_permissions:
+            return result
+        # Expand inherited roles using the canonical RBAC role graph.
+        from ai_karen_engine.auth.rbac_middleware import Role, ROLE_PERMISSIONS
+
+        expanded_roles: Set[str] = set()
+        for role_name in user_roles or []:
+            try:
+                role = Role(str(role_name).lower())
+            except ValueError:
+                continue
+            seen: Set[Role] = set()
+            while role not in seen:
+                seen.add(role)
+                expanded_roles.add(role.value)
+                parent = ROLE_PERMISSIONS.get(role)
+                if parent is None or parent.inherits_from is None:
+                    break
+                role = parent.inherits_from
+        if "super_admin" in expanded_roles:
+            expanded_roles.update({"admin", "developer", "user"})
+        if "admin" in expanded_roles:
+            expanded_roles.update({"developer", "user"})
+        result.allowed = True
+        self._check_rbac_eligibility(manifest, rbac, sorted(expanded_roles), result)
+        return result
 
     def resolve(
         self,
@@ -114,12 +165,12 @@ class PluginPermissionResolver:
         tenant_id: Optional[str],
         result: PermissionResolutionResult,
     ) -> None:
-        if tenant.scope == TenantIsolation.TenantScope.GLOBAL:
+        if tenant.scope == TenantScope.GLOBAL:
             result.resolution_notes.append("Global tenant scope is forbidden by governance")
             result.denied_permissions.append("tenant:global")
             return
 
-        if tenant.scope == TenantIsolation.TenantScope.MULTI:
+        if tenant.scope == TenantScope.MULTI:
             if tenant_id not in tenant.allowed_tenant_ids:
                 result.resolution_notes.append(
                     f"Tenant {tenant_id} not in allowed_tenant_ids"
@@ -127,7 +178,7 @@ class PluginPermissionResolver:
                 result.denied_permissions.append("tenant:access")
                 return
 
-        if tenant.scope == TenantIsolation.TenantScope.SINGLE:
+        if tenant.scope == TenantScope.SINGLE:
             if not tenant_id:
                 result.resolution_notes.append("Single-tenant plugin requires tenant_id")
                 result.denied_permissions.append("tenant:identify")
