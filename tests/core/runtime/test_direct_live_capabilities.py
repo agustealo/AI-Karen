@@ -1105,3 +1105,21 @@ def test_live_public_updates_without_private_status_hijack() -> None:
     assert resolve_capability_decision("Latest update on Hurricane Milton").intent == "search.general"
     assert resolve_capability_decision("What is the current status of my order?").intent == "general.chat"
     assert resolve_capability_decision("What is the current status of deployment 123?").intent == "general.chat"
+
+
+def test_private_updates_are_not_external_search_targets() -> None:
+    for query in (
+        "Latest update on my private project",
+        "Current status of our deployment",
+        "Latest updates for your internal account",
+    ):
+        assert resolve_capability_decision(query).intent == "general.chat"
+
+
+def test_polite_find_current_queries_route_to_live_search() -> None:
+    for query in (
+        "Please find current Bitcoin price",
+        "Can you find the latest Python version?",
+        "Could you please find the latest Python version?",
+    ):
+        assert resolve_capability_decision(query).intent == "search.general"
