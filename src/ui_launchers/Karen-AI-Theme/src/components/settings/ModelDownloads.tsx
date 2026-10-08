@@ -169,6 +169,9 @@ type RecommendedModel = {
   gated?: boolean;
   resolved_revision?: string | null;
   metadata_verified?: boolean;
+  verification_state?: 'verified' | 'unavailable';
+  verification_source?: string | null;
+  verification_error?: string | null;
   include_patterns?: string[] | null;
   capabilities: string[];
   app_consumers: string[];
@@ -322,7 +325,7 @@ type DiscoverySnapshot = {
 };
 
 type EndpointErrors = Partial<
-  Record<'policy' | 'channels' | 'jobs' | 'installed' | 'discovery', string>
+  Record<'policy' | 'channels' | 'jobs' | 'installed' | 'discovery' | 'recommendations', string>
 >;
 
 interface ModelDownloadsProps {
@@ -643,6 +646,11 @@ export default function ModelDownloads({
 
     if (recommendationsResult.status === 'fulfilled') {
       setRecommendations(recommendationsResult.value);
+    } else {
+      nextErrors.recommendations = getErrorMessage(
+        recommendationsResult.reason,
+        'Model source verification request failed.',
+      );
     }
 
     if (storageResult.status === 'fulfilled') {
@@ -1627,8 +1635,18 @@ export default function ModelDownloads({
                       <div className="mt-3 rounded-xl border border-border/50 bg-muted/20 p-3 text-xs">
                         <div className="font-semibold">Access terms unavailable</div>
                         <p className="mt-1 text-[10px] text-muted-foreground">
-                          Karen could not verify this model&apos;s current license or gated-access state. Refresh when the model source is reachable before installation.
+                          {item.verification_error || 'Karen could not verify the current model license or access restrictions. Check source connectivity and refresh before installation.'}
                         </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="mt-3"
+                          disabled={refreshing || loading}
+                          onClick={() => void refreshAll()}
+                        >
+                          {refreshing ? 'Checking source...' : 'Retry source verification'}
+                        </Button>
                       </div>
                     )}
 

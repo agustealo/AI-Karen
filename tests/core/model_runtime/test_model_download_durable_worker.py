@@ -690,3 +690,73 @@ async def test_reported_license_requires_acknowledgment_even_when_ungated(
     assert "License acceptance is required" in blocked.blocking_reasons[0]
     assert allowed.license_required is True
     assert allowed.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_recommendation_verification_failure_does_not_promote_curated_license(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    service._orchestrator.snapshot_registry_entry = AsyncMock(return_value=None)
+    service._orchestrator.get_model_info = AsyncMock(
+        side_effect=RuntimeError("metadata endpoint offline")
+    )
+    monkeypatch.setattr(
+        "ai_karen_engine.core.model_runtime.model_download_control_service.load_model_download_recommendations",
+        lambda: {"recommendations": [{
+            "id": "spacy-english-core",
+            "model_id": "spacy/en_core_web_sm",
+            "label": "spaCy English Core",
+            "tier": "essential",
+            "channel_id": "core_spacy",
+            "license": "MIT",
+        }]},
+    )
+
+    result = await service.get_recommendations()
+    item = result["recommendations"][0]
+    assert item["license"] == "MIT"
+    assert item["metadata_verified"] is False
+    assert item["verification_state"] == "unavailable"
+    assert item["resolved_revision"] is None
+    assert "connectivity" in item["verification_error"]
+    assert result["essential_ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_recommendation_verified_metadata_overrides_curated_license(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    service._orchestrator.snapshot_registry_entry = AsyncMock(return_value=None)
+    service._orchestrator.get_model_info = AsyncMock(return_value=ModelInfo(
+        model_id="spacy/en_core_web_sm",
+        owner="spacy",
+        repository="en_core_web_sm",
+        storage_key="spacy",
+        license="MIT",
+        gated=False,
+        revision="0123456789abcdef0123456789abcdef01234567",
+    ))
+    monkeypatch.setattr(
+        "ai_karen_engine.core.model_runtime.model_download_control_service.load_model_download_recommendations",
+        lambda: {"recommendations": [{
+            "id": "spacy-english-core",
+            "model_id": "spacy/en_core_web_sm",
+            "label": "spaCy English Core",
+            "tier": "essential",
+            "channel_id": "core_spacy",
+            "license": "unknown",
+        }]},
+    )
+
+    item = (await service.get_recommendations())["recommendations"][0]
+    assert item["metadata_verified"] is True
+    assert item["verification_state"] == "verified"
+    assert item["verification_error"] is None
+    assert item["license"] == "MIT"
+    assert item["resolved_revision"] == "0123456789abcdef0123456789abcdef01234567"

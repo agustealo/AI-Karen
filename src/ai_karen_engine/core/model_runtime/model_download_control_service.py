@@ -1136,6 +1136,12 @@ class ModelDownloadControlService:
             install_path = str((entry or {}).get("install_path") or "")
             installed = bool(entry and install_path and Path(install_path).exists())
 
+            lookup_source = (
+                "remote_model_metadata"
+                if self._policy.require_license_acceptance or entry is None
+                else "model_registry"
+            )
+
             # Enrich curated recommendations with the same canonical metadata
             # authority used by validation. Config provides the curated model
             # choice; remote/local model metadata provides license and gating truth.
@@ -1145,6 +1151,9 @@ class ModelDownloadControlService:
                     refresh_remote=self._policy.require_license_acceptance,
                 )
                 item["metadata_verified"] = True
+                item["verification_state"] = "verified"
+                item["verification_source"] = lookup_source
+                item["verification_error"] = None
                 item["license"] = info.license
                 resolved_revision = info.revision or "main"
                 item["resolved_revision"] = resolved_revision
@@ -1161,7 +1170,16 @@ class ModelDownloadControlService:
                     model_id,
                     exc,
                 )
+                # A curated license label is not proof of current remote access
+                # terms. Never promote it to a verified result after an outage.
                 item["metadata_verified"] = False
+                item["verification_state"] = "unavailable"
+                item["verification_source"] = lookup_source
+                item["verification_error"] = (
+                    "Local model registry metadata could not be read or validated. Check the registry integrity before retrying."
+                    if lookup_source == "model_registry"
+                    else "Model source metadata could not be reached or verified. Check backend connectivity and source credentials, then refresh."
+                )
                 item["gated"] = bool(item.get("gated", False))
                 item["resolved_revision"] = None
 
