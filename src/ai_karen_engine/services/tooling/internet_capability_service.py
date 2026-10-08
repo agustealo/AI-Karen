@@ -37,7 +37,7 @@ from ..search.search_query_planner import SearchQueryPlanner
 from ..search.search_result_processor import SearchResultProcessor
 from ..search.web_search_provider_registry import WebSearchProviderRegistry
 from ..search.web_search_client import WebSearchClient
-from ...config.config_manager import get_config_value
+from ...config.config_manager import get_config_value, get_shipped_settings
 from ...core.runtime.contracts import ActionExecutionGate, AuthorizedExecutionPlan, ExecutionBudget, ExecutionContext
 from ...core.runtime.policy.runtime_policy import PolicyEvaluationRequest, RuntimePolicyEnforcer
 from ...integrations.web.crawl4ai_integration import Crawl4AIIntegration
@@ -255,7 +255,29 @@ class InternetCapabilityService:
             self.provider_registry = provider_registry
         else:
             manifest_search = dict(search_settings or {})
-            plugins_config = get_config_value("plugins", {})
+            shipped_settings = get_shipped_settings()
+            shipped_plugins = shipped_settings.get("plugins", {})
+            runtime_plugins = get_config_value("plugins", {})
+            plugins_config = dict(shipped_plugins) if isinstance(shipped_plugins, Mapping) else {}
+            if isinstance(runtime_plugins, Mapping):
+                for plugin_name, runtime_plugin in runtime_plugins.items():
+                    if isinstance(runtime_plugin, Mapping):
+                        base_plugin = plugins_config.get(plugin_name, {})
+                        merged_plugin = dict(base_plugin) if isinstance(base_plugin, Mapping) else {}
+                        for key, value in runtime_plugin.items():
+                            if key == "search" and isinstance(value, Mapping):
+                                existing = merged_plugin.get("search", {})
+                                merged_search = dict(existing) if isinstance(existing, Mapping) else {}
+                                for provider_name, provider_settings in value.items():
+                                    if isinstance(provider_settings, Mapping):
+                                        existing_provider = merged_search.get(provider_name, {})
+                                        merged_provider = dict(existing_provider) if isinstance(existing_provider, Mapping) else {}
+                                        merged_provider.update(provider_settings)
+                                        merged_search[provider_name] = merged_provider
+                                merged_plugin["search"] = merged_search
+                            else:
+                                merged_plugin[key] = value
+                        plugins_config[plugin_name] = merged_plugin
             legacy_plugin_search: Dict[str, Any] = {}
             if isinstance(plugins_config, Mapping):
                 intelligent_search = plugins_config.get("intelligent-search", {})
