@@ -55,3 +55,12 @@ def test_legacy_loader_cannot_create_shadow_plugin_root() -> None:
     ).read_text(encoding="utf-8")
     assert "self.extensions_dir.mkdir(" not in loader
     assert "Configured extensions directory unavailable:" in loader
+
+
+def test_canonical_plugin_root_does_not_depend_on_working_directory() -> None:
+    service = (ENGINE / "services/plugin_service.py").read_text(encoding="utf-8")
+    manager = (ENGINE / "extensions/platform/core/manager.py").read_text(encoding="utf-8")
+    kernel = (ENGINE / "extensions/plugin_kernel.py").read_text(encoding="utf-8")
+    assert 'Path(__file__).resolve().parents[1] / "extensions" / "plugins"' in service
+    assert 'self.extensions_dir else _CANONICAL_PLUGIN_ROOT' in manager
+    assert 'Path(__file__).resolve().parent / "plugins"' in kernel
