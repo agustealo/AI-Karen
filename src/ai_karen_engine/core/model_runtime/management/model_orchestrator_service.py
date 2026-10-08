@@ -295,7 +295,11 @@ class ModelOrchestratorService:
         files: List[Dict[str, Union[str, int]]] = []
         total = 0
         for p in root.rglob("*"):
-            if not p.is_file():
+            if not p.is_file() or p.is_symlink():
+                continue
+            # Hugging Face local_dir bookkeeping is not model content.
+            relative = p.relative_to(root)
+            if relative.parts[:2] == (".cache", "huggingface"):
                 continue
             try:
                 size = p.stat().st_size
@@ -498,6 +502,95 @@ class ModelOrchestratorService:
             revision=getattr(remote, "sha", None) or revision,
         )
 
+    @staticmethod
+    def _reject_snapshot_symlinks(root: Path) -> None:
+        """Reject symlink artifacts before validation or durable publication."""
+        if root.is_symlink():
+            raise ModelOrchestratorError(
+                E_VERIFY,
+                "Downloaded model snapshot root is a symlink",
+                {"path": str(root)},
+            )
+        def reject_traversal_error(error: OSError) -> None:
+            raise ModelOrchestratorError(
+                E_VERIFY,
+                "Downloaded model snapshot could not be fully inspected",
+                {"error_type": type(error).__name__},
+            ) from error
+
+        for directory, directories, files in os.walk(
+            root, followlinks=False, onerror=reject_traversal_error
+        ):
+            for name in directories + files:
+                path = Path(directory) / name
+                if path.is_symlink():
+                    raise ModelOrchestratorError(
+                        E_VERIFY,
+                        "Downloaded model snapshot contains a symlink",
+                        {"path": str(path.relative_to(root))},
+                    )
+
+    @staticmethod
+    def _verify_spacy_pipeline(install_path: Path) -> None:
+        """Reject incomplete or incompatible spaCy artifacts before publication."""
+        # Hugging Face snapshots can contain an unpacked model or a package
+        # directory. Only consider bounded, local direct descendants.
+        candidates = [install_path]
+        candidates.extend(
+            child for child in install_path.iterdir() if child.is_dir() and not child.is_symlink()
+        )
+        candidates.extend(
+            grandchild
+            for child in tuple(candidates[1:])
+            for grandchild in child.iterdir()
+            if grandchild.is_dir() and not grandchild.is_symlink()
+        )
+        errors: list[str] = []
+        for candidate in candidates:
+            if not (candidate / "config.cfg").is_file() or not (candidate / "meta.json").is_file():
+                continue
+            try:
+                import spacy
+            except ImportError as exc:
+                raise ModelOrchestratorError(
+                    E_COMPAT,
+                    "spaCy must be installed to verify a spaCy model",
+                ) from exc
+            try:
+                nlp = spacy.load(candidate)
+                if not nlp.pipe_names:
+                    errors.append("no pipeline components")
+                    continue
+                if candidate != install_path:
+                    # The consumer loads the published root, not this nested
+                    # package path. Normalize the verified payload in staging.
+                    for artifact in candidate.iterdir():
+                        destination = install_path / artifact.name
+                        if destination.exists() or destination.is_symlink():
+                            # A packaged snapshot can have repository-level
+                            # metadata differing from the loadable pipeline.
+                            # Only replace ordinary metadata files, never
+                            # pipeline directories or symlink targets.
+                            if artifact.name not in {"meta.json", "config.cfg"} or not destination.is_file() or destination.is_symlink():
+                                raise ModelOrchestratorError(
+                                    E_VERIFY,
+                                    "Nested spaCy model conflicts with the publication root",
+                                )
+                            destination.unlink()
+                        shutil.move(str(artifact), str(destination))
+                    # Verify the precise path that will be published.
+                    loaded_root = spacy.load(install_path)
+                    if not loaded_root.pipe_names:
+                        raise ModelOrchestratorError(E_VERIFY, "Published spaCy root has no pipeline components")
+                return
+            except (OSError, ValueError, ImportError) as exc:
+                errors.append(type(exc).__name__)
+        raise ModelOrchestratorError(
+            E_VERIFY,
+            "Downloaded spaCy snapshot does not contain a loadable pipeline",
+            {"error_types": errors, "install_path": str(install_path)},
+        )
+
     async def download_model(self, request: Union[DownloadRequest, str], **kwargs: Any) -> DownloadResult:
         req = DownloadRequest(model_id=request, **kwargs) if isinstance(request, str) else request
         owner, repo = self._split_model_id(req.model_id)
@@ -542,7 +635,16 @@ class ModelOrchestratorService:
                 {"model_id": req.model_id, "revision": req.revision, "error": str(exc)},
             ) from exc
 
+        await asyncio.to_thread(self._reject_snapshot_symlinks, install_path)
+        if req.storage_key == "spacy":
+            await asyncio.to_thread(self._verify_spacy_pipeline, install_path)
         files, total_size = await asyncio.to_thread(self._walk_files, install_path)
+        if not files or total_size <= 0:
+            raise ModelOrchestratorError(
+                E_VERIFY,
+                "Downloaded model artifact is empty; refusing registry publication",
+                {"model_id": req.model_id, "revision": req.revision},
+            )
         duration = time.perf_counter() - start
         previous = await self.snapshot_registry_entry(req.model_id)
 

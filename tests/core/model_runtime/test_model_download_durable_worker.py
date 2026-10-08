@@ -786,3 +786,135 @@ async def test_spacy_download_validation_identifies_linguistic_runtime(
     assert validation.storage_key == "spacy"
     assert Path(validation.install_path).parts[-2:] == ("spacy", "en_core_web_sm")
     service._orchestrator.get_model_info.assert_awaited_once()
+
+def test_spacy_snapshot_rejects_missing_pipeline(tmp_path: Path) -> None:
+    model_path = tmp_path / "downloaded"
+    model_path.mkdir()
+    (model_path / "README.md").write_text("not a model", encoding="utf-8")
+    with pytest.raises(ModelOrchestratorError, match="loadable pipeline"):
+        ModelOrchestratorService._verify_spacy_pipeline(model_path)
+
+
+def test_spacy_snapshot_accepts_valid_nested_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import Mock
+    import sys
+    model_path = tmp_path / "downloaded"
+    nested = model_path / "package" / "model-version"
+    nested.mkdir(parents=True)
+    (nested / "config.cfg").write_text("[nlp]", encoding="utf-8")
+    (nested / "meta.json").write_text("{}", encoding="utf-8")
+    loader = Mock(return_value=Mock(pipe_names=["tok2vec", "ner"]))
+    monkeypatch.setitem(sys.modules, "spacy", Mock(load=loader))
+    ModelOrchestratorService._verify_spacy_pipeline(model_path)
+    assert loader.call_count == 2
+    assert loader.call_args_list[0].args == (nested,)
+    assert loader.call_args_list[1].args == (model_path,)
+    assert (model_path / "config.cfg").is_file()
+    assert (model_path / "meta.json").is_file()
+
+
+def test_spacy_snapshot_rejects_empty_component_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import Mock
+    import sys
+    model_path = tmp_path / "downloaded"
+    model_path.mkdir()
+    (model_path / "config.cfg").write_text("[nlp]", encoding="utf-8")
+    (model_path / "meta.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setitem(sys.modules, "spacy", Mock(load=Mock(return_value=Mock(pipe_names=[]))))
+    with pytest.raises(ModelOrchestratorError, match="loadable pipeline"):
+        ModelOrchestratorService._verify_spacy_pipeline(model_path)
+
+
+def test_hf_cache_only_is_not_a_downloaded_model(tmp_path: Path) -> None:
+    cache = tmp_path / ".cache" / "huggingface"
+    cache.mkdir(parents=True)
+    (cache / "download-state.json").write_text('{"cached":true}', encoding="utf-8")
+    files, total = ModelOrchestratorService._walk_files(tmp_path)
+    assert files == []
+    assert total == 0
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    files, total = ModelOrchestratorService._walk_files(tmp_path)
+    assert [file["path"] for file in files] == ["config.json"]
+    assert total == 2
+
+
+def test_spacy_nested_pipeline_replaces_packaging_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import Mock
+    import sys
+
+    root = tmp_path / "snapshot"
+    pipeline = root / "package" / "version"
+    pipeline.mkdir(parents=True)
+    (root / "meta.json").write_text('{"name":"packaging"}', encoding="utf-8")
+    (pipeline / "meta.json").write_text('{"name":"pipeline"}', encoding="utf-8")
+    (pipeline / "config.cfg").write_text("[nlp]", encoding="utf-8")
+    (pipeline / "ner").mkdir()
+    loader = Mock(return_value=Mock(pipe_names=["ner"]))
+    monkeypatch.setitem(sys.modules, "spacy", Mock(load=loader))
+
+    ModelOrchestratorService._verify_spacy_pipeline(root)
+
+    assert (root / "meta.json").read_text(encoding="utf-8") == '{"name":"pipeline"}'
+    assert (root / "config.cfg").is_file()
+    assert (root / "ner").is_dir()
+    assert loader.call_args_list[-1].args == (root,)
+
+
+def test_downloaded_snapshot_rejects_symlink_file_before_publication(tmp_path: Path) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    target = root / "config.cfg"
+    target.write_text("[nlp]", encoding="utf-8")
+    (root / "linked.cfg").symlink_to(target)
+    with pytest.raises(ModelOrchestratorError, match="contains a symlink"):
+        ModelOrchestratorService._reject_snapshot_symlinks(root)
+
+
+def test_downloaded_snapshot_rejects_symlink_directory_before_publication(tmp_path: Path) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    real = root / "components"
+    real.mkdir()
+    (root / "component-link").symlink_to(real, target_is_directory=True)
+    with pytest.raises(ModelOrchestratorError, match="contains a symlink"):
+        ModelOrchestratorService._reject_snapshot_symlinks(root)
+
+
+def test_downloaded_snapshot_accepts_regular_artifacts(tmp_path: Path) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    (root / "config.cfg").write_text("[nlp]", encoding="utf-8")
+    ModelOrchestratorService._reject_snapshot_symlinks(root)
+
+
+def test_downloaded_snapshot_rejects_unreadable_subtrees(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+
+    root = tmp_path / "snapshot"
+    root.mkdir()
+
+    def broken_walk(path: Path, *, followlinks: bool, onerror: Any):
+        assert followlinks is False
+        onerror(PermissionError("unreadable component directory"))
+        yield str(path), [], []
+
+    monkeypatch.setattr(os, "walk", broken_walk)
+    with pytest.raises(ModelOrchestratorError, match="could not be fully inspected"):
+        ModelOrchestratorService._reject_snapshot_symlinks(root)
+
+def test_downloaded_snapshot_rejects_symlink_root(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "config.cfg").write_text("[nlp]", encoding="utf-8")
+    root = tmp_path / "snapshot"
+    root.symlink_to(real, target_is_directory=True)
+    with pytest.raises(ModelOrchestratorError, match="root is a symlink"):
+        ModelOrchestratorService._reject_snapshot_symlinks(root)
