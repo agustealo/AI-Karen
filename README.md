@@ -32,20 +32,11 @@ That means the UI does not invent provider health, model availability, memory st
 
 The images below are **real browser captures of the real authenticated application** from a sanitized demo installation. They are not generated dashboards or hand-built mockups.
 
-<table>
-  <tr>
-    <td width="50%">
-      <img src="docs/assets/screenshots/02-agents-overview.png" alt="KAREN Agents overview" />
-      <br />
-      <strong>Agents overview</strong>
-    </td>
-    <td width="50%">
-      <img src="docs/assets/screenshots/03-plugin-ecosystem.png" alt="KAREN Plugin ecosystem" />
-      <br />
-      <strong>Plugin ecosystem</strong>
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <img src="docs/assets/screenshots/03-plugin-ecosystem.png" alt="KAREN Plugin ecosystem" width="82%" />
+  <br />
+  <strong>Plugin ecosystem</strong>
+</p>
 
 <p align="center">
   <img src="docs/assets/screenshots/04-comms-center.png" alt="KAREN Comms Center" width="82%" />
@@ -53,7 +44,7 @@ The images below are **real browser captures of the real authenticated applicati
   <strong>Comms Center</strong>
 </p>
 
-> **Screenshot provenance:** these previews come from the governed October 2, 2026 capture at target revision `9980fb0bbcf52d162c53278d759c6632dc416a24` using a sanitized demo account. Two images from that historical five-screen capture currently show failed/loading state and are deliberately **not promoted here**. The application has also evolved since that capture, so a fresh governed five-screen capture is still required before consumer-release visual signoff. See [screenshot provenance](docs/assets/screenshots/README.md).
+> **Screenshot provenance:** these previews come from the governed October 2, 2026 capture at target revision `9980fb0bbcf52d162c53278d759c6632dc416a24` using a sanitized demo account. Images from that historical capture with failed/loading states are deliberately **not promoted here**. The application has also evolved since that capture, so a fresh governed five-screen capture is still required before consumer-release visual signoff. See [screenshot provenance](docs/assets/screenshots/README.md).
 
 ## What you can do with KAREN
 
