@@ -45,6 +45,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"^what(?:'s|\s+is)\s+(?:the\s+)?weather(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"\bwhat\s+will\s+the\s+weather\s+be\s+(?:in|for)\s+.+$",
             r"^how(?:'s|\s+is)\s+(?:the\s+)?weather(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^what(?:\x27s|\\s+is)\\s+(?:the\\s+)?weather\\s+forecast(?:\\s+(?:in|for)\\s+.+)?[?!.]*$",
             r"^weather[?!.]*$",
             r"\bweather\s+(?:in|for|today|tonight|tomorrow|this\s+week)\b",
             r"^forecast\s+(?:today|tonight|tomorrow|this\s+week)[?!.]*$",
@@ -218,7 +219,20 @@ def _looks_like_shorthand_time(query: str) -> bool:
 def _looks_like_forecast_target(query: str) -> bool:
     raw = " ".join((query or "").strip().split()).rstrip("?!.")
     match = re.fullmatch(r"forecast\s+(?:for|in)\s+(.+)", raw, re.IGNORECASE)
-    return bool(match and _looks_like_location_phrase(match.group(1)))
+    if not match:
+        return False
+    location = match.group(1).strip()
+    # "forecast for" is ambiguous. Require a resolvable IANA zone or
+    # positively shaped proper place name rather than guessing from prose.
+    if not _looks_like_location_phrase(location):
+        return False
+    if re.fullmatch(r"[A-Za-z_]+/[A-Za-z_+-]+", location):
+        return True
+    tokens = location.split()
+    return bool(tokens and all(
+        token.lower() in _LOCATION_CONNECTORS or token[:1].isupper()
+        for token in tokens
+    ))
 
 
 def _looks_like_location_first_weather(query: str) -> bool:
