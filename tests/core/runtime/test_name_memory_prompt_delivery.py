@@ -27,4 +27,4 @@ async def test_personal_name_memory_reaches_model_prompt_without_conversation_hi
     )
     assert "name: Alex" in prompt_text
     assert "hats my name?" in prompt_text
-    assert "profile-name-fact" in assembled.provenance.memory_refs
+    assert "profile-name-fact" in assembled.included_memory_refs
