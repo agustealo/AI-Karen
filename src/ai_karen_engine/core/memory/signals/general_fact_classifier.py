@@ -60,19 +60,19 @@ _TRAVEL = re.compile(
 _LOCATION_PATTERNS = (
     ("current_location", "current", re.compile(
         r"(?i)\b(?:i(?:'m| am)\s+(?:currently|right now)\s+in|"
-        r"currently\s+i(?:'m| am)\s+in)\s+(.+?)(?=[,.!?;]|$)"
+        r"currently\s+i(?:'m| am)\s+in)\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
     ("residence_location", "residence", re.compile(
-        r"(?i)\bi\s+(?:live|reside)\s+in\s+(.+?)(?=[,.!?;]|$)"
+        r"(?i)\bi\s+(?:live|reside)\s+in\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
     ("residence_location", "residence", re.compile(
-        r"(?i)\bi(?:'m| am)\s+based\s+in\s+(.+?)(?=[,.!?;]|$)"
+        r"(?i)\bi(?:'m| am)\s+based\s+in\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
     ("birthplace", "birthplace", re.compile(
-        r"(?i)\b(?:i\s+(?:was\s+)?born\s+in|born\s+in)\s+(.+?)(?=[,.!?;]|$)"
+        r"(?i)\b(?:i\s+(?:was\s+)?born\s+in|born\s+in)\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
     ("origin_location", "origin", re.compile(
-        r"(?i)\bi(?:'m| am)\s+(?:originally\s+)?from\s+(.+?)(?=[,.!?;]|$)"
+        r"(?i)\bi(?:'m| am)\s+(?:originally\s+)?from\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
 )
 
