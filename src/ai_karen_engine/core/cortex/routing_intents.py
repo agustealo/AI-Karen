@@ -187,9 +187,19 @@ def _clock_target_is_location(query: str, target: str) -> bool:
     ):
         return True
     tokens = [token for token in re.split(r"[\s,]+", target) if token]
-    if len(tokens) > 1:
-        return True
-    return bool(tokens and tokens[0][:1].isupper())
+    if not tokens:
+        return False
+
+    # For the ambiguous "for" relation, require a positively shaped place
+    # name instead of accepting arbitrary multi-word phrases such as
+    # "lunch today" or "team meeting". Lowercase shorthand remains available
+    # through the unambiguous "in <location>" grammar above.
+    return all(
+        token.lower() in _LOCATION_CONNECTORS
+        or token[:1].isupper()
+        or token.isupper()
+        for token in tokens
+    )
 
 
 def _looks_like_shorthand_time(query: str) -> bool:
