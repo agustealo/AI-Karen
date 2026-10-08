@@ -989,3 +989,20 @@ def test_routed_targeted_clock_forms_preserve_plugin_destination() -> None:
         assert DirectCapabilityExecutor._extract_time_location(query) == "Tokyo", query
 
     assert DirectCapabilityExecutor._extract_time_location("What time is it right now?") is None
+
+
+def test_forecast_context_requires_weather_or_positive_place_shape() -> None:
+    for query in (
+        "What is the revenue forecast for next quarter?",
+        "Explain the sales forecast for 2027",
+        "Bitcoin forecast",
+    ):
+        assert resolve_capability_decision(query).intent == "general.chat", query
+    assert resolve_capability_decision("forecast for Detroit").intent == "search.weather"
+    assert resolve_capability_decision("forecast in Tokyo").intent == "search.weather"
+
+
+def test_trailing_right_now_is_not_part_of_clock_location() -> None:
+    query = "What time is it in Tokyo right now?"
+    assert resolve_capability_decision(query).intent == "time.current"
+    assert DirectCapabilityExecutor._extract_time_location(query) == "Tokyo"
