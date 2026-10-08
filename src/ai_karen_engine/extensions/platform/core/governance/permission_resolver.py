@@ -70,6 +70,35 @@ class PluginPermissionResolver:
         self.policy_provider = policy_provider
         self._role_permissions: Dict[str, Set[str]] = self._default_role_permissions()
 
+    def can_view_catalog(
+        self,
+        manifest: ExtensionManifest,
+        *,
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        user_roles: Optional[List[str]] = None,
+    ) -> PermissionResolutionResult:
+        """Resolve catalog visibility without granting runtime capabilities.
+
+        Catalog discovery is governed by tenant isolation and manifest RBAC only.
+        Runtime permissions, secrets, tools, and network access remain subject to
+        the full resolve path when the plugin is actually invoked.
+        """
+        result = PermissionResolutionResult(
+            allowed=False,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            roles=list(user_roles or []),
+        )
+        tenant = self._coerce_tenant(manifest)
+        rbac = self._coerce_rbac(manifest)
+        self._check_tenant_isolation(manifest, tenant, tenant_id, result)
+        if result.denied_permissions:
+            return result
+        result.allowed = True
+        self._check_rbac_eligibility(manifest, rbac, user_roles or [], result)
+        return result
+
     def resolve(
         self,
         manifest: ExtensionManifest,
