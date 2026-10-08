@@ -132,7 +132,7 @@ class MemoryFormationEvaluator:
         else:
             sensitivity = (
                 MemorySensitivity.CONFIDENTIAL
-                if explicit and is_identity
+                if explicit and signal.signal_type == "identity_fact"
                 else MemorySensitivity.INTERNAL
             )
 
@@ -205,19 +205,33 @@ class MemoryFormationEvaluator:
             user_id=resolved_user,
         )
 
-        privacy_metadata = self._privacy_classifier.extract_safe_metadata(normalized)
-        contains_pii = bool(privacy_metadata.get("contains_pii", False))
+        # Determine consent per extracted fact, not from the entire user turn.
+        # Sensitive data in one clause must not contaminate unrelated facts.
+        contains_pii = bool(
+            self._privacy_classifier.extract_safe_metadata(normalized).get("contains_pii", False)
+        )
 
         admitted: list[AdmittedMemorySignal] = []
         for signal in extraction.signals:
-            worthiness = await self._worthiness_scorer.evaluate(
-                signal.text,
-                signal.signal_type,
+            privacy_metadata = self._privacy_classifier.extract_safe_metadata(signal.text)
+            # Explicit first-person claims have deterministic confidence supplied by
+            # the canonical semantic classifier. Preserve memory formation when
+            # the optional salience model is unhealthy, without bypassing guards.
+            explicitly_asserted = (
+                bool(signal.metadata.get("explicit_user_statement"))
+                and signal.signal_type in {"identity_fact", "profile_fact", "preference"}
+                and float(signal.confidence) >= 0.9
             )
-            if not worthiness.get("is_worthy"):
-                continue
-
-            score = max(0.0, min(1.0, float(worthiness.get("score") or 0.0)))
+            if explicitly_asserted:
+                score = max(0.0, min(1.0, float(signal.confidence)))
+            else:
+                worthiness = await self._worthiness_scorer.evaluate(
+                    signal.text,
+                    signal.signal_type,
+                )
+                if not worthiness.get("is_worthy"):
+                    continue
+                score = max(0.0, min(1.0, float(worthiness.get("score") or 0.0)))
             consent_policy = self._consent_policy_for_signal(
                 signal,
                 privacy_metadata=privacy_metadata,

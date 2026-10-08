@@ -253,6 +253,10 @@ class CortexExecutionDecider:
             topology = self._infer_topology_from_analysis(analysis)
             capabilities = self._infer_capabilities_from_analysis(analysis)
             memory_policy = self._infer_memory_policy_from_analysis(analysis)
+            if self._personal_recall_query(text):
+                memory_policy["recall_required"] = True
+                memory_policy["scope"] = "user"
+                memory_policy["top_k"] = max(15, memory_policy["top_k"])
             workflow = self._infer_workflow_from_analysis(analysis)
             risk_level = self._assess_risk_level(analysis)
 
@@ -366,7 +370,26 @@ class CortexExecutionDecider:
                     capability_decision.confidence
                 )
                 fallback["direct_capability"] = True
+            if self._personal_recall_query(text):
+                fallback["memory_recall_required"] = True
+                fallback["memory_scope"] = "user"
+                fallback["memory_top_k"] = 15
             return fallback
+
+    @staticmethod
+    def _personal_recall_query(text: str) -> bool:
+        normalized = " ".join(str(text or "").casefold().replace("’", "'").split())
+        cues = (
+            "where am i from", "where im from", "where i'm from",
+            "where was i born", "where do i live", "where am i based",
+            "where am i currently", "where am i right now",
+            "what is my birthplace", "what's my birthplace",
+            "what is my hometown", "what's my hometown",
+            "what is my name", "what's my name", "whats my name",
+            "what do you remember about me", "what do you know about me",
+            "what did i tell you about", "i already told you",
+        )
+        return any(cue in normalized for cue in cues)
 
     @staticmethod
     def _apply_direct_capability_route(

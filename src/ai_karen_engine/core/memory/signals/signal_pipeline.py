@@ -67,13 +67,18 @@ class SignalPipeline:
                 result.signals = extracted_data
                 result.status = "success"
             else:
+                result.signals = self.rule_extractor.extract(text)
                 result.status = "degraded"
                 result.errors.append("Unknown extraction output format")
 
         except Exception as e:
-            logger.error("Pipeline processing failed: %s", e)
-            result.status = "failed"
-            result.errors.append(str(e))
+            logger.warning(
+                "memory.signal_pipeline.primary_degraded",
+                extra={"error_type": type(e).__name__},
+            )
+            result.signals = self.rule_extractor.extract(text)
+            result.status = "degraded"
+            result.errors.append(f"primary_extraction:{type(e).__name__}")
 
         result.processing_time_ms = (time.time() - start_time) * 1000
         return result
