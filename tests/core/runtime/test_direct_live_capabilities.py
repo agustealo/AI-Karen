@@ -571,8 +571,12 @@ def test_clock_for_target_rejects_non_locations_but_in_shorthand_is_case_insensi
         "What time is it for lunch?",
         "What time is it for work?",
         "What time is it for the meeting?",
+        "What time is it for lunch today?",
+        "What time is it for work tomorrow?",
+        "What time is it for team meeting?",
     ):
         decision = resolve_capability_decision(prompt)
         assert decision.intent == "general.chat", prompt
 
     assert resolve_capability_decision("What time is it for Tokyo?").intent == "time.current"
+    assert resolve_capability_decision("What time is it for New York?").intent == "time.current"
