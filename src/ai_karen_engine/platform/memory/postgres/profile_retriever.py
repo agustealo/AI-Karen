@@ -65,6 +65,8 @@ class PostgresProfileRecallRetriever:
             "about me",
             "my name",
             "what is my name",
+            "hats my name",
+            "hat's my name",
             "what's my name",
             "remember my name",
             "my preference",
