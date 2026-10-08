@@ -92,21 +92,23 @@ class WebSearchClient:
                 error="Empty query",
             )
 
-        selected = self.registry.select_provider(requested=provider)
-        if not selected:
+        if provider:
+            selected = self.registry.select_provider(requested=provider)
+            candidates = [selected] if selected else []
+        else:
+            candidates = [
+                candidate
+                for candidate in self.registry.sorted_enabled()
+                if self.registry.select_provider(requested=candidate) == candidate
+            ]
+
+        if not candidates:
             return SearchResponse(
                 query=query,
                 results=[],
                 provider="none",
                 error="No enabled search providers are configured.",
             )
-
-        candidates = [selected] + [
-            candidate
-            for candidate in self.registry.sorted_enabled()
-            if candidate != selected
-            and self.registry.select_provider(requested=candidate) == candidate
-        ]
         last_response: Optional[SearchResponse] = None
         for candidate in candidates:
             try:
