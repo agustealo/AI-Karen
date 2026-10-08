@@ -1085,3 +1085,23 @@ def test_private_status_queries_do_not_trigger_external_search() -> None:
         "Latest update on my private project",
     ):
         assert resolve_capability_decision(prompt).intent != "search.general", prompt
+
+
+def test_polite_clock_extracts_every_supported_modal_location() -> None:
+    from ai_karen_engine.core.runtime.direct_capability_executor import DirectCapabilityExecutor
+
+    for query in (
+        "Can you tell me the time in Tokyo?",
+        "Could you tell me what time it is in Tokyo?",
+        "Would you please tell me the time in Tokyo?",
+        "Please tell me what time it is in Tokyo?",
+    ):
+        assert resolve_capability_decision(query).intent == "time.current"
+        assert DirectCapabilityExecutor._extract_time_location(query) == "Tokyo"
+
+
+def test_live_public_updates_without_private_status_hijack() -> None:
+    assert resolve_capability_decision("Latest Windows update").intent == "search.general"
+    assert resolve_capability_decision("Latest update on Hurricane Milton").intent == "search.general"
+    assert resolve_capability_decision("What is the current status of my order?").intent == "general.chat"
+    assert resolve_capability_decision("What is the current status of deployment 123?").intent == "general.chat"
