@@ -105,6 +105,23 @@ async def build_runtime_fallback(
         "requested_model": md.requested_model,
         "actual_model": md.actual_model,
     }
+    # A recovered request is degraded because the primary execution failed,
+    # not proof that the responding Ollama server is itself unhealthy.
+    # Do not infer distinct backends from provider display-name differences.
+    md.extra["recovery"] = {
+        "occurred": True,
+        "reason": "primary_execution_failed",
+        "failure_type": type(failure).__name__,
+        "provider_identity_verified": False,
+        "requested_provider": md.requested_provider,
+        "actual_provider": md.actual_provider,
+        "model_changed": (
+            md.requested_model != md.actual_model
+            if md.requested_model and md.actual_model
+            else None
+        ),
+        "actual_response_healthy": True,
+    }
     return ChatExecutionResult(
         answer=text,
         status=ChatExecutionStatus.DEGRADED,
