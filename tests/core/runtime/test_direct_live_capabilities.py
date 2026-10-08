@@ -453,3 +453,69 @@ def test_internet_capability_preserves_injected_provider_registry() -> None:
 
     assert client.registry is registry
     assert client.registry.select_provider() == "wikipedia"
+
+
+def test_lowercase_location_shorthand_routes_live() -> None:
+    for prompt, intent in (
+        ("time in detroit", "time.current"),
+        ("forecast in detroit", "search.weather"),
+        ("detroit weather", "search.weather"),
+    ):
+        decision = resolve_capability_decision(prompt)
+        assert decision.intent == intent, prompt
+        assert decision.requires_live_data is True, prompt
+
+
+def test_non_location_for_targets_do_not_route_to_clock() -> None:
+    for prompt in (
+        "What time is it for the meeting?",
+        "What time is it for the algorithm to terminate?",
+    ):
+        decision = resolve_capability_decision(prompt)
+        assert decision.intent == "general.chat", prompt
+        assert decision.requires_tool is False, prompt
+
+
+@pytest.mark.asyncio
+async def test_web_search_client_falls_back_to_next_enabled_provider() -> None:
+    from ai_karen_engine.services.search.web_search_client import SearchResponse
+    from ai_karen_engine.services.search.web_search_provider_registry import (
+        WebSearchProviderRegistry,
+    )
+
+    registry = WebSearchProviderRegistry(
+        settings={
+            "search": {
+                "duckduckgo": {"enabled": True, "priority": 100},
+                "wikipedia": {"enabled": True, "priority": 90},
+            }
+        }
+    )
+    client = WebSearchClient(registry=registry)
+    client._search_with_provider = AsyncMock(
+        side_effect=[
+            SearchResponse(
+                query="Detroit weather",
+                results=[],
+                provider="duckduckgo",
+                error="HTTP 202",
+            ),
+            SearchResponse(
+                query="Detroit weather",
+                results=[
+                    SimpleNamespace(
+                        title="Detroit",
+                        url="https://en.wikipedia.org/wiki/Detroit",
+                        snippet="Detroit",
+                    )
+                ],
+                provider="wikipedia",
+            ),
+        ]
+    )
+
+    result = await client.search("Detroit weather")
+
+    assert result.provider == "wikipedia"
+    assert result.results
+    assert client._search_with_provider.await_count == 2
