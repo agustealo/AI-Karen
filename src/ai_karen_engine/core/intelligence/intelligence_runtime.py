@@ -23,6 +23,7 @@ from ai_karen_engine.core.intelligence.ml.predictors.complexity import Complexit
 from ai_karen_engine.core.intelligence.ml.predictors.domain import DomainClassifier
 from ai_karen_engine.core.intelligence.ml.predictors.intent import IntentPredictor
 from ai_karen_engine.core.intelligence.ml.predictors.memory_relevance import MemoryRelevancePredictor
+from ai_karen_engine.core.intelligence.ml.predictors.registry_classifier import RegistryBackedClassifier
 from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
 from ai_karen_engine.core.intelligence.task_signature_builder import TaskSignatureBuilder
 
@@ -92,6 +93,21 @@ class IntelligenceRuntime:
             logger.warning(
                 "IntelligenceRuntime: execution topology predictor unavailable: %s",
                 exc,
+            )
+
+        for adaptive_task in (
+            PredictionTask.AFFECT,
+            PredictionTask.PREFERENCE,
+            PredictionTask.OUTCOME_FORECAST,
+            PredictionTask.BEHAVIOR_PATTERN,
+        ):
+            self._ml_runtime.register_predictor(
+                adaptive_task,
+                RegistryBackedClassifier(
+                    adaptive_task,
+                    self._ml_runtime,
+                    registry=self._registry,
+                ),
             )
 
     async def analyze(
