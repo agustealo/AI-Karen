@@ -1215,8 +1215,22 @@ class ChatRuntime:
         attribute = str(
             decision.policy_constraints.get("personal_evidence_attribute") or ""
         ).strip()
-        if decision.intent != "memory.recall" or not attribute:
+        if decision.intent != "memory.recall":
             return None
+        if not attribute:
+            # An unresolved relation (notably "where am I from") is not
+            # license to guess from any nearby retrieved profile attribute.
+            return (
+                "Which personal detail do you mean? I won't guess from unrelated saved information.",
+                {
+                    "evidence_sufficiency": "ambiguous",
+                    "evidence_reason": "attribute_unresolved",
+                    "evidence_count": 0,
+                    "response_source": "runtime_evidence_sufficiency",
+                    "actual_provider": None,
+                    "actual_model": None,
+                },
+            )
         result = evaluate_personal_evidence(
             decision.cognitive_context,
             tenant_id=tenant_id,
