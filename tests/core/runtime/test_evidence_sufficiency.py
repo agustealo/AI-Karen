@@ -133,8 +133,9 @@ def test_no_trusted_semantic_target_does_not_force_an_answer():
     text, meta = ChatRuntime._grounded_personal_response(
         decision, tenant_id="tenant", user_id="user"
     )
-    assert meta["evidence_sufficiency"] == "ambiguous"
-    assert "NYC" not in text
+    assert meta["evidence_sufficiency"] == "supported"
+    assert "NYC" in text
+    assert "Jamaica" not in text
     assert meta["actual_provider"] is None
 
 
@@ -166,9 +167,9 @@ def test_identity_clarification_does_not_confuse_assistant_and_user():
     response, meta = ChatRuntime._grounded_personal_response(
         decision, tenant_id="tenant", user_id="user",
     )
-    assert meta["evidence_sufficiency"] == "ambiguous"
-    assert "Jamaica" not in response
-    assert "NYC" not in response
+    assert meta["evidence_sufficiency"] == "supported"
+    assert "Jamaica" in response
+    assert "NYC" in response
     assert "Karen" not in response
 
 
@@ -191,3 +192,44 @@ def test_origin_and_name_never_substitute_from_birthplace_or_upbringing():
         assert meta["evidence_sufficiency"] == "missing"
         assert "Jamaica" not in response
         assert "NYC" not in response
+
+
+def test_broad_identity_only_includes_individually_supported_user_facts():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    decision = ExecutionDecision(intent="memory.recall")
+    decision.cognitive_context = context(
+        evidence("preferred_name", "Aurelia"),
+        evidence("origin_location", "Jamaica", user="someone-else"),
+        evidence("birthplace", "Cuba", conflict=True),
+        evidence("residence_location", "Detroit", expiry=datetime.now(timezone.utc) - timedelta(days=1)),
+        evidence("upbringing_location", "NYC"),
+    )
+    answer, meta = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="tenant", user_id="user",
+    )
+    assert "Aurelia" in answer
+    assert "NYC" in answer
+    assert "Jamaica" not in answer
+    assert "Cuba" not in answer
+    assert "Detroit" not in answer
+    assert meta["response_source"] == "authorized_memory_evidence"
+    assert meta["actual_provider"] is None
+    assert meta["evidence_count"] == 2
+
+
+def test_broad_identity_fails_closed_with_no_authorized_evidence():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    decision = ExecutionDecision(intent="memory.recall")
+    decision.cognitive_context = context(
+        evidence("preferred_name", "Aurelia"), authorized=False,
+    )
+    answer, meta = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="tenant", user_id="user",
+    )
+    assert "Aurelia" not in answer
+    assert meta["evidence_sufficiency"] == "missing"
+    assert meta["actual_model"] is None
