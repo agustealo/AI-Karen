@@ -53,6 +53,7 @@ class RegistryBackedClassifier(BasePredictor):
         self._loaded_manifest: MLModelManifest | None = None
         self._loaded_model: Any = None
         self._feature_order: list[str] = []
+        self._class_labels: list[str] = []
 
     async def predict(self, features: IntelligenceFeatures) -> Prediction:
         manifest = self._active_manifest()
@@ -65,7 +66,7 @@ class RegistryBackedClassifier(BasePredictor):
             probabilities = model.predict_proba(
                 np.array([feature_values], dtype=np.float64)
             )[0]
-            labels = [str(label) for label in getattr(model, "classes_", [])]
+            labels = list(self._class_labels)
             if not labels or len(labels) != len(probabilities):
                 return self._unknown(features, "invalid_class_schema", manifest)
 
@@ -203,6 +204,8 @@ class RegistryBackedClassifier(BasePredictor):
         manifest: MLModelManifest,
     ) -> tuple[Any, list[str]]:
         if self._loaded_manifest == manifest and self._loaded_model is not None:
+            if not manifest.artifact_hash or not self._registry.validate_artifact(manifest):
+                raise ValueError("cached model artifact integrity is not verified")
             return self._loaded_model, list(self._feature_order)
 
         artifact = Path(manifest.artifact_path)
@@ -215,6 +218,9 @@ class RegistryBackedClassifier(BasePredictor):
         feature_order = schema.get("feature_order")
         if not isinstance(feature_order, list) or not feature_order:
             raise ValueError("feature_schema.feature_order is missing")
+        class_labels = schema.get("classes")
+        if not isinstance(class_labels, list) or not class_labels or not all(isinstance(label, str) for label in class_labels):
+            raise ValueError("feature_schema.classes is missing or invalid")
         schema_version = str(schema.get("feature_version") or "")
         if schema_version and schema_version != manifest.feature_version:
             raise ValueError(
@@ -225,9 +231,18 @@ class RegistryBackedClassifier(BasePredictor):
             raise ValueError("active model artifact integrity is not verified")
 
         model = joblib.load(str(model_path))
+        if len(getattr(model, "classes_", [])) != len(class_labels):
+            raise ValueError("Model class count does not match signed schema")
+        model_classes = list(model.classes_)
+        if all(isinstance(value, (int, np.integer)) for value in model_classes):
+            if model_classes != list(range(len(class_labels))):
+                raise ValueError("Unexpected numeric class indexes")
+        elif [str(value) for value in model_classes] != class_labels:
+            raise ValueError("Model class labels do not match signed schema")
         self._loaded_manifest = manifest
         self._loaded_model = model
         self._feature_order = [str(name) for name in feature_order]
+        self._class_labels = class_labels
         return model, list(self._feature_order)
 
     @classmethod
