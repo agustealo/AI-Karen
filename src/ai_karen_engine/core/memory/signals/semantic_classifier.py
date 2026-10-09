@@ -61,16 +61,100 @@ _OPEN_LOOP_DONE = re.compile(
 )
 
 
+_EXPLICIT_MEMORY_SAVE = re.compile(
+    r"^(?:(?:please|can you|could you|i want you to)\s+)?"
+    r"(?:remember|save|store)\s+"
+    r"(?P<target>this|that|my\b.+?|the\b.+?|what i (?:just )?(?:said|told you))"
+    r"(?:\s+(?:for later|long[- ]term|permanently|in (?:your )?memory))?[.!?]*$",
+    re.IGNORECASE,
+)
+_MEMORY_SAVE_DEICTIC_TARGETS = {
+    "this",
+    "that",
+    "what i said",
+    "what i just said",
+    "what i told you",
+    "what i just told you",
+}
+_MEMORY_SAVE_TARGET_STOPWORDS = {
+    "my",
+    "the",
+    "a",
+    "an",
+    "of",
+    "to",
+    "for",
+    "in",
+    "on",
+    "about",
+    "information",
+    "info",
+    "fact",
+    "facts",
+}
+
+
+def _normalize_save_text(text: str) -> str:
+    return " ".join(str(text or "").casefold().replace("’", "'").split())
+
+
 def is_explicit_memory_save_request(text: str) -> bool:
     """Recognize bounded user-directed save intent, never authorize a write."""
-    normalized = " ".join(str(text or "").casefold().replace("’", "'").split())
-    return bool(re.search(
-        r"^(?:(?:please|can you|could you|i want you to)\s+)?"
-        r"(?:remember|save|store)\s+(?:this|that|my\b.+|the\b.+|"
-        r"what i (?:just )?(?:said|told you))"
-        r"(?:\s+(?:for later|long[- ]term|permanently|in (?:your )?memory))?[.!?]*$",
-        normalized,
-    ))
+    return bool(_EXPLICIT_MEMORY_SAVE.fullmatch(_normalize_save_text(text)))
+
+
+def explicit_memory_save_target_terms(text: str) -> frozenset[str] | None:
+    """Return semantic target terms, or an empty set for deictic save requests."""
+    match = _EXPLICIT_MEMORY_SAVE.fullmatch(_normalize_save_text(text))
+    if not match:
+        return None
+
+    target = " ".join(str(match.group("target") or "").split())
+    if target in _MEMORY_SAVE_DEICTIC_TARGETS:
+        return frozenset()
+
+    terms = {
+        token
+        for token in re.findall(r"[a-z0-9]+", target)
+        if token not in _MEMORY_SAVE_TARGET_STOPWORDS
+    }
+    return frozenset(terms)
+
+
+def memory_save_request_matches_signal(text: str, signal: MemorySignal) -> bool:
+    """Match an explicit save target against canonical signal semantics."""
+    target_terms = explicit_memory_save_target_terms(text)
+    if target_terms is None:
+        return False
+    if not target_terms:
+        return True
+
+    metadata = signal.metadata or {}
+    semantic_text = " ".join(
+        str(value or "")
+        for value in (
+            signal.text,
+            signal.signal_type,
+            metadata.get("attribute"),
+            metadata.get("category"),
+            metadata.get("semantic_class"),
+            metadata.get("location_type"),
+            metadata.get("relationship_type"),
+            metadata.get("goal_type"),
+            metadata.get("event_type"),
+        )
+    ).casefold()
+    semantic_terms = set(re.findall(r"[a-z0-9]+", semantic_text.replace("_", " ").replace(".", " ")))
+
+    for requested in target_terms:
+        for semantic in semantic_terms:
+            if requested == semantic:
+                return True
+            if min(len(requested), len(semantic)) >= 4 and (
+                requested.startswith(semantic) or semantic.startswith(requested)
+            ):
+                return True
+    return False
 
 
 def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
@@ -344,4 +428,9 @@ def _looks_like_event_duplicate(
     return "interview" in lowered
 
 
-__all__ = ["classify_explicit_user_memory"]
+__all__ = [
+    "classify_explicit_user_memory",
+    "explicit_memory_save_target_terms",
+    "is_explicit_memory_save_request",
+    "memory_save_request_matches_signal",
+]
