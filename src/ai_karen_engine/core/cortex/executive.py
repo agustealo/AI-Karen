@@ -351,6 +351,12 @@ class CortexExecutionDecider:
                 "reasoning_modes": reasoning_modes,
                 "reasoning_required": bool(reasoning_modes)
                 or topology.get("reasoning_depth") == "deep",
+                # Interpretation is an Intelligence-produced observation, never
+                # a claim supplied by request metadata.
+                "semantic_predicate": str(
+                    getattr(getattr(analysis, "interpretation", None), "predicate", "")
+                    or ""
+                ).strip(),
                 "memory_recall_required": memory_policy.get("recall_required", False),
                 "memory_write_requested": memory_policy.get("write_requested", False),
                 "memory_write_denied": memory_policy.get("write_denied", False),
