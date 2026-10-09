@@ -59,25 +59,27 @@ class TrainingJobWorker:
             if not check["ready"]:
                 raise ValueError("Training preflight failed: " +
                                  ", ".join(item["code"] for item in check["checks"]))
-            if not self.ledger.transition(
-                job_id, tenant_id=tenant_id,
-                from_status="VALIDATING", to_status="RUNNING",
-                job=job,
-            ):
-                raise RuntimeError("Failed to acquire running state")
+            async def on_state(status: str, current: TrainingJob) -> None:
+                previous = {
+                    "RUNNING": "VALIDATING",
+                    "EVALUATING": "RUNNING",
+                }.get(status)
+                if previous is None or not self.ledger.transition(
+                    job_id, tenant_id=tenant_id,
+                    from_status=previous, to_status=status, job=current,
+                ):
+                    raise RuntimeError("Training phase transition was rejected")
 
-            # sklearn training is CPU-bound and blocks; keep the service event loop live.
+            # The worker thread runs the canonical pipeline without blocking API loops.
             result: TrainingPipelineResult = await asyncio.to_thread(
-                lambda: asyncio.run(self.pipeline.run(TrainingPipelineResult(job=job)))
+                lambda: asyncio.run(
+                    self.pipeline.run(
+                        TrainingPipelineResult(job=job), on_state=on_state,
+                    )
+                )
             )
             if result.job.status != "SUCCEEDED" or not result.registered:
                 raise RuntimeError(result.error or "Training pipeline did not succeed")
-            if not self.ledger.transition(
-                job_id, tenant_id=tenant_id,
-                from_status="RUNNING", to_status="EVALUATING",
-                job=result.job,
-            ):
-                raise RuntimeError("Job execution state was changed concurrently")
             if not self.ledger.transition(
                 job_id, tenant_id=tenant_id,
                 from_status="EVALUATING", to_status="SUCCEEDED",
