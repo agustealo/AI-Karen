@@ -2154,6 +2154,10 @@ class ChatRuntime:
                 "workflow_version": decision.workflow_version,
                 "requires_human_gate": decision.requires_human_gate,
                 "requires_resumability": decision.requires_resumability,
+                **({"clarification_inputs": dict(request.metadata["clarification_inputs"])}
+                   if isinstance((request.metadata or {}).get("clarification_inputs"), dict)
+                   and (request.metadata["clarification_inputs"].get("source") == "authorized_conversation")
+                   else {}),
             },
             token_budget=decision.token_budget,
             messages=[dict(msg) for msg in request.messages],
