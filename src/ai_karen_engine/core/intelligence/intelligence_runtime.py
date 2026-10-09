@@ -114,6 +114,8 @@ class IntelligenceRuntime:
         self,
         text: str,
         context: dict[str, Any] | None = None,
+        *,
+        tenant_id: str | None = None,
     ) -> IntelligenceAnalysisResult:
         start = time.time()
         context = context or {}
@@ -125,7 +127,7 @@ class IntelligenceRuntime:
 
         await self.initialize()
         signals: list[IntelligenceSignal] = []
-        features = IntelligenceFeatures(text=text)
+        features = IntelligenceFeatures(text=text, tenant_id=tenant_id)
 
         if self._linguistic is not None:
             try:
@@ -352,7 +354,7 @@ class IntelligenceRuntime:
             encoding.vector if encoding is not None else None for encoding in encodings
         ]
 
-    async def classify(self, task: str, text: str) -> dict[str, Any]:
+    async def classify(self, task: str, text: str, *, tenant_id: str | None = None) -> dict[str, Any]:
         """Return one predictor signal without promoting Intelligence to CORTEX authority."""
 
         await self.initialize()
@@ -376,7 +378,7 @@ class IntelligenceRuntime:
                 "metadata": {"reason": "unsupported_prediction_task"},
             }
 
-        features = IntelligenceFeatures(text=text)
+        features = IntelligenceFeatures(text=text, tenant_id=tenant_id)
         prediction = await self._ml_runtime.predict(features, prediction_task)
         if prediction is None:
             return {
