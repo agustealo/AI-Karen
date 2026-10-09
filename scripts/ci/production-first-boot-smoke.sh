@@ -475,6 +475,81 @@ assert token in str(messages[-4].get("content") or ""), messages[-4]
 assert token in str(messages[-1].get("content") or ""), messages[-1]
 PY
 
+  # A fresh session must resolve the user's name from durable profile memory,
+  # not from messages in the same conversation. No mocked profile or answer.
+  name_session="beta_name_${GITHUB_RUN_ID:-local}_$"
+  recall_session="beta_recall_${GITHUB_RUN_ID:-local}_$"
+  expected_name="Aurelia${GITHUB_RUN_ID:-local}Proof"
+
+  name_write_payload="$("${PYTHON_BIN}" - "${name_session}" "${LIVE_MODEL_PROVIDER}" "${LIVE_MODEL_NAME}" "${expected_name}" <<'PY'
+import json
+import sys
+
+session_id, provider, model, name = sys.argv[1:5]
+payload = {
+    "messages": [{"content": f"My name is {name}.", "message_type": "user"}],
+    "preferred_llm_provider": provider,
+    "temperature": 0.0,
+    "max_tokens": 96,
+    "stream": False,
+    "session_id": session_id,
+}
+if model:
+    payload["preferred_model"] = model
+print(json.dumps(payload))
+PY
+)"
+  name_write_response="$(curl -fsS --max-time "${LIVE_MODEL_TIMEOUT_SECONDS}" \
+    -b "${COOKIE_JAR}" -H 'Content-Type: application/json' \
+    -d "${name_write_payload}" "${BASE_URL}/api/chat")"
+
+  "${PYTHON_BIN}" - "${name_write_response}" "${LIVE_MODEL_PROVIDER}" <<'PY'
+import json
+import sys
+
+response = json.loads(sys.argv[1])
+metadata = response.get("metadata") or {}
+assert response.get("content"), response
+assert metadata.get("actual_provider") == sys.argv[2], metadata
+assert metadata.get("response_source") not in {"emergency", "unavailable"}, metadata
+assert metadata.get("memory_persistence_status") == "persisted", metadata
+PY
+
+  name_recall_payload="$("${PYTHON_BIN}" - "${recall_session}" "${LIVE_MODEL_PROVIDER}" "${LIVE_MODEL_NAME}" <<'PY'
+import json
+import sys
+
+session_id, provider, model = sys.argv[1:4]
+payload = {
+    "messages": [{"content": "What's my name? Reply with my name.", "message_type": "user"}],
+    "preferred_llm_provider": provider,
+    "temperature": 0.0,
+    "max_tokens": 96,
+    "stream": False,
+    "session_id": session_id,
+}
+if model:
+    payload["preferred_model"] = model
+print(json.dumps(payload))
+PY
+)"
+  name_recall_response="$(curl -fsS --max-time "${LIVE_MODEL_TIMEOUT_SECONDS}" \
+    -b "${COOKIE_JAR}" -H 'Content-Type: application/json' \
+    -d "${name_recall_payload}" "${BASE_URL}/api/chat")"
+
+  "${PYTHON_BIN}" - "${name_recall_response}" "${LIVE_MODEL_PROVIDER}" "${expected_name}" <<'PY'
+import json
+import sys
+
+response = json.loads(sys.argv[1])
+metadata = response.get("metadata") or {}
+assert sys.argv[3] in str(response.get("content") or ""), response
+assert metadata.get("actual_provider") == sys.argv[2], metadata
+assert metadata.get("response_source") not in {"emergency", "unavailable"}, metadata
+assert int(metadata.get("memory_recall_count") or 0) > 0, metadata
+PY
+  echo "PRODUCTION LIVE-MODEL CROSS-SESSION NAME RECALL PROOF PASSED"
+
   echo "PRODUCTION LIVE-MODEL TWO-TURN CHAT PROOF PASSED"
 fi
 
