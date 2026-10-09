@@ -85,6 +85,52 @@ async def test_explicit_name_chat_reaches_fresh_conversation_recall():
         assert any(f"preferred_name: {name}" == item.content for item in found), [
             item.content for item in found
         ]
+        # Exercise the actual Postgres rows through Runtime's existing
+        # authorization-aware evidence sufficiency contract, not an LLM mock.
+        from ai_karen_engine.core.context.contracts import (
+            ContextEvidence, EvidenceScope, EvidenceSource,
+        )
+        from ai_karen_engine.core.runtime.evidence_sufficiency import (
+            EvidenceSufficiencyStatus, evaluate_personal_evidence,
+        )
+        from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+        from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+        scoped_evidence = [
+            ContextEvidence(
+                evidence_id=item.id,
+                source=EvidenceSource.MEMORY,
+                content=item.content,
+                scope=EvidenceScope(tenant_id=str(tenant), user_id=str(user)),
+            )
+            for item in found
+        ]
+        authorized_context = SimpleNamespace(
+            tenant_id=str(tenant),
+            user_id=str(user),
+            authorized_sources=["memory"],
+            denied_sources=[],
+            unresolved_sources=[],
+            evidence=scoped_evidence,
+        )
+        decision = ExecutionDecision(
+            intent="memory.recall",
+            policy_constraints={"personal_evidence_attribute": "preferred_name"},
+        )
+        decision.cognitive_context = authorized_context
+        answer, provenance = ChatRuntime._grounded_personal_response(
+            decision, tenant_id=str(tenant), user_id=str(user),
+        )
+        assert name in answer
+        assert provenance["response_source"] == "authorized_memory_evidence"
+        assert provenance["actual_provider"] is None
+        assert provenance["evidence_sufficiency"] == "supported"
+        assert evaluate_personal_evidence(
+            authorized_context,
+            tenant_id=str(tenant), user_id=str(uuid.uuid4()),
+            attribute="preferred_name",
+        ).status is EvidenceSufficiencyStatus.MISSING
+
         assert await retriever.recall(
             SimpleNamespace(
                 text=query.text, tenant_id=str(tenant),
