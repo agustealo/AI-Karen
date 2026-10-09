@@ -153,6 +153,16 @@ class RegistryBackedClassifier(BasePredictor):
             for filename in ("model.joblib", "feature_schema.json")
             if not (artifact / filename).exists()
         ]
+        if not missing and (
+            not manifest.artifact_hash
+            or not self._registry.validate_artifact(manifest)
+        ):
+            return {
+                "status": "degraded",
+                "task": self._task.value,
+                "model_id": manifest.model_id,
+                "reason": "artifact_integrity_unverified",
+            }
         if missing:
             return {
                 "status": "degraded",
@@ -210,6 +220,9 @@ class RegistryBackedClassifier(BasePredictor):
             raise ValueError(
                 "feature schema version does not match active manifest"
             )
+
+        if not manifest.artifact_hash or not self._registry.validate_artifact(manifest):
+            raise ValueError("active model artifact integrity is not verified")
 
         model = joblib.load(str(model_path))
         self._loaded_manifest = manifest
