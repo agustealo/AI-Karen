@@ -137,6 +137,16 @@ class BenchmarkRunner:
             or not registry.validate_artifact(manifest)
         ):
             raise ValueError("Registered candidate identity or artifact is invalid")
+        from ai_karen_engine.core.intelligence.ml.predictors.registry_classifier import (
+            RegistryBackedClassifier,
+        )
+        if (
+            not isinstance(predictor, RegistryBackedClassifier)
+            or predictor._candidate_model_id != config.model_id
+            or predictor._tenant_id != tenant
+            or predictor._registry.registry_dir.resolve() != registry.registry_dir.resolve()
+        ):
+            raise PermissionError("Canonical tenant-scoped candidate predictor required")
         result = await self.run(predictor, config)
         receipt = EvaluationEvidenceStore(registry.registry_dir)._record(
             manifest, result, active_result=active_result
