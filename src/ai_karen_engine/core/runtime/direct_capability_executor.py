@@ -81,18 +81,20 @@ class DirectCapabilityResult:
             or payload_metadata.get("provider")
             or ""
         ).strip()
-        actual_provider = (
-            reported_provider
-            if reported_provider and reported_provider != "none"
-            else self.source_id
-        )
+        # Search backends and tool/plugin identifiers are not chat model
+        # providers. Never misrepresent web_search as a replacement for Ollama.
         return {
-            "actual_provider": actual_provider,
+            "actual_provider": None,
             "capability_executor": self.source_id,
+            "capability_data_provider": (
+                reported_provider
+                if reported_provider and reported_provider != "none"
+                else None
+            ),
             "actual_model": None,
             "runtime_engine": "direct_capability",
             "response_source": self.source or "capability_unavailable",
-            "fallback_level": max(0, len(self.attempts) - 1),
+            "fallback_level": 0,
             "degraded_mode": self.degraded,
             "degradation_reason": self.error,
             "provider_attempts": list(self.attempts),
