@@ -5,6 +5,7 @@ from uuid import uuid4
 from fastapi import HTTPException, Query
 from ai_karen_engine.core.intelligence.ml.training.contracts import TrainingJob
 from ai_karen_engine.core.intelligence.ml.training.job_ledger import TrainingJobLedger
+from ai_karen_engine.core.intelligence.ml.training.artifact_reconciliation import TrainingArtifactReconciler
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -149,6 +150,15 @@ async def list_expired_training_leases(
 ) -> dict[str, Any]:
     tenant, _ = _identity(current_user)
     return {"jobs": ledger.expired(tenant_id=tenant)}
+
+
+@router.get("/advanced/artifact-reconciliation")
+async def inspect_training_artifacts(
+    current_user: Any = Depends(require_permission(Permission.TRAINING_READ)),
+    ledger: TrainingJobLedger = Depends(get_training_job_ledger),
+) -> dict[str, Any]:
+    tenant, _ = _identity(current_user)
+    return TrainingArtifactReconciler(ledger=ledger).inspect(tenant_id=tenant)
 
 
 @router.get("/advanced/jobs/{job_id}")
