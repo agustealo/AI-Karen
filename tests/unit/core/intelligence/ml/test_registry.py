@@ -211,3 +211,46 @@ def test_registry_multiple_purposes_can_be_active(tmp_path):
     registry.register(m2)
     assert registry.get_active("intent").model_id == "m1"
     assert registry.get_active("domain").model_id == "m2"
+
+
+def test_governed_trained_model_cannot_promote_without_canonical_benchmark(tmp_path):
+    registry = MLModelRegistry(registry_dir=str(tmp_path))
+    candidate = MLModelManifest(
+        model_id="tenant-abc-affect-test",
+        purpose="affect",
+        architecture="trained",
+        artifact_path=str(tmp_path / "artifact"),
+        artifact_hash="sha-placeholder",
+        model_version="v1",
+        feature_version="v1",
+        metrics={"canonical_benchmark_status": "not_run"},
+        status=ModelStatus.CANDIDATE.value,
+    )
+    registry.register(candidate)
+    candidate.status = ModelStatus.SHADOW.value
+    with pytest.raises(ManifestValidationError, match="passing canonical benchmark"):
+        registry.register(candidate)
+    assert registry.get(candidate.model_id).status == ModelStatus.CANDIDATE.value
+    assert not (tmp_path / f"{candidate.model_id}.json").read_text().count('"status": "shadow"')
+
+
+def test_governed_trained_model_rejects_fabricated_pass_without_artifact(tmp_path):
+    registry = MLModelRegistry(registry_dir=str(tmp_path))
+    candidate = MLModelManifest(
+        model_id="tenant-abc-affect-other",
+        purpose="affect",
+        architecture="trained",
+        artifact_path=str(tmp_path / "missing"),
+        artifact_hash="not-real",
+        model_version="v1",
+        feature_version="v1",
+        metrics={
+            "canonical_benchmark_status": "passed",
+            "canonical_benchmark_id": "claimed-benchmark",
+        },
+        status=ModelStatus.CANDIDATE.value,
+    )
+    registry.register(candidate)
+    candidate.status = ModelStatus.SHADOW.value
+    with pytest.raises(ManifestValidationError, match="verified model artifacts"):
+        registry.register(candidate)
