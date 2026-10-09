@@ -476,3 +476,44 @@ async def test_governed_benchmark_rejects_actor_without_permission(monkeypatch):
             registry=Registry(),
             actor=SimpleNamespace(tenant_id="tenant-a", user_id="user-a"),
         )
+
+
+@pytest.mark.asyncio
+async def test_governed_runner_rechecks_candidate_after_execution(tmp_path, monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+    from ai_karen_engine.auth import rbac_middleware
+    from ai_karen_engine.core.intelligence.ml.contracts import MLModelManifest, ModelStatus
+    from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
+    from ai_karen_engine.core.intelligence.ml.predictors.registry_classifier import RegistryBackedClassifier
+
+    monkeypatch.setattr(
+        rbac_middleware, "get_rbac_manager",
+        lambda: SimpleNamespace(has_permission=lambda actor, permission: True),
+    )
+    tenant = "tenant-a"
+    model_id = f"tenant-{hashlib.sha256(tenant.encode()).hexdigest()[:16]}-intent-run"
+    registry = MLModelRegistry(registry_dir=str(tmp_path))
+    candidate = MLModelManifest(
+        model_id=model_id, purpose="intent", architecture="trained",
+        artifact_path=str(tmp_path), artifact_hash="integrity",
+        model_version="v1", feature_version="v1",
+        status=ModelStatus.CANDIDATE.value,
+    )
+    registry.register(candidate)
+    monkeypatch.setattr(registry, "validate_artifact", lambda manifest: True)
+    predictor = RegistryBackedClassifier(
+        PredictionTask.INTENT, registry=registry,
+        tenant_id=tenant, candidate_model_id=model_id,
+    )
+    async def change_during_run(*args, **kwargs):
+        candidate.artifact_hash = "changed"
+        return object()
+    monkeypatch.setattr(BenchmarkRunner, "run", change_during_run)
+    with pytest.raises(ValueError, match="changed during benchmark"):
+        await BenchmarkRunner().run_and_record(
+            predictor,
+            BenchmarkConfig(model_id=model_id, model_version="v1", task=PredictionTask.INTENT),
+            registry=registry,
+            actor=SimpleNamespace(tenant_id=tenant, user_id="operator"),
+        )
