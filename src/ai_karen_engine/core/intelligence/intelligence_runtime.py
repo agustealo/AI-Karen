@@ -12,6 +12,7 @@ from ai_karen_engine.core.intelligence.contracts import (
     SignalSourceType,
     SignalType,
 )
+from ai_karen_engine.core.intelligence.profile_attribute import requested_profile_attribute
 from ai_karen_engine.core.intelligence.features import IntelligenceFeatures
 from ai_karen_engine.core.intelligence.linguistic.contracts import LinguisticAnalysisResult
 from ai_karen_engine.core.intelligence.ml.contracts import PredictionTask
@@ -275,6 +276,7 @@ class IntelligenceRuntime:
         )
         result.interpretation = SemanticInterpretation(
             intent_family=result.intent or "unknown",
+            requested_profile_attribute=requested_profile_attribute(text),
             ambiguity=ambiguity,
             confidence=interpretation_confidence,
             provenance=tuple(
