@@ -36,10 +36,8 @@ class TrainingJobWorker:
     async def run_claimed(self, job_id: str, *, tenant_id: str) -> dict[str, Any]:
         if not tenant_id or tenant_id == "default":
             raise ValueError("Explicit tenant scope required")
-        if not self.ledger.transition(
-            job_id, tenant_id=tenant_id,
-            from_status="QUEUED", to_status="VALIDATING",
-        ):
+        lease_token = self.ledger.claim(job_id, tenant_id=tenant_id)
+        if lease_token is None:
             raise ValueError("Job missing, cancelled, or already claimed")
         job: TrainingJob | None = None
         try:
@@ -68,24 +66,37 @@ class TrainingJobWorker:
                 }.get(status)
                 if previous is None or not self.ledger.transition(
                     job_id, tenant_id=tenant_id,
-                    from_status=previous, to_status=status, job=current,
+                    from_status=previous, to_status=status, job=current,\n                    lease_token=lease_token,
                 ):
                     raise RuntimeError("Training phase transition was rejected")
 
+            async def keep_lease() -> None:
+                while True:
+                    await asyncio.sleep(20)
+                    if not self.ledger.heartbeat(
+                        job_id, tenant_id=tenant_id, token=lease_token,
+                    ):
+                        raise RuntimeError("Training worker lease expired")
+
+            heartbeat_task = asyncio.create_task(keep_lease())
             # The worker thread runs the canonical pipeline without blocking API loops.
-            result: TrainingPipelineResult = await asyncio.to_thread(
-                lambda: asyncio.run(
-                    self.pipeline.run(
-                        TrainingPipelineResult(job=job), on_state=on_state,
+            try:
+                result: TrainingPipelineResult = await asyncio.to_thread(
+                    lambda: asyncio.run(
+                        self.pipeline.run(
+                            TrainingPipelineResult(job=job), on_state=on_state,
+                        )
                     )
                 )
-            )
+            finally:
+                heartbeat_task.cancel()
+                await asyncio.gather(heartbeat_task, return_exceptions=True)
             if result.job.status != "SUCCEEDED" or not result.registered:
                 raise RuntimeError(result.error or "Training pipeline did not succeed")
             if not self.ledger.transition(
                 job_id, tenant_id=tenant_id,
                 from_status="EVALUATING", to_status="SUCCEEDED",
-                job=result.job,
+                job=result.job, lease_token=lease_token,
             ):
                 raise RuntimeError("Job completion state was changed concurrently")
             logger.info("Training job completed job_id=%s tenant_id=%s", job_id, tenant_id)
@@ -98,7 +109,7 @@ class TrainingJobWorker:
             for state in ("VALIDATING", "RUNNING", "EVALUATING"):
                 if self.ledger.transition(
                     job_id, tenant_id=tenant_id, from_status=state,
-                    to_status="FAILED", job=job,
+                    to_status="FAILED", job=job, lease_token=lease_token,
                 ):
                     break
             raise
