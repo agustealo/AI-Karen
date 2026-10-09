@@ -433,3 +433,28 @@ async def test_mixed_sensitive_message_only_persists_safe_candidate():
     assert len(vault.calls) == 1
     assert vault.calls[0][0].metadata.custom["attribute"] == "origin_location"
     assert len(projector.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_session_only_self_description_is_not_admitted_for_durable_memory():
+    signal = MemorySignal(
+        text="I Jamaican",
+        signal_type="identity_fact",
+        confidence=0.87,
+        scope="session",
+        metadata={
+            "explicit_user_statement": True,
+            "semantic_class": "self_description",
+            "retention_scope": "session",
+            "normalized_value": "Jamaican",
+        },
+    )
+    evaluator = MemoryFormationEvaluator(
+        signal_pipeline=_Pipeline(signal),
+        worthiness_scorer=_Scorer(),
+        privacy_classifier=_PrivacyClassifier(),
+    )
+    evaluation = await evaluator.evaluate(
+        text="I Jamaican", tenant_id="tenant-a", user_id="user-1"
+    )
+    assert evaluation.admitted_count == 0
