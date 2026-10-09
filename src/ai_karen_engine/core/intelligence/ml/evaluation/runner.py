@@ -49,7 +49,7 @@ class BenchmarkRunner:
             outcome = await self._run_case(predictor, case)
             outcomes.append(outcome)
 
-        metrics = self._collect_metrics(outcomes, config.task)
+        # A benchmark is valid only for the exact model and version requested.\n        # Predictions from fallbacks or a different model are not evidence.\n        for outcome in outcomes:\n            prediction = outcome.prediction\n            if prediction is None or outcome.error is not None:\n                continue\n            if (\n                prediction.model_id != config.model_id\n                or prediction.model_version != config.model_version\n                or prediction.task != config.task\n            ):\n                outcome.error = 'model_identity_mismatch'\n                outcome.correct = False\n            elif outcome.fallback_used:\n                outcome.error = 'fallback_is_not_candidate_evidence'\n                outcome.correct = False\n\n        metrics = self._collect_metrics(outcomes, config.task)
         latency_metrics = compute_latency_metrics(outcomes)
         metrics.update(latency_metrics)
 
