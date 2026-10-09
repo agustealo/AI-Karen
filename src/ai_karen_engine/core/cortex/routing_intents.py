@@ -187,7 +187,7 @@ def _looks_like_location_first_weather(query: str) -> bool:
     raw = " ".join((query or "").strip().split()).rstrip("?!.")
     # Interrogative openings are not place names: "What's the weather?"
     # must request authorized location context, not invent "What's the".
-    if re.match(r"^(?:what(?:'s|\\s+is)|how(?:'s|\\s+is)|where|will|is|does)\\b", raw, re.IGNORECASE):
+    if re.match(r"^(?:what(?:'s|\s+is)|how(?:'s|\s+is)|where|will|is|does)\b", raw, re.IGNORECASE):
         return False
     match = re.fullmatch(
         r"(?P<location>.+?)\s+(?:weather|forecast)",
