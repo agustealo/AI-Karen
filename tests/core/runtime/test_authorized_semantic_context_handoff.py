@@ -1,5 +1,6 @@
 """Typed context handoff: only authorized, current, scoped memory can feed tools."""
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from ai_karen_engine.core.context.contracts import (
     CognitiveContext,
@@ -15,6 +16,8 @@ from ai_karen_engine.core.cortex.context_stages import build_context_requirement
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext, ChatExecutionRequest
 from ai_karen_engine.core.runtime.evidence_resolver import RuntimeEvidenceResolver
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.memory.types import MemoryQuery
+from ai_karen_engine.platform.memory.postgres.profile_retriever import PostgresProfileRecallRetriever
 
 TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 USER = "11111111-1111-1111-1111-111111111111"
@@ -91,3 +94,77 @@ def test_nonweather_recall_keeps_original_query():
     )
     memory = next(x for x in requirements.requirements if x.source is EvidenceSource.MEMORY)
     assert memory.metadata == {}
+
+
+def test_profile_retriever_entry_preserves_future_validity_window():
+    now = datetime.now(timezone.utc)
+    valid_until = now + timedelta(days=2)
+    row = SimpleNamespace(
+        fact_id="fact-1",
+        event_id="event-1",
+        tenant_id=TENANT,
+        user_id=USER,
+        category="location",
+        attribute="current_location",
+        value={"value": "Washington, DC"},
+        valid_from=now,
+        valid_to=valid_until,
+        confidence=0.95,
+        source_type="chat",
+        source_ref="message-1",
+        created_at=now,
+        updated_at=now,
+    )
+    entry = PostgresProfileRecallRetriever._entry(
+        row,
+        MemoryQuery(
+            text="Where am I currently?",
+            tenant_id=TENANT,
+            user_id=USER,
+        ),
+    )
+    assert entry.content == "current_location: Washington, DC"
+    assert entry.expires_at == valid_until
+
+
+def test_recalled_expiry_is_materialized_into_typed_evidence():
+    request = ChatExecutionRequest(
+        messages=[{"role": "user", "content": "What's the weather?"}],
+        context=ChatExecutionContext(user_id=USER, tenant_id=TENANT, session_id="s"),
+    )
+    expired_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    evidence = RuntimeEvidenceResolver._memory_item_to_evidence(
+        {
+            "id": "memory-expired",
+            "content": "current_location: Washington, DC",
+            "timestamp": datetime.now(timezone.utc).timestamp(),
+            "expires_at": expired_at.isoformat(),
+            "similarity_score": 0.99,
+            "memory_type": "semantic",
+            "metadata": {"confidence": 0.95},
+        },
+        request=request,
+        retrieved_at=datetime.now(timezone.utc),
+    )
+    context = CognitiveContext(
+        context_id="ctx-expired",
+        request_id="req",
+        correlation_id="corr",
+        tenant_id=TENANT,
+        user_id=USER,
+        requirements=ContextRequirements(
+            request_id="req",
+            correlation_id="corr",
+            tenant_id=TENANT,
+            user_id=USER,
+        ),
+        authorized_sources=["memory"],
+        evidence=[evidence],
+    )
+    assert evidence.temporal.expires_at == expired_at
+    assert RuntimeEvidenceResolver.authorized_semantic_value(
+        context,
+        tenant_id=TENANT,
+        user_id=USER,
+        attribute="current_location",
+    ) is None
