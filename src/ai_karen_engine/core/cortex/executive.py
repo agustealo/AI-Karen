@@ -206,6 +206,12 @@ class CortexExecutionDecider:
             topology = ExecutionTopology.WORKFLOW
 
         policy_constraints = dict(meta.get("policy_constraints") or {})
+        # This field is exclusively CORTEX-owned: never accept a caller's
+        # claimed grounding target as a verified semantic interpretation.
+        policy_constraints.pop("personal_evidence_attribute", None)
+        semantic_attribute = str(analysis.get("semantic_predicate") or "").strip()
+        if analysis.get("intent") == "memory.recall" and semantic_attribute:
+            policy_constraints["personal_evidence_attribute"] = semantic_attribute
         policy_constraints.update(
             {
                 "memory_write_requested": memory_write_requested,
