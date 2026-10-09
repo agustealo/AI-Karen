@@ -148,6 +148,17 @@ class BenchmarkRunner:
         ):
             raise PermissionError("Canonical tenant-scoped candidate predictor required")
         result = await self.run(predictor, config)
+        # Re-check ownership and artifact after potentially lengthy evaluation.
+        latest = registry.get(config.model_id)
+        if (
+            latest is None
+            or latest.status != "candidate"
+            or latest.model_version != manifest.model_version
+            or latest.artifact_hash != manifest.artifact_hash
+            or latest.artifact_path != manifest.artifact_path
+            or not registry.validate_artifact(latest)
+        ):
+            raise ValueError("Candidate changed during benchmark evaluation")
         receipt = EvaluationEvidenceStore(registry.registry_dir)._record(
             manifest, result, active_result=active_result
         )
