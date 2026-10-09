@@ -256,8 +256,12 @@ class ChatRuntime:
                 )
 
         try:
-            direct_executor = get_direct_capability_executor()
-            if direct_executor.can_handle(decision):
+            if self._is_explicit_save_turn(request):
+                text = await self._execute_memory_write_receipt(request, decision, plan, memory_recall_meta)
+                provider_meta = {"response_source": "memory_persistence", "actual_provider": None, "actual_model": None}
+            else:
+                direct_executor = get_direct_capability_executor()
+            if not self._is_explicit_save_turn(request) and direct_executor.can_handle(decision):
                 resolved_location = RuntimeEvidenceResolver.authorized_semantic_value(
                     decision.cognitive_context,
                     tenant_id=ctx.tenant_id,
@@ -282,11 +286,11 @@ class ChatRuntime:
                 pending = self._pending_clarification_from_result(request, direct_result)
                 if pending:
                     provider_meta["pending_clarification"] = pending
-            elif decision.topology.value == "reasoning":
+            elif not self._is_explicit_save_turn(request) and decision.topology.value == "reasoning":
                 text, provider_meta = await self._run_reasoning(request, decision, plan, meter)
-            elif decision.is_graph_required:
+            elif not self._is_explicit_save_turn(request) and decision.is_graph_required:
                 text, provider_meta = await self._run_graph(request, decision, plan, meter)
-            else:
+            elif not self._is_explicit_save_turn(request):
                 text, provider_meta = await self._run_simple(request, decision, plan, meter)
         except Exception as exc:
             error_type = type(exc).__name__
@@ -378,7 +382,7 @@ class ChatRuntime:
             *list(provider_meta.get("execution_spans") or []),
         ]
 
-        if decision.memory_write_allowed:
+        if decision.memory_write_allowed and not self._is_explicit_save_turn(request):
             persistence_started = time.perf_counter()
             await self._persist_memory(request, text, memory_recall_meta, plan)
             provider_meta["execution_spans"].append(
@@ -1152,6 +1156,47 @@ class ChatRuntime:
             ),
         }
         return meta
+
+    @staticmethod
+    def _is_explicit_save_turn(request: ChatExecutionRequest) -> bool:
+        from ai_karen_engine.core.memory.signals.semantic_classifier import (
+            is_explicit_memory_save_request,
+        )
+        return is_explicit_memory_save_request(
+            ChatRuntime._extract_user_message(request.messages)
+        )
+
+    @staticmethod
+    def _memory_write_receipt_text(
+        receipt: Dict[str, Any], memory_meta: Dict[str, Any]
+    ) -> str:
+        """Only the governed write receipt may establish durable success."""
+        persisted = int(receipt.get("persisted") or 0)
+        if persisted > 0 and memory_meta.get("memory_persistence_status") == "persisted":
+            return (
+                f"Saved {persisted} memory fact"
+                f"{'s' if persisted != 1 else ''} for future conversations."
+            )
+        reason = str(receipt.get("reason") or "")
+        if reason == "memory_write_not_authorized" or memory_meta.get("memory_persistence_status") == "denied_by_policy":
+            return "I couldn't save that information because memory writing was not authorized."
+        if receipt.get("status") in {"failed", "error"} or memory_meta.get("memory_persistence_status") == "failed":
+            return "I couldn't verify a successful long-term memory save because persistence failed."
+        return "I couldn't confirm any eligible personal facts were saved. Please state the fact you want me to remember."
+
+    async def _execute_memory_write_receipt(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+        memory_meta: Dict[str, Any],
+    ) -> str:
+        if not decision.memory_write_allowed:
+            receipt = {"status": "rejected", "reason": "memory_write_not_authorized", "persisted": 0}
+            memory_meta["memory_persistence_status"] = "denied_by_policy"
+        else:
+            receipt = await self._persist_memory(request, "", memory_meta, plan)
+        return self._memory_write_receipt_text(receipt, memory_meta)
 
     @staticmethod
     def _resolve_explicit_memory_reference(
