@@ -17,6 +17,7 @@ prometheus_client
 fastapi==0.136.1
 httpx==0.28.1
 aiohttp
+aiofiles
 bs4
 openai==2.32.0
 requests
