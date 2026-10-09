@@ -90,11 +90,11 @@ class SklearnTrainingExecutor(TrainingExecutor):
         if not examples:
             raise ValueError("No training examples loaded")
 
-        max_samples = get_ml_training_max_samples()
+        options = job.metadata.get('advanced_config', {})\n        max_samples = int(options.get('max_samples', get_ml_training_max_samples()))
         if len(examples) > max_samples:
             examples = examples[:max_samples]
 
-        feature_version = examples[0].feature_version if examples else "v1"
+        feature_version = examples[0].feature_version if examples else 'v1'\n        feature_order = tuple(examples[0].features)\n        if any(tuple(ex.features) != feature_order or ex.feature_version != feature_version for ex in examples):\n            raise ValueError('Training examples have inconsistent features or feature versions')\n        if len({ex.target for ex in examples}) < 2:\n            raise ValueError('At least two training classes are required')\n        if any(not all(isinstance(value, (int, float, bool)) and np.isfinite(float(value)) for value in ex.features.values()) for ex in examples):\n            raise ValueError('Training features must contain finite numeric values')
         classes = sorted({ex.target for ex in examples})
         class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
         idx_to_class = {idx: cls for cls, idx in class_to_idx.items()}
@@ -105,9 +105,9 @@ class SklearnTrainingExecutor(TrainingExecutor):
         _, counts = np.unique(y, return_counts=True)
         stratify = y if np.min(counts) >= 2 else None
 
-        test_size = get_ml_training_test_size()
+        test_size = float(options.get('test_split', get_ml_training_test_size()))\n        random_seed = int(options.get('seed', job.seed))\n        max_iter = int(options.get('max_iter', 1000))\n        class_weight = options.get('class_weight', 'balanced')\n        if class_weight == 'none':\n            class_weight = None\n        if not 0.05 <= test_size <= 0.5 or not 100 <= max_iter <= 10000 or class_weight not in (None, 'balanced'):\n            raise ValueError('Invalid advanced sklearn training configuration')
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=get_ml_random_seed(), stratify=stratify
+            X, y, test_size=test_size, random_state=random_seed, stratify=stratify
         )
 
         model = LogisticRegression(
@@ -168,37 +168,20 @@ class SklearnTrainingExecutor(TrainingExecutor):
             "model_version": model_version,
             "task": job.task,
             "base_model": job.base_model,
-            "seed": get_ml_random_seed(),
-            "test_size": test_size,
-            "class_weight": "balanced",
+            "seed": random_seed,
+            "test_size": test_size,\n            "max_iter": max_iter,
+            "class_weight": class_weight,
         }
         metadata_path = artifact_root / "training_metadata.json"
         metadata_path.write_text(
             json.dumps(training_metadata, indent=2, sort_keys=True), encoding="utf-8"
         )
 
-        manifest = MLModelManifest(
-            model_id=model_id,
-            purpose=job.task,
-            architecture="logistic_regression",
-            artifact_path=str(artifact_root),
-            artifact_hash=_hash_directory(artifact_root),
-            model_version=model_version,
-            feature_version=feature_version,
-            training_dataset_version=job.dataset_version,
-            calibration_version="",
-            metrics=training_metadata,
-            created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            status=ModelStatus.CANDIDATE.value,
-        )
-        manifest_path = Path(get_ml_registry_dir()) / f"{model_id}.json"
-        manifest_path.write_text(
-            json.dumps(manifest.__dict__, indent=2, sort_keys=True), encoding="utf-8"
-        )
+        artifact_hash = _hash_directory(artifact_root)
 
         return TrainingArtifact(
             artifact_path=str(artifact_root),
-            artifact_hash=manifest.artifact_hash,
+            artifact_hash=artifact_hash,
             model_id=model_id,
             model_version=model_version,
             task=job.task,
