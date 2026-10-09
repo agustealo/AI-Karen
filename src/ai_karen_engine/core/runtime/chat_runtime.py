@@ -1411,6 +1411,14 @@ class ChatRuntime:
         request.metadata["clarification_resolved"] = True
         request.metadata["clarification_slot"] = slot
         request.metadata["clarification_source"] = "authorized_conversation"
+        # One typed continuation envelope is shared by downstream authorized
+        # direct capabilities, workflows and prompt assembly. Never execute
+        # the slot value or treat it as an authorization grant.
+        request.metadata["clarification_inputs"] = {
+            "original_request": original,
+            "values": {slot: answer},
+            "source": "authorized_conversation",
+        }
         return True
 
     @staticmethod
