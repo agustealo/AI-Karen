@@ -1217,19 +1217,39 @@ class ChatRuntime:
         if decision.intent != "memory.recall":
             return None
         if not attribute:
-            # An unresolved relation (notably "where am I from") is not
-            # license to guess from any nearby retrieved profile attribute.
-            return (
-                "Which personal detail do you mean? I won't guess from unrelated saved information.",
-                {
-                    "evidence_sufficiency": "ambiguous",
-                    "evidence_reason": "attribute_unresolved",
-                    "evidence_count": 0,
-                    "response_source": "runtime_evidence_sufficiency",
-                    "actual_provider": None,
-                    "actual_model": None,
-                },
+            # A broad identity question may use only independently verified
+            # profile facts. Never infer origin from birthplace/upbringing,
+            # or treat the assistant's own identity as the user's.
+            fields = (
+                ("preferred_name", "name"),
+                ("birthplace", "birthplace"),
+                ("upbringing_location", "place you grew up"),
+                ("residence_location", "home location"),
+                ("origin_location", "place you're from"),
+                ("work_location", "work location"),
             )
+            verified = [
+                (label, result)
+                for key, label in fields
+                if (result := evaluate_personal_evidence(
+                    decision.cognitive_context,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    attribute=key,
+                )).status is EvidenceSufficiencyStatus.SUPPORTED
+            ]
+            meta = {
+                "evidence_sufficiency": "supported" if verified else "missing",
+                "evidence_reason": "verified_identity_summary" if verified else "no_verified_identity_facts",
+                "evidence_count": sum(len(result.evidence_ids) for _, result in verified),
+                "response_source": "authorized_memory_evidence",
+                "actual_provider": None,
+                "actual_model": None,
+            }
+            if not verified:
+                return "I don't have enough verified information saved to describe who you are.", meta
+            facts = "; ".join(f"{label}: {result.value}" for label, result in verified)
+            return f"Here's what you've shared about yourself: {facts}.", meta
         result = evaluate_personal_evidence(
             decision.cognitive_context,
             tenant_id=tenant_id,
