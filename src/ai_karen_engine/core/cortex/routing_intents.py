@@ -159,7 +159,7 @@ def weather_query_has_explicit_location(query: str) -> bool:
     """
     raw = " ".join(str(query or "").strip().split()).rstrip("?!.")
     named_place = re.search(
-        r"\\b(?:weather(?:\\s+like)?|forecast|temperature)\\s+(?:in|for|at)\\s+"
+        r"\b(?:weather(?:\s+like)?|forecast|temperature)\s+(?:in|for|at)\s+"
         r"(?P<location>[A-Za-z][A-Za-z0-9 ,.'-]{0,110})$",
         raw,
         flags=re.IGNORECASE,
