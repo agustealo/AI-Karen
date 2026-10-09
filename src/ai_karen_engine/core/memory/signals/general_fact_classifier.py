@@ -89,6 +89,9 @@ _LOCATION_PATTERNS = (
         r"(?i)\bi\s+(?:work|am\s+working)\s+in\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
     ("birthplace", "birthplace", re.compile(
+        r"(?i)\bmy\s+(?:place\s+of\s+birth|birthplace)\s+is\s+(.+?)(?=[,.!?;]|$)"
+    )),
+    ("birthplace", "birthplace", re.compile(
         r"(?i)\b(?:i\s+(?:was\s+)?born\s+in|born\s+in)\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
     # Explicit first-person clauses frequently omit the repeated subject:
