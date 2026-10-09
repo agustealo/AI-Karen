@@ -261,7 +261,7 @@ async def test_latency_metrics():
 async def test_runner_with_mock_predictor():
     class MockPredictor:
         async def predict(self, features):
-            return Prediction(task=PredictionTask.INTENT, label="information_seeking", confidence=0.9, model_id="sync-model", model_version="v1")
+            return Prediction(task=PredictionTask.INTENT, label="information_seeking", confidence=0.9, model_id="mock-model", model_version="v1")
 
     runner = BenchmarkRunner()
     config = BenchmarkConfig(
@@ -298,7 +298,7 @@ async def test_runner_error_handling():
 async def test_runner_sync_predictor():
     class SyncPredictor:
         def predict(self, features):
-            return Prediction(task=PredictionTask.INTENT, label="information_seeking", confidence=0.9)
+            return Prediction(task=PredictionTask.INTENT, label="information_seeking", confidence=0.9, model_id="sync-model", model_version="v1")
 
     runner = BenchmarkRunner()
     config = BenchmarkConfig(
@@ -380,3 +380,28 @@ async def test_run_and_record_requires_governed_authorization_before_execution()
             ),
             registry=NeverReadRegistry(),
         )
+
+
+@pytest.mark.asyncio
+async def test_benchmark_does_not_credit_wrong_task_or_version():
+    class WrongVersion:
+        def predict(self, features):
+            return Prediction(
+                task=PredictionTask.DOMAIN,
+                label="information_seeking",
+                model_id="candidate",
+                model_version="different-version",
+            )
+
+    result = await BenchmarkRunner().run(
+        WrongVersion(),
+        BenchmarkConfig(
+            model_id="candidate",
+            model_version="v1",
+            task=PredictionTask.INTENT,
+            case_ids=["intent-001"],
+        ),
+    )
+    assert result.error_count == 1
+    assert result.outcomes[0].error == "model_identity_mismatch"
+    assert result.outcomes[0].correct is False
