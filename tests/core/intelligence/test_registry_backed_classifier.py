@@ -113,6 +113,10 @@ async def test_registry_classifier_fails_closed_on_missing_feature(tmp_path):
         encoding="utf-8",
     )
 
+    from ai_karen_engine.core.intelligence.ml.training.sklearn_executor import _hash_directory
+    manifest.artifact_hash = _hash_directory(Path(manifest.artifact_path))
+    registry.register(manifest)
+
     predictor = RegistryBackedClassifier(
         PredictionTask.OUTCOME_FORECAST,
         registry=registry,
