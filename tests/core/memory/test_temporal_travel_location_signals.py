@@ -76,3 +76,22 @@ def test_role_specific_profile_recall_targets():
     assert retriever._preferred_attribute("Where do I live?") == "residence_location"
     assert retriever._preferred_attribute("Where was I born?") == "birthplace"
     assert retriever._preferred_attribute("What's the weather?") is None
+
+
+def test_temporary_presence_without_travel_cue_remains_current_presence():
+    facts = _location_facts("I'm in Detroit.")
+    assert len(facts) == 1
+    assert facts[0].metadata["context_kind"] == "current_presence"
+
+
+def test_vacation_and_holiday_cues_are_classified_as_travel():
+    for statement in (
+        "I'm in DC on vacation.",
+        "I'm in Paris on holiday.",
+        "I'm visiting Boston.",
+        "I'm in Chicago for a trip.",
+    ):
+        facts = _location_facts(statement)
+        assert len(facts) == 1, statement
+        assert facts[0].metadata["attribute"] == "current_location"
+        assert facts[0].metadata["context_kind"] == "travel", statement
