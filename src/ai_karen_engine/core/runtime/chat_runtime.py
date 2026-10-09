@@ -1294,46 +1294,39 @@ class ChatRuntime:
     # ------------------------------------------------------------------
 
     async def _prepare_conversation_continuation(self, request: ChatExecutionRequest) -> None:
-        """Recover authorized conversational continuity before capability routing."""
-        import re
-        from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
+        """Hydrate authorized history for any single-turn request before routing.
 
+        The canonical gateway enforces tenant and user ownership. Conversation
+        evidence never bypasses the later RuntimePolicy evidence authorization;
+        this bounded transcript is conversational input for continuity only.
+        """
         if not request.messages:
             return
         current = request.messages[-1]
         if str(current.get("role", "")).lower() != "user":
             return
-        text = str(current.get("content", "")).strip()
-        is_weather = resolve_capability_decision(text).intent == "search.weather"
-        is_location_reply = bool(re.fullmatch(r"[A-Za-z][A-Za-z .,'-]{0,79}", text))
-        if not (is_weather or is_location_reply):
-            return
-
-        transcript = list(request.messages)
-        if len(transcript) == 1:
+        if len(request.messages) == 1:
             try:
                 gateway = self._conversation_gateway or get_conversation_runtime_gateway()
                 history = await gateway.load_history(request.context, limit=12)
                 if history.success and history.messages:
                     ordered = sorted(history.messages, key=lambda message: message.created_at)
-                    transcript = [
+                    prior = [
                         {"role": message.role, "content": message.content}
                         for message in ordered
-                    ] + [dict(current)]
+                        if str(message.role).lower() in {"assistant", "user"}
+                        and str(message.content or "").strip()
+                    ]
+                    if prior:
+                        request.messages = [*prior, current]
+                        request.metadata["conversation_history_source"] = "canonical_repository"
+                        request.metadata["conversation_history_materialized"] = True
             except Exception as exc:
-                logger.warning("Capability history unavailable: %s", type(exc).__name__)
-
-        candidate = ChatExecutionRequest(
-            messages=transcript,
-            context=request.context,
-            metadata=dict(request.metadata or {}),
-        )
-        if is_location_reply:
-            self._resolve_pending_weather_followup(candidate)
-            if candidate.metadata.get("weather_followup_resolved"):
-                current["content"] = candidate.messages[-1]["content"]
-                request.metadata.update(candidate.metadata)
-            return
+                logger.warning(
+                    "Authorized conversation history unavailable: %s",
+                    type(exc).__name__,
+                )
+        self._resolve_pending_weather_followup(request)
 
     @staticmethod
     def _resolve_pending_weather_followup(request: ChatExecutionRequest) -> None:
