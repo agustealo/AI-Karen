@@ -19,13 +19,17 @@ class PipelineStub:
         self.success = success
         self.calls = 0
 
-    async def run(self, result, on_state=None):
+    async def run(self, result, on_state=None, authorize_publication=None):
         self.calls += 1
         if on_state is not None:
             result.job.status = 'RUNNING'
             await on_state('RUNNING', result.job)
             result.job.status = 'EVALUATING'
             await on_state('EVALUATING', result.job)
+        if authorize_publication is not None and not authorize_publication():
+            result.error = 'Expired training lease'
+            result.job.status = 'FAILED'
+            return result
         if self.success:
             result.job.status = "SUCCEEDED"
             result.registered = True
