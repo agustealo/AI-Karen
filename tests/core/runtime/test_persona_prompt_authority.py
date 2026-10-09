@@ -184,3 +184,52 @@ def test_persona_message_follows_protected_policy_messages(tmp_path) -> None:  #
         ]
 
     asyncio.run(run())
+
+
+def test_canonical_prompt_prioritizes_user_stated_facts_over_external_provider(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        service = _service(tmp_path)
+        request = PromptAssemblyRequest(
+            system_policy="Be helpful and accurate.",
+            messages=[
+                {"role": "user", "content": "I Jamaican, where am I from?"},
+            ],
+        )
+        result = await service.assemble_prompt(
+            request, enforce_budget=False, validate_schema=False,
+        )
+        contracts = [
+            message for message in result.messages
+            if message.get("source") == "evidence_first_conversation_contract"
+        ]
+        assert len(contracts) == 1
+        instruction = contracts[0]["content"]
+        assert "current user message" in instruction
+        assert "nationality" in instruction
+        assert "birthplace" in instruction
+        assert "identification documents" in instruction
+        assert result.messages[-1]["content"] == "I Jamaican, where am I from?"
+
+    asyncio.run(run())
+
+
+def test_evidence_first_contract_keeps_policy_authority(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        service = _service(tmp_path)
+        request = PromptAssemblyRequest(
+            system_policy="Never reveal confidential customer data.",
+            messages=[{"role": "user", "content": "Where am I from?"}],
+        )
+        result = await service.assemble_prompt(
+            request, enforce_budget=False, validate_schema=False,
+        )
+        assert any(
+            "Never reveal confidential customer data." in str(item.get("content", ""))
+            for item in result.messages
+        )
+        assert any(
+            item.get("source") == "evidence_first_conversation_contract"
+            for item in result.messages
+        )
+
+    asyncio.run(run())
