@@ -30,7 +30,8 @@ type Config = {
   optimizer: string; class_weight: string; precision: string;
 };
 type Finding = { code: string; message: string };
-type JobSummary = { job_id: string; state: string; submitted_at: string; updated_at: string };\ntype Preflight = {
+type JobSummary = { job_id: string; state: string; submitted_at: string; updated_at: string };
+type Preflight = {
   ready: boolean;
   checks: Finding[];
   warnings: Finding[];
@@ -47,7 +48,10 @@ export default function AdvancedTrainingWorkbench() {
   const [config, setConfig] = useState<Config | null>(null);
   const [preflight, setPreflight] = useState<Preflight | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);\n  const [jobs, setJobs] = useState<JobSummary[]>([]);\n  const [queueing, setQueueing] = useState(false);\n  const [queueMessage, setQueueMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [jobs, setJobs] = useState<JobSummary[]>([]);
+  const [queueing, setQueueing] = useState(false);
+  const [queueMessage, setQueueMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setBusy(true);
