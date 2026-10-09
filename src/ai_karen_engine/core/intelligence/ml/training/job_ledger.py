@@ -8,9 +8,10 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from ai_karen_engine.config.config_manager import get_ml_registry_dir
 from ai_karen_engine.core.intelligence.ml.training.contracts import TrainingJob, TrainingJobStatus
@@ -36,6 +37,13 @@ class TrainingJobLedger:
                     updated_at TEXT NOT NULL
                 )
             """)
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(training_jobs)")}
+            for name, definition in (
+                ("lease_token", "TEXT"),
+                ("lease_expires_at", "TEXT"),
+            ):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE training_jobs ADD COLUMN {name} {definition}")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_training_jobs_tenant ON training_jobs(tenant_id, submitted_at)"
             )
@@ -85,9 +93,54 @@ class TrainingJobLedger:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def claim(self, job_id: str, *, tenant_id: str, ttl_seconds: int = 300) -> str | None:
+        """Atomically take a queued job. The opaque token fences competing workers."""
+        if not tenant_id or tenant_id == "default" or not 30 <= ttl_seconds <= 3600:
+            raise ValueError("Invalid tenant scope or lease duration")
+        token = uuid4().hex
+        now = datetime.now(timezone.utc)
+        expires = (now + timedelta(seconds=ttl_seconds)).isoformat()
+        with self._connect() as db:
+            result = db.execute(
+                "UPDATE training_jobs SET state='VALIDATING', "
+                "body=json_set(body, '$.status', 'VALIDATING'), "
+                "lease_token=?,lease_expires_at=?,updated_at=? "
+                "WHERE job_id=? AND tenant_id=? AND state='QUEUED' AND lease_token IS NULL",
+                (token, expires, now.isoformat(), job_id, tenant_id),
+            )
+        return token if result.rowcount == 1 else None
+
+    def heartbeat(self, job_id: str, *, tenant_id: str, token: str, ttl_seconds: int = 300) -> bool:
+        if not token or not 30 <= ttl_seconds <= 3600:
+            raise ValueError("Invalid lease credentials")
+        now = datetime.now(timezone.utc)
+        expires = (now + timedelta(seconds=ttl_seconds)).isoformat()
+        with self._connect() as db:
+            result = db.execute(
+                "UPDATE training_jobs SET lease_expires_at=?,updated_at=? "
+                "WHERE job_id=? AND tenant_id=? AND lease_token=? "
+                "AND lease_expires_at>? AND state IN ('VALIDATING','RUNNING','EVALUATING')",
+                (expires, now.isoformat(), job_id, tenant_id, token, now.isoformat()),
+            )
+        return result.rowcount == 1
+
+    def expired(self, *, tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Inspect expired ownership without ever requeueing uncertain work."""
+        if not tenant_id or tenant_id == "default":
+            raise ValueError("Explicit tenant scope required")
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT job_id,state,updated_at,lease_expires_at FROM training_jobs "
+                "WHERE tenant_id=? AND lease_token IS NOT NULL AND lease_expires_at<=? "
+                "AND state IN ('VALIDATING','RUNNING','EVALUATING') "
+                "ORDER BY lease_expires_at LIMIT ?",
+                (tenant_id, _now(), max(1, min(limit, 100))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def transition(
         self, job_id: str, *, tenant_id: str, from_status: str,
-        to_status: str, job: TrainingJob | None = None,
+        to_status: str, job: TrainingJob | None = None,\n        lease_token: str | None = None,
     ) -> bool:
         allowed = {
             "QUEUED": {"VALIDATING", "CANCELLED"},
@@ -98,13 +151,17 @@ class TrainingJobLedger:
         }
         if to_status not in allowed.get(from_status, set()):
             raise ValueError("Invalid training job state transition")
+        if from_status in {"VALIDATING", "RUNNING", "EVALUATING"} and not lease_token:
+            raise ValueError("A lease token is required for running job transitions")
+        clause = " AND lease_token=? AND lease_expires_at>?" if lease_token else " AND lease_token IS NULL"
+        extra = (lease_token, _now()) if lease_token else ()
         with self._connect() as db:
             if job is None:
                 # JSON state must match the indexed state after every transition.
                 result = db.execute(
                     "UPDATE training_jobs SET state=?,body=json_set(body, '$.status', ?),updated_at=? "
-                    "WHERE job_id=? AND tenant_id=? AND state=?",
-                    (to_status, to_status, _now(), job_id, tenant_id, from_status),
+                    "WHERE job_id=? AND tenant_id=? AND state=?" + clause,
+                    (to_status, to_status, _now(), job_id, tenant_id, from_status, *extra),
                 )
             else:
                 if job.job_id != job_id:
@@ -113,8 +170,8 @@ class TrainingJobLedger:
                 body["status"] = to_status
                 result = db.execute(
                     "UPDATE training_jobs SET state=?,body=?,updated_at=? "
-                    "WHERE job_id=? AND tenant_id=? AND state=?",
-                    (to_status, json.dumps(body), _now(), job_id, tenant_id, from_status),
+                    "WHERE job_id=? AND tenant_id=? AND state=?" + clause,
+                    (to_status, json.dumps(body), _now(), job_id, tenant_id, from_status, *extra),
                 )
         return result.rowcount == 1
 
