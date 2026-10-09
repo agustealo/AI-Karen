@@ -207,8 +207,16 @@ class CortexExecutionDecider:
 
         policy_constraints = dict(meta.get("policy_constraints") or {})
         policy_constraints.pop("personal_evidence_attribute", None)
-        semantic_attribute = str(analysis.get("requested_profile_attribute") or "").strip()
-        if analysis.get("memory_recall_required") and semantic_attribute:
+        # The intelligence-owned resolver is deterministic and remains available
+        # when ML analysis degrades or does not populate the semantic envelope.
+        from ai_karen_engine.core.intelligence.profile_attribute import (
+            requested_profile_attribute,
+        )
+        semantic_attribute = (
+            requested_profile_attribute(user_content)
+            if personal_recall_query else None
+        )
+        if personal_recall_query and semantic_attribute:
             policy_constraints["personal_evidence_attribute"] = semantic_attribute
         policy_constraints.update(
             {
@@ -412,6 +420,13 @@ class CortexExecutionDecider:
                     capability_decision.confidence
                 )
                 fallback["direct_capability"] = True
+            if self._personal_recall_query(text):
+                fallback["intent"] = "memory.recall"
+                fallback["intent_confidence"] = 0.0
+                from ai_karen_engine.core.intelligence.profile_attribute import (
+                    requested_profile_attribute,
+                )
+                fallback["requested_profile_attribute"] = requested_profile_attribute(text)
             if self._personal_recall_query(text) or "location.current" in capability_decision.missing_requirements:
                 fallback["memory_recall_required"] = True
                 fallback["memory_scope"] = "user"
