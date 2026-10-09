@@ -25,7 +25,6 @@ from ai_karen_engine.config.config_manager import (
     get_ml_training_max_samples,
     get_ml_training_test_size,
 )
-from ai_karen_engine.core.intelligence.ml.contracts import MLModelManifest, ModelStatus
 from ai_karen_engine.core.intelligence.ml.training.contracts import (
     TrainingArtifact,
     TrainingExecutor,
@@ -59,7 +58,8 @@ def _hash_directory(directory: Path) -> str:
                     file_hash.update(chunk)
             entries.append((str(rel).replace("\\", "/"), entry.stat().st_size, file_hash.hexdigest()))
     for rel_path, size, digest in sorted(entries):
-        h.update(f"{rel_path}\t{size}\t{digest}\n".encode())
+        h.update(f"{rel_path}\t{size}\t{digest}
+".encode())
     return h.hexdigest()
 
 
@@ -90,11 +90,19 @@ class SklearnTrainingExecutor(TrainingExecutor):
         if not examples:
             raise ValueError("No training examples loaded")
 
-        options = job.metadata.get('advanced_config', {})\n        max_samples = int(options.get('max_samples', get_ml_training_max_samples()))
+        options = job.metadata.get('advanced_config', {})
+        max_samples = int(options.get('max_samples', get_ml_training_max_samples()))
         if len(examples) > max_samples:
             examples = examples[:max_samples]
 
-        feature_version = examples[0].feature_version if examples else 'v1'\n        feature_order = tuple(examples[0].features)\n        if any(tuple(ex.features) != feature_order or ex.feature_version != feature_version for ex in examples):\n            raise ValueError('Training examples have inconsistent features or feature versions')\n        if len({ex.target for ex in examples}) < 2:\n            raise ValueError('At least two training classes are required')\n        if any(not all(isinstance(value, (int, float, bool)) and np.isfinite(float(value)) for value in ex.features.values()) for ex in examples):\n            raise ValueError('Training features must contain finite numeric values')
+        feature_version = examples[0].feature_version if examples else 'v1'
+        feature_order = tuple(examples[0].features)
+        if any(tuple(ex.features) != feature_order or ex.feature_version != feature_version for ex in examples):
+            raise ValueError('Training examples have inconsistent features or feature versions')
+        if len({ex.target for ex in examples}) < 2:
+            raise ValueError('At least two training classes are required')
+        if any(not all(isinstance(value, (int, float, bool)) and np.isfinite(float(value)) for value in ex.features.values()) for ex in examples):
+            raise ValueError('Training features must contain finite numeric values')
         classes = sorted({ex.target for ex in examples})
         class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
         idx_to_class = {idx: cls for cls, idx in class_to_idx.items()}
@@ -105,15 +113,22 @@ class SklearnTrainingExecutor(TrainingExecutor):
         _, counts = np.unique(y, return_counts=True)
         stratify = y if np.min(counts) >= 2 else None
 
-        test_size = float(options.get('test_split', get_ml_training_test_size()))\n        random_seed = int(options.get('seed', job.seed))\n        max_iter = int(options.get('max_iter', 1000))\n        class_weight = options.get('class_weight', 'balanced')\n        if class_weight == 'none':\n            class_weight = None\n        if not 0.05 <= test_size <= 0.5 or not 100 <= max_iter <= 10000 or class_weight not in (None, 'balanced'):\n            raise ValueError('Invalid advanced sklearn training configuration')
+        test_size = float(options.get('test_split', get_ml_training_test_size()))
+        random_seed = int(options.get('seed', job.seed))
+        max_iter = int(options.get('max_iter', 1000))
+        class_weight = options.get('class_weight', 'balanced')
+        if class_weight == 'none':
+            class_weight = None
+        if not 0.05 <= test_size <= 0.5 or not 100 <= max_iter <= 10000 or class_weight not in (None, 'balanced'):
+            raise ValueError('Invalid advanced sklearn training configuration')
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_seed, stratify=stratify
         )
 
         model = LogisticRegression(
-            max_iter=1000,
-            random_state=get_ml_random_seed(),
-            class_weight="balanced",
+            max_iter=max_iter,
+            random_state=random_seed,
+            class_weight=class_weight,
             solver="lbfgs",
         )
         model.fit(X_train, y_train)
@@ -177,9 +192,11 @@ class SklearnTrainingExecutor(TrainingExecutor):
             "task": job.task,
             "base_model": job.base_model,
             "seed": random_seed,
-            "test_size": test_size,\n            "max_iter": max_iter,
+            "test_size": test_size,
+            "max_iter": max_iter,
             "tenant_scoped": bool(tenant_id),
             "training_job_id": job.job_id,
+            "tenant_key": hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:16] if tenant_id else "",
             "class_weight": class_weight,
         }
         metadata_path = artifact_root / "training_metadata.json"
