@@ -60,10 +60,10 @@ _TRAVEL = re.compile(
 # Temporary travel/current-presence statements are not residence updates.
 # Distinguish today's visited place from durable home and origin locations.
 _TEMPORARY_PRESENCE = re.compile(
-    r"(?i)\\bi(?:'m| am)\\s+(?:currently\\s+)?(?:in|visiting|staying\\s+in)\\s+"
+    r"(?i)\bi(?:'m| am)\s+(?:currently\s+)?(?:in|visiting|staying\s+in)\s+"
     r"(?P<place>[A-Za-z][A-Za-z.' -]{0,70}?)"
-    r"(?=\\s+(?:on\\s+vacation|on\\s+holiday|for\\s+(?:vacation|a\\s+trip|work)|"
-    r"visiting\\b|and\\b|but\\b)|[,.!?;]|$)"
+    r"(?=\s+(?:on\s+vacation|on\s+holiday|for\s+(?:vacation|a\s+trip|work)|"
+    r"visiting\b|and\b|but\b)|[,.!?;]|$)"
 )
 
 _LOCATION_PATTERNS = (
