@@ -126,3 +126,36 @@ async def test_registry_classifier_fails_closed_on_missing_feature(tmp_path):
     assert prediction.label == "unknown"
     assert prediction.fallback_used is True
     assert prediction.metadata["reason"] == "feature_contract_unavailable"
+
+
+async def test_registry_classifier_decodes_numeric_training_labels(tmp_path):
+    registry = MLModelRegistry(registry_dir=str(tmp_path / "registry"))
+    artifact = tmp_path / "numeric"
+    artifact.mkdir()
+    model = LogisticRegression(random_state=42)
+    model.fit([[1.0], [2.0], [8.0], [9.0]], [1, 1, 0, 0])
+    joblib.dump(model, artifact / "model.joblib")
+    (artifact / "feature_schema.json").write_text(
+        json.dumps({
+            "feature_version": "v1",
+            "feature_order": ["token_count"],
+            "classes": ["high", "low"],
+        }), encoding="utf-8",
+    )
+    from ai_karen_engine.core.intelligence.ml.training.sklearn_executor import _hash_directory
+    manifest = MLModelManifest(
+        model_id="numeric-affect",
+        purpose=PredictionTask.AFFECT.value,
+        architecture="logistic_regression",
+        artifact_path=str(artifact),
+        artifact_hash=_hash_directory(artifact),
+        model_version="numeric-v1",
+        feature_version="v1",
+        training_dataset_version="test-dataset",
+        status=ModelStatus.ACTIVE.value,
+    )
+    registry.register(manifest)
+    predictor = RegistryBackedClassifier(PredictionTask.AFFECT, registry=registry)
+    prediction = await predictor.predict(IntelligenceFeatures(text="longer", token_count=9))
+    assert prediction.label == "high"
+    assert set(prediction.metadata["probabilities"]) == {"high", "low"}
