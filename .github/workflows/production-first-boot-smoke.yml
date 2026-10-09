@@ -70,8 +70,26 @@ jobs:
       - name: Validate smoke harness
         run: bash -n scripts/ci/production-first-boot-smoke.sh
 
+      - name: Authenticate registry before production build
+        env:
+          KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$KAREN_CI_DOCKERHUB_USERNAME" || -n "$KAREN_CI_DOCKERHUB_TOKEN" ]]; then
+            test -n "$KAREN_CI_DOCKERHUB_USERNAME" && test -n "$KAREN_CI_DOCKERHUB_TOKEN"
+            printf '%s' "$KAREN_CI_DOCKERHUB_TOKEN" |
+              docker login --username "$KAREN_CI_DOCKERHUB_USERNAME" --password-stdin >/dev/null
+          fi
+
       - name: Build production API image
-        run: docker build --target app --build-arg PROFILE=runtime -t ai-karen-api:beta .
+        env:
+          KAREN_CI_PYTHON_BASE_IMAGE: ${{ vars.KAREN_CI_PYTHON_BASE_IMAGE || 'python:3.11-slim' }}
+        run: |
+          docker build --target app --build-arg PROFILE=runtime \
+            --build-arg KAREN_PYTHON_BASE_IMAGE="$KAREN_CI_PYTHON_BASE_IMAGE" \
+            -t ai-karen-api:beta .
 
       - name: Build production web image
         run: |
