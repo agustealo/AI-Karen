@@ -37,9 +37,11 @@ class RegistryBackedClassifier(BasePredictor):
         ml_runtime: Any = None,
         *,
         registry: MLModelRegistry | None = None,
+        tenant_id: str | None = None,
     ) -> None:
         super().__init__(ml_runtime)
         self._task = task
+        self._tenant_id = tenant_id
         self._registry = (
             registry
             or (
@@ -190,7 +192,7 @@ class RegistryBackedClassifier(BasePredictor):
 
     def _active_manifest(self) -> MLModelManifest | None:
         try:
-            return self._registry.get_active(self._task.value)
+            return self._registry.get_active(self._task.value, tenant_id=self._tenant_id)
         except Exception as exc:
             logger.debug(
                 "Failed to resolve active model for %s: %s",
