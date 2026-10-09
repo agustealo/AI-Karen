@@ -66,7 +66,8 @@ class TrainingJobWorker:
                 }.get(status)
                 if previous is None or not self.ledger.transition(
                     job_id, tenant_id=tenant_id,
-                    from_status=previous, to_status=status, job=current,\n                    lease_token=lease_token,
+                    from_status=previous, to_status=status, job=current,
+                    lease_token=lease_token,
                 ):
                     raise RuntimeError("Training phase transition was rejected")
 
@@ -85,6 +86,9 @@ class TrainingJobWorker:
                     lambda: asyncio.run(
                         self.pipeline.run(
                             TrainingPipelineResult(job=job), on_state=on_state,
+                            authorize_publication=lambda: self.ledger.lease_valid(
+                                job_id, tenant_id=tenant_id, token=lease_token,
+                            ),
                         )
                     )
                 )
