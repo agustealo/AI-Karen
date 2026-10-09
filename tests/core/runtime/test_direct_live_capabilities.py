@@ -295,8 +295,8 @@ async def test_missing_live_capability_returns_actionable_continuation() -> None
     assert result.success is False
     assert result.degraded is True
     assert result.source == "capability_unavailable"
-    assert result.payload["next_action"] == "enable_or_authorize_capability"
-    assert "enable it" in result.text.lower()
+    assert result.payload["next_action"] == "inspect_authorized_execution_plan"
+    assert "not authorized" in result.text.lower()
     assert "check your phone" not in result.text.lower()
 
 
