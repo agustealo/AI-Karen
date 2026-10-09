@@ -1245,3 +1245,47 @@ def test_weather_question_is_not_misread_as_a_location_name() -> None:
     assert weather_query_has_explicit_location("How's the weather?") is False
     assert weather_query_has_explicit_location("What's the weather in Detroit?") is True
     assert weather_query_has_explicit_location("Detroit weather") is True
+
+
+def test_runtime_resumes_weather_location_from_immediate_transcript() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("NYC")
+    request.messages = [
+        {"role": "user", "content": "Whats the weather"},
+        {"role": "assistant", "content": "Which city or location should I check the weather for?"},
+        {"role": "user", "content": "NYC"},
+    ]
+    ChatRuntime._resolve_pending_weather_followup(request)
+    assert request.messages[-1]["content"] == "What's the weather in NYC?"
+    assert request.metadata["weather_followup_resolved"] is True
+    assert resolve_capability_decision(request.messages[-1]["content"]).intent == "search.weather"
+
+
+def test_runtime_does_not_hijack_unrelated_city_message() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("NYC")
+    request.messages = [
+        {"role": "user", "content": "Tell me about museums"},
+        {"role": "assistant", "content": "Which city or location should I check the weather for?"},
+        {"role": "user", "content": "NYC"},
+    ]
+    ChatRuntime._resolve_pending_weather_followup(request)
+    assert request.messages[-1]["content"] == "NYC"
+    assert not request.metadata.get("weather_followup_resolved")
+
+
+def test_runtime_does_not_resume_weather_from_stale_assistant_message() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("NYC")
+    request.messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {"role": "assistant", "content": "Which city or location should I check the weather for?"},
+        {"role": "user", "content": "Tell me a story"},
+        {"role": "assistant", "content": "Once upon a time."},
+        {"role": "user", "content": "NYC"},
+    ]
+    ChatRuntime._resolve_pending_weather_followup(request)
+    assert request.messages[-1]["content"] == "NYC"
