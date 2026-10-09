@@ -77,6 +77,9 @@ _LOCATION_PATTERNS = (
     ("residence_location", "residence", re.compile(
         r"(?i)\bi(?:'m| am)\s+based\s+in\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
+    ("work_location", "workplace", re.compile(
+        r"(?i)\bi\s+(?:work|am\s+working)\s+in\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
+    )),
     ("birthplace", "birthplace", re.compile(
         r"(?i)\b(?:i\s+(?:was\s+)?born\s+in|born\s+in)\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
