@@ -1411,8 +1411,7 @@ class ChatRuntime:
             for item in messages[:-2]
         ):
             return False
-        request.metadata["original_user_input"] = str(latest.get("content") or "")
-        latest["content"] = f"{original}\nAdditional {slot}: {answer}"
+        request.metadata["clarification_effective_query"] = f"{original}\nAdditional {slot}: {answer}"
         request.metadata["clarification_resolved"] = True
         request.metadata["clarification_slot"] = slot
         request.metadata["clarification_source"] = "authorized_conversation"

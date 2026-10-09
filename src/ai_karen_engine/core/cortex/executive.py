@@ -49,7 +49,7 @@ class CortexExecutionDecider:
         ctx = request.context
         reason_codes: List[str] = []
 
-        user_content = self._extract_user_content(request.messages)
+        user_content = str(meta.get("clarification_effective_query") or self._extract_user_content(request.messages))
         analysis = await self._analyze_request(user_content, ctx)
 
         explicit_graph = bool(meta.get("graph_required") or meta.get("force_graph"))

@@ -383,6 +383,9 @@ class DirectCapabilityExecutor:
 
     @staticmethod
     def _latest_user_text(request: ChatExecutionRequest) -> str:
+        effective = (request.metadata or {}).get("clarification_effective_query")
+        if isinstance(effective, str) and effective.strip():
+            return effective.strip()
         for message in reversed(request.messages):
             if str(message.get("role") or "").lower() == "user":
                 return str(message.get("content") or "").strip()
