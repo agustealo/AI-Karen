@@ -1238,3 +1238,10 @@ async def test_missing_weather_location_requests_governed_memory_lookup() -> Non
     assert decision.intent == "search.weather"
     assert decision.memory_recall_required is True
     assert decision.memory_scope == "user"
+
+def test_weather_question_is_not_misread_as_a_location_name() -> None:
+    from ai_karen_engine.core.cortex.routing_intents import weather_query_has_explicit_location
+    assert weather_query_has_explicit_location("What's the weather?") is False
+    assert weather_query_has_explicit_location("How's the weather?") is False
+    assert weather_query_has_explicit_location("What's the weather in Detroit?") is True
+    assert weather_query_has_explicit_location("Detroit weather") is True
