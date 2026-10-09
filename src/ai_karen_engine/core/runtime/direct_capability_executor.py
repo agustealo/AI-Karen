@@ -515,15 +515,15 @@ class DirectCapabilityExecutor:
         executor asks one targeted question before making an internet call.
         """
         explicit = re.search(
-            r"\\b(?:weather(?:\\s+like)?|forecast|temperature)\\s+(?:in|for|at)\\s+"
+            r"\b(?:weather(?:\s+like)?|forecast|temperature)\s+(?:in|for|at)\s+"
             r"(?P<place>[A-Za-z][A-Za-z0-9 ,.'-]{0,110})",
             query,
             flags=re.IGNORECASE,
         )
         if not explicit:
             explicit = re.search(
-                r"\\b(?:in|for)\\s+(?P<place>[A-Za-z][A-Za-z0-9 ,.'-]{0,110})"
-                r"\\s+(?:weather|forecast)\\b",
+                r"\b(?:in|for)\s+(?P<place>[A-Za-z][A-Za-z0-9 ,.'-]{0,110})"
+                r"\s+(?:weather|forecast)\b",
                 query,
                 flags=re.IGNORECASE,
             )
