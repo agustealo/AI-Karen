@@ -1153,6 +1153,50 @@ class ChatRuntime:
         }
         return meta
 
+    @staticmethod
+    def _resolve_explicit_memory_reference(
+        request: ChatExecutionRequest, current_text: str
+    ) -> str:
+        """Resolve a save-only reference from already-authorized user history.
+
+        This does not authorize storage. MemoryFormationEvaluator still
+        classifies, applies privacy policy, and owns admission.
+        """
+        from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+        from ai_karen_engine.core.memory.signals.semantic_classifier import (
+            classify_explicit_user_memory,
+        )
+
+        if not CortexExecutionDecider._explicit_memory_save_request(current_text):
+            return current_text
+        requested = current_text.casefold()
+        attribute_hints = {
+            "birthplace": ("birthplace", "place of birth", "born"),
+            "upbringing_location": ("grew up", "grow up", "upbringing"),
+            "residence_location": ("where i live", "residence", "living"),
+            "favorite_color": ("favorite color", "favourite colour"),
+            "preferred_name": ("my name", "preferred name"),
+        }
+        matched_attrs = {
+            attr for attr, phrases in attribute_hints.items()
+            if any(phrase in requested for phrase in phrases)
+        }
+        for message in reversed(request.messages[:-1]):
+            if str(message.get("role") or "").casefold() != "user":
+                continue
+            candidate = str(message.get("content") or "").strip()
+            if not candidate or CortexExecutionDecider._explicit_memory_save_request(candidate):
+                continue
+            facts = [
+                item for item in classify_explicit_user_memory(candidate)
+                if item.metadata.get("retention_scope") == "user_profile"
+                and item.metadata.get("explicit_user_statement") is True
+                and (not matched_attrs or item.metadata.get("attribute") in matched_attrs)
+            ]
+            if facts:
+                return " ".join(str(item.text) for item in facts)
+        return current_text
+
     async def _persist_memory(
         self,
         request: ChatExecutionRequest,
@@ -1171,6 +1215,7 @@ class ChatRuntime:
 
         ctx = request.context
         user_message = self._extract_user_message(request.messages)
+        user_message = self._resolve_explicit_memory_reference(request, user_message)
         if not user_message.strip():
             result = {
                 "status": "noop",
