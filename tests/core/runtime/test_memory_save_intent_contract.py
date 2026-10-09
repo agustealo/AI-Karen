@@ -1,5 +1,5 @@
 """CORTEX may request a governed memory write, never authorize or execute it."""
-from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+from ai_karen_engine.core.memory.signals.semantic_classifier import is_explicit_memory_save_request
 
 
 def test_explicit_memory_save_language_is_general_and_bounded():
@@ -12,7 +12,7 @@ def test_explicit_memory_save_language_is_general_and_bounded():
         "Save the preference in memory",
     )
     for text in yes:
-        assert CortexExecutionDecider._explicit_memory_save_request(text), text
+        assert is_explicit_memory_save_request(text), text
 
 
 def test_memory_save_intent_does_not_hijack_recall_or_unrelated_text():
@@ -24,7 +24,7 @@ def test_memory_save_intent_does_not_hijack_recall_or_unrelated_text():
         "They told me to remember that",
     )
     for text in no:
-        assert not CortexExecutionDecider._explicit_memory_save_request(text), text
+        assert not is_explicit_memory_save_request(text), text
 
 
 def test_explicit_reference_resolves_only_authorized_user_profile_facts():
