@@ -213,6 +213,11 @@ class MemoryFormationEvaluator:
 
         admitted: list[AdmittedMemorySignal] = []
         for signal in extraction.signals:
+            # Transcript/session observations are available through the governed
+            # conversation evidence resolver; never promote them into durable
+            # identity memory merely because their signal type is identity_fact.
+            if str(signal.metadata.get("retention_scope") or "").casefold() == "session":
+                continue
             privacy_metadata = self._privacy_classifier.extract_safe_metadata(signal.text)
             # Explicit first-person claims have deterministic confidence supplied by
             # the canonical semantic classifier. Preserve memory formation when
