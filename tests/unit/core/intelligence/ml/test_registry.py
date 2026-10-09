@@ -229,7 +229,7 @@ def test_governed_trained_model_cannot_promote_without_canonical_benchmark(tmp_p
     registry.register(candidate)
     from dataclasses import replace
     shadow = replace(candidate, status=ModelStatus.SHADOW.value)
-    with pytest.raises(ManifestValidationError, match="passing canonical benchmark"):
+    with pytest.raises(ManifestValidationError, match="trusted canonical"):
         registry.register(shadow)
     assert registry.get(candidate.model_id).status == ModelStatus.CANDIDATE.value
     assert not (tmp_path / f"{candidate.model_id}.json").read_text().count('"status": "shadow"')
@@ -253,5 +253,28 @@ def test_governed_trained_model_rejects_fabricated_pass_without_artifact(tmp_pat
     )
     registry.register(candidate)
     candidate.status = ModelStatus.SHADOW.value
-    with pytest.raises(ManifestValidationError, match="verified model artifacts"):
+    with pytest.raises(ManifestValidationError, match="trusted canonical"):
         registry.register(shadow)
+
+
+def test_manifest_mutation_after_registration_cannot_promote_cached_candidate(tmp_path):
+    from dataclasses import replace
+    registry = MLModelRegistry(registry_dir=str(tmp_path))
+    manifest = MLModelManifest(
+        model_id="tenant-example-affect-run",
+        purpose="affect",
+        architecture="trained",
+        artifact_path="no-artifact",
+        artifact_hash="unverified",
+        model_version="v1",
+        feature_version="v1",
+        status=ModelStatus.CANDIDATE.value,
+        metrics={"canonical_benchmark_status": "not_run"},
+    )
+    registry.register(manifest)
+    manifest.metrics["canonical_benchmark_status"] = "passed"
+    manifest.status = ModelStatus.ACTIVE.value
+    assert registry.get(manifest.model_id).status == ModelStatus.CANDIDATE.value
+    assert registry.get(manifest.model_id).metrics["canonical_benchmark_status"] == "not_run"
+    with pytest.raises(ManifestValidationError, match="trusted canonical"):
+        registry.register(replace(manifest, status=ModelStatus.SHADOW.value))
