@@ -116,13 +116,22 @@ class BenchmarkRunner:
 
         from ai_karen_engine.auth.rbac_middleware import (
             Permission, get_rbac_manager,
-        )\n        tenant = str(getattr(actor, "tenant_id", "") or "")\n        user = str(getattr(actor, "user_id", "") or "")\n        if (\n            not tenant or tenant == "default" or not user\n            or not get_rbac_manager().has_permission(actor, Permission.TRAINING_EXECUTE)\n        ):\n            raise PermissionError("Governed benchmark authorization is required")
+        )
+        tenant = str(getattr(actor, "tenant_id", "") or "")
+        user = str(getattr(actor, "user_id", "") or "")
+        if (
+            not tenant or tenant == "default" or not user
+            or not get_rbac_manager().has_permission(actor, Permission.TRAINING_EXECUTE)
+        ):\n            raise PermissionError("Governed benchmark authorization is required")
         manifest = registry.get(config.model_id)
         if (
             manifest is None
             or manifest.status != "candidate"
             or manifest.model_version != config.model_version
             or manifest.purpose != config.task.value
+            or not manifest.model_id.startswith(
+                "tenant-" + __import__("hashlib").sha256(tenant.encode("utf-8")).hexdigest()[:16] + "-"
+            )
             or not registry.validate_artifact(manifest)
         ):
             raise ValueError("Registered candidate identity or artifact is invalid")
