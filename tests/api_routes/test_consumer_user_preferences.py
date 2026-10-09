@@ -196,3 +196,50 @@ def test_user_preference_routes_do_not_depend_on_global_settings_manager() -> No
     assert "settings.json" not in text
     assert "update_user_preferences" in text
     assert "Depends(get_current_user)" in text
+
+
+@pytest.mark.asyncio
+async def test_general_settings_prefer_durable_user_model_selection(monkeypatch) -> None:
+    service = FakeAuthService(preferences={
+        "model_selection": {"provider": "ollama", "model": "local-selected"},
+        "behavior": {"memoryDepth": "long"},
+    })
+
+    async def fake_get_auth_service():
+        return service
+
+    monkeypatch.setattr(settings_routes, "get_auth_service", fake_get_auth_service)
+    global_defaults = SimpleNamespace(
+        preferred_provider="external-default",
+        preferred_model="shared-model",
+        show_degraded_banner=False,
+        degraded_status={},
+        ui={},
+        active_profile=None,
+        available_profiles=[],
+        profile_assignments={},
+    )
+    result = await settings_routes.get_settings(global_defaults, _principal())
+
+    assert result["preferred_provider"] == "ollama"
+    assert result["preferred_model"] == "local-selected"
+    assert result["preferences"]["behavior"]["memoryDepth"] == "long"
+
+
+@pytest.mark.asyncio
+async def test_general_settings_falls_back_to_runtime_defaults_without_user_selection(
+    monkeypatch,
+) -> None:
+    service = FakeAuthService(preferences={"model_selection": {"provider": None}})
+    async def fake_get_auth_service():
+        return service
+
+    monkeypatch.setattr(settings_routes, "get_auth_service", fake_get_auth_service)
+    global_defaults = SimpleNamespace(
+        preferred_provider="ollama", preferred_model="default-model",
+        show_degraded_banner=False, degraded_status={}, ui={},
+        active_profile=None, available_profiles=[], profile_assignments={},
+    )
+    result = await settings_routes.get_settings(global_defaults, _principal())
+    assert result["preferred_provider"] == "ollama"
+    assert result["preferred_model"] == "default-model"
