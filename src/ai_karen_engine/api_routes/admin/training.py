@@ -132,6 +132,16 @@ async def list_advanced_training_jobs(
     return {"jobs": ledger.list(tenant_id=tenant, limit=limit)}
 
 
+@router.get("/advanced/jobs-interrupted")
+async def list_interrupted_advanced_training_jobs(
+    current_user: Any = Depends(require_permission(Permission.TRAINING_READ)),
+    ledger: TrainingJobLedger = Depends(get_training_job_ledger),
+) -> dict[str, Any]:
+    """Operator diagnostic only. No implicit retries or unsafe job takeover."""
+    tenant, _ = _identity(current_user)
+    return {"jobs": ledger.interrupted(tenant_id=tenant)}
+
+
 @router.get("/advanced/jobs/{job_id}")
 async def get_advanced_training_job(
     job_id: str,
@@ -186,12 +196,3 @@ async def cancel_advanced_training_job(
         raise HTTPException(status_code=409, detail="Job cannot be cancelled or is not queued")
     return {"job_id": job_id, "status": "CANCELLED"}
 
-
-@router.get("/advanced/jobs-interrupted")
-async def list_interrupted_advanced_training_jobs(
-    current_user: Any = Depends(require_permission(Permission.TRAINING_READ)),
-    ledger: TrainingJobLedger = Depends(get_training_job_ledger),
-) -> dict[str, Any]:
-    """Operator diagnostic only. No implicit retries or unsafe job takeover."""
-    tenant, _ = _identity(current_user)
-    return {"jobs": ledger.interrupted(tenant_id=tenant)}
