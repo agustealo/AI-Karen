@@ -52,16 +52,16 @@ jobs:
           python - <<'PY'
           import asyncio
           from ai_karen_engine.persistence.postgres import get_postgres_engine
-          from ai_karen_engine.platform.memory.postgres.ledger_models import Base, MemoryEvent, ProfileFact
+          from ai_karen_engine.platform.memory.postgres.ledger_models import Base, MemoryEvent, MemoryAssertion, MemoryEpisode, ProfileFact, ProjectionStatus, ConsentScope, RetentionPolicy
 
           async def prepare():
               engine = get_postgres_engine().async_engine
               async with engine.begin() as conn:
                   await conn.run_sync(
                       Base.metadata.create_all,
-                      tables=[MemoryEvent.__table__, ProfileFact.__table__],
+                      tables=[model.__table__ for model in (MemoryEvent, MemoryAssertion, MemoryEpisode, ProfileFact, ProjectionStatus, ConsentScope, RetentionPolicy)],
                   )
           asyncio.run(prepare())
           PY
       - name: Prove live name recall, tenant isolation, and consent revocation
-        run: pytest tests/integration/test_live_profile_memory_roundtrip.py -q -rs
+        run: pytest tests/integration/test_live_profile_memory_roundtrip.py tests/integration/test_live_name_formation_path.py -q -rs
