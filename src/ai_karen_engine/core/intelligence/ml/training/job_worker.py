@@ -56,6 +56,8 @@ class TrainingJobWorker:
             if job.metadata.get("tenant_id") != tenant_id:
                 raise ValueError("Training job tenant identity mismatch")
             check = self.workbench.preflight(**config)
+            if config.get('engine') != job.base_model or config.get('task') != job.task or config.get('dataset_version') != job.dataset_version:
+                raise ValueError('Persisted training job and approved configuration differ')
             if not check["ready"]:
                 raise ValueError("Training preflight failed: " +
                                  ", ".join(item["code"] for item in check["checks"]))
