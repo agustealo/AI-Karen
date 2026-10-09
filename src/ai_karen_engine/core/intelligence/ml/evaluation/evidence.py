@@ -54,7 +54,9 @@ class EvaluationEvidenceStore:
             or result.model_version != manifest.model_version
             or result.task.value != manifest.purpose
             or not manifest.artifact_hash
+            or result.sample_count == 0
             or result.sample_count != len(result.outcomes)
+            or any(outcome.task != result.task for outcome in result.outcomes)
             or result.error_count != sum(bool(outcome.error) for outcome in result.outcomes)
             or result.error_count != 0
             or result.fallback_count != 0
