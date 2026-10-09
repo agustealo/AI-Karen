@@ -358,3 +358,25 @@ async def test_runner_rejects_fallback_with_matching_model_identity():
     assert result.error_count == 1
     assert result.outcomes[0].error == "fallback_is_not_candidate_evidence"
     assert not result.outcomes[0].correct
+
+
+@pytest.mark.asyncio
+async def test_run_and_record_requires_governed_authorization_before_execution():
+    class NeverRunPredictor:
+        def predict(self, features):
+            raise AssertionError("Unauthorized benchmark executed")
+
+    class NeverReadRegistry:
+        def get(self, model_id):
+            raise AssertionError("Unauthorized registry accessed")
+
+    runner = BenchmarkRunner()
+    with pytest.raises(PermissionError, match="authorization"):
+        await runner.run_and_record(
+            NeverRunPredictor(),
+            BenchmarkConfig(
+                model_id="candidate", model_version="v1",
+                task=PredictionTask.INTENT,
+            ),
+            registry=NeverReadRegistry(),
+        )
