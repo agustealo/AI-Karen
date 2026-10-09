@@ -1571,3 +1571,36 @@ async def test_runtime_does_not_infer_identity_from_denied_history() -> None:
 
     assert request.messages == [{"role": "user", "content": "Where am I from?"}]
     assert "conversation_history_source" not in request.metadata
+
+
+def test_typed_clarification_persists_literal_reply_not_execution_rewrite() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("four")
+    request.messages = [
+        {"role": "user", "content": "Find a restaurant booking"},
+        {
+            "role": "assistant",
+            "content": "How many people?",
+            "metadata": {"pending_clarification": {
+                "status": "awaiting_user",
+                "slot": "party_size",
+                "original_request": "Find a restaurant booking",
+            }},
+        },
+        {"role": "user", "content": "four"},
+    ]
+    assert ChatRuntime._resolve_typed_pending_clarification(request)
+    assert request.messages[-1]["content"] != "four"
+    assert ChatRuntime._extract_user_message_for_persistence(
+        ChatRuntime.__new__(ChatRuntime), request
+    ) == "four"
+
+
+def test_unresolved_request_preserves_normal_user_persistence() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("Where am I from?")
+    assert ChatRuntime._extract_user_message_for_persistence(
+        ChatRuntime.__new__(ChatRuntime), request
+    ) == "Where am I from?"
