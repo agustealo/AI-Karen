@@ -5,7 +5,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import joblib
 import numpy as np
 
 from ai_karen_engine.core.intelligence.features import IntelligenceFeatures
@@ -245,6 +244,8 @@ class RegistryBackedClassifier(BasePredictor):
 
         if not manifest.artifact_hash or not self._registry.validate_artifact(manifest):
             raise ValueError("active model artifact integrity is not verified")
+
+        import joblib  # Optional training dependency; required only to load an artifact.
 
         model = joblib.load(str(model_path))
         if len(getattr(model, "classes_", [])) != len(class_labels):
