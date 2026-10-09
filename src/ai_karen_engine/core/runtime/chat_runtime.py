@@ -1349,7 +1349,12 @@ class ChatRuntime:
         if not isinstance(payload, dict) or payload.get("status") != "needs_input":
             return None
         slot = str(payload.get("missing_requirement") or "").strip()
-        original = ChatRuntime._extract_user_message(request.messages).strip()
+        original = next(
+            (str(message.get("content") or "").strip()
+             for message in reversed(request.messages)
+             if str(message.get("role") or "").lower() == "user"),
+            "",
+        )
         if (
             not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", slot)
             or not original or len(original) > 4000
