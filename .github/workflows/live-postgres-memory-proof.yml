@@ -64,4 +64,6 @@ jobs:
           asyncio.run(prepare())
           PY
       - name: Prove live name recall, tenant isolation, and consent revocation
-        run: pytest tests/integration/test_live_profile_memory_roundtrip.py tests/integration/test_live_name_formation_path.py -q -rs
+        run: |
+          pytest tests/integration/test_live_profile_memory_roundtrip.py -q -rs
+          pytest tests/integration/test_live_name_formation_path.py -q -rs
