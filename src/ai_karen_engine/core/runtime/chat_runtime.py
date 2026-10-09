@@ -1176,13 +1176,12 @@ class ChatRuntime:
         }
         return meta
 
-    @staticmethod
-    def _is_explicit_save_turn(request: ChatExecutionRequest) -> bool:
+    def _is_explicit_save_turn(self, request: ChatExecutionRequest) -> bool:
         from ai_karen_engine.core.memory.signals.semantic_classifier import (
             is_explicit_memory_save_request,
         )
         return is_explicit_memory_save_request(
-            ChatRuntime._extract_user_message(request.messages)
+            self._extract_user_message(request.messages)
         )
 
     @staticmethod
