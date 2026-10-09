@@ -5,6 +5,7 @@ from typing import Any
 from ai_karen_engine.core.intelligence.contracts import (
     IntelligenceAnalysisResult,
     IntelligenceSignal,
+    SemanticInterpretation,
     SignalSourceType,
     SignalType,
     TaskAmbiguity,
@@ -17,6 +18,7 @@ __all__ = [
     "IntelligenceAnalysisResult",
     "IntelligenceRuntime",
     "IntelligenceSignal",
+    "SemanticInterpretation",
     "SignalSourceType",
     "SignalType",
     "TaskAmbiguity",
