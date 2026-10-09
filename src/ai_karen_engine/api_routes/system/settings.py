@@ -252,7 +252,8 @@ async def update_user_model_selection(
     auth_service, _ = await _load_authoritative_user(current_user)
     provider = selection.provider.strip()
     model = selection.model.strip()
-    if not provider or not model or not get_provider_config_manager().get_provider(provider):
+    provider_config = get_provider_config_manager().get_provider(provider) if provider else None
+    if not provider or not model or provider_config is None or not provider_config.enabled:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Provider or model selection is not configured",
