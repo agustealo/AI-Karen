@@ -155,12 +155,14 @@ class TrainingJobLedger:
             raise ValueError("A lease token is required for running job transitions")
         clause = " AND lease_token=? AND lease_expires_at>?" if lease_token else " AND lease_token IS NULL"
         extra = (lease_token, _now()) if lease_token else ()
+        clear_lease = to_status in {"FAILED", "SUCCEEDED", "CANCELLED", "QUEUED"}
+        lease_assignment = ",lease_token=NULL,lease_expires_at=NULL" if clear_lease else ""
         with self._connect() as db:
             if job is None:
                 # JSON state must match the indexed state after every transition.
                 result = db.execute(
-                    "UPDATE training_jobs SET state=?,body=json_set(body, '$.status', ?),updated_at=? "
-                    "WHERE job_id=? AND tenant_id=? AND state=?" + clause,
+                    "UPDATE training_jobs SET state=?,body=json_set(body, '$.status', ?),updated_at=?"
+                    + lease_assignment + " WHERE job_id=? AND tenant_id=? AND state=?" + clause,
                     (to_status, to_status, _now(), job_id, tenant_id, from_status, *extra),
                 )
             else:
@@ -169,8 +171,8 @@ class TrainingJobLedger:
                 body = asdict(job)
                 body["status"] = to_status
                 result = db.execute(
-                    "UPDATE training_jobs SET state=?,body=?,updated_at=? "
-                    "WHERE job_id=? AND tenant_id=? AND state=?" + clause,
+                    "UPDATE training_jobs SET state=?,body=?,updated_at=?"
+                    + lease_assignment + " WHERE job_id=? AND tenant_id=? AND state=?" + clause,
                     (to_status, json.dumps(body), _now(), job_id, tenant_id, from_status, *extra),
                 )
         return result.rowcount == 1
