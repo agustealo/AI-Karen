@@ -580,7 +580,7 @@ export const deriveDegradedPresentation = (
 ): DegradedPresentation => {
   const safeMetadata = (isRecord(metadata) ? metadata : {}) as ChatMetadata;
   const llm = (isRecord(safeMetadata?.llm) ? safeMetadata.llm : {}) as LlmMetadata;
-  const recovery = isRecord(safeMetadata?.recovery) ? safeMetadata.recovery : {};
+  const recovery: Record<string, unknown> = isRecord(safeMetadata?.recovery) ? safeMetadata.recovery : {};
 
   const failureCategory = toCleanString(safeMetadata?.failure_category || llm?.failure_category);
   const isSafetyBlocked = failureCategory === 'safety_blocked';
