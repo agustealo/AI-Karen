@@ -135,6 +135,13 @@ class TrainingJobLedger:
                                from_status="QUEUED", to_status="CANCELLED")
 
     def recover(self, *, tenant_id: str, job_id: str) -> bool:
-        # Explicit operator action; never automatically retry uncertain side effects.
-        return self.transition(job_id, tenant_id=tenant_id,
-                               from_status="FAILED", to_status="QUEUED")
+        """Explicit retry, only when no execution artifacts or side effects exist."""
+        record = self.get(job_id, tenant_id=tenant_id)
+        if record is None or record["status"] != "FAILED":
+            return False
+        job = record["job"]
+        if job.get("artifact_path") or job.get("artifact_hash"):
+            return False
+        return self.transition(
+            job_id, tenant_id=tenant_id, from_status="FAILED", to_status="QUEUED",
+        )
