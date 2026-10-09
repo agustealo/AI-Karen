@@ -13,7 +13,7 @@ def requested_profile_attribute(text: str) -> str | None:
     cues = (
         ("preferred_name", ("what's my name", "what is my name", "whats my name",
                             "hats my name", "hat's my name", "remember my name")),
-        ("origin_location", ("where am i from", "where i'm from", "where im from")),
+        ("origin_location", ("where am i from", "where i'm from", "where im from", "where did i say i'm from", "where did i say im from")),
         ("birthplace", ("where was i born", "my birthplace", "where was i born at")),
         ("residence_location", ("where do i live", "where i live", "where am i based")),
         ("work_location", ("where do i work", "where i work", "my workplace", "work location")),
