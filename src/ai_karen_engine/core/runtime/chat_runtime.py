@@ -140,7 +140,7 @@ class ChatRuntime:
         return get_workflow_runtime()
 
     async def execute(self, request: ChatExecutionRequest) -> ChatExecutionResult:
-        await self._prepare_pending_weather_followup(request)
+        await self._prepare_conversation_continuation(request)
         start = time.time()
         ctx = request.context
 
@@ -437,7 +437,7 @@ class ChatRuntime:
     async def execute_stream(
         self, request: ChatExecutionRequest
     ) -> AsyncIterator[ChatStreamChunk]:
-        await self._prepare_pending_weather_followup(request)
+        await self._prepare_conversation_continuation(request)
         ctx = request.context
         sequence = 0
         request_id = ctx.request_id or str(uuid.uuid4())
@@ -1293,8 +1293,8 @@ class ChatRuntime:
     # Routing
     # ------------------------------------------------------------------
 
-    async def _prepare_pending_weather_followup(self, request: ChatExecutionRequest) -> None:
-        """Use authorized conversation evidence before capability routing."""
+    async def _prepare_conversation_continuation(self, request: ChatExecutionRequest) -> None:
+        """Recover authorized conversational continuity before capability routing."""
         import re
         from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
 
@@ -1334,31 +1334,6 @@ class ChatRuntime:
                 current["content"] = candidate.messages[-1]["content"]
                 request.metadata.update(candidate.metadata)
             return
-
-        # Explicit location in the request takes priority. Durable semantic
-        # memory is resolved later by RuntimeEvidenceResolver when authorized.
-        if "location.current" not in resolve_capability_decision(text).missing_requirements:
-            return
-        if request.metadata.get("weather_location"):
-            return
-        # A recent, unambiguous first-person location declaration is useful
-        # within this authorized conversation. Do not infer third-party places.
-        pattern = re.compile(
-            r"\b(?:i(?:'m| am)|we(?:'re| are))\s+(?:currently\s+|staying\s+)?in\s+"
-            r"(?P<city>[A-Z][A-Za-z]+(?:[ -][A-Z][A-Za-z]+){0,3})\b",
-            re.IGNORECASE,
-        )
-        for message in reversed(transcript[:-1]):
-            if str(message.get("role", "")).lower() != "user":
-                continue
-            stated = str(message.get("content", ""))
-            match = pattern.search(stated)
-            if match:
-                city = match.group("city").strip()
-                if city.casefold() not in {"the", "a", "my", "our", "this"}:
-                    request.metadata["weather_location"] = city
-                    request.metadata["location_source"] = "conversation"
-                    break
 
     @staticmethod
     def _resolve_pending_weather_followup(request: ChatExecutionRequest) -> None:
