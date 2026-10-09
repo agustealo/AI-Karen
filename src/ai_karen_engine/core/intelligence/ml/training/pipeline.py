@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,7 +25,9 @@ from ai_karen_engine.core.intelligence.ml.training.contracts import (
 )
 from ai_karen_engine.core.intelligence.ml.training.sklearn_executor import (
     SklearnTrainingExecutor,
+    _hash_directory,
 )
+from ai_karen_engine.config.config_manager import get_ml_registry_dir
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +69,12 @@ class TrainingPipeline:
                 'macro_f1' not in artifact.metrics or
                 not artifact.artifact_hash):
                 raise ValueError('Missing held-out evaluation evidence or artifact integrity hash')
+            artifact_root = Path(artifact.artifact_path).resolve()
+            trusted_root = Path(get_ml_registry_dir()).resolve()
+            if not artifact_root.is_relative_to(trusted_root) or not artifact_root.is_dir():
+                raise ValueError('Training artifact is outside the canonical model registry')
+            if _hash_directory(artifact_root) != artifact.artifact_hash:
+                raise ValueError('Training artifact failed integrity verification')
             registered = self._register_artifact(artifact, job)
             if not registered:
                 raise ValueError('Training candidate registration rejected')
