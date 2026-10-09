@@ -54,3 +54,17 @@ def test_weather_question_activates_current_location_profile_recall():
     assert retriever._looks_like_profile_query("Will it rain tomorrow?")
     assert retriever._preferred_attribute("Will it rain tomorrow?") == "current_location"
     assert retriever._preferred_attribute("Where do I live?") == "residence_location"
+
+
+def test_workplace_city_is_distinct_from_residence_and_birthplace():
+    workplace = _location_facts("I work in Washington, DC.")
+    # Comma-delimited locations require a separate geographic normalizer;
+    # the classifier preserves the confidently supplied city token.
+    assert any(item.metadata["attribute"] == "work_location" and item.metadata["normalized_value"] == "Washington" for item in workplace)
+    born = _location_facts("I was born in Baltimore.")
+    assert any(item.metadata["attribute"] == "birthplace" and item.metadata["normalized_value"] == "Baltimore" for item in born)
+
+
+def test_employer_name_is_not_silently_geocoded_as_workplace():
+    facts = _location_facts("I work at Microsoft.")
+    assert facts == []
