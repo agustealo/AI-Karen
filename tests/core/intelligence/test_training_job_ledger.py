@@ -57,3 +57,23 @@ def test_tenant_scope_required(tmp_path):
     store = TrainingJobLedger(tmp_path / "jobs.sqlite3")
     with pytest.raises(ValueError, match="tenant"):
         store.submit(make_job(), tenant_id="default", user_id="operator")
+
+
+def test_state_and_persisted_body_are_consistent(tmp_path):
+    ledger = TrainingJobLedger(tmp_path / "jobs.sqlite3")
+    ledger.submit(make_job(), tenant_id="tenant-a", user_id="operator")
+    assert ledger.transition(
+        "training-1", tenant_id="tenant-a",
+        from_status="QUEUED", to_status="VALIDATING",
+    )
+    record = ledger.get("training-1", tenant_id="tenant-a")
+    assert record["status"] == record["job"]["status"] == "VALIDATING"
+    assert ledger.interrupted(tenant_id="tenant-a")[0]["job_id"] == "training-1"
+    assert ledger.interrupted(tenant_id="tenant-b") == []
+    assert ledger.transition(
+        "training-1", tenant_id="tenant-a",
+        from_status="VALIDATING", to_status="FAILED",
+    )
+    assert ledger.interrupted(tenant_id="tenant-a") == []
+    assert ledger.recover(tenant_id="tenant-a", job_id="training-1")
+    assert ledger.get("training-1", tenant_id="tenant-a")["job"]["status"] == "QUEUED"
