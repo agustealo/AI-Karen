@@ -253,7 +253,7 @@ class CortexExecutionDecider:
             topology = self._infer_topology_from_analysis(analysis)
             capabilities = self._infer_capabilities_from_analysis(analysis)
             memory_policy = self._infer_memory_policy_from_analysis(analysis)
-            if self._personal_recall_query(text):
+            if self._personal_recall_query(text) or capability_decision.intent == "search.weather":
                 memory_policy["recall_required"] = True
                 memory_policy["scope"] = "user"
                 memory_policy["top_k"] = max(15, memory_policy["top_k"])
@@ -370,7 +370,7 @@ class CortexExecutionDecider:
                     capability_decision.confidence
                 )
                 fallback["direct_capability"] = True
-            if self._personal_recall_query(text):
+            if self._personal_recall_query(text) or capability_decision.intent == "search.weather":
                 fallback["memory_recall_required"] = True
                 fallback["memory_scope"] = "user"
                 fallback["memory_top_k"] = 15
