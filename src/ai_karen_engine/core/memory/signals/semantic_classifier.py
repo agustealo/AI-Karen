@@ -98,6 +98,28 @@ def _normalize_save_text(text: str) -> str:
     return " ".join(str(text or "").casefold().replace("’", "'").split())
 
 
+_PERSONAL_RECALL_QUERY = re.compile(
+    r"^(?:(?:please|can you|could you)\s+)?"
+    r"(?:where\s+(?:am|was)\s+i\s+(?:from|born|currently|right now|based)|"
+    r"where\s+did\s+i\s+grow\s+up|"
+    r"where\s+do\s+i\s+(?:live|work)|"
+    r"(?:what\s+is|what's|whats|hats|hat's)\s+my\s+.+|"
+    r"what\s+(?:are|was|were)\s+my\s+.+|"
+    r"what\s+do\s+you\s+(?:remember|know)\s+about\s+me|"
+    r"do\s+you\s+remember\s+my\s+.+|"
+    r"what\s+did\s+i\s+tell\s+you\s+about\s+.+|"
+    r"i\s+already\s+told\s+you(?:\s+.+)?)"
+    r"[?.!]*$",
+    re.IGNORECASE,
+)
+
+
+def is_personal_memory_recall_query(text: str) -> bool:
+    """Recognize a bounded recall cue; authorization remains with policy."""
+    normalized = " ".join(str(text or "").strip().replace("’", "'").split())
+    return bool(_PERSONAL_RECALL_QUERY.fullmatch(normalized))
+
+
 def is_explicit_memory_save_request(text: str) -> bool:
     """Recognize bounded user-directed save intent, never authorize a write."""
     return bool(_EXPLICIT_MEMORY_SAVE.fullmatch(_normalize_save_text(text)))
@@ -461,4 +483,5 @@ __all__ = [
     "explicit_memory_save_target_terms",
     "is_explicit_memory_save_request",
     "memory_save_request_matches_signal",
+    "is_personal_memory_recall_query",
 ]
