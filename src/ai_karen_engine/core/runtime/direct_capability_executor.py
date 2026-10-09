@@ -81,18 +81,20 @@ class DirectCapabilityResult:
             or payload_metadata.get("provider")
             or ""
         ).strip()
-        actual_provider = (
-            reported_provider
-            if reported_provider and reported_provider != "none"
-            else self.source_id
-        )
+        # Search backends and tool/plugin identifiers are not chat model
+        # providers. Never misrepresent web_search as a replacement for Ollama.
         return {
-            "actual_provider": actual_provider,
+            "actual_provider": None,
             "capability_executor": self.source_id,
+            "capability_data_provider": (
+                reported_provider
+                if reported_provider and reported_provider != "none"
+                else None
+            ),
             "actual_model": None,
             "runtime_engine": "direct_capability",
             "response_source": self.source or "capability_unavailable",
-            "fallback_level": max(0, len(self.attempts) - 1),
+            "fallback_level": 0,
             "degraded_mode": self.degraded,
             "degradation_reason": self.error,
             "provider_attempts": list(self.attempts),
@@ -145,6 +147,25 @@ class DirectCapabilityExecutor:
         tool_name = str(route.get("handler") or "").strip()
         mode = str(route.get("plugin_mode") or "").strip() or None
         attempts: List[Dict[str, Any]] = []
+
+        if decision.intent == "search.weather":
+            resolved = self._weather_query_with_location(query, request.metadata)
+            if resolved is None:
+                return DirectCapabilityResult(
+                    handled=True,
+                    text="Which city or location should I check the weather for?",
+                    success=True,
+                    source="missing_context",
+                    source_id="weather_location",
+                    payload={
+                        "status": "needs_input",
+                        "required_capability": capability,
+                        "missing_requirement": "weather_location",
+                        "next_action": "ask_location",
+                    },
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                )
+            query = resolved
 
         async def run_tool() -> Optional[DirectCapabilityResult]:
             if not tool_name:
@@ -477,6 +498,48 @@ class DirectCapabilityExecutor:
             if error:
                 return error
         return default
+
+    @staticmethod
+    def _weather_query_with_location(
+        query: str, metadata: Dict[str, Any]
+    ) -> Optional[str]:
+        """Resolve weather location without silently inferring private geography.
+
+        Explicit place names in the user query take precedence over an
+        authorized selected/profile location. If neither exists, the DIRECT
+        executor asks one targeted question before making an internet call.
+        """
+        explicit = re.search(
+            r"\\b(?:weather(?:\\s+like)?|forecast|temperature)\\s+(?:in|for|at)\\s+"
+            r"(?P<place>[A-Za-z][A-Za-z0-9 ,.'-]{0,110})",
+            query,
+            flags=re.IGNORECASE,
+        )
+        if not explicit:
+            explicit = re.search(
+                r"\\b(?:in|for)\\s+(?P<place>[A-Za-z][A-Za-z0-9 ,.'-]{0,110})"
+                r"\\s+(?:weather|forecast)\\b",
+                query,
+                flags=re.IGNORECASE,
+            )
+        if explicit:
+            place = explicit.group("place").strip(" ?!. ,")
+            if place:
+                return query
+
+        context = dict(metadata or {})
+        location = context.get("weather_location")
+        if not isinstance(location, str) or not location.strip():
+            source = context.get("location_source")
+            if source in {"user_selected", "user_profile", "device_with_consent"}:
+                location = context.get("location") or context.get("city")
+            else:
+                location = None
+        if isinstance(location, str):
+            location = location.strip()
+            if location and len(location) <= 120:
+                return f"{query.rstrip(' ?!.')} in {location}?"
+        return None
 
     @staticmethod
     def _tool_parameters(query: str, mode: Optional[str]) -> Dict[str, Any]:
