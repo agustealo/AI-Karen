@@ -25,9 +25,9 @@ jobs:
     services:
       postgres:
         image: pgvector/pgvector:pg16
-        credentials:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        # GitHub validates service credentials before any job step starts.
+        # Empty secrets make the workflow invalid. Configure both Docker Hub
+        # secrets to enable authenticated pulls before restoring credentials.
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
