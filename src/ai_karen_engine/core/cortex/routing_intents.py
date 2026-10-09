@@ -3,6 +3,17 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
+    "system.resources": {
+        "triggers": ["ram left", "memory left", "free memory", "available ram", "vram left", "disk space"],
+        "patterns": [
+            r"^(?:how much|what(?:'s| is) the)\s+(?:system\s+|computer\s+)?(?:ram|memory|vram|disk space)\s+(?:(?:do i have|i (?:got|have))\s+)?(?:left|available|free)(?:\s+on\s+(?:my\s+)?(?:computer|system|machine|pc))?[?!.]*$",
+            r"^(?:how much|what(?:'s| is) the)\s+(?:free|available|remaining)\s+(?:system\s+)?(?:ram|memory|vram|disk space)(?:\s+do i have)?[?!.]*$",
+        ],
+        "required_capability": "system.resources",
+        "handler": "system_resources",
+        "requires_live_data": True,
+        "allow_llm_only": False,
+    },
     "time.current": {
         "triggers": ["what time", "current time", "time in", "timezone"],
         "patterns": [
