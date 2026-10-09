@@ -202,3 +202,31 @@ async def test_shared_predictor_does_not_reuse_another_request_tenant(tmp_path):
     assert registry.seen == [
         ("affect", "tenant-a"), ("affect", "tenant-b"), ("affect", None),
     ]
+
+
+async def test_candidate_predictor_requires_matching_tenant_and_candidate_status(tmp_path):
+    import hashlib
+    registry = MLModelRegistry(registry_dir=str(tmp_path / "registry"))
+    prefix = hashlib.sha256(b"tenant-a").hexdigest()[:16]
+    candidate = MLModelManifest(
+        model_id=f"tenant-{prefix}-affect-candidate",
+        purpose=PredictionTask.AFFECT.value,
+        architecture="trained",
+        artifact_path=str(tmp_path / "missing"),
+        artifact_hash="missing",
+        model_version="v1",
+        feature_version="v1",
+        status=ModelStatus.CANDIDATE.value,
+    )
+    registry.register(candidate)
+    allowed = RegistryBackedClassifier(
+        PredictionTask.AFFECT, registry=registry,
+        tenant_id="tenant-a", candidate_model_id=candidate.model_id,
+    )
+    denied = RegistryBackedClassifier(
+        PredictionTask.AFFECT, registry=registry,
+        tenant_id="tenant-b", candidate_model_id=candidate.model_id,
+    )
+    assert allowed._active_manifest() is not None
+    assert denied._active_manifest() is None
+    assert registry.get_active(PredictionTask.AFFECT.value, tenant_id="tenant-a") is None
