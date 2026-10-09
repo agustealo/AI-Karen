@@ -206,6 +206,10 @@ class CortexExecutionDecider:
             topology = ExecutionTopology.WORKFLOW
 
         policy_constraints = dict(meta.get("policy_constraints") or {})
+        policy_constraints.pop("personal_evidence_attribute", None)
+        semantic_attribute = str(analysis.get("requested_profile_attribute") or "").strip()
+        if analysis.get("memory_recall_required") and semantic_attribute:
+            policy_constraints["personal_evidence_attribute"] = semantic_attribute
         policy_constraints.update(
             {
                 "memory_write_requested": memory_write_requested,
@@ -355,6 +359,7 @@ class CortexExecutionDecider:
                 "reasoning_modes": reasoning_modes,
                 "reasoning_required": bool(reasoning_modes)
                 or topology.get("reasoning_depth") == "deep",
+                "requested_profile_attribute": getattr(getattr(analysis, "interpretation", None), "requested_profile_attribute", None),
                 "memory_recall_required": memory_policy.get("recall_required", False),
                 "memory_write_requested": memory_policy.get("write_requested", False),
                 "memory_write_denied": memory_policy.get("write_denied", False),
