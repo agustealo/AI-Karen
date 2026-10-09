@@ -92,8 +92,8 @@ class MLModelRegistry:
     def register(self, manifest: MLModelManifest) -> None:
         self._validate_status_transition(manifest)
         self._validate_uniqueness(manifest)
-        self._manifests[manifest.model_id] = manifest
         self._save_manifest(manifest)
+        self._manifests[manifest.model_id] = manifest
 
     def _validate_status_transition(self, manifest: MLModelManifest) -> None:
         existing = self._manifests.get(manifest.model_id)
@@ -113,7 +113,14 @@ class MLModelRegistry:
         for existing in self._manifests.values():
             if existing.model_id == manifest.model_id:
                 continue
-            if existing.purpose == manifest.purpose and existing.status == manifest.status:
+            same_scope = (
+                existing.model_id.startswith("tenant-") == manifest.model_id.startswith("tenant-")
+                and (
+                    not manifest.model_id.startswith("tenant-")
+                    or existing.model_id.split("-", 2)[:2] == manifest.model_id.split("-", 2)[:2]
+                )
+            )
+            if same_scope and existing.purpose == manifest.purpose and existing.status == manifest.status:
                 raise RegistryInvariantError(
                     f"Purpose '{manifest.purpose}' already has {manifest.status} model: {existing.model_id}"
                 )
@@ -121,9 +128,20 @@ class MLModelRegistry:
     def get(self, model_id: str) -> MLModelManifest | None:
         return self._manifests.get(model_id)
 
-    def get_active(self, purpose: str) -> MLModelManifest | None:
+    def get_active(self, purpose: str, *, tenant_id: str | None = None) -> MLModelManifest | None:
+        """Resolve a promoted model within an explicit tenant or the global scope."""
+        tenant_prefix = None
+        if tenant_id is not None:
+            if not tenant_id or tenant_id == "default":
+                raise ValueError("Explicit tenant identity is required")
+            tenant_key = hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:16]
+            tenant_prefix = f"tenant-{tenant_key}-"
         for manifest in self._manifests.values():
-            if manifest.purpose == purpose and manifest.status == ModelStatus.ACTIVE.value:
+            if manifest.purpose != purpose or manifest.status != ModelStatus.ACTIVE.value:
+                continue
+            if tenant_prefix is None and not manifest.model_id.startswith("tenant-"):
+                return manifest
+            if tenant_prefix is not None and manifest.model_id.startswith(tenant_prefix):
                 return manifest
         return None
 
