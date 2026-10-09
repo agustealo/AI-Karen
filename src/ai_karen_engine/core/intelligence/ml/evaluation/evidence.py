@@ -7,7 +7,6 @@ against a filesystem administrator with write access.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from pathlib import Path
 from uuid import uuid4
@@ -67,6 +66,13 @@ class EvaluationEvidenceStore:
             )
         ):
             raise ValueError("Benchmark result does not verify the exact candidate")
+        from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
+        registry = MLModelRegistry(registry_dir=str(self.database.parent))
+        registered = registry.get(manifest.model_id)
+        if (registered is None or registered.status != "candidate"
+                or registered.artifact_hash != manifest.artifact_hash
+                or not registry.validate_artifact(registered)):
+            raise ValueError("Candidate is unregistered or artifact integrity is invalid")
         decision, reasons = evaluate_promotion(result, active_result)
         receipt_id = uuid4().hex
         evidence = {
