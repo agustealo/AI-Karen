@@ -264,8 +264,7 @@ class ChatRuntime:
             elif self._is_explicit_save_turn(request):
                 text = await self._execute_memory_write_receipt(request, decision, plan, memory_recall_meta)
                 provider_meta = {"response_source": "memory_persistence", "actual_provider": None, "actual_model": None}
-            else:
-                direct_executor = get_direct_capability_executor()
+            direct_executor = get_direct_capability_executor()
             if grounded is None and not self._is_explicit_save_turn(request) and direct_executor.can_handle(decision):
                 resolved_location = RuntimeEvidenceResolver.authorized_semantic_value(
                     decision.cognitive_context,
