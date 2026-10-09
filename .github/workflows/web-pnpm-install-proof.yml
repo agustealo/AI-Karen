@@ -6,6 +6,8 @@ on:
     paths:
       - 'src/ui_launchers/Karen-AI-Theme/package.json'
       - 'src/ui_launchers/Karen-AI-Theme/next.config.ts'
+      - 'src/ui_launchers/Karen-AI-Theme/src/lib/chat-response.ts'
+      - 'src/ui_launchers/Karen-AI-Theme/tests/chat-response.test.ts'
       - 'src/ui_launchers/Karen-AI-Theme/package-lock.json'
       - 'src/ui_launchers/Karen-AI-Theme/pnpm-workspace.yaml'
       - '.github/workflows/web-pnpm-install-proof.yml'
@@ -39,5 +41,7 @@ jobs:
         run: |
           pnpm exec next --version
           pnpm exec tsc --version
+      - name: Verify real chat recovery presentation tests
+        run: pnpm exec vitest run tests/chat-response.test.ts
       - name: Build actual Next.js application with pnpm
         run: pnpm exec next build
