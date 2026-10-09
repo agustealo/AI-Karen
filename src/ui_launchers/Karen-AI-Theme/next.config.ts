@@ -1,5 +1,6 @@
 import path from 'path';
 import os from 'os';
+import fs from 'fs';
 import type {NextConfig} from 'next';
 
 const isDocker = process.env.KAREN_DOCKER === 'true' || 
@@ -110,7 +111,6 @@ const nextConfig: NextConfig = {
   },
 
   webpack: (config) => {
-    const fs = require('fs');
 
     // 1. Set up plugin repo alias for dynamic loading
     if (!config.resolve) config.resolve = {};
