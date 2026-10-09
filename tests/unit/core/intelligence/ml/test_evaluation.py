@@ -261,7 +261,7 @@ async def test_latency_metrics():
 async def test_runner_with_mock_predictor():
     class MockPredictor:
         async def predict(self, features):
-            return Prediction(task=PredictionTask.INTENT, label="information_seeking", confidence=0.9)
+            return Prediction(task=PredictionTask.INTENT, label="information_seeking", confidence=0.9, model_id="sync-model", model_version="v1")
 
     runner = BenchmarkRunner()
     config = BenchmarkConfig(
@@ -310,3 +310,27 @@ async def test_runner_sync_predictor():
     result = await runner.run(SyncPredictor(), config)
     assert result.sample_count == 1
     assert result.metrics["accuracy"].value == 1.0
+
+
+@pytest.mark.asyncio
+async def test_runner_rejects_model_identity_mismatch_as_benchmark_evidence():
+    class WrongModelPredictor:
+        async def predict(self, features):
+            return Prediction(
+                task=PredictionTask.INTENT,
+                label="information_seeking",
+                model_id="another-model",
+                model_version="v1",
+                confidence=0.99,
+            )
+
+    result = await BenchmarkRunner().run(
+        WrongModelPredictor(),
+        BenchmarkConfig(
+            model_id="candidate", model_version="v1",
+            task=PredictionTask.INTENT, case_ids=["intent-001"],
+        ),
+    )
+    assert result.error_count == 1
+    assert result.outcomes[0].error == "model_identity_mismatch"
+    assert result.outcomes[0].correct is False
