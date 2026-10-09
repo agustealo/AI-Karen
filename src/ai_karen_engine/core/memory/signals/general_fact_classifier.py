@@ -91,6 +91,17 @@ _LOCATION_PATTERNS = (
     ("birthplace", "birthplace", re.compile(
         r"(?i)\b(?:i\s+(?:was\s+)?born\s+in|born\s+in)\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
+    # Explicit first-person clauses frequently omit the repeated subject:
+    # "I am Jamaican, from Jamaica, grew up in NYC, living in Detroit".
+    ("origin_location", "origin", re.compile(
+        r"(?i)\bi(?:'m| am)\s+[A-Za-z][A-Za-z'-]{2,45}\s*,\s*from\s+(.+?)(?=[,.!?;]|$)"
+    )),
+    ("upbringing_location", "upbringing", re.compile(
+        r"(?i)\b(?:i\s+)?(?:grew|grow)\s+up\s+in\s+(.+?)(?=[,.!?;]|$)"
+    )),
+    ("residence_location", "residence", re.compile(
+        r"(?i)(?:\bi(?:'m| am)\s+living\s+in|,\s*living\s+in)\s+(.+?)(?=[,.!?;]|$)"
+    )),
     ("origin_location", "origin", re.compile(
         r"(?i)\bi(?:'m| am)\s+(?:originally\s+)?from\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
