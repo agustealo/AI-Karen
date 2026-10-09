@@ -61,6 +61,18 @@ _OPEN_LOOP_DONE = re.compile(
 )
 
 
+def is_explicit_memory_save_request(text: str) -> bool:
+    """Recognize bounded user-directed save intent, never authorize a write."""
+    normalized = " ".join(str(text or "").casefold().replace("’", "'").split())
+    return bool(re.search(
+        r"^(?:(?:please|can you|could you|i want you to)\s+)?"
+        r"(?:remember|save|store)\s+(?:this|that|my\b.+|the\b.+|"
+        r"what i (?:just )?(?:said|told you))"
+        r"(?:\s+(?:for later|long[- ]term|permanently|in (?:your )?memory))?[.!?]*$",
+        normalized,
+    ))
+
+
 def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
     """Return high-confidence typed candidates from explicit first-person claims."""
 
