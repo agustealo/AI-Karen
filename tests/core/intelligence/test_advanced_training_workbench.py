@@ -121,3 +121,16 @@ def test_advanced_preflight_requires_dataset_loader_fields(tmp_path):
     result = _preflight(AdvancedTrainingWorkbench(root))
     assert not result["ready"]
     assert "invalid_dataset_record" in {issue["code"] for issue in result["checks"]}
+
+
+def test_preflight_rejects_singleton_class_that_executor_cannot_stratify(tmp_path):
+    root = _dataset(tmp_path)
+    path = root / "adaptive_v1.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    for row in rows:
+        row["target"] = "common"
+    rows[0]["target"] = "singleton"
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    result = _preflight(AdvancedTrainingWorkbench(root))
+    assert result["ready"] is False
+    assert "rare_classes" in {check["code"] for check in result["checks"]}
