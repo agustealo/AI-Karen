@@ -256,8 +256,12 @@ class ChatRuntime:
                 )
 
         try:
-            direct_executor = get_direct_capability_executor()
-            if direct_executor.can_handle(decision):
+            if self._is_explicit_save_turn(request):
+                text = await self._execute_memory_write_receipt(request, decision, plan, memory_recall_meta)
+                provider_meta = {"response_source": "memory_persistence", "actual_provider": None, "actual_model": None}
+            else:
+                direct_executor = get_direct_capability_executor()
+            if not self._is_explicit_save_turn(request) and direct_executor.can_handle(decision):
                 resolved_location = RuntimeEvidenceResolver.authorized_semantic_value(
                     decision.cognitive_context,
                     tenant_id=ctx.tenant_id,
@@ -282,11 +286,11 @@ class ChatRuntime:
                 pending = self._pending_clarification_from_result(request, direct_result)
                 if pending:
                     provider_meta["pending_clarification"] = pending
-            elif decision.topology.value == "reasoning":
+            elif not self._is_explicit_save_turn(request) and decision.topology.value == "reasoning":
                 text, provider_meta = await self._run_reasoning(request, decision, plan, meter)
-            elif decision.is_graph_required:
+            elif not self._is_explicit_save_turn(request) and decision.is_graph_required:
                 text, provider_meta = await self._run_graph(request, decision, plan, meter)
-            else:
+            elif not self._is_explicit_save_turn(request):
                 text, provider_meta = await self._run_simple(request, decision, plan, meter)
         except Exception as exc:
             error_type = type(exc).__name__
@@ -378,7 +382,7 @@ class ChatRuntime:
             *list(provider_meta.get("execution_spans") or []),
         ]
 
-        if decision.memory_write_allowed:
+        if decision.memory_write_allowed and not self._is_explicit_save_turn(request):
             persistence_started = time.perf_counter()
             await self._persist_memory(request, text, memory_recall_meta, plan)
             provider_meta["execution_spans"].append(
@@ -596,46 +600,65 @@ class ChatRuntime:
         generation_error: Optional[Exception] = None
         recovered_error_type: Optional[str] = None
 
-        direct_executor = get_direct_capability_executor()
-        gen = (
-            self._run_direct_capability_stream(
-                request,
-                decision,
-                plan,
-                meter,
-                _meta=provider_meta,
+        if self._is_explicit_save_turn(request):
+            receipt_text = await self._execute_memory_write_receipt(
+                request, decision, plan, memory_recall_meta
             )
-            if direct_executor.can_handle(decision)
-            else (
-                self._run_reasoning_stream(
+            provider_meta.update({
+                "response_source": "memory_persistence",
+                "actual_provider": None,
+                "actual_model": None,
+            })
+
+            async def receipt_stream() -> AsyncIterator[ChatStreamChunk]:
+                yield ChatStreamChunk(
+                    type="content",
+                    content=receipt_text,
+                    correlation_id=ctx.correlation_id,
+                )
+
+            gen = receipt_stream()
+        else:
+            direct_executor = get_direct_capability_executor()
+            gen = (
+                self._run_direct_capability_stream(
                     request,
                     decision,
                     plan,
                     meter,
                     _meta=provider_meta,
                 )
-                if decision.topology.value == "reasoning"
+                if direct_executor.can_handle(decision)
                 else (
-                    self._run_graph_stream(
+                    self._run_reasoning_stream(
                         request,
                         decision,
                         plan,
                         meter,
                         _meta=provider_meta,
                     )
-                    if decision.is_graph_required
-                    else self._run_simple_stream(
-                        request,
-                        decision,
-                        plan,
-                        meter,
-                        memory_recall_meta,
-                        _meta=provider_meta,
+                    if decision.topology.value == "reasoning"
+                    else (
+                        self._run_graph_stream(
+                            request,
+                            decision,
+                            plan,
+                            meter,
+                            _meta=provider_meta,
+                        )
+                        if decision.is_graph_required
+                        else self._run_simple_stream(
+                            request,
+                            decision,
+                            plan,
+                            meter,
+                            memory_recall_meta,
+                            _meta=provider_meta,
+                        )
                     )
                 )
             )
-        )
-
+    
         try:
             async for chunk in gen:
                 if chunk.type == "content":
@@ -779,7 +802,7 @@ class ChatRuntime:
         ]
 
         memory_persistence_failed = False
-        if decision.memory_write_allowed and streamed_text:
+        if decision.memory_write_allowed and streamed_text and not self._is_explicit_save_turn(request):
             persistence_started = time.perf_counter()
             await self._persist_memory(
                 request,
@@ -1153,6 +1176,89 @@ class ChatRuntime:
         }
         return meta
 
+    def _is_explicit_save_turn(self, request: ChatExecutionRequest) -> bool:
+        from ai_karen_engine.core.memory.signals.semantic_classifier import (
+            is_explicit_memory_save_request,
+        )
+        return is_explicit_memory_save_request(
+            self._extract_user_message(request.messages)
+        )
+
+    @staticmethod
+    def _memory_write_receipt_text(
+        receipt: Dict[str, Any], memory_meta: Dict[str, Any]
+    ) -> str:
+        """Only the governed write receipt may establish durable success."""
+        persisted = int(receipt.get("persisted") or 0)
+        if persisted > 0 and memory_meta.get("memory_persistence_status") == "persisted":
+            return (
+                f"Saved {persisted} memory fact"
+                f"{'s' if persisted != 1 else ''} for future conversations."
+            )
+        reason = str(receipt.get("reason") or "")
+        if reason == "memory_write_not_authorized" or memory_meta.get("memory_persistence_status") == "denied_by_policy":
+            return "I couldn't save that information because memory writing was not authorized."
+        if receipt.get("status") in {"failed", "error"} or memory_meta.get("memory_persistence_status") == "failed":
+            return "I couldn't verify a successful long-term memory save because persistence failed."
+        return "I couldn't confirm any eligible personal facts were saved. Please state the fact you want me to remember."
+
+    async def _execute_memory_write_receipt(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+        memory_meta: Dict[str, Any],
+    ) -> str:
+        if not decision.memory_write_allowed:
+            receipt = {"status": "rejected", "reason": "memory_write_not_authorized", "persisted": 0}
+            memory_meta["memory_persistence_status"] = "denied_by_policy"
+        else:
+            receipt = await self._persist_memory(request, "", memory_meta, plan)
+        return self._memory_write_receipt_text(receipt, memory_meta)
+
+    @staticmethod
+    def _resolve_explicit_memory_reference(
+        request: ChatExecutionRequest, current_text: str
+    ) -> str:
+        """Resolve a save-only reference from already-authorized user history.
+
+        This does not authorize storage. MemoryFormationEvaluator still
+        classifies, applies privacy policy, and owns admission.
+        """
+        from ai_karen_engine.core.memory.signals.semantic_classifier import (
+            classify_explicit_user_memory,
+            explicit_memory_save_target_terms,
+            is_explicit_memory_save_request,
+            memory_save_request_matches_signal,
+        )
+
+        target_terms = explicit_memory_save_target_terms(current_text)
+        if target_terms is None:
+            return current_text
+
+        for message in reversed(request.messages[:-1]):
+            if str(message.get("role") or "").casefold() != "user":
+                continue
+            candidate = str(message.get("content") or "").strip()
+            if not candidate or is_explicit_memory_save_request(candidate):
+                continue
+
+            facts = [
+                item
+                for item in classify_explicit_user_memory(candidate)
+                if item.metadata.get("retention_scope") == "user_profile"
+                and item.metadata.get("explicit_user_statement") is True
+            ]
+            if target_terms:
+                facts = [
+                    item
+                    for item in facts
+                    if memory_save_request_matches_signal(current_text, item)
+                ]
+            if facts:
+                return " ".join(str(item.text) for item in facts)
+        return current_text
+
     async def _persist_memory(
         self,
         request: ChatExecutionRequest,
@@ -1171,6 +1277,7 @@ class ChatRuntime:
 
         ctx = request.context
         user_message = self._extract_user_message(request.messages)
+        user_message = self._resolve_explicit_memory_reference(request, user_message)
         if not user_message.strip():
             result = {
                 "status": "noop",

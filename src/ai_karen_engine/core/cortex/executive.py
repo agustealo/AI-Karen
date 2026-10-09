@@ -124,6 +124,10 @@ class CortexExecutionDecider:
             analysis.get("memory_write_requested", False)
             or meta.get("memory_write_requested", False)
         )
+        from ai_karen_engine.core.memory.signals.semantic_classifier import (
+            is_explicit_memory_save_request,
+        )
+        memory_write_requested = memory_write_requested or is_explicit_memory_save_request(user_content)
         if analysis.get("memory_write_denied", False):
             memory_write_requested = False
 
