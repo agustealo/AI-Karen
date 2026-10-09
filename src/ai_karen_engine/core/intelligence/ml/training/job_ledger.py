@@ -70,8 +70,10 @@ class TrainingJobLedger:
             ).fetchone()
         if row is None:
             return None
+        job_body = json.loads(row["body"])
+        job_body["status"] = row["state"]
         return {"job_id": row["job_id"], "status": row["state"],
-                "job": json.loads(row["body"]), "submitted_at": row["submitted_at"],
+                "job": job_body, "submitted_at": row["submitted_at"],
                 "updated_at": row["updated_at"]}
 
     def list(self, *, tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -98,20 +100,34 @@ class TrainingJobLedger:
             raise ValueError("Invalid training job state transition")
         with self._connect() as db:
             if job is None:
+                # JSON state must match the indexed state after every transition.
                 result = db.execute(
-                    "UPDATE training_jobs SET state=?,updated_at=? "
+                    "UPDATE training_jobs SET state=?,body=json_set(body, '$.status', ?),updated_at=? "
                     "WHERE job_id=? AND tenant_id=? AND state=?",
-                    (to_status, _now(), job_id, tenant_id, from_status),
+                    (to_status, to_status, _now(), job_id, tenant_id, from_status),
                 )
             else:
                 if job.job_id != job_id:
                     raise ValueError("Job identity mismatch")
+                body = asdict(job)
+                body["status"] = to_status
                 result = db.execute(
                     "UPDATE training_jobs SET state=?,body=?,updated_at=? "
                     "WHERE job_id=? AND tenant_id=? AND state=?",
-                    (to_status, json.dumps(asdict(job)), _now(), job_id, tenant_id, from_status),
+                    (to_status, json.dumps(body), _now(), job_id, tenant_id, from_status),
                 )
         return result.rowcount == 1
+
+    def interrupted(self, *, tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Read-only operator inventory; no uncertain work is automatically replayed."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT job_id,state,updated_at FROM training_jobs "
+                "WHERE tenant_id=? AND state IN ('VALIDATING','RUNNING','EVALUATING') "
+                "ORDER BY updated_at LIMIT ?",
+                (tenant_id, max(1, min(limit, 100))),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def cancel(self, job_id: str, *, tenant_id: str) -> bool:
         # Cancellation is safe only before execution begins.
