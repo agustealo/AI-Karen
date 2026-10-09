@@ -17,6 +17,7 @@ from typing import Any, Iterable
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from ai_karen_engine.api_routes.admin.training import router as admin_training_router
 from ai_karen_engine.api_routes.agents.runtime import router as agent_runtime_router
 from ai_karen_engine.api_routes.artifacts import router as artifacts_router
 from ai_karen_engine.api_routes.auth.auth import router as auth_router
@@ -107,6 +108,7 @@ class RouterSpec:
 
 
 CORE_ROUTERS: tuple[RouterSpec, ...] = (
+    RouterSpec(admin_training_router, "/api", ("admin-training",)),
     RouterSpec(auth_router, "/api", ("authentication",)),
     RouterSpec(events_router, "/api/events", ("events",)),
     RouterSpec(websocket_router, "/api/ws", ("websocket",)),
