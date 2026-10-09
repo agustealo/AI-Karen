@@ -405,3 +405,74 @@ async def test_benchmark_does_not_credit_wrong_task_or_version():
     assert result.error_count == 1
     assert result.outcomes[0].error == "model_identity_mismatch"
     assert result.outcomes[0].correct is False
+
+
+@pytest.mark.asyncio
+async def test_governed_benchmark_rejects_other_tenant_before_execution(monkeypatch):
+    from types import SimpleNamespace
+    from ai_karen_engine.auth import rbac_middleware
+
+    monkeypatch.setattr(
+        rbac_middleware,
+        "get_rbac_manager",
+        lambda: SimpleNamespace(has_permission=lambda actor, permission: True),
+    )
+
+    class Registry:
+        def get(self, model_id):
+            return SimpleNamespace(
+                model_id=model_id,
+                status="candidate",
+                model_version="v1",
+                purpose=PredictionTask.INTENT.value,
+            )
+
+        def validate_artifact(self, manifest):
+            raise AssertionError("Cross-tenant artifact was inspected")
+
+    class Predictor:
+        def predict(self, features):
+            raise AssertionError("Cross-tenant predictor was executed")
+
+    import hashlib
+    tenant_b_key = hashlib.sha256(b"tenant-b").hexdigest()[:16]
+    config = BenchmarkConfig(
+        model_id=f"tenant-{tenant_b_key}-intent-candidate",
+        model_version="v1",
+        task=PredictionTask.INTENT,
+    )
+    with pytest.raises(ValueError, match="candidate identity"):
+        await BenchmarkRunner().run_and_record(
+            Predictor(),
+            config,
+            registry=Registry(),
+            actor=SimpleNamespace(tenant_id="tenant-a", user_id="user-a"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_governed_benchmark_rejects_actor_without_permission(monkeypatch):
+    from types import SimpleNamespace
+    from ai_karen_engine.auth import rbac_middleware
+
+    monkeypatch.setattr(
+        rbac_middleware,
+        "get_rbac_manager",
+        lambda: SimpleNamespace(has_permission=lambda actor, permission: False),
+    )
+
+    class Registry:
+        def get(self, model_id):
+            raise AssertionError("Denied actor reached registry")
+
+    with pytest.raises(PermissionError, match="authorization"):
+        await BenchmarkRunner().run_and_record(
+            object(),
+            BenchmarkConfig(
+                model_id="candidate",
+                model_version="v1",
+                task=PredictionTask.INTENT,
+            ),
+            registry=Registry(),
+            actor=SimpleNamespace(tenant_id="tenant-a", user_id="user-a"),
+        )
