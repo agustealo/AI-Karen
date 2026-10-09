@@ -25,7 +25,7 @@ test.describe('Intelligent Search - Crawl4AI Integration', () => {
 
   test('enabling crawl includes options in API request', async ({ page }) => {
     // Enable API interception
-    let requestBody: any = null;
+    let requestBody: Record<string, unknown> | null = null;
     await page.route('**/api/plugins/execute', async route => {
       const request = route.request();
       requestBody = await request.postDataJSON();
@@ -77,12 +77,15 @@ test.describe('Intelligent Search - Crawl4AI Integration', () => {
     await page.getByTestId('intelligent-search-submit').click();
 
     // Verify request body includes crawl options
-    expect(requestBody).toBeDefined();
-    expect(requestBody.parameters.crawl).toBeDefined();
-    expect(requestBody.parameters.crawl.enabled).toBe(true);
-    expect(requestBody.parameters.crawl.maxPages).toBe(10);
-    expect(requestBody.parameters.crawl.maxDepth).toBe(2);
-    expect(requestBody.parameters.crawl.captureScreenshot).toBe(true);
+    const body = requestBody as Record<string, unknown> | null;
+    expect(body).not.toBeNull();
+    const parameters = (body ?? {}).parameters as Record<string, unknown> | undefined;
+    const crawl = parameters?.crawl as Record<string, unknown> | undefined;
+    expect(crawl).toBeDefined();
+    expect(crawl?.enabled).toBe(true);
+    expect(crawl?.maxPages).toBe(10);
+    expect(crawl?.maxDepth).toBe(2);
+    expect(crawl?.captureScreenshot).toBe(true);
   });
 
   test('successful crawl renders crawl diagnostics', async ({ page }) => {
