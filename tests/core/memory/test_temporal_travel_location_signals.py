@@ -68,3 +68,11 @@ def test_workplace_city_is_distinct_from_residence_and_birthplace():
 def test_employer_name_is_not_silently_geocoded_as_workplace():
     facts = _location_facts("I work at Microsoft.")
     assert facts == []
+
+
+def test_role_specific_profile_recall_targets():
+    retriever = PostgresProfileRecallRetriever
+    assert retriever._preferred_attribute("Where do I work?") == "work_location"
+    assert retriever._preferred_attribute("Where do I live?") == "residence_location"
+    assert retriever._preferred_attribute("Where was I born?") == "birthplace"
+    assert retriever._preferred_attribute("What's the weather?") == "current_location"
