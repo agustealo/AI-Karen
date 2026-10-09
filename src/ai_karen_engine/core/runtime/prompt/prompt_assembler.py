@@ -22,6 +22,20 @@ from ai_karen_engine.core.runtime.prompt.prompt_registry import PromptRegistry
 
 logger = logging.getLogger("kari.runtime.prompt.assembler")
 
+_EVIDENCE_FIRST_INSTRUCTION = (
+    "Answer questions using relevant facts explicitly stated in the current "
+    "user message and authorized conversation context before requesting new "
+    "information or external tools. Do not claim missing live data access when "
+    "the answer is already in the user's words. Distinguish nationality, "
+    "ancestry, birthplace, residence, and current physical location: a user "
+    "saying they are Jamaican establishes self-described Jamaican identity, "
+    "not a verified birthplace or current GPS position. Do not request "
+    "identification documents to answer an ordinary conversational question. "
+    "Ask a focused clarification only when the missing distinction materially "
+    "changes the answer. This instruction does not authorize a tool, memory "
+    "write, or disclosure."
+)
+
 _PERSONA_BOUNDARY_INSTRUCTION = (
     "Presentation-only persona overlay. Apply these preferences only to wording, "
     "tone, register, verbosity, warmth, language style, and formatting. Persona "
@@ -96,6 +110,11 @@ class PromptAssembler:
                 if item.get("id")
             ]
 
+        messages.append({
+            "role": "system",
+            "content": _EVIDENCE_FIRST_INSTRUCTION,
+            "source": "evidence_first_conversation_contract",
+        })
         if request.messages:
             messages.extend(request.messages)
 
