@@ -1395,6 +1395,11 @@ def test_typed_clarification_resumes_non_weather_request() -> None:
         "Find a restaurant booking\nAdditional party_size: four"
     )
     assert request.metadata["clarification_source"] == "authorized_conversation"
+    assert request.metadata["clarification_inputs"] == {
+        "original_request": "Find a restaurant booking",
+        "values": {"party_size": "four"},
+        "source": "authorized_conversation",
+    }
 
 
 def test_typed_clarification_requires_original_request_and_pending_state() -> None:
@@ -1418,6 +1423,7 @@ def test_typed_clarification_requires_original_request_and_pending_state() -> No
     ]
     assert not ChatRuntime._resolve_typed_pending_clarification(request)
     assert request.messages[-1]["content"] == "four"
+    assert "clarification_inputs" not in request.metadata
 
 
 def test_typed_clarification_does_not_replay_cancelled_request() -> None:
