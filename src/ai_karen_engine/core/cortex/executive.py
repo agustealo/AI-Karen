@@ -106,9 +106,19 @@ class CortexExecutionDecider:
             graph_required = True
             reason_codes.append("agent_delegation_required")
 
+        # CORTEX owns the requested recall decision; the runtime still
+        # authorizes any access through policy and tenant-scoped memory.
+        # A live weather request without a named place needs user context,
+        # regardless of whether Intelligence supplied a memory hint.
+        capability_route = resolve_capability_decision(user_content)
+        needs_location_recall = (
+            analysis.get("intent") == "search.weather"
+            and "location.current" in capability_route.missing_requirements
+        )
         memory_recall_required = bool(
             analysis.get("memory_recall_required", False)
             or meta.get("memory_recall_required", False)
+            or needs_location_recall
         )
         memory_write_requested = bool(
             analysis.get("memory_write_requested", False)
@@ -117,8 +127,10 @@ class CortexExecutionDecider:
         if analysis.get("memory_write_denied", False):
             memory_write_requested = False
 
-        memory_scope = str(
-            analysis.get("memory_scope", meta.get("memory_scope", "session"))
+        memory_scope = (
+            "user" if needs_location_recall else str(
+                analysis.get("memory_scope", meta.get("memory_scope", "session"))
+            )
         )
         memory_top_k = int(
             analysis.get("memory_top_k", meta.get("memory_top_k", 10))
