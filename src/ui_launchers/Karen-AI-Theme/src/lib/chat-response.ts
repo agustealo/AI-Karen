@@ -154,6 +154,9 @@ export const REMOVED_PROVIDER_WARNING =
   'This provider is no longer available as a built-in runtime. Configure a custom compatible endpoint if needed.';
 
 const BUILTIN_PROVIDER_ALIASES: Record<string, string> = {
+  ollama: OLLAMA_PROVIDER,
+  'ollama-local': OLLAMA_PROVIDER,
+  ollama_local: OLLAMA_PROVIDER,
   transformers: BUILTIN_TRANSFORMERS_PROVIDER,
   'builtin-transformers': BUILTIN_TRANSFORMERS_PROVIDER,
   builtin_transformers: BUILTIN_TRANSFORMERS_PROVIDER,
@@ -577,6 +580,7 @@ export const deriveDegradedPresentation = (
 ): DegradedPresentation => {
   const safeMetadata = (isRecord(metadata) ? metadata : {}) as ChatMetadata;
   const llm = (isRecord(safeMetadata?.llm) ? safeMetadata.llm : {}) as LlmMetadata;
+  const recovery: Record<string, unknown> = isRecord(safeMetadata?.recovery) ? safeMetadata.recovery : {};
 
   const failureCategory = toCleanString(safeMetadata?.failure_category || llm?.failure_category);
   const isSafetyBlocked = failureCategory === 'safety_blocked';
@@ -603,12 +607,14 @@ export const deriveDegradedPresentation = (
     safeMetadata?.actual_model || llm?.actual_model || llm?.model_id || llm?.model_name || actualModel,
   );
 
-  const providerChanged = Boolean(
-    normalizedRequestedProvider &&
-      normalizedActualProvider &&
-      normalizedRequestedProvider !== normalizedActualProvider &&
-      normalizedRequestedProvider !== 'auto',
-  );
+  const providerChanged = recovery.provider_switched === false
+    ? false
+    : Boolean(
+        normalizedRequestedProvider &&
+        normalizedActualProvider &&
+        normalizedRequestedProvider !== normalizedActualProvider &&
+        normalizedRequestedProvider !== 'auto',
+      );
 
   const modelChanged = Boolean(
     normalizedRequestedModel &&
@@ -635,11 +641,10 @@ export const deriveDegradedPresentation = (
     Boolean(requestedProvider) && reasonLooksUnavailable(failureReason);
 
   const providerOrModelChanged = providerChanged || modelChanged;
-  const fallbackTransitionText =
-    providerOrModelChanged &&
-    requestedProvider &&
-    (actualProviderLabel || actualProvider)
-      ? `${requestedProvider} failed, switched to ${actualProviderLabel || actualProvider}${actualModel && actualModel !== 'none' && actualModel !== 'auto' ? ` (${actualModel})` : ''}.`
+  const fallbackTransitionText = providerChanged && requestedProvider && (actualProviderLabel || actualProvider)
+    ? `${requestedProvider} failed, switched to ${actualProviderLabel || actualProvider}${actualModel && actualModel !== 'none' && actualModel !== 'auto' ? ` (${actualModel})` : ''}.`
+    : modelChanged && requestedModel
+      ? `Requested model ${requestedModel} was not used; response came from ${actualModel || 'a different model'}.`
       : '';
 
   const degradedStatusLabel = isSafetyBlocked
