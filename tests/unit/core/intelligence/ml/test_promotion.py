@@ -94,3 +94,21 @@ def test_promotion_eligible_no_active_sufficient_samples():
     candidate = _make_result("candidate", f1=0.85, fallback=0.1, latency_p95=200.0, ece=0.02, errors=0, samples=100)
     decision, reasons = evaluate_promotion(candidate)
     assert decision == PromotionDecision.PROMOTION_ELIGIBLE
+
+
+@pytest.mark.parametrize(
+    "latency,ece,errors,expected",
+    [
+        (600.0, 0.02, 0, "latency"),
+        (200.0, 0.10, 0, "ECE"),
+        (200.0, 0.02, 1, "errors"),
+    ],
+)
+def test_first_model_still_requires_safety_gates(latency, ece, errors, expected):
+    candidate = _make_result(
+        "candidate", f1=0.85, fallback=0.1,
+        latency_p95=latency, ece=ece, errors=errors,
+    )
+    decision, reasons = evaluate_promotion(candidate)
+    assert decision == PromotionDecision.PROMOTION_BLOCKED
+    assert any(expected.lower() in reason.lower() for reason in reasons)
