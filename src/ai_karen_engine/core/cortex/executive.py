@@ -115,11 +115,22 @@ class CortexExecutionDecider:
             analysis.get("intent") == "search.weather"
             and "location.current" in capability_route.missing_requirements
         )
+        from ai_karen_engine.core.memory.signals.semantic_classifier import (
+            is_personal_memory_recall_query,
+        )
+        personal_recall_query = is_personal_memory_recall_query(user_content)
         memory_recall_required = bool(
             analysis.get("memory_recall_required", False)
             or meta.get("memory_recall_required", False)
             or needs_location_recall
+            or personal_recall_query
         )
+        if personal_recall_query:
+            reason_codes.append("explicit_personal_memory_recall")
+            if str(analysis.get("intent") or "unknown") in {"unknown", "general_assist", ""}:
+                analysis["intent"] = "memory.recall"
+                # A deterministic recall cue is not a calibrated model confidence.
+                analysis["intent_confidence"] = 0.0
         memory_write_requested = bool(
             analysis.get("memory_write_requested", False)
             or meta.get("memory_write_requested", False)
@@ -132,7 +143,7 @@ class CortexExecutionDecider:
             memory_write_requested = False
 
         memory_scope = (
-            "user" if needs_location_recall else str(
+            "user" if (needs_location_recall or personal_recall_query) else str(
                 analysis.get("memory_scope", meta.get("memory_scope", "session"))
             )
         )
@@ -394,19 +405,12 @@ class CortexExecutionDecider:
 
     @staticmethod
     def _personal_recall_query(text: str) -> bool:
-        normalized = " ".join(str(text or "").casefold().replace("’", "'").split())
-        cues = (
-            "where am i from", "where im from", "where i'm from",
-            "where was i born", "where do i live", "where am i based",
-            "where am i currently", "where am i right now",
-            "what is my birthplace", "what's my birthplace",
-            "what is my hometown", "what's my hometown",
-            "what is my name", "what's my name", "whats my name",
-            "hats my name", "hat's my name",
-            "what do you remember about me", "what do you know about me",
-            "what did i tell you about", "i already told you",
+        """Delegate recognition to Intelligence's canonical memory signals."""
+        from ai_karen_engine.core.memory.signals.semantic_classifier import (
+            is_personal_memory_recall_query,
         )
-        return any(cue in normalized for cue in cues)
+
+        return is_personal_memory_recall_query(text)
 
     @staticmethod
     def _apply_direct_capability_route(
