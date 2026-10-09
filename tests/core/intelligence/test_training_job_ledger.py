@@ -77,3 +77,19 @@ def test_state_and_persisted_body_are_consistent(tmp_path):
     assert ledger.interrupted(tenant_id="tenant-a") == []
     assert ledger.recover(tenant_id="tenant-a", job_id="training-1")
     assert ledger.get("training-1", tenant_id="tenant-a")["job"]["status"] == "QUEUED"
+
+
+def test_claim_is_exclusive_across_independent_connections(tmp_path):
+    db = tmp_path / "jobs.sqlite3"
+    one, two = TrainingJobLedger(db), TrainingJobLedger(db)
+    one.submit(make_job(), tenant_id="tenant-a", user_id="operator")
+    assert one.transition(
+        "training-1", tenant_id="tenant-a",
+        from_status="QUEUED", to_status="VALIDATING",
+    )
+    assert not two.transition(
+        "training-1", tenant_id="tenant-a",
+        from_status="QUEUED", to_status="VALIDATING",
+    )
+    record = two.get("training-1", tenant_id="tenant-a")
+    assert record["status"] == record["job"]["status"] == "VALIDATING"
