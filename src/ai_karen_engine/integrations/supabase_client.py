@@ -56,8 +56,16 @@ class SupabasePlatformClient:
         url: Optional[str] = None,
         key: Optional[str] = None,
     ) -> bool:
-        self._url = url or os.getenv("SUPABASE_URL")
-        self._key = key or os.getenv("SUPABASE_ANON_KEY")
+        # New API-key contract has precedence. Legacy keys remain a compatibility
+        # path for existing installations until their deployment env is migrated.
+        self._url = url or os.getenv("SUPABASE_PROJECT_URL") or os.getenv("SUPABASE_URL")
+        self._key = (
+            key
+            or os.getenv("SUPABASE_SECRET_KEY")
+            or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            or os.getenv("SUPABASE_PUBLISHABLE_KEY")
+            or os.getenv("SUPABASE_ANON_KEY")
+        )
 
         if not self._url or not self._key:
             logger.info(
