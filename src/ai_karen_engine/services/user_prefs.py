@@ -116,8 +116,8 @@ def get_user_prefs() -> UserPrefs:
     # Determine routing profile overrides (if any)
     active_profile_id, assignments = _resolve_profile_preferences()
     preferred_provider, preferred_model = _choose_provider_and_model(
-        default_provider=config.llm.provider,
-        default_model=config.llm.model,
+        default_provider=config.llm.default_provider,
+        default_model=config.llm.default_model,
         profile_assignments=assignments,
     )
 
