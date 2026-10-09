@@ -245,3 +245,22 @@ async def test_chat_runtime_consumes_typed_evidence_without_retrieving_again() -
     assert recall[0]["content"] == "User prefers local-first execution."
     assert recall[0]["relevance"] == pytest.approx(0.91)
     assert recall[0]["confidence"] == pytest.approx(0.87)
+
+
+@pytest.mark.asyncio
+async def test_semantic_role_lookup_uses_governed_requirement_not_raw_weather_query() -> None:
+    request = _request()
+    request.messages[-1]["content"] = "What's the weather?"
+    cognitive_context = _authorized_context(request)
+    cognitive_context.requirements.requirements[0].metadata.update(
+        {"semantic_role": "location.current", "retrieval_query": "Where am I currently?"}
+    )
+    memory_manager = RecordingMemoryManager()
+    resolver = RuntimeEvidenceResolver(memory_manager=memory_manager)
+
+    await resolver.resolve(request, cognitive_context)
+
+    assert len(memory_manager.calls) == 1
+    assert memory_manager.calls[0]["query"] == "Where am I currently?"
+    assert memory_manager.calls[0]["user_id"] == request.context.user_id
+    assert memory_manager.calls[0]["tenant_id"] == request.context.tenant_id

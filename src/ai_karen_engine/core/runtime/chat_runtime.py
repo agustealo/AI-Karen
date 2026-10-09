@@ -38,6 +38,7 @@ from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
     get_conversation_runtime_gateway,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.evidence_resolver import RuntimeEvidenceResolver
 from ai_karen_engine.core.runtime.direct_capability_executor import (
     get_direct_capability_executor,
 )
@@ -254,11 +255,24 @@ class ChatRuntime:
         try:
             direct_executor = get_direct_capability_executor()
             if direct_executor.can_handle(decision):
+                resolved_location = RuntimeEvidenceResolver.authorized_semantic_value(
+                    decision.cognitive_context,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    attribute="current_location",
+                ) if decision.intent == "search.weather" else None
                 direct_result = await direct_executor.execute(
                     request=request,
                     decision=decision,
                     plan=plan,
                     meter=meter,
+                    resolved_context=(
+                        {
+                            "weather_location": resolved_location,
+                            "location_source": "user_profile",
+                        }
+                        if resolved_location else None
+                    ),
                 )
                 text = direct_result.text
                 provider_meta = direct_result.normalized_metadata()

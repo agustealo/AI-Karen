@@ -38,6 +38,11 @@ def build_context_requirements(
                 classes=list(preliminary.memory_classes),
                 max_items=max(0, int(preliminary.memory_top_k)),
                 reason_codes=["cortex_memory_recall_requested"],
+                metadata=(
+                    {"semantic_role": "location.current", "retrieval_query": "Where am I currently?"}
+                    if preliminary.intent == "search.weather"
+                    else {}
+                ),
             )
         )
         proactive_settings = get_proactive_continuity_settings()

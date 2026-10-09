@@ -90,6 +90,60 @@ class RuntimeEvidenceResolver:
                 )
         return cognitive_context
 
+    @staticmethod
+    def authorized_semantic_value(
+        cognitive_context: CognitiveContext | None,
+        *,
+        tenant_id: str,
+        user_id: str,
+        attribute: str,
+    ) -> str | None:
+        """Read one structured profile attribute from already-authorized evidence.
+
+        This is not a second recall or a memory permission decision. The
+        evidence came through RuntimePolicy and NeuroRecall; fail closed on
+        scope mismatches, denied or unresolved sources, and contradictions.
+        """
+        if (
+            cognitive_context is None
+            or EvidenceSource.MEMORY.value not in cognitive_context.authorized_sources
+            or EvidenceSource.MEMORY.value in cognitive_context.denied_sources
+            or EvidenceSource.MEMORY.value in cognitive_context.unresolved_sources
+            or cognitive_context.tenant_id != tenant_id
+            or cognitive_context.user_id != user_id
+            or not attribute
+        ):
+            return None
+        prefix = f"{attribute}: "
+        for item in cognitive_context.evidence:
+            if (
+                item.source is not EvidenceSource.MEMORY
+                or item.scope is None
+                or item.scope.tenant_id != tenant_id
+                or item.scope.user_id != user_id
+                or item.contradiction.status
+                in {
+                    EvidenceContradictionStatus.CONFIRMED,
+                    EvidenceContradictionStatus.POSSIBLE,
+                }
+                or not item.content.startswith(prefix)
+            ):
+                continue
+            now = datetime.now(timezone.utc)
+            for expiry in (item.temporal.expires_at, item.temporal.effective_until):
+                if expiry is not None:
+                    scoped_expiry = (
+                        expiry.replace(tzinfo=timezone.utc)
+                        if expiry.tzinfo is None else expiry
+                    )
+                    if scoped_expiry <= now:
+                        break
+            else:
+                value = item.content[len(prefix):].strip()
+                if value and len(value) <= 120 and "\n" not in value:
+                    return value
+        return None
+
     async def _resolve_memory(
         self,
         request: ChatExecutionRequest,
@@ -111,7 +165,10 @@ class RuntimeEvidenceResolver:
             result = await memory_manager.recall_context(
                 user_id=ctx.user_id,
                 tenant_id=ctx.tenant_id,
-                query=self._latest_user_message(request),
+                query=(
+                    str(requirement.metadata.get("retrieval_query") or "").strip()
+                    or self._latest_user_message(request)
+                ),
                 top_k=max(0, int(requirement.max_items or 0)),
                 tiers=tuple(requirement.classes),
                 session_id=ctx.session_id,
@@ -387,6 +444,7 @@ class RuntimeEvidenceResolver:
         item_metadata = dict(item.get("metadata") or {})
         evidence_id = str(item.get("id") or item_metadata.get("id") or "memory")
         timestamp = cls._coerce_datetime(item.get("timestamp"))
+        expires_at = cls._coerce_datetime(item.get("expires_at"))
         contradiction = cls._contradiction_from_metadata(item_metadata)
 
         return ContextEvidence(
@@ -408,6 +466,7 @@ class RuntimeEvidenceResolver:
             temporal=EvidenceTemporalContext(
                 observed_at=timestamp,
                 as_of=retrieved_at,
+                expires_at=expires_at,
             ),
             contradiction=contradiction,
             scope=EvidenceScope(
@@ -534,9 +593,18 @@ class RuntimeEvidenceResolver:
             return None
         if isinstance(value, datetime):
             return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            try:
+                parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
         try:
             return datetime.fromtimestamp(float(value), tz=timezone.utc)
-        except (TypeError, ValueError, OSError):
+        except (TypeError, ValueError, OSError, OverflowError):
             return None
 
     @staticmethod

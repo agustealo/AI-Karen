@@ -295,8 +295,8 @@ async def test_missing_live_capability_returns_actionable_continuation() -> None
     assert result.success is False
     assert result.degraded is True
     assert result.source == "capability_unavailable"
-    assert result.payload["next_action"] == "enable_or_authorize_capability"
-    assert "enable it" in result.text.lower()
+    assert result.payload["next_action"] == "inspect_authorized_execution_plan"
+    assert "not authorized" in result.text.lower()
     assert "check your phone" not in result.text.lower()
 
 
@@ -604,6 +604,10 @@ def test_web_search_registry_invalid_priority_does_not_disable_search() -> None:
         settings={
             "search": {
                 "duckduckgo": {"enabled": True, "priority": "high"},
+                "searxng": {"enabled": False},
+                "brave_search_free": {"enabled": False},
+                "mojeek": {"enabled": False},
+                "startpage": {"enabled": False},
                 "wikipedia": {"enabled": True, "priority": 20},
             }
         }
@@ -822,7 +826,8 @@ def test_direct_capability_metadata_reports_search_provider_not_wrapper() -> Non
 
     metadata = result.normalized_metadata()
 
-    assert metadata["actual_provider"] == "multi_search"
+    assert metadata["actual_provider"] is None
+    assert metadata["capability_data_provider"] == "multi_search"
     assert metadata["capability_executor"] == "web_search"
     assert metadata["structured_content"]["provider"] == "multi_search"
     assert metadata["structured_content"]["search_providers"] == [
@@ -1152,3 +1157,91 @@ def test_inverted_tell_me_clock_and_standalone_private_updates() -> None:
                   "Latest update on yours", "Latest update on hers",
                   "Latest update on theirs"):
         assert resolve_capability_decision(query).intent == "general.chat"
+
+
+@pytest.mark.asyncio
+async def test_weather_uses_governed_profile_location_without_a_parallel_memory_read() -> None:
+    executor = DirectCapabilityExecutor()
+    request = _request("What's the weather?")
+    decision = await _weather_decision()
+    plan = _plan(tools=["web_search"], capabilities=["web.search"])
+    meter = ExecutionBudgetMeter(plan.budget)
+    meter.start()
+    tool_service = SimpleNamespace(
+        execute_tool=AsyncMock(
+            return_value=SimpleNamespace(
+                success=True,
+                result={
+                    "status": "ok",
+                    "results": [{"snippet": "Sourced forecast for DC."}],
+                },
+                error=None,
+            )
+        )
+    )
+    with patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.get_tool_service",
+        return_value=tool_service,
+    ):
+        result = await executor.execute(
+            request=request, decision=decision, plan=plan, meter=meter,
+            resolved_context={
+                "weather_location": "Washington, DC",
+                "location_source": "user_profile",
+            },
+        )
+    assert result.success
+    tool_input = tool_service.execute_tool.await_args.args[0]
+    assert "Washington, DC" in tool_input.parameters["query"]
+    assert tool_input.user_context["authorized_plan"] is plan
+
+
+@pytest.mark.asyncio
+async def test_weather_without_authorized_location_asks_instead_of_searching() -> None:
+    executor = DirectCapabilityExecutor()
+    request = _request("What's the weather?")
+    decision = await _weather_decision()
+    plan = _plan(tools=["web_search"], capabilities=["web.search"])
+    meter = ExecutionBudgetMeter(plan.budget)
+    meter.start()
+    tool_service = SimpleNamespace(execute_tool=AsyncMock())
+    with patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.get_tool_service",
+        return_value=tool_service,
+    ):
+        result = await executor.execute(
+            request=request, decision=decision, plan=plan, meter=meter,
+        )
+    assert result.success
+    assert "location" in result.text.lower() or "city" in result.text.lower()
+    tool_service.execute_tool.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_explicit_weather_location_does_not_trigger_private_profile_recall() -> None:
+    decider = CortexExecutionDecider(force_graph=False)
+    decider._intelligence = SimpleNamespace(
+        analyze=AsyncMock(return_value=_analysis())
+    )
+    decision = await decider.decide(_request("What's the weather in Detroit?"))
+    assert decision.intent == "search.weather"
+    assert decision.memory_recall_required is False
+
+
+@pytest.mark.asyncio
+async def test_missing_weather_location_requests_governed_memory_lookup() -> None:
+    decider = CortexExecutionDecider(force_graph=False)
+    decider._intelligence = SimpleNamespace(
+        analyze=AsyncMock(return_value=_analysis())
+    )
+    decision = await decider.decide(_request("What's the weather?"))
+    assert decision.intent == "search.weather"
+    assert decision.memory_recall_required is True
+    assert decision.memory_scope == "user"
+
+def test_weather_question_is_not_misread_as_a_location_name() -> None:
+    from ai_karen_engine.core.cortex.routing_intents import weather_query_has_explicit_location
+    assert weather_query_has_explicit_location("What's the weather?") is False
+    assert weather_query_has_explicit_location("How's the weather?") is False
+    assert weather_query_has_explicit_location("What's the weather in Detroit?") is True
+    assert weather_query_has_explicit_location("Detroit weather") is True

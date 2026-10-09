@@ -49,8 +49,9 @@ class PostgresProfileRecallRetriever:
                     MemoryEvent.user_id == user_uuid,
                     MemoryEvent.consent_state == "granted",
                     or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
-                    # Superseded facts must never compete with the active value.
-                    ProfileFact.valid_to.is_(None),
+                    # Superseded or expired facts must never compete with the active value.
+                    # Temporary facts remain eligible until their explicit validity window closes.
+                    or_(ProfileFact.valid_to.is_(None), ProfileFact.valid_to > now),
                 )
                 .order_by(
                     *(
@@ -198,6 +199,11 @@ class PostgresProfileRecallRetriever:
             timestamp=created_at,
             created_at=created_at,
             updated_at=row.updated_at or created_at,
+            expires_at=(
+                row.valid_to.replace(tzinfo=timezone.utc)
+                if row.valid_to is not None and row.valid_to.tzinfo is None
+                else row.valid_to
+            ),
             relevance=0.55,
             confidence=float(row.confidence or 0.0),
             importance=7.0,
