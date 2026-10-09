@@ -149,6 +149,7 @@ class AdvancedTrainingWorkbench:
         examples = 0
         labels: dict[str, int] = {}
         features: tuple[str, ...] | None = None
+        seen_feature_version: str | None = None
         if path is not None and path.is_file() and not path.is_symlink():
             import json
             with path.open("r", encoding="utf-8") as source:
@@ -159,12 +160,22 @@ class AdvancedTrainingWorkbench:
                         break
                     try:
                         entry = json.loads(line)
+                        if not isinstance(entry, dict):
+                            raise ValueError("training record must be an object")
+                        if not isinstance(entry.get("example_id"), str) or not entry["example_id"]:
+                            raise ValueError("example_id is required by the dataset loader")
+                        if not isinstance(entry.get("feature_version"), str) or not entry["feature_version"]:
+                            raise ValueError("feature_version is required by the dataset loader")
                         feature_map = entry["features"]
                         label = entry["target"]
                         if not isinstance(feature_map, dict) or not feature_map:
                             raise ValueError("features must be a non-empty object")
                         if not isinstance(label, str) or not label:
                             raise ValueError("target must be a non-empty class label")
+                        if seen_feature_version is None:
+                            seen_feature_version = entry["feature_version"]
+                        elif entry["feature_version"] != seen_feature_version:
+                            raise ValueError("feature_version differs across examples")
                         names = tuple(feature_map.keys())
                         if features is None:
                             features = names
