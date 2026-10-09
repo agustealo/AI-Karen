@@ -113,6 +113,18 @@ class EvaluationEvidenceStore:
     def is_approved(self, manifest: MLModelManifest) -> bool:
         if not manifest.artifact_hash:
             return False
+        from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
+        registry = MLModelRegistry(registry_dir=str(self.database.parent))
+        persisted = registry.get(manifest.model_id)
+        if (
+            persisted is None
+            or persisted.model_version != manifest.model_version
+            or persisted.artifact_hash != manifest.artifact_hash
+            or persisted.purpose != manifest.purpose
+            or persisted.artifact_path != manifest.artifact_path
+            or not registry.validate_artifact(manifest)
+        ):
+            return False
         with self._connect() as db:
             row = db.execute(
                 """SELECT 1 FROM benchmark_receipts WHERE
