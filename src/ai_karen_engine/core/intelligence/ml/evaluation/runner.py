@@ -123,7 +123,8 @@ class BenchmarkRunner:
         if (
             not tenant or tenant == "default" or not user
             or not get_rbac_manager().has_permission(actor, Permission.TRAINING_EXECUTE)
-        ):\n            raise PermissionError("Governed benchmark authorization is required")
+        ):
+            raise PermissionError("Governed benchmark authorization is required")
         manifest = registry.get(config.model_id)
         if (
             manifest is None
