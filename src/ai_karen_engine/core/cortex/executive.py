@@ -127,10 +127,10 @@ class CortexExecutionDecider:
         )
         if personal_recall_query:
             reason_codes.append("explicit_personal_memory_recall")
-            if str(analysis.get("intent") or "unknown") in {"unknown", "general_assist", ""}:
-                analysis["intent"] = "memory.recall"
-                # A deterministic recall cue is not a calibrated model confidence.
-                analysis["intent_confidence"] = 0.0
+            # Explicit user-profile recall wins over an unrelated ML intent label.
+            # This only routes recall; RuntimePolicy still owns authorization.
+            analysis["intent"] = "memory.recall"
+            analysis["intent_confidence"] = 0.0
         memory_write_requested = bool(
             analysis.get("memory_write_requested", False)
             or meta.get("memory_write_requested", False)
