@@ -131,7 +131,15 @@ class SklearnTrainingExecutor(TrainingExecutor):
         metrics.feature_version = feature_version
         metrics.dataset_version = job.dataset_version
 
-        model_id = f"topology-{job.task}"
+        tenant_id = str(job.metadata.get("tenant_id") or "")
+        if tenant_id:
+            if tenant_id == "default":
+                raise ValueError("Explicit tenant required for governed training")
+            tenant_key = hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:16]
+            model_id = f"tenant-{tenant_key}-{job.task}"
+        else:
+            # Legacy direct pipeline callers retain the existing model identity.
+            model_id = f"topology-{job.task}"
         model_version = f"train-{job.job_id[:8]}"
         artifact_root = Path(get_ml_registry_dir()) / "topology" / model_id / model_version
         artifact_root.mkdir(parents=True, exist_ok=True)
@@ -170,6 +178,7 @@ class SklearnTrainingExecutor(TrainingExecutor):
             "base_model": job.base_model,
             "seed": random_seed,
             "test_size": test_size,\n            "max_iter": max_iter,
+            "tenant_scoped": bool(tenant_id),
             "class_weight": class_weight,
         }
         metadata_path = artifact_root / "training_metadata.json"
