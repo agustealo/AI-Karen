@@ -334,6 +334,12 @@ class DirectCapabilityExecutor:
                 attempts=attempts,
             )
 
+        if decision.intent == "system.resources":
+            result = await run_tool()
+            if result is not None:
+                return result
+            return self._unavailable(started, capability, tool_name, "Resource tool unavailable or unauthorized.", attempts)
+
         if decision.intent == "time.current":
             result = await run_plugin()
             if result is not None:
@@ -403,6 +409,9 @@ class DirectCapabilityExecutor:
             return False
         if payload.get("error"):
             return False
+
+        if intent == "system.resources":
+            return isinstance(payload.get("memory"), dict) and bool(payload["memory"].get("available"))
 
         if intent == "time.current":
             return any(
@@ -621,6 +630,23 @@ class DirectCapabilityExecutor:
         return None
 
     def _render(self, intent: str, query: str, payload: Dict[str, Any]) -> str:
+        if intent == "system.resources":
+            requested = (
+                "vram" if re.search(r"\bvram\b", query, re.I)
+                else "disk" if re.search(r"\bdisk\b", query, re.I)
+                else "memory"
+            )
+            metric = payload.get(requested)
+            if not isinstance(metric, dict) or not metric.get("available"):
+                return f"Current {requested.upper() if requested == 'vram' else requested} availability could not be measured."
+            available = metric.get("available_bytes")
+            total = metric.get("total_bytes")
+            if not isinstance(available, (int, float)) or isinstance(available, bool):
+                return "Resource snapshot did not report available capacity."
+            remaining_gib = available / (1024 ** 3)
+            if isinstance(total, (int, float)) and not isinstance(total, bool):
+                return f"Available {requested}: {remaining_gib:.2f} GiB of {total / (1024 ** 3):.2f} GiB."
+            return f"Available {requested}: {remaining_gib:.2f} GiB."
         if intent == "time.current":
             value = (
                 payload.get("value")
