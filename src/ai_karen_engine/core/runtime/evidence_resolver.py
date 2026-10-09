@@ -444,6 +444,7 @@ class RuntimeEvidenceResolver:
         item_metadata = dict(item.get("metadata") or {})
         evidence_id = str(item.get("id") or item_metadata.get("id") or "memory")
         timestamp = cls._coerce_datetime(item.get("timestamp"))
+        expires_at = cls._coerce_datetime(item.get("expires_at"))
         contradiction = cls._contradiction_from_metadata(item_metadata)
 
         return ContextEvidence(
@@ -465,6 +466,7 @@ class RuntimeEvidenceResolver:
             temporal=EvidenceTemporalContext(
                 observed_at=timestamp,
                 as_of=retrieved_at,
+                expires_at=expires_at,
             ),
             contradiction=contradiction,
             scope=EvidenceScope(
