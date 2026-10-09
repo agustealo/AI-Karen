@@ -30,7 +30,7 @@ type Config = {
   optimizer: string; class_weight: string; precision: string;
 };
 type Finding = { code: string; message: string };
-type Preflight = {
+type JobSummary = { job_id: string; state: string; submitted_at: string; updated_at: string };\ntype Preflight = {
   ready: boolean;
   checks: Finding[];
   warnings: Finding[];
@@ -47,7 +47,7 @@ export default function AdvancedTrainingWorkbench() {
   const [config, setConfig] = useState<Config | null>(null);
   const [preflight, setPreflight] = useState<Preflight | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false);\n  const [jobs, setJobs] = useState<JobSummary[]>([]);\n  const [queueing, setQueueing] = useState(false);\n  const [queueMessage, setQueueMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -90,6 +90,33 @@ export default function AdvancedTrainingWorkbench() {
       setError(cause instanceof Error ? cause.message : "Preflight unavailable");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const loadJobs = async () => {
+    try {
+      const response = await apiClient.get<{ jobs: JobSummary[] }>("/api/admin/training/advanced/jobs");
+      setJobs(response.jobs);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Job inventory unavailable");
+    }
+  };
+
+  const queueJob = async () => {
+    if (!config || !preflight?.ready) return;
+    setQueueing(true);
+    setQueueMessage(null);
+    try {
+      const queued = await apiClient.post<{ job_id: string; status: string }>(
+        "/api/admin/training/advanced/jobs", config,
+      );
+      setQueueMessage(`Job ${queued.job_id} queued. Execution requires a connected training worker.`);
+      await loadJobs();
+      setPreflight(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to queue training job");
+    } finally {
+      setQueueing(false);
     }
   };
 
@@ -261,6 +288,13 @@ export default function AdvancedTrainingWorkbench() {
                     <strong>{title(item.code)}</strong><p className="mt-1 text-muted-foreground">{item.message}</p>
                   </div>
                 ))}
+                {preflight.ready && (
+                  <Button className="w-full" variant="secondary" disabled={queueing}
+                    onClick={() => void queueJob()}>
+                    {queueing ? "Submitting..." : "Queue approved training job"}
+                  </Button>
+                )}
+                {queueMessage && <p className="text-sm" role="status">{queueMessage}</p>}
                 <Alert><AlertTriangle className="h-4 w-4" /><AlertTitle>Execution remains governed</AlertTitle>
                   <AlertDescription>
                     Preflight is a validation result, not a queued training job. Job execution remains
