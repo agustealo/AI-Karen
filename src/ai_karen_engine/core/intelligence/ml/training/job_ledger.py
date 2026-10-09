@@ -124,6 +124,18 @@ class TrainingJobLedger:
             )
         return result.rowcount == 1
 
+    def lease_valid(self, job_id: str, *, tenant_id: str, token: str) -> bool:
+        if not token:
+            return False
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT 1 FROM training_jobs WHERE job_id=? AND tenant_id=? "
+                "AND lease_token=? AND lease_expires_at>? "
+                "AND state IN ('VALIDATING','RUNNING','EVALUATING')",
+                (job_id, tenant_id, token, _now()),
+            ).fetchone()
+        return row is not None
+
     def expired(self, *, tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
         """Inspect expired ownership without ever requeueing uncertain work."""
         if not tenant_id or tenant_id == "default":
@@ -140,7 +152,8 @@ class TrainingJobLedger:
 
     def transition(
         self, job_id: str, *, tenant_id: str, from_status: str,
-        to_status: str, job: TrainingJob | None = None,\n        lease_token: str | None = None,
+        to_status: str, job: TrainingJob | None = None,
+        lease_token: str | None = None,
     ) -> bool:
         allowed = {
             "QUEUED": {"VALIDATING", "CANCELLED"},
