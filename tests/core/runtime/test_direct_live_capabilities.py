@@ -1316,7 +1316,7 @@ async def test_runtime_loads_authorized_transcript_for_single_turn_weather_reply
 
     assert request.messages[-1]["content"] == "What's the weather in nyc?"
     assert request.metadata["weather_followup_resolved"] is True
-    gateway.load_history.assert_awaited_once_with(request.context, limit=8)
+    gateway.load_history.assert_awaited_once_with(request.context, limit=12)
 
 
 @pytest.mark.asyncio
