@@ -148,6 +148,25 @@ class DirectCapabilityExecutor:
         mode = str(route.get("plugin_mode") or "").strip() or None
         attempts: List[Dict[str, Any]] = []
 
+        if decision.intent == "search.weather":
+            resolved = self._weather_query_with_location(query, request.metadata)
+            if resolved is None:
+                return DirectCapabilityResult(
+                    handled=True,
+                    text="Which city or location should I check the weather for?",
+                    success=True,
+                    source="missing_context",
+                    source_id="weather_location",
+                    payload={
+                        "status": "needs_input",
+                        "required_capability": capability,
+                        "missing_requirement": "weather_location",
+                        "next_action": "ask_location",
+                    },
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                )
+            query = resolved
+
         async def run_tool() -> Optional[DirectCapabilityResult]:
             if not tool_name:
                 return None
@@ -479,6 +498,48 @@ class DirectCapabilityExecutor:
             if error:
                 return error
         return default
+
+    @staticmethod
+    def _weather_query_with_location(
+        query: str, metadata: Dict[str, Any]
+    ) -> Optional[str]:
+        """Resolve weather location without silently inferring private geography.
+
+        Explicit place names in the user query take precedence over an
+        authorized selected/profile location. If neither exists, the DIRECT
+        executor asks one targeted question before making an internet call.
+        """
+        explicit = re.search(
+            r"\\b(?:weather|forecast|temperature)\\s+(?:in|for|at)\\s+"
+            r"(?P<place>[A-Za-z][A-Za-z0-9 ,.'-]{0,110})",
+            query,
+            flags=re.IGNORECASE,
+        )
+        if not explicit:
+            explicit = re.search(
+                r"\\b(?:in|for)\\s+(?P<place>[A-Za-z][A-Za-z0-9 ,.'-]{0,110})"
+                r"\\s+(?:weather|forecast)\\b",
+                query,
+                flags=re.IGNORECASE,
+            )
+        if explicit:
+            place = explicit.group("place").strip(" ?!. ,")
+            if place:
+                return query
+
+        context = dict(metadata or {})
+        location = context.get("weather_location")
+        if not isinstance(location, str) or not location.strip():
+            source = context.get("location_source")
+            if source in {"user_selected", "user_profile", "device_with_consent"}:
+                location = context.get("location") or context.get("city")
+            else:
+                location = None
+        if isinstance(location, str):
+            location = location.strip()
+            if location and len(location) <= 120:
+                return f"{query.rstrip(' ?!.')} in {location}?"
+        return None
 
     @staticmethod
     def _tool_parameters(query: str, mode: Optional[str]) -> Dict[str, Any]:
