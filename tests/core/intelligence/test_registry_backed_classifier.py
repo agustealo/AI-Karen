@@ -40,12 +40,14 @@ def _register_active_model(
         encoding="utf-8",
     )
 
+    from ai_karen_engine.core.intelligence.ml.training.sklearn_executor import _hash_directory
+
     manifest = MLModelManifest(
         model_id=f"adaptive-{task.value}",
         purpose=task.value,
         architecture="logistic_regression",
         artifact_path=str(artifact),
-        artifact_hash="",
+        artifact_hash=_hash_directory(artifact),
         model_version="test-v1",
         feature_version="v1",
         training_dataset_version="test-dataset",
