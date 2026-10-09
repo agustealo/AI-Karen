@@ -140,7 +140,6 @@ class ChatRuntime:
         return get_workflow_runtime()
 
     async def execute(self, request: ChatExecutionRequest) -> ChatExecutionResult:
-        await self._prepare_conversation_continuation(request)
         start = time.time()
         ctx = request.context
 
@@ -168,6 +167,9 @@ class ChatRuntime:
                     mode=getattr(gate, "mode", "gate"),
                 ),
             )
+
+        # Do not read prior conversation or personal context while gated.
+        await self._prepare_conversation_continuation(request)
 
         decision_started = time.perf_counter()
         decision = await self._decide(request)
@@ -440,7 +442,6 @@ class ChatRuntime:
     async def execute_stream(
         self, request: ChatExecutionRequest
     ) -> AsyncIterator[ChatStreamChunk]:
-        await self._prepare_conversation_continuation(request)
         ctx = request.context
         sequence = 0
         request_id = ctx.request_id or str(uuid.uuid4())
@@ -487,6 +488,9 @@ class ChatRuntime:
                 conversation_id,
             )
             return
+
+        # Match HTTP ordering: runtime availability gate precedes context access.
+        await self._prepare_conversation_continuation(request)
 
         decision_started = time.perf_counter()
         decision = await self._decide(request)
