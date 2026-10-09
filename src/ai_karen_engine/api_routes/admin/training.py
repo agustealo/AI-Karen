@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
+from fastapi import HTTPException, Query
+from ai_karen_engine.core.intelligence.ml.training.contracts import TrainingJob
+from ai_karen_engine.core.intelligence.ml.training.job_ledger import TrainingJobLedger
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -104,3 +108,80 @@ async def preflight_advanced_training(
 ) -> dict[str, Any]:
     del current_user
     return workbench.preflight(**body.model_dump())
+
+
+def get_training_job_ledger() -> TrainingJobLedger:
+    return TrainingJobLedger()
+
+
+def _identity(current_user: Any) -> tuple[str, str]:
+    tenant = str(getattr(current_user, "tenant_id", "") or "")
+    user = str(getattr(current_user, "user_id", "") or "")
+    if not tenant or tenant == "default" or not user:
+        raise HTTPException(status_code=403, detail="Explicit user and tenant context required")
+    return tenant, user
+
+
+@router.get("/advanced/jobs")
+async def list_advanced_training_jobs(
+    limit: int = Query(50, ge=1, le=100),
+    current_user: Any = Depends(require_permission(Permission.TRAINING_READ)),
+    ledger: TrainingJobLedger = Depends(get_training_job_ledger),
+) -> dict[str, Any]:
+    tenant, _ = _identity(current_user)
+    return {"jobs": ledger.list(tenant_id=tenant, limit=limit)}
+
+
+@router.get("/advanced/jobs/{job_id}")
+async def get_advanced_training_job(
+    job_id: str,
+    current_user: Any = Depends(require_permission(Permission.TRAINING_READ)),
+    ledger: TrainingJobLedger = Depends(get_training_job_ledger),
+) -> dict[str, Any]:
+    tenant, _ = _identity(current_user)
+    result = ledger.get(job_id, tenant_id=tenant)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Training job not found")
+    return result
+
+
+@router.post("/advanced/jobs", status_code=201)
+async def enqueue_advanced_training_job(
+    body: AdvancedPreflightRequest,
+    current_user: Any = Depends(require_permission(Permission.TRAINING_EXECUTE)),
+    workbench: AdvancedTrainingWorkbench = Depends(get_advanced_workbench),
+    ledger: TrainingJobLedger = Depends(get_training_job_ledger),
+) -> dict[str, Any]:
+    tenant, user = _identity(current_user)
+    check = workbench.preflight(**body.model_dump())
+    if not check["ready"]:
+        raise HTTPException(status_code=422, detail={
+            "message": "Training preflight did not pass",
+            "checks": check["checks"],
+        })
+    job = TrainingJob(
+        job_id=uuid4().hex,
+        task=body.task,
+        base_model=body.engine,
+        dataset_version=body.dataset_version,
+        seed=body.seed,
+        metadata={
+            "advanced_config": body.model_dump(),
+            "submitted_by": user,
+            "tenant_id": tenant,
+            "preflight": check["evidence"],
+        },
+    )
+    return ledger.submit(job, tenant_id=tenant, user_id=user)
+
+
+@router.post("/advanced/jobs/{job_id}/cancel")
+async def cancel_advanced_training_job(
+    job_id: str,
+    current_user: Any = Depends(require_permission(Permission.TRAINING_EXECUTE)),
+    ledger: TrainingJobLedger = Depends(get_training_job_ledger),
+) -> dict[str, Any]:
+    tenant, _ = _identity(current_user)
+    if not ledger.cancel(job_id, tenant_id=tenant):
+        raise HTTPException(status_code=409, detail="Job cannot be cancelled or is not queued")
+    return {"job_id": job_id, "status": "CANCELLED"}
