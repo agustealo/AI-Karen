@@ -58,7 +58,9 @@ class RegistryBackedClassifier(BasePredictor):
         self._class_labels: list[str] = []
 
     async def predict(self, features: IntelligenceFeatures) -> Prediction:
-        manifest = self._active_manifest()
+        # Runtime instances are shared: tenant selection must be request-local.
+        tenant_id = getattr(features, "tenant_id", None) or self._tenant_id
+        manifest = self._active_manifest(tenant_id=tenant_id)
         if manifest is None:
             return self._unknown(features, "no_active_model")
 
@@ -190,9 +192,9 @@ class RegistryBackedClassifier(BasePredictor):
             "model_version": manifest.model_version if manifest else None,
         }
 
-    def _active_manifest(self) -> MLModelManifest | None:
+    def _active_manifest(self, *, tenant_id: str | None = None) -> MLModelManifest | None:
         try:
-            return self._registry.get_active(self._task.value, tenant_id=self._tenant_id)
+            return self._registry.get_active(self._task.value, tenant_id=tenant_id or self._tenant_id)
         except Exception as exc:
             logger.debug(
                 "Failed to resolve active model for %s: %s",
