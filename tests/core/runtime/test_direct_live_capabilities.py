@@ -1391,7 +1391,8 @@ def test_typed_clarification_resumes_non_weather_request() -> None:
         {"role": "user", "content": "four"},
     ]
     assert ChatRuntime._resolve_typed_pending_clarification(request)
-    assert request.messages[-1]["content"] == (
+    assert request.messages[-1]["content"] == "four"
+    assert request.metadata["clarification_effective_query"] == (
         "Find a restaurant booking\nAdditional party_size: four"
     )
     assert request.metadata["clarification_source"] == "authorized_conversation"
@@ -1591,7 +1592,8 @@ def test_typed_clarification_persists_literal_reply_not_execution_rewrite() -> N
         {"role": "user", "content": "four"},
     ]
     assert ChatRuntime._resolve_typed_pending_clarification(request)
-    assert request.messages[-1]["content"] != "four"
+    assert request.messages[-1]["content"] == "four"
+    assert request.metadata["clarification_effective_query"].startswith("Find a restaurant booking")
     assert ChatRuntime._extract_user_message_for_persistence(
         ChatRuntime.__new__(ChatRuntime), request
     ) == "four"
