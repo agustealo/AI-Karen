@@ -104,13 +104,11 @@ class MLModelRegistry:
             return
         if manifest.status not in {ModelStatus.SHADOW.value, ModelStatus.ACTIVE.value}:
             return
-        # The canonical benchmark runner has no durable, trusted receipt
-        # contract yet. Manifest-supplied flags and identifiers are mutable and
-        # cannot authorize activation, even if they claim "passed".
-        raise ManifestValidationError(
-            "Trained model promotion blocked until a trusted canonical "
-            "evaluation receipt is implemented"
-        )
+        from ai_karen_engine.core.intelligence.ml.evaluation.evidence import EvaluationEvidenceStore
+        if not EvaluationEvidenceStore(self.registry_dir).is_approved(manifest):
+            raise ManifestValidationError(
+                "Trained model promotion requires a trusted canonical evaluation receipt"
+            )
 
     def _validate_status_transition(self, manifest: MLModelManifest) -> None:
         existing = self._manifests.get(manifest.model_id)
