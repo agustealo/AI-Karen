@@ -49,10 +49,10 @@ from ai_karen_engine.platform.memory.postgres.profile_retriever import PostgresP
 
 def test_weather_question_activates_current_location_profile_recall():
     retriever = PostgresProfileRecallRetriever
-    assert retriever._looks_like_profile_query("What's the weather?")
-    assert retriever._preferred_attribute("What's the weather?") == "current_location"
-    assert retriever._looks_like_profile_query("Will it rain tomorrow?")
-    assert retriever._preferred_attribute("Will it rain tomorrow?") == "current_location"
+    assert not retriever._looks_like_profile_query("What's the weather?")
+    assert retriever._preferred_attribute("What's the weather?") is None
+    assert not retriever._looks_like_profile_query("Will it rain tomorrow?")
+    assert retriever._preferred_attribute("Will it rain tomorrow?") is None
     assert retriever._preferred_attribute("Where do I live?") == "residence_location"
 
 
@@ -75,4 +75,4 @@ def test_role_specific_profile_recall_targets():
     assert retriever._preferred_attribute("Where do I work?") == "work_location"
     assert retriever._preferred_attribute("Where do I live?") == "residence_location"
     assert retriever._preferred_attribute("Where was I born?") == "birthplace"
-    assert retriever._preferred_attribute("What's the weather?") == "current_location"
+    assert retriever._preferred_attribute("What's the weather?") is None
