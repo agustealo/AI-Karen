@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import case, or_, select
 
+from ai_karen_engine.core.intelligence.profile_attribute import requested_profile_attribute
 from ai_karen_engine.core.memory.neuro import decide_activation_mode
 from ai_karen_engine.core.memory.types import (
     MemoryEntry,
@@ -69,24 +70,8 @@ class PostgresProfileRecallRetriever:
 
     @staticmethod
     def _preferred_attribute(text: str) -> str | None:
-        """Prioritize the explicit question target before applying top-k."""
-        q = " ".join(str(text).casefold().replace("’", "'").split())
-        if any(cue in q for cue in (
-            "what's my name", "what is my name", "whats my name",
-            "hats my name", "hat's my name", "remember my name",
-        )):
-            return "preferred_name"
-        if any(cue in q for cue in ("where am i from", "where i'm from", "where im from")):
-            return "origin_location"
-        if "where was i born" in q or "my birthplace" in q:
-            return "birthplace"
-        if "where do i live" in q or "where i live" in q:
-            return "residence_location"
-        if any(cue in q for cue in ("where do i work", "where i work", "my workplace", "work location")):
-            return "work_location"
-        if any(cue in q for cue in ("where am i currently", "where am i right now")):
-            return "current_location"
-        return None
+        """Consume the intelligence-owned query interpretation."""
+        return requested_profile_attribute(text)
 
     @staticmethod
     def _looks_like_profile_query(text: str) -> bool:

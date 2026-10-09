@@ -70,6 +70,7 @@ class SemanticInterpretation:
     """
 
     intent_family: str = "unknown"
+    requested_profile_attribute: str | None = None
     subject: str | None = None
     predicate: str | None = None
     object_text: str | None = None
