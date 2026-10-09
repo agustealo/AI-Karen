@@ -69,9 +69,9 @@ _TEMPORARY_PRESENCE = re.compile(
 # A short explicit self-description is conversational evidence, not proof of
 # birthplace, citizenship, ancestry, or current physical location.
 _SELF_DESCRIPTION = re.compile(
-    r"(?i)\\bi\\s+(?:am\\s+)?(?:an?\\s+)?"
+    r"(?i)\bi\s+(?:am\s+)?(?:an?\s+)?"
     r"(?P<description>[A-Za-z][A-Za-z'-]{2,45})"
-    r"(?=\\s*[,;.!?]|$)"
+    r"(?=\s*[,;.!?]|$)"
 )
 
 _LOCATION_PATTERNS = (
