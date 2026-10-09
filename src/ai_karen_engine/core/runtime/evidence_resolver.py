@@ -593,9 +593,18 @@ class RuntimeEvidenceResolver:
             return None
         if isinstance(value, datetime):
             return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            try:
+                parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
         try:
             return datetime.fromtimestamp(float(value), tz=timezone.utc)
-        except (TypeError, ValueError, OSError):
+        except (TypeError, ValueError, OSError, OverflowError):
             return None
 
     @staticmethod
