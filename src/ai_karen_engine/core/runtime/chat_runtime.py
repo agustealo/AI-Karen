@@ -1344,8 +1344,8 @@ class ChatRuntime:
         # A recent, unambiguous first-person location declaration is useful
         # within this authorized conversation. Do not infer third-party places.
         pattern = re.compile(
-            r"\\b(?:i(?:'m| am)|we(?:'re| are))\\s+(?:currently\\s+|staying\\s+)?in\\s+"
-            r"(?P<city>[A-Z][A-Za-z]+(?:[ -][A-Z][A-Za-z]+){0,3})\\b",
+            r"\b(?:i(?:'m| am)|we(?:'re| are))\s+(?:currently\s+|staying\s+)?in\s+"
+            r"(?P<city>[A-Z][A-Za-z]+(?:[ -][A-Z][A-Za-z]+){0,3})\b",
             re.IGNORECASE,
         )
         for message in reversed(transcript[:-1]):
