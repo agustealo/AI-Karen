@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from datetime import datetime, timezone
+from collections.abc import Callable, Awaitable
 
 from ai_karen_engine.core.intelligence.ml.contracts import (
     MLModelManifest,
@@ -39,13 +40,19 @@ class TrainingPipeline:
         job.status = TrainingJobStatus.QUEUED.value
         return TrainingPipelineResult(job=job)
 
-    async def run(self, result: TrainingPipelineResult) -> TrainingPipelineResult:
+    async def run(
+        self,
+        result: TrainingPipelineResult,
+        on_state: Callable[[str, TrainingJob], Awaitable[None]] | None = None,
+    ) -> TrainingPipelineResult:
         job = result.job
         try:
             job.status = TrainingJobStatus.VALIDATING.value
             self._validate_job(job)
 
             job.status = TrainingJobStatus.RUNNING.value
+            if on_state is not None:
+                await on_state(job.status, job)
             job.started_at = datetime.now(timezone.utc).isoformat()
             artifact = self._executor.execute(job)
             job.artifact_path = artifact.artifact_path
@@ -56,6 +63,8 @@ class TrainingPipeline:
             # The executor reports genuine held-out classification metrics.
             # Canonical benchmark execution is a separate predictor-owned gate.
             job.status = TrainingJobStatus.EVALUATING.value
+            if on_state is not None:
+                await on_state(job.status, job)
             result.evaluation_result = None
 
             if (int(artifact.metrics.get('test_samples', 0)) < 1 or
