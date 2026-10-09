@@ -74,3 +74,27 @@ def test_plugin_startup_and_dependency_share_configured_catalog_root() -> None:
     assert 'expected_path = Path("src/ai_karen_engine/extensions/plugins")' not in dependencies
     assert 'service = get_plugin_service_impl()' in dependencies
     assert 'await service.discover_plugins()' in dependencies
+
+
+def test_admin_can_read_governed_extension_catalog_without_bypassing_rbac() -> None:
+    import json
+
+    from ai_karen_engine.auth.rbac_middleware import Permission, RBACManager
+
+    canonical = json.loads(
+        (ROOT / "config_assets" / "permissions.json").read_text(encoding="utf-8")
+    )
+    assert "read" in canonical["role_permissions"]["admin"]["permissions"]
+    admin = {
+        "user_id": "11111111-1111-1111-1111-111111111111",
+        "tenant_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "roles": ["admin"],
+    }
+    assert RBACManager().has_permission(admin, Permission.READ)
+
+
+def test_extension_catalog_still_requires_authentication_and_rbac() -> None:
+    route = (ENGINE / "api_routes/extensions/extensions.py").read_text(encoding="utf-8")
+    assert "Depends(require_extension_catalog_access)" in route
+    assert "rbac.has_permission(user, Permission.READ)" in route
+    assert "status_code=403, detail=\"Extension catalog access denied\"" in route
