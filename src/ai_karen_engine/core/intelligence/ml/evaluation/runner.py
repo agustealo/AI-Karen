@@ -103,7 +103,7 @@ class BenchmarkRunner:
         *,
         registry: Any,
         active_result: BenchmarkResult | None = None,
-        authorized: bool = False,
+        actor: Any = None,
     ) -> tuple[BenchmarkResult, str]:
         """Run the canonical evaluation before recording a candidate receipt.
 
@@ -114,8 +114,9 @@ class BenchmarkRunner:
             EvaluationEvidenceStore,
         )
 
-        if not authorized:
-            raise PermissionError("Governed benchmark authorization is required")
+        from ai_karen_engine.auth.rbac_middleware import (
+            Permission, get_rbac_manager,
+        )\n        tenant = str(getattr(actor, "tenant_id", "") or "")\n        user = str(getattr(actor, "user_id", "") or "")\n        if (\n            not tenant or tenant == "default" or not user\n            or not get_rbac_manager().has_permission(actor, Permission.TRAINING_EXECUTE)\n        ):\n            raise PermissionError("Governed benchmark authorization is required")
         manifest = registry.get(config.model_id)
         if (
             manifest is None
