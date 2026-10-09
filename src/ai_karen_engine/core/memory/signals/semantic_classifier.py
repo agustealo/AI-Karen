@@ -98,6 +98,30 @@ def _normalize_save_text(text: str) -> str:
     return " ".join(str(text or "").casefold().replace("’", "'").split())
 
 
+_PERSONAL_LOCATION_QUESTIONS = (
+    (re.compile(r"^where (?:was|am) i born[?.!]*$", re.I), "birthplace"),
+    (re.compile(r"^where did i grow up[?.!]*$", re.I), "upbringing_location"),
+    (re.compile(r"^where do i live[?.!]*$", re.I), "residence_location"),
+    (re.compile(r"^where do i work[?.!]*$", re.I), "work_location"),
+    (re.compile(r"^where am i (?:currently|right now)[?.!]*$", re.I), "current_location"),
+    (re.compile(r"^where am i from[?.!]*$", re.I), None),
+)
+
+
+def personal_location_query_attribute(text: str) -> tuple[bool, str | None]:
+    """Describe a location question without inventing its semantic meaning.
+
+    An ambiguous origin question returns (True, None). It must not be
+    silently answered using a nearby birthplace, upbringing or residence fact.
+    Authorization and retrieval remain runtime responsibilities.
+    """
+    query = " ".join(str(text or "").strip().split())
+    for pattern, attribute in _PERSONAL_LOCATION_QUESTIONS:
+        if pattern.fullmatch(query):
+            return True, attribute
+    return False, None
+
+
 def is_explicit_memory_save_request(text: str) -> bool:
     """Recognize bounded user-directed save intent, never authorize a write."""
     return bool(_EXPLICIT_MEMORY_SAVE.fullmatch(_normalize_save_text(text)))
@@ -433,4 +457,5 @@ __all__ = [
     "explicit_memory_save_target_terms",
     "is_explicit_memory_save_request",
     "memory_save_request_matches_signal",
+    "personal_location_query_attribute",
 ]
