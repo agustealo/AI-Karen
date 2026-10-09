@@ -280,6 +280,16 @@ class CortexExecutionDecider:
             topology = self._infer_topology_from_analysis(analysis)
             capabilities = self._infer_capabilities_from_analysis(analysis)
             memory_policy = self._infer_memory_policy_from_analysis(analysis)
+            # Consume the canonical Intelligence interpretation as an evidence
+            # request, not as an authorization or a new model-routing decision.
+            interpretation = getattr(analysis, "interpretation", None)
+            evidence_needs = tuple(
+                str(source).casefold()
+                for source in (getattr(interpretation, "evidence_needs", ()) or ())
+            )
+            if "memory" in evidence_needs:
+                memory_policy["recall_required"] = True
+                memory_policy["scope"] = "user"
             if self._personal_recall_query(text) or "location.current" in capability_decision.missing_requirements:
                 memory_policy["recall_required"] = True
                 memory_policy["scope"] = "user"
