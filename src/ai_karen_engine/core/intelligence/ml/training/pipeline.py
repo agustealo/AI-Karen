@@ -3,18 +3,12 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Any
 
 from ai_karen_engine.core.intelligence.ml.contracts import (
     MLModelManifest,
     ModelStatus,
     PredictionTask,
 )
-from ai_karen_engine.core.intelligence.ml.evaluation.contracts import BenchmarkConfig
-from ai_karen_engine.core.intelligence.ml.evaluation.corpus import (
-    CanonicalEvaluationCorpus,
-)
-from ai_karen_engine.core.intelligence.ml.evaluation.runner import BenchmarkRunner
 from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
 from ai_karen_engine.core.intelligence.ml.training.contracts import (
     TrainingArtifact,
@@ -37,11 +31,9 @@ class TrainingPipeline:
         self,
         registry: MLModelRegistry | None = None,
         executor: TrainingExecutor | None = None,
-        evaluator: BenchmarkRunner | None = None,
     ) -> None:
         self._registry = registry or MLModelRegistry()
         self._executor = executor or SklearnTrainingExecutor()
-        self._evaluator = evaluator or BenchmarkRunner(CanonicalEvaluationCorpus())
 
     def submit(self, job: TrainingJob) -> TrainingPipelineResult:
         job.status = TrainingJobStatus.QUEUED.value
@@ -61,9 +53,10 @@ class TrainingPipeline:
             job.metrics = artifact.metrics
             job.resource_usage = artifact.resource_usage
 
+            # The executor reports genuine held-out classification metrics.
+            # Canonical benchmark execution is a separate predictor-owned gate.
             job.status = TrainingJobStatus.EVALUATING.value
-            eval_result = await self._evaluate_artifact(artifact)
-            result.evaluation_result = eval_result
+            result.evaluation_result = None
 
             if (int(artifact.metrics.get('test_samples', 0)) < 1 or
                 'macro_f1' not in artifact.metrics or
@@ -100,28 +93,6 @@ class TrainingPipeline:
             PredictionTask(job.task)
         except ValueError:
             raise ValueError(f"Unknown task: {job.task}")
-
-    async def _evaluate_artifact(self, artifact: TrainingArtifact) -> Any:
-        try:
-            task = PredictionTask(artifact.task)
-        except ValueError:
-            return None
-
-        config = BenchmarkConfig(
-            model_id=artifact.model_id,
-            model_version=artifact.model_version,
-            task=task,
-            dataset_version=artifact.dataset_version,
-        )
-        try:
-            from ai_karen_engine.core.intelligence.ml.training.sklearn_executor import (
-                SklearnTrainingExecutor,
-            )
-            executor = SklearnTrainingExecutor()
-            return await self._evaluator.run(executor, config)
-        except Exception as exc:
-            logger.debug("Evaluation artifact failed: %s", exc)
-            return None
 
     def _register_artifact(self, artifact: TrainingArtifact, job: TrainingJob) -> bool:
         try:
