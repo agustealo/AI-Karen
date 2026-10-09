@@ -103,6 +103,7 @@ class BenchmarkRunner:
         *,
         registry: Any,
         active_result: BenchmarkResult | None = None,
+        authorized: bool = False,
     ) -> tuple[BenchmarkResult, str]:
         """Run the canonical evaluation before recording a candidate receipt.
 
@@ -113,6 +114,8 @@ class BenchmarkRunner:
             EvaluationEvidenceStore,
         )
 
+        if not authorized:
+            raise PermissionError("Governed benchmark authorization is required")
         manifest = registry.get(config.model_id)
         if (
             manifest is None
