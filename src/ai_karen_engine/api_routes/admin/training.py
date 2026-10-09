@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from ai_karen_engine.core.intelligence.ml.training.workbench import AdvancedTrainingWorkbench
 from ai_karen_engine.auth.rbac_middleware import Permission, require_permission
 from ai_karen_engine.services.admin.admin_training_control_service import (
     AdminTrainingControlService,
@@ -67,3 +68,39 @@ async def list_training_capabilities(
     del current_user
     snapshot = service.snapshot()
     return [TrainingCapabilityResponse(**lane) for lane in snapshot["lanes"]]
+
+
+class AdvancedPreflightRequest(BaseModel):
+    engine: str = Field(min_length=1, max_length=40)
+    task: str = Field(min_length=1, max_length=80)
+    dataset_version: str = Field(min_length=1, max_length=128)
+    test_split: float = 0.2
+    max_samples: int = 10000
+    seed: int = 42
+    max_iter: int = 1000
+    class_weight: str = "balanced"
+    optimizer: str = "lbfgs"
+    precision: str = "fp64"
+
+
+def get_advanced_workbench() -> AdvancedTrainingWorkbench:
+    return AdvancedTrainingWorkbench()
+
+
+@router.get("/advanced/catalog")
+async def get_advanced_training_catalog(
+    current_user: dict[str, Any] = Depends(require_permission(Permission.ADMIN_READ)),
+    workbench: AdvancedTrainingWorkbench = Depends(get_advanced_workbench),
+) -> dict[str, Any]:
+    del current_user
+    return workbench.catalog()
+
+
+@router.post("/advanced/preflight")
+async def preflight_advanced_training(
+    body: AdvancedPreflightRequest,
+    current_user: dict[str, Any] = Depends(require_permission(Permission.ADMIN_READ)),
+    workbench: AdvancedTrainingWorkbench = Depends(get_advanced_workbench),
+) -> dict[str, Any]:
+    del current_user
+    return workbench.preflight(**body.model_dump())
