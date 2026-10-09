@@ -201,10 +201,15 @@ class AdvancedTrainingWorkbench:
                 if test_count < len(labels):
                     error("test_split_too_small", "Test split does not contain enough rows for all classes.")
                 if min(labels.values(), default=0) < 2:
-                    warnings.append({
-                        "code": "rare_classes",
-                        "message": "Some classes cannot be stratified reliably.",
-                    })
+                    error(
+                        "rare_classes",
+                        "Every class needs at least two examples for stratified training.",
+                    )
+                elif examples - test_count < len(labels):
+                    error(
+                        "training_split_too_small",
+                        "Training split must retain an example from every class.",
+                    )
 
         return {
             "ready": not failures,
