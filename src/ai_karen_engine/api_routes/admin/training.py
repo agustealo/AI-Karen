@@ -215,3 +215,49 @@ async def cancel_advanced_training_job(
         raise HTTPException(status_code=409, detail="Job cannot be cancelled or is not queued")
     return {"job_id": job_id, "status": "CANCELLED"}
 
+
+
+@router.post("/advanced/candidates/{model_id}/evaluate")
+async def evaluate_training_candidate(
+    model_id: str,
+    current_user: Any = Depends(require_permission(Permission.TRAINING_EXECUTE)),
+) -> dict[str, Any]:
+    """Authenticated ingress delegates benchmark execution to canonical ML."""
+    from ai_karen_engine.core.intelligence.ml.contracts import PredictionTask
+    from ai_karen_engine.core.intelligence.ml.evaluation.contracts import BenchmarkConfig
+    from ai_karen_engine.core.intelligence.ml.evaluation.runner import BenchmarkRunner
+    from ai_karen_engine.core.intelligence.ml.predictors.registry_classifier import RegistryBackedClassifier
+    from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
+    import hashlib
+
+    tenant, _ = _identity(current_user)
+    prefix = "tenant-" + hashlib.sha256(tenant.encode("utf-8")).hexdigest()[:16] + "-"
+    if not model_id.startswith(prefix):
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    registry = MLModelRegistry()
+    manifest = registry.get(model_id)
+    if manifest is None or manifest.status != "candidate":
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    try:
+        task = PredictionTask(manifest.purpose)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Unsupported benchmark task")
+    predictor = RegistryBackedClassifier(
+        task, registry=registry, tenant_id=tenant, candidate_model_id=model_id,
+    )
+    result, receipt = await BenchmarkRunner().run_and_record(
+        predictor,
+        BenchmarkConfig(
+            model_id=model_id,
+            model_version=manifest.model_version,
+            task=task,
+        ),
+        registry=registry,
+        actor=current_user,
+    )
+    return {
+        "model_id": model_id,
+        "receipt_id": receipt,
+        "sample_count": result.sample_count,
+        "error_count": result.error_count,
+    }
