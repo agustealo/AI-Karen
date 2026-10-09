@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import joblib
+from sklearn.linear_model import LogisticRegression
+
+from ai_karen_engine.core.intelligence.features import IntelligenceFeatures
+from ai_karen_engine.core.intelligence.ml.contracts import (
+    MLModelManifest,
+    ModelStatus,
+    PredictionTask,
+)
+from ai_karen_engine.core.intelligence.ml.predictors.registry_classifier import (
+    RegistryBackedClassifier,
+)
+from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
+
+
+def _register_active_model(
+    registry: MLModelRegistry,
+    tmp_path: Path,
+    task: PredictionTask,
+) -> MLModelManifest:
+    artifact = tmp_path / task.value
+    artifact.mkdir(parents=True, exist_ok=True)
+
+    model = LogisticRegression(random_state=42)
+    model.fit([[1.0], [2.0], [8.0], [9.0]], ["low", "low", "high", "high"])
+    joblib.dump(model, artifact / "model.joblib")
+    (artifact / "feature_schema.json").write_text(
+        json.dumps(
+            {
+                "feature_version": "v1",
+                "feature_order": ["token_count"],
+                "classes": ["high", "low"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = MLModelManifest(
+        model_id=f"adaptive-{task.value}",
+        purpose=task.value,
+        architecture="logistic_regression",
+        artifact_path=str(artifact),
+        artifact_hash="",
+        model_version="test-v1",
+        feature_version="v1",
+        training_dataset_version="test-dataset",
+        status=ModelStatus.ACTIVE.value,
+    )
+    registry.register(manifest)
+    return manifest
+
+
+async def test_registry_classifier_is_unknown_without_active_model(tmp_path):
+    registry = MLModelRegistry(registry_dir=str(tmp_path / "registry"))
+    predictor = RegistryBackedClassifier(
+        PredictionTask.AFFECT,
+        registry=registry,
+    )
+
+    prediction = await predictor.predict(
+        IntelligenceFeatures(text="hello", token_count=3)
+    )
+
+    assert prediction.label == "unknown"
+    assert prediction.confidence == 0.0
+    assert prediction.fallback_used is True
+    assert prediction.metadata["reason"] == "no_active_model"
+
+
+async def test_registry_classifier_runs_active_model(tmp_path):
+    registry = MLModelRegistry(registry_dir=str(tmp_path / "registry"))
+    manifest = _register_active_model(registry, tmp_path, PredictionTask.AFFECT)
+    predictor = RegistryBackedClassifier(
+        PredictionTask.AFFECT,
+        registry=registry,
+    )
+
+    prediction = await predictor.predict(
+        IntelligenceFeatures(text="hello", token_count=9)
+    )
+
+    assert prediction.label == "high"
+    assert prediction.model_id == manifest.model_id
+    assert prediction.model_version == manifest.model_version
+    assert prediction.fallback_used is False
+    assert prediction.inference_method == "registry_model"
+    assert 0.0 <= prediction.confidence <= 1.0
+
+
+async def test_registry_classifier_fails_closed_on_missing_feature(tmp_path):
+    registry = MLModelRegistry(registry_dir=str(tmp_path / "registry"))
+    manifest = _register_active_model(
+        registry,
+        tmp_path,
+        PredictionTask.OUTCOME_FORECAST,
+    )
+    schema_path = Path(manifest.artifact_path) / "feature_schema.json"
+    schema_path.write_text(
+        json.dumps(
+            {
+                "feature_version": "v1",
+                "feature_order": ["request.missing_signal"],
+                "classes": ["high", "low"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    predictor = RegistryBackedClassifier(
+        PredictionTask.OUTCOME_FORECAST,
+        registry=registry,
+    )
+    prediction = await predictor.predict(IntelligenceFeatures(text="forecast"))
+
+    assert prediction.label == "unknown"
+    assert prediction.fallback_used is True
+    assert prediction.metadata["reason"] == "feature_contract_unavailable"
