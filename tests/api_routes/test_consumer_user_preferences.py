@@ -256,7 +256,7 @@ async def test_user_model_selection_save_is_scoped_and_preserves_other_preferenc
     from ai_karen_engine.config import llm_provider_config
     monkeypatch.setattr(
         llm_provider_config, "get_provider_config_manager",
-        lambda: SimpleNamespace(get_provider=lambda name: object() if name == "ollama" else None),
+        lambda: SimpleNamespace(get_provider=lambda name: SimpleNamespace(enabled=True) if name == "ollama" else None),
     )
     response = await settings_routes.update_user_model_selection(
         settings_routes.ModelSelectionSettings(provider="ollama", model="local-model"),
