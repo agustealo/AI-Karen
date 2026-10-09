@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from ai_karen_engine.core.intelligence.ml.training.contracts import (
-    TrainingArtifact, TrainingJob, TrainingPipelineResult,
+    TrainingJob,
 )
 from ai_karen_engine.core.intelligence.ml.training.job_ledger import TrainingJobLedger
 from ai_karen_engine.core.intelligence.ml.training.job_worker import TrainingJobWorker
@@ -45,7 +45,7 @@ def enqueue(store):
         base_model="sklearn", dataset_version="test-v1",
         metadata={
             "tenant_id": "tenant-a",
-            "advanced_config": {"engine": "sklearn"},
+            "advanced_config": {\n                "engine": "sklearn", "task": "affect",\n                "dataset_version": "test-v1",\n            },
         },
     )
     store.submit(job, tenant_id="tenant-a", user_id="operator")
