@@ -5,6 +5,8 @@ auto-retries a run whose side effects may have occurred.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +88,58 @@ class TrainingArtifactReconciler:
                     "job_status": record["state"],
                     "finding": "unresolved_training_artifact",
                 })
+
+        # Read bounded metadata only, never load serialized model weights.
+        # The tenant namespace and persisted job must agree before disclosure.
+        tenant_key = hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:16]
+        tenant_prefix = f"tenant-{tenant_key}-"
+        topology_root = self.registry_root / "topology"
+        if topology_root.is_dir():
+            scanned = 0
+            for model_dir in sorted(topology_root.glob(f"{tenant_prefix}*")):
+                if len(findings) >= limit or scanned >= 500:
+                    break
+                if not model_dir.is_dir() or model_dir.is_symlink():
+                    continue
+                for version_dir in sorted(model_dir.glob("train-*")):
+                    if len(findings) >= limit or scanned >= 500:
+                        break
+                    if version_dir.is_symlink() or not version_dir.is_dir():
+                        continue
+                    scanned += 1
+                    metadata_file = version_dir / "training_metadata.json"
+                    if not metadata_file.is_file() or metadata_file.is_symlink():
+                        continue
+                    try:
+                        if metadata_file.stat().st_size > 1024 * 1024:
+                            continue
+                        metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+                        if not isinstance(metadata, dict):
+                            continue
+                        job_id = metadata.get("training_job_id")
+                        if not isinstance(job_id, str) or not job_id:
+                            continue
+                        if metadata.get("tenant_key") != tenant_key:
+                            continue
+                        record = self.ledger.get(job_id, tenant_id=tenant_id)
+                        if record is None:
+                            continue
+                        if metadata.get("model_id") != model_dir.name:
+                            continue
+                        if metadata.get("model_version") != version_dir.name:
+                            continue
+                        registered = self.registry.get(model_dir.name)
+                        if registered is not None:
+                            continue
+                        if not any(item["job_id"] == job_id for item in findings):
+                            findings.append({
+                                "job_id": job_id,
+                                "model_id": model_dir.name,
+                                "job_status": record["status"],
+                                "finding": "unregistered_training_artifact",
+                            })
+                    except (OSError, ValueError, TypeError, UnicodeError):
+                        continue
 
         return {
             "tenant_id": tenant_id,
