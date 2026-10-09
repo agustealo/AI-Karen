@@ -126,7 +126,10 @@ class CortexExecutionDecider:
             analysis.get("memory_write_requested", False)
             or meta.get("memory_write_requested", False)
         )
-        memory_write_requested = memory_write_requested or self._explicit_memory_save_request(user_content)
+        from ai_karen_engine.core.memory.signals.semantic_classifier import (
+            is_explicit_memory_save_request,
+        )
+        memory_write_requested = memory_write_requested or is_explicit_memory_save_request(user_content)
         if analysis.get("memory_write_denied", False):
             memory_write_requested = False
 
@@ -390,18 +393,6 @@ class CortexExecutionDecider:
                 fallback["memory_scope"] = "user"
                 fallback["memory_top_k"] = 15
             return fallback
-
-    @staticmethod
-    def _explicit_memory_save_request(text: str) -> bool:
-        """Recognize bounded user-directed save intent, never authorize a write."""
-        normalized = " ".join(str(text or "").casefold().replace("’", "'").split())
-        return bool(re.search(
-            r"^(?:(?:please|can you|could you|i want you to)\s+)?"
-            r"(?:remember|save|store)\s+(?:this|that|my\b.+|the\b.+|"
-            r"what i (?:just )?(?:said|told you))"
-            r"(?:\s+(?:for later|long[- ]term|permanently|in (?:your )?memory))?[.!?]*$",
-            normalized,
-        ))
 
     @staticmethod
     def _personal_recall_query(text: str) -> bool:
