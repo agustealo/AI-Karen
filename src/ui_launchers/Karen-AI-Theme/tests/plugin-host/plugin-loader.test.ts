@@ -7,7 +7,7 @@ vi.hoisted(() => {
     moduleGlobal.require = Object.assign(
       () => undefined,
       { resolve: require.resolve, cache: require.cache, extensions: require.extensions, main: require.main, context: undefined },
-    ) as NodeRequire & { context?: unknown };
+    ) as unknown as NodeRequire & { context?: unknown };
   }
   moduleGlobal.require.context = vi.fn(() => {
     const context = (key: string) => ({ default: () => null });
