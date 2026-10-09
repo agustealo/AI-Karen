@@ -140,6 +140,7 @@ class ChatRuntime:
         return get_workflow_runtime()
 
     async def execute(self, request: ChatExecutionRequest) -> ChatExecutionResult:
+        self._resolve_pending_weather_followup(request)
         start = time.time()
         ctx = request.context
 
@@ -436,6 +437,7 @@ class ChatRuntime:
     async def execute_stream(
         self, request: ChatExecutionRequest
     ) -> AsyncIterator[ChatStreamChunk]:
+        self._resolve_pending_weather_followup(request)
         ctx = request.context
         sequence = 0
         request_id = ctx.request_id or str(uuid.uuid4())
@@ -1290,6 +1292,50 @@ class ChatRuntime:
     # ------------------------------------------------------------------
     # Routing
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_pending_weather_followup(request: ChatExecutionRequest) -> None:
+        """Complete a pending weather-location question from this transcript.
+
+        Only an immediately preceding, explicit assistant clarification may
+        supply continuation intent. Never infer it from a stale conversation,
+        profile, or an unrelated city mention.
+        """
+        import re
+
+        messages = request.messages
+        if len(messages) < 3:
+            return
+        current = messages[-1]
+        previous = messages[-2]
+        if (
+            str(current.get("role", "")).lower() != "user"
+            or str(previous.get("role", "")).lower() != "assistant"
+        ):
+            return
+        prompt = str(previous.get("content", "")).strip()
+        if prompt != "Which city or location should I check the weather for?":
+            return
+        location = str(current.get("content", "")).strip()
+        if not re.fullmatch(r"[A-Za-z][A-Za-z .,'-]{0,79}", location):
+            return
+        if location.casefold() in {"yes", "no", "thanks", "thank you", "cancel", "nevermind"}:
+            return
+        # Require the preceding user turn to be an actual weather request.
+        preceding_user = next(
+            (str(msg.get("content", "")) for msg in reversed(messages[:-2])
+             if str(msg.get("role", "")).lower() == "user"),
+            "",
+        )
+        from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
+        if resolve_capability_decision(preceding_user).intent != "search.weather":
+            return
+        current["content"] = f"What's the weather in {location}?"
+        request.metadata = {
+            **dict(request.metadata or {}),
+            "weather_followup_location": location,
+            "weather_followup_resolved": True,
+        }
 
     async def _decide(self, request: ChatExecutionRequest) -> ExecutionDecision:
         return await self._composition.cortex.decide(request)
