@@ -56,12 +56,17 @@ class EvaluationEvidenceStore:
             or not manifest.artifact_hash
             or result.sample_count != len(result.outcomes)
             or result.error_count != sum(bool(outcome.error) for outcome in result.outcomes)
+            or result.error_count != 0
+            or result.fallback_count != 0
+            or result.abstention_count != 0
+            or any(outcome.error or not outcome.correct for outcome in result.outcomes)
             or any(
                 outcome.prediction is None
                 or outcome.prediction.model_id != manifest.model_id
                 or outcome.prediction.model_version != manifest.model_version
                 or outcome.prediction.task != result.task
                 or outcome.fallback_used
+                or outcome.prediction.fallback_used
                 for outcome in result.outcomes
             )
         ):
@@ -73,6 +78,9 @@ class EvaluationEvidenceStore:
                 or registered.artifact_hash != manifest.artifact_hash
                 or not registry.validate_artifact(registered)):
             raise ValueError("Candidate is unregistered or artifact integrity is invalid")
+        if (registered.model_version != manifest.model_version
+                or registered.purpose != manifest.purpose):
+            raise ValueError("Registered candidate identity changed")
         decision, reasons = evaluate_promotion(result, active_result)
         receipt_id = uuid4().hex
         evidence = {
