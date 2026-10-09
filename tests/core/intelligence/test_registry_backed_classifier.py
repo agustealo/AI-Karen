@@ -159,3 +159,25 @@ async def test_registry_classifier_decodes_numeric_training_labels(tmp_path):
     prediction = await predictor.predict(IntelligenceFeatures(text="longer", token_count=9))
     assert prediction.label == "high"
     assert set(prediction.metadata["probabilities"]) == {"high", "low"}
+
+
+def test_registry_active_selection_requires_matching_tenant(tmp_path):
+    import hashlib
+    registry = MLModelRegistry(registry_dir=str(tmp_path / "registry"))
+    a = hashlib.sha256(b"tenant-a").hexdigest()[:16]
+    b = hashlib.sha256(b"tenant-b").hexdigest()[:16]
+    for tenant_key in (a, b):
+        registry.register(MLModelManifest(
+            model_id=f"tenant-{tenant_key}-affect-model",
+            purpose="affect",
+            architecture="logistic_regression",
+            artifact_path=str(tmp_path),
+            artifact_hash="test-hash",
+            model_version="v1",
+            feature_version="v1",
+            status=ModelStatus.ACTIVE.value,
+        ))
+    assert registry.get_active("affect") is None
+    assert registry.get_active("affect", tenant_id="tenant-a").model_id.startswith(f"tenant-{a}-")
+    assert registry.get_active("affect", tenant_id="tenant-b").model_id.startswith(f"tenant-{b}-")
+    assert registry.get_active("affect", tenant_id="tenant-c") is None
