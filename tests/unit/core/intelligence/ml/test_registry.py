@@ -227,9 +227,10 @@ def test_governed_trained_model_cannot_promote_without_canonical_benchmark(tmp_p
         status=ModelStatus.CANDIDATE.value,
     )
     registry.register(candidate)
-    candidate.status = ModelStatus.SHADOW.value
+    from dataclasses import replace
+    shadow = replace(candidate, status=ModelStatus.SHADOW.value)
     with pytest.raises(ManifestValidationError, match="passing canonical benchmark"):
-        registry.register(candidate)
+        registry.register(shadow)
     assert registry.get(candidate.model_id).status == ModelStatus.CANDIDATE.value
     assert not (tmp_path / f"{candidate.model_id}.json").read_text().count('"status": "shadow"')
 
@@ -253,4 +254,4 @@ def test_governed_trained_model_rejects_fabricated_pass_without_artifact(tmp_pat
     registry.register(candidate)
     candidate.status = ModelStatus.SHADOW.value
     with pytest.raises(ManifestValidationError, match="verified model artifacts"):
-        registry.register(candidate)
+        registry.register(shadow)
