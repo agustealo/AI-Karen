@@ -80,6 +80,38 @@ class BenchmarkRunner:
             outcomes=outcomes,
         )
 
+    async def run_and_record(
+        self,
+        predictor: Any,
+        config: BenchmarkConfig,
+        *,
+        registry: Any,
+        active_result: BenchmarkResult | None = None,
+    ) -> tuple[BenchmarkResult, str]:
+        """Run the canonical evaluation before recording a candidate receipt.
+
+        Callers must authorize this operation in the governed execution layer;
+        a receipt cannot be created solely from manifest-provided metrics.
+        """
+        from ai_karen_engine.core.intelligence.ml.evaluation.evidence import (
+            EvaluationEvidenceStore,
+        )
+
+        manifest = registry.get(config.model_id)
+        if (
+            manifest is None
+            or manifest.status != "candidate"
+            or manifest.model_version != config.model_version
+            or manifest.purpose != config.task.value
+            or not registry.validate_artifact(manifest)
+        ):
+            raise ValueError("Registered candidate identity or artifact is invalid")
+        result = await self.run(predictor, config)
+        receipt = EvaluationEvidenceStore(registry.registry_dir).record(
+            manifest, result, active_result=active_result
+        )
+        return result, receipt
+
     async def _run_case(self, predictor: Any, case: EvaluationCase) -> PredictionOutcome:
         features = IntelligenceFeatures(
             text=case.input_text,
