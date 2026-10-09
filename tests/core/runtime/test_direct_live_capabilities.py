@@ -1369,3 +1369,75 @@ async def test_runtime_denied_history_stays_uninjected_for_general_request() -> 
     await runtime._prepare_conversation_continuation(request)
     assert len(request.messages) == 1
     assert "conversation_history_source" not in request.metadata
+
+
+def test_typed_clarification_resumes_non_weather_request() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("four")
+    request.messages = [
+        {"role": "user", "content": "Find a restaurant booking"},
+        {
+            "role": "assistant",
+            "content": "How many people?",
+            "metadata": {
+                "pending_clarification": {
+                    "status": "awaiting_user",
+                    "slot": "party_size",
+                    "original_request": "Find a restaurant booking",
+                }
+            },
+        },
+        {"role": "user", "content": "four"},
+    ]
+    assert ChatRuntime._resolve_typed_pending_clarification(request)
+    assert request.messages[-1]["content"] == (
+        "Find a restaurant booking\nAdditional party_size: four"
+    )
+    assert request.metadata["clarification_source"] == "authorized_conversation"
+
+
+def test_typed_clarification_requires_original_request_and_pending_state() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("four")
+    request.messages = [
+        {"role": "user", "content": "Explain this photo"},
+        {
+            "role": "assistant",
+            "content": "How many people?",
+            "metadata": {
+                "pending_clarification": {
+                    "status": "awaiting_user",
+                    "slot": "party_size",
+                    "original_request": "Find a restaurant booking",
+                }
+            },
+        },
+        {"role": "user", "content": "four"},
+    ]
+    assert not ChatRuntime._resolve_typed_pending_clarification(request)
+    assert request.messages[-1]["content"] == "four"
+
+
+def test_typed_clarification_does_not_replay_cancelled_request() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("cancel")
+    request.messages = [
+        {"role": "user", "content": "Book a meeting"},
+        {
+            "role": "assistant",
+            "content": "What time?",
+            "metadata": {
+                "pending_clarification": {
+                    "status": "awaiting_user",
+                    "slot": "meeting_time",
+                    "original_request": "Book a meeting",
+                }
+            },
+        },
+        {"role": "user", "content": "cancel"},
+    ]
+    assert not ChatRuntime._resolve_typed_pending_clarification(request)
+    assert request.messages[-1]["content"] == "cancel"
