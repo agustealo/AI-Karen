@@ -206,8 +206,29 @@ class IntelligenceRuntime:
                 signal_type = SignalType.TASK_COMPLEXITY
             elif task == PredictionTask.MEMORY_RELEVANCE:
                 signal_type = SignalType.MEMORY_RELEVANCE
+            elif task == PredictionTask.AFFECT:
+                signal_type = SignalType.SENTIMENT
+            elif task == PredictionTask.PREFERENCE:
+                signal_type = SignalType.PREFERENCE
+            elif task == PredictionTask.OUTCOME_FORECAST:
+                signal_type = SignalType.FORECAST
+            elif task == PredictionTask.BEHAVIOR_PATTERN:
+                signal_type = SignalType.BEHAVIOR_PATTERN
             else:
                 signal_type = SignalType.RISK
+
+            if (
+                task
+                in {
+                    PredictionTask.AFFECT,
+                    PredictionTask.PREFERENCE,
+                    PredictionTask.OUTCOME_FORECAST,
+                    PredictionTask.BEHAVIOR_PATTERN,
+                }
+                and pred.fallback_used
+                and (pred.label or "unknown") == "unknown"
+            ):
+                continue
 
             signals.append(
                 IntelligenceSignal(
@@ -246,6 +267,25 @@ class IntelligenceRuntime:
                     }
             elif task == PredictionTask.EXECUTION_TOPOLOGY:
                 result.topology_signals["ml_prediction"] = {
+                    "label": pred.label,
+                    "confidence": pred.confidence,
+                    "probability": pred.probability,
+                    "model_id": pred.model_id,
+                    "model_version": pred.model_version,
+                    "feature_version": pred.feature_version,
+                    "calibration_version": pred.calibration_version,
+                    "calibrated": pred.calibrated,
+                    "fallback_used": pred.fallback_used,
+                    "inference_method": pred.inference_method,
+                    "probabilities": pred.metadata.get("probabilities", {}),
+                }
+            elif task in {
+                PredictionTask.AFFECT,
+                PredictionTask.PREFERENCE,
+                PredictionTask.OUTCOME_FORECAST,
+                PredictionTask.BEHAVIOR_PATTERN,
+            }:
+                result.adaptive_signals[task.value] = {
                     "label": pred.label,
                     "confidence": pred.confidence,
                     "probability": pred.probability,
