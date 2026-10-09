@@ -184,3 +184,37 @@ def test_coordinated_location_claims_are_not_inferred_from_third_person() -> Non
         }
         for item in signals
     )
+
+
+def test_explicit_place_of_birth_is_durable_profile_candidate_not_origin_inference() -> None:
+    for statement in ("My place of birth is Jamaica.", "My birthplace is Jamaica."):
+        facts = classify_explicit_user_memory(statement)
+        births = [signal for signal in facts if signal.metadata.get("attribute") == "birthplace"]
+        assert len(births) == 1
+        assert births[0].metadata["normalized_value"] == "Jamaica"
+        assert births[0].metadata["retention_scope"] == "user_profile"
+        assert births[0].metadata["explicit_user_statement"] is True
+
+
+def test_explicit_profile_fact_types_share_governed_retention_contract() -> None:
+    examples = (
+        ("My name is Orlando.", "preferred_name"),
+        ("My favorite color is green.", "favorite_color"),
+        ("My place of birth is Jamaica.", "birthplace"),
+        ("I live in Detroit.", "residence_location"),
+        ("I grew up in NYC.", "upbringing_location"),
+    )
+    for statement, attribute in examples:
+        matched = [
+            item for item in classify_explicit_user_memory(statement)
+            if item.metadata.get("attribute") == attribute
+        ]
+        assert len(matched) == 1, (statement, attribute)
+        assert matched[0].metadata["explicit_user_statement"] is True
+        assert matched[0].metadata["retention_scope"] == "user_profile"
+
+
+def test_questions_and_third_person_biographies_do_not_become_profile_facts() -> None:
+    for statement in ("Where was I born?", "What is my favorite color?", "Her birthplace is Jamaica."):
+        facts = classify_explicit_user_memory(statement)
+        assert not any(item.metadata.get("attribute") == "birthplace" for item in facts)
