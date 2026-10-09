@@ -16,6 +16,8 @@ python-dotenv
 prometheus_client
 fastapi==0.136.1
 httpx==0.28.1
+aiohttp
+bs4
 requests
 tenacity
 redis
