@@ -45,7 +45,10 @@ def enqueue(store):
         base_model="sklearn", dataset_version="test-v1",
         metadata={
             "tenant_id": "tenant-a",
-            "advanced_config": {\n                "engine": "sklearn", "task": "affect",\n                "dataset_version": "test-v1",\n            },
+            "advanced_config": {
+                "engine": "sklearn", "task": "affect",
+                "dataset_version": "test-v1",
+            },
         },
     )
     store.submit(job, tenant_id="tenant-a", user_id="operator")
