@@ -278,3 +278,20 @@ def test_manifest_mutation_after_registration_cannot_promote_cached_candidate(tm
     assert registry.get(manifest.model_id).metrics["canonical_benchmark_status"] == "not_run"
     with pytest.raises(ManifestValidationError, match="trusted canonical"):
         registry.register(replace(manifest, status=ModelStatus.SHADOW.value))
+
+
+def test_untrusted_manifest_flags_without_evaluation_receipt_remain_blocked(tmp_path):
+    from dataclasses import replace
+    registry = MLModelRegistry(registry_dir=str(tmp_path))
+    candidate = MLModelManifest(
+        model_id="tenant-test-affect-candidate",
+        purpose="affect", architecture="trained",
+        artifact_path=str(tmp_path / "artifact"), artifact_hash="pretend-hash",
+        model_version="v1", feature_version="v1",
+        metrics={"canonical_benchmark_status": "passed", "canonical_benchmark_id": "forged"},
+        status=ModelStatus.CANDIDATE.value,
+    )
+    registry.register(candidate)
+    with pytest.raises(ManifestValidationError, match="trusted canonical"):
+        registry.register(replace(candidate, status=ModelStatus.SHADOW.value))
+    assert registry.get(candidate.model_id).status == ModelStatus.CANDIDATE.value
