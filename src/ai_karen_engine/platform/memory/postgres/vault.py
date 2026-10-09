@@ -300,9 +300,13 @@ class PostgresNeuroVault(VaultPort):
                 valid_to=valid_to,
                 supersedes=self._optional_uuid(entry.parent_id),
             )
-            session.add(event)
-            session.add(assertion)
             try:
+                # Explicitly flush the parent row before inserting the child.
+                # Independent ORM objects without relationship wiring are not
+                # guaranteed to flush in FK dependency order.
+                session.add(event)
+                await session.flush()
+                session.add(assertion)
                 await session.commit()
             except IntegrityError:
                 await session.rollback()
