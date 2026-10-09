@@ -57,6 +57,15 @@ _TRAVEL = re.compile(
 )
 
 
+# Temporary travel/current-presence statements are not residence updates.
+# Distinguish today's visited place from durable home and origin locations.
+_TEMPORARY_PRESENCE = re.compile(
+    r"(?i)\bi(?:'m| am)\s+(?:currently\s+)?(?:in|visiting|staying\s+in)\s+"
+    r"(?P<place>[A-Za-z][A-Za-z.' -]{0,70}?)"
+    r"(?=\s+(?:on\s+vacation|on\s+holiday|for\s+(?:vacation|a\s+trip|work)|"
+    r"visiting\b|and\b|but\b)|[,.!?;]|$)"
+)
+
 _LOCATION_PATTERNS = (
     ("current_location", "current", re.compile(
         r"(?i)\b(?:i(?:'m| am)\s+(?:currently|right now)\s+in|"
@@ -67,6 +76,9 @@ _LOCATION_PATTERNS = (
     )),
     ("residence_location", "residence", re.compile(
         r"(?i)\bi(?:'m| am)\s+based\s+in\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
+    )),
+    ("work_location", "workplace", re.compile(
+        r"(?i)\bi\s+(?:work|am\s+working)\s+in\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
     ("birthplace", "birthplace", re.compile(
         r"(?i)\b(?:i\s+(?:was\s+)?born\s+in|born\s+in)\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
@@ -86,8 +98,38 @@ def classify_general_user_facts(text: str) -> list[MemorySignal]:
 
     signals: list[MemorySignal] = []
 
+    temporary = _TEMPORARY_PRESENCE.search(normalized)
+    if temporary:
+        place = _clean(temporary.group("place"))
+        if place:
+            # Admission, expiration and active-location arbitration remain
+            # governed by the canonical memory lifecycle.
+            signals.append(
+                _profile_fact(
+                    text=temporary.group(0),
+                    category="location",
+                    attribute="current_location",
+                    value=place,
+                    semantic_class="location",
+                    confidence=0.98,
+                    extra={
+                        "location_type": "current",
+                        "stability": "short_term",
+                        "context_kind": (
+                            "travel" if re.search(
+                                r"(?i)\\b(?:vacation|holiday|trip|visiting)\\b",
+                                normalized,
+                            ) else "current_presence"
+                        ),
+                        "temporal_source": "explicit_user_statement",
+                    },
+                )
+            )
+
     for attribute, location_type, pattern in _LOCATION_PATTERNS:
         for match in pattern.finditer(normalized):
+            if temporary and attribute == "current_location" and match.start() == temporary.start():
+                continue
             value = _clean(match.group(1))
             if not value:
                 continue
