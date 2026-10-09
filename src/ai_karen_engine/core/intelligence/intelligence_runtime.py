@@ -7,6 +7,8 @@ from typing import Any
 from ai_karen_engine.core.intelligence.contracts import (
     IntelligenceAnalysisResult,
     IntelligenceSignal,
+    SemanticInterpretation,
+    TaskAmbiguity,
     SignalSourceType,
     SignalType,
 )
@@ -250,6 +252,36 @@ class IntelligenceRuntime:
         if not result.capability_hints:
             result.capability_hints = self._assess_capability_hints(text, result)
 
+        # Project established Intelligence signals into the canonical semantic
+        # envelope. This does not infer new personal facts or grant evidence access.
+        ambiguity_prediction = predictions.get(PredictionTask.AMBIGUITY)
+        ambiguity_label = str(
+            getattr(ambiguity_prediction, "label", "") or ""
+        ).casefold()
+        ambiguity = next(
+            (candidate for candidate in TaskAmbiguity
+             if candidate.value == ambiguity_label),
+            TaskAmbiguity.UNKNOWN,
+        )
+        intent_signal = next(
+            (signal for signal in signals if signal.signal_type == SignalType.INTENT),
+            None,
+        )
+        interpretation_confidence = (
+            float(result.intent_confidence)
+            if intent_signal is not None and not intent_signal.fallback_used
+            and 0.0 <= float(result.intent_confidence) <= 1.0
+            else None
+        )
+        result.interpretation = SemanticInterpretation(
+            intent_family=result.intent or "unknown",
+            ambiguity=ambiguity,
+            confidence=interpretation_confidence,
+            provenance=tuple(
+                signal.source_id for signal in signals
+                if signal.signal_type == SignalType.INTENT and signal.source_id
+            ),
+        )
         result.signals = signals
         result.latency_ms = (time.time() - start) * 1000.0
         result.degraded = not signals and not predictions

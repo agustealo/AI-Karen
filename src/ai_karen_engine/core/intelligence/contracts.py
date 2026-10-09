@@ -60,6 +60,33 @@ class IntelligenceSignal:
     inference_method: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class SemanticInterpretation:
+    """Model-independent meaning signal, not an authorization or memory fact.
+
+    Unknown values must stay unknown. A recognized pattern is not equivalent
+    to a calibrated intent probability, and evidence requests are advisory to
+    CORTEX/RuntimePolicy, never permission grants.
+    """
+
+    intent_family: str = "unknown"
+    subject: str | None = None
+    predicate: str | None = None
+    object_text: str | None = None
+    temporal_reference: str | None = None
+    ambiguity: "TaskAmbiguity" = field(default_factory=lambda: TaskAmbiguity.UNKNOWN)
+    candidate_interpretations: tuple[str, ...] = ()
+    evidence_needs: tuple[str, ...] = ()
+    confidence: float | None = None
+    provenance: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.confidence is not None and not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("semantic confidence must be in [0, 1]")
+        if not self.intent_family.strip():
+            raise ValueError("intent_family must not be empty")
+
+
 @dataclass
 class IntelligenceAnalysisResult:
     """Complete intelligence analysis result from IntelligenceRuntime."""
@@ -82,6 +109,7 @@ class IntelligenceAnalysisResult:
     capability_hints: dict[str, Any] = field(default_factory=dict)
 
     signals: list[IntelligenceSignal] = field(default_factory=list)
+    interpretation: SemanticInterpretation | None = None
 
     signal_provenance: dict[str, Any] = field(default_factory=dict)
     latency_ms: float = 0.0
