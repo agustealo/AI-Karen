@@ -60,3 +60,19 @@ def test_training_control_plane_requires_shadow_governance(tmp_path):
     assert "sensitive_data_filtering" in controls
     assert "held_out_evaluation" in controls
     assert "shadow_evaluation" in controls
+
+
+def test_admin_training_routes_are_mounted_by_canonical_router_registry():
+    """The Admin UI must not receive 404 for a defined but unmounted endpoint."""
+    from ai_karen_engine.api_routes.admin.training import router as training_router
+    from ai_karen_engine.server.routers import CORE_ROUTERS
+
+    mounts = [
+        spec for spec in CORE_ROUTERS
+        if spec.router is training_router and spec.prefix == "/api"
+    ]
+    assert len(mounts) == 1
+    paths = {route.path for route in training_router.routes}
+    assert "/admin/training/control-plane" in paths
+    assert "/admin/training/advanced/catalog" in paths
+    assert "/admin/training/advanced/jobs" in paths
