@@ -119,21 +119,48 @@ async def build_runtime_fallback(
             "local_openai_endpoint", "cloud_provider"
         }
     )
+    # Canonical registry aliases are the only evidence of provider identity;
+    # shared locality/provider family is not evidence of the same backend.
+    from ai_karen_engine.core.model_runtime.provider_registry_service import (
+        ProviderRegistryService,
+    )
+
+    requested_canonical = ProviderRegistryService.canonicalize_provider_id(
+        md.requested_provider
+    )
+    actual_canonical = ProviderRegistryService.canonicalize_provider_id(
+        md.actual_provider
+    )
+    same_registered_provider = bool(
+        requested_canonical
+        and actual_canonical
+        and requested_canonical == actual_canonical
+    )
+    provider_switched = (
+        requested_canonical != actual_canonical
+        if requested_canonical and actual_canonical
+        else None
+    )
+    model_switched = (
+        md.requested_model != md.actual_model
+        if md.requested_model and md.actual_model
+        else None
+    )
     md.extra["recovery"] = {
         "occurred": True,
         "reason": "primary_execution_failed",
         "failure_type": type(failure).__name__,
         "provider_identity_verified": False,
         "same_provider_family": same_provider_family,
+        "same_registered_provider": same_registered_provider,
+        "provider_switched": provider_switched,
+        "canonical_requested_provider": requested_canonical,
+        "canonical_actual_provider": actual_canonical,
         "requested_provider_class": requested_policy.classification,
         "actual_provider_class": actual_policy.classification,
         "requested_provider": md.requested_provider,
         "actual_provider": md.actual_provider,
-        "model_changed": (
-            md.requested_model != md.actual_model
-            if md.requested_model and md.actual_model
-            else None
-        ),
+        "model_changed": model_switched,
         "actual_response_healthy": True,
     }
     return ChatExecutionResult(
