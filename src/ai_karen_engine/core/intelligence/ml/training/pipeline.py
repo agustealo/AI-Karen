@@ -62,7 +62,7 @@ class TrainingPipeline:
             eval_result = await self._evaluate_artifact(artifact)
             result.evaluation_result = eval_result
 
-            registered = self._register_artifact(artifact, job)
+            if (int(artifact.metrics.get('test_samples', 0)) < 1 or\n                'macro_f1' not in artifact.metrics or\n                not artifact.artifact_hash):\n                raise ValueError('Missing held-out evaluation evidence or artifact integrity hash')\n            registered = self._register_artifact(artifact, job)
             result.artifact = artifact
             result.registered = registered
             job.status = TrainingJobStatus.SUCCEEDED.value
@@ -121,10 +121,10 @@ class TrainingPipeline:
             artifact_path=artifact.artifact_path,
             artifact_hash=artifact.artifact_hash,
             model_version=artifact.model_version,
-            feature_version="v1",
+            feature_version=str(artifact.metrics.get("feature_version") or "v1"),
             training_dataset_version=artifact.dataset_version,
             calibration_version="",
-            metrics=artifact.metrics,
+            metrics={**artifact.metrics, 'canonical_benchmark_status': 'not_run'},
             created_at=datetime.now(timezone.utc).isoformat(),
             status=ModelStatus.CANDIDATE.value,
         )
