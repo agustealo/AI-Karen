@@ -253,6 +253,8 @@ class CortexExecutionDecider:
             topology = self._infer_topology_from_analysis(analysis)
             capabilities = self._infer_capabilities_from_analysis(analysis)
             memory_policy = self._infer_memory_policy_from_analysis(analysis)
+            if self._explicit_user_memory_write_request(text):
+                memory_policy["write_requested"] = True
             if self._personal_recall_query(text):
                 memory_policy["recall_required"] = True
                 memory_policy["scope"] = "user"
@@ -370,11 +372,27 @@ class CortexExecutionDecider:
                     capability_decision.confidence
                 )
                 fallback["direct_capability"] = True
+            if self._explicit_user_memory_write_request(text):
+                fallback["memory_write_requested"] = True
             if self._personal_recall_query(text):
                 fallback["memory_recall_required"] = True
                 fallback["memory_scope"] = "user"
                 fallback["memory_top_k"] = 15
             return fallback
+
+    @staticmethod
+    def _explicit_user_memory_write_request(text: str) -> bool:
+        """Request governed write eligibility for classified explicit user facts.
+
+        The existing formation classifier owns semantics. CORTEX only requests
+        an action; RuntimePolicy still decides whether memory.write is allowed.
+        """
+        from ai_karen_engine.core.memory.signals import classify_explicit_user_memory
+
+        return any(
+            signal.metadata.get("explicit_user_statement") is True
+            for signal in classify_explicit_user_memory(text)
+        )
 
     @staticmethod
     def _personal_recall_query(text: str) -> bool:
