@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import time
@@ -130,7 +131,7 @@ class BenchmarkRunner:
             or manifest.model_version != config.model_version
             or manifest.purpose != config.task.value
             or not manifest.model_id.startswith(
-                "tenant-" + __import__("hashlib").sha256(tenant.encode("utf-8")).hexdigest()[:16] + "-"
+                "tenant-" + hashlib.sha256(tenant.encode("utf-8")).hexdigest()[:16] + "-"
             )
             or not registry.validate_artifact(manifest)
         ):
