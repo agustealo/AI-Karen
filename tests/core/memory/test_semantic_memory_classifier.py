@@ -157,3 +157,30 @@ def test_explicit_origin_remains_distinct_from_self_description() -> None:
 def test_short_self_description_does_not_infer_identity_from_generic_question() -> None:
     signals = classify_explicit_user_memory("Where am I from?")
     assert not any(item.metadata.get("attribute") == "self_description" for item in signals)
+
+
+def test_coordinated_first_person_location_facts_keep_distinct_roles() -> None:
+    signals = classify_explicit_user_memory(
+        "I am Jamican, from Jamaica, Grow up in NYC, living in detroit"
+    )
+    facts = {
+        str(item.metadata.get("attribute")): item.metadata.get("normalized_value")
+        for item in signals
+    }
+    assert facts["origin_location"] == "Jamaica"
+    assert facts["upbringing_location"] == "NYC"
+    assert facts["residence_location"] == "detroit"
+    assert "birthplace" not in facts
+    assert "current_location" not in facts
+
+
+def test_coordinated_location_claims_are_not_inferred_from_third_person() -> None:
+    signals = classify_explicit_user_memory(
+        "She is Jamaican, from Jamaica, grew up in NYC, living in Detroit."
+    )
+    assert not any(
+        item.metadata.get("attribute") in {
+            "origin_location", "upbringing_location", "residence_location"
+        }
+        for item in signals
+    )
