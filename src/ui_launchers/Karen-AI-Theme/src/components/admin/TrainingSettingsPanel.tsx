@@ -35,6 +35,7 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import IntelligenceTrainingControlPlane from "./IntelligenceTrainingControlPlane";
+import AdvancedTrainingWorkbench from "./AdvancedTrainingWorkbench";
 
 type DatasetRecord = {
   dataset_id: string;
@@ -503,10 +504,15 @@ export default function TrainingSettingsPanel() {
       <Tabs defaultValue="intelligence" className="w-full">
         <TabsList className="flex w-full flex-wrap justify-start">
           <TabsTrigger value="intelligence">Intelligence</TabsTrigger>
+          <TabsTrigger value="advanced">Advanced Training</TabsTrigger>
           <TabsTrigger value="overview">Data Sources</TabsTrigger>
           <TabsTrigger value="datasets">Datasets</TabsTrigger>
           <TabsTrigger value="curation">Curated Ingest</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="advanced" className="mt-6">
+          <AdvancedTrainingWorkbench />
+        </TabsContent>
 
         <TabsContent value="intelligence" className="mt-6">
           <IntelligenceTrainingControlPlane />
