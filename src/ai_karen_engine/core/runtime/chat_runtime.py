@@ -1162,12 +1162,12 @@ class ChatRuntime:
         This does not authorize storage. MemoryFormationEvaluator still
         classifies, applies privacy policy, and owns admission.
         """
-        from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
         from ai_karen_engine.core.memory.signals.semantic_classifier import (
             classify_explicit_user_memory,
+            is_explicit_memory_save_request,
         )
 
-        if not CortexExecutionDecider._explicit_memory_save_request(current_text):
+        if not is_explicit_memory_save_request(current_text):
             return current_text
         requested = current_text.casefold()
         attribute_hints = {
@@ -1185,7 +1185,7 @@ class ChatRuntime:
             if str(message.get("role") or "").casefold() != "user":
                 continue
             candidate = str(message.get("content") or "").strip()
-            if not candidate or CortexExecutionDecider._explicit_memory_save_request(candidate):
+            if not candidate or is_explicit_memory_save_request(candidate):
                 continue
             facts = [
                 item for item in classify_explicit_user_memory(candidate)
