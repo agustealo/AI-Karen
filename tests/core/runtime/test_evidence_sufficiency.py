@@ -136,3 +136,58 @@ def test_no_trusted_semantic_target_does_not_force_an_answer():
     assert meta["evidence_sufficiency"] == "ambiguous"
     assert "NYC" not in text
     assert meta["actual_provider"] is None
+
+
+def test_reported_identity_questions_are_recognized_as_profile_recall():
+    from ai_karen_engine.core.memory.signals.semantic_classifier import (
+        is_personal_memory_recall_query,
+    )
+    from ai_karen_engine.core.intelligence.profile_attribute import (
+        requested_profile_attribute,
+    )
+
+    assert is_personal_memory_recall_query("Who am I?")
+    assert requested_profile_attribute("Who am I?") is None
+    assert is_personal_memory_recall_query("where am I from?")
+    assert requested_profile_attribute("where am I from?") == "origin_location"
+    assert is_personal_memory_recall_query("Whats my name")
+    assert requested_profile_attribute("Whats my name") == "preferred_name"
+
+
+def test_identity_clarification_does_not_confuse_assistant_and_user():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    decision = ExecutionDecision(intent="memory.recall")
+    decision.cognitive_context = context(
+        evidence("birthplace", "Jamaica"),
+        evidence("upbringing_location", "NYC"),
+    )
+    response, meta = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="tenant", user_id="user",
+    )
+    assert meta["evidence_sufficiency"] == "ambiguous"
+    assert "Jamaica" not in response
+    assert "NYC" not in response
+    assert "Karen" not in response
+
+
+def test_origin_and_name_never_substitute_from_birthplace_or_upbringing():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    for attribute in ("origin_location", "preferred_name"):
+        decision = ExecutionDecision(
+            intent="memory.recall",
+            policy_constraints={"personal_evidence_attribute": attribute},
+        )
+        decision.cognitive_context = context(
+            evidence("birthplace", "Jamaica"),
+            evidence("upbringing_location", "NYC"),
+        )
+        response, meta = ChatRuntime._grounded_personal_response(
+            decision, tenant_id="tenant", user_id="user",
+        )
+        assert meta["evidence_sufficiency"] == "missing"
+        assert "Jamaica" not in response
+        assert "NYC" not in response
