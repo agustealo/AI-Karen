@@ -136,7 +136,7 @@ class SklearnTrainingExecutor(TrainingExecutor):
             if tenant_id == "default":
                 raise ValueError("Explicit tenant required for governed training")
             tenant_key = hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:16]
-            model_id = f"tenant-{tenant_key}-{job.task}"
+            model_id = f"tenant-{tenant_key}-{job.task}-{job.job_id[:12]}"
         else:
             # Legacy direct pipeline callers retain the existing model identity.
             model_id = f"topology-{job.task}"
@@ -179,6 +179,7 @@ class SklearnTrainingExecutor(TrainingExecutor):
             "seed": random_seed,
             "test_size": test_size,\n            "max_iter": max_iter,
             "tenant_scoped": bool(tenant_id),
+            "training_job_id": job.job_id,
             "class_weight": class_weight,
         }
         metadata_path = artifact_root / "training_metadata.json"
