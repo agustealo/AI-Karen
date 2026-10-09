@@ -71,12 +71,15 @@ jobs:
         run: bash -n scripts/ci/production-first-boot-smoke.sh
 
       - name: Authenticate Docker Hub for production image builds
-        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+          else
+            echo "::warning::Docker Hub credentials are not configured; public image pulls may be rate-limited"
+          fi
 
       - name: Build production API image
         run: docker build --target app --build-arg PROFILE=runtime -t ai-karen-api:beta .
