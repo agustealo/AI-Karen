@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 import json
 import logging
 import os
@@ -93,8 +94,9 @@ class MLModelRegistry:
         self._validate_status_transition(manifest)
         self._validate_uniqueness(manifest)
         self._validate_promotion_evidence(manifest)
-        self._save_manifest(manifest)
-        self._manifests[manifest.model_id] = manifest
+        snapshot = replace(manifest, metrics=dict(manifest.metrics or {}))
+        self._save_manifest(snapshot)
+        self._manifests[snapshot.model_id] = snapshot
 
     def _validate_promotion_evidence(self, manifest: MLModelManifest) -> None:
         """Trained models cannot bypass the canonical benchmark promotion gate."""
@@ -102,19 +104,13 @@ class MLModelRegistry:
             return
         if manifest.status not in {ModelStatus.SHADOW.value, ModelStatus.ACTIVE.value}:
             return
-        metrics = manifest.metrics or {}
-        if metrics.get("canonical_benchmark_status") != "passed":
-            raise ManifestValidationError(
-                "Trained model promotion requires a passing canonical benchmark"
-            )
-        if not metrics.get("canonical_benchmark_id"):
-            raise ManifestValidationError(
-                "Trained model promotion requires benchmark provenance"
-            )
-        if not manifest.artifact_hash or not self.validate_artifact(manifest):
-            raise ManifestValidationError(
-                "Trained model promotion requires verified model artifacts"
-            )
+        # The canonical benchmark runner has no durable, trusted receipt
+        # contract yet. Manifest-supplied flags and identifiers are mutable and
+        # cannot authorize activation, even if they claim "passed".
+        raise ManifestValidationError(
+            "Trained model promotion blocked until a trusted canonical "
+            "evaluation receipt is implemented"
+        )
 
     def _validate_status_transition(self, manifest: MLModelManifest) -> None:
         existing = self._manifests.get(manifest.model_id)
