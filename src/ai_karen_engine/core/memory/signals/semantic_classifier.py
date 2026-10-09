@@ -100,8 +100,7 @@ def _normalize_save_text(text: str) -> str:
 
 _PERSONAL_RECALL_QUERY = re.compile(
     r"^(?:(?:please|can you|could you)\s+)?"
-    r"(?:who\s+am\s+i|"+
-    r"(?:where\s+(?:am|was)\s+i\s+(?:from|born|currently|right now|based)|"
+    r"(?:who\s+am\s+i|where\s+(?:am|was)\s+i\s+(?:from|born|currently|right now|based)|"
     r"where\s+did\s+i\s+grow\s+up|"
     r"where\s+do\s+i\s+(?:live|work)|"
     r"(?:what\s+is|what's|whats|hats|hat's)\s+my\s+.+|"
