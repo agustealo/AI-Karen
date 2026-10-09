@@ -83,7 +83,7 @@ class PostgresProfileRecallRetriever:
             return "residence_location"
         if any(cue in q for cue in ("where do i work", "where i work", "my workplace", "work location")):
             return "work_location"
-        if any(cue in q for cue in ("weather", "rain", "forecast", "snow", "temperature", "where am i currently", "where am i right now")):
+        if any(cue in q for cue in ("where am i currently", "where am i right now")):
             return "current_location"
         return None
 
@@ -138,13 +138,6 @@ class PostgresProfileRecallRetriever:
             "my birthplace",
             "my hometown",
             "current location",
-            "weather",
-            "forecast",
-            "rain today",
-            "rain tomorrow",
-            "will it rain",
-            "will it snow",
-            "temperature outside",
             "where i live",
             "where i'm from",
             "i already told you",
