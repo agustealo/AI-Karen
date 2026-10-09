@@ -307,7 +307,6 @@ def test_approved_receipt_cannot_promote_modified_candidate_artifact(tmp_path):
     artifact.mkdir()
     model_file = artifact / "model.bin"
     model_file.write_bytes(b"original-model")
-    digest = hashlib.sha256(b"original-model").hexdigest()
     from ai_karen_engine.core.intelligence.ml.training.sklearn_executor import _hash_directory
     candidate = MLModelManifest(
         model_id="tenant-abc-affect-hash-check",
