@@ -1289,3 +1289,45 @@ def test_runtime_does_not_resume_weather_from_stale_assistant_message() -> None:
     ]
     ChatRuntime._resolve_pending_weather_followup(request)
     assert request.messages[-1]["content"] == "NYC"
+
+
+@pytest.mark.asyncio
+async def test_runtime_loads_authorized_transcript_for_single_turn_weather_reply() -> None:
+    from datetime import datetime, timedelta
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    now = datetime.utcnow()
+    history = [
+        SimpleNamespace(role="user", content="What's the weather?", created_at=now),
+        SimpleNamespace(
+            role="assistant",
+            content="Which city or location should I check the weather for?",
+            created_at=now + timedelta(seconds=1),
+        ),
+    ]
+    gateway = SimpleNamespace(
+        load_history=AsyncMock(return_value=SimpleNamespace(success=True, messages=tuple(history)))
+    )
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = gateway
+    request = _request("nyc")
+
+    await runtime._prepare_pending_weather_followup(request)
+
+    assert request.messages[-1]["content"] == "What's the weather in nyc?"
+    assert request.metadata["weather_followup_resolved"] is True
+    gateway.load_history.assert_awaited_once_with(request.context, limit=8)
+
+
+@pytest.mark.asyncio
+async def test_runtime_does_not_infer_pending_weather_after_denied_history() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = SimpleNamespace(
+        load_history=AsyncMock(return_value=SimpleNamespace(success=False, messages=()))
+    )
+    request = _request("nyc")
+    await runtime._prepare_pending_weather_followup(request)
+    assert request.messages[-1]["content"] == "nyc"
+    assert not request.metadata.get("weather_followup_resolved")
