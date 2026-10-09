@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { apiClient } from '@/lib/api';
 import { formatModelSwitchError } from '@/lib/model-switch-errors';
-import { normalizeModelSettingsResponse, type NormalizedRuntimeInventory, type RuntimeSettingsResponse } from '@/lib/model-runtime-inventory';
+import type { NormalizedRuntimeInventory } from '@/lib/model-runtime-inventory';
 import type {
   ModelDetails,
   ProviderDetails,
@@ -70,48 +70,6 @@ const getAllowedProviders = (
     .filter((provider) => cleanString(provider.id));
 };
 
-const resolveSelectedProviderId = (
-  providers: ProviderDetails[],
-  preferredProviderId?: string | null,
-): string => {
-  const preferred = cleanString(preferredProviderId);
-
-  return (
-    providers.find((provider) => provider.id === preferred)?.id ||
-    providers[0]?.id ||
-    ''
-  );
-};
-
-const resolveSelectedModelId = (
-  providers: ProviderDetails[],
-  providerId: string,
-  preferredModelId?: string | null,
-): string => {
-  const provider = providers.find((item) => item.id === providerId);
-
-  if (!provider) {
-    return cleanString(preferredModelId);
-  }
-
-  const preferred = cleanString(preferredModelId);
-  const providerModelIds = new Set(provider.models.map((model) => model.id));
-
-  if (preferred && providerModelIds.has(preferred)) {
-    return preferred;
-  }
-
-  if (cleanString(provider.selected_model)) {
-    return cleanString(provider.selected_model);
-  }
-
-  if (cleanString(provider.default_model)) {
-    return cleanString(provider.default_model);
-  }
-
-  return provider.models[0]?.id || preferred || '';
-};
-
 const findProvider = (
   providers: ProviderDetails[],
   providerId: string,
@@ -143,7 +101,7 @@ export function useModelSettings() {
       providerId: string,
       modelId: string,
       modelSettings: NormalizedRuntimeInventory | null,
-      setModelSettings: SetModelSettings,
+      _setModelSettings: SetModelSettings,
       setSelectedProvider: SetStringState,
       setSelectedModel: SetStringState,
       setIsUpdatingModelSelection: SetBooleanState,
