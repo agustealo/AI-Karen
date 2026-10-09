@@ -140,7 +140,7 @@ class ChatRuntime:
         return get_workflow_runtime()
 
     async def execute(self, request: ChatExecutionRequest) -> ChatExecutionResult:
-        self._resolve_pending_weather_followup(request)
+        await self._prepare_pending_weather_followup(request)
         start = time.time()
         ctx = request.context
 
@@ -437,7 +437,7 @@ class ChatRuntime:
     async def execute_stream(
         self, request: ChatExecutionRequest
     ) -> AsyncIterator[ChatStreamChunk]:
-        self._resolve_pending_weather_followup(request)
+        await self._prepare_pending_weather_followup(request)
         ctx = request.context
         sequence = 0
         request_id = ctx.request_id or str(uuid.uuid4())
@@ -1292,6 +1292,47 @@ class ChatRuntime:
     # ------------------------------------------------------------------
     # Routing
     # ------------------------------------------------------------------
+
+    async def _prepare_pending_weather_followup(self, request: ChatExecutionRequest) -> None:
+        """Read prior turns only through the authorized transcript gateway."""
+        if len(request.messages) >= 3:
+            self._resolve_pending_weather_followup(request)
+            return
+        if len(request.messages) != 1:
+            return
+        current = request.messages[0]
+        if str(current.get("role", "")).lower() != "user":
+            return
+        import re
+
+        if not re.fullmatch(r"[A-Za-z][A-Za-z .,'-]{0,79}", str(current.get("content", "")).strip()):
+            return
+        try:
+            gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+            history = await gateway.load_history(request.context, limit=8)
+            if not history.success or len(history.messages) < 2:
+                return
+            ordered = sorted(history.messages, key=lambda message: message.created_at)
+            transcript = [
+                {"role": message.role, "content": message.content}
+                for message in ordered
+            ]
+            candidate = ChatExecutionRequest(
+                messages=[*transcript, dict(current)],
+                context=request.context,
+                metadata=dict(request.metadata or {}),
+            )
+            self._resolve_pending_weather_followup(candidate)
+            if candidate.metadata.get("weather_followup_resolved"):
+                current["content"] = candidate.messages[-1]["content"]
+                request.metadata.update(candidate.metadata)
+        except Exception as exc:
+            # History is optional for general chat, never fabricate a pending
+            # request when durable scope validation or persistence fails.
+            logger.warning(
+                "Pending capability history unavailable: %s",
+                type(exc).__name__,
+            )
 
     @staticmethod
     def _resolve_pending_weather_followup(request: ChatExecutionRequest) -> None:
