@@ -334,3 +334,27 @@ async def test_runner_rejects_model_identity_mismatch_as_benchmark_evidence():
     assert result.error_count == 1
     assert result.outcomes[0].error == "model_identity_mismatch"
     assert result.outcomes[0].correct is False
+
+
+@pytest.mark.asyncio
+async def test_runner_rejects_fallback_with_matching_model_identity():
+    class FallbackPredictor:
+        async def predict(self, features):
+            return Prediction(
+                task=PredictionTask.INTENT,
+                label="information_seeking",
+                model_id="candidate",
+                model_version="v1",
+                fallback_used=True,
+            )
+
+    result = await BenchmarkRunner().run(
+        FallbackPredictor(),
+        BenchmarkConfig(
+            model_id="candidate", model_version="v1",
+            task=PredictionTask.INTENT, case_ids=["intent-001"],
+        ),
+    )
+    assert result.error_count == 1
+    assert result.outcomes[0].error == "fallback_is_not_candidate_evidence"
+    assert not result.outcomes[0].correct
