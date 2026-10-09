@@ -41,6 +41,8 @@ jobs:
         run: |
           pnpm exec next --version
           pnpm exec tsc --version
+      - name: Verify web lint command
+        run: pnpm lint
       - name: Verify real chat recovery presentation tests
         run: pnpm exec vitest run tests/chat-response.test.ts
       - name: Build actual Next.js application with pnpm
