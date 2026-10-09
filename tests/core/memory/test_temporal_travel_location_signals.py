@@ -42,3 +42,15 @@ def test_existing_current_location_statement_keeps_one_candidate():
     facts = _location_facts("I'm currently in DC.")
     assert len(facts) == 1
     assert facts[0].metadata["normalized_value"] == "DC"
+
+
+from ai_karen_engine.platform.memory.postgres.profile_retriever import PostgresProfileRecallRetriever
+
+
+def test_weather_question_activates_current_location_profile_recall():
+    retriever = PostgresProfileRecallRetriever
+    assert retriever._looks_like_profile_query("What's the weather?")
+    assert retriever._preferred_attribute("What's the weather?") == "current_location"
+    assert retriever._looks_like_profile_query("Will it rain tomorrow?")
+    assert retriever._preferred_attribute("Will it rain tomorrow?") == "current_location"
+    assert retriever._preferred_attribute("Where do I live?") == "residence_location"
