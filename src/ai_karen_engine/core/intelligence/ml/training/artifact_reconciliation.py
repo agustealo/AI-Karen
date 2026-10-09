@@ -5,7 +5,6 @@ auto-retries a run whose side effects may have occurred.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
