@@ -11,7 +11,7 @@ import logging
 from typing import Any, Dict, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ai_karen_engine.auth.auth_service import get_auth_service
 from ai_karen_engine.auth.models import UserData
@@ -233,3 +233,44 @@ async def update_notification_settings(
         "message": "Notification settings updated successfully",
         "notifications": payload,
     }
+
+
+class ModelSelectionSettings(BaseModel):
+    """User selection; never grants runtime access to disabled providers."""
+    provider: str = Field(min_length=1, max_length=100)
+    model: str = Field(min_length=1, max_length=250)
+
+
+@router.put("/settings/model-selection")
+async def update_user_model_selection(
+    selection: ModelSelectionSettings,
+    current_user: UserData = Depends(get_current_user),
+):
+    """Persist a user's requested model separately from installation defaults."""
+    from ai_karen_engine.config.llm_provider_config import get_provider_config_manager
+
+    auth_service, _ = await _load_authoritative_user(current_user)
+    provider = selection.provider.strip()
+    model = selection.model.strip()
+    provider_config = get_provider_config_manager().get_provider(provider) if provider else None
+    if not provider or not model or provider_config is None or not provider_config.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Provider or model selection is not configured",
+        )
+    updated_user = await auth_service.update_user_preferences(
+        user_id=str(current_user.user_id),
+        preferences={"model_selection": {"provider": provider, "model": model}},
+        merge=True,
+    )
+    if str(updated_user.tenant_id or "").strip() != str(current_user.tenant_id).strip():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Updated user tenant scope is invalid",
+        )
+    logger.info(
+        "settings.model_selection_updated",
+        extra={"user_id": current_user.user_id, "tenant_id": current_user.tenant_id},
+    )
+    return {"status": "success", "model_selection": {"provider": provider, "model": model}}
+

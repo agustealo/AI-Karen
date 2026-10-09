@@ -243,3 +243,75 @@ async def test_general_settings_falls_back_to_runtime_defaults_without_user_sele
     result = await settings_routes.get_settings(global_defaults, _principal())
     assert result["preferred_provider"] == "ollama"
     assert result["preferred_model"] == "default-model"
+
+
+@pytest.mark.asyncio
+async def test_user_model_selection_save_is_scoped_and_preserves_other_preferences(monkeypatch):
+    service = FakeAuthService(preferences={"notifications": {"enabled": False}})
+
+    async def fake_get_auth_service():
+        return service
+
+    monkeypatch.setattr(settings_routes, "get_auth_service", fake_get_auth_service)
+    from ai_karen_engine.config import llm_provider_config
+    monkeypatch.setattr(
+        llm_provider_config, "get_provider_config_manager",
+        lambda: SimpleNamespace(get_provider=lambda name: SimpleNamespace(enabled=True) if name == "ollama" else None),
+    )
+    response = await settings_routes.update_user_model_selection(
+        settings_routes.ModelSelectionSettings(provider="ollama", model="local-model"),
+        _principal(),
+    )
+    assert response["status"] == "success"
+    assert service.preference_updates[0] == {
+        "user_id": "11111111-1111-1111-1111-111111111111",
+        "preferences": {"model_selection": {"provider": "ollama", "model": "local-model"}},
+        "merge": True,
+    }
+    assert service.account.preferences["notifications"]["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_user_model_selection_rejects_unregistered_provider(monkeypatch):
+    service = FakeAuthService()
+
+    async def fake_get_auth_service():
+        return service
+
+    monkeypatch.setattr(settings_routes, "get_auth_service", fake_get_auth_service)
+    from ai_karen_engine.config import llm_provider_config
+    monkeypatch.setattr(
+        llm_provider_config, "get_provider_config_manager",
+        lambda: SimpleNamespace(get_provider=lambda name: None),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await settings_routes.update_user_model_selection(
+            settings_routes.ModelSelectionSettings(provider="unknown", model="model"),
+            _principal(),
+        )
+    assert exc.value.status_code == 422
+    assert not service.preference_updates
+
+
+@pytest.mark.asyncio
+async def test_user_model_selection_rejects_disabled_provider(monkeypatch):
+    service = FakeAuthService()
+
+    async def fake_get_auth_service():
+        return service
+
+    monkeypatch.setattr(settings_routes, "get_auth_service", fake_get_auth_service)
+    from ai_karen_engine.config import llm_provider_config
+    monkeypatch.setattr(
+        llm_provider_config, "get_provider_config_manager",
+        lambda: SimpleNamespace(
+            get_provider=lambda name: SimpleNamespace(enabled=False)
+        ),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await settings_routes.update_user_model_selection(
+            settings_routes.ModelSelectionSettings(provider="disabled", model="model"),
+            _principal(),
+        )
+    assert exc.value.status_code == 422
+    assert not service.preference_updates
