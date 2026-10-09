@@ -507,7 +507,8 @@ async def test_governed_runner_rechecks_candidate_after_execution(tmp_path, monk
         tenant_id=tenant, candidate_model_id=model_id,
     )
     async def change_during_run(*args, **kwargs):
-        candidate.artifact_hash = "changed"
+        from dataclasses import replace
+        registry._manifests[model_id] = replace(registry.get(model_id), artifact_hash="changed")
         return object()
     monkeypatch.setattr(BenchmarkRunner, "run", change_during_run)
     with pytest.raises(ValueError, match="changed during benchmark"):
