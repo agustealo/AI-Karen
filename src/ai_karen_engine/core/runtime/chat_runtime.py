@@ -256,12 +256,16 @@ class ChatRuntime:
                 )
 
         try:
-            if self._is_explicit_save_turn(request):
+            grounded = self._grounded_personal_response(
+                decision, tenant_id=ctx.tenant_id, user_id=ctx.user_id
+            )
+            if grounded is not None and not self._is_explicit_save_turn(request):
+                text, provider_meta = grounded
+            elif self._is_explicit_save_turn(request):
                 text = await self._execute_memory_write_receipt(request, decision, plan, memory_recall_meta)
                 provider_meta = {"response_source": "memory_persistence", "actual_provider": None, "actual_model": None}
-            else:
-                direct_executor = get_direct_capability_executor()
-            if not self._is_explicit_save_turn(request) and direct_executor.can_handle(decision):
+            direct_executor = get_direct_capability_executor()
+            if grounded is None and not self._is_explicit_save_turn(request) and direct_executor.can_handle(decision):
                 resolved_location = RuntimeEvidenceResolver.authorized_semantic_value(
                     decision.cognitive_context,
                     tenant_id=ctx.tenant_id,
@@ -286,11 +290,11 @@ class ChatRuntime:
                 pending = self._pending_clarification_from_result(request, direct_result)
                 if pending:
                     provider_meta["pending_clarification"] = pending
-            elif not self._is_explicit_save_turn(request) and decision.topology.value == "reasoning":
+            elif grounded is None and not self._is_explicit_save_turn(request) and decision.topology.value == "reasoning":
                 text, provider_meta = await self._run_reasoning(request, decision, plan, meter)
-            elif not self._is_explicit_save_turn(request) and decision.is_graph_required:
+            elif grounded is None and not self._is_explicit_save_turn(request) and decision.is_graph_required:
                 text, provider_meta = await self._run_graph(request, decision, plan, meter)
-            elif not self._is_explicit_save_turn(request):
+            elif grounded is None and not self._is_explicit_save_turn(request):
                 text, provider_meta = await self._run_simple(request, decision, plan, meter)
         except Exception as exc:
             error_type = type(exc).__name__
@@ -600,7 +604,22 @@ class ChatRuntime:
         generation_error: Optional[Exception] = None
         recovered_error_type: Optional[str] = None
 
-        if self._is_explicit_save_turn(request):
+        grounded = self._grounded_personal_response(
+            decision, tenant_id=ctx.tenant_id, user_id=ctx.user_id
+        )
+        if grounded is not None and not self._is_explicit_save_turn(request):
+            grounded_text, grounded_meta = grounded
+            provider_meta.update(grounded_meta)
+
+            async def grounded_stream() -> AsyncIterator[ChatStreamChunk]:
+                yield ChatStreamChunk(
+                    type="content",
+                    content=grounded_text,
+                    correlation_id=ctx.correlation_id,
+                )
+
+            gen = grounded_stream()
+        elif self._is_explicit_save_turn(request):
             receipt_text = await self._execute_memory_write_receipt(
                 request, decision, plan, memory_recall_meta
             )
@@ -1175,6 +1194,65 @@ class ChatRuntime:
             ),
         }
         return meta
+
+    @staticmethod
+    def _grounded_personal_response(
+        decision: ExecutionDecision,
+        *,
+        tenant_id: str,
+        user_id: str,
+    ) -> tuple[str, Dict[str, Any]] | None:
+        """Provider-independent answer only for a CORTEX-resolved predicate.
+
+        Do not infer an attribute from the nearest retrieved memory. Unknown
+        predicates continue through normal response generation unchanged.
+        """
+        from ai_karen_engine.core.runtime.evidence_sufficiency import (
+            EvidenceSufficiencyStatus, evaluate_personal_evidence,
+        )
+
+        attribute = str(
+            decision.policy_constraints.get("personal_evidence_attribute") or ""
+        ).strip()
+        if decision.intent != "memory.recall":
+            return None
+        if not attribute:
+            # An unresolved relation (notably "where am I from") is not
+            # license to guess from any nearby retrieved profile attribute.
+            return (
+                "Which personal detail do you mean? I won't guess from unrelated saved information.",
+                {
+                    "evidence_sufficiency": "ambiguous",
+                    "evidence_reason": "attribute_unresolved",
+                    "evidence_count": 0,
+                    "response_source": "runtime_evidence_sufficiency",
+                    "actual_provider": None,
+                    "actual_model": None,
+                },
+            )
+        result = evaluate_personal_evidence(
+            decision.cognitive_context,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            attribute=attribute,
+        )
+        metadata = {
+            "evidence_sufficiency": result.status.value,
+            "evidence_reason": result.reason,
+            "evidence_count": len(result.evidence_ids),
+            "response_source": "authorized_memory_evidence",
+            "actual_provider": None,
+            "actual_model": None,
+        }
+        if result.status is EvidenceSufficiencyStatus.SUPPORTED:
+            return f"Your {attribute.replace('_', ' ')} is {result.value}.", metadata
+        if result.status is EvidenceSufficiencyStatus.AMBIGUOUS:
+            return "Which detail about you would you like me to recall?", metadata
+        if result.status is EvidenceSufficiencyStatus.CONTRADICTORY:
+            return "I found conflicting saved information about that detail, so I can't verify an answer.", metadata
+        if result.status is EvidenceSufficiencyStatus.EXPIRED:
+            return "My saved information about that detail is outdated, so I can't verify it.", metadata
+        return "I don't have verified saved information about that detail.", metadata
 
     def _is_explicit_save_turn(self, request: ChatExecutionRequest) -> bool:
         from ai_karen_engine.core.memory.signals.semantic_classifier import (

@@ -127,10 +127,10 @@ class CortexExecutionDecider:
         )
         if personal_recall_query:
             reason_codes.append("explicit_personal_memory_recall")
-            if str(analysis.get("intent") or "unknown") in {"unknown", "general_assist", ""}:
-                analysis["intent"] = "memory.recall"
-                # A deterministic recall cue is not a calibrated model confidence.
-                analysis["intent_confidence"] = 0.0
+            # Explicit user-profile recall wins over an unrelated ML intent label.
+            # This only routes recall; RuntimePolicy still owns authorization.
+            analysis["intent"] = "memory.recall"
+            analysis["intent_confidence"] = 0.0
         memory_write_requested = bool(
             analysis.get("memory_write_requested", False)
             or meta.get("memory_write_requested", False)
@@ -206,6 +206,10 @@ class CortexExecutionDecider:
             topology = ExecutionTopology.WORKFLOW
 
         policy_constraints = dict(meta.get("policy_constraints") or {})
+        policy_constraints.pop("personal_evidence_attribute", None)
+        semantic_attribute = str(analysis.get("requested_profile_attribute") or "").strip()
+        if analysis.get("memory_recall_required") and semantic_attribute:
+            policy_constraints["personal_evidence_attribute"] = semantic_attribute
         policy_constraints.update(
             {
                 "memory_write_requested": memory_write_requested,
@@ -355,6 +359,7 @@ class CortexExecutionDecider:
                 "reasoning_modes": reasoning_modes,
                 "reasoning_required": bool(reasoning_modes)
                 or topology.get("reasoning_depth") == "deep",
+                "requested_profile_attribute": getattr(getattr(analysis, "interpretation", None), "requested_profile_attribute", None),
                 "memory_recall_required": memory_policy.get("recall_required", False),
                 "memory_write_requested": memory_policy.get("write_requested", False),
                 "memory_write_denied": memory_policy.get("write_denied", False),
