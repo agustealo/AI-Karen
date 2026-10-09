@@ -277,6 +277,9 @@ class ChatRuntime:
                 )
                 text = direct_result.text
                 provider_meta = direct_result.normalized_metadata()
+                pending = self._pending_clarification_from_result(request, direct_result)
+                if pending:
+                    provider_meta["pending_clarification"] = pending
             elif decision.topology.value == "reasoning":
                 text, provider_meta = await self._run_reasoning(request, decision, plan, meter)
             elif decision.is_graph_required:
@@ -970,6 +973,8 @@ class ChatRuntime:
                     for key, value in provider_meta.items()
                     if key in _CANONICAL_META_KEYS or key in _RICH_RESULT_KEYS
                 },
+                **({"pending_clarification": provider_meta["pending_clarification"]}
+                   if isinstance(provider_meta.get("pending_clarification"), dict) else {}),
                 **({"trajectory_id": trajectory_id} if trajectory_id else {}),
             },
         )
@@ -1312,7 +1317,11 @@ class ChatRuntime:
                 if history.success and history.messages:
                     ordered = sorted(history.messages, key=lambda message: message.created_at)
                     prior = [
-                        {"role": message.role, "content": message.content}
+                        {
+                            "role": message.role,
+                            "content": message.content,
+                            "metadata": dict(getattr(message, "metadata", {}) or {}),
+                        }
                         for message in ordered
                         if str(message.role).lower() in {"assistant", "user"}
                         and str(message.content or "").strip()
@@ -1326,7 +1335,83 @@ class ChatRuntime:
                     "Authorized conversation history unavailable: %s",
                     type(exc).__name__,
                 )
-        self._resolve_pending_weather_followup(request)
+        if not self._resolve_typed_pending_clarification(request):
+            self._resolve_pending_weather_followup(request)
+
+    @staticmethod
+    def _pending_clarification_from_result(
+        request: ChatExecutionRequest, result: Any,
+    ) -> Dict[str, str] | None:
+        """Translate a governed capability's missing-input result to durable state."""
+        import re
+
+        payload = getattr(result, "payload", None)
+        if not isinstance(payload, dict) or payload.get("status") != "needs_input":
+            return None
+        slot = str(payload.get("missing_requirement") or "").strip()
+        original = next(
+            (str(message.get("content") or "").strip()
+             for message in reversed(request.messages)
+             if str(message.get("role") or "").lower() == "user"),
+            "",
+        )
+        if (
+            not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", slot)
+            or not original or len(original) > 4000
+        ):
+            return None
+        return {
+            "status": "awaiting_user",
+            "slot": slot,
+            "original_request": original,
+        }
+
+    @staticmethod
+    def _resolve_typed_pending_clarification(request: ChatExecutionRequest) -> bool:
+        """Resume any explicitly registered pending slot, never guess one.
+
+        The assistant turn's metadata is part of the scoped canonical transcript.
+        The original user request and the slot identifier must be present. No
+        actions are executed here: CORTEX and RuntimePolicy route and authorize
+        the completed user request as usual.
+        """
+        import re
+
+        messages = request.messages
+        if len(messages) < 3:
+            return False
+        latest, previous = messages[-1], messages[-2]
+        if (
+            str(latest.get("role", "")).lower() != "user"
+            or str(previous.get("role", "")).lower() != "assistant"
+        ):
+            return False
+        pending = (previous.get("metadata") or {}).get("pending_clarification")
+        if not isinstance(pending, dict) or pending.get("status") != "awaiting_user":
+            return False
+        slot = str(pending.get("slot") or "").strip()
+        original = str(pending.get("original_request") or "").strip()
+        answer = str(latest.get("content") or "").strip()
+        if (
+            not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", slot)
+            or not original or len(original) > 4000
+            or not answer or len(answer) > 500
+            or answer.casefold() in {"cancel", "never mind", "nevermind", "stop"}
+        ):
+            return False
+        # The pending request must match a preceding user turn. Never execute
+        # a forged instruction solely from assistant-controlled metadata.
+        if not any(
+            str(item.get("role", "")).lower() == "user"
+            and str(item.get("content", "")).strip() == original
+            for item in messages[:-2]
+        ):
+            return False
+        latest["content"] = f"{original}\nAdditional {slot}: {answer}"
+        request.metadata["clarification_resolved"] = True
+        request.metadata["clarification_slot"] = slot
+        request.metadata["clarification_source"] = "authorized_conversation"
+        return True
 
     @staticmethod
     def _resolve_pending_weather_followup(request: ChatExecutionRequest) -> None:
@@ -1580,6 +1665,9 @@ class ChatRuntime:
             ),
         )
         normalized = result.normalized_metadata()
+        pending = self._pending_clarification_from_result(request, result)
+        if pending:
+            normalized["pending_clarification"] = pending
         if _meta is not None:
             _meta.update(normalized)
 
