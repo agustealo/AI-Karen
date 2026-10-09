@@ -1331,3 +1331,41 @@ async def test_runtime_does_not_infer_pending_weather_after_denied_history() -> 
     await runtime._prepare_conversation_continuation(request)
     assert request.messages[-1]["content"] == "nyc"
     assert not request.metadata.get("weather_followup_resolved")
+
+
+@pytest.mark.asyncio
+async def test_runtime_hydrates_general_conversation_without_weather_keywords() -> None:
+    from datetime import datetime
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    history = [
+        SimpleNamespace(role="user", content="We're working on Supabase migration.", created_at=datetime.utcnow()),
+        SimpleNamespace(role="assistant", content="I will track the migration blockers.", created_at=datetime.utcnow()),
+    ]
+    gateway = SimpleNamespace(
+        load_history=AsyncMock(return_value=SimpleNamespace(success=True, messages=tuple(history)))
+    )
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = gateway
+    request = _request("What is still broken?")
+
+    await runtime._prepare_conversation_continuation(request)
+
+    assert [m["role"] for m in request.messages] == ["user", "assistant", "user"]
+    assert request.messages[0]["content"] == "We're working on Supabase migration."
+    assert request.messages[-1]["content"] == "What is still broken?"
+    assert request.metadata["conversation_history_source"] == "canonical_repository"
+
+
+@pytest.mark.asyncio
+async def test_runtime_denied_history_stays_uninjected_for_general_request() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = SimpleNamespace(
+        load_history=AsyncMock(return_value=SimpleNamespace(success=False, messages=()))
+    )
+    request = _request("What is still broken?")
+    await runtime._prepare_conversation_continuation(request)
+    assert len(request.messages) == 1
+    assert "conversation_history_source" not in request.metadata
