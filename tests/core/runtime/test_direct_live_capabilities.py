@@ -1441,3 +1441,42 @@ def test_typed_clarification_does_not_replay_cancelled_request() -> None:
     ]
     assert not ChatRuntime._resolve_typed_pending_clarification(request)
     assert request.messages[-1]["content"] == "cancel"
+
+
+def test_governed_missing_input_produces_durable_typed_pending_state() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("What's the weather?")
+    result = SimpleNamespace(
+        payload={"status": "needs_input", "missing_requirement": "weather_location"},
+    )
+    pending = ChatRuntime._pending_clarification_from_result(request, result)
+    assert pending == {
+        "status": "awaiting_user",
+        "slot": "weather_location",
+        "original_request": "What's the weather?",
+    }
+
+
+def test_governed_pending_producer_is_capability_independent() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("Find me a booking")
+    result = SimpleNamespace(
+        payload={"status": "needs_input", "missing_requirement": "party_size"},
+    )
+    assert ChatRuntime._pending_clarification_from_result(request, result)["slot"] == "party_size"
+
+
+def test_governed_pending_producer_rejects_untrusted_payload() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("Find me a booking")
+    for payload in [
+        {"status": "success", "missing_requirement": "party_size"},
+        {"status": "needs_input", "missing_requirement": "../admin"},
+        {"status": "needs_input"},
+    ]:
+        assert ChatRuntime._pending_clarification_from_result(
+            request, SimpleNamespace(payload=payload)
+        ) is None
