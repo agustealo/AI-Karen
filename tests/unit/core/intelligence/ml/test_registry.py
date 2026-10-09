@@ -295,3 +295,40 @@ def test_untrusted_manifest_flags_without_evaluation_receipt_remain_blocked(tmp_
     with pytest.raises(ManifestValidationError, match="trusted canonical"):
         registry.register(replace(candidate, status=ModelStatus.SHADOW.value))
     assert registry.get(candidate.model_id).status == ModelStatus.CANDIDATE.value
+
+
+def test_approved_receipt_cannot_promote_modified_candidate_artifact(tmp_path):
+    import sqlite3
+    from dataclasses import replace
+    from ai_karen_engine.core.intelligence.ml.evaluation.evidence import EvaluationEvidenceStore
+
+    registry = MLModelRegistry(registry_dir=str(tmp_path / "registry"))
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    model_file = artifact / "model.bin"
+    model_file.write_bytes(b"original-model")
+    digest = hashlib.sha256(b"original-model").hexdigest()
+    from ai_karen_engine.core.intelligence.ml.training.sklearn_executor import _hash_directory
+    candidate = MLModelManifest(
+        model_id="tenant-abc-affect-hash-check",
+        purpose="affect", architecture="trained",
+        artifact_path=str(artifact),
+        artifact_hash=_hash_directory(artifact),
+        model_version="v1", feature_version="v1",
+        status=ModelStatus.CANDIDATE.value,
+    )
+    registry.register(candidate)
+    evidence = EvaluationEvidenceStore(registry.registry_dir)
+    with sqlite3.connect(str(evidence.database)) as db:
+        db.execute(
+            "INSERT INTO benchmark_receipts "
+            "(receipt_id,model_id,model_version,purpose,artifact_hash,dataset_version,decision,evidence_json) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            ("historical-eligible", candidate.model_id, candidate.model_version,
+             candidate.purpose, candidate.artifact_hash, "ml-eval-v1",
+             "PROMOTION_ELIGIBLE", "{}"),
+        )
+    model_file.write_bytes(b"tampered-model")
+    with pytest.raises(ManifestValidationError, match="trusted canonical"):
+        registry.register(replace(candidate, status=ModelStatus.SHADOW.value))
+    assert registry.get(candidate.model_id).status == ModelStatus.CANDIDATE.value
