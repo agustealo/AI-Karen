@@ -91,6 +91,8 @@ class TrainingJobWorker:
             finally:
                 heartbeat_task.cancel()
                 await asyncio.gather(heartbeat_task, return_exceptions=True)
+            if not self.ledger.heartbeat(job_id, tenant_id=tenant_id, token=lease_token):
+                raise RuntimeError('Worker lease is no longer valid after training')
             if result.job.status != "SUCCEEDED" or not result.registered:
                 raise RuntimeError(result.error or "Training pipeline did not succeed")
             if not self.ledger.transition(
