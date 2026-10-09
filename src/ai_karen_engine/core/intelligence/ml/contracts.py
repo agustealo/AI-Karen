@@ -17,6 +17,10 @@ class PredictionTask(str, Enum):
     COLLABORATION_VALUE = "collaboration_value"
     VERIFICATION_VALUE = "verification_value"
     EXECUTION_TOPOLOGY = "execution_topology"
+    AFFECT = "affect"
+    PREFERENCE = "preference"
+    OUTCOME_FORECAST = "outcome_forecast"
+    BEHAVIOR_PATTERN = "behavior_pattern"
 
 
 EXECUTION_TOPOLOGY_LABELS = {

@@ -47,3 +47,32 @@ async def test_intelligence_runtime_classify():
     result = await runtime.classify("general", "Hello world")
     assert "task" in result
     assert "label" in result
+
+
+@pytest.mark.asyncio
+async def test_classify_forwards_explicit_tenant_scope_without_global_mutation():
+    from ai_karen_engine.core.intelligence.ml.contracts import PredictionTask
+
+    class CapturingML:
+        def __init__(self):
+            self.scopes = []
+
+        async def predict(self, features, task):
+            self.scopes.append((features.tenant_id, task))
+            return None
+
+    runtime = IntelligenceRuntime()
+    runtime.initialize = _no_op_async
+    capture = CapturingML()
+    runtime._ml_runtime = capture
+    for tenant in ("tenant-a", "tenant-b", None):
+        await runtime.classify("affect", "test", tenant_id=tenant)
+    assert capture.scopes == [
+        ("tenant-a", PredictionTask.AFFECT),
+        ("tenant-b", PredictionTask.AFFECT),
+        (None, PredictionTask.AFFECT),
+    ]
+
+
+async def _no_op_async():
+    return None

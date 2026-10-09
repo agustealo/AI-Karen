@@ -34,6 +34,8 @@ import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import IntelligenceTrainingControlPlane from "./IntelligenceTrainingControlPlane";
+import AdvancedTrainingWorkbench from "./AdvancedTrainingWorkbench";
 
 type DatasetRecord = {
   dataset_id: string;
@@ -451,9 +453,9 @@ export default function TrainingSettingsPanel() {
                   Training Control Plane
                 </CardTitle>
                 <CardDescription className="mt-2 max-w-2xl text-sm leading-6">
-                  Organize Karen&apos;s governed training inputs around curated memory,
-                  validated outcomes, reasoning patterns, audit-aware provenance, and
-                  approved feedback loops without bypassing backend training services.
+                  Operate Karen&apos;s learning system across adaptive memory, user modeling, outcome evidence,
+                  continual ML, affect, forecasting, evaluation, and governed promotion while keeping
+                  runtime authority, provenance, RBAC, and deletion boundaries intact.
                 </CardDescription>
               </div>
             </div>
@@ -499,12 +501,22 @@ export default function TrainingSettingsPanel() {
         </CardHeader>
       </Card>
 
-      <Tabs defaultValue="overview" className="w-full">
+      <Tabs defaultValue="intelligence" className="w-full">
         <TabsList className="flex w-full flex-wrap justify-start">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="intelligence">Intelligence</TabsTrigger>
+          <TabsTrigger value="advanced">Advanced Training</TabsTrigger>
+          <TabsTrigger value="overview">Data Sources</TabsTrigger>
           <TabsTrigger value="datasets">Datasets</TabsTrigger>
           <TabsTrigger value="curation">Curated Ingest</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="advanced" className="mt-6">
+          <AdvancedTrainingWorkbench />
+        </TabsContent>
+
+        <TabsContent value="intelligence" className="mt-6">
+          <IntelligenceTrainingControlPlane />
+        </TabsContent>
 
         <TabsContent value="overview" className="mt-6 space-y-6">
           <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">

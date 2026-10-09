@@ -25,7 +25,6 @@ from ai_karen_engine.config.config_manager import (
     get_ml_training_max_samples,
     get_ml_training_test_size,
 )
-from ai_karen_engine.core.intelligence.ml.contracts import MLModelManifest, ModelStatus
 from ai_karen_engine.core.intelligence.ml.training.contracts import (
     TrainingArtifact,
     TrainingExecutor,
@@ -90,11 +89,19 @@ class SklearnTrainingExecutor(TrainingExecutor):
         if not examples:
             raise ValueError("No training examples loaded")
 
-        max_samples = get_ml_training_max_samples()
+        options = job.metadata.get('advanced_config', {})
+        max_samples = int(options.get('max_samples', get_ml_training_max_samples()))
         if len(examples) > max_samples:
             examples = examples[:max_samples]
 
-        feature_version = examples[0].feature_version if examples else "v1"
+        feature_version = examples[0].feature_version if examples else 'v1'
+        feature_order = tuple(examples[0].features)
+        if any(tuple(ex.features) != feature_order or ex.feature_version != feature_version for ex in examples):
+            raise ValueError('Training examples have inconsistent features or feature versions')
+        if len({ex.target for ex in examples}) < 2:
+            raise ValueError('At least two training classes are required')
+        if any(not all(isinstance(value, (int, float, bool)) and np.isfinite(float(value)) for value in ex.features.values()) for ex in examples):
+            raise ValueError('Training features must contain finite numeric values')
         classes = sorted({ex.target for ex in examples})
         class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
         idx_to_class = {idx: cls for cls, idx in class_to_idx.items()}
@@ -105,15 +112,22 @@ class SklearnTrainingExecutor(TrainingExecutor):
         _, counts = np.unique(y, return_counts=True)
         stratify = y if np.min(counts) >= 2 else None
 
-        test_size = get_ml_training_test_size()
+        test_size = float(options.get('test_split', get_ml_training_test_size()))
+        random_seed = int(options.get('seed', job.seed))
+        max_iter = int(options.get('max_iter', 1000))
+        class_weight = options.get('class_weight', 'balanced')
+        if class_weight == 'none':
+            class_weight = None
+        if not 0.05 <= test_size <= 0.5 or not 100 <= max_iter <= 10000 or class_weight not in (None, 'balanced'):
+            raise ValueError('Invalid advanced sklearn training configuration')
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=get_ml_random_seed(), stratify=stratify
+            X, y, test_size=test_size, random_state=random_seed, stratify=stratify
         )
 
         model = LogisticRegression(
-            max_iter=1000,
-            random_state=get_ml_random_seed(),
-            class_weight="balanced",
+            max_iter=max_iter,
+            random_state=random_seed,
+            class_weight=class_weight,
             solver="lbfgs",
         )
         model.fit(X_train, y_train)
@@ -131,7 +145,15 @@ class SklearnTrainingExecutor(TrainingExecutor):
         metrics.feature_version = feature_version
         metrics.dataset_version = job.dataset_version
 
-        model_id = f"topology-{job.task}"
+        tenant_id = str(job.metadata.get("tenant_id") or "")
+        if tenant_id:
+            if tenant_id == "default":
+                raise ValueError("Explicit tenant required for governed training")
+            tenant_key = hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:16]
+            model_id = f"tenant-{tenant_key}-{job.task}-{job.job_id[:12]}"
+        else:
+            # Legacy direct pipeline callers retain the existing model identity.
+            model_id = f"topology-{job.task}"
         model_version = f"train-{job.job_id[:8]}"
         artifact_root = Path(get_ml_registry_dir()) / "topology" / model_id / model_version
         artifact_root.mkdir(parents=True, exist_ok=True)
@@ -168,37 +190,24 @@ class SklearnTrainingExecutor(TrainingExecutor):
             "model_version": model_version,
             "task": job.task,
             "base_model": job.base_model,
-            "seed": get_ml_random_seed(),
+            "seed": random_seed,
             "test_size": test_size,
-            "class_weight": "balanced",
+            "max_iter": max_iter,
+            "tenant_scoped": bool(tenant_id),
+            "training_job_id": job.job_id,
+            "tenant_key": hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:16] if tenant_id else "",
+            "class_weight": class_weight,
         }
         metadata_path = artifact_root / "training_metadata.json"
         metadata_path.write_text(
             json.dumps(training_metadata, indent=2, sort_keys=True), encoding="utf-8"
         )
 
-        manifest = MLModelManifest(
-            model_id=model_id,
-            purpose=job.task,
-            architecture="logistic_regression",
-            artifact_path=str(artifact_root),
-            artifact_hash=_hash_directory(artifact_root),
-            model_version=model_version,
-            feature_version=feature_version,
-            training_dataset_version=job.dataset_version,
-            calibration_version="",
-            metrics=training_metadata,
-            created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            status=ModelStatus.CANDIDATE.value,
-        )
-        manifest_path = Path(get_ml_registry_dir()) / f"{model_id}.json"
-        manifest_path.write_text(
-            json.dumps(manifest.__dict__, indent=2, sort_keys=True), encoding="utf-8"
-        )
+        artifact_hash = _hash_directory(artifact_root)
 
         return TrainingArtifact(
             artifact_path=str(artifact_root),
-            artifact_hash=manifest.artifact_hash,
+            artifact_hash=artifact_hash,
             model_id=model_id,
             model_version=model_version,
             task=job.task,

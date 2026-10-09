@@ -32,19 +32,31 @@ def evaluate_promotion(
 ) -> tuple[PromotionDecision, list[str]]:
     reasons: list[str] = []
 
-    if active is None:
-        if candidate.sample_count < get_ml_promotion_min_samples():
-            return PromotionDecision.INSUFFICIENT_EVIDENCE, ["No active model to compare against"]
-        f1 = _primary_metric(candidate)
-        if f1 is None:
-            return PromotionDecision.INSUFFICIENT_EVIDENCE, ["Missing primary metric for standalone evaluation"]
-        if candidate.sample_count >= get_ml_promotion_min_samples():
-            return PromotionDecision.PROMOTION_ELIGIBLE, ["Sufficient standalone evidence"]
-        return PromotionDecision.INSUFFICIENT_EVIDENCE, ["Insufficient standalone samples"]
-
     if candidate.sample_count < get_ml_promotion_min_samples():
-        reasons.append(f"Candidate samples {candidate.sample_count} < {get_ml_promotion_min_samples()}")
-        return PromotionDecision.INSUFFICIENT_EVIDENCE, reasons
+        return PromotionDecision.INSUFFICIENT_EVIDENCE, [
+            f"Candidate samples {candidate.sample_count} < {get_ml_promotion_min_samples()}"
+        ]
+
+    candidate_primary = _primary_metric(candidate)
+    if candidate_primary is None:
+        return PromotionDecision.INSUFFICIENT_EVIDENCE, ["Missing primary metric"]
+
+    max_latency = get_ml_promotion_max_latency_ms()
+    if candidate.latency_p95_ms > max_latency:
+        reasons.append(
+            f"Candidate p95 latency {candidate.latency_p95_ms:.2f}ms > {max_latency:.2f}ms"
+        )
+    max_ece = get_ml_promotion_max_ece()
+    candidate_ece = candidate.metrics.get("ece")
+    if candidate_ece is not None and candidate_ece.value > max_ece:
+        reasons.append(f"Candidate ECE {candidate_ece.value:.4f} > {max_ece:.4f}")
+    if candidate.error_count > 0:
+        reasons.append(f"Candidate has {candidate.error_count} errors")
+
+    if active is None:
+        if reasons:
+            return PromotionDecision.PROMOTION_BLOCKED, reasons
+        return PromotionDecision.PROMOTION_ELIGIBLE, ["Sufficient standalone evidence"]
 
     candidate_f1 = _primary_metric(candidate)
     active_f1 = _primary_metric(active)
@@ -65,18 +77,6 @@ def evaluate_promotion(
             reasons.append(
                 f"Candidate fallback rate {candidate_fallback.value:.4f} > active {active_fallback.value:.4f}"
             )
-
-    max_latency = get_ml_promotion_max_latency_ms()
-    if candidate.latency_p95_ms > max_latency:
-        reasons.append(f"Candidate p95 latency {candidate.latency_p95_ms:.2f}ms > {max_latency:.2f}ms")
-
-    max_ece = get_ml_promotion_max_ece()
-    candidate_ece = candidate.metrics.get("ece")
-    if candidate_ece is not None and candidate_ece.value > max_ece:
-        reasons.append(f"Candidate ECE {candidate_ece.value:.4f} > {max_ece:.4f}")
-
-    if candidate.error_count > 0:
-        reasons.append(f"Candidate has {candidate.error_count} errors")
 
     if reasons:
         return PromotionDecision.PROMOTION_BLOCKED, reasons

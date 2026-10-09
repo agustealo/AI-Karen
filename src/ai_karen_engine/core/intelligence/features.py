@@ -17,5 +17,6 @@ class IntelligenceFeatures:
     temporal_features: dict[str, Any] = field(default_factory=dict)
     request_features: dict[str, Any] = field(default_factory=dict)
     conversation_features: dict[str, Any] = field(default_factory=dict)
+    tenant_id: str | None = None
     feature_version: str = "v1"
     text: str = ""

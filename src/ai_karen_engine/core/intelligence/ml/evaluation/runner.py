@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import time
@@ -49,6 +50,22 @@ class BenchmarkRunner:
             outcome = await self._run_case(predictor, case)
             outcomes.append(outcome)
 
+        # Benchmark evidence must originate from this model, not a fallback.
+        for outcome in outcomes:
+            prediction = outcome.prediction
+            if prediction is None or outcome.error is not None:
+                continue
+            if (
+                prediction.model_id != config.model_id
+                or prediction.model_version != config.model_version
+                or prediction.task != config.task
+            ):
+                outcome.error = "model_identity_mismatch"
+                outcome.correct = False
+            elif outcome.fallback_used:
+                outcome.error = "fallback_is_not_candidate_evidence"
+                outcome.correct = False
+
         metrics = self._collect_metrics(outcomes, config.task)
         latency_metrics = compute_latency_metrics(outcomes)
         metrics.update(latency_metrics)
@@ -79,6 +96,73 @@ class BenchmarkRunner:
             abstention_count=abstention_count,
             outcomes=outcomes,
         )
+
+    async def run_and_record(
+        self,
+        predictor: Any,
+        config: BenchmarkConfig,
+        *,
+        registry: Any,
+        active_result: BenchmarkResult | None = None,
+        actor: Any = None,
+    ) -> tuple[BenchmarkResult, str]:
+        """Run the canonical evaluation before recording a candidate receipt.
+
+        Callers must authorize this operation in the governed execution layer;
+        a receipt cannot be created solely from manifest-provided metrics.
+        """
+        from ai_karen_engine.core.intelligence.ml.evaluation.evidence import (
+            EvaluationEvidenceStore,
+        )
+
+        from ai_karen_engine.auth.rbac_middleware import (
+            Permission, get_rbac_manager,
+        )
+        tenant = str(getattr(actor, "tenant_id", "") or "")
+        user = str(getattr(actor, "user_id", "") or "")
+        if (
+            not tenant or tenant == "default" or not user
+            or not get_rbac_manager().has_permission(actor, Permission.TRAINING_EXECUTE)
+        ):
+            raise PermissionError("Governed benchmark authorization is required")
+        manifest = registry.get(config.model_id)
+        if (
+            manifest is None
+            or manifest.status != "candidate"
+            or manifest.model_version != config.model_version
+            or manifest.purpose != config.task.value
+            or not manifest.model_id.startswith(
+                "tenant-" + hashlib.sha256(tenant.encode("utf-8")).hexdigest()[:16] + "-"
+            )
+            or not registry.validate_artifact(manifest)
+        ):
+            raise ValueError("Registered candidate identity or artifact is invalid")
+        from ai_karen_engine.core.intelligence.ml.predictors.registry_classifier import (
+            RegistryBackedClassifier,
+        )
+        if (
+            not isinstance(predictor, RegistryBackedClassifier)
+            or predictor._candidate_model_id != config.model_id
+            or predictor._tenant_id != tenant
+            or predictor._registry.registry_dir.resolve() != registry.registry_dir.resolve()
+        ):
+            raise PermissionError("Canonical tenant-scoped candidate predictor required")
+        result = await self.run(predictor, config)
+        # Re-check ownership and artifact after potentially lengthy evaluation.
+        latest = registry.get(config.model_id)
+        if (
+            latest is None
+            or latest.status != "candidate"
+            or latest.model_version != manifest.model_version
+            or latest.artifact_hash != manifest.artifact_hash
+            or latest.artifact_path != manifest.artifact_path
+            or not registry.validate_artifact(latest)
+        ):
+            raise ValueError("Candidate changed during benchmark evaluation")
+        receipt = EvaluationEvidenceStore(registry.registry_dir)._record(
+            manifest, result, active_result=active_result
+        )
+        return result, receipt
 
     async def _run_case(self, predictor: Any, case: EvaluationCase) -> PredictionOutcome:
         features = IntelligenceFeatures(

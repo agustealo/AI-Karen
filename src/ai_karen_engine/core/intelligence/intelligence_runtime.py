@@ -23,6 +23,7 @@ from ai_karen_engine.core.intelligence.ml.predictors.complexity import Complexit
 from ai_karen_engine.core.intelligence.ml.predictors.domain import DomainClassifier
 from ai_karen_engine.core.intelligence.ml.predictors.intent import IntentPredictor
 from ai_karen_engine.core.intelligence.ml.predictors.memory_relevance import MemoryRelevancePredictor
+from ai_karen_engine.core.intelligence.ml.predictors.registry_classifier import RegistryBackedClassifier
 from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
 from ai_karen_engine.core.intelligence.task_signature_builder import TaskSignatureBuilder
 
@@ -94,10 +95,27 @@ class IntelligenceRuntime:
                 exc,
             )
 
+        for adaptive_task in (
+            PredictionTask.AFFECT,
+            PredictionTask.PREFERENCE,
+            PredictionTask.OUTCOME_FORECAST,
+            PredictionTask.BEHAVIOR_PATTERN,
+        ):
+            self._ml_runtime.register_predictor(
+                adaptive_task,
+                RegistryBackedClassifier(
+                    adaptive_task,
+                    self._ml_runtime,
+                    registry=self._registry,
+                ),
+            )
+
     async def analyze(
         self,
         text: str,
         context: dict[str, Any] | None = None,
+        *,
+        tenant_id: str | None = None,
     ) -> IntelligenceAnalysisResult:
         start = time.time()
         context = context or {}
@@ -109,7 +127,7 @@ class IntelligenceRuntime:
 
         await self.initialize()
         signals: list[IntelligenceSignal] = []
-        features = IntelligenceFeatures(text=text)
+        features = IntelligenceFeatures(text=text, tenant_id=tenant_id)
 
         if self._linguistic is not None:
             try:
@@ -190,8 +208,29 @@ class IntelligenceRuntime:
                 signal_type = SignalType.TASK_COMPLEXITY
             elif task == PredictionTask.MEMORY_RELEVANCE:
                 signal_type = SignalType.MEMORY_RELEVANCE
+            elif task == PredictionTask.AFFECT:
+                signal_type = SignalType.SENTIMENT
+            elif task == PredictionTask.PREFERENCE:
+                signal_type = SignalType.PREFERENCE
+            elif task == PredictionTask.OUTCOME_FORECAST:
+                signal_type = SignalType.FORECAST
+            elif task == PredictionTask.BEHAVIOR_PATTERN:
+                signal_type = SignalType.BEHAVIOR_PATTERN
             else:
                 signal_type = SignalType.RISK
+
+            if (
+                task
+                in {
+                    PredictionTask.AFFECT,
+                    PredictionTask.PREFERENCE,
+                    PredictionTask.OUTCOME_FORECAST,
+                    PredictionTask.BEHAVIOR_PATTERN,
+                }
+                and pred.fallback_used
+                and (pred.label or "unknown") == "unknown"
+            ):
+                continue
 
             signals.append(
                 IntelligenceSignal(
@@ -230,6 +269,25 @@ class IntelligenceRuntime:
                     }
             elif task == PredictionTask.EXECUTION_TOPOLOGY:
                 result.topology_signals["ml_prediction"] = {
+                    "label": pred.label,
+                    "confidence": pred.confidence,
+                    "probability": pred.probability,
+                    "model_id": pred.model_id,
+                    "model_version": pred.model_version,
+                    "feature_version": pred.feature_version,
+                    "calibration_version": pred.calibration_version,
+                    "calibrated": pred.calibrated,
+                    "fallback_used": pred.fallback_used,
+                    "inference_method": pred.inference_method,
+                    "probabilities": pred.metadata.get("probabilities", {}),
+                }
+            elif task in {
+                PredictionTask.AFFECT,
+                PredictionTask.PREFERENCE,
+                PredictionTask.OUTCOME_FORECAST,
+                PredictionTask.BEHAVIOR_PATTERN,
+            }:
+                result.adaptive_signals[task.value] = {
                     "label": pred.label,
                     "confidence": pred.confidence,
                     "probability": pred.probability,
@@ -296,7 +354,7 @@ class IntelligenceRuntime:
             encoding.vector if encoding is not None else None for encoding in encodings
         ]
 
-    async def classify(self, task: str, text: str) -> dict[str, Any]:
+    async def classify(self, task: str, text: str, *, tenant_id: str | None = None) -> dict[str, Any]:
         """Return one predictor signal without promoting Intelligence to CORTEX authority."""
 
         await self.initialize()
@@ -320,7 +378,7 @@ class IntelligenceRuntime:
                 "metadata": {"reason": "unsupported_prediction_task"},
             }
 
-        features = IntelligenceFeatures(text=text)
+        features = IntelligenceFeatures(text=text, tenant_id=tenant_id)
         prediction = await self._ml_runtime.predict(features, prediction_task)
         if prediction is None:
             return {

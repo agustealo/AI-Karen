@@ -14,6 +14,7 @@ from ai_karen_engine.api_routes.admin.health import router as admin_health_route
 from ai_karen_engine.api_routes.admin.runtime import router as admin_runtime_router
 from ai_karen_engine.api_routes.admin.features import router as admin_features_router
 from ai_karen_engine.api_routes.admin.memory import router as admin_memory_router
+from ai_karen_engine.api_routes.admin.training import router as admin_training_router
 
 
 def register_admin_endpoints(app: FastAPI, settings=None) -> None:
@@ -30,6 +31,7 @@ def register_admin_endpoints(app: FastAPI, settings=None) -> None:
     app.include_router(admin_diagnostics_router, prefix="/api", tags=["admin-diagnostics"])
     app.include_router(admin_features_router, prefix="/api", tags=["admin-features"])
     app.include_router(admin_memory_router, prefix="/api", tags=["admin-memory"])
+    app.include_router(admin_training_router, prefix="/api", tags=["admin-training"])
 
 
 __all__ = ["register_admin_endpoints"]

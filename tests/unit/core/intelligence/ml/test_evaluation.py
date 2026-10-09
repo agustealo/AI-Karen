@@ -261,7 +261,7 @@ async def test_latency_metrics():
 async def test_runner_with_mock_predictor():
     class MockPredictor:
         async def predict(self, features):
-            return Prediction(task=PredictionTask.INTENT, label="information_seeking", confidence=0.9)
+            return Prediction(task=PredictionTask.INTENT, label="information_seeking", confidence=0.9, model_id="mock-model", model_version="v1")
 
     runner = BenchmarkRunner()
     config = BenchmarkConfig(
@@ -298,7 +298,7 @@ async def test_runner_error_handling():
 async def test_runner_sync_predictor():
     class SyncPredictor:
         def predict(self, features):
-            return Prediction(task=PredictionTask.INTENT, label="information_seeking", confidence=0.9)
+            return Prediction(task=PredictionTask.INTENT, label="information_seeking", confidence=0.9, model_id="sync-model", model_version="v1")
 
     runner = BenchmarkRunner()
     config = BenchmarkConfig(
@@ -310,3 +310,211 @@ async def test_runner_sync_predictor():
     result = await runner.run(SyncPredictor(), config)
     assert result.sample_count == 1
     assert result.metrics["accuracy"].value == 1.0
+
+
+@pytest.mark.asyncio
+async def test_runner_rejects_model_identity_mismatch_as_benchmark_evidence():
+    class WrongModelPredictor:
+        async def predict(self, features):
+            return Prediction(
+                task=PredictionTask.INTENT,
+                label="information_seeking",
+                model_id="another-model",
+                model_version="v1",
+                confidence=0.99,
+            )
+
+    result = await BenchmarkRunner().run(
+        WrongModelPredictor(),
+        BenchmarkConfig(
+            model_id="candidate", model_version="v1",
+            task=PredictionTask.INTENT, case_ids=["intent-001"],
+        ),
+    )
+    assert result.error_count == 1
+    assert result.outcomes[0].error == "model_identity_mismatch"
+    assert result.outcomes[0].correct is False
+
+
+@pytest.mark.asyncio
+async def test_runner_rejects_fallback_with_matching_model_identity():
+    class FallbackPredictor:
+        async def predict(self, features):
+            return Prediction(
+                task=PredictionTask.INTENT,
+                label="information_seeking",
+                model_id="candidate",
+                model_version="v1",
+                fallback_used=True,
+            )
+
+    result = await BenchmarkRunner().run(
+        FallbackPredictor(),
+        BenchmarkConfig(
+            model_id="candidate", model_version="v1",
+            task=PredictionTask.INTENT, case_ids=["intent-001"],
+        ),
+    )
+    assert result.error_count == 1
+    assert result.outcomes[0].error == "fallback_is_not_candidate_evidence"
+    assert not result.outcomes[0].correct
+
+
+@pytest.mark.asyncio
+async def test_run_and_record_requires_governed_authorization_before_execution():
+    class NeverRunPredictor:
+        def predict(self, features):
+            raise AssertionError("Unauthorized benchmark executed")
+
+    class NeverReadRegistry:
+        def get(self, model_id):
+            raise AssertionError("Unauthorized registry accessed")
+
+    runner = BenchmarkRunner()
+    with pytest.raises(PermissionError, match="authorization"):
+        await runner.run_and_record(
+            NeverRunPredictor(),
+            BenchmarkConfig(
+                model_id="candidate", model_version="v1",
+                task=PredictionTask.INTENT,
+            ),
+            registry=NeverReadRegistry(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_benchmark_does_not_credit_wrong_task_or_version():
+    class WrongVersion:
+        def predict(self, features):
+            return Prediction(
+                task=PredictionTask.DOMAIN,
+                label="information_seeking",
+                model_id="candidate",
+                model_version="different-version",
+            )
+
+    result = await BenchmarkRunner().run(
+        WrongVersion(),
+        BenchmarkConfig(
+            model_id="candidate",
+            model_version="v1",
+            task=PredictionTask.INTENT,
+            case_ids=["intent-001"],
+        ),
+    )
+    assert result.error_count == 1
+    assert result.outcomes[0].error == "model_identity_mismatch"
+    assert result.outcomes[0].correct is False
+
+
+@pytest.mark.asyncio
+async def test_governed_benchmark_rejects_other_tenant_before_execution(monkeypatch):
+    from types import SimpleNamespace
+    from ai_karen_engine.auth import rbac_middleware
+
+    monkeypatch.setattr(
+        rbac_middleware,
+        "get_rbac_manager",
+        lambda: SimpleNamespace(has_permission=lambda actor, permission: True),
+    )
+
+    class Registry:
+        def get(self, model_id):
+            return SimpleNamespace(
+                model_id=model_id,
+                status="candidate",
+                model_version="v1",
+                purpose=PredictionTask.INTENT.value,
+            )
+
+        def validate_artifact(self, manifest):
+            raise AssertionError("Cross-tenant artifact was inspected")
+
+    class Predictor:
+        def predict(self, features):
+            raise AssertionError("Cross-tenant predictor was executed")
+
+    import hashlib
+    tenant_b_key = hashlib.sha256(b"tenant-b").hexdigest()[:16]
+    config = BenchmarkConfig(
+        model_id=f"tenant-{tenant_b_key}-intent-candidate",
+        model_version="v1",
+        task=PredictionTask.INTENT,
+    )
+    with pytest.raises(ValueError, match="candidate identity"):
+        await BenchmarkRunner().run_and_record(
+            Predictor(),
+            config,
+            registry=Registry(),
+            actor=SimpleNamespace(tenant_id="tenant-a", user_id="user-a"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_governed_benchmark_rejects_actor_without_permission(monkeypatch):
+    from types import SimpleNamespace
+    from ai_karen_engine.auth import rbac_middleware
+
+    monkeypatch.setattr(
+        rbac_middleware,
+        "get_rbac_manager",
+        lambda: SimpleNamespace(has_permission=lambda actor, permission: False),
+    )
+
+    class Registry:
+        def get(self, model_id):
+            raise AssertionError("Denied actor reached registry")
+
+    with pytest.raises(PermissionError, match="authorization"):
+        await BenchmarkRunner().run_and_record(
+            object(),
+            BenchmarkConfig(
+                model_id="candidate",
+                model_version="v1",
+                task=PredictionTask.INTENT,
+            ),
+            registry=Registry(),
+            actor=SimpleNamespace(tenant_id="tenant-a", user_id="user-a"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_governed_runner_rechecks_candidate_after_execution(tmp_path, monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+    from ai_karen_engine.auth import rbac_middleware
+    from ai_karen_engine.core.intelligence.ml.contracts import MLModelManifest, ModelStatus
+    from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
+    from ai_karen_engine.core.intelligence.ml.predictors.registry_classifier import RegistryBackedClassifier
+
+    monkeypatch.setattr(
+        rbac_middleware, "get_rbac_manager",
+        lambda: SimpleNamespace(has_permission=lambda actor, permission: True),
+    )
+    tenant = "tenant-a"
+    model_id = f"tenant-{hashlib.sha256(tenant.encode()).hexdigest()[:16]}-intent-run"
+    registry = MLModelRegistry(registry_dir=str(tmp_path))
+    candidate = MLModelManifest(
+        model_id=model_id, purpose="intent", architecture="trained",
+        artifact_path=str(tmp_path), artifact_hash="integrity",
+        model_version="v1", feature_version="v1",
+        status=ModelStatus.CANDIDATE.value,
+    )
+    registry.register(candidate)
+    monkeypatch.setattr(registry, "validate_artifact", lambda manifest: True)
+    predictor = RegistryBackedClassifier(
+        PredictionTask.INTENT, registry=registry,
+        tenant_id=tenant, candidate_model_id=model_id,
+    )
+    async def change_during_run(*args, **kwargs):
+        from dataclasses import replace
+        registry._manifests[model_id] = replace(registry.get(model_id), artifact_hash="changed")
+        return object()
+    monkeypatch.setattr(BenchmarkRunner, "run", change_during_run)
+    with pytest.raises(ValueError, match="changed during benchmark"):
+        await BenchmarkRunner().run_and_record(
+            predictor,
+            BenchmarkConfig(model_id=model_id, model_version="v1", task=PredictionTask.INTENT),
+            registry=registry,
+            actor=SimpleNamespace(tenant_id=tenant, user_id="operator"),
+        )

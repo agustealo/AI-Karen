@@ -30,6 +30,9 @@ class SignalType(str, Enum):
     ENTITY = "entity"
     TOPIC = "topic"
     SENTIMENT = "sentiment"
+    PREFERENCE = "preference"
+    FORECAST = "forecast"
+    BEHAVIOR_PATTERN = "behavior_pattern"
     EMBEDDING = "embedding"
     TASK_COMPLEXITY = "task_complexity"
     MEMORY_RELEVANCE = "memory_relevance"
@@ -108,6 +111,7 @@ class IntelligenceAnalysisResult:
     topology_signals: dict[str, Any] = field(default_factory=dict)
     risk_signals: dict[str, Any] = field(default_factory=dict)
     capability_hints: dict[str, Any] = field(default_factory=dict)
+    adaptive_signals: dict[str, Any] = field(default_factory=dict)
 
     signals: list[IntelligenceSignal] = field(default_factory=list)
     interpretation: SemanticInterpretation | None = None
