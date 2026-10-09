@@ -193,3 +193,70 @@ def test_deictic_save_request_can_use_latest_eligible_profile_fact():
     )
     assert "Acme Labs" in resolved
 
+
+
+def test_related_location_facts_resolve_independently_without_cross_selection():
+    """Explicit targets must never inherit a neighboring location attribute."""
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatExecutionContext,
+        ChatExecutionRequest,
+    )
+
+    context = ChatExecutionContext(
+        user_id="user",
+        tenant_id="tenant",
+        session_id="session",
+        conversation_id="conversation",
+        request_id="request",
+        correlation_id="correlation",
+    )
+    history = [
+        {"role": "user", "content": "I was born in Kingston."},
+        {"role": "assistant", "content": "Noted."},
+        {"role": "user", "content": "I grew up in Toronto."},
+        {"role": "assistant", "content": "Noted."},
+        {"role": "user", "content": "I live in Detroit."},
+        {"role": "assistant", "content": "Noted."},
+    ]
+    scenarios = (
+        ("Store my birthplace", "Kingston", ("Toronto", "Detroit")),
+        ("Store my upbringing location", "Toronto", ("Kingston", "Detroit")),
+        ("Store my residence location", "Detroit", ("Kingston", "Toronto")),
+    )
+    for command, expected, excluded in scenarios:
+        request = ChatExecutionRequest(
+            messages=[*history, {"role": "user", "content": command}],
+            context=context,
+        )
+        resolved = ChatRuntime._resolve_explicit_memory_reference(request, command)
+        assert expected in resolved, command
+        assert all(place not in resolved for place in excluded), command
+        assert request.messages[-1]["content"] == command
+
+
+def test_targeted_location_save_never_promotes_temporary_presence_to_residence():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatExecutionContext,
+        ChatExecutionRequest,
+    )
+
+    request = ChatExecutionRequest(
+        context=ChatExecutionContext(
+            user_id="user",
+            tenant_id="tenant",
+            session_id="session",
+            conversation_id="conversation",
+            request_id="request",
+            correlation_id="correlation",
+        ),
+        messages=[
+            {"role": "user", "content": "I'm in Washington on vacation."},
+            {"role": "assistant", "content": "Enjoy your trip."},
+            {"role": "user", "content": "Store my residence location"},
+        ],
+    )
+    assert ChatRuntime._resolve_explicit_memory_reference(
+        request, request.messages[-1]["content"]
+    ) == "Store my residence location"

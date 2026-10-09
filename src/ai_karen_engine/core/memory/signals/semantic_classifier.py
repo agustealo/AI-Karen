@@ -122,7 +122,7 @@ def explicit_memory_save_target_terms(text: str) -> frozenset[str] | None:
 
 
 def memory_save_request_matches_signal(text: str, signal: MemorySignal) -> bool:
-    """Match an explicit save target against canonical signal semantics."""
+    """Match a requested fact to an attribute, not just a shared generic word."""
     target_terms = explicit_memory_save_target_terms(text)
     if target_terms is None:
         return False
@@ -130,31 +130,59 @@ def memory_save_request_matches_signal(text: str, signal: MemorySignal) -> bool:
         return True
 
     metadata = signal.metadata or {}
+    attribute = str(metadata.get("attribute") or "").casefold()
+    attribute_terms = set(
+        re.findall(r"[a-z0-9]+", attribute.replace("_", " ").replace(".", " "))
+    )
+    # Explicit canonical attributes take priority over broad overlapping
+    # category words such as "location", "relationship" and "work".
+    if attribute and attribute_terms.issubset(target_terms):
+        return True
+
+    generic_terms = {"location", "place", "fact", "memory", "information"}
+    specific_target_terms = target_terms - generic_terms
+    if not specific_target_terms:
+        return False
+
+    # A location-qualified request may only select another location
+    # attribute if the subtype itself also matches. "residence location"
+    # must not match "current location" just because both say location.
+    location_attributes = {
+        "birthplace",
+        "origin_location",
+        "upbringing_location",
+        "residence_location",
+        "work_location",
+        "current_location",
+    }
+    if attribute in location_attributes and "location" in target_terms:
+        return False
+
     semantic_text = " ".join(
         str(value or "")
         for value in (
             signal.text,
             signal.signal_type,
-            metadata.get("attribute"),
+            attribute,
             metadata.get("category"),
             metadata.get("semantic_class"),
-            metadata.get("location_type"),
             metadata.get("relationship_type"),
             metadata.get("goal_type"),
             metadata.get("event_type"),
         )
     ).casefold()
-    semantic_terms = set(re.findall(r"[a-z0-9]+", semantic_text.replace("_", " ").replace(".", " ")))
-
-    for requested in target_terms:
-        for semantic in semantic_terms:
-            if requested == semantic:
-                return True
-            if min(len(requested), len(semantic)) >= 4 and (
-                requested.startswith(semantic) or semantic.startswith(requested)
-            ):
-                return True
-    return False
+    semantic_terms = set(
+        re.findall(r"[a-z0-9]+", semantic_text.replace("_", " ").replace(".", " "))
+    )
+    return any(
+        requested == semantic
+        or (
+            min(len(requested), len(semantic)) >= 4
+            and (requested.startswith(semantic) or semantic.startswith(requested))
+        )
+        for requested in specific_target_terms
+        for semantic in semantic_terms
+    )
 
 
 def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
