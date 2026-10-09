@@ -123,3 +123,20 @@ def test_expired_lease_never_allows_stale_worker_write(tmp_path):
     )
     assert store.expired(tenant_id="tenant-a")[0]["job_id"] == "training-1"
     assert store.expired(tenant_id="tenant-b") == []
+
+
+def test_lease_valid_requires_current_unexpired_owner(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    store = TrainingJobLedger(tmp_path / "jobs.sqlite3")
+    store.submit(make_job(), tenant_id="tenant-a", user_id="operator")
+    token = store.claim("training-1", tenant_id="tenant-a", ttl_seconds=30)
+    assert token
+    assert store.lease_valid("training-1", tenant_id="tenant-a", token=token)
+    assert not store.lease_valid("training-1", tenant_id="tenant-a", token="not-the-token")
+    assert not store.lease_valid("training-1", tenant_id="tenant-b", token=token)
+    with store._connect() as db:
+        db.execute(
+            "UPDATE training_jobs SET lease_expires_at=? WHERE job_id=?",
+            ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), "training-1"),
+        )
+    assert not store.lease_valid("training-1", tenant_id="tenant-a", token=token)
