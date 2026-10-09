@@ -604,6 +604,10 @@ def test_web_search_registry_invalid_priority_does_not_disable_search() -> None:
         settings={
             "search": {
                 "duckduckgo": {"enabled": True, "priority": "high"},
+                "searxng": {"enabled": False},
+                "brave_search_free": {"enabled": False},
+                "mojeek": {"enabled": False},
+                "startpage": {"enabled": False},
                 "wikipedia": {"enabled": True, "priority": 20},
             }
         }
@@ -822,7 +826,8 @@ def test_direct_capability_metadata_reports_search_provider_not_wrapper() -> Non
 
     metadata = result.normalized_metadata()
 
-    assert metadata["actual_provider"] == "multi_search"
+    assert metadata["actual_provider"] is None
+    assert metadata["capability_data_provider"] == "multi_search"
     assert metadata["capability_executor"] == "web_search"
     assert metadata["structured_content"]["provider"] == "multi_search"
     assert metadata["structured_content"]["search_providers"] == [
