@@ -142,6 +142,15 @@ async def list_interrupted_advanced_training_jobs(
     return {"jobs": ledger.interrupted(tenant_id=tenant)}
 
 
+@router.get("/advanced/jobs-expired")
+async def list_expired_training_leases(
+    current_user: Any = Depends(require_permission(Permission.TRAINING_READ)),
+    ledger: TrainingJobLedger = Depends(get_training_job_ledger),
+) -> dict[str, Any]:
+    tenant, _ = _identity(current_user)
+    return {"jobs": ledger.expired(tenant_id=tenant)}
+
+
 @router.get("/advanced/jobs/{job_id}")
 async def get_advanced_training_job(
     job_id: str,
