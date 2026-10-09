@@ -245,16 +245,24 @@ async def evaluate_training_candidate(
     predictor = RegistryBackedClassifier(
         task, registry=registry, tenant_id=tenant, candidate_model_id=model_id,
     )
-    result, receipt = await BenchmarkRunner().run_and_record(
-        predictor,
-        BenchmarkConfig(
-            model_id=model_id,
-            model_version=manifest.model_version,
-            task=task,
-        ),
-        registry=registry,
-        actor=current_user,
-    )
+    try:
+        result, receipt = await BenchmarkRunner().run_and_record(
+            predictor,
+            BenchmarkConfig(
+                model_id=model_id,
+                model_version=manifest.model_version,
+                task=task,
+            ),
+            registry=registry,
+            actor=current_user,
+        )
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Evaluation not permitted")
+    except ValueError:
+        raise HTTPException(
+            status_code=409,
+            detail="Candidate or evaluation evidence is not eligible",
+        )
     return {
         "model_id": model_id,
         "receipt_id": receipt,
