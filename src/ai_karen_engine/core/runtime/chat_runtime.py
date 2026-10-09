@@ -1227,35 +1227,34 @@ class ChatRuntime:
         """
         from ai_karen_engine.core.memory.signals.semantic_classifier import (
             classify_explicit_user_memory,
+            explicit_memory_save_target_terms,
             is_explicit_memory_save_request,
+            memory_save_request_matches_signal,
         )
 
-        if not is_explicit_memory_save_request(current_text):
+        target_terms = explicit_memory_save_target_terms(current_text)
+        if target_terms is None:
             return current_text
-        requested = current_text.casefold()
-        attribute_hints = {
-            "birthplace": ("birthplace", "place of birth", "born"),
-            "upbringing_location": ("grew up", "grow up", "upbringing"),
-            "residence_location": ("where i live", "residence", "living"),
-            "favorite_color": ("favorite color", "favourite colour"),
-            "preferred_name": ("my name", "preferred name"),
-        }
-        matched_attrs = {
-            attr for attr, phrases in attribute_hints.items()
-            if any(phrase in requested for phrase in phrases)
-        }
+
         for message in reversed(request.messages[:-1]):
             if str(message.get("role") or "").casefold() != "user":
                 continue
             candidate = str(message.get("content") or "").strip()
             if not candidate or is_explicit_memory_save_request(candidate):
                 continue
+
             facts = [
-                item for item in classify_explicit_user_memory(candidate)
+                item
+                for item in classify_explicit_user_memory(candidate)
                 if item.metadata.get("retention_scope") == "user_profile"
                 and item.metadata.get("explicit_user_statement") is True
-                and (not matched_attrs or item.metadata.get("attribute") in matched_attrs)
             ]
+            if target_terms:
+                facts = [
+                    item
+                    for item in facts
+                    if memory_save_request_matches_signal(current_text, item)
+                ]
             if facts:
                 return " ".join(str(item.text) for item in facts)
         return current_text
