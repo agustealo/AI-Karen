@@ -93,3 +93,17 @@ def test_claim_is_exclusive_across_independent_connections(tmp_path):
     )
     record = two.get("training-1", tenant_id="tenant-a")
     assert record["status"] == record["job"]["status"] == "VALIDATING"
+
+
+def test_recovery_refuses_failed_job_with_recorded_artifact(tmp_path):
+    store = TrainingJobLedger(tmp_path / "jobs.sqlite3")
+    job = make_job()
+    store.submit(job, tenant_id="tenant-a", user_id="operator")
+    assert store.transition("training-1", tenant_id="tenant-a",
+                            from_status="QUEUED", to_status="VALIDATING")
+    job.artifact_path = "/existing/model"
+    job.artifact_hash = "existing-hash"
+    assert store.transition("training-1", tenant_id="tenant-a",
+                            from_status="VALIDATING", to_status="FAILED", job=job)
+    assert store.recover(tenant_id="tenant-a", job_id="training-1") is False
+    assert store.get("training-1", tenant_id="tenant-a")["status"] == "FAILED"
