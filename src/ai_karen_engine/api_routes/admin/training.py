@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ai_karen_engine.auth.rbac_middleware import Permission, require_permission
 from ai_karen_engine.services.admin.admin_training_control_service import (
@@ -14,11 +14,11 @@ router = APIRouter(prefix="/admin/training", tags=["admin-training"])
 
 
 class TrainingControlPlaneResponse(BaseModel):
-    architecture: Dict[str, Any]
+    architecture: dict[str, Any]
     prediction_tasks: list[str]
-    lanes: list[Dict[str, Any]]
-    registry: Dict[str, Any]
-    governance: Dict[str, Any]
+    lanes: list[dict[str, Any]]
+    registry: dict[str, Any]
+    governance: dict[str, Any]
 
 
 class TrainingCapabilityResponse(BaseModel):
@@ -44,7 +44,7 @@ def get_admin_training_control_service() -> AdminTrainingControlService:
 
 @router.get("/control-plane", response_model=TrainingControlPlaneResponse)
 async def get_training_control_plane(
-    current_user: Dict[str, Any] = Depends(
+    current_user: dict[str, Any] = Depends(
         require_permission(Permission.ADMIN_READ)
     ),
     service: AdminTrainingControlService = Depends(
@@ -57,7 +57,7 @@ async def get_training_control_plane(
 
 @router.get("/capabilities", response_model=list[TrainingCapabilityResponse])
 async def list_training_capabilities(
-    current_user: Dict[str, Any] = Depends(
+    current_user: dict[str, Any] = Depends(
         require_permission(Permission.ADMIN_READ)
     ),
     service: AdminTrainingControlService = Depends(
