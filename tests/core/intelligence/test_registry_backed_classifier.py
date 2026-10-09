@@ -181,3 +181,24 @@ def test_registry_active_selection_requires_matching_tenant(tmp_path):
     assert registry.get_active("affect", tenant_id="tenant-a").model_id.startswith(f"tenant-{a}-")
     assert registry.get_active("affect", tenant_id="tenant-b").model_id.startswith(f"tenant-{b}-")
     assert registry.get_active("affect", tenant_id="tenant-c") is None
+
+
+async def test_shared_predictor_does_not_reuse_another_request_tenant(tmp_path):
+    import hashlib
+
+    class RecordingRegistry:
+        def __init__(self):
+            self.seen = []
+
+        def get_active(self, purpose, *, tenant_id=None):
+            self.seen.append((purpose, tenant_id))
+            return None
+
+    registry = RecordingRegistry()
+    predictor = RegistryBackedClassifier(PredictionTask.AFFECT, registry=registry)
+    for tenant in ("tenant-a", "tenant-b", None):
+        result = await predictor.predict(IntelligenceFeatures(text="test", tenant_id=tenant))
+        assert result.label == "unknown"
+    assert registry.seen == [
+        ("affect", "tenant-a"), ("affect", "tenant-b"), ("affect", None),
+    ]
