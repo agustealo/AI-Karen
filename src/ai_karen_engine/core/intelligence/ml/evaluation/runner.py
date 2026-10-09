@@ -123,7 +123,7 @@ class BenchmarkRunner:
         ):
             raise ValueError("Registered candidate identity or artifact is invalid")
         result = await self.run(predictor, config)
-        receipt = EvaluationEvidenceStore(registry.registry_dir).record(
+        receipt = EvaluationEvidenceStore(registry.registry_dir)._record(
             manifest, result, active_result=active_result
         )
         return result, receipt
