@@ -108,3 +108,16 @@ def test_advanced_preflight_rejects_bad_feature_contract(tmp_path):
     assert "invalid_dataset_record" in {
         issue["code"] for issue in result["checks"]
     }
+
+
+def test_advanced_preflight_requires_dataset_loader_fields(tmp_path):
+    root = _dataset(tmp_path)
+    path = root / "adaptive_v1.jsonl"
+    rows = path.read_text(encoding="utf-8").splitlines()
+    item = json.loads(rows[0])
+    item.pop("feature_version")
+    rows[0] = json.dumps(item)
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    result = _preflight(AdvancedTrainingWorkbench(root))
+    assert not result["ready"]
+    assert "invalid_dataset_record" in {issue["code"] for issue in result["checks"]}
