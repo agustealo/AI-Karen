@@ -19,8 +19,13 @@ class PipelineStub:
         self.success = success
         self.calls = 0
 
-    async def run(self, result):
+    async def run(self, result, on_state=None):
         self.calls += 1
+        if on_state is not None:
+            result.job.status = 'RUNNING'
+            await on_state('RUNNING', result.job)
+            result.job.status = 'EVALUATING'
+            await on_state('EVALUATING', result.job)
         if self.success:
             result.job.status = "SUCCEEDED"
             result.registered = True
