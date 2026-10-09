@@ -1,34 +1,3 @@
-
-describe('Ollama recovery truth', () => {
-  it('does not claim a provider switch between the same registered Ollama aliases', () => {
-    const actual = deriveDegradedPresentation({
-      requested_provider: 'ollama',
-      actual_provider: 'ollama-local',
-      requested_model: 'deepseek-r1:1.5b',
-      actual_model: 'deepseek-r1:1.5b',
-      degraded_mode: true,
-      degradation_reason: 'primary_failure:RuntimeError',
-      recovery: { provider_switched: false, same_registered_provider: true },
-    });
-    expect(normalizeProviderName('ollama-local')).toBe(normalizeProviderName('ollama'));
-    expect(actual.visibleDegradedNotice).not.toContain('switched to');
-    expect(actual.isDegraded).toBe(true);
-  });
-
-  it('reports a different model without falsely calling it a provider switch', () => {
-    const actual = deriveDegradedPresentation({
-      requested_provider: 'ollama',
-      actual_provider: 'ollama-local',
-      requested_model: 'deepseek-r1:1.5b',
-      actual_model: 'qwen-local:4b',
-      degraded_mode: true,
-      recovery: { provider_switched: false, same_registered_provider: true },
-    });
-    expect(actual.visibleDegradedNotice).toContain('Requested model deepseek-r1:1.5b was not used');
-    expect(actual.visibleDegradedNotice).not.toContain('ollama failed, switched');
-  });
-});
-
 /**
  * Tests for chat-response.ts degraded presentation logic.
  *
@@ -498,3 +467,35 @@ describe('Degraded Runtime Fallback Presentation', () => {
     });
   });
 });
+
+
+describe('Ollama recovery truth', () => {
+  it('does not claim a provider switch between the same registered Ollama aliases', () => {
+    const actual = deriveDegradedPresentation({
+      requested_provider: 'ollama',
+      actual_provider: 'ollama-local',
+      requested_model: 'deepseek-r1:1.5b',
+      actual_model: 'deepseek-r1:1.5b',
+      degraded_mode: true,
+      degradation_reason: 'primary_failure:RuntimeError',
+      recovery: { provider_switched: false, same_registered_provider: true },
+    });
+    expect(normalizeProviderName('ollama-local')).toBe(normalizeProviderName('ollama'));
+    expect(actual.visibleDegradedNotice).not.toContain('switched to');
+    expect(actual.isDegraded).toBe(true);
+  });
+
+  it('reports a different model without falsely calling it a provider switch', () => {
+    const actual = deriveDegradedPresentation({
+      requested_provider: 'ollama',
+      actual_provider: 'ollama-local',
+      requested_model: 'deepseek-r1:1.5b',
+      actual_model: 'qwen-local:4b',
+      degraded_mode: true,
+      recovery: { provider_switched: false, same_registered_provider: true },
+    });
+    expect(actual.visibleDegradedNotice).toContain('Requested model deepseek-r1:1.5b was not used');
+    expect(actual.visibleDegradedNotice).not.toContain('ollama failed, switched');
+  });
+});
+
