@@ -23,7 +23,7 @@ type SetStringState = React.Dispatch<React.SetStateAction<string>>;
 
 type SetBooleanState = React.Dispatch<React.SetStateAction<boolean>>;
 
-const MODEL_SETTINGS_ENDPOINT = '/api/settings/model';
+const MODEL_SELECTION_ENDPOINT = '/api/settings/model-selection';
 
 const cleanString = (value: unknown): string => {
   return typeof value === 'string' ? value.trim() : '';
@@ -191,37 +191,22 @@ export function useModelSettings() {
       setIsUpdatingModelSelection(true);
 
       try {
-        const response = await apiClient.put<RuntimeSettingsResponse>(
-          MODEL_SETTINGS_ENDPOINT,
+        await apiClient.put<{ status: string; model_selection: { provider: string; model: string } }>(
+          MODEL_SELECTION_ENDPOINT,
           {
             provider: requestedProviderId,
             model: requestedModelId,
           },
         );
 
-        const normalizedSettings = normalizeModelSettingsResponse(response);
-        const allowedProviders = getAllowedProviders(normalizedSettings);
-
-        const resolvedProviderId = resolveSelectedProviderId(
-          allowedProviders,
-          normalizedSettings.selected_provider || requestedProviderId,
-        );
-
-        const resolvedModelId = resolveSelectedModelId(
-          allowedProviders,
-          resolvedProviderId,
-          normalizedSettings.selected_model || requestedModelId,
-        );
-
-        setModelSettings(normalizedSettings);
-        setSelectedProvider(resolvedProviderId);
-        setSelectedModel(resolvedModelId);
+        // This saves user preference only. The backend runtime still owns
+        // provider eligibility, actual model selection and fallback reporting.
+        setSelectedProvider(requestedProviderId);
+        setSelectedModel(requestedModelId);
 
         toast({
-          title: 'Settings applied',
-          description: `Karen is now using ${
-            getModelDisplayName(selectedModel) || requestedModelId
-          } via ${getProviderDisplayName(provider)}.`,
+          title: 'Model preference saved',
+          description: `Preferred model: ${getModelDisplayName(selectedModel) || requestedModelId} via ${getProviderDisplayName(provider)}. Karen will confirm the actual model in response details.`,
         });
       } catch (error) {
         toast({
