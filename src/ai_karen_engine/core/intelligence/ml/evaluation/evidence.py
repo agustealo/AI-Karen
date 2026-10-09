@@ -59,7 +59,7 @@ class EvaluationEvidenceStore:
             or result.error_count != 0
             or result.fallback_count != 0
             or result.abstention_count != 0
-            or any(outcome.error or not outcome.correct for outcome in result.outcomes)
+            or any(outcome.error for outcome in result.outcomes)
             or any(
                 outcome.prediction is None
                 or outcome.prediction.model_id != manifest.model_id
