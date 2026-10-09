@@ -92,9 +92,7 @@ class WebSearchClient:
                 error="Empty query",
             )
 
-        selected = self.registry.select_provider(
-            requested=provider,
-        )
+        selected = self.registry.select_provider(requested=provider)
         if not selected:
             return SearchResponse(
                 query=query,
@@ -103,22 +101,43 @@ class WebSearchClient:
                 error="No enabled search providers are configured.",
             )
 
-        try:
-            return await self._search_with_provider(
-                selected,
-                query,
-                max_results,
-                time_range,
-                **kwargs,
-            )
-        except Exception as exc:
-            logger.warning("Provider %s failed: %s", selected, exc, exc_info=True)
-            return SearchResponse(
-                query=query,
-                results=[],
-                provider=selected,
-                error=str(exc),
-            )
+        # The registry owns eligibility and order. Search transports may fail
+        # independently; never mistake one failed endpoint for an unavailable
+        # web.search capability.
+        candidates = [
+            selected,
+            *(
+                candidate
+                for candidate in self.registry.sorted_enabled()
+                if candidate != selected
+                and self.registry.get_descriptor(candidate) is not None
+                and self.registry.get_descriptor(candidate).health
+                not in {"unhealthy", "degraded"}
+            ),
+        ]
+        errors: list[str] = []
+        for candidate in candidates:
+            try:
+                response = await self._search_with_provider(
+                    candidate, query, max_results, time_range, **kwargs
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Search provider %s failed: %s", candidate, type(exc).__name__
+                )
+                errors.append(f"{candidate}:{type(exc).__name__}")
+                continue
+            if response.results:
+                return response
+            errors.append(f"{candidate}:{response.error or 'no_results'}")
+
+        return SearchResponse(
+            query=query,
+            results=[],
+            provider="none",
+            error="All enabled search providers failed or returned no results: "
+            + "; ".join(errors),
+        )
 
     async def _search_with_provider(
         self,
