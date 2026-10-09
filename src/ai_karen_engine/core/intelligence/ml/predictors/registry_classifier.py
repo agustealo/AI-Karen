@@ -38,10 +38,12 @@ class RegistryBackedClassifier(BasePredictor):
         *,
         registry: MLModelRegistry | None = None,
         tenant_id: str | None = None,
+        candidate_model_id: str | None = None,
     ) -> None:
         super().__init__(ml_runtime)
         self._task = task
         self._tenant_id = tenant_id
+        self._candidate_model_id = candidate_model_id
         self._registry = (
             registry
             or (
@@ -194,6 +196,16 @@ class RegistryBackedClassifier(BasePredictor):
 
     def _active_manifest(self, *, tenant_id: str | None = None) -> MLModelManifest | None:
         try:
+            if self._candidate_model_id is not None:
+                candidate = self._registry.get(self._candidate_model_id)
+                if candidate is None or candidate.status != "candidate" or candidate.purpose != self._task.value:
+                    return None
+                scope = tenant_id or self._tenant_id
+                if not scope or scope == "default":
+                    return None
+                import hashlib
+                prefix = "tenant-" + hashlib.sha256(scope.encode("utf-8")).hexdigest()[:16] + "-"
+                return candidate if candidate.model_id.startswith(prefix) else None
             return self._registry.get_active(self._task.value, tenant_id=tenant_id or self._tenant_id)
         except Exception as exc:
             logger.debug(
