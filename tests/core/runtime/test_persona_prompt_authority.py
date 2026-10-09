@@ -233,3 +233,31 @@ def test_evidence_first_contract_keeps_policy_authority(tmp_path) -> None:  # ty
         )
 
     asyncio.run(run())
+
+
+def test_prompt_keeps_user_biography_separate_from_model_identity(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        service = _service(tmp_path)
+        request = PromptAssemblyRequest(
+            messages=[
+                {"role": "user", "content": "Where am I from?"},
+                {"role": "assistant", "content": "I need more context."},
+                {"role": "user", "content": "I am Jamican, from Jamaica, Grow up in NYC, living in detroit"},
+            ],
+        )
+        result = await service.assemble_prompt(
+            request, enforce_budget=False, validate_schema=False,
+        )
+        boundaries = [
+            item["content"] for item in result.messages
+            if item.get("source") == "evidence_first_conversation_contract"
+        ]
+        assert len(boundaries) == 1
+        assert "User messages describe the user, NOT you" in boundaries[0]
+        assert "model vendor" in boundaries[0]
+        assert "origin, upbringing and residence" in boundaries[0]
+        assert "metaphor about AI" in boundaries[0]
+        assert result.messages[-1]["role"] == "user"
+        assert result.messages[-1]["content"] == request.messages[-1]["content"]
+
+    asyncio.run(run())
