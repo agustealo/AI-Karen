@@ -1058,11 +1058,21 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     try {
       const response = await apiClient.get<ModelSettingsResponse>('/api/runtime/providers');
       const normalized = normalizeRuntimeProviderCatalogResponse(response);
+      // Account-scoped preference is separate from runtime provider inventory.
+      // Inventory remains the authority on which targets are selectable.
+      const savedSettings = await apiClient.get<{
+        preferred_provider?: string;
+        preferred_model?: string;
+        preferences?: { model_selection?: { provider?: string; model?: string } };
+      }>('/api/settings');
+      const savedSelection = savedSettings.preferences?.model_selection;
+      const preferredProviderId = savedSelection?.provider || savedSettings.preferred_provider || normalized.selected_provider;
+      const preferredModelId = savedSelection?.model || savedSettings.preferred_model || normalized.selected_model;
       setModelSettings(normalized);
 
       // Check if selected provider is still available and configured
       const selectableProviders = normalized.selectableProviders;
-      const selectedProviderId = normalized.selected_provider;
+      const selectedProviderId = preferredProviderId;
       const selectedProvider = selectableProviders.find(p => p.id === selectedProviderId);
 
       if (selectedProviderId && !selectedProvider) {
@@ -1077,22 +1087,21 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         setSelectedProvider(fallbackProvider?.id || '');
         setSelectedModel(fallbackProvider?.selected_model || fallbackProvider?.default_model || fallbackProvider?.models?.[0]?.id || '');
       } else {
-        setSelectedProvider(normalized.selected_provider);
+        setSelectedProvider(selectedProviderId);
         
         // Ensure selected model is valid for this provider
-        const modelId = normalized.selected_model;
+        const modelId = preferredModelId;
         const modelExists = selectedProvider?.models.some(m => m.id === modelId);
         
         if (selectedProvider && !modelExists) {
            setSelectedModel(
              selectedProvider.selected_model ||
              selectedProvider.default_model ||
-             modelId ||
              selectedProvider.models?.[0]?.id ||
              ''
            );
         } else {
-           setSelectedModel(normalized.selected_model);
+           setSelectedModel(modelId);
         }
       }
     } catch (err) {
