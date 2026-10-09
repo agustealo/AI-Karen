@@ -135,6 +135,7 @@ class DirectCapabilityExecutor:
         decision: ExecutionDecision,
         plan: AuthorizedExecutionPlan,
         meter: ExecutionBudgetMeter,
+        resolved_context: Optional[Dict[str, Any]] = None,
     ) -> DirectCapabilityResult:
         route = CAPABILITY_ROUTES.get(str(decision.intent or ""))
         if not route:
@@ -149,7 +150,11 @@ class DirectCapabilityExecutor:
         attempts: List[Dict[str, Any]] = []
 
         if decision.intent == "search.weather":
-            resolved = self._weather_query_with_location(query, request.metadata)
+            effective_context = dict(resolved_context or {})
+            # Explicit request/device-selected context is handled by the
+            # existing resolver; governed profile values fill missing roles.
+            effective_context.update(dict(request.metadata or {}))
+            resolved = self._weather_query_with_location(query, effective_context)
             if resolved is None:
                 return DirectCapabilityResult(
                     handled=True,

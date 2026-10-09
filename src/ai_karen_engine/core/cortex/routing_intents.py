@@ -151,6 +151,24 @@ def _looks_like_location_phrase(value: str) -> bool:
     )
 
 
+def weather_query_has_explicit_location(query: str) -> bool:
+    """Detect explicitly named forecast places at the CORTEX ingress boundary.
+
+    This only decides whether private-memory location resolution is needed.
+    Provider search and geographic validation remain downstream authorities.
+    """
+    raw = " ".join(str(query or "").strip().split()).rstrip("?!.")
+    named_place = re.search(
+        r"\\b(?:weather(?:\\s+like)?|forecast|temperature)\\s+(?:in|for|at)\\s+"
+        r"(?P<location>[A-Za-z][A-Za-z0-9 ,.'-]{0,110})$",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if named_place and _looks_like_location_phrase(named_place.group("location")):
+        return True
+    return _looks_like_location_first_weather(query) or _looks_like_forecast_target(query)
+
+
 def _looks_like_shorthand_time(query: str) -> bool:
     raw = " ".join((query or "").strip().split()).rstrip("?")
     match = re.fullmatch(r"time\s+in\s+(?P<location>.+)", raw, flags=re.IGNORECASE)
@@ -239,6 +257,12 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
                 handler=config.get("handler"),
                 requires_chat_capable_model=bool(config.get("allow_llm_only", False)),
                 allow_llm_only=bool(config.get("allow_llm_only", False)),
+                missing_requirements=(
+                    ["location.current"]
+                    if intent == "search.weather"
+                    and not weather_query_has_explicit_location(query)
+                    else []
+                ),
             )
 
     # Detect broad conversational subtypes
