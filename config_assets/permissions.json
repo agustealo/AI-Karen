@@ -9,6 +9,7 @@
     "admin": {
       "description": "Administrative access",
       "permissions": [
+        "read",
         "users:manage",
         "system:configure",
         "data:read",
