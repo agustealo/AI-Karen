@@ -91,6 +91,17 @@ _LOCATION_PATTERNS = (
     ("birthplace", "birthplace", re.compile(
         r"(?i)\b(?:i\s+(?:was\s+)?born\s+in|born\s+in)\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
+    # Explicit first-person clauses frequently omit the repeated subject:
+    # "I am Jamaican, from Jamaica, grew up in NYC, living in Detroit".
+    ("origin_location", "origin", re.compile(
+        r"(?i)\bi(?:'m| am)\s+[A-Za-z][A-Za-z'-]{2,45}\s*,\s*from\s+(.+?)(?=[,.!?;]|$)"
+    )),
+    ("upbringing_location", "upbringing", re.compile(
+        r"(?i)\b(?:i\s+)?(?:grew|grow)\s+up\s+in\s+(.+?)(?=[,.!?;]|$)"
+    )),
+    ("residence_location", "residence", re.compile(
+        r"(?i)(?:\bi(?:'m| am)\s+living\s+in|,\s*living\s+in)\s+(.+?)(?=[,.!?;]|$)"
+    )),
     ("origin_location", "origin", re.compile(
         r"(?i)\bi(?:'m| am)\s+(?:originally\s+)?from\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
@@ -162,6 +173,12 @@ def classify_general_user_facts(text: str) -> list[MemorySignal]:
 
     for attribute, location_type, pattern in _LOCATION_PATTERNS:
         for match in pattern.finditer(normalized):
+            # Subject-omitted coordinated clauses are user facts only when
+            # anchored by an explicit first-person statement in this turn.
+            if attribute in {"upbringing_location", "residence_location"} and not re.search(
+                r"(?i)\bi(?:\s|\x27m\b)", normalized
+            ):
+                continue
             if temporary and attribute == "current_location" and match.start() == temporary.start():
                 continue
             value = _clean(match.group(1))
