@@ -3,7 +3,8 @@ ARG PROFILE=runtime
 # -----------------------------
 # Base build stage (common deps)
 # -----------------------------
-FROM python:3.11-slim AS base
+ARG KAREN_PYTHON_BASE_IMAGE=python:3.11-slim
+FROM ${KAREN_PYTHON_BASE_IMAGE} AS base
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
