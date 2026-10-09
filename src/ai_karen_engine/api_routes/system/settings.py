@@ -111,9 +111,18 @@ async def get_settings(
     current_user: UserData = Depends(get_current_user),
 ):
     _, account = await _load_authoritative_user(current_user)
+    selections = dict(account.preferences or {}).get("model_selection")
+    selections = selections if isinstance(selections, dict) else {}
+    provider = selections.get("provider")
+    model = selections.get("model")
+    # Explicit, user-scoped selections win over shared runtime defaults.
+    # Actual availability and fallback remain owned by the provider registry
+    # and ChatRuntime; this endpoint does not validate or execute models.
+    preferred_provider = provider.strip() if isinstance(provider, str) and provider.strip() else user.preferred_provider
+    preferred_model = model.strip() if isinstance(model, str) and model.strip() else user.preferred_model
     return {
-        "preferred_provider": user.preferred_provider,
-        "preferred_model": user.preferred_model,
+        "preferred_provider": preferred_provider,
+        "preferred_model": preferred_model,
         "degraded_banner": user.show_degraded_banner,
         "degraded_status": user.degraded_status,
         "ui": user.ui,
