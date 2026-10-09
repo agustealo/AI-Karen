@@ -42,7 +42,7 @@ class EvaluationEvidenceStore:
         db = sqlite3.connect(str(self.database), timeout=10)
         return db
 
-    def record(
+    def _record(
         self,
         manifest: MLModelManifest,
         result: BenchmarkResult,
