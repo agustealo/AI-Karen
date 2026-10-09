@@ -126,3 +126,34 @@ def test_completed_unfinished_work_becomes_open_loop_transition() -> None:
 
 def test_unrelated_text_does_not_create_explicit_user_state() -> None:
     assert classify_explicit_user_memory("Explain how TCP congestion control works.") == []
+
+
+def test_colloquial_first_person_identity_is_session_evidence_not_birthplace() -> None:
+    signals = classify_explicit_user_memory("I Jamaican, where am I from?")
+    descriptions = [
+        item for item in signals
+        if item.metadata.get("attribute") == "self_description"
+    ]
+    assert len(descriptions) == 1
+    assert descriptions[0].metadata["normalized_value"] == "Jamaican"
+    assert descriptions[0].metadata["retention_scope"] == "session"
+    assert descriptions[0].metadata["not_verified_birthplace"] is True
+    assert not any(
+        item.metadata.get("attribute") in {"birthplace", "origin_location"}
+        for item in signals
+    )
+
+
+def test_explicit_origin_remains_distinct_from_self_description() -> None:
+    signals = classify_explicit_user_memory("I'm from Jamaica.")
+    assert any(
+        item.metadata.get("attribute") == "origin_location"
+        and item.metadata.get("normalized_value") == "Jamaica"
+        for item in signals
+    )
+    assert not any(item.metadata.get("attribute") == "birthplace" for item in signals)
+
+
+def test_short_self_description_does_not_infer_identity_from_generic_question() -> None:
+    signals = classify_explicit_user_memory("Where am I from?")
+    assert not any(item.metadata.get("attribute") == "self_description" for item in signals)

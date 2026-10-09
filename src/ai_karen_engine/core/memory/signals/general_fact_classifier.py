@@ -66,6 +66,14 @@ _TEMPORARY_PRESENCE = re.compile(
     r"visiting\b|and\b|but\b)|[,.!?;]|$)"
 )
 
+# A short explicit self-description is conversational evidence, not proof of
+# birthplace, citizenship, ancestry, or current physical location.
+_SELF_DESCRIPTION = re.compile(
+    r"(?i)\bi\s+(?:am\s+)?(?:an?\s+)?"
+    r"(?P<description>[A-Za-z][A-Za-z'-]{2,45})"
+    r"(?=\s*[,;.!?]|$)"
+)
+
 _LOCATION_PATTERNS = (
     ("current_location", "current", re.compile(
         r"(?i)\b(?:i(?:'m| am)\s+(?:currently|right now)\s+in|"
@@ -97,6 +105,32 @@ def classify_general_user_facts(text: str) -> list[MemorySignal]:
         return []
 
     signals: list[MemorySignal] = []
+
+    self_description = _SELF_DESCRIPTION.search(normalized)
+    if self_description:
+        description = _clean(self_description.group("description"))
+        # Do not infer a national origin from a demonym-shaped adjective, and
+        # do not commit unconstrained personal identity claims to long-term
+        # memory without the existing memory admission process.
+        if description and description.casefold() not in {"not", "don't", "dont", "going", "trying"}:
+            signals.append(
+                MemorySignal(
+                    text=self_description.group(0),
+                    signal_type="identity_fact",
+                    confidence=0.87,
+                    scope="session",
+                    metadata={
+                        "source": "explicit_general_fact_rule",
+                        "explicit_user_statement": True,
+                        "semantic_class": "self_description",
+                        "attribute": "self_description",
+                        "normalized_value": description,
+                        "retention_scope": "session",
+                        "stability": "short_term",
+                        "not_verified_birthplace": True,
+                    },
+                )
+            )
 
     temporary = _TEMPORARY_PRESENCE.search(normalized)
     if temporary:

@@ -1486,3 +1486,88 @@ def test_governed_pending_producer_rejects_untrusted_payload() -> None:
         assert ChatRuntime._pending_clarification_from_result(
             request, SimpleNamespace(payload=payload)
         ) is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_hydrates_colloquial_identity_for_later_origin_question() -> None:
+    """The original statement survives a later request without location tools."""
+    from datetime import datetime
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    history = (
+        SimpleNamespace(
+            role="user",
+            content="I Jamaican.",
+            created_at=datetime.utcnow(),
+            metadata={},
+        ),
+        SimpleNamespace(
+            role="assistant",
+            content="Thanks for telling me.",
+            created_at=datetime.utcnow(),
+            metadata={},
+        ),
+    )
+    gateway = SimpleNamespace(
+        load_history=AsyncMock(
+            return_value=SimpleNamespace(success=True, messages=history)
+        )
+    )
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = gateway
+    request = _request("Where am I from?")
+
+    await runtime._prepare_conversation_continuation(request)
+
+    assert request.messages[0]["content"] == "I Jamaican."
+    assert request.messages[-1]["content"] == "Where am I from?"
+    assert request.metadata["conversation_history_materialized"] is True
+    gateway.load_history.assert_awaited_once_with(request.context, limit=12)
+
+
+@pytest.mark.asyncio
+async def test_runtime_preserves_self_described_identity_for_later_question() -> None:
+    from datetime import datetime, timedelta
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    now = datetime.utcnow()
+    history = [
+        SimpleNamespace(role="user", content="I Jamaican.", created_at=now, metadata={}),
+        SimpleNamespace(
+            role="assistant", content="Thanks for sharing.",
+            created_at=now + timedelta(seconds=1), metadata={},
+        ),
+    ]
+    gateway = SimpleNamespace(
+        load_history=AsyncMock(
+            return_value=SimpleNamespace(success=True, messages=tuple(history))
+        )
+    )
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = gateway
+    request = _request("Where am I from?")
+
+    await runtime._prepare_conversation_continuation(request)
+
+    assert request.messages[0]["content"] == "I Jamaican."
+    assert request.messages[-1]["content"] == "Where am I from?"
+    assert request.metadata["conversation_history_source"] == "canonical_repository"
+    gateway.load_history.assert_awaited_once_with(request.context, limit=12)
+
+
+@pytest.mark.asyncio
+async def test_runtime_does_not_infer_identity_from_denied_history() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = SimpleNamespace(
+        load_history=AsyncMock(
+            return_value=SimpleNamespace(success=False, messages=())
+        )
+    )
+    request = _request("Where am I from?")
+
+    await runtime._prepare_conversation_continuation(request)
+
+    assert request.messages == [{"role": "user", "content": "Where am I from?"}]
+    assert "conversation_history_source" not in request.metadata
