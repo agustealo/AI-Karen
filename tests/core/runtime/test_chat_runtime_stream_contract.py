@@ -684,3 +684,46 @@ async def test_execute_stream_preserves_rich_results_in_terminal_metadata_and_tr
     persisted = gateway.calls[0]["response_metadata"]
     for key, value in rich.items():
         assert persisted[key] == value
+
+
+@pytest.mark.asyncio
+async def test_stream_personal_identity_uses_authorized_evidence_without_model_call():
+    """Provider degradation cannot turn a verified identity into LLM speculation."""
+    from ai_karen_engine.core.context.contracts import (
+        ContextEvidence, EvidenceScope, EvidenceSource,
+    )
+
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    request.messages = [{"role": "user", "content": "Who am I?"}]
+    decision = _make_decision()
+    decision.intent = "memory.recall"
+    decision.policy_constraints = {}
+    decision.cognitive_context = MagicMock()
+    decision.cognitive_context.tenant_id = TENANT_ID
+    decision.cognitive_context.user_id = USER_ID
+    decision.cognitive_context.authorized_sources = ["memory"]
+    decision.cognitive_context.denied_sources = []
+    decision.cognitive_context.unresolved_sources = []
+    decision.cognitive_context.evidence = [
+        ContextEvidence(
+            evidence_id="verified-name",
+            source=EvidenceSource.MEMORY,
+            content="preferred_name: Aurelia",
+            scope=EvidenceScope(tenant_id=TENANT_ID, user_id=USER_ID),
+        ),
+    ]
+    plan = _make_plan()
+
+    async def forbidden_model(*args, **kwargs):
+        raise AssertionError("personal identity recall must not reach a model")
+        yield  # pragma: no cover
+
+    chunks = await _collect_stream(
+        runtime, request, decision, plan, forbidden_model,
+    )
+    content = "".join(c.content for c in chunks if c.type == "content")
+    assert "Aurelia" in content
+    assert len([c for c in chunks if c.type == ChatStreamEventType.COMPLETE]) == 1
+    assert gateway.calls[0]["assistant_text"] == content
+    assert gateway.calls[0]["response_metadata"]["response_source"] == "authorized_memory_evidence"
