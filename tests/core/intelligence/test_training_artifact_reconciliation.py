@@ -76,3 +76,38 @@ def test_artifact_outside_trusted_root_does_not_get_validated(tmp_path):
     )
     result = reconciler.inspect(tenant_id="tenant-one")
     assert result["findings"][0]["finding"] == "artifact_integrity_failed"
+
+
+def test_discovers_unregistered_artifact_after_worker_crash(tmp_path):
+    import hashlib
+    import json
+    registry_root = tmp_path / "registry"
+    registry_root.mkdir()
+    tenant = "tenant-one"
+    tenant_key = hashlib.sha256(tenant.encode("utf-8")).hexdigest()[:16]
+    model_id = f"tenant-{tenant_key}-affect-run-3"
+    model_version = "train-run-3"
+    root = registry_root / "topology" / model_id / model_version
+    root.mkdir(parents=True)
+    (root / "training_metadata.json").write_text(json.dumps({
+        "tenant_key": tenant_key,
+        "training_job_id": "run-3",
+        "model_id": model_id,
+        "model_version": model_version,
+    }), encoding="utf-8")
+    ledger = TrainingJobLedger(tmp_path / "jobs.sqlite3")
+    ledger.submit(
+        TrainingJob(job_id="run-3", task="affect", base_model="sklearn",
+                    dataset_version="approved-v1"),
+        tenant_id=tenant, user_id="operator",
+    )
+    registry = RegistryStub([])
+    registry.get = lambda _: None
+    reconciler = TrainingArtifactReconciler(
+        ledger=ledger, registry=registry, registry_root=registry_root,
+    )
+    report = reconciler.inspect(tenant_id=tenant)
+    assert report["count"] == 1
+    assert report["findings"][0]["finding"] == "unregistered_training_artifact"
+    assert reconciler.inspect(tenant_id="other-tenant")["findings"] == []
+    assert ledger.get("run-3", tenant_id=tenant)["status"] == "QUEUED"
