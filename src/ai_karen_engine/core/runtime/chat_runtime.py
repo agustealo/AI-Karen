@@ -140,6 +140,7 @@ class ChatRuntime:
         return get_workflow_runtime()
 
     async def execute(self, request: ChatExecutionRequest) -> ChatExecutionResult:
+        await self._prepare_conversation_continuation(request)
         start = time.time()
         ctx = request.context
 
@@ -436,6 +437,7 @@ class ChatRuntime:
     async def execute_stream(
         self, request: ChatExecutionRequest
     ) -> AsyncIterator[ChatStreamChunk]:
+        await self._prepare_conversation_continuation(request)
         ctx = request.context
         sequence = 0
         request_id = ctx.request_id or str(uuid.uuid4())
@@ -1291,6 +1293,85 @@ class ChatRuntime:
     # Routing
     # ------------------------------------------------------------------
 
+    async def _prepare_conversation_continuation(self, request: ChatExecutionRequest) -> None:
+        """Hydrate authorized history for any single-turn request before routing.
+
+        The canonical gateway enforces tenant and user ownership. Conversation
+        evidence never bypasses the later RuntimePolicy evidence authorization;
+        this bounded transcript is conversational input for continuity only.
+        """
+        if not request.messages:
+            return
+        current = request.messages[-1]
+        if str(current.get("role", "")).lower() != "user":
+            return
+        if len(request.messages) == 1:
+            try:
+                gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+                history = await gateway.load_history(request.context, limit=12)
+                if history.success and history.messages:
+                    ordered = sorted(history.messages, key=lambda message: message.created_at)
+                    prior = [
+                        {"role": message.role, "content": message.content}
+                        for message in ordered
+                        if str(message.role).lower() in {"assistant", "user"}
+                        and str(message.content or "").strip()
+                    ]
+                    if prior:
+                        request.messages = [*prior, current]
+                        request.metadata["conversation_history_source"] = "canonical_repository"
+                        request.metadata["conversation_history_materialized"] = True
+            except Exception as exc:
+                logger.warning(
+                    "Authorized conversation history unavailable: %s",
+                    type(exc).__name__,
+                )
+        self._resolve_pending_weather_followup(request)
+
+    @staticmethod
+    def _resolve_pending_weather_followup(request: ChatExecutionRequest) -> None:
+        """Complete a pending weather-location question from this transcript.
+
+        Only an immediately preceding, explicit assistant clarification may
+        supply continuation intent. Never infer it from a stale conversation,
+        profile, or an unrelated city mention.
+        """
+        import re
+
+        messages = request.messages
+        if len(messages) < 3:
+            return
+        current = messages[-1]
+        previous = messages[-2]
+        if (
+            str(current.get("role", "")).lower() != "user"
+            or str(previous.get("role", "")).lower() != "assistant"
+        ):
+            return
+        prompt = str(previous.get("content", "")).strip()
+        if prompt != "Which city or location should I check the weather for?":
+            return
+        location = str(current.get("content", "")).strip()
+        if not re.fullmatch(r"[A-Za-z][A-Za-z .,'-]{0,79}", location):
+            return
+        if location.casefold() in {"yes", "no", "thanks", "thank you", "cancel", "nevermind"}:
+            return
+        # Require the preceding user turn to be an actual weather request.
+        preceding_user = next(
+            (str(msg.get("content", "")) for msg in reversed(messages[:-2])
+             if str(msg.get("role", "")).lower() == "user"),
+            "",
+        )
+        from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
+        if resolve_capability_decision(preceding_user).intent != "search.weather":
+            return
+        current["content"] = f"What's the weather in {location}?"
+        request.metadata = {
+            **dict(request.metadata or {}),
+            "weather_followup_location": location,
+            "weather_followup_resolved": True,
+        }
+
     async def _decide(self, request: ChatExecutionRequest) -> ExecutionDecision:
         return await self._composition.cortex.decide(request)
 
@@ -1478,11 +1559,25 @@ class ChatRuntime:
         meter: ExecutionBudgetMeter,
         _meta: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[ChatStreamChunk]:
+        resolved_location = (
+            RuntimeEvidenceResolver.authorized_semantic_value(
+                decision.cognitive_context,
+                tenant_id=request.context.tenant_id,
+                user_id=request.context.user_id,
+                attribute="current_location",
+            )
+            if decision.intent == "search.weather"
+            else None
+        )
         result = await get_direct_capability_executor().execute(
             request=request,
             decision=decision,
             plan=plan,
             meter=meter,
+            resolved_context=(
+                {"weather_location": resolved_location, "location_source": "user_profile"}
+                if resolved_location else None
+            ),
         )
         normalized = result.normalized_metadata()
         if _meta is not None:

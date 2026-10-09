@@ -1245,3 +1245,127 @@ def test_weather_question_is_not_misread_as_a_location_name() -> None:
     assert weather_query_has_explicit_location("How's the weather?") is False
     assert weather_query_has_explicit_location("What's the weather in Detroit?") is True
     assert weather_query_has_explicit_location("Detroit weather") is True
+
+
+def test_runtime_resumes_weather_location_from_immediate_transcript() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("NYC")
+    request.messages = [
+        {"role": "user", "content": "Whats the weather"},
+        {"role": "assistant", "content": "Which city or location should I check the weather for?"},
+        {"role": "user", "content": "NYC"},
+    ]
+    ChatRuntime._resolve_pending_weather_followup(request)
+    assert request.messages[-1]["content"] == "What's the weather in NYC?"
+    assert request.metadata["weather_followup_resolved"] is True
+    assert resolve_capability_decision(request.messages[-1]["content"]).intent == "search.weather"
+
+
+def test_runtime_does_not_hijack_unrelated_city_message() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("NYC")
+    request.messages = [
+        {"role": "user", "content": "Tell me about museums"},
+        {"role": "assistant", "content": "Which city or location should I check the weather for?"},
+        {"role": "user", "content": "NYC"},
+    ]
+    ChatRuntime._resolve_pending_weather_followup(request)
+    assert request.messages[-1]["content"] == "NYC"
+    assert not request.metadata.get("weather_followup_resolved")
+
+
+def test_runtime_does_not_resume_weather_from_stale_assistant_message() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request("NYC")
+    request.messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {"role": "assistant", "content": "Which city or location should I check the weather for?"},
+        {"role": "user", "content": "Tell me a story"},
+        {"role": "assistant", "content": "Once upon a time."},
+        {"role": "user", "content": "NYC"},
+    ]
+    ChatRuntime._resolve_pending_weather_followup(request)
+    assert request.messages[-1]["content"] == "NYC"
+
+
+@pytest.mark.asyncio
+async def test_runtime_loads_authorized_transcript_for_single_turn_weather_reply() -> None:
+    from datetime import datetime, timedelta
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    now = datetime.utcnow()
+    history = [
+        SimpleNamespace(role="user", content="What's the weather?", created_at=now),
+        SimpleNamespace(
+            role="assistant",
+            content="Which city or location should I check the weather for?",
+            created_at=now + timedelta(seconds=1),
+        ),
+    ]
+    gateway = SimpleNamespace(
+        load_history=AsyncMock(return_value=SimpleNamespace(success=True, messages=tuple(history)))
+    )
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = gateway
+    request = _request("nyc")
+
+    await runtime._prepare_conversation_continuation(request)
+
+    assert request.messages[-1]["content"] == "What's the weather in nyc?"
+    assert request.metadata["weather_followup_resolved"] is True
+    gateway.load_history.assert_awaited_once_with(request.context, limit=12)
+
+
+@pytest.mark.asyncio
+async def test_runtime_does_not_infer_pending_weather_after_denied_history() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = SimpleNamespace(
+        load_history=AsyncMock(return_value=SimpleNamespace(success=False, messages=()))
+    )
+    request = _request("nyc")
+    await runtime._prepare_conversation_continuation(request)
+    assert request.messages[-1]["content"] == "nyc"
+    assert not request.metadata.get("weather_followup_resolved")
+
+
+@pytest.mark.asyncio
+async def test_runtime_hydrates_general_conversation_without_weather_keywords() -> None:
+    from datetime import datetime
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    history = [
+        SimpleNamespace(role="user", content="We're working on Supabase migration.", created_at=datetime.utcnow()),
+        SimpleNamespace(role="assistant", content="I will track the migration blockers.", created_at=datetime.utcnow()),
+    ]
+    gateway = SimpleNamespace(
+        load_history=AsyncMock(return_value=SimpleNamespace(success=True, messages=tuple(history)))
+    )
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = gateway
+    request = _request("What is still broken?")
+
+    await runtime._prepare_conversation_continuation(request)
+
+    assert [m["role"] for m in request.messages] == ["user", "assistant", "user"]
+    assert request.messages[0]["content"] == "We're working on Supabase migration."
+    assert request.messages[-1]["content"] == "What is still broken?"
+    assert request.metadata["conversation_history_source"] == "canonical_repository"
+
+
+@pytest.mark.asyncio
+async def test_runtime_denied_history_stays_uninjected_for_general_request() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = SimpleNamespace(
+        load_history=AsyncMock(return_value=SimpleNamespace(success=False, messages=()))
+    )
+    request = _request("What is still broken?")
+    await runtime._prepare_conversation_continuation(request)
+    assert len(request.messages) == 1
+    assert "conversation_history_source" not in request.metadata
