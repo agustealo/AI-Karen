@@ -312,6 +312,13 @@ class DirectCapabilityExecutor:
             result = await run_plugin()
             if result is not None:
                 return result
+            # The policy may authorize the canonical time tool but not the
+            # plugin (or plugin discovery may be unavailable). Never bypass
+            # the plan: run_tool independently enforces tool eligibility,
+            # action gates, and execution budget.
+            result = await run_tool()
+            if result is not None:
+                return result
             reason = self._last_attempt_error(
                 attempts,
                 "Time Query is not authorized or available for this chat.",
