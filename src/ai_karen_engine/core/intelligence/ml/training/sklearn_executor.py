@@ -58,8 +58,7 @@ def _hash_directory(directory: Path) -> str:
                     file_hash.update(chunk)
             entries.append((str(rel).replace("\\", "/"), entry.stat().st_size, file_hash.hexdigest()))
     for rel_path, size, digest in sorted(entries):
-        h.update(f"{rel_path}\t{size}\t{digest}
-".encode())
+        h.update(f"{rel_path}\t{size}\t{digest}\n".encode())
     return h.hexdigest()
 
 
