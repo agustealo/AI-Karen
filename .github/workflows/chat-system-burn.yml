@@ -22,23 +22,14 @@ jobs:
       PYTHONPATH: src
       CHAT_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/ai_karen
 
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: ai_karen
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d ai_karen"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-
     steps:
       - uses: actions/checkout@v4
+      - name: Start authenticated canonical PostgreSQL service
+        env:
+          KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+          KAREN_CI_POSTGRES_IMAGE: ${{ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
+        run: bash scripts/ci/start-postgres-container.sh
 
       - uses: actions/setup-python@v5
         with:
