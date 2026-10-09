@@ -117,7 +117,7 @@ def classify_general_user_facts(text: str) -> list[MemorySignal]:
                         "stability": "short_term",
                         "context_kind": (
                             "travel" if re.search(
-                                r"(?i)\\b(?:vacation|holiday|trip|visiting)\\b",
+                                r"(?i)\b(?:vacation|holiday|trip|visiting)\b",
                                 normalized,
                             ) else "current_presence"
                         ),
