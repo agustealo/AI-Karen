@@ -40,6 +40,7 @@ jobs:
       BETA_MODEL_BASE_URL: ${{ vars.BETA_MODEL_BASE_URL }}
       BETA_MODEL_API_KEY: ${{ secrets.BETA_MODEL_API_KEY }}
       BETA_MODEL_NAME: ${{ vars.BETA_MODEL_NAME }}
+      BETA_MODEL_PROVIDER: ${{ vars.BETA_MODEL_PROVIDER }}
       BETA_MODEL_TIMEOUT_SECONDS: "90"
 
     steps:
@@ -75,7 +76,7 @@ jobs:
         env:
           KAREN_SMOKE_API_IMAGE: ai-karen-api:beta-live
           KAREN_SMOKE_LIVE_MODEL_BASE_URL: ${{ vars.BETA_MODEL_BASE_URL }}
-          KAREN_SMOKE_LIVE_MODEL_PROVIDER: lmstudio-desktop
+          KAREN_SMOKE_LIVE_MODEL_PROVIDER: ${{ vars.BETA_MODEL_PROVIDER || 'lmstudio-desktop' }}
           KAREN_SMOKE_LIVE_MODEL_NAME: ${{ vars.BETA_MODEL_NAME }}
           KAREN_SMOKE_LIVE_MODEL_TIMEOUT_SECONDS: "90"
         run: bash scripts/ci/production-first-boot-smoke.sh
