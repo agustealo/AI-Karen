@@ -1606,3 +1606,45 @@ def test_unresolved_request_preserves_normal_user_persistence() -> None:
     assert ChatRuntime._extract_user_message_for_persistence(
         ChatRuntime.__new__(ChatRuntime), request
     ) == "Where am I from?"
+
+
+@pytest.mark.asyncio
+async def test_prompt_assembly_includes_authorized_typed_clarification_without_mutating_user() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.prompt.prompt_assembler import PromptAssembler
+    from ai_karen_engine.core.runtime.prompt.prompt_registry import PromptRegistry
+    from unittest.mock import patch
+
+    request = _request("four")
+    request.messages = [
+        {"role": "user", "content": "Find a restaurant booking"},
+        {"role": "assistant", "content": "How many people?", "metadata": {
+            "pending_clarification": {"status": "awaiting_user", "slot": "party_size",
+                                      "original_request": "Find a restaurant booking"}
+        }},
+        {"role": "user", "content": "four"},
+    ]
+    assert ChatRuntime._resolve_typed_pending_clarification(request)
+    assert request.messages[-1]["content"] == "four"
+
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    class _PromptService:
+        async def assemble_prompt(self, assembly_request):
+            assembler = PromptAssembler(PromptRegistry())
+            return await assembler.assemble_prompt(assembly_request)
+
+    decision = SimpleNamespace(
+        memory_recall_required=False, tool_requirements=[],
+        workflow_id=None, workflow_version=None, requires_human_gate=False,
+        requires_resumability=False, token_budget=4096,
+    )
+    with patch("ai_karen_engine.core.runtime.prompt.get_prompt_runtime_service",
+               return_value=_PromptService()):
+        messages, _ = await runtime._assemble_prompt_with_telemetry(request, decision)
+    workflow = next(m for m in messages if m.get("source") == "workflow_context")
+    assert workflow["metadata"]["workflow_context"]["clarification_inputs"] == {
+        "original_request": "Find a restaurant booking",
+        "values": {"party_size": "four"},
+        "source": "authorized_conversation",
+    }
+    assert request.messages[-1]["content"] == "four"
