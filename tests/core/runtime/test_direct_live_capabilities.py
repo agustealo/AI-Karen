@@ -1312,7 +1312,7 @@ async def test_runtime_loads_authorized_transcript_for_single_turn_weather_reply
     runtime._conversation_gateway = gateway
     request = _request("nyc")
 
-    await runtime._prepare_pending_weather_followup(request)
+    await runtime._prepare_conversation_continuation(request)
 
     assert request.messages[-1]["content"] == "What's the weather in nyc?"
     assert request.metadata["weather_followup_resolved"] is True
@@ -1328,6 +1328,6 @@ async def test_runtime_does_not_infer_pending_weather_after_denied_history() -> 
         load_history=AsyncMock(return_value=SimpleNamespace(success=False, messages=()))
     )
     request = _request("nyc")
-    await runtime._prepare_pending_weather_followup(request)
+    await runtime._prepare_conversation_continuation(request)
     assert request.messages[-1]["content"] == "nyc"
     assert not request.metadata.get("weather_followup_resolved")
