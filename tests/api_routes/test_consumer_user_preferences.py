@@ -291,3 +291,27 @@ async def test_user_model_selection_rejects_unregistered_provider(monkeypatch):
         )
     assert exc.value.status_code == 422
     assert not service.preference_updates
+
+
+@pytest.mark.asyncio
+async def test_user_model_selection_rejects_disabled_provider(monkeypatch):
+    service = FakeAuthService()
+
+    async def fake_get_auth_service():
+        return service
+
+    monkeypatch.setattr(settings_routes, "get_auth_service", fake_get_auth_service)
+    from ai_karen_engine.config import llm_provider_config
+    monkeypatch.setattr(
+        llm_provider_config, "get_provider_config_manager",
+        lambda: SimpleNamespace(
+            get_provider=lambda name: SimpleNamespace(enabled=False)
+        ),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await settings_routes.update_user_model_selection(
+            settings_routes.ModelSelectionSettings(provider="disabled", model="model"),
+            _principal(),
+        )
+    assert exc.value.status_code == 422
+    assert not service.preference_updates
