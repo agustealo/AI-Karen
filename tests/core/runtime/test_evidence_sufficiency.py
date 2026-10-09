@@ -130,6 +130,9 @@ def test_no_trusted_semantic_target_does_not_force_an_answer():
 
     decision = ExecutionDecision(intent="memory.recall")
     decision.cognitive_context = context(evidence("upbringing_location", "NYC"))
-    assert ChatRuntime._grounded_personal_response(
+    text, meta = ChatRuntime._grounded_personal_response(
         decision, tenant_id="tenant", user_id="user"
-    ) is None
+    )
+    assert meta["evidence_sufficiency"] == "ambiguous"
+    assert "NYC" not in text
+    assert meta["actual_provider"] is None
