@@ -285,6 +285,7 @@ class CortexExecutionDecider:
             analysis = await self._intelligence.analyze(
                 text,
                 {"user_id": ctx.user_id, "session_id": ctx.session_id},
+                tenant_id=str(ctx.tenant_id),
             )
             intent_value = analysis.intent or "general_assist"
             confidence = analysis.intent_confidence or 0.0
