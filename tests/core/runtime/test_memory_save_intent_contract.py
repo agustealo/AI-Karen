@@ -116,3 +116,80 @@ def test_save_intent_is_not_recognized_from_assistant_messages():
     assert not runtime._is_explicit_save_turn(request)
     request.messages[-1]["content"] = "Store my name"
     assert runtime._is_explicit_save_turn(request)
+
+def test_targeted_save_request_never_falls_back_to_unrelated_recent_fact():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatExecutionContext, ChatExecutionRequest,
+    )
+
+    ctx = ChatExecutionContext(
+        user_id="u", tenant_id="tenant", session_id="s",
+        conversation_id="c", request_id="r", correlation_id="r",
+    )
+    req = ChatExecutionRequest(
+        messages=[
+            {"role": "user", "content": "I work at Acme Labs."},
+            {"role": "assistant", "content": "Got it."},
+            {"role": "user", "content": "I live in Detroit."},
+            {"role": "assistant", "content": "Understood."},
+            {"role": "user", "content": "Remember my employer"},
+        ],
+        context=ctx,
+    )
+
+    resolved = ChatRuntime._resolve_explicit_memory_reference(
+        req, req.messages[-1]["content"]
+    )
+    assert "Acme Labs" in resolved
+    assert "Detroit" not in resolved
+
+
+def test_unknown_target_does_not_save_an_unrelated_profile_fact():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatExecutionContext, ChatExecutionRequest,
+    )
+
+    ctx = ChatExecutionContext(
+        user_id="u", tenant_id="tenant", session_id="s",
+        conversation_id="c", request_id="r", correlation_id="r",
+    )
+    req = ChatExecutionRequest(
+        messages=[
+            {"role": "user", "content": "I live in Detroit."},
+            {"role": "assistant", "content": "Understood."},
+            {"role": "user", "content": "Remember my shoe size"},
+        ],
+        context=ctx,
+    )
+
+    assert ChatRuntime._resolve_explicit_memory_reference(
+        req, req.messages[-1]["content"]
+    ) == "Remember my shoe size"
+
+
+def test_deictic_save_request_can_use_latest_eligible_profile_fact():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatExecutionContext, ChatExecutionRequest,
+    )
+
+    ctx = ChatExecutionContext(
+        user_id="u", tenant_id="tenant", session_id="s",
+        conversation_id="c", request_id="r", correlation_id="r",
+    )
+    req = ChatExecutionRequest(
+        messages=[
+            {"role": "user", "content": "I work at Acme Labs."},
+            {"role": "assistant", "content": "Got it."},
+            {"role": "user", "content": "Remember that"},
+        ],
+        context=ctx,
+    )
+
+    resolved = ChatRuntime._resolve_explicit_memory_reference(
+        req, req.messages[-1]["content"]
+    )
+    assert "Acme Labs" in resolved
+
