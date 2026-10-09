@@ -221,10 +221,13 @@ class ExpressionGateway:
                 }:
                     task.preferred_provider = engine_id
 
+            # Configured engine defaults must not silently replace an explicit
+            # user-selected provider/model on the primary attempt. A later
+            # fallback engine may apply its own configured target.
             if cfg.metadata:
-                if "preferred_provider" in cfg.metadata:
+                if (level > 0 or not original_provider) and cfg.metadata.get("preferred_provider"):
                     task.preferred_provider = cfg.metadata["preferred_provider"]
-                if "preferred_model" in cfg.metadata:
+                if (level > 0 or not original_model) and cfg.metadata.get("preferred_model"):
                     task.preferred_model = cfg.metadata["preferred_model"]
 
             emit_expression_event(
