@@ -277,6 +277,9 @@ class ChatRuntime:
                 )
                 text = direct_result.text
                 provider_meta = direct_result.normalized_metadata()
+                pending = self._pending_clarification_from_result(request, direct_result)
+                if pending:
+                    provider_meta["pending_clarification"] = pending
             elif decision.topology.value == "reasoning":
                 text, provider_meta = await self._run_reasoning(request, decision, plan, meter)
             elif decision.is_graph_required:
@@ -970,6 +973,8 @@ class ChatRuntime:
                     for key, value in provider_meta.items()
                     if key in _CANONICAL_META_KEYS or key in _RICH_RESULT_KEYS
                 },
+                **({"pending_clarification": provider_meta["pending_clarification"]}
+                   if isinstance(provider_meta.get("pending_clarification"), dict) else {}),
                 **({"trajectory_id": trajectory_id} if trajectory_id else {}),
             },
         )
@@ -1334,6 +1339,29 @@ class ChatRuntime:
             self._resolve_pending_weather_followup(request)
 
     @staticmethod
+    def _pending_clarification_from_result(
+        request: ChatExecutionRequest, result: Any,
+    ) -> Dict[str, str] | None:
+        """Translate a governed capability's missing-input result to durable state."""
+        import re
+
+        payload = getattr(result, "payload", None)
+        if not isinstance(payload, dict) or payload.get("status") != "needs_input":
+            return None
+        slot = str(payload.get("missing_requirement") or "").strip()
+        original = ChatRuntime._extract_user_message(request.messages).strip()
+        if (
+            not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", slot)
+            or not original or len(original) > 4000
+        ):
+            return None
+        return {
+            "status": "awaiting_user",
+            "slot": slot,
+            "original_request": original,
+        }
+
+    @staticmethod
     def _resolve_typed_pending_clarification(request: ChatExecutionRequest) -> bool:
         """Resume any explicitly registered pending slot, never guess one.
 
@@ -1632,6 +1660,9 @@ class ChatRuntime:
             ),
         )
         normalized = result.normalized_metadata()
+        pending = self._pending_clarification_from_result(request, result)
+        if pending:
+            normalized["pending_clarification"] = pending
         if _meta is not None:
             _meta.update(normalized)
 
