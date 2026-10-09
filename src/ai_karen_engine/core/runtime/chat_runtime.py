@@ -600,46 +600,65 @@ class ChatRuntime:
         generation_error: Optional[Exception] = None
         recovered_error_type: Optional[str] = None
 
-        direct_executor = get_direct_capability_executor()
-        gen = (
-            self._run_direct_capability_stream(
-                request,
-                decision,
-                plan,
-                meter,
-                _meta=provider_meta,
+        if self._is_explicit_save_turn(request):
+            receipt_text = await self._execute_memory_write_receipt(
+                request, decision, plan, memory_recall_meta
             )
-            if direct_executor.can_handle(decision)
-            else (
-                self._run_reasoning_stream(
+            provider_meta.update({
+                "response_source": "memory_persistence",
+                "actual_provider": None,
+                "actual_model": None,
+            })
+
+            async def receipt_stream() -> AsyncIterator[ChatStreamChunk]:
+                yield ChatStreamChunk(
+                    type="content",
+                    content=receipt_text,
+                    correlation_id=ctx.correlation_id,
+                )
+
+            gen = receipt_stream()
+        else:
+            direct_executor = get_direct_capability_executor()
+            gen = (
+                self._run_direct_capability_stream(
                     request,
                     decision,
                     plan,
                     meter,
                     _meta=provider_meta,
                 )
-                if decision.topology.value == "reasoning"
+                if direct_executor.can_handle(decision)
                 else (
-                    self._run_graph_stream(
+                    self._run_reasoning_stream(
                         request,
                         decision,
                         plan,
                         meter,
                         _meta=provider_meta,
                     )
-                    if decision.is_graph_required
-                    else self._run_simple_stream(
-                        request,
-                        decision,
-                        plan,
-                        meter,
-                        memory_recall_meta,
-                        _meta=provider_meta,
+                    if decision.topology.value == "reasoning"
+                    else (
+                        self._run_graph_stream(
+                            request,
+                            decision,
+                            plan,
+                            meter,
+                            _meta=provider_meta,
+                        )
+                        if decision.is_graph_required
+                        else self._run_simple_stream(
+                            request,
+                            decision,
+                            plan,
+                            meter,
+                            memory_recall_meta,
+                            _meta=provider_meta,
+                        )
                     )
                 )
             )
-        )
-
+    
         try:
             async for chunk in gen:
                 if chunk.type == "content":
@@ -783,7 +802,7 @@ class ChatRuntime:
         ]
 
         memory_persistence_failed = False
-        if decision.memory_write_allowed and streamed_text:
+        if decision.memory_write_allowed and streamed_text and not self._is_explicit_save_turn(request):
             persistence_started = time.perf_counter()
             await self._persist_memory(
                 request,
