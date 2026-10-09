@@ -44,6 +44,7 @@ class TrainingPipeline:
         self,
         result: TrainingPipelineResult,
         on_state: Callable[[str, TrainingJob], Awaitable[None]] | None = None,
+        authorize_publication: Callable[[], bool] | None = None,
     ) -> TrainingPipelineResult:
         job = result.job
         try:
@@ -77,6 +78,8 @@ class TrainingPipeline:
                 raise ValueError('Training artifact is outside the canonical model registry')
             if _hash_directory(artifact_root) != artifact.artifact_hash:
                 raise ValueError('Training artifact failed integrity verification')
+            if authorize_publication is not None and not authorize_publication():
+                raise RuntimeError('Training worker lease invalid before artifact publication')
             registered = self._register_artifact(artifact, job)
             if not registered:
                 raise ValueError('Training candidate registration rejected')
