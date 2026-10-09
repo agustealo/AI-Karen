@@ -969,7 +969,7 @@ class ChatRuntime:
         gateway = self._conversation_gateway or get_conversation_runtime_gateway()
         result = await gateway.persist_completed_turn(
             ctx,
-            user_text=self._extract_user_message(request.messages),
+            user_text=self._extract_user_message_for_persistence(request),
             assistant_text=response_text,
             response_metadata={
                 **{
@@ -1411,6 +1411,7 @@ class ChatRuntime:
             for item in messages[:-2]
         ):
             return False
+        request.metadata["original_user_input"] = str(latest.get("content") or "")
         latest["content"] = f"{original}\nAdditional {slot}: {answer}"
         request.metadata["clarification_resolved"] = True
         request.metadata["clarification_slot"] = slot
@@ -2185,6 +2186,13 @@ class ChatRuntime:
             time.perf_counter() - assembly_started
         ) * 1000.0
         return result.messages, prompt_telemetry
+
+    def _extract_user_message_for_persistence(self, request: ChatExecutionRequest) -> str:
+        """Persist the user's literal reply, not an execution-only continuation."""
+        original = (request.metadata or {}).get("original_user_input")
+        if isinstance(original, str):
+            return original
+        return self._extract_user_message(request.messages)
 
     def _extract_user_message(self, messages: List[Dict[str, Any]]) -> str:
         """Extract the latest user message."""
