@@ -168,3 +168,12 @@ def test_recalled_expiry_is_materialized_into_typed_evidence():
         user_id=USER,
         attribute="current_location",
     ) is None
+
+
+def test_temporal_evidence_parser_accepts_iso_z_and_unix_seconds():
+    reference = datetime(2026, 10, 9, 12, 30, tzinfo=timezone.utc)
+    parser = RuntimeEvidenceResolver._coerce_datetime
+    assert parser("2026-10-09T12:30:00Z") == reference
+    assert parser("2026-10-09T12:30:00+00:00") == reference
+    assert parser(reference.timestamp()) == reference
+    assert parser("not-a-date") is None
