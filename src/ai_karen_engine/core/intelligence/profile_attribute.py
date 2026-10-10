@@ -47,4 +47,31 @@ def requested_profile_attribute(text: str) -> str | None:
     return next(iter(matches)) if len(matches) == 1 else None
 
 
-__all__ = ["normalize_personal_query", "requested_profile_attribute"]
+def referenced_profile_attribute(
+    text: str, messages: list[dict[str, object]]
+) -> str | None:
+    """Resolve only unambiguous, immediate user-profile follow-up references.
+
+    No model inference, memory reads, or cross-session guesswork. Only recent
+    user turns establish the subject; assistant claims never establish facts.
+    """
+    explicit = requested_profile_attribute(text)
+    if explicit:
+        return explicit
+    utterance = normalize_personal_query(text).strip(" ?.!").strip()
+    if utterance not in {"my name", "what is it", "what's it", "whats it"}:
+        return None
+    if utterance == "my name":
+        return "preferred_name"
+    # Resolve a pronoun only if the immediately preceding user turn was
+    # explicitly about a single personal attribute.
+    for item in reversed(messages[:-1]):
+        if str(item.get("role") or "").casefold() == "user":
+            previous = normalize_personal_query(str(item.get("content") or "")).strip(" ?.!")
+            if previous == "my name":
+                return "preferred_name"
+            return requested_profile_attribute(previous)
+    return None
+
+
+__all__ = ["normalize_personal_query", "requested_profile_attribute", "referenced_profile_attribute"]

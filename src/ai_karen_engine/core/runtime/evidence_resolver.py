@@ -159,12 +159,12 @@ class RuntimeEvidenceResolver:
             return governed_query
         query = RuntimeEvidenceResolver._latest_user_message(request)
         from ai_karen_engine.core.intelligence.profile_attribute import (
-            requested_profile_attribute,
+            referenced_profile_attribute,
         )
 
         # Query by the requested fact, not by a sanitized user utterance.
         # The semantic query is internal and the original words are untouched.
-        attribute = requested_profile_attribute(query)
+        attribute = referenced_profile_attribute(query, request.messages)
         canonical_queries = {
             "preferred_name": "what is my name",
             "origin_location": "where am i from",
