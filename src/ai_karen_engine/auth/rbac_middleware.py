@@ -663,8 +663,28 @@ def require_permission(permission: Union[Permission, str]) -> Callable:
         current_user: UserData = Depends(resolve_current_user),
     ) -> UserData:
         if not get_rbac_manager().has_permission(current_user, target):
+            roles = current_user.get("roles") or []
+            claims = current_user.get("permissions") or []
+            logger.warning(
+                "auth.rbac.permission_denied",
+                extra={
+                    "required_permission": target.value if isinstance(target, Permission) else str(target),
+                    "user_id": current_user.get("user_id"),
+                    "tenant_id": current_user.get("tenant_id"),
+                    "role_count": len(roles),
+                    "permission_claim_count": len(claims),
+                },
+            )
+            detail = "Permission denied"
+            if target == Permission.TRAINING_READ:
+                detail = (
+                    "Training requires training:read. "
+                    + ("The authenticated session has no roles or permission claims."
+                       if not roles and not claims
+                       else "The authenticated session's grants do not include training:read.")
+                )
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied"
+                status_code=status.HTTP_403_FORBIDDEN, detail=detail
             )
         return current_user
 
