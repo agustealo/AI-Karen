@@ -74,6 +74,9 @@ jobs:
       - name: Verify upbringing routing and no fabricated biography
         run: pytest tests/core/cortex/test_personal_recall_degraded_routing.py tests/core/runtime/test_evidence_sufficiency.py -q
 
+      - name: Verify canonical chat ingress and grounded response parity
+        run: pytest tests/architecture/test_chat_stream_route_contract.py -q
+
       - name: Run chat architecture contract
         run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
 
