@@ -194,15 +194,37 @@ class AdminUserService:
         if not user:
             return False
         effective_tenant_id = self._enforce_tenant_boundary(user.tenant_id, operator_tenant_id)
-        # AuthService does not expose a generic update path; audit the attempt anyway.
+        allowed_fields = {"full_name", "roles", "is_active", "is_verified"}
+        if not updates or set(updates) - allowed_fields:
+            raise ValueError("Unsupported admin user update fields")
+        validated = dict(updates)
+        if "roles" in validated:
+            validated["roles"] = [
+                UserRole(role).value for role in validated["roles"]
+            ]
+        # The canonical auth service owns durable user mutations.
+        # Disabling an account must revoke sessions, not merely flip a flag.
+        is_active = validated.pop("is_active", None)
+        if is_active is not None:
+            validated["is_active"] = is_active
+        if is_active is False:
+            # Avoid a split mutation where deactivation silently leaves sessions active.
+            profile_fields = {key: value for key, value in validated.items() if key != "is_active"}
+            if profile_fields:
+                await self._auth_service.update_user(user_id, **profile_fields)
+            await self._auth_service.set_user_status(
+                user_id, False, reason="admin_user_deactivated"
+            )
+        else:
+            await self._auth_service.update_user(user_id, **validated)
         self._audit_mutation(
             action="update",
             target_user_id=user_id,
             tenant_id=effective_tenant_id,
             operator_id=operator_id,
-            metadata={"updated_fields": sorted(updates.keys())},
+            metadata={"updated_fields": sorted(updates)},
         )
-        return False
+        return True
 
     async def delete_user(
         self,
@@ -216,13 +238,16 @@ class AdminUserService:
         if not user:
             return False
         effective_tenant_id = self._enforce_tenant_boundary(user.tenant_id, operator_tenant_id)
+        await self._auth_service.set_user_status(
+            user_id, False, reason="admin_user_deleted"
+        )
         self._audit_mutation(
             action="delete",
             target_user_id=user_id,
             tenant_id=effective_tenant_id,
             operator_id=operator_id,
         )
-        return False
+        return True
 
     async def get_user_sessions(
         self,
