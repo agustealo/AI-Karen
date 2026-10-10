@@ -416,3 +416,27 @@ def test_spacy_preflight_validates_corpus_but_never_queues_unsupported_engine(tm
     assert result["ready"] == AdvancedTrainingWorkbench(dataset_root=tmp_path).catalog()["engines"][1]["supported"]
     assert result["evidence"]["mode"] == "textcat"
     assert result["evidence"]["examples_scanned"] == 10
+
+
+def test_spacy_preflight_matches_stratified_split_for_imbalanced_labels(tmp_path):
+    import json
+    from ai_karen_engine.core.intelligence.ml.training.workbench import AdvancedTrainingWorkbench
+
+    rows = [
+        {"example_id": f"major-{i}", "text": f"Majority sample {i}", "label": "major"}
+        for i in range(18)
+    ] + [
+        {"example_id": f"minor-{i}", "text": f"Minority sample {i}", "label": "minor"}
+        for i in range(2)
+    ]
+    (tmp_path / "imbalanced.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8",
+    )
+    workbench = AdvancedTrainingWorkbench(dataset_root=tmp_path)
+    result = workbench.preflight(
+        engine="spacy", task="intent", dataset_version="imbalanced",
+        test_split=0.2, max_samples=20, seed=42, max_iter=2,
+        class_weight="balanced", optimizer="lbfgs", precision="fp64",
+    )
+    assert result["evidence"]["class_counts"] == {"major": 18, "minor": 2}
+    assert not any(check["code"] == "split_class_support" for check in result["checks"])
