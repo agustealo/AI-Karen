@@ -44,8 +44,24 @@ class SpacyTrainingExecutor:
             raise ValueError("Invalid held-out split")
         rng = random.Random(seed)
         rng.shuffle(rows)
-        test_count = max(1, int(len(rows) * split))
-        test_rows, train_rows = rows[:test_count], rows[test_count:]
+        if mode == "textcat":
+            # Keep every class in both partitions. A globally shuffled split can
+            # silently omit rare classes from held-out validation.
+            by_label: dict[str, list[dict]] = {}
+            for row in rows:
+                by_label.setdefault(row["label"], []).append(row)
+            train_rows, test_rows = [], []
+            for examples in by_label.values():
+                if len(examples) < 2:
+                    raise ValueError("Each text category requires two examples")
+                test_count = max(1, min(len(examples) - 1, round(len(examples) * split)))
+                test_rows.extend(examples[:test_count])
+                train_rows.extend(examples[test_count:])
+            rng.shuffle(train_rows)
+            rng.shuffle(test_rows)
+        else:
+            test_count = max(1, int(len(rows) * split))
+            test_rows, train_rows = rows[:test_count], rows[test_count:]
         if not train_rows:
             raise ValueError("Missing training split")
         nlp = spacy.blank("en")
