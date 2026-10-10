@@ -194,7 +194,18 @@ class AdminUserService:
         if not user:
             return False
         effective_tenant_id = self._enforce_tenant_boundary(user.tenant_id, operator_tenant_id)
-        # AuthService does not expose a generic update path; audit the attempt anyway.
+        allowed = {"full_name", "roles", "is_active", "is_verified"}
+        if not updates or set(updates) - allowed:
+            raise ValueError("Unsupported or empty user update")
+        if "roles" in updates:
+            updates = {**updates, "roles": [UserRole(role) for role in updates["roles"]]}
+        if "is_active" in updates and updates["is_active"] is False:
+            await self._auth_service.set_user_status(user_id, False, reason="admin_disabled")
+            remaining = {key: value for key, value in updates.items() if key != "is_active"}
+            if remaining:
+                await self._auth_service.update_user(user_id, **remaining)
+        else:
+            await self._auth_service.update_user(user_id, **updates)
         self._audit_mutation(
             action="update",
             target_user_id=user_id,
@@ -202,7 +213,7 @@ class AdminUserService:
             operator_id=operator_id,
             metadata={"updated_fields": sorted(updates.keys())},
         )
-        return False
+        return True
 
     async def delete_user(
         self,
@@ -216,13 +227,14 @@ class AdminUserService:
         if not user:
             return False
         effective_tenant_id = self._enforce_tenant_boundary(user.tenant_id, operator_tenant_id)
+        await self._auth_service.set_user_status(user_id, False, reason="admin_deactivated")
         self._audit_mutation(
             action="delete",
             target_user_id=user_id,
             tenant_id=effective_tenant_id,
             operator_id=operator_id,
         )
-        return False
+        return True
 
     async def get_user_sessions(
         self,
