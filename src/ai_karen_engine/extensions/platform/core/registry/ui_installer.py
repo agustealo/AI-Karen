@@ -701,7 +701,16 @@ class UIInstallerService:
         # modified or unverified files just because they survived a restart.
         if not package_info.checksum:
             self._recover_bundled_integrity(package_info)
-        current_checksum = self._calculate_checksum(package_info.target_path)
+        try:
+            current_checksum = self._calculate_checksum(package_info.target_path)
+        except (OSError, ValueError):
+            logger.warning("Could not verify UI package checksum for %s", plugin_id)
+            return {
+                "state": UIInstallationState.ERROR.value,
+                "status": UIInstallationStatus.VALIDATION_FAILED.value,
+                "message": "UI package integrity verification failed",
+                "error_code": "INTEGRITY_VERIFICATION_FAILED",
+            }
         checksum_valid = bool(package_info.checksum) and current_checksum == package_info.checksum
 
         return {
