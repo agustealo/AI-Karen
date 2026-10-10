@@ -15,6 +15,7 @@
  */
 
 import React, { useCallback, useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -917,7 +918,7 @@ function PluginHealthCard({
             onClick={() => void handleRemoveUI()}
             disabled={isOperationInProgress}
           >
-            {isRemoving ? 'Uninstalling...' : 'Uninstall'}
+            {isRemoving ? 'Removing UI...' : 'Remove UI only'}
           </Button>
         )}
 
@@ -953,6 +954,9 @@ export default function PluginOverviewPage() {
           <p className="karen-page-description mt-1">
             Inspect KAREN&apos;s governed plugin capabilities and live integration state.
           </p>
+          <Button asChild variant="outline" className="mt-3">
+            <Link href="/plugins">Upload and install a plugin</Link>
+          </Button>
         </div>
       </div>
 
