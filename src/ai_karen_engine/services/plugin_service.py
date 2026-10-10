@@ -183,6 +183,9 @@ class PluginService:
             raise ValueError("Invalid plugin identifier")
         if len(archive) > 20 * 1024 * 1024:
             raise ValueError("Plugin archive exceeds 20 MiB")
+        # Initialize discovery before publishing untrusted uploaded files.
+        # First boot must never discover the uploaded package as default-enabled.
+        await self._ensure_initialized()
         root = self._resolve_root()
         if root.is_symlink():
             raise ValueError("Unsafe plugin root")
@@ -263,7 +266,6 @@ class PluginService:
                 os.rename(staged, target)
                 published = True
                 try:
-                    await self._ensure_initialized()
                     await self._get_kernel().refresh_with_new_plugin_disabled(plugin_id)
                     record = self._get_kernel().get_record(plugin_id)
                     if record is None or record.get("error_message"):
