@@ -593,7 +593,7 @@ export default function AdvancedTrainingWorkbench() {
                     <SelectContent>
                       {catalog.datasets.map((item) => (
                         <SelectItem value={item.version} key={item.version}>
-                          {item.version} · {item.format} · {formatBytes(item.bytes)}
+                          {item.version} · {item.format} · {formatBytes(item.bytes)} · {item.inspection_status === "structural_only" ? item.schema_engines?.includes(config.engine) ? "Schema matches" : "Schema mismatch" : "Inspection pending"}
                         </SelectItem>
                       ))}
                     </SelectContent>
