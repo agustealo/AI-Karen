@@ -65,3 +65,65 @@ def test_temporal_training_artifact_and_tenant_forecast(tmp_path, monkeypatch):
             tenant_id="tenant-a", candidate_model_id=artifact.model_id,
             recent_values=[1.0],
         )
+
+
+def test_temporal_rejects_symlinked_model_payload_before_pickle_load(tmp_path, monkeypatch):
+    import hashlib
+    from ai_karen_engine.core.intelligence.ml.predictors import temporal_forecast
+
+    tenant = "tenant-a"
+    key = hashlib.sha256(tenant.encode()).hexdigest()[:16]
+    model_id = f"tenant-{key}-outcome_forecast-test"
+    artifact = tmp_path / "topology" / model_id / "train-v1"
+    artifact.mkdir(parents=True)
+    real_payload = tmp_path / "outside.joblib"
+    real_payload.write_bytes(b"untrusted pickle bytes")
+    (artifact / "model.joblib").symlink_to(real_payload)
+    (artifact / "feature_schema.json").write_text(json.dumps({
+        "feature_version": "temporal-lags-v1",
+        "lags": 5, "horizon": 1, "target": "value",
+    }))
+    registry = MLModelRegistry(registry_dir=str(tmp_path / "manifests"))
+    registry.register(MLModelManifest(
+        model_id=model_id, purpose="outcome_forecast", architecture="trained",
+        artifact_path=str(artifact), artifact_hash="hash",
+        model_version="train-v1", feature_version="temporal-lags-v1",
+        metrics={"executor": "timeseries"}, status=ModelStatus.CANDIDATE.value,
+    ))
+    monkeypatch.setattr(registry, "validate_artifact", lambda manifest: True)
+    monkeypatch.setattr(temporal_forecast.joblib, "load", lambda path: pytest.fail("pickle loaded"))
+    with pytest.raises(ValueError, match="Unsafe temporal artifact"):
+        TemporalForecastPredictor(registry).forecast(
+            tenant_id=tenant, candidate_model_id=model_id,
+            recent_values=[1., 2., 3., 4., 5.],
+        )
+
+
+def test_temporal_rejects_feature_schema_mismatch_before_inference(tmp_path, monkeypatch):
+    import hashlib
+    from ai_karen_engine.core.intelligence.ml.predictors import temporal_forecast
+
+    tenant = "tenant-a"
+    key = hashlib.sha256(tenant.encode()).hexdigest()[:16]
+    model_id = f"tenant-{key}-outcome_forecast-schema-test"
+    artifact = tmp_path / "topology" / model_id / "train-v1"
+    artifact.mkdir(parents=True)
+    (artifact / "model.joblib").write_bytes(b"not a real model")
+    (artifact / "feature_schema.json").write_text(json.dumps({
+        "feature_version": "wrong-version", "lags": 5, "horizon": 1,
+        "target": "value",
+    }))
+    registry = MLModelRegistry(registry_dir=str(tmp_path / "manifests"))
+    registry.register(MLModelManifest(
+        model_id=model_id, purpose="outcome_forecast", architecture="trained",
+        artifact_path=str(artifact), artifact_hash="hash", model_version="train-v1",
+        feature_version="temporal-lags-v1",
+        metrics={"executor": "timeseries"}, status=ModelStatus.CANDIDATE.value,
+    ))
+    monkeypatch.setattr(registry, "validate_artifact", lambda manifest: True)
+    monkeypatch.setattr(temporal_forecast.joblib, "load", lambda path: pytest.fail("pickle loaded"))
+    with pytest.raises(ValueError, match="feature schema identity mismatch"):
+        TemporalForecastPredictor(registry).forecast(
+            tenant_id=tenant, candidate_model_id=model_id,
+            recent_values=[1., 2., 3., 4., 5.],
+        )
