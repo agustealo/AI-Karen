@@ -77,6 +77,9 @@ jobs:
       - name: Verify canonical chat ingress and grounded response parity
         run: pytest tests/architecture/test_chat_stream_route_contract.py -q
 
+      - name: Verify personal recall execution provenance
+        run: pytest tests/core/runtime/test_personal_recall_provenance_metadata.py -q
+
       - name: Run chat architecture contract
         run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
 

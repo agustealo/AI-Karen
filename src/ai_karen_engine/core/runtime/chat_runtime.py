@@ -2515,6 +2515,17 @@ class ChatRuntime:
             if value is not None:
                 setattr(md, key, value)
 
+        # Diagnostic only: CORTEX and runtime remain the sole authorities.
+        md.extra["cortex_intent"] = decision.intent
+        md.extra["cortex_reason_codes"] = list(decision.reason_codes)
+        md.extra["personal_evidence_attribute"] = (
+            decision.policy_constraints.get("personal_evidence_attribute")
+            if decision.intent == "memory.recall" else None
+        )
+        md.extra["personal_recall_grounded"] = (
+            normalized.get("response_source") == "authorized_memory_evidence"
+        )
+
         if memory_meta:
             md.extra.update(
                 {k: v for k, v in memory_meta.items() if k not in md.extra}
