@@ -503,21 +503,35 @@ export default function TrainingSettingsPanel() {
 
       <Tabs defaultValue="intelligence" className="w-full">
         <TabsList className="flex w-full flex-wrap justify-start">
-          <TabsTrigger value="intelligence">Intelligence</TabsTrigger>
-          <TabsTrigger value="advanced">Advanced Training</TabsTrigger>
-          <TabsTrigger value="overview">Data Sources</TabsTrigger>
-          <TabsTrigger value="datasets">Datasets</TabsTrigger>
-          <TabsTrigger value="curation">Curated Ingest</TabsTrigger>
+          <TabsTrigger value="intelligence">Learning Overview</TabsTrigger>
+          <TabsTrigger value="advanced">Train a Model</TabsTrigger>
+          <TabsTrigger value="management">Data &amp; Governance</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="advanced" className="mt-6">
+        <TabsContent value="advanced" className="mt-6 space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Train a supported classifier using a registered dataset. Submission queues a job;
+            actual execution requires a healthy training worker. Unsupported model architectures
+            are not yet trainable here.
+          </p>
           <AdvancedTrainingWorkbench />
         </TabsContent>
 
-        <TabsContent value="intelligence" className="mt-6">
+        <TabsContent value="intelligence" className="mt-6 space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Memory adaptation and model-weight retraining are separate. This view reports backend
+            learning capabilities; it does not mean autonomous retraining is enabled.
+          </p>
           <IntelligenceTrainingControlPlane />
         </TabsContent>
 
+        <TabsContent value="management" className="mt-6">
+          <Tabs defaultValue="datasets" className="w-full">
+            <TabsList className="flex w-full flex-wrap justify-start">
+              <TabsTrigger value="datasets">Datasets</TabsTrigger>
+              <TabsTrigger value="curation">Curated Ingest</TabsTrigger>
+              <TabsTrigger value="overview">Sources &amp; Governance</TabsTrigger>
+            </TabsList>
         <TabsContent value="overview" className="mt-6 space-y-6">
           <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
             {TRAINING_SOURCES.map((source) => {
@@ -970,6 +984,8 @@ export default function TrainingSettingsPanel() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+          </Tabs>
         </TabsContent>
       </Tabs>
     </div>
