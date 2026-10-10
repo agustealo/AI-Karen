@@ -230,3 +230,16 @@ async def test_candidate_predictor_requires_matching_tenant_and_candidate_status
     assert allowed._active_manifest() is not None
     assert denied._active_manifest() is None
     assert registry.get_active(PredictionTask.AFFECT.value, tenant_id="tenant-a") is None
+
+
+def test_sklearn_predictor_rejects_spacy_candidate_architecture_before_loading(tmp_path):
+    from dataclasses import replace
+
+    registry = MLModelRegistry(registry_dir=str(tmp_path))
+    manifest = _register_active_model(registry, tmp_path, PredictionTask.AFFECT)
+    spacy_manifest = replace(manifest, architecture="spacy")
+    predictor = RegistryBackedClassifier(PredictionTask.AFFECT, registry=registry)
+
+    import pytest
+    with pytest.raises(ValueError, match="only accepts canonical sklearn"):
+        predictor._load_artifact(spacy_manifest)
