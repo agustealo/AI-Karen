@@ -53,7 +53,14 @@ class TrainingJobWorker:
                 raise ValueError("Missing approved training configuration")
             if job.metadata.get("tenant_id") != tenant_id:
                 raise ValueError("Training job tenant identity mismatch")
-            check = self.workbench.preflight(**config)
+            dataset_scope = job.metadata.get("dataset_scope", "legacy")
+            if dataset_scope == "tenant":
+                workbench = AdvancedTrainingWorkbench.for_tenant(tenant_id)
+            elif dataset_scope == "legacy":
+                workbench = self.workbench
+            else:
+                raise ValueError("Unknown training dataset scope")
+            check = workbench.preflight(**config)
             if config.get('engine') != job.base_model or config.get('task') != job.task or config.get('dataset_version') != job.dataset_version:
                 raise ValueError('Persisted training job and approved configuration differ')
             if not check["ready"]:
