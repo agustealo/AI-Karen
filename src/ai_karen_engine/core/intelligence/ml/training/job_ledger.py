@@ -45,6 +45,9 @@ class TrainingJobLedger:
                 if name not in columns:
                     db.execute(f"ALTER TABLE training_jobs ADD COLUMN {name} {definition}")
             db.execute("""CREATE TABLE IF NOT EXISTS training_workers (\n                tenant_id TEXT NOT NULL, worker_id TEXT NOT NULL,\n                heartbeat_at TEXT NOT NULL, PRIMARY KEY(tenant_id,worker_id)\n            )""")
+            worker_columns = {row["name"] for row in db.execute("PRAGMA table_info(training_workers)")}
+            if "capabilities_json" not in worker_columns:
+                db.execute("ALTER TABLE training_workers ADD COLUMN capabilities_json TEXT")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_training_jobs_tenant ON training_jobs(tenant_id, submitted_at)"
             )
@@ -94,15 +97,15 @@ class TrainingJobLedger:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def worker_heartbeat(self, *, tenant_id: str, worker_id: str) -> None:
+    def worker_heartbeat(self, *, tenant_id: str, worker_id: str, capabilities: dict[str, Any] | None = None) -> None:
         """Heartbeat must originate from the worker process, not HTTP ingress."""
         if not tenant_id or tenant_id == "default" or not worker_id:
             raise ValueError("Explicit tenant and worker scope required")
         with self._connect() as db:
             db.execute(
-                "INSERT INTO training_workers(tenant_id,worker_id,heartbeat_at) VALUES (?,?,?) "
-                "ON CONFLICT(tenant_id,worker_id) DO UPDATE SET heartbeat_at=excluded.heartbeat_at",
-                (tenant_id, worker_id, _now()),
+                "INSERT INTO training_workers(tenant_id,worker_id,heartbeat_at,capabilities_json) VALUES (?,?,?,?) "
+                "ON CONFLICT(tenant_id,worker_id) DO UPDATE SET heartbeat_at=excluded.heartbeat_at, capabilities_json=excluded.capabilities_json",
+                (tenant_id, worker_id, _now(), json.dumps(capabilities or {}, sort_keys=True)),
             )
 
     def worker_unregister(self, *, tenant_id: str, worker_id: str) -> None:
@@ -111,6 +114,29 @@ class TrainingJobLedger:
                 "DELETE FROM training_workers WHERE tenant_id=? AND worker_id=?",
                 (tenant_id, worker_id),
             )
+
+    def worker_capabilities(self, *, tenant_id: str) -> dict[str, Any]:
+        """Return fresh, worker-originated capability observations only."""
+        if not tenant_id or tenant_id == "default":
+            raise ValueError("Explicit tenant scope required")
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=90)).isoformat()
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT worker_id, heartbeat_at, capabilities_json FROM training_workers "
+                "WHERE tenant_id=? AND heartbeat_at>? ORDER BY heartbeat_at DESC",
+                (tenant_id, cutoff),
+            ).fetchall()
+        return {
+            "worker_status": "online" if rows else "offline",
+            "workers": [
+                {
+                    "worker_id": row["worker_id"],
+                    "heartbeat_at": row["heartbeat_at"],
+                    "capabilities": json.loads(row["capabilities_json"] or "{}"),
+                }
+                for row in rows
+            ],
+        }
 
     def next_queued(self, *, tenant_id: str) -> str | None:
         if not tenant_id or tenant_id == "default":
