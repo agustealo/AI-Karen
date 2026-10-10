@@ -274,6 +274,11 @@ class PluginKernel:
             visit(plugin_id)
         return errors
 
+    async def refresh_with_new_plugin_disabled(self, plugin_id: str) -> int:
+        """Refresh after explicit upload without auto-enabling the new package."""
+        self._disabled.add(plugin_id)
+        return await self.refresh()
+
     async def refresh(self) -> int:
         """Refresh catalog truth and atomically rebuild the execution projection."""
         self._disabled.update(
