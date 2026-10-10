@@ -35,6 +35,7 @@ jobs:
         run: python -m compileall -q src/ai_karen_engine/core/intelligence/ml
       - name: Prove durable jobs, real models, and registry integrity
         run: |
+          pytest tests/core/intelligence/test_peft_worker_image_contract.py -q
           pytest tests/core/intelligence/test_training_job_ledger.py tests/core/intelligence/test_training_job_worker.py -q
           pytest tests/core/intelligence/test_spacy_training_executor.py tests/core/intelligence/test_registry_spacy_predictor.py -q
           pytest tests/core/intelligence/test_registry_backed_classifier.py tests/core/intelligence/test_training_evidence_persistence.py -q
