@@ -410,11 +410,29 @@ class UIInstallerService:
                     error_code="NOT_INSTALLED",
                 )
 
-            # Create backup
+            package_info = self.installations[plugin_id]
+            expected = self.plugins_repo_root / plugin_id
+            # Persisted inventory entries are untrusted until their delete
+            # target is proven to belong to this exact plugin directory.
+            if (
+                not plugin_id
+                or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for ch in plugin_id)
+                or package_info.target_path.absolute() != expected.absolute()
+                or package_info.target_path.is_symlink()
+                or self.plugins_repo_root.is_symlink()
+                or not expected.is_dir()
+            ):
+                return UIInstallationResult(
+                    plugin_id=plugin_id,
+                    status=UIInstallationStatus.VALIDATION_FAILED,
+                    state=UIInstallationState.ERROR,
+                    message="Plugin removal target does not match the registered package",
+                    error_code="UNSAFE_REMOVAL_TARGET",
+                )
+
             backup_path = self._backup_package(plugin_id)
 
             # Remove package
-            package_info = self.installations[plugin_id]
             try:
                 shutil.rmtree(package_info.target_path)
                 logger.info(f"Removed UI package: {package_info.target_path}")
