@@ -78,6 +78,8 @@ class PostgresProfileRecallRetriever:
         q = text.casefold()
         cues = (
             "who am i",
+            "about myself",
+            "tell me about myself",
             "about me",
             "my name",
             "what is my name",
