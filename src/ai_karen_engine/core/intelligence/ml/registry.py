@@ -100,7 +100,7 @@ class MLModelRegistry:
 
     def _validate_promotion_evidence(self, manifest: MLModelManifest) -> None:
         """Trained models cannot bypass the canonical benchmark promotion gate."""
-        if manifest.architecture != "trained":
+        if manifest.architecture not in {"trained", "spacy"}:
             return
         if manifest.status not in {ModelStatus.SHADOW.value, ModelStatus.ACTIVE.value}:
             return
