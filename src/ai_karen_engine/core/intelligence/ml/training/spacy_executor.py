@@ -12,6 +12,7 @@ from pathlib import Path
 from time import perf_counter
 
 from ai_karen_engine.config.config_manager import get_ml_registry_dir
+from ai_karen_engine.core.intelligence.ml.training.dataset_import import training_dataset_root
 from ai_karen_engine.core.intelligence.ml.training.contracts import TrainingArtifact, TrainingJob
 from ai_karen_engine.core.intelligence.ml.training.sklearn_executor import _hash_directory
 from ai_karen_engine.core.intelligence.ml.training.spacy_datasets import validate_spacy_jsonl
@@ -32,7 +33,7 @@ class SpacyTrainingExecutor:
         version = job.dataset_version
         if not version or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for ch in version) or version in {".", ".."}:
             raise ValueError("Invalid dataset identifier")
-        dataset = root / "datasets" / f"{version}.jsonl"
+        dataset = training_dataset_root(tenant_id=str(tenant), scope=str(job.metadata.get("dataset_scope", "legacy"))) / f"{version}.jsonl"
         limit = int(options.get("max_samples", 10000))
         evidence = validate_spacy_jsonl(dataset, max_samples=limit)
         mode = evidence["mode"]
