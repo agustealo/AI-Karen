@@ -134,7 +134,9 @@ class UIInstallerService:
                                 target_path=plugin_dir,
                                 manifest_path=manifest_path,
                                 entry_file=entry_file,
-                                checksum=self._calculate_checksum(plugin_dir),
+                                # Restart discovery is not an integrity attestation.
+                                # The original install checksum is not durable yet.
+                                checksum="",
                                 size_bytes=self._get_directory_size(plugin_dir),
                                 installed_at=datetime.fromtimestamp(
                                     manifest_path.stat().st_mtime
@@ -542,9 +544,10 @@ class UIInstallerService:
                 "message": "UI files missing",
             }
 
-        # Validate checksum
+        # Unknown baselines are *not* valid checksums. Never silently trust
+        # modified or unverified files just because they survived a restart.
         current_checksum = self._calculate_checksum(package_info.target_path)
-        checksum_valid = current_checksum == package_info.checksum
+        checksum_valid = bool(package_info.checksum) and current_checksum == package_info.checksum
 
         return {
             "state": UIInstallationState.INSTALLED.value,
@@ -600,7 +603,16 @@ class UIInstallerService:
                 error_code="FILES_MISSING",
             )
 
-        # Validate checksum
+        # Files rediscovered after restart lack a durable trusted baseline.
+        if not package_info.checksum:
+            return UIInstallationResult(
+                plugin_id=plugin_id,
+                status=UIInstallationStatus.VALIDATION_FAILED,
+                state=UIInstallationState.ERROR,
+                message="UI package integrity cannot be verified after restart",
+                error_code="INTEGRITY_BASELINE_UNAVAILABLE",
+            )
+
         current_checksum = self._calculate_checksum(package_info.target_path)
         if current_checksum != package_info.checksum:
             return UIInstallationResult(
