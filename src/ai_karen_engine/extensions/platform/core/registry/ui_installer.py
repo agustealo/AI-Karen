@@ -722,6 +722,53 @@ class UIInstallerService:
             },
         }
 
+    def inspect_recovery(self, plugin_id: str) -> Dict[str, Any]:
+        """Classify recovery evidence without changing packages or trust state.
+
+        Installation repair must remain a separate authorized, audited action.
+        """
+        state = self.get_ui_state(plugin_id)
+        code = state.get("error_code")
+        if code == "INVALID_PLUGIN_ID":
+            return {
+                "plugin_id": plugin_id,
+                "classification": "invalid_identifier",
+                "action": "none",
+                "can_auto_repair": False,
+            }
+        if code == "INCOMPLETE_INSTALLATION":
+            path = self.plugins_repo_root / plugin_id
+            record = self._baseline_path(plugin_id)
+            if path.is_symlink() or record.is_symlink():
+                classification = "unsafe_filesystem_reference"
+            elif path.exists() and record.exists():
+                classification = "unregistered_package_with_record"
+            elif path.exists():
+                classification = "unregistered_package"
+            else:
+                classification = "orphan_integrity_record"
+            return {
+                "plugin_id": plugin_id,
+                "classification": classification,
+                "action": "manual_review",
+                "can_auto_repair": False,
+            }
+        if state.get("status") == UIInstallationStatus.VALIDATION_FAILED.value:
+            return {
+                "plugin_id": plugin_id,
+                "classification": "integrity_unverified",
+                "action": "manual_review",
+                "can_auto_repair": False,
+            }
+        return {
+            "plugin_id": plugin_id,
+            "classification": "verified_installed"
+            if state.get("status") == UIInstallationStatus.SUCCESS.value
+            else "absent",
+            "action": "none",
+            "can_auto_repair": False,
+        }
+
     def list_installed_ui(self) -> List[Dict[str, Any]]:
         """List all installed UI packages."""
         installations = []
