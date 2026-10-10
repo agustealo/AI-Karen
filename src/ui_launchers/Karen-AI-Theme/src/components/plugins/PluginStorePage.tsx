@@ -97,6 +97,8 @@ export default function PluginStorePage() {
   const [uploadId, setUploadId] = useState('');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uninstallId, setUninstallId] = useState('');
+  const [uninstalling, setUninstalling] = useState(false);
 
   const installedPlugins = useMemo(() => {
     return Array.isArray(plugins)
@@ -195,6 +197,33 @@ export default function PluginStorePage() {
     setOperationError('');
     void refreshPlugins();
   }, [refreshPlugins]);
+
+  const handleUninstall = useCallback(async () => {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(uninstallId)) {
+      setOperationError('Choose a valid installed plugin ID.');
+      return;
+    }
+    if (!window.confirm('Uninstall plugin ' + uninstallId + '? Its installed package will be removed.')) return;
+    setUninstalling(true);
+    setOperationError('');
+    try {
+      const response = await fetch('/api/plugins/store/' + encodeURIComponent(uninstallId) + '/installation', {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        const detail: unknown = await response.json().catch(() => null);
+        const message = detail && typeof detail === 'object' ? (detail as { detail?: unknown }).detail : null;
+        throw new Error(typeof message === 'string' ? message : 'Uninstall failed');
+      }
+      setUninstallId('');
+      await refreshPlugins();
+    } catch (cause) {
+      setOperationError(getErrorMessage(cause));
+    } finally {
+      setUninstalling(false);
+    }
+  }, [uninstallId, refreshPlugins]);
 
   const handleUpload = useCallback(async () => {
     if (!uploadFile || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(uploadId)) {
@@ -310,6 +339,26 @@ export default function PluginStorePage() {
           </label>
           <Button type="button" onClick={() => void handleUpload()} disabled={uploading || !uploadFile}>
             {uploading ? 'Uploading...' : 'Upload & Install'}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Uninstall a Plugin</CardTitle>
+          <CardDescription>Remove an installed plugin package, not just its UI. Existing shipped source files under free_plugins are not affected.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-sm">Installed plugin ID
+            <select className="rounded border bg-background px-3 py-2" value={uninstallId}
+              onChange={(event) => setUninstallId(event.target.value)}>
+              <option value="">Choose a plugin</option>
+              {plugins.filter(plugin => plugin.status === 'installed').map(plugin =>
+                <option key={plugin.id} value={plugin.id}>{plugin.name}</option>)}
+            </select>
+          </label>
+          <Button type="button" variant="destructive" disabled={!uninstallId || uninstalling}
+            onClick={() => void handleUninstall()}>
+            {uninstalling ? 'Uninstalling...' : 'Uninstall plugin'}
           </Button>
         </CardContent>
       </Card>
