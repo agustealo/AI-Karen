@@ -106,6 +106,16 @@ RUN python -m spacy download en_core_web_sm || true
 RUN mkdir -p /app/models/spacy && python -c "import spacy; nlp=spacy.load('en_core_web_sm'); nlp.to_disk('/app/models/spacy/en_core_web_sm')" || true
 
 # -----------------------------
+# Opt-in governed LoRA training image. No PEFT dependency in the API runtime.
+# Select PROFILE=training-peft only for the dedicated training worker.
+# -----------------------------
+FROM runtime AS training-peft
+COPY requirements/training-peft.txt /app/requirements/training-peft.txt
+RUN python -m pip install --no-cache-dir -r /app/requirements/training-peft.txt && \
+    python -m pip check && \
+    python -c "import torch, transformers, peft, accelerate, safetensors"
+
+# -----------------------------
 # Final stage (select by target)
 # -----------------------------
 FROM ${PROFILE} AS app
