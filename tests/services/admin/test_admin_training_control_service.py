@@ -94,3 +94,26 @@ def test_training_dataset_router_imports_without_removed_cortex_module():
 
     module = importlib.import_module("ai_karen_engine.api_routes.training.data")
     assert any(route.path == "/api/training-data/datasets" for route in module.router.routes)
+
+
+def test_training_preflight_is_read_only_and_job_submission_remains_privileged():
+    """Non-mutating validation uses training:read; dispatch still requires execute."""
+    import inspect
+
+    from ai_karen_engine.api_routes.admin.training import router
+    from ai_karen_engine.auth.rbac_middleware import Permission
+
+    def required_permission(path: str, method: str):
+        route = next(
+            route for route in router.routes
+            if route.path == path and method in route.methods
+        )
+        dependency = next(
+            entry.call for entry in route.dependant.dependencies
+            if entry.call.__name__ == "dependency"
+        )
+        return inspect.getclosurevars(dependency).nonlocals["target"]
+
+    assert required_permission("/admin/training/advanced/catalog", "GET") == Permission.TRAINING_READ
+    assert required_permission("/admin/training/advanced/preflight", "POST") == Permission.TRAINING_READ
+    assert required_permission("/admin/training/advanced/jobs", "POST") == Permission.TRAINING_EXECUTE
