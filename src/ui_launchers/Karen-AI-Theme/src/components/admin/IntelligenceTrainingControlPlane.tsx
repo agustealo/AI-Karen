@@ -384,7 +384,7 @@ export default function IntelligenceTrainingControlPlane() {
         </TabsContent>
 
         <TabsContent value="models" className="mt-6">
-          <div className="grid items-start gap-5 xl:grid-cols-[minmax(260px,0.75fr)_minmax(0,1.25fr)]">
+          <div className="space-y-5">
             <Card className="border-border/70">
               <CardHeader className="border-b border-border/60 bg-muted/10">
                 <CardTitle className="flex items-center gap-2 text-base">
@@ -400,7 +400,7 @@ export default function IntelligenceTrainingControlPlane() {
                     No lifecycle status counts reported.
                   </p>
                 ) : (
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                     {Object.entries(data.registry.status_counts).map(([status, count]) => (
                       <div key={status} className="rounded-xl border border-border/70 bg-muted/10 p-4">
                         <div className="text-2xl font-semibold tabular-nums">{count}</div>
