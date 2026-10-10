@@ -185,13 +185,13 @@ class PluginService:
         if not target.is_dir():
             raise FileNotFoundError("Plugin is not installed")
         kernel = self._get_kernel()
-        if plugin_id in kernel._active.values():
-            raise RuntimeError("Plugin has active executions")
         lock_path = root / (".plugin-install-" + plugin_id + ".lock")
         lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         quarantine = root.parent / ".karen-plugin-uninstall"
         moved = None
         try:
+            if plugin_id in kernel._active.values():
+                raise RuntimeError("Plugin has active executions")
             if not target.is_dir() or target.is_symlink():
                 raise FileNotFoundError("Plugin is not installed")
             quarantine.mkdir(mode=0o700, parents=True, exist_ok=True)
