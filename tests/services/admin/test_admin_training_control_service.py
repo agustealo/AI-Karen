@@ -147,3 +147,22 @@ def test_shipped_permissions_allow_training_read_without_execution_for_users():
     assert manager.has_permission(admin, Permission.TRAINING_EXECUTE)
     assert manager.has_permission(user, Permission.TRAINING_READ)
     assert not manager.has_permission(user, Permission.TRAINING_EXECUTE)
+
+
+def test_signed_permission_claims_survive_user_context_and_rbac():
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.auth.rbac_middleware import Permission, RBACManager
+
+    identity = UserData.from_dict({
+        "user_id": "operator", "tenant_id": "tenant-a",
+        "roles": [], "permissions": ["training:read"],
+    })
+    assert identity.to_dict()["permissions"] == ["training:read"]
+    assert RBACManager().has_permission(identity, Permission.TRAINING_READ)
+    assert not RBACManager().has_permission(identity, Permission.TRAINING_EXECUTE)
+
+    no_grant = UserData.from_dict({
+        "user_id": "guest", "tenant_id": "tenant-a",
+        "roles": [], "permissions": ["unknown:permission"],
+    })
+    assert not RBACManager().has_permission(no_grant, Permission.TRAINING_READ)
