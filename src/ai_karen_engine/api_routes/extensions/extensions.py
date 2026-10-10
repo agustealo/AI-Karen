@@ -310,7 +310,7 @@ async def load_extension(extension_name: str, user=Depends(require_extension_mut
             "success": True,
             "message": f"Extension {extension_name} loaded",
             "plugin_id": extension_name,
-            "status": record.status.value if record else "loaded",
+            "status": (record.get("status", "loaded") if isinstance(record, dict) else getattr(getattr(record, "status", None), "value", "loaded")) if record else "loaded",
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
