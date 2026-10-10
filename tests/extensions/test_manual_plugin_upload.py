@@ -60,3 +60,28 @@ async def test_wrong_manifest_id_refused(tmp_path):
     with pytest.raises(ValueError):
         await service.install_uploaded_archive("demo", data)
     assert not (tmp_path / "demo").exists()
+
+
+@pytest.mark.asyncio
+async def test_registry_rejection_rolls_back_published_package(tmp_path, monkeypatch):
+    service = PluginService(tmp_path, tmp_path)
+
+    class Kernel:
+        async def refresh_with_new_plugin_disabled(self, name):
+            return 1
+
+        def get_record(self, name):
+            return None
+
+    async def initialized():
+        service.kernel = Kernel()
+
+    monkeypatch.setattr(service, "_ensure_initialized", initialized)
+    manifest = {
+        "id": "demo", "name": "demo", "version": "1.0.0",
+        "display_name": "Demo", "description": "Test plugin",
+        "author": "Tests", "license": "MIT", "category": "integration",
+    }
+    with pytest.raises(ValueError, match="runtime registry validation"):
+        await service.install_uploaded_archive("demo", _archive({"manifest.json": json.dumps(manifest)}))
+    assert not (tmp_path / "demo").exists()
