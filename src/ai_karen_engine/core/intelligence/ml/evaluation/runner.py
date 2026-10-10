@@ -140,8 +140,18 @@ class BenchmarkRunner:
         from ai_karen_engine.core.intelligence.ml.predictors.registry_classifier import (
             RegistryBackedClassifier,
         )
+        from ai_karen_engine.core.intelligence.ml.predictors.registry_spacy import (
+            SpacyCandidateBenchmarkPredictor,
+        )
+        if manifest.architecture == "spacy":
+            valid_predictor = (
+                isinstance(predictor, SpacyCandidateBenchmarkPredictor)
+                and manifest.metrics.get("mode") == "textcat"
+            )
+        else:
+            valid_predictor = isinstance(predictor, RegistryBackedClassifier)
         if (
-            not isinstance(predictor, RegistryBackedClassifier)
+            not valid_predictor
             or predictor._candidate_model_id != config.model_id
             or predictor._tenant_id != tenant
             or predictor._registry.registry_dir.resolve() != registry.registry_dir.resolve()
