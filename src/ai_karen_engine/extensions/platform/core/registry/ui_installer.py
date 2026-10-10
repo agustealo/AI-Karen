@@ -676,8 +676,10 @@ class UIInstallerService:
                 "message": "UI files missing",
             }
 
-        # Unknown baselines are *not* valid checksums. Never silently trust
-        # modified or unverified files just because they survived a restart.
+        # The UI state endpoint must use the same verified bundled migration
+        # as validate_ui_package, without approving arbitrary installed bytes.
+        if not package_info.checksum:
+            self._recover_bundled_integrity(package_info)
         current_checksum = self._calculate_checksum(package_info.target_path)
         checksum_valid = bool(package_info.checksum) and current_checksum == package_info.checksum
 
