@@ -1,11 +1,11 @@
-import { PluginStorePage } from '@/components/plugins';
+import ManualFreePluginCatalog from '@/components/plugins/ManualFreePluginCatalog';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'Plugin Store | Karen AI',
-  description: 'Discover and install plugins to enhance Karen AI capabilities',
+  title: 'Free Plugins | Karen AI',
+  description: 'Browse essential and premium plugins for manual installation',
 };
 
 export default function PluginsPage() {
-  return <PluginStorePage />;
+  return <ManualFreePluginCatalog />;
 }
