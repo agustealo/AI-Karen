@@ -35,6 +35,22 @@ def tenant_dataset_directory(root: Path, tenant_id: str) -> Path:
     return directory
 
 
+def training_dataset_root(*, tenant_id: str, scope: str = "legacy") -> Path:
+    """Resolve an executor dataset root from validated persisted job metadata.
+
+    Tenant imports require explicit tenant scope; legacy jobs retain their
+    existing canonical directory and must never implicitly use tenant imports.
+    """
+    from ai_karen_engine.config.config_manager import get_ml_registry_dir
+
+    root = Path(get_ml_registry_dir()) / "datasets"
+    if scope == "tenant":
+        return tenant_dataset_directory(root, tenant_id)
+    if scope == "legacy":
+        return root
+    raise DatasetImportError("Unsupported training dataset scope")
+
+
 def import_jsonl_dataset(
     *,
     source: BinaryIO,
