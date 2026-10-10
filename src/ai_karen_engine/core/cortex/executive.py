@@ -118,7 +118,16 @@ class CortexExecutionDecider:
         from ai_karen_engine.core.memory.signals.semantic_classifier import (
             is_personal_memory_recall_query,
         )
-        personal_recall_query = is_personal_memory_recall_query(user_content)
+        from ai_karen_engine.core.intelligence.profile_attribute import (
+            referenced_profile_attribute,
+        )
+        resolved_discourse_attribute = referenced_profile_attribute(
+            user_content, request.messages
+        )
+        personal_recall_query = (
+            is_personal_memory_recall_query(user_content)
+            or resolved_discourse_attribute is not None
+        )
         memory_recall_required = bool(
             analysis.get("memory_recall_required", False)
             or meta.get("memory_recall_required", False)
@@ -213,7 +222,7 @@ class CortexExecutionDecider:
             requested_profile_attribute,
         )
         semantic_attribute = (
-            requested_profile_attribute(user_content)
+            resolved_discourse_attribute
             if personal_recall_query else None
         )
         if personal_recall_query and semantic_attribute:
