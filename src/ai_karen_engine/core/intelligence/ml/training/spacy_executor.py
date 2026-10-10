@@ -33,7 +33,7 @@ class SpacyTrainingExecutor:
         version = job.dataset_version
         if not version or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for ch in version) or version in {".", ".."}:
             raise ValueError("Invalid dataset identifier")
-        dataset = training_dataset_root(tenant_id=str(tenant), scope=str(job.metadata.get("dataset_scope", "legacy"))) / f"{version}.jsonl"
+        dataset = (root / "datasets" if job.metadata.get("dataset_scope", "legacy") == "legacy" else training_dataset_root(tenant_id=str(tenant), scope=str(job.metadata.get("dataset_scope")))) / f"{version}.jsonl"
         limit = int(options.get("max_samples", 10000))
         evidence = validate_spacy_jsonl(dataset, max_samples=limit)
         mode = evidence["mode"]
