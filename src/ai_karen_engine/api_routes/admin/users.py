@@ -32,7 +32,7 @@ class AdminUserCreateRequest(BaseModel):
     password: str
     full_name: str
     tenant_id: str = "default"
-    roles: List[str] = []
+    roles: List[UserRole] = []
 
 
 class AdminUserUpdateRequest(BaseModel):
@@ -77,8 +77,8 @@ async def list_admin_users(
     current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_USERS_READ)),
     service: AdminUserService = Depends(get_admin_user_service),
     tenant_id: Optional[str] = Query(None),
-    role: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
+    role: Optional[UserRole] = Query(None),
+    status: Optional[UserStatus] = Query(None),
     search: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
@@ -88,8 +88,8 @@ async def list_admin_users(
 
     user_filter = AdminUserFilter(
         tenant_id=tenant_id,
-        role=UserRole(role) if role else None,
-        status=UserStatus(status) if status else None,
+        role=role,
+        status=status,
         search=search,
         limit=limit,
         offset=offset,
@@ -137,7 +137,7 @@ async def create_admin_user(
         password=request.password,
         full_name=request.full_name,
         tenant_id=request.tenant_id,
-        roles=[UserRole(r) for r in request.roles] if request.roles else None,
+        roles=request.roles or None,
         operator_tenant_id=current_user.get("tenant_id"),
         operator_id=current_user.get("user_id"),
     )
