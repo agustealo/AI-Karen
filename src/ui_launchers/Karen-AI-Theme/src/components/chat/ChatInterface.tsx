@@ -1256,6 +1256,14 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       requestId: asText(metadata.request_id),
       status,
       responseSource,
+      cortexIntent: asText(metadata.cortex_intent),
+      cortexReasonCodes: Array.isArray(metadata.cortex_reason_codes)
+        ? metadata.cortex_reason_codes.filter((value): value is string => typeof value === 'string')
+        : [],
+      personalEvidenceAttribute: asText(metadata.personal_evidence_attribute),
+      personalRecallGrounded: typeof metadata.personal_recall_grounded === 'boolean'
+        ? metadata.personal_recall_grounded : undefined,
+      evidenceCount: typeof metadata.evidence_count === 'number' ? metadata.evidence_count : undefined,
       degradedMode: Boolean(metadata.degraded_mode),
       degradedReason,
       degradationType: asText(metadata.degradation_type),
@@ -2353,6 +2361,11 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           requestId={latestAssistantMetadata.requestId}
           status={latestAssistantMetadata.status}
           responseSource={latestAssistantMetadata.responseSource}
+          cortexIntent={latestAssistantMetadata.cortexIntent}
+          cortexReasonCodes={latestAssistantMetadata.cortexReasonCodes}
+          personalEvidenceAttribute={latestAssistantMetadata.personalEvidenceAttribute}
+          personalRecallGrounded={latestAssistantMetadata.personalRecallGrounded}
+          evidenceCount={latestAssistantMetadata.evidenceCount}
           degradedMode={latestAssistantMetadata.degradedMode}
           degradationType={latestAssistantMetadata.degradationType}
           degradationReason={latestAssistantMetadata.degradedReason}
