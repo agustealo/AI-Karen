@@ -15,12 +15,12 @@ from ai_karen_engine.services.auth.auth_service import UserRole, UserStatus
 @pytest.mark.asyncio
 async def test_admin_user_list_uses_canonical_role_and_status():
     class UserService:
-        async def list_users(self, *, user_filter, operator_tenant_id, operator_id):
+        async def list_users_page(self, *, user_filter, operator_tenant_id, operator_id):
             assert user_filter.role is UserRole.ADMIN
             assert user_filter.status is UserStatus.ACTIVE
             assert operator_tenant_id == "tenant-a"
             assert operator_id == "operator"
-            return []
+            return [], 0
 
     result = await list_admin_users(
         current_user={"user_id": "operator", "tenant_id": "tenant-a"},

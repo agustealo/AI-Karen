@@ -94,11 +94,16 @@ async def list_admin_users(
         limit=limit,
         offset=offset,
     )
-    users = await service.list_users(
-        user_filter=user_filter,
-        operator_tenant_id=current_user.get("tenant_id"),
-        operator_id=current_user.get("user_id"),
-    )
+    try:
+        users, total = await service.list_users_page(
+            user_filter=user_filter,
+            operator_tenant_id=current_user.get("tenant_id"),
+            operator_id=current_user.get("user_id"),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Access denied") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     serialized = [
         {
             "user_id": str(u.id),
@@ -106,7 +111,7 @@ async def list_admin_users(
             "full_name": u.full_name,
             "username": u.username,
             "tenant_id": str(u.tenant_id) if u.tenant_id else None,
-            "roles": [r.value for r in u.roles],
+            "roles": [r.value if hasattr(r, "value") else str(r) for r in u.roles],
             "status": u.status.value if hasattr(u.status, "value") else str(u.status),
             "is_active": u.is_active,
             "is_verified": u.is_verified,
@@ -118,7 +123,7 @@ async def list_admin_users(
     ]
     return AdminUserListResponse(
         users=serialized,
-        total=len(serialized),
+        total=total,
         limit=limit,
         offset=offset,
     )
@@ -148,7 +153,7 @@ async def create_admin_user(
         "email": user.email,
         "full_name": user.full_name,
         "tenant_id": str(user.tenant_id) if user.tenant_id else None,
-        "roles": [r.value for r in user.roles],
+        "roles": [r.value if hasattr(r, "value") else str(r) for r in user.roles],
     }
 
 
@@ -172,7 +177,7 @@ async def get_admin_user(
         "full_name": user.full_name,
         "username": user.username,
         "tenant_id": str(user.tenant_id) if user.tenant_id else None,
-        "roles": [r.value for r in user.roles],
+        "roles": [r.value if hasattr(r, "value") else str(r) for r in user.roles],
         "status": user.status.value if hasattr(user.status, "value") else str(user.status),
         "is_active": user.is_active,
         "is_verified": user.is_verified,

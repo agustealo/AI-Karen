@@ -9,6 +9,7 @@ on:
       - "tests/unit/api_routes/test_admin_user_route_imports.py"
       - "tests/unit/services/test_admin_user_mutation_contract.py"
       - "tests/unit/services/test_admin_user_session_contract.py"
+      - "tests/unit/services/test_admin_user_pagination_contract.py"
       - "src/ai_karen_engine/server/client_identity.py"
       - "src/ai_karen_engine/server/public_origin.py"
       - "src/ai_karen_engine/middleware/rate_limit.py"
@@ -46,6 +47,7 @@ on:
       - "tests/unit/api_routes/test_admin_user_route_imports.py"
       - "tests/unit/services/test_admin_user_mutation_contract.py"
       - "tests/unit/services/test_admin_user_session_contract.py"
+      - "tests/unit/services/test_admin_user_pagination_contract.py"
       - "src/ai_karen_engine/server/client_identity.py"
       - "src/ai_karen_engine/server/public_origin.py"
       - "src/ai_karen_engine/middleware/rate_limit.py"
@@ -130,7 +132,7 @@ jobs:
       - name: Prove admin user route canonical authentication imports
         env:
           PYTHONPATH: src
-        run: pytest tests/unit/api_routes/test_admin_user_route_imports.py tests/unit/services/test_admin_user_mutation_contract.py tests/unit/services/test_admin_user_session_contract.py -q
+        run: pytest tests/unit/api_routes/test_admin_user_route_imports.py tests/unit/services/test_admin_user_mutation_contract.py tests/unit/services/test_admin_user_session_contract.py tests/unit/services/test_admin_user_pagination_contract.py -q
 
       - name: Prove first-run authority boundary
         run: pytest tests/architecture/test_auth_production_security_contract.py -q
