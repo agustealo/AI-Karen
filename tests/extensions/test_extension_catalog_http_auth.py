@@ -174,3 +174,51 @@ async def test_load_extension_supports_canonical_dict_status(catalog_app, monkey
         response = await client.post("/api/extensions/intelligent-search/load")
     assert response.status_code == 200
     assert response.json()["status"] == "enabled"
+
+
+@pytest.mark.asyncio
+async def test_ui_state_requires_tenant_authenticated_catalog_access(catalog_app, monkeypatch):
+    app, _ = catalog_app
+
+    async def guest(_request):
+        return {"user_id": "guest", "authenticated": False}
+
+    monkeypatch.setattr(routes, "get_current_user", guest)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/extensions/time-query/ui-state")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_ui_state_reports_installer_truth_separately(catalog_app, monkeypatch):
+    app, _ = catalog_app
+
+    async def admin(_request):
+        return {
+            "user_id": "11111111-1111-1111-1111-111111111111",
+            "tenant_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "roles": ["admin"],
+        }
+
+    from ai_karen_engine.extensions.platform.core.registry import ui_installer
+    monkeypatch.setattr(routes, "get_current_user", admin)
+    monkeypatch.setattr(
+        ui_installer,
+        "get_ui_state",
+        lambda plugin_id: {
+            "state": "installed",
+            "status": "validation_failed",
+            "message": "UI package integrity cannot be verified",
+        },
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/extensions/time-query/ui-state")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["plugin_id"] == "time-query"
+    assert body["ui"]["status"] == "validation_failed"
+    assert body["ui"]["state"] == "installed"

@@ -239,6 +239,28 @@ async def install_extension(request: InstallRequest, user: dict[str, Any] = Depe
         return {"success": False, "message": str(e), "plugin_id": request.plugin_id}
 
 
+@router.get("/{extension_name}/ui-state")
+async def get_extension_ui_state(
+    extension_name: str,
+    user: dict[str, Any] = Depends(require_extension_catalog_access),
+):
+    """Expose actual UI package inventory, not backend execution health.
+
+    This is read-only and reports the canonical installer service state.
+    Frontend mount registration is a separate client-owned dimension.
+    """
+    from ai_karen_engine.extensions.platform.core.registry.ui_installer import get_ui_state
+
+    try:
+        state = get_ui_state(extension_name)
+    except Exception:
+        logger.exception("Extension UI package inventory unavailable")
+        raise HTTPException(status_code=503, detail="Extension UI state unavailable")
+    if not isinstance(state, dict):
+        raise HTTPException(status_code=503, detail="Extension UI state unavailable")
+    return {"plugin_id": extension_name, "ui": state}
+
+
 @router.get("/{extension_name}")
 async def get_extension_status(extension_name: str, user: dict[str, Any] = Depends(require_extension_catalog_access)):
     """Get detailed status of a specific extension."""
