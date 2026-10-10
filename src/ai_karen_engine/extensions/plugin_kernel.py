@@ -509,10 +509,19 @@ class PluginKernel:
             return False
         marker = self.extensions_root / plugin_id / ".karen-manual-disabled"
         # A successful explicit enable must be durable across restart.
-        if marker.is_file() and not marker.is_symlink():
-            marker.unlink()
-        self._disabled.discard(plugin_id)
+        if marker.is_symlink():
+            raise ValueError("Unsafe plugin activation marker")
         await self.runtime_registry.update_state(plugin_id, ExtensionLifecycleState.ENABLED)
+        # Record the durable state only after the canonical registry accepts
+        # activation. A failed state transition must preserve the marker.
+        if marker.is_file():
+            try:
+                marker.unlink()
+            except OSError:
+                await self.runtime_registry.update_state(plugin_id, ExtensionLifecycleState.DISABLED)
+                self._disabled.add(plugin_id)
+                raise
+        self._disabled.discard(plugin_id)
         return True
 
     async def disable(self, plugin_id: str) -> bool:
