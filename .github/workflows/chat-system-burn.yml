@@ -50,6 +50,9 @@ jobs:
             src/ai_karen_engine/core/expression \
             src/ai_karen_engine/api_routes/chat
 
+      - name: Verify conversational name and output hygiene contracts
+        run: pytest tests/core/runtime/test_name_response_prompt_contract.py tests/core/runtime/test_conversational_output_hygiene.py -q
+
       - name: Run chat architecture contract
         run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
 
