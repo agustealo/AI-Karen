@@ -149,6 +149,31 @@ class AdvancedTrainingWorkbench:
             if not path.is_file() or path.is_symlink():
                 error("dataset_missing", "The requested canonical ML dataset was not found.")
 
+        if engine == "spacy":
+            from ai_karen_engine.core.intelligence.ml.training.spacy_datasets import (
+                validate_spacy_jsonl,
+            )
+
+            evidence: dict[str, Any] = {
+                "dataset_version": dataset_version,
+                "examples_scanned": 0,
+                "class_counts": {},
+                "feature_count": 0,
+            }
+            if path is not None and path.is_file() and not path.is_symlink():
+                try:
+                    result = validate_spacy_jsonl(path, max_samples=max_samples)
+                    evidence.update(result)
+                except ValueError as exc:
+                    error("invalid_spacy_dataset", str(exc))
+            return {
+                "ready": False,
+                "checks": failures,
+                "warnings": warnings,
+                "evidence": evidence,
+                "execution": {"engine": engine, "task": task},
+            }
+
         if not math.isfinite(test_split) or not (0.05 <= test_split <= 0.5):
             error("invalid_test_split", "Test split must be between 0.05 and 0.5.")
         if not (10 <= max_samples <= 10_000_000):
