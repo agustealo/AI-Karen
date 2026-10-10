@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Activity, AlertTriangle, CheckCircle2, Cpu, Database, Gauge, RefreshCw, SlidersHorizontal } from "lucide-react";
 
-import { apiClient } from "@/lib/api";
+import { apiClient, ApiError } from "@/lib/api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -44,6 +44,18 @@ type Preflight = {
 
 const title = (v: string) => v.replaceAll("_", " ").replace(/\b\w/g, c => c.toUpperCase());
 
+const trainingError = (cause: unknown, action: "read" | "execute"): string => {
+  if (cause instanceof ApiError && cause.status === 401) {
+    return "Your training session has expired. Sign in again and retry.";
+  }
+  if (cause instanceof ApiError && cause.status === 403) {
+    return action === "execute"
+      ? "Job submission requires training:execute permission for your current account and tenant."
+      : "Training inventory requires training:read permission and an authenticated tenant-scoped session. Check your assigned role and tenant, then retry.";
+  }
+  return cause instanceof Error ? cause.message : "Training service unavailable";
+};
+
 export default function AdvancedTrainingWorkbench() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
@@ -68,7 +80,7 @@ export default function AdvancedTrainingWorkbench() {
       });
       setPreflight(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Training catalog unavailable");
+      setError(trainingError(cause, "read"));
     } finally {
       setBusy(false);
     }
@@ -96,7 +108,7 @@ export default function AdvancedTrainingWorkbench() {
       setPreflight(result);
     } catch (cause) {
       setPreflight(null);
-      setError(cause instanceof Error ? cause.message : "Preflight unavailable");
+      setError(trainingError(cause, "read"));
     } finally {
       setBusy(false);
     }
@@ -110,7 +122,7 @@ export default function AdvancedTrainingWorkbench() {
       setExecutionStatus(status);
     } catch (cause) {
       setExecutionStatus(null);
-      setError(cause instanceof Error ? cause.message : "Job inventory or execution status unavailable");
+      setError(trainingError(cause, "read"));
     }
   }, []);
 
@@ -128,7 +140,7 @@ export default function AdvancedTrainingWorkbench() {
       await loadJobs();
       setPreflight(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Failed to queue training job");
+      setError(trainingError(cause, "execute"));
     } finally {
       setQueueing(false);
     }
