@@ -56,6 +56,7 @@ type Dataset = {
   schema_engines?: string[];
   inspection_status?: string;
   inspection_reason?: string;
+  scope?: "legacy" | "tenant";
 };
 
 type Catalog = {
@@ -81,6 +82,7 @@ type Config = {
   engine: string;
   task: string;
   dataset_version: string;
+  dataset_scope: "legacy" | "tenant";
   test_split: number;
   max_samples: number;
   seed: number;
@@ -215,6 +217,10 @@ export default function AdvancedTrainingWorkbench() {
   const [executionStatus, setExecutionStatus] = useState<ExecutionStatus | null>(null);
   const [queueing, setQueueing] = useState(false);
   const [queueMessage, setQueueMessage] = useState<string | null>(null);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadVersion, setUploadVersion] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -229,6 +235,7 @@ export default function AdvancedTrainingWorkbench() {
           ? "execution_topology"
           : response.tasks[0] ?? "",
         dataset_version: response.datasets[0]?.version ?? "",
+        dataset_scope: response.datasets[0]?.scope ?? "legacy",
         base_model_path: "",
         license_id: "",
         license_accepted: false,
@@ -251,6 +258,29 @@ export default function AdvancedTrainingWorkbench() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const importSelectedDataset = async () => {
+    if (!uploadFile || !uploadVersion.trim()) return;
+    setUploading(true);
+    setUploadResult(null);
+    setError(null);
+    try {
+      if (!uploadFile.name.toLowerCase().endsWith(".jsonl") || uploadFile.size > 24 * 1024 * 1024) {
+        throw new Error("Select a JSONL file smaller than 24 MiB.");
+      }
+      const result = await apiClient.post<{ version: string; rows: number }>(
+        "/api/admin/training/advanced/datasets/import",
+        { version: uploadVersion.trim(), content_jsonl: await uploadFile.text() },
+      );
+      setUploadResult(`Registered ${result.version}: ${result.rows} records.`);
+      setUploadFile(null);
+      await load();
+    } catch (cause) {
+      setError(trainingError(cause, "execute"));
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const change = <K extends keyof Config>(key: K, value: Config[K]) => {
     setConfig((previous) =>
@@ -580,20 +610,38 @@ export default function AdvancedTrainingWorkbench() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5 pt-6">
+              <div className="space-y-3 rounded-xl border border-border/70 p-4">
+                <div className="text-sm font-semibold">Import a private JSONL dataset</div>
+                <p className="text-xs text-muted-foreground">File content is validated and stored as a new immutable version for your authenticated tenant. Import does not approve it for training.</p>
+                <Label htmlFor="dataset-import-version">New dataset version</Label>
+                <Input id="dataset-import-version" value={uploadVersion} onChange={(event) => setUploadVersion(event.target.value)} placeholder="example-v1" maxLength={128} />
+                <Label htmlFor="dataset-import-file">JSONL file</Label>
+                <Input id="dataset-import-file" type="file" accept=".jsonl,application/x-ndjson" onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} />
+                <Button type="button" onClick={() => void importSelectedDataset()} disabled={uploading || !uploadFile || !uploadVersion.trim()}>
+                  {uploading ? "Importing…" : "Register dataset"}
+                </Button>
+                {uploadResult && <p role="status" className="text-xs text-muted-foreground">{uploadResult}</p>}
+              </div>
+
               <div className="space-y-2">
                 <Label>Versioned ML dataset</Label>
                 {catalog.datasets.length ? (
                   <Select
-                    value={config.dataset_version}
-                    onValueChange={(value) => change("dataset_version", value)}
+                    value={`${config.dataset_scope}:${config.dataset_version}`}
+                    onValueChange={(value) => {
+                      const item = catalog.datasets.find((entry) => `${entry.scope ?? "legacy"}:${entry.version}` === value);
+                      if (!item) return;
+                      setConfig((previous) => previous ? {...previous, dataset_version: item.version, dataset_scope: item.scope ?? "legacy"} : previous);
+                      setPreflight(null);
+                    }}
                   >
                     <SelectTrigger className="h-11">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       {catalog.datasets.map((item) => (
-                        <SelectItem value={item.version} key={item.version}>
-                          {item.version} · {item.format} · {formatBytes(item.bytes)} · {item.inspection_status === "structural_only" ? item.schema_engines?.includes(config.engine) ? "Schema matches" : "Schema mismatch" : "Inspection pending"}
+                        <SelectItem value={`${item.scope ?? "legacy"}:${item.version}`} key={`${item.scope ?? "legacy"}:${item.version}`}>
+                          {item.version} · {item.scope === "tenant" ? "Private" : "Shared"} · {item.format} · {formatBytes(item.bytes)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -610,7 +658,7 @@ export default function AdvancedTrainingWorkbench() {
               </div>
 
               {(() => {
-                const chosen = catalog.datasets.find((item) => item.version === config.dataset_version);
+                const chosen = catalog.datasets.find((item) => item.version === config.dataset_version && (item.scope ?? "legacy") === config.dataset_scope);
                 if (!chosen) return null;
                 const matches = chosen.schema_engines?.includes(config.engine) ?? false;
                 return (
