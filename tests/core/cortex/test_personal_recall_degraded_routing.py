@@ -21,6 +21,11 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionCont
         ("What\u2019s my freaking name?", "preferred_name"),
         ("Where the fuck am I from?", "origin_location"),
         ("Where am I from?", "origin_location"),
+        ("Where do I grow up?", "upbringing_location"),
+        ("Where did I grow up?", "upbringing_location"),
+        ("Where I grew up?", "upbringing_location"),
+        ("Tell me about myself", None),
+        ("Whats my name, tell me about myself", None),
     ],
 )
 def test_personal_recall_cortex_overrides_unrelated_ml_intent(question, attribute):
