@@ -97,7 +97,7 @@ services:
       context: .
       target: app
       args:
-        PROFILE: ${API_BUILD_TARGET:-runtime}
+        PROFILE: training-peft
     profiles:
       - training-worker
     restart: unless-stopped
