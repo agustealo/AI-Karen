@@ -464,32 +464,32 @@ export default function TrainingSettingsPanel() {
             <div className="relative grid min-w-[240px] gap-3 rounded-xl border border-border/70 bg-background/80 p-4 shadow-sm backdrop-blur">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Dataset inventory</span>
-                <span className="font-medium">{datasets.length}</span>
+                <span className="font-medium">{isLoadingDatasets || datasetLoadError || datasetAuthRequired || datasetAccessDenied ? "Unavailable" : datasets.length}</span>
               </div>
 
               <div className="h-px bg-border/70" />
 
               <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
                 <div className="rounded-lg bg-muted/60 p-2">
-                  <div className="font-medium text-foreground">{datasets.length}</div>
+                  <div className="font-medium text-foreground">{isLoadingDatasets || datasetLoadError || datasetAuthRequired || datasetAccessDenied ? "Unavailable" : datasets.length}</div>
                   dataset records
                 </div>
 
                 <div className="rounded-lg bg-muted/60 p-2">
-                  <div className="font-medium text-foreground">{curatedDatasetCount}</div>
+                  <div className="font-medium text-foreground">{isLoadingDatasets || datasetLoadError || datasetAuthRequired || datasetAccessDenied ? "Unavailable" : curatedDatasetCount}</div>
                   curated packs
                 </div>
 
                 <div className="rounded-lg bg-muted/60 p-2">
                   <div className="font-medium text-foreground">
-                    {formatRecordCount(totalRecords)}
+                    {isLoadingDatasets || datasetLoadError || datasetAuthRequired || datasetAccessDenied ? "Unavailable" : formatRecordCount(totalRecords)}
                   </div>
                   total records
                 </div>
 
                 <div className="rounded-lg bg-muted/60 p-2">
                   <div className="font-medium text-foreground">
-                    {averageQuality == null ? "unscored" : `${averageQuality.toFixed(0)}%`}
+                    {isLoadingDatasets || datasetLoadError || datasetAuthRequired || datasetAccessDenied ? "Unavailable" : averageQuality == null ? "unscored" : `${averageQuality.toFixed(0)}%`}
                   </div>
                   avg quality
                 </div>
