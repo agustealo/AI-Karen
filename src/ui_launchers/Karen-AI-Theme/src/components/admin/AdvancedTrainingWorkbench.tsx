@@ -77,7 +77,10 @@ export default function AdvancedTrainingWorkbench() {
   useEffect(() => { void load(); }, [load]);
 
   const change = <K extends keyof Config>(key: K, value: Config[K]) => {
-    setConfig(previous => previous ? { ...previous, [key]: value } : previous);
+    setConfig(previous => previous ? {
+      ...previous, [key]: value,
+      ...(key === "engine" ? { max_iter: value === "spacy" ? 20 : (catalog?.defaults.max_iter ?? 1000) } : {}),
+    } : previous);
     setPreflight(null);
   };
 
