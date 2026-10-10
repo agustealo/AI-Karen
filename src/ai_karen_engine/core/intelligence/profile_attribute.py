@@ -10,7 +10,7 @@ import re
 
 
 _DISCOURSE_INTENSIFIER = re.compile(
-    r"\\b(?:fucking|fuckin|freaking|fricking|goddamn|damn)\\b",
+    r"\b(?:the\s+fuck|the\s+hell|fucking|fuckin|fuck|freaking|fricking|goddamn|damn)\b",
     re.IGNORECASE,
 )
 
