@@ -87,3 +87,10 @@ def test_training_dataset_routes_are_mandatory_in_canonical_registry():
     paths = {route.path for route in data_router.routes}
     assert "/api/training-data/datasets" in paths
     assert "/api/training-data/datasets/from-curated-memory" in paths
+
+
+def test_training_dataset_router_imports_without_removed_cortex_module():
+    import importlib
+
+    module = importlib.import_module("ai_karen_engine.api_routes.training.data")
+    assert any(route.path == "/api/training-data/datasets" for route in module.router.routes)
