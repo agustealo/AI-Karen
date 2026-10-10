@@ -63,6 +63,7 @@ async def test_registry_rejection_restores_uninstalled_package(tmp_path: Path, m
     service = PluginService(installed, installed)
     class Kernel:
         _active = {}
+        runtime_registry = type('Registry', (), {'get': lambda self, name: None})()
         async def refresh(self):
             return 1
         def get_record(self, plugin_id):
