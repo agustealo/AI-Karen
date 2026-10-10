@@ -158,16 +158,22 @@ class RuntimeEvidenceResolver:
             str(requirement.metadata.get("retrieval_query") or "").strip()
             or RuntimeEvidenceResolver._latest_user_message(request)
         )
-        from ai_karen_engine.core.memory.signals.semantic_classifier import (
-            is_personal_memory_recall_query,
-        )
         from ai_karen_engine.core.intelligence.profile_attribute import (
-            normalize_personal_query,
+            requested_profile_attribute,
         )
 
-        if is_personal_memory_recall_query(query):
-            return normalize_personal_query(query)
-        return query
+        # Query by the requested fact, not by a sanitized user utterance.
+        # The semantic query is internal and the original words are untouched.
+        attribute = requested_profile_attribute(query)
+        canonical_queries = {
+            "preferred_name": "what is my name",
+            "origin_location": "where am i from",
+            "birthplace": "where was i born",
+            "residence_location": "where do i live",
+            "work_location": "where do i work",
+            "current_location": "where am i currently",
+        }
+        return canonical_queries.get(attribute, query)
 
     async def _resolve_memory(
         self,
