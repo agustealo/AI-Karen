@@ -28,7 +28,9 @@ def tenant_dataset_directory(root: Path, tenant_id: str) -> Path:
         raise DatasetImportError("Explicit tenant identity is required")
     key = hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:24]
     directory = root / ("tenant-" + key)
-    if root.is_symlink() or directory.is_symlink():
+    # Check the entire existing ancestor chain before creating directories.
+    # Merely checking the leaf permits a symlink at an intermediate root.
+    if any(parent.is_symlink() for parent in (root, *root.parents)) or directory.is_symlink():
         raise DatasetImportError("Dataset storage cannot use symlinks")
     return directory
 
@@ -55,6 +57,8 @@ def import_jsonl_dataset(
 
     key = directory.name.removeprefix("tenant-")
     directory.mkdir(parents=True, exist_ok=True)
+    if directory.is_symlink():
+        raise DatasetImportError("Dataset directory cannot be a symlink")
     destination = directory / (version + ".jsonl")
     fd, tmp_name = tempfile.mkstemp(prefix=".incoming-", suffix=".tmp", dir=directory)
     count = 0
@@ -91,6 +95,8 @@ def import_jsonl_dataset(
         os.link(tmp_name, destination, follow_symlinks=False)
     except FileExistsError as exc:
         raise DatasetImportError("Dataset version already exists") from exc
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise DatasetImportError("Dataset contains an invalid JSON value") from exc
     finally:
         Path(tmp_name).unlink(missing_ok=True)
     return {"version": version, "tenant_key": key, "rows": count,
