@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import importlib.util
+import importlib
 import os
 from uuid import uuid4
 
@@ -29,10 +29,20 @@ async def serve(*, tenant_id: str, poll_seconds: float = 5.0) -> None:
     dependencies = {}
     for module in dependency_names:
         try:
-            dependencies[module] = importlib.util.find_spec(module) is not None
-        except (ImportError, ValueError, AttributeError):
+            importlib.import_module(module)
+            dependencies[module] = True
+        except Exception:
+            logger.exception("Training worker dependency import failed: %s", module)
             dependencies[module] = False
-    capabilities = {"dependencies": dependencies, "runtime": "governed_training_worker"}
+    cuda_available = False
+    if dependencies.get("torch"):
+        import torch
+        cuda_available = bool(torch.cuda.is_available())
+    capabilities = {
+        "dependencies": dependencies,
+        "cuda_available": cuda_available,
+        "runtime": "governed_training_worker",
+    }
     async def heartbeat() -> None:
         while True:
             ledger.worker_heartbeat(tenant_id=tenant_id, worker_id=worker_id, capabilities=capabilities)
