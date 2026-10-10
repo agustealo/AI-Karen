@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  ArrowRight,
+  Layers3,
+  Network,
   BrainCircuit,
   ChartNoAxesCombined,
   Gauge,
@@ -177,6 +180,12 @@ export default function IntelligenceTrainingControlPlane() {
   const readiness = totalLaneCount
     ? Math.round((availableCount / totalLaneCount) * 100)
     : 0;
+  const activeCount = Object.entries(data?.registry.status_counts ?? {})
+    .filter(([status]) => status.toLowerCase() === "active")
+    .reduce((total, [, count]) => total + count, 0);
+  const shadowCount = Object.entries(data?.registry.status_counts ?? {})
+    .filter(([status]) => status.toLowerCase() === "shadow")
+    .reduce((total, [, count]) => total + count, 0);
 
   if (loading) {
     return (
@@ -207,80 +216,107 @@ export default function IntelligenceTrainingControlPlane() {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 xl:grid-cols-[1.4fr_0.8fr]">
-        <Card className="overflow-hidden border-border/70">
-          <CardHeader className="bg-gradient-to-br from-primary/10 via-background to-background">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge>Two-speed adaptation</Badge>
-              <Badge variant="outline">Memory first</Badge>
-              <Badge variant="outline">Shadow before promotion</Badge>
+
+      <section className="overflow-hidden rounded-2xl border border-border/70 bg-card">
+        <div className="border-b border-border/70 bg-gradient-to-br from-primary/10 via-background to-background px-5 py-6 sm:px-7">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-3xl">
+              <div className="mb-3 flex flex-wrap gap-2">
+                <Badge variant="outline" className="border-primary/30 bg-primary/5 text-primary">Learning intelligence</Badge>
+                <Badge variant="outline">Memory first</Badge>
+                <Badge variant="outline">Governed promotion</Badge>
+              </div>
+              <h3 className="flex items-center gap-3 text-2xl font-semibold tracking-tight">
+                <BrainCircuit className="h-6 w-6 text-primary" />
+                Learning Overview
+              </h3>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
+                See how Karen learns through memory, verified outcomes, predictive models,
+                and governed evaluation. Availability is reported by the control-plane service,
+                not inferred from a healthy page.
+              </p>
             </div>
-            <CardTitle className="mt-3 flex items-center gap-2 text-xl">
-              <Sparkles className="h-5 w-5 text-primary" />
-              Cognitive Learning Architecture
+            <Button variant="outline" size="sm" onClick={() => void load()}>
+              <RefreshCw className="mr-2 h-4 w-4" />Refresh overview
+            </Button>
+          </div>
+        </div>
+        <div className="grid gap-px bg-border/60 sm:grid-cols-2 xl:grid-cols-4">
+          {[
+            { label: "Learning authorities", value: availableCount + " / " + totalLaneCount, detail: "backend-available lanes", icon: Layers3 },
+            { label: "Registry artifacts", value: String(data.registry.total_models), detail: "governed model records", icon: BrainCircuit },
+            { label: "Active / shadow", value: activeCount + " / " + shadowCount, detail: "model lifecycle states", icon: Network },
+            { label: "Prediction tasks", value: String(data.prediction_tasks.length), detail: "registered task contracts", icon: Target },
+          ].map((metric) => {
+            const Icon = metric.icon;
+            return (
+              <div key={metric.label} className="bg-card p-5">
+                <div className="flex items-center justify-between text-xs uppercase tracking-[0.12em] text-muted-foreground">
+                  <span>{metric.label}</span><Icon className="h-4 w-4 text-primary" />
+                </div>
+                <div className="mt-3 text-2xl font-semibold tabular-nums">{metric.value}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{metric.detail}</div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <div className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
+        <Card className="overflow-hidden border-border/70">
+          <CardHeader className="border-b border-border/60">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Sparkles className="h-4 w-4 text-primary" />Two-speed Adaptation
             </CardTitle>
-            <CardDescription className="max-w-3xl leading-6">
-              Karen adapts quickly through memory, profiles, reward evidence, and calibration.
-              Model weights change slowly through curated training, held-out evaluation, shadow
-              comparison, and governed promotion.
+            <CardDescription>
+              Context updates and model-weight promotion are deliberately separate operating paths.
             </CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4 pt-6 md:grid-cols-2">
-            <div className="rounded-xl border border-border/70 p-4">
-              <div className="mb-2 text-sm font-semibold">Fast path</div>
-              <p className="text-sm leading-6 text-muted-foreground">
-                {data.architecture.fast_path}
-              </p>
+          <CardContent className="grid gap-4 pt-5 md:grid-cols-2">
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-5">
+              <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
+                <History className="h-4 w-4 text-primary" />Fast path: Memory
+              </div>
+              <p className="text-sm leading-6 text-muted-foreground">{data.architecture.fast_path}</p>
+              <Badge variant="outline" className="mt-4">No immediate weight updates</Badge>
             </div>
-            <div className="rounded-xl border border-border/70 p-4">
-              <div className="mb-2 text-sm font-semibold">Slow path</div>
-              <p className="text-sm leading-6 text-muted-foreground">
-                {data.architecture.slow_path}
-              </p>
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-5">
+              <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
+                <BrainCircuit className="h-4 w-4 text-primary" />Slow path: Model learning
+              </div>
+              <p className="text-sm leading-6 text-muted-foreground">{data.architecture.slow_path}</p>
+              <Badge variant="outline" className="mt-4">Evidence before activation</Badge>
             </div>
           </CardContent>
         </Card>
-
         <Card className="border-border/70">
-          <CardHeader>
+          <CardHeader className="border-b border-border/60">
             <CardTitle className="flex items-center gap-2 text-base">
-              <Gauge className="h-5 w-5 text-primary" />
-              Learning Readiness
+              <Gauge className="h-4 w-4 text-primary" />Authority Coverage
             </CardTitle>
-            <CardDescription>Backend authorities available to the control plane.</CardDescription>
+            <CardDescription>Available learning lanes, not a model-quality score.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-end justify-between">
-              <div>
-                <div className="text-3xl font-semibold">{readiness}%</div>
-                <div className="text-xs text-muted-foreground">
-                  {availableCount} of {totalLaneCount} learning lanes available
-                </div>
-              </div>
+          <CardContent className="space-y-4 pt-5">
+            <div className="flex items-end justify-between gap-3">
+              <div className="text-3xl font-semibold tabular-nums">{readiness}%</div>
               <Badge variant={readiness === 100 ? "secondary" : "outline"}>
-                {readiness === 100 ? "Authorities online" : "Partial"}
+                {readiness === 100 ? "All lanes available" : "Partial availability"}
               </Badge>
             </div>
             <Progress value={readiness} />
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div className="rounded-lg bg-muted/50 p-3">
-                <div className="font-semibold">{data.registry.total_models}</div>
-                <div className="text-xs text-muted-foreground">registered ML artifacts</div>
-              </div>
-              <div className="rounded-lg bg-muted/50 p-3">
-                <div className="font-semibold">{data.prediction_tasks.length}</div>
-                <div className="text-xs text-muted-foreground">governed prediction tasks</div>
-              </div>
-            </div>
+            <p className="text-xs leading-5 text-muted-foreground">
+              {availableCount} of {totalLaneCount} backend learning authorities reported available.
+              This does not imply every executor or training worker is healthy.
+            </p>
           </CardContent>
         </Card>
       </div>
 
       <Tabs defaultValue="capabilities">
-        <TabsList className="flex h-auto w-full flex-wrap justify-start">
-          <TabsTrigger value="capabilities">Capabilities</TabsTrigger>
-          <TabsTrigger value="models">Model Lifecycle</TabsTrigger>
-          <TabsTrigger value="governance">Learning Policy</TabsTrigger>
+        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-xl border border-border/70 bg-muted/30 p-1.5">
+          <TabsTrigger value="capabilities" className="rounded-lg px-4 py-2">Learning Capabilities</TabsTrigger>
+          <TabsTrigger value="models" className="rounded-lg px-4 py-2">Model Lifecycle</TabsTrigger>
+          <TabsTrigger value="governance" className="rounded-lg px-4 py-2">Learning Policy</TabsTrigger>
         </TabsList>
 
         <TabsContent value="capabilities" className="mt-6 space-y-6">
@@ -288,17 +324,17 @@ export default function IntelligenceTrainingControlPlane() {
             const meta = CATEGORY_META[category] ?? CATEGORY_META.ml;
             const Icon = meta.icon;
             return (
-              <Card key={category} className="border-border/70">
-                <CardHeader>
+              <Card key={category} className="overflow-hidden border-border/70">
+                <CardHeader className="border-b border-border/60 bg-muted/10">
                   <CardTitle className="flex items-center gap-2 text-lg">
                     <Icon className="h-5 w-5 text-primary" />
                     {meta.label}
                   </CardTitle>
                   <CardDescription>{meta.description}</CardDescription>
                 </CardHeader>
-                <CardContent className="grid gap-4 lg:grid-cols-2">
+                <CardContent className="grid gap-3 pt-5 lg:grid-cols-2">
                   {lanes.map((lane) => (
-                    <div key={lane.lane_id} className="rounded-xl border border-border/70 p-4">
+                    <div key={lane.lane_id} className="rounded-xl border border-border/70 bg-muted/10 p-5 transition-colors hover:border-primary/30">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <div className="font-medium">{lane.title}</div>
@@ -313,7 +349,7 @@ export default function IntelligenceTrainingControlPlane() {
                       <p className="mt-3 text-sm leading-6 text-muted-foreground">
                         {lane.description}
                       </p>
-                      <div className="mt-4 flex flex-wrap gap-2">
+                      <div className="mt-4 flex flex-wrap gap-2 border-t border-border/60 pt-3">
                         <Badge variant="outline">{prettify(lane.human_like_role)}</Badge>
                         {lane.prediction_task && (
                           <Badge variant="outline">{prettify(lane.prediction_task)}</Badge>
@@ -336,7 +372,7 @@ export default function IntelligenceTrainingControlPlane() {
         <TabsContent value="models" className="mt-6">
           <Card className="border-border/70">
             <CardHeader>
-              <CardTitle>Candidate → Shadow → Active</CardTitle>
+              <CardTitle className="flex items-center gap-2"><ArrowRight className="h-4 w-4 text-primary" />Candidate → Shadow → Active</CardTitle>
               <CardDescription>
                 Model artifacts remain governed independently from instant user-memory adaptation.
               </CardDescription>
