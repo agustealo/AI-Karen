@@ -119,3 +119,31 @@ def test_training_preflight_is_read_only_and_job_submission_remains_privileged()
     assert required_permission("/admin/training/advanced/catalog", "GET") == Permission.TRAINING_READ
     assert required_permission("/admin/training/advanced/preflight", "POST") == Permission.TRAINING_READ
     assert required_permission("/admin/training/advanced/jobs", "POST") == Permission.TRAINING_EXECUTE
+
+
+def test_shipped_permissions_allow_training_read_without_execution_for_users():
+    """Canonical config must agree with the intended RBAC role inheritance."""
+    import json
+    from pathlib import Path
+
+    from ai_karen_engine.auth.rbac_middleware import (
+        Permission, RBACManager, Role, _default_role_entries,
+    )
+    from ai_karen_engine.auth.models import UserData
+
+    root = Path(__file__).resolve().parents[3]
+    config = json.loads((root / "config_assets/permissions.json").read_text(encoding="utf-8"))
+    roles = config["role_permissions"]
+    assert roles["user"]["inherits_from"] == Role.READONLY.value
+    assert Permission.TRAINING_READ.value in _default_role_entries()[Role.READONLY.value]["permissions"]
+    assert Permission.TRAINING_READ.value in roles["admin"]["permissions"]
+    assert Permission.TRAINING_EXECUTE.value in roles["admin"]["permissions"]
+    assert Permission.TRAINING_EXECUTE.value not in roles["user"]["permissions"]
+
+    manager = RBACManager()
+    admin = UserData(user_id="admin", tenant_id="tenant-a", roles=["admin"])
+    user = UserData(user_id="user", tenant_id="tenant-a", roles=["user"])
+    assert manager.has_permission(admin, Permission.TRAINING_READ)
+    assert manager.has_permission(admin, Permission.TRAINING_EXECUTE)
+    assert manager.has_permission(user, Permission.TRAINING_READ)
+    assert not manager.has_permission(user, Permission.TRAINING_EXECUTE)
