@@ -121,3 +121,36 @@ def test_training_execution_resolver_uses_exact_tenant_import(tmp_path, monkeypa
         training_dataset_root(tenant_id="tenant-a", scope="invalid")
     with pytest.raises(DatasetImportError, match="tenant"):
         training_dataset_root(tenant_id="default", scope="tenant")
+
+
+
+def test_tenant_dataset_inventory_only_lists_owned_versions(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.training.dataset_import import (
+        list_tenant_dataset_versions,
+    )
+
+    one = _import(tmp_path, tenant="tenant-a", version="owned")
+    _import(tmp_path, tenant="tenant-b", version="other")
+    owned = list_tenant_dataset_versions(root=tmp_path, tenant_id="tenant-a")
+    assert [row["version"] for row in owned] == ["owned"]
+    assert owned[0]["sha256"] == one["sha256"]
+    assert owned[0]["bytes"] == one["bytes"]
+    assert list_tenant_dataset_versions(root=tmp_path, tenant_id="new-tenant") == []
+    with pytest.raises(DatasetImportError):
+        list_tenant_dataset_versions(root=tmp_path, tenant_id="default")
+
+
+def test_tenant_inventory_skips_symlinks_and_hidden_staging(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.training.dataset_import import (
+        list_tenant_dataset_versions,
+        tenant_dataset_directory,
+    )
+
+    _import(tmp_path, tenant="tenant-a", version="real")
+    directory = tenant_dataset_directory(tmp_path, "tenant-a")
+    (directory / "other.jsonl").symlink_to(directory / "real.jsonl")
+    (directory / ".incoming-stale.tmp").write_bytes(b"partial")
+    found = list_tenant_dataset_versions(root=tmp_path, tenant_id="tenant-a")
+    assert [row["version"] for row in found] == ["real"]
+    with pytest.raises(DatasetImportError):
+        list_tenant_dataset_versions(root=tmp_path, tenant_id="tenant-a", max_versions=0)
