@@ -34,7 +34,7 @@ class TrainingPipeline:
         executor: TrainingExecutor | None = None,
     ) -> None:
         self._registry = registry or MLModelRegistry()
-        self._executor = executor or SklearnTrainingExecutor()
+        self._executor = executor
 
     def submit(self, job: TrainingJob) -> TrainingPipelineResult:
         job.status = TrainingJobStatus.QUEUED.value
@@ -55,7 +55,16 @@ class TrainingPipeline:
             if on_state is not None:
                 await on_state(job.status, job)
             job.started_at = datetime.now(timezone.utc).isoformat()
-            artifact = self._executor.execute(job)
+            executor = self._executor
+            if executor is None:
+                if job.base_model == "sklearn":
+                    executor = SklearnTrainingExecutor()
+                elif job.base_model == "spacy":
+                    from ai_karen_engine.core.intelligence.ml.training.spacy_executor import SpacyTrainingExecutor
+                    executor = SpacyTrainingExecutor()
+                else:
+                    raise ValueError("No governed training executor for requested model")
+            artifact = executor.execute(job)
             job.artifact_path = artifact.artifact_path
             job.artifact_hash = artifact.artifact_hash
             job.metrics = artifact.metrics
