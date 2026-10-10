@@ -143,14 +143,35 @@ async def get_advanced_training_catalog(
     return catalog
 
 
+def _worker_dependencies(ledger: TrainingJobLedger, *, tenant: str, engine: str) -> dict[str, bool]:
+    """Only an online worker satisfying one complete dependency set can admit work."""
+    requirements = {
+        "transformers": ("torch", "transformers", "peft", "accelerate", "safetensors"),
+        "timeseries": ("numpy", "sklearn"),
+        "spacy": ("spacy",),
+        "sklearn": ("sklearn",),
+    }
+    needed = requirements.get(engine, ())
+    workers = ledger.worker_capabilities(tenant_id=tenant)["workers"]
+    for worker in workers:
+        dependencies = worker["capabilities"].get("dependencies", {})
+        if needed and all(dependencies.get(item) is True for item in needed):
+            return {item: True for item in needed}
+    return {item: False for item in needed}
+
+
 @router.post("/advanced/preflight")
 async def preflight_advanced_training(
     body: AdvancedPreflightRequest,
     current_user: dict[str, Any] = Depends(require_permission(Permission.TRAINING_READ)),
     workbench: AdvancedTrainingWorkbench = Depends(get_advanced_workbench),
+    ledger: TrainingJobLedger = Depends(lambda: TrainingJobLedger()),
 ) -> dict[str, Any]:
-    del current_user
-    return workbench.preflight(**body.model_dump())
+    tenant, _ = _identity(current_user)
+    return workbench.preflight(
+        **body.model_dump(),
+        dependency_availability=_worker_dependencies(ledger, tenant=tenant, engine=body.engine),
+    )
 
 
 def get_training_job_ledger() -> TrainingJobLedger:
@@ -233,7 +254,10 @@ async def enqueue_advanced_training_job(
     ledger: TrainingJobLedger = Depends(get_training_job_ledger),
 ) -> dict[str, Any]:
     tenant, user = _identity(current_user)
-    check = workbench.preflight(**body.model_dump())
+    check = workbench.preflight(
+        **body.model_dump(),
+        dependency_availability=_worker_dependencies(ledger, tenant=tenant, engine=body.engine),
+    )
     if not check["ready"]:
         raise HTTPException(status_code=422, detail={
             "message": "Training preflight did not pass",
