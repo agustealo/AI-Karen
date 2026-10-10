@@ -94,11 +94,16 @@ async def list_admin_users(
         limit=limit,
         offset=offset,
     )
-    users = await service.list_users(
-        user_filter=user_filter,
-        operator_tenant_id=current_user.get("tenant_id"),
-        operator_id=current_user.get("user_id"),
-    )
+    try:
+        users = await service.list_users(
+            user_filter=user_filter,
+            operator_tenant_id=current_user.get("tenant_id"),
+            operator_id=current_user.get("user_id"),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Tenant access denied") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     serialized = [
         {
             "user_id": str(u.id),
@@ -132,15 +137,20 @@ async def create_admin_user(
 ):
     """Create a new user (admin only)."""
 
-    user = await service.create_user(
-        email=request.email,
-        password=request.password,
-        full_name=request.full_name,
-        tenant_id=request.tenant_id,
-        roles=[UserRole(r) for r in request.roles] if request.roles else None,
-        operator_tenant_id=current_user.get("tenant_id"),
-        operator_id=current_user.get("user_id"),
-    )
+    try:
+        user = await service.create_user(
+            email=request.email,
+            password=request.password,
+            full_name=request.full_name,
+            tenant_id=request.tenant_id,
+            roles=[UserRole(r) for r in request.roles] if request.roles else None,
+            operator_tenant_id=current_user.get("tenant_id"),
+            operator_id=current_user.get("user_id"),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Tenant access denied") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not user:
         raise HTTPException(status_code=400, detail="Failed to create user")
     return {
@@ -159,11 +169,16 @@ async def get_admin_user(
     service: AdminUserService = Depends(get_admin_user_service),
 ):
     """Get user details (admin only)."""
-    user = await service.get_user(
-        user_id,
-        operator_tenant_id=current_user.get("tenant_id"),
-        operator_id=current_user.get("user_id"),
-    )
+    try:
+        user = await service.get_user(
+            user_id,
+            operator_tenant_id=current_user.get("tenant_id"),
+            operator_id=current_user.get("user_id"),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Tenant access denied") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return {
@@ -209,12 +224,17 @@ async def update_admin_user(
 ):
     """Update user details (admin only)."""
     updates = request.model_dump(exclude_none=True)
-    success = await service.update_user(
-        user_id,
-        updates,
-        operator_tenant_id=current_user.get("tenant_id"),
-        operator_id=current_user.get("user_id"),
-    )
+    try:
+        success = await service.update_user(
+            user_id,
+            updates,
+            operator_tenant_id=current_user.get("tenant_id"),
+            operator_id=current_user.get("user_id"),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Tenant access denied") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not success:
         raise HTTPException(status_code=400, detail="Failed to update user")
     return {"status": "success", "message": f"User {user_id} updated"}
@@ -229,11 +249,16 @@ async def delete_admin_user(
     """Delete a user (admin only)."""
     if current_user.get("user_id") == user_id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
-    success = await service.delete_user(
-        user_id,
-        operator_tenant_id=current_user.get("tenant_id"),
-        operator_id=current_user.get("user_id"),
-    )
+    try:
+        success = await service.delete_user(
+            user_id,
+            operator_tenant_id=current_user.get("tenant_id"),
+            operator_id=current_user.get("user_id"),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Tenant access denied") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not success:
         raise HTTPException(status_code=404, detail="User not found")
     return None
