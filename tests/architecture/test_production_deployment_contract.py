@@ -152,3 +152,17 @@ def test_production_environment_template_contains_no_real_credentials() -> None:
     assert "KARI_AUTH_BYPASS=false" in text
     assert "AUTH_DEV_MODE=false" in text
     assert "WEB_PUBLIC_SCHEME=CHANGE_ME_HTTP_OR_HTTPS" in text
+
+
+def test_training_worker_is_opt_in_and_uses_api_model_registry_mount() -> None:
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    worker = _service_block(compose, "training-worker")
+    api = _service_block(compose, "api")
+
+    assert "profiles:" in worker
+    assert "      - training-worker" in worker
+    assert 'KAREN_TRAINING_WORKER_TENANT: "${KAREN_TRAINING_WORKER_TENANT:-}"' in worker
+    assert "./models:/app/models:rw" in worker
+    assert "./models:/app/models:rw" in api
+    assert "ai_karen_engine.core.intelligence.ml.training.worker_service" in worker
+    assert "depends_on:" not in worker
