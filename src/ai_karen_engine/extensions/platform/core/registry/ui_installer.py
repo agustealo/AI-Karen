@@ -214,15 +214,18 @@ class UIInstallerService:
                             error_code="PLUGIN_NOT_FOUND",
                         )
 
-            # Check if already installed
+            # Repeated installation requests are idempotent when the current
+            # package still validates. Never label an installed UI as broken.
             if plugin_id in self.installations:
-                return UIInstallationResult(
-                    plugin_id=plugin_id,
-                    status=UIInstallationStatus.CONFLICT,
-                    state=UIInstallationState.ERROR,
-                    message=f"UI already installed for plugin: {plugin_id}",
-                    error_code="ALREADY_INSTALLED",
-                )
+                existing = self.validate_ui_package(plugin_id)
+                if existing.status == UIInstallationStatus.SUCCESS:
+                    return UIInstallationResult(
+                        plugin_id=plugin_id,
+                        status=UIInstallationStatus.SUCCESS,
+                        state=UIInstallationState.INSTALLED,
+                        message=f"UI already installed for plugin: {plugin_id}",
+                    )
+                return existing
 
             # Create backup if exists
             backup_path = self._backup_package(plugin_id)
