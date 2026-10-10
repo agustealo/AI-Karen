@@ -94,6 +94,7 @@ export default function PluginStorePage() {
     PluginCategory | undefined
   >(searchParams.category);
   const [operationError, setOperationError] = useState('');
+  const [operationSuccess, setOperationSuccess] = useState('');
   const [uploadId, setUploadId] = useState('');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -206,6 +207,7 @@ export default function PluginStorePage() {
     if (!window.confirm('Uninstall plugin ' + uninstallId + '? Its installed package will be removed.')) return;
     setUninstalling(true);
     setOperationError('');
+    setOperationSuccess('');
     try {
       const response = await fetch('/api/plugins/store/' + encodeURIComponent(uninstallId) + '/installation', {
         method: 'DELETE',
@@ -218,6 +220,7 @@ export default function PluginStorePage() {
       }
       setUninstallId('');
       await refreshPlugins();
+      setOperationSuccess('Plugin package uninstalled successfully.');
     } catch (cause) {
       setOperationError(getErrorMessage(cause));
     } finally {
@@ -232,6 +235,7 @@ export default function PluginStorePage() {
     }
     setUploading(true);
     setOperationError('');
+    setOperationSuccess('');
     try {
       const form = new FormData();
       form.append('plugin_id', uploadId);
@@ -251,6 +255,7 @@ export default function PluginStorePage() {
       setUploadFile(null);
       setUploadId('');
       await refreshPlugins();
+      setOperationSuccess('Plugin package installed. It remains disabled until explicitly enabled.');
     } catch (cause) {
       setOperationError(getErrorMessage(cause));
     } finally {
@@ -362,6 +367,8 @@ export default function PluginStorePage() {
           </Button>
         </CardContent>
       </Card>
+
+      {operationSuccess && <p role="status" className="text-sm text-green-700 dark:text-green-400">{operationSuccess}</p>}
 
       <Tabs
         value={activeTab}
