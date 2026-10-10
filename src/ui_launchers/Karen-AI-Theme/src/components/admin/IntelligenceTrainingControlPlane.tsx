@@ -6,6 +6,8 @@ import {
   ArrowRight,
   Layers3,
   Network,
+  Search,
+  CircleAlert,
   BrainCircuit,
   ChartNoAxesCombined,
   Gauge,
@@ -31,6 +33,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type TrainingLane = {
@@ -144,6 +147,8 @@ export default function IntelligenceTrainingControlPlane() {
   const [data, setData] = useState<TrainingControlPlane | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+  const [onlyUnavailable, setOnlyUnavailable] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -174,6 +179,15 @@ export default function IntelligenceTrainingControlPlane() {
     }
     return Array.from(groups.entries());
   }, [data?.lanes]);
+
+  const visibleGroups = useMemo(() => grouped.map(([category, lanes]) => [
+    category, lanes.filter((lane) => {
+      if (onlyUnavailable && lane.available) return false;
+      const search = filter.trim().toLowerCase();
+      return !search || [lane.title, lane.category, lane.description, lane.authority, lane.mode,
+        lane.human_like_role, lane.prediction_task ?? ""].some((value) => value.toLowerCase().includes(search));
+    }),
+  ] as const).filter(([, lanes]) => lanes.length > 0), [grouped, filter, onlyUnavailable]);
 
   const availableCount = (data?.lanes ?? []).filter((lane) => lane.available).length;
   const totalLaneCount = data?.lanes.length ?? 0;
@@ -300,7 +314,7 @@ export default function IntelligenceTrainingControlPlane() {
             <div className="flex items-end justify-between gap-3">
               <div className="text-3xl font-semibold tabular-nums">{readiness}%</div>
               <Badge variant={readiness === 100 ? "secondary" : "outline"}>
-                {readiness === 100 ? "All lanes available" : "Partial availability"}
+                {totalLaneCount === 0 ? "No lanes reported" : readiness === 100 ? "All lanes available" : "Partial availability"}
               </Badge>
             </div>
             <Progress value={readiness} />
@@ -321,16 +335,16 @@ export default function IntelligenceTrainingControlPlane() {
 
         <TabsContent value="capabilities" className="mt-6 space-y-6">
           {grouped.map(([category, lanes]) => {
-            const meta = CATEGORY_META[category] ?? CATEGORY_META.ml;
-            const Icon = meta.icon;
+            const meta = CATEGORY_META[category];
+            const Icon = meta?.icon ?? BrainCircuit;
             return (
               <Card key={category} className="overflow-hidden border-border/70">
                 <CardHeader className="border-b border-border/60 bg-muted/10">
                   <CardTitle className="flex items-center gap-2 text-lg">
                     <Icon className="h-5 w-5 text-primary" />
-                    {meta.label}
+                    {meta?.label ?? prettify(category)}
                   </CardTitle>
-                  <CardDescription>{meta.description}</CardDescription>
+                  <CardDescription>{meta?.description ?? "Registered learning authorities."} · {lanes.filter((lane) => lane.available).length}/{lanes.length} available</CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-3 pt-5 lg:grid-cols-2">
                   {lanes.map((lane) => (
@@ -378,8 +392,8 @@ export default function IntelligenceTrainingControlPlane() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              <div className="grid gap-3 md:grid-cols-4">
-                {Object.entries(data.registry.status_counts).map(([status, count]) => (
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {Object.entries(data.registry.status_counts).length === 0 && <p className="text-sm text-muted-foreground">No lifecycle counts reported.</p>}\n                {Object.entries(data.registry.status_counts).map(([status, count]) => (
                   <div key={status} className="rounded-xl border border-border/70 p-4">
                     <div className="text-2xl font-semibold">{count}</div>
                     <div className="mt-1 text-xs text-muted-foreground">{prettify(status)}</div>
@@ -398,7 +412,7 @@ export default function IntelligenceTrainingControlPlane() {
                         <div className="font-medium">{prettify(task)}</div>
                         <div className="text-xs text-muted-foreground">
                           {models.length
-                            ? models.map((model) => `${model.model_id} · ${model.status}`).join(" | ")
+                            ? models.map((model) => `${model.model_id} v${model.model_version} · ${prettify(model.status)} · ${model.architecture || "unspecified architecture"}`).join(" | ")
                             : "No trained artifact registered yet"}
                         </div>
                       </div>
