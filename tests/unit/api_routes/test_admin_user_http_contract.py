@@ -5,6 +5,8 @@ claim to prove production RBAC, durable DB behavior, or session revocation.
 """
 from __future__ import annotations
 
+import pytest
+
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
@@ -95,3 +97,39 @@ def test_permission_rejection_short_circuits_service():
         response = client.get("/api/admin/users/")
     assert response.status_code == 403
     assert service.calls == []
+
+
+def test_invalid_filter_enums_are_rejected_before_service():
+    service = AdminService()
+    with build_client(service) as client:
+        bad_role = client.get("/api/admin/users/", params={"role": "super_admin"})
+        bad_status = client.get("/api/admin/users/", params={"status": "unknown"})
+    assert bad_role.status_code == 422
+    assert bad_status.status_code == 422
+    assert service.calls == []
+
+
+def test_invalid_user_roles_rejected_at_request_boundary():
+    from ai_karen_engine.api_routes.admin.users import AdminUserCreateRequest, AdminUserUpdateRequest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        AdminUserCreateRequest(
+            email="person@example.com", password="test-value", full_name="Person",
+            tenant_id="tenant-a", roles=["super_admin"],
+        )
+    with pytest.raises(ValidationError):
+        AdminUserUpdateRequest(roles=["super_admin"])
+
+
+def test_openapi_exposes_canonical_filter_enums():
+    from ai_karen_engine.services.auth.auth_service import UserRole, UserStatus
+    assert UserRole.ADMIN.value == "admin"
+    assert UserStatus.ACTIVE.value == "active"
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    schema = app.openapi()
+    params = schema["paths"]["/api/admin/users/"]["get"]["parameters"]
+    for name, definition in (("role", "UserRole"), ("status", "UserStatus")):
+        param = next(item for item in params if item["name"] == name)
+        assert definition in str(param["schema"])
