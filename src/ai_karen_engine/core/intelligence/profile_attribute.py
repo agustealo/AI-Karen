@@ -67,7 +67,10 @@ def referenced_profile_attribute(
     # explicitly about a single personal attribute.
     for item in reversed(messages[:-1]):
         if str(item.get("role") or "").casefold() == "user":
-            return requested_profile_attribute(str(item.get("content") or ""))
+            previous = normalize_personal_query(str(item.get("content") or "")).strip(" ?.!")
+            if previous == "my name":
+                return "preferred_name"
+            return requested_profile_attribute(previous)
     return None
 
 
