@@ -125,7 +125,7 @@ const CATEGORY_META: Record<
 const formatError = (error: unknown) => {
   if (error instanceof ApiError) {
     if (error.status === 401) return "Sign in before opening the training control plane.";
-    if (error.status === 403) return "This account does not have training read permission.";
+    if (error.status === 403) return error.message && error.message !== "Permission denied" ? error.message : "Training requires training:read. Check the account roles and permission claims in the authenticated session.";
     return error.message || "Karen could not load training intelligence.";
   }
   if (error instanceof Error) return error.message;
