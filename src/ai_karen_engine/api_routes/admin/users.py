@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/users", tags=["admin-users"])
 
 
+def serialize_user_roles(roles: List[UserRole | str]) -> List[str]:
+    """Normalize canonical roles from database strings or UserRole enums."""
+    return [UserRole(role).value for role in roles]
+
+
 class AdminUserListResponse(BaseModel):
     users: List[Dict[str, Any]]
     total: int
@@ -111,7 +116,7 @@ async def list_admin_users(
             "full_name": u.full_name,
             "username": u.username,
             "tenant_id": str(u.tenant_id) if u.tenant_id else None,
-            "roles": [r.value for r in u.roles],
+            "roles": serialize_user_roles(u.roles),
             "status": u.status.value if hasattr(u.status, "value") else str(u.status),
             "is_active": u.is_active,
             "is_verified": u.is_verified,
@@ -158,7 +163,7 @@ async def create_admin_user(
         "email": user.email,
         "full_name": user.full_name,
         "tenant_id": str(user.tenant_id) if user.tenant_id else None,
-        "roles": [r.value for r in user.roles],
+        "roles": serialize_user_roles(user.roles),
     }
 
 
@@ -187,7 +192,7 @@ async def get_admin_user(
         "full_name": user.full_name,
         "username": user.username,
         "tenant_id": str(user.tenant_id) if user.tenant_id else None,
-        "roles": [r.value for r in user.roles],
+        "roles": serialize_user_roles(user.roles),
         "status": user.status.value if hasattr(user.status, "value") else str(user.status),
         "is_active": user.is_active,
         "is_verified": user.is_verified,
