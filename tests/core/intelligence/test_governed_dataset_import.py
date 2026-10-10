@@ -101,3 +101,23 @@ def test_import_rejects_nonfinite_json_and_cleans_up(tmp_path):
         )
     assert list(tmp_path.rglob("*.jsonl")) == []
     assert list(tmp_path.rglob(".incoming-*")) == []
+
+
+def test_training_execution_resolver_uses_exact_tenant_import(tmp_path, monkeypatch):
+    from ai_karen_engine.config import config_manager
+    from ai_karen_engine.core.intelligence.ml.training.dataset_import import training_dataset_root
+
+    monkeypatch.setattr(config_manager, "get_ml_registry_dir", lambda: str(tmp_path))
+    root = tmp_path / "datasets"
+    _import(root, tenant="tenant-a", version="a")
+    _import(root, tenant="tenant-b", version="b")
+    a_root = training_dataset_root(tenant_id="tenant-a", scope="tenant")
+    b_root = training_dataset_root(tenant_id="tenant-b", scope="tenant")
+    assert (a_root / "a.jsonl").is_file()
+    assert not (a_root / "b.jsonl").exists()
+    assert (b_root / "b.jsonl").is_file()
+    assert not (b_root / "a.jsonl").exists()
+    with pytest.raises(DatasetImportError, match="scope"):
+        training_dataset_root(tenant_id="tenant-a", scope="invalid")
+    with pytest.raises(DatasetImportError, match="tenant"):
+        training_dataset_root(tenant_id="default", scope="tenant")

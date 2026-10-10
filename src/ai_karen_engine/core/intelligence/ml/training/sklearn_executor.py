@@ -25,6 +25,7 @@ from ai_karen_engine.config.config_manager import (
     get_ml_training_max_samples,
     get_ml_training_test_size,
 )
+from ai_karen_engine.core.intelligence.ml.training.dataset_import import training_dataset_root
 from ai_karen_engine.core.intelligence.ml.training.contracts import (
     TrainingArtifact,
     TrainingExecutor,
@@ -222,7 +223,7 @@ class SklearnTrainingExecutor(TrainingExecutor):
             return self._dataset_provider.load(job.dataset_version)
 
         dataset_version = job.dataset_version
-        provider_path = Path(get_ml_registry_dir()) / "datasets"
+        provider_path = (Path(get_ml_registry_dir()) / "datasets" if job.metadata.get("dataset_scope", "legacy") == "legacy" else training_dataset_root(tenant_id=str(job.metadata.get("tenant_id") or ""), scope=str(job.metadata.get("dataset_scope"))))
         if provider_path.exists():
             provider = JsonlTrainingDatasetProvider(provider_path)
             examples = provider.load(dataset_version)
