@@ -710,6 +710,52 @@ class UIInstallerService:
             )
         return installations
 
+    def _recover_bundled_integrity(self, package_info: UIPackageInfo) -> bool:
+        """Recover missing baseline only when installed bytes equal bundled source.
+
+        This never accepts the current installed bytes as their own authority.
+        Unknown or altered packages stay unverified.
+        """
+        plugin_id = package_info.plugin_id
+        canonical = Path("src/ai_karen_engine/extensions/plugins")
+        source = canonical / plugin_id
+        if not source.is_dir():
+            source = canonical / plugin_id.replace("-", "_")
+        target = package_info.target_path
+        if (
+            not source.is_dir()
+            or source.is_symlink()
+            or target.is_symlink()
+            or not target.is_dir()
+            or any(p.is_symlink() for p in source.rglob("*"))
+        ):
+            return False
+        staging = Path(tempfile.mkdtemp(prefix=".verify-", dir=self.plugins_repo_root))
+        try:
+            ui_source = source / "ui"
+            if ui_source.is_dir():
+                for item in ui_source.iterdir():
+                    if item.is_dir():
+                        shutil.copytree(item, staging / item.name)
+                    else:
+                        shutil.copy2(item, staging / item.name)
+                manifest = source / "manifest.json"
+                if manifest.is_file():
+                    shutil.copy2(manifest, staging / "manifest.json")
+            else:
+                shutil.copytree(source, staging, dirs_exist_ok=True)
+            expected = self._calculate_checksum(staging)
+            if expected != self._calculate_checksum(target):
+                return False
+            self._save_baseline(plugin_id, expected)
+            package_info.checksum = expected
+            return True
+        except (OSError, ValueError):
+            logger.exception("Bundled UI integrity recovery failed for %s", plugin_id)
+            return False
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
     def validate_ui_package(self, plugin_id: str) -> UIInstallationResult:
         """Validate an installed UI package."""
         if plugin_id not in self.installations:
@@ -735,7 +781,10 @@ class UIInstallerService:
                 error_code="FILES_MISSING",
             )
 
-        # Files rediscovered after restart lack a durable trusted baseline.
+        # Legacy bundled installs predate durable baseline records. Recover
+        # only when they match the canonical bundled source byte-for-byte.
+        if not package_info.checksum:
+            self._recover_bundled_integrity(package_info)
         if not package_info.checksum:
             return UIInstallationResult(
                 plugin_id=plugin_id,
