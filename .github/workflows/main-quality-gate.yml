@@ -82,6 +82,11 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q src server scripts
 
+      - name: Verify authentication and training route imports
+        run: |
+          python -m py_compile src/ai_karen_engine/auth/models.py src/ai_karen_engine/auth/rbac_middleware.py src/ai_karen_engine/auth/session.py src/ai_karen_engine/api_routes/admin/training.py
+          python -c 'from ai_karen_engine.auth.rbac_middleware import RBACManager, Permission; from ai_karen_engine.api_routes.admin.training import router; assert any(route.path == "/admin/training/control-plane" for route in router.routes)'
+
       - name: Ruff correctness baseline
         run: |
           # Historical formatting/style debt is retired in contained slices.
