@@ -56,6 +56,9 @@ jobs:
       - name: Prove personal recall intent invariance under emotional phrasing
         run: pytest tests/core/cortex/test_personal_recall_nuance_normalization.py tests/core/cortex/test_personal_recall_degraded_routing.py -q
 
+      - name: Verify volunteered personal fact acknowledgment contract
+        run: pytest tests/core/runtime/test_volunteered_fact_acknowledgment.py -q
+
       - name: Run chat architecture contract
         run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
 
