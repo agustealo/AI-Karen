@@ -19,10 +19,10 @@ _GAP = r"(?:[\w'-]+\s+){0,5}"
 _ATTRIBUTE_QUESTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("preferred_name", (
         rf"(?:what(?:\s+is|'s|s)|hats|hat's|remember)\s+{_GAP}my\s+{_GAP}name",
-    )),
         r"my\s+name\s+is\s+(?:what|who)",
         rf"what\s+{_GAP}am\s+i\s+{_GAP}called",
         rf"what\s+{_GAP}do\s+(?:you|people|they)\s+call\s+me",
+    )),
     ("origin_location", (
         rf"where\s+{_GAP}(?:am\s+i|i'm|im)\s+from",
         rf"where\s+did\s+i\s+{_GAP}say\s+(?:i'm|i\s+am|im)\s+from",
