@@ -76,7 +76,7 @@ class EvaluationEvidenceStore:
         from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
         registry = MLModelRegistry(registry_dir=str(self.database.parent))
         registered = registry.get(manifest.model_id)
-        if (registered is None or registered.status != "candidate"
+        if (registered is None or registered.status != "CANDIDATE"
                 or registered.artifact_hash != manifest.artifact_hash
                 or not registry.validate_artifact(registered)):
             raise ValueError("Candidate is unregistered or artifact integrity is invalid")
