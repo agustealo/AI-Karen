@@ -222,6 +222,29 @@ class UIInstallerService:
                         error_code="PLUGIN_NOT_FOUND",
                     )
 
+            # A package source must stay inside the trusted plugin tree.
+            # Refuse links rather than following them into unrelated files.
+            if source_path.is_symlink() or any(
+                item.is_symlink() for item in source_path.rglob("*")
+            ):
+                return UIInstallationResult(
+                    plugin_id=plugin_id,
+                    status=UIInstallationStatus.VALIDATION_FAILED,
+                    state=UIInstallationState.ERROR,
+                    message="Linked plugin source files are not allowed",
+                    error_code="UNSAFE_SOURCE",
+                )
+
+            target_path = self.plugins_repo_root / plugin_id
+            if target_path.is_symlink():
+                return UIInstallationResult(
+                    plugin_id=plugin_id,
+                    status=UIInstallationStatus.VALIDATION_FAILED,
+                    state=UIInstallationState.ERROR,
+                    message="Linked plugin installation paths are not allowed",
+                    error_code="UNSAFE_TARGET",
+                )
+
             # Repeated installation requests are idempotent when the current
             # package still validates. Never label an installed UI as broken.
             if plugin_id in self.installations:
@@ -235,8 +258,17 @@ class UIInstallerService:
                     )
                 return existing
 
-            # Create backup if exists
-            backup_path = self._backup_package(plugin_id)
+            # Do not overwrite an untracked package. This is not a repair
+            # operation and must not silently destroy an unknown installation.
+            if target_path.exists():
+                return UIInstallationResult(
+                    plugin_id=plugin_id,
+                    status=UIInstallationStatus.CONFLICT,
+                    state=UIInstallationState.ERROR,
+                    message="Existing UI package is not registered; repair required",
+                    error_code="UNTRACKED_INSTALLATION",
+                )
+            backup_path = None
 
             # Validate source structure
             validation_report = self.validator.validate_plugin_structure(
@@ -292,9 +324,10 @@ class UIInstallerService:
                     shutil.copytree(source_path, target_path, dirs_exist_ok=True)
                     logger.info(f"Copied entire plugin source from {source_path} to {target_path}")
             except Exception as e:
-                if backup_path:
+                # No valid package existed before this call. Delete only the
+                # partial directory created by this installation attempt.
+                if target_path.is_dir() and not target_path.is_symlink():
                     shutil.rmtree(target_path, ignore_errors=True)
-                    shutil.move(backup_path, target_path)
                 return UIInstallationResult(
                     plugin_id=plugin_id,
                     status=UIInstallationStatus.FAILED,
