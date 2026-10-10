@@ -48,6 +48,11 @@ def test_canonical_receipt_survives_registry_restart_and_rejects_tampering(tmp_p
         ) for i in range(100)],
     )
     store = EvaluationEvidenceStore(registry.registry_dir)
+    # A durable receipt is not automatically an approved promotion decision.
+    short_result = replace(result, sample_count=10, outcomes=result.outcomes[:10])
+    short_receipt = store._record(manifest, short_result)
+    assert short_receipt
+    assert not store.is_approved(manifest)
     receipt = store._record(manifest, result)
     assert receipt
     restarted = MLModelRegistry(registry_dir=str(registry.registry_dir))
