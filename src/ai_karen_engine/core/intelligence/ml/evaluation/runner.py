@@ -128,7 +128,7 @@ class BenchmarkRunner:
         manifest = registry.get(config.model_id)
         if (
             manifest is None
-            or manifest.status != "candidate"
+            or manifest.status != "CANDIDATE"
             or manifest.model_version != config.model_version
             or manifest.purpose != config.task.value
             or not manifest.model_id.startswith(
@@ -152,7 +152,7 @@ class BenchmarkRunner:
         latest = registry.get(config.model_id)
         if (
             latest is None
-            or latest.status != "candidate"
+            or latest.status != "CANDIDATE"
             or latest.model_version != manifest.model_version
             or latest.artifact_hash != manifest.artifact_hash
             or latest.artifact_path != manifest.artifact_path
