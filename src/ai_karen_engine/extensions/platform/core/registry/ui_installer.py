@@ -153,16 +153,25 @@ class UIInstallerService:
                         logger.error(f"Failed to load UI installation {plugin_id}: {e}")
 
     def _calculate_checksum(self, path: Path) -> str:
-        """Calculate checksum of a directory."""
+        """Hash file names and bytes deterministically, rejecting unsafe entries."""
+        if path.is_symlink() or not path.is_dir():
+            raise ValueError("Invalid UI package directory")
         hash_sha256 = hashlib.sha256()
-        for root, dirs, files in os.walk(path):
-            for file in files:
-                file_path = Path(root) / file
-                try:
-                    with open(file_path, "rb") as f:
-                        hash_sha256.update(f.read())
-                except (IOError, OSError):
-                    continue
+        for root, dirs, files in os.walk(path, followlinks=False):
+            dirs.sort()
+            for name in dirs:
+                if (Path(root) / name).is_symlink():
+                    raise ValueError("Linked UI package directory")
+            for name in sorted(files):
+                file_path = Path(root) / name
+                if file_path.is_symlink() or not file_path.is_file():
+                    raise ValueError("Unsafe UI package file")
+                relative_name = file_path.relative_to(path).as_posix().encode("utf-8")
+                hash_sha256.update(len(relative_name).to_bytes(8, "big"))
+                hash_sha256.update(relative_name)
+                with file_path.open("rb") as handle:
+                    while chunk := handle.read(65536):
+                        hash_sha256.update(chunk)
         return hash_sha256.hexdigest()
 
     def _get_directory_size(self, path: Path) -> int:
