@@ -246,34 +246,35 @@ class PluginService:
             (staged / ".karen-manual-disabled").write_text(
                 "Uploaded plugin requires explicit enable\\n", encoding="utf-8"
             )
-            # Atomic no-clobber publication: directory rename can replace an
-            # empty directory under race, so use a filesystem lock file instead.
-            # A lock is exclusive across processes, not only asyncio tasks.
+            # Hold the exclusive lock through runtime validation and rollback.
+            # Releasing it immediately after rename exposed a partial install.
             lock_path = root / (".plugin-install-" + plugin_id + ".lock")
-            lock_fd = None
+            lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             try:
-                lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 if target.exists() or target.is_symlink():
                     raise FileExistsError("Plugin installation conflict")
                 os.rename(staged, target)
                 published = True
+                try:
+                    await self._ensure_initialized()
+                    await self._get_kernel().refresh_with_new_plugin_disabled(plugin_id)
+                    record = self._get_kernel().get_record(plugin_id)
+                    if record is None or record.get("error_message"):
+                        raise ValueError("Uploaded plugin did not pass runtime registry validation")
+                except Exception:
+                    # Restore the canonical registry after removing a rejected
+                    # package so failed uploads cannot remain executable.
+                    if target.is_dir() and not target.is_symlink():
+                        shutil.rmtree(target)
+                    try:
+                        await self._get_kernel().refresh()
+                    except Exception:
+                        logger.exception("Unable to reconcile plugin registry after rejected upload")
+                    raise
+                return {"plugin_id": plugin_id, "installed": True, "enabled": False}
             finally:
-                if lock_fd is not None:
-                    os.close(lock_fd)
-                    lock_path.unlink(missing_ok=True)
-            try:
-                await self._ensure_initialized()
-                await self._get_kernel().refresh_with_new_plugin_disabled(plugin_id)
-                record = self._get_kernel().get_record(plugin_id)
-                if record is None or record.get("error_message"):
-                    raise ValueError("Uploaded plugin did not pass runtime registry validation")
-            except Exception:
-                # Installation must not claim success when canonical discovery
-                # rejected the package. Leave no published package behind.
-                if target.is_dir() and not target.is_symlink():
-                    shutil.rmtree(target)
-                raise
-            return {"plugin_id": plugin_id, "installed": True, "enabled": False}
+                os.close(lock_fd)
+                lock_path.unlink(missing_ok=True)
         finally:
             if not published and staged.exists():
                 shutil.rmtree(staged)
