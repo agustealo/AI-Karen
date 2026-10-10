@@ -96,3 +96,40 @@ async def test_enabled_plugin_must_be_disabled_before_uninstall(tmp_path: Path, 
         await service.uninstall_plugin_package("demo")
     assert (root / "demo").is_dir()
     assert not (root / ".plugin-install-demo.lock").exists()
+
+
+@pytest.mark.asyncio
+async def test_disabled_plugin_uninstalls_and_refreshes(tmp_path: Path, monkeypatch):
+    from types import SimpleNamespace
+    root = tmp_path / "plugins"
+    root.mkdir()
+    package = root / "demo"
+    package.mkdir()
+    (package / "manifest.json").write_text('{"name":"demo"}')
+    service = PluginService(root, root)
+    observations = []
+
+    class Registry:
+        def get(self, name):
+            return SimpleNamespace(state=SimpleNamespace(value="disabled"))
+
+    class Kernel:
+        _active = {}
+        runtime_registry = Registry()
+
+        async def refresh(self):
+            observations.append(("refresh", package.exists()))
+
+        def get_record(self, name):
+            return None
+
+    async def initialized():
+        service.kernel = Kernel()
+
+    monkeypatch.setattr(service, "_ensure_initialized", initialized)
+    assert await service.uninstall_plugin_package("demo") == {
+        "plugin_id": "demo", "uninstalled": True
+    }
+    assert observations == [("refresh", False)]
+    assert not package.exists()
+    assert not (root / ".plugin-install-demo.lock").exists()
