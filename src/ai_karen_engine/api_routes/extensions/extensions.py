@@ -163,6 +163,33 @@ async def require_extension_catalog_access(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=403, detail="Extension catalog access denied")
     return user
 
+async def require_extension_mutation_access(request: Request) -> dict[str, Any]:
+    """Require authenticated tenant administrator permission for lifecycle writes."""
+    user = await get_current_user(request)
+    if (
+        not isinstance(user, dict)
+        or user.get("authenticated") is False
+        or not user.get("user_id")
+        or user.get("user_id") == "guest"
+        or not user.get("tenant_id")
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+    rbac = get_rbac_manager()
+    allowed = rbac.has_permission(user, Permission.ADMIN_PLUGINS_MANAGE)
+    rbac.audit_access_attempt(
+        user,
+        Permission.ADMIN_PLUGINS_MANAGE,
+        "extension_lifecycle",
+        allowed,
+        request=request,
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Plugin management access denied")
+    return user
+
+
 @router.get("/", response_model=List[ExtensionStatusAPI])
 async def list_extensions_root(user: dict[str, Any] = Depends(require_extension_catalog_access)):
     """List all extensions and their status (root endpoint)."""
@@ -190,7 +217,7 @@ async def list_extensions(user: dict[str, Any] = Depends(require_extension_catal
 
 
 @router.post("/install")
-async def install_extension(request: InstallRequest):
+async def install_extension(request: InstallRequest, user: dict[str, Any] = Depends(require_extension_mutation_access)):
     """Extension installation endpoint."""
     manager = get_extension_manager()
     if not manager:
@@ -213,7 +240,7 @@ async def install_extension(request: InstallRequest):
 
 
 @router.get("/{extension_name}")
-async def get_extension_status(extension_name: str):
+async def get_extension_status(extension_name: str, user: dict[str, Any] = Depends(require_extension_catalog_access)):
     """Get detailed status of a specific extension."""
     manager = get_extension_manager()
     if not manager:
@@ -229,7 +256,7 @@ async def get_extension_status(extension_name: str):
 
 
 @router.get("/debug/system-status")
-async def get_extension_system_status():
+async def get_extension_system_status(user: dict[str, Any] = Depends(require_extension_mutation_access)):
     """Debug endpoint to check extension system status."""
     try:
         manager = get_extension_manager()
@@ -271,26 +298,34 @@ async def get_extension_system_status():
 
 
 @router.post("/{extension_name}/load")
-async def load_extension(extension_name: str, user=Depends(get_current_user)):
+async def load_extension(extension_name: str, user=Depends(require_extension_mutation_access)):
     """Load an extension."""
     manager = get_extension_manager()
     if not manager:
         raise HTTPException(status_code=503, detail="Extension manager not initialized")
     try:
         record = await manager.load_extension(extension_name)
+        if record is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Extension could not be enabled by the canonical runtime",
+            )
         await manager.refresh_extensions()
         return {
             "success": True,
             "message": f"Extension {extension_name} loaded",
             "plugin_id": extension_name,
-            "status": record.status.value if record else "loaded",
+            "status": (record.get("status", "loaded") if isinstance(record, dict) else getattr(getattr(record, "status", None), "value", "loaded")) if record else "loaded",
         }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Extension enable failed")
+        raise HTTPException(status_code=503, detail="Extension enable failed")
 
 
 @router.post("/{extension_name}/unload")
-async def unload_extension(extension_name: str, user=Depends(get_current_user)):
+async def unload_extension(extension_name: str, user=Depends(require_extension_mutation_access)):
     """Unload an extension."""
     manager = get_extension_manager()
     if not manager:
@@ -314,7 +349,7 @@ async def unload_extension(extension_name: str, user=Depends(get_current_user)):
 
 
 @router.post("/{extension_name}/remove-ui")
-async def remove_extension_ui(extension_name: str, user=Depends(get_current_user)):
+async def remove_extension_ui(extension_name: str, user=Depends(require_extension_mutation_access)):
     """Remove the installed UI package for an extension."""
     try:
         from ai_karen_engine.extensions.platform.core.registry.ui_installer import (
