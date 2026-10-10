@@ -165,7 +165,7 @@ def test_pipeline_submit_sets_queued(tmp_path):
 @pytest.mark.asyncio
 async def test_pipeline_run_succeeds(tmp_path):
     registry = MLModelRegistry(registry_dir=str(tmp_path))
-    examples = _make_examples() * 5 * 5
+    examples = _make_examples() * 5
     provider = FixtureTrainingDatasetProvider(examples)
     pipeline = TrainingPipeline(registry=registry, executor=SklearnTrainingExecutor(dataset_provider=provider))
     job = TrainingJob(
