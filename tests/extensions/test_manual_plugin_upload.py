@@ -133,3 +133,20 @@ async def test_lock_held_through_registry_validation_and_released(tmp_path, monk
     await service.install_uploaded_archive("demo", _archive({"manifest.json": json.dumps(manifest)}))
     assert observed == [True]
     assert not (tmp_path / ".plugin-install-demo.lock").exists()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_zip_entry_is_refused(tmp_path):
+    service = PluginService(tmp_path, tmp_path)
+    payload = io.BytesIO()
+    manifest = {
+        "id": "demo", "name": "demo", "version": "1.0.0",
+        "display_name": "Demo", "description": "Test plugin",
+        "author": "Tests", "license": "MIT", "category": "integration",
+    }
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+        archive.writestr("./manifest.json", json.dumps(manifest))
+    with pytest.raises(ValueError, match="Duplicate"):
+        await service.install_uploaded_archive("demo", payload.getvalue())
+    assert not (tmp_path / "demo").exists()
