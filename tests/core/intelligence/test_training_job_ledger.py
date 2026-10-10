@@ -155,6 +155,7 @@ def test_execution_status_reports_tenant_scoped_leases_without_claiming_worker_h
     assert a["active_leases"] == 1
     assert a["expired_leases"] == 0
     assert a["worker_status"] == "offline"
+    assert a["automatic_dispatch_verified"] is True
     assert a["automatic_dispatch_verified"] is False
 
     b = store.execution_status(tenant_id="tenant-b")
@@ -175,6 +176,7 @@ def test_worker_registration_and_dispatch_scope_are_durable(tmp_path):
     store.worker_heartbeat(tenant_id="tenant-a", worker_id="worker-1")
     restarted = TrainingJobLedger(database)
     assert restarted.execution_status(tenant_id="tenant-a")["worker_status"] == "online"
+    assert restarted.execution_status(tenant_id="tenant-a")["automatic_dispatch_verified"] is False
     assert restarted.execution_status(tenant_id="tenant-b")["worker_status"] == "offline"
     assert restarted.next_queued(tenant_id="tenant-b") == "tenant-b-pending"
     restarted.worker_unregister(tenant_id="tenant-a", worker_id="worker-1")
