@@ -173,6 +173,49 @@ class PluginService:
             for record in self._get_kernel().list_records()
         }
 
+    async def uninstall_plugin_package(self, plugin_id: str) -> Dict[str, Any]:
+        """Uninstall a canonical plugin package; never touch free_plugins storage."""
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", plugin_id):
+            raise ValueError("Invalid plugin identifier")
+        await self._ensure_initialized()
+        root = self._resolve_root()
+        target = root / plugin_id
+        if root.is_symlink() or target.is_symlink():
+            raise ValueError("Unsafe plugin installation path")
+        if not target.is_dir():
+            raise FileNotFoundError("Plugin is not installed")
+        kernel = self._get_kernel()
+        if plugin_id in kernel._active.values():
+            raise RuntimeError("Plugin has active executions")
+        lock_path = root / (".plugin-install-" + plugin_id + ".lock")
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        quarantine = root.parent / ".karen-plugin-uninstall"
+        moved = None
+        try:
+            if not target.is_dir() or target.is_symlink():
+                raise FileNotFoundError("Plugin is not installed")
+            quarantine.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if quarantine.is_symlink():
+                raise ValueError("Unsafe uninstall quarantine")
+            moved = quarantine / (plugin_id + "-" + uuid.uuid4().hex)
+            os.rename(target, moved)
+            try:
+                await kernel.refresh()
+                if kernel.get_record(plugin_id) is not None:
+                    raise RuntimeError("Uninstalled plugin remains in registry")
+            except Exception:
+                os.rename(moved, target)
+                await kernel.refresh()
+                raise
+            try:
+                shutil.rmtree(moved)
+            except OSError:
+                logger.warning("Plugin package quarantined for cleanup: %s", plugin_id)
+            return {"plugin_id": plugin_id, "uninstalled": True}
+        finally:
+            os.close(lock_fd)
+            lock_path.unlink(missing_ok=True)
+
     async def install_uploaded_archive(self, plugin_id: str, archive: bytes) -> Dict[str, Any]:
         """Install a user-uploaded plugin package without enabling it.
 
