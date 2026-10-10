@@ -86,6 +86,16 @@ class AdvancedPreflightRequest(BaseModel):
     class_weight: str = "balanced"
     optimizer: str = "lbfgs"
     precision: str = "fp64"
+    base_model_path: str | None = None
+    license_id: str | None = None
+    license_accepted: bool = False
+    license_model_path: str | None = None
+    epochs: int = Field(1, ge=1, le=10)
+    sequence_length: int = Field(256, ge=32, le=2048)
+    lora_rank: int = 8
+    allow_cpu_training: bool = False
+    lags: int = Field(5, ge=2, le=128)
+    horizon: int = Field(1, ge=1, le=32)
 
 
 def get_advanced_workbench() -> AdvancedTrainingWorkbench:
