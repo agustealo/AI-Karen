@@ -38,6 +38,7 @@ async def test_upload_requires_explicit_enable(tmp_path, monkeypatch):
     assert result == {"plugin_id": "demo", "installed": True, "enabled": False}
     assert called == ["demo"]
     assert (tmp_path / "demo/handler.py").exists()
+    assert (tmp_path / "demo/.karen-manual-disabled").is_file()
     with pytest.raises(FileExistsError):
         await service.install_uploaded_archive("demo", data)
 
