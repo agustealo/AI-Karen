@@ -44,6 +44,7 @@ class TrainingJobLedger:
             ):
                 if name not in columns:
                     db.execute(f"ALTER TABLE training_jobs ADD COLUMN {name} {definition}")
+            db.execute("""CREATE TABLE IF NOT EXISTS training_workers (\n                tenant_id TEXT NOT NULL, worker_id TEXT NOT NULL,\n                heartbeat_at TEXT NOT NULL, PRIMARY KEY(tenant_id,worker_id)\n            )""")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_training_jobs_tenant ON training_jobs(tenant_id, submitted_at)"
             )
@@ -93,6 +94,35 @@ class TrainingJobLedger:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def worker_heartbeat(self, *, tenant_id: str, worker_id: str) -> None:
+        """Heartbeat must originate from the worker process, not HTTP ingress."""
+        if not tenant_id or tenant_id == "default" or not worker_id:
+            raise ValueError("Explicit tenant and worker scope required")
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO training_workers(tenant_id,worker_id,heartbeat_at) VALUES (?,?,?) "
+                "ON CONFLICT(tenant_id,worker_id) DO UPDATE SET heartbeat_at=excluded.heartbeat_at",
+                (tenant_id, worker_id, _now()),
+            )
+
+    def worker_unregister(self, *, tenant_id: str, worker_id: str) -> None:
+        with self._connect() as db:
+            db.execute(
+                "DELETE FROM training_workers WHERE tenant_id=? AND worker_id=?",
+                (tenant_id, worker_id),
+            )
+
+    def next_queued(self, *, tenant_id: str) -> str | None:
+        if not tenant_id or tenant_id == "default":
+            raise ValueError("Explicit tenant scope required")
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT job_id FROM training_jobs WHERE tenant_id=? AND state='QUEUED' "
+                "AND lease_token IS NULL ORDER BY submitted_at,job_id LIMIT 1",
+                (tenant_id,),
+            ).fetchone()
+        return str(row["job_id"]) if row else None
+
     def execution_status(self, *, tenant_id: str) -> dict[str, Any]:
         """Report durable job/lease truth, not speculative worker availability."""
         if not tenant_id or tenant_id == "default":
@@ -117,13 +147,19 @@ class TrainingJobLedger:
                 "AND lease_token IS NOT NULL AND lease_expires_at<=?",
                 (tenant_id, _now()),
             ).fetchone()["count"]
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=90)).isoformat()
+        with self._connect() as db:
+            online = db.execute(
+                "SELECT COUNT(*) AS count FROM training_workers WHERE tenant_id=? AND heartbeat_at>?",
+                (tenant_id, cutoff),
+            ).fetchone()["count"]
         return {
             "queued_jobs": counts.get("QUEUED", 0),
             "active_leases": active,
             "expired_leases": expired,
-            "worker_status": "unverified",
-            "worker_status_reason": "No durable worker registration/heartbeat exists",
-            "automatic_dispatch_verified": False,
+            "worker_status": "online" if online else "offline",
+            "worker_status_reason": "Recent worker heartbeat" if online else "No recent registered worker heartbeat",
+            "automatic_dispatch_verified": bool(online),
         }
 
     def claim(self, job_id: str, *, tenant_id: str, ttl_seconds: int = 300) -> str | None:
