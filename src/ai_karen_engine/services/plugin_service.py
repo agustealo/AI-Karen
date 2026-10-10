@@ -198,6 +198,7 @@ class PluginService:
                 if len(entries) > 500:
                     raise ValueError("Too many archive members")
                 total_size = 0
+                seen_paths: set[str] = set()
                 for member in entries:
                     relative = Path(member.filename)
                     if (
@@ -208,6 +209,12 @@ class PluginService:
                         or member.filename.startswith("/")
                     ):
                         raise ValueError("Unsafe package member path")
+                    # Reject duplicate paths and file/directory collisions before
+                    # extraction, including normalized "." path components.
+                    normalized = "/".join(part for part in relative.parts if part != ".")
+                    if not normalized or normalized in seen_paths:
+                        raise ValueError("Duplicate or invalid package member")
+                    seen_paths.add(normalized)
                     mode = (member.external_attr >> 16) & 0xFFFF
                     if stat.S_ISLNK(mode):
                         raise ValueError("Package links are forbidden")
