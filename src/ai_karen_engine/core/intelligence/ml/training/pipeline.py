@@ -34,7 +34,7 @@ class TrainingPipeline:
         executor: TrainingExecutor | None = None,
     ) -> None:
         self._registry = registry or MLModelRegistry()
-        self._executor = executor or SklearnTrainingExecutor()
+        self._executor = executor
 
     def submit(self, job: TrainingJob) -> TrainingPipelineResult:
         job.status = TrainingJobStatus.QUEUED.value
@@ -55,7 +55,19 @@ class TrainingPipeline:
             if on_state is not None:
                 await on_state(job.status, job)
             job.started_at = datetime.now(timezone.utc).isoformat()
-            artifact = self._executor.execute(job)
+            executor = self._executor
+            if executor is None:
+                if job.base_model == "sklearn":
+                    executor = SklearnTrainingExecutor()
+                elif job.base_model == "timeseries":
+                    from ai_karen_engine.core.intelligence.ml.training.temporal_executor import TemporalTrainingExecutor
+                    executor = TemporalTrainingExecutor()
+                elif job.base_model == "transformers":
+                    from ai_karen_engine.core.intelligence.ml.training.transformer_executor import TransformerLoRAExecutor
+                    executor = TransformerLoRAExecutor()
+                else:
+                    raise ValueError("Unregistered training executor")
+            artifact = executor.execute(job)
             job.artifact_path = artifact.artifact_path
             job.artifact_hash = artifact.artifact_hash
             job.metrics = artifact.metrics
@@ -68,9 +80,20 @@ class TrainingPipeline:
                 await on_state(job.status, job)
             result.evaluation_result = None
 
-            if (int(artifact.metrics.get('test_samples', 0)) < 1 or
-                'macro_f1' not in artifact.metrics or
-                not artifact.artifact_hash):
+            evidence = artifact.metrics
+            if job.base_model == 'sklearn':
+                valid_evidence = int(evidence.get('test_samples', 0)) > 0 and 'macro_f1' in evidence
+            elif job.base_model == 'timeseries':
+                valid_evidence = (int(evidence.get('test_samples', 0)) >= 5 and
+                                  all(key in evidence for key in ('mae', 'rmse', 'baseline_mae')) and
+                                  evidence.get('temporal_validation') == 'chronological_holdout_with_embargo')
+            elif job.base_model == 'transformers':
+                valid_evidence = (evidence.get('artifact_type') == 'peft_lora_adapter' and
+                                  int(evidence.get('optimizer_steps', 0)) > 0 and
+                                  evidence.get('license_accepted') is True)
+            else:
+                valid_evidence = False
+            if not valid_evidence or not artifact.artifact_hash:
                 raise ValueError('Missing held-out evaluation evidence or artifact integrity hash')
             artifact_root = Path(artifact.artifact_path).resolve()
             trusted_root = Path(get_ml_registry_dir()).resolve()
