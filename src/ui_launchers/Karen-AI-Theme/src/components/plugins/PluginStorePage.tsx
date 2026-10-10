@@ -345,14 +345,14 @@ export default function PluginStorePage() {
 
       <Card>
         <CardHeader><CardTitle>Uninstall a Plugin</CardTitle>
-          <CardDescription>Remove an installed plugin package, not just its UI. Existing shipped source files under free_plugins are not affected.</CardDescription>
+          <CardDescription>Disable the plugin first, then remove its installed package. This does not delete bundled source files in free_plugins.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-sm">Installed plugin ID
             <select className="rounded border bg-background px-3 py-2" value={uninstallId}
               onChange={(event) => setUninstallId(event.target.value)}>
               <option value="">Choose a plugin</option>
-              {plugins.filter(plugin => plugin.status === 'installed').map(plugin =>
+              {installedPlugins.map(plugin =>
                 <option key={plugin.id} value={plugin.id}>{plugin.name}</option>)}
             </select>
           </label>
