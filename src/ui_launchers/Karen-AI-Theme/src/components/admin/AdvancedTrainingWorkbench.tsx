@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Activity, AlertTriangle, CheckCircle2, Cpu, Database, Gauge, RefreshCw, SlidersHorizontal, Layers3, Server, ShieldCheck, Clock3, ArrowUpRight } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Cpu, Database, RefreshCw, SlidersHorizontal, Layers3, Server, ShieldCheck, Clock3, ArrowUpRight } from "lucide-react";
 
 import { apiClient, ApiError } from "@/lib/api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
