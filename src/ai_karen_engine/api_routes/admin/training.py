@@ -152,8 +152,8 @@ def _worker_dependencies(ledger: TrainingJobLedger, *, tenant: str, engine: str)
     for worker in workers:
         dependencies = worker["capabilities"].get("dependencies", {})
         if needed and all(dependencies.get(item) is True for item in needed):
-            return {item: True for item in needed}
-    return {item: False for item in needed}
+            return {**{item: True for item in needed}, "cuda_available": worker["capabilities"].get("cuda_available") is True}
+    return {**{item: False for item in needed}, "cuda_available": False}
 
 
 @router.post("/advanced/preflight")
