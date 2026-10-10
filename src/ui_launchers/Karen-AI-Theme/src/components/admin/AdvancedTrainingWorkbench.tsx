@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Activity, AlertTriangle, CheckCircle2, Cpu, Database, Gauge, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Cpu, Database, Gauge, RefreshCw, SlidersHorizontal, Layers3, Server, ShieldCheck, Clock3, ArrowUpRight } from "lucide-react";
 
 import { apiClient, ApiError } from "@/lib/api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -165,24 +165,32 @@ export default function AdvancedTrainingWorkbench() {
   }
 
   const selectedEngine = catalog.engines.find(engine => engine.id === config.engine);
+  const readyEngines = catalog.engines.filter(engine => engine.supported && engine.status === "ready").length;
+  const workerReady = executionStatus?.worker_status === "ready" && executionStatus.automatic_dispatch_verified;
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="space-y-6 rounded-2xl bg-[#090b10] p-3 text-slate-100 sm:p-5 xl:p-7">
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-5">
         <div>
-          <h3 className="text-xl font-semibold">Train a Model</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Choose a supported model type and dataset, validate the configuration, then queue training.
+          <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.19em] text-cyan-300"><span className="h-1.5 w-1.5 rounded-full bg-cyan-300" />Training control plane / Execution workbench</div>
+          <h3 className="text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl">Train a Model</h3>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+            Configure a governed training run, inspect backend readiness, and submit to the durable execution queue.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => void load()} disabled={busy}>
+        <Button variant="outline" size="sm" className="border-white/15 bg-white/5 text-slate-200 hover:bg-white/10" onClick={() => { void load(); void loadJobs(); }} disabled={busy}>
           <RefreshCw className="mr-2 h-4 w-4" />Refresh capabilities
         </Button>
       </div>
-      <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-        <div className="space-y-5">
-          <Card>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-white/10 bg-white/[0.035] p-4"><div className="flex items-center justify-between text-xs font-medium uppercase tracking-widest text-slate-400"><span>Architectures</span><Layers3 className="h-4 w-4 text-cyan-300" /></div><div className="mt-3 text-2xl font-semibold tabular-nums">{readyEngines}<span className="ml-2 text-sm font-normal text-slate-500">/ {catalog.engines.length} ready</span></div><p className="mt-1 text-xs text-slate-500">Verified executor availability</p></div>
+        <div className="rounded-xl border border-white/10 bg-white/[0.035] p-4"><div className="flex items-center justify-between text-xs font-medium uppercase tracking-widest text-slate-400"><span>Versioned datasets</span><Database className="h-4 w-4 text-indigo-300" /></div><div className="mt-3 text-2xl font-semibold tabular-nums">{catalog.datasets.length}</div><p className="mt-1 text-xs text-slate-500">Catalogued by the backend</p></div>
+        <div className="rounded-xl border border-white/10 bg-white/[0.035] p-4"><div className="flex items-center justify-between text-xs font-medium uppercase tracking-widest text-slate-400"><span>Worker dispatch</span><Server className="h-4 w-4 text-cyan-300" /></div><div className="mt-3 text-lg font-semibold">{!executionStatus ? "Unverified" : workerReady ? "Verified" : title(executionStatus.worker_status)}</div><p className="mt-1 text-xs text-slate-500">{executionStatus ? `${executionStatus.queued_jobs} queued · ${executionStatus.active_leases} active leases` : "Awaiting live execution status"}</p></div>
+      </div>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_minmax(340px,0.7fr)]">
+        <div className="min-w-0 space-y-5">
+          <Card className="border-white/10 bg-[#12151d] text-slate-100 shadow-xl shadow-black/10">
             <CardHeader><CardTitle className="flex items-center gap-2 text-base">
-              <Cpu className="h-4 w-4" />Architecture &amp; execution engine
+              <Cpu className="h-4 w-4 text-indigo-300" />Architecture &amp; execution engine
             </CardTitle><CardDescription>
               Engines without a verified runtime executor cannot launch.
             </CardDescription></CardHeader>
@@ -192,16 +200,16 @@ export default function AdvancedTrainingWorkbench() {
                   <button type="button" key={engine.id} disabled={!engine.supported}
                     aria-pressed={config.engine === engine.id}
                     onClick={() => change("engine", engine.id)}
-                    className={`rounded-xl border p-4 text-left transition-colors ${config.engine === engine.id ? "border-primary bg-primary/5" : "border-border/70 hover:bg-muted/30"}`}>
+                    className={`group relative flex min-h-40 flex-col rounded-xl border p-4 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 disabled:cursor-not-allowed disabled:opacity-60 ${config.engine === engine.id ? "border-indigo-300/75 bg-indigo-400/10 shadow-[inset_0_0_0_1px_rgba(165,180,252,0.22)]" : "border-white/10 bg-[#0c0f15] hover:border-white/30 hover:bg-white/[0.04]"}`}>
                     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-sm font-semibold">{engine.label}</span>
+                      <span className="max-w-[14rem] text-sm font-semibold leading-5 text-slate-100">{engine.label}</span>
                       <Badge variant={engine.supported ? "secondary" : "outline"}>
                         {engine.status === "ready" ? "Executor ready" : engine.status === "worker_offline" ? "Training worker offline" : engine.status === "missing_dependencies" ? "Worker dependencies missing" : "Executor not implemented"}
                       </Badge>
                     </div>
-                    <p className="text-xs leading-5 text-muted-foreground">{engine.details}</p>
+                    <p className="flex-1 text-xs leading-5 text-slate-400">{engine.details}</p>
                     {engine.missing_dependencies.length > 0 && (
-                      <p className="mt-2 text-xs text-muted-foreground">Missing: {engine.missing_dependencies.join(", ")}</p>
+                      <p className="mt-3 border-t border-white/10 pt-2 text-xs text-amber-200">Missing: {engine.missing_dependencies.join(", ")}</p>
                     )}
                   </button>
                 ))}
@@ -252,7 +260,7 @@ export default function AdvancedTrainingWorkbench() {
               )}
             </CardContent>
           </Card>
-          <Card>
+          <Card className="border-white/10 bg-[#12151d] text-slate-100">
             <CardHeader><CardTitle className="flex items-center gap-2 text-base">
               <Database className="h-4 w-4" />Dataset &amp; preprocessing
             </CardTitle><CardDescription>
@@ -288,8 +296,8 @@ export default function AdvancedTrainingWorkbench() {
             </CardContent>
           </Card>
         </div>
-        <div className="space-y-5">
-          <Card>
+        <div className="min-w-0 space-y-5">
+          <Card className="border-white/10 bg-[#12151d] text-slate-100">
             <CardHeader><CardTitle className="flex items-center gap-2 text-base">
               <SlidersHorizontal className="h-4 w-4" />Optimizer &amp; reproducibility
             </CardTitle><CardDescription>
@@ -325,14 +333,15 @@ export default function AdvancedTrainingWorkbench() {
               </p>
             </CardContent>
           </Card>
-          <Card>
+          <Card className="border-indigo-300/20 bg-[#12151d] text-slate-100 shadow-[0_16px_40px_rgba(0,0,0,0.2)]">
             <CardHeader><CardTitle className="flex items-center gap-2 text-base">
-              <Gauge className="h-4 w-4" />Preflight &amp; execution readiness
+              <ShieldCheck className="h-4 w-4" />Preflight &amp; execution readiness
             </CardTitle><CardDescription>
               Dataset schema, feature order, class support, selected engine and optimizer compatibility.
             </CardDescription></CardHeader>
             <CardContent className="space-y-4">
-              <Button className="w-full" onClick={() => void validate()} disabled={busy || !config.dataset_version}>
+              <div className={`rounded-xl border px-4 py-3 ${preflight?.ready ? "border-cyan-400/30 bg-cyan-400/5" : "border-white/10 bg-white/[0.03]"}`} role="status"><div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Execution gate</span><Badge variant="outline">{preflight?.ready ? "Preflight passed" : preflight ? "Blocked" : "Not validated"}</Badge></div><p className="mt-2 text-sm text-slate-300">{preflight?.ready ? "Configuration passed backend checks. Submission still requires an available worker." : preflight ? "Review the findings below and run preflight again." : "Run preflight to obtain backend evidence before queuing."}</p></div>
+              <Button className="w-full border border-white/15 bg-white/10 text-slate-100 hover:bg-white/15" onClick={() => void validate()} disabled={busy || !config.dataset_version}>
                 {busy ? "Validating..." : "Run backend preflight"}
               </Button>
               {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
@@ -363,7 +372,7 @@ export default function AdvancedTrainingWorkbench() {
                   </div>
                 ))}
                 {preflight.ready && (
-                  <Button className="w-full" variant="secondary" disabled={queueing}
+                  <Button className="w-full bg-indigo-300 font-semibold text-slate-950 hover:bg-indigo-200" disabled={queueing}
                     onClick={() => void queueJob()}>
                     {queueing ? "Submitting..." : "Queue approved training job"}
                   </Button>
@@ -380,10 +389,10 @@ export default function AdvancedTrainingWorkbench() {
           </Card>
         </div>
       </div>
-      <Card>
+      <Card className="border-white/10 bg-[#12151d] text-slate-100">
         <CardHeader className="flex flex-row items-center justify-between gap-3">
           <div>
-            <CardTitle className="text-base">Training Jobs</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-base"><Clock3 className="h-4 w-4 text-cyan-300" />Training jobs &amp; execution queue</CardTitle>
             <CardDescription>Backend-reported state, not estimated progress.</CardDescription>
           </div>
           <Button size="sm" variant="outline" onClick={() => void loadJobs()}>
@@ -406,12 +415,12 @@ export default function AdvancedTrainingWorkbench() {
           )}
           {jobs.length === 0 && <p className="text-sm text-muted-foreground">No jobs reported for this tenant.</p>}
           {jobs.map(job => (
-            <div key={job.job_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
+            <div key={job.job_id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#0b0e14] p-4 transition-colors hover:border-white/20">
               <div>
-                <p className="text-sm font-medium">{job.job_id}</p>
+                <p className="flex items-center gap-2 font-mono text-xs font-semibold text-indigo-200"><ArrowUpRight className="h-3.5 w-3.5" />{job.job_id}</p>
                 <p className="text-xs text-muted-foreground">Updated: {job.updated_at || "Unavailable"}</p>
               </div>
-              <Badge variant="outline">{job.state}</Badge>
+              <Badge variant="outline" className="border-white/20 text-slate-200">{title(job.state)}</Badge>
             </div>
           ))}
           {queueMessage && <p className="text-sm" role="status">{queueMessage}</p>}
