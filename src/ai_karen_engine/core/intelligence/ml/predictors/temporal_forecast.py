@@ -40,13 +40,29 @@ class TemporalForecastPredictor:
             raise ValueError("No eligible temporal forecast model")
         if not manifest.artifact_hash or not self.registry.validate_artifact(manifest):
             raise ValueError("Temporal model integrity check failed")
+        # A trusted receipt alone is insufficient if a path can escape the
+        # canonical model/version layout or introduce a symlink to a pickle.
         root = Path(manifest.artifact_path)
+        if (
+            not root.is_dir()
+            or root.is_symlink()
+            or root.name != manifest.model_version
+            or root.parent.name != manifest.model_id
+            or root.parent.parent.name != "topology"
+            or root.resolve() != root.absolute()
+            or any(entry.is_symlink() for entry in root.rglob("*"))
+            or not (root / "model.joblib").is_file()
+            or not (root / "feature_schema.json").is_file()
+        ):
+            raise ValueError("Unsafe temporal artifact layout")
         schema = json.loads((root / "feature_schema.json").read_text(encoding="utf-8"))
         lags = schema.get("lags")
         horizon = schema.get("horizon")
-        if not isinstance(lags, int) or not 2 <= lags <= 128:
+        if schema.get("feature_version") != manifest.feature_version or schema.get("target") != "value":
+            raise ValueError("Temporal feature schema identity mismatch")
+        if not isinstance(lags, int) or isinstance(lags, bool) or not 2 <= lags <= 128:
             raise ValueError("Invalid lag schema")
-        if not isinstance(horizon, int) or not 1 <= horizon <= 32:
+        if not isinstance(horizon, int) or isinstance(horizon, bool) or not 1 <= horizon <= 32:
             raise ValueError("Invalid forecast horizon")
         if not isinstance(recent_values, list) or len(recent_values) != lags:
             raise ValueError("Expected exactly the trained lag window")
