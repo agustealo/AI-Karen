@@ -352,10 +352,13 @@ def test_training_engine_catalog_distinguishes_installed_packages_from_executors
     inventory = AdvancedTrainingWorkbench(dataset_root=tmp_path).catalog()["engines"]
     by_id = {item["id"]: item for item in inventory}
     assert set(by_id) == {"sklearn", "spacy", "transformers", "timeseries"}
-    for engine_id in ("spacy", "transformers", "timeseries"):
+    for engine_id in ("transformers", "timeseries"):
         assert by_id[engine_id]["supported"] is False
         assert by_id[engine_id]["status"] == "not_implemented"
         assert by_id[engine_id]["executor"] is None
+    assert by_id["spacy"]["supported"] == (by_id["spacy"]["status"] == "ready")
+    if by_id["spacy"]["supported"]:
+        assert by_id["spacy"]["executor"]
     assert by_id["sklearn"]["supported"] == (
         by_id["sklearn"]["status"] == "ready"
     )
