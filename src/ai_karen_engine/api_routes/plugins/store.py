@@ -344,13 +344,33 @@ async def uninstall_plugin_endpoint(
     try:
         result = await plugin_service.uninstall_plugin_package(plugin_id)
     except FileNotFoundError:
+        _audit_plugin_event(
+            request=http_request, current_user=current_user,
+            event_type="plugin_uninstall", action="manual_package_uninstall",
+            outcome="error", details={"plugin_id": plugin_id, "reason": "not_installed"},
+        )
         raise HTTPException(status_code=404, detail="Plugin is not installed")
     except FileExistsError:
+        _audit_plugin_event(
+            request=http_request, current_user=current_user,
+            event_type="plugin_uninstall", action="manual_package_uninstall",
+            outcome="error", details={"plugin_id": plugin_id, "reason": "operation_in_progress"},
+        )
         raise HTTPException(status_code=409, detail="Plugin installation operation in progress")
     except (ValueError, RuntimeError) as exc:
+        _audit_plugin_event(
+            request=http_request, current_user=current_user,
+            event_type="plugin_uninstall", action="manual_package_uninstall",
+            outcome="error", details={"plugin_id": plugin_id, "reason": "lifecycle_conflict"},
+        )
         raise HTTPException(status_code=409, detail=str(exc))
     except Exception:
         logger.exception("Plugin package uninstall failed")
+        _audit_plugin_event(
+            request=http_request, current_user=current_user,
+            event_type="plugin_uninstall", action="manual_package_uninstall",
+            outcome="error", details={"plugin_id": plugin_id, "reason": "internal_error"},
+        )
         raise HTTPException(status_code=503, detail="Plugin uninstall unavailable")
     _audit_plugin_event(
         request=http_request, current_user=current_user,
