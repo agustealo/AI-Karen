@@ -529,7 +529,19 @@ class UIInstallerService:
                     error_code="REMOVAL_FAILED",
                 )
 
-            # Unregister installation
+            # Invalidate prior baseline once files have actually been removed.
+            try:
+                self._baseline_path(plugin_id).unlink(missing_ok=True)
+            except OSError:
+                logger.exception("Failed to clear plugin integrity baseline")
+                return UIInstallationResult(
+                    plugin_id=plugin_id,
+                    status=UIInstallationStatus.FAILED,
+                    state=UIInstallationState.ERROR,
+                    message="UI removed but integrity record cleanup failed",
+                    error_code="INTEGRITY_CLEANUP_FAILED",
+                )
+
             del self.installations[plugin_id]
 
             # Update registry to reflect UI removal
