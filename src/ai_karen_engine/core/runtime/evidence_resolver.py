@@ -154,10 +154,10 @@ class RuntimeEvidenceResolver:
         intact for CORTEX, audit, conversation and persistence. No additional
         memory source is authorized here.
         """
-        query = (
-            str(requirement.metadata.get("retrieval_query") or "").strip()
-            or RuntimeEvidenceResolver._latest_user_message(request)
-        )
+        governed_query = str(requirement.metadata.get("retrieval_query") or "").strip()
+        if governed_query:
+            return governed_query
+        query = RuntimeEvidenceResolver._latest_user_message(request)
         from ai_karen_engine.core.intelligence.profile_attribute import (
             requested_profile_attribute,
         )
