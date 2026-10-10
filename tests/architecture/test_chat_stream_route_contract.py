@@ -31,3 +31,21 @@ def test_chat_stream_telemetry_reports_the_canonical_route() -> None:
     assert '"endpoint": "/api/chat/stream"' in runtime
     assert 'endpoint="/api/stream"' not in runtime
     assert '"endpoint": "/api/stream"' not in runtime
+
+
+def test_both_production_chat_transports_delegate_to_canonical_runtime() -> None:
+    """HTTP and SSE must share runtime decisions and memory-grounded output."""
+    runtime = RUNTIME.read_text(encoding="utf-8")
+    assert "result = await get_chat_runtime().execute(runtime_request)" in runtime
+    assert "async for chunk in get_chat_runtime().execute_stream(runtime_request)" in runtime
+    assert "response_metadata = result.metadata.to_dict()" in runtime
+    assert "metadata=response_metadata" in runtime
+    assert "chunk.to_sse_payload()" in runtime
+
+
+def test_both_runtime_modes_offer_grounded_answer_before_model_execution() -> None:
+    """No generated biography may replace canonical authorized profile evidence."""
+    core = (ROOT / "src/ai_karen_engine/core/runtime/chat_runtime.py").read_text(encoding="utf-8")
+    assert core.count("grounded = self._grounded_personal_response(") >= 2
+    assert "if grounded is not None and not self._is_explicit_save_turn(request):" in core
+    assert "actual_model\": None" in core
