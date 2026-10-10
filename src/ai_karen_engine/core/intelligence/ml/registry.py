@@ -104,6 +104,10 @@ class MLModelRegistry:
             return
         if manifest.status not in {ModelStatus.SHADOW.value, ModelStatus.ACTIVE.value}:
             return
+        if manifest.metrics.get("executor") in {"transformers", "timeseries"}:
+            raise ManifestValidationError(
+                "Engine-specific promotion remains blocked until canonical benchmark support exists"
+            )
         from ai_karen_engine.core.intelligence.ml.evaluation.evidence import EvaluationEvidenceStore
         if not EvaluationEvidenceStore(self.registry_dir).is_approved(manifest):
             raise ManifestValidationError(
