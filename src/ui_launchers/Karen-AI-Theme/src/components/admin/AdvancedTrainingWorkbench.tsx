@@ -72,7 +72,7 @@ export default function AdvancedTrainingWorkbench() {
     }
   }, []);
 
-  useEffect(() => { void load(); void loadJobs(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   const change = <K extends keyof Config>(key: K, value: Config[K]) => {
     setConfig(previous => previous ? { ...previous, [key]: value } : previous);
@@ -97,14 +97,16 @@ export default function AdvancedTrainingWorkbench() {
     }
   };
 
-  const loadJobs = async () => {
+  const loadJobs = useCallback(async () => {
     try {
       const response = await apiClient.get<{ jobs: JobSummary[] }>("/api/admin/training/advanced/jobs");
       setJobs(response.jobs);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Job inventory unavailable");
     }
-  };
+  }, []);
+
+  useEffect(() => { void loadJobs(); }, [loadJobs]);
 
   const queueJob = async () => {
     if (!config || !preflight?.ready) return;
@@ -301,8 +303,8 @@ export default function AdvancedTrainingWorkbench() {
                 {queueMessage && <p className="text-sm" role="status">{queueMessage}</p>}
                 <Alert><AlertTriangle className="h-4 w-4" /><AlertTitle>Execution remains governed</AlertTitle>
                   <AlertDescription>
-                    Preflight is a validation result, not a queued training job. Job execution remains
-                    unavailable here until durable scheduling, evaluation, audit and recovery are wired.
+                    Preflight confirms eligibility only. Queued jobs need an active training worker.
+                    Refresh Training Jobs to see the real persisted state; a queued job is not a completed model.
                   </AlertDescription>
                 </Alert>
               </>}
