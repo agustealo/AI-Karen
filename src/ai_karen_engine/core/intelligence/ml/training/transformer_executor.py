@@ -12,6 +12,7 @@ import random
 from pathlib import Path
 
 from ai_karen_engine.config.config_manager import get_ml_registry_dir
+from ai_karen_engine.core.intelligence.ml.training.dataset_import import training_dataset_root
 from ai_karen_engine.core.intelligence.ml.training.contracts import TrainingArtifact, TrainingJob
 from ai_karen_engine.core.intelligence.ml.training.sklearn_executor import _hash_directory
 
@@ -41,7 +42,7 @@ class TransformerLoRAExecutor:
         version = job.dataset_version
         if not version or version in {".", ".."} or any(not (c.isascii() and (c.isalnum() or c in "._-")) for c in version):
             raise ValueError("Invalid dataset version")
-        path = Path(get_ml_registry_dir()) / "datasets" / (version + ".jsonl")
+        path = training_dataset_root(tenant_id=str(job.metadata.get("tenant_id") or ""), scope=str(job.metadata.get("dataset_scope", "legacy"))) / (version + ".jsonl")
         if path.is_symlink() or not path.is_file():
             raise ValueError("Canonical fine-tuning dataset missing")
         limit = int(cfg.get("max_samples", 1000))
