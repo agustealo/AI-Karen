@@ -652,6 +652,27 @@ class UIInstallerService:
     def get_ui_state(self, plugin_id: str) -> Dict[str, Any]:
         """Get current state of UI installation."""
         if plugin_id not in self.installations:
+            # Crash recovery: a published directory without a validated
+            # inventory entry is *not* proof of a successful installation.
+            # Preserve it for governed repair instead of silently promoting
+            # or deleting unknown files.
+            try:
+                target = self.plugins_repo_root / plugin_id
+                baseline = self._baseline_path(plugin_id)
+            except ValueError:
+                return {
+                    "state": UIInstallationState.ERROR.value,
+                    "status": UIInstallationStatus.VALIDATION_FAILED.value,
+                    "message": "Invalid plugin identifier",
+                    "error_code": "INVALID_PLUGIN_ID",
+                }
+            if target.exists() or target.is_symlink() or baseline.exists():
+                return {
+                    "state": UIInstallationState.ERROR.value,
+                    "status": UIInstallationStatus.VALIDATION_FAILED.value,
+                    "message": "Unverified UI package or orphaned integrity record requires recovery",
+                    "error_code": "INCOMPLETE_INSTALLATION",
+                }
             return {
                 "state": UIInstallationState.NOT_INSTALLED.value,
                 "status": UIInstallationStatus.NOT_FOUND.value,
