@@ -138,6 +138,7 @@ class AdvancedTrainingWorkbench:
         allow_cpu_training: bool = False,
         lags: int = 5,
         horizon: int = 1,
+        dependency_availability: dict[str, bool] | None = None,
     ) -> dict[str, Any]:
         if engine in {"transformers", "timeseries"}:
             from ai_karen_engine.core.intelligence.ml.training.advanced_preflight import preflight_advanced_engine
@@ -149,6 +150,7 @@ class AdvancedTrainingWorkbench:
                 license_model_path=license_model_path, epochs=epochs,
                 sequence_length=sequence_length, lora_rank=lora_rank,
                 allow_cpu_training=allow_cpu_training, lags=lags, horizon=horizon,
+                dependency_availability=dependency_availability,
             )
         failures: list[dict[str, str]] = []
         warnings: list[dict[str, str]] = []
