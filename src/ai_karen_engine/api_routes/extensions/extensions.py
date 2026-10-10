@@ -305,6 +305,11 @@ async def load_extension(extension_name: str, user=Depends(require_extension_mut
         raise HTTPException(status_code=503, detail="Extension manager not initialized")
     try:
         record = await manager.load_extension(extension_name)
+        if record is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Extension could not be enabled by the canonical runtime",
+            )
         await manager.refresh_extensions()
         return {
             "success": True,
@@ -312,8 +317,11 @@ async def load_extension(extension_name: str, user=Depends(require_extension_mut
             "plugin_id": extension_name,
             "status": (record.get("status", "loaded") if isinstance(record, dict) else getattr(getattr(record, "status", None), "value", "loaded")) if record else "loaded",
         }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Extension enable failed")
+        raise HTTPException(status_code=503, detail="Extension enable failed")
 
 
 @router.post("/{extension_name}/unload")
