@@ -363,3 +363,54 @@ def test_training_engine_catalog_distinguishes_installed_packages_from_executors
         assert by_id["sklearn"]["executor"]
     else:
         assert by_id["sklearn"]["missing_dependencies"]
+
+
+def test_spacy_dataset_contract_validates_textcat_and_ner(tmp_path):
+    import json
+
+    from ai_karen_engine.core.intelligence.ml.training.spacy_datasets import (
+        validate_spacy_jsonl,
+    )
+
+    textcat = tmp_path / "textcat.jsonl"
+    rows = [
+        {"example_id": f"item-{i}", "text": f"example sentence {i}",
+         "label": "positive" if i % 2 else "negative"}
+        for i in range(10)
+    ]
+    textcat.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    evidence = validate_spacy_jsonl(textcat)
+    assert evidence["mode"] == "textcat"
+    assert evidence["class_counts"] == {"negative": 5, "positive": 5}
+
+    ner = tmp_path / "ner.jsonl"
+    rows = [
+        {"example_id": f"ner-{i}", "text": "Alice works",
+         "entities": [[0, 5, "PERSON"]]} for i in range(10)
+    ]
+    ner.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    assert validate_spacy_jsonl(ner)["mode"] == "ner"
+    rows[0]["entities"] = [[0, 50, "PERSON"]]
+    ner.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="offsets"):
+        validate_spacy_jsonl(ner)
+
+
+def test_spacy_preflight_validates_corpus_but_never_queues_unsupported_engine(tmp_path):
+    import json
+    from ai_karen_engine.core.intelligence.ml.training.workbench import AdvancedTrainingWorkbench
+
+    dataset = tmp_path / "spacy-sample.jsonl"
+    dataset.write_text("\n".join(
+        json.dumps({"example_id": str(i), "text": "Some sample text", "label": "A" if i % 2 else "B"})
+        for i in range(10)
+    ) + "\n", encoding="utf-8")
+    result = AdvancedTrainingWorkbench(dataset_root=tmp_path).preflight(
+        engine="spacy", task="intent", dataset_version="spacy-sample",
+        test_split=0.2, max_samples=100, seed=42, max_iter=1000,
+        class_weight="balanced", optimizer="lbfgs", precision="fp64",
+    )
+    assert result["ready"] is False
+    assert result["evidence"]["mode"] == "textcat"
+    assert result["evidence"]["examples_scanned"] == 10
+    assert any(item["code"] == "unsupported_engine" for item in result["checks"])
