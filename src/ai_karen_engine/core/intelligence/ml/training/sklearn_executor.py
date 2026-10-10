@@ -223,7 +223,7 @@ class SklearnTrainingExecutor(TrainingExecutor):
             return self._dataset_provider.load(job.dataset_version)
 
         dataset_version = job.dataset_version
-        provider_path = training_dataset_root(tenant_id=str(job.metadata.get("tenant_id") or ""), scope=str(job.metadata.get("dataset_scope", "legacy")))
+        provider_path = (Path(get_ml_registry_dir()) / "datasets" if job.metadata.get("dataset_scope", "legacy") == "legacy" else training_dataset_root(tenant_id=str(job.metadata.get("tenant_id") or ""), scope=str(job.metadata.get("dataset_scope"))))
         if provider_path.exists():
             provider = JsonlTrainingDatasetProvider(provider_path)
             examples = provider.load(dataset_version)
