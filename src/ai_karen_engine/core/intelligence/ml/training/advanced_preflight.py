@@ -73,12 +73,16 @@ def preflight_advanced_engine(
         if lora_rank not in (4, 8, 16, 32):
             reject("invalid_lora_rank", "Unsupported LoRA rank")
         if not allow_cpu_training:
-            try:
-                import torch
-                if not torch.cuda.is_available():
-                    reject("gpu_unavailable", "CUDA unavailable; opt in to CPU training explicitly")
-            except ImportError:
-                pass
+            if dependency_availability is not None:
+                if not dependency_availability.get("cuda_available", False):
+                    reject("gpu_unavailable", "Training worker CUDA unavailable; opt in to CPU training explicitly")
+            else:
+                try:
+                    import torch
+                    if not torch.cuda.is_available():
+                        reject("gpu_unavailable", "CUDA unavailable; opt in to CPU training explicitly")
+                except ImportError:
+                    pass
     count = 0
     last = None
     seen_texts: set[str] = set()
