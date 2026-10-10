@@ -56,6 +56,7 @@ type Dataset = {
   schema_engines?: string[];
   inspection_status?: string;
   inspection_reason?: string;
+  scope?: "legacy" | "tenant";
 };
 
 type Catalog = {
@@ -81,6 +82,7 @@ type Config = {
   engine: string;
   task: string;
   dataset_version: string;
+  dataset_scope: "legacy" | "tenant";
   test_split: number;
   max_samples: number;
   seed: number;
@@ -215,6 +217,13 @@ export default function AdvancedTrainingWorkbench() {
   const [executionStatus, setExecutionStatus] = useState<ExecutionStatus | null>(null);
   const [queueing, setQueueing] = useState(false);
   const [queueMessage, setQueueMessage] = useState<string | null>(null);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
+  const [csvTextColumn, setCsvTextColumn] = useState("");
+  const [csvLabelColumn, setCsvLabelColumn] = useState("");
+  const [uploadVersion, setUploadVersion] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -229,6 +238,7 @@ export default function AdvancedTrainingWorkbench() {
           ? "execution_topology"
           : response.tasks[0] ?? "",
         dataset_version: response.datasets[0]?.version ?? "",
+        dataset_scope: response.datasets[0]?.scope ?? "legacy",
         base_model_path: "",
         license_id: "",
         license_accepted: false,
@@ -251,6 +261,40 @@ export default function AdvancedTrainingWorkbench() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const importSelectedDataset = async () => {
+    if (!uploadFile || !uploadVersion.trim()) return;
+    setUploading(true);
+    setUploadResult(null);
+    setError(null);
+    try {
+      const isCsv = uploadFile.name.toLowerCase().endsWith(".csv");
+      if (!isCsv && !uploadFile.name.toLowerCase().endsWith(".jsonl")) {
+        throw new Error("Select a CSV or JSONL file.");
+      }
+      if (uploadFile.size > (isCsv ? 12 : 24) * 1024 * 1024) {
+        throw new Error("File exceeds the supported import limit.");
+      }
+      if (isCsv && (!csvTextColumn || !csvLabelColumn || csvTextColumn === csvLabelColumn)) {
+        throw new Error("Map two distinct CSV columns to text and label.");
+      }
+      const result = await apiClient.post<{ version: string; rows: number }>(
+        isCsv ? "/api/admin/training/advanced/datasets/import-csv" : "/api/admin/training/advanced/datasets/import",
+        isCsv
+          ? { version: uploadVersion.trim(), content_csv: await uploadFile.text(), column_mapping: { [csvTextColumn]: "text", [csvLabelColumn]: "label" } }
+          : { version: uploadVersion.trim(), content_jsonl: await uploadFile.text() },
+      );
+      setUploadResult(`Registered ${result.version}: ${result.rows} records.`);
+      setUploadFile(null);
+      await load();
+      setConfig((previous) => previous ? { ...previous, dataset_version: result.version, dataset_scope: "tenant" } : previous);
+      setPreflight(null);
+    } catch (cause) {
+      setError(trainingError(cause, "execute"));
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const change = <K extends keyof Config>(key: K, value: Config[K]) => {
     setConfig((previous) =>
@@ -580,20 +624,70 @@ export default function AdvancedTrainingWorkbench() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5 pt-6">
+              <div className="space-y-3 rounded-xl border border-border/70 p-4">
+                <div className="text-sm font-semibold">Import a private dataset</div>
+                <p className="text-xs text-muted-foreground">File content is validated and stored as a new immutable version for your authenticated tenant. Import does not approve it for training.</p>
+                <Label htmlFor="dataset-import-version">New dataset version</Label>
+                <Input id="dataset-import-version" value={uploadVersion} onChange={(event) => setUploadVersion(event.target.value)} placeholder="example-v1" maxLength={128} />
+                <Label htmlFor="dataset-import-file">CSV or JSONL file</Label>
+                <Input id="dataset-import-file" type="file" accept=".csv,.jsonl,text/csv,application/x-ndjson" onChange={(event) => {
+                  const selected = event.target.files?.[0] ?? null;
+                  setUploadFile(selected);
+                  setCsvHeaders([]);
+                  setCsvTextColumn("");
+                  setCsvLabelColumn("");
+                  if (selected?.name.toLowerCase().endsWith(".csv") && selected.size <= 12 * 1024 * 1024) {
+                    void selected.slice(0, 8192).text().then((sample) => {
+                      const header = sample.split(/\r?\n/, 1)[0] ?? "";
+                      const columns = header.split(",").map((column) => column.trim().replace(/^"|"$/g, ""));
+                      if (columns.every(Boolean) && new Set(columns).size === columns.length) setCsvHeaders(columns);
+                    });
+                  }
+                }} />
+                {uploadFile?.name.toLowerCase().endsWith(".csv") && (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label>CSV text column</Label>
+                      <Select value={csvTextColumn} onValueChange={setCsvTextColumn}>
+                        <SelectTrigger><SelectValue placeholder="Select text column" /></SelectTrigger>
+                        <SelectContent>{csvHeaders.map((header) => <SelectItem key={header} value={header}>{header}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>CSV label column</Label>
+                      <Select value={csvLabelColumn} onValueChange={setCsvLabelColumn}>
+                        <SelectTrigger><SelectValue placeholder="Select label column" /></SelectTrigger>
+                        <SelectContent>{csvHeaders.map((header) => <SelectItem key={header} value={header}>{header}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    <p className="text-xs text-muted-foreground sm:col-span-2">Column preview is a convenience only. Server-side CSV validation is authoritative. This import maps text classification records; numeric and temporal mapping is not yet supported.</p>
+                  </div>
+                )}
+                <Button type="button" onClick={() => void importSelectedDataset()} disabled={uploading || !uploadFile || !uploadVersion.trim()}>
+                  {uploading ? "Importing…" : "Register dataset"}
+                </Button>
+                {uploadResult && <p role="status" className="text-xs text-muted-foreground">{uploadResult}</p>}
+              </div>
+
               <div className="space-y-2">
                 <Label>Versioned ML dataset</Label>
                 {catalog.datasets.length ? (
                   <Select
-                    value={config.dataset_version}
-                    onValueChange={(value) => change("dataset_version", value)}
+                    value={`${config.dataset_scope}:${config.dataset_version}`}
+                    onValueChange={(value) => {
+                      const item = catalog.datasets.find((entry) => `${entry.scope ?? "legacy"}:${entry.version}` === value);
+                      if (!item) return;
+                      setConfig((previous) => previous ? {...previous, dataset_version: item.version, dataset_scope: item.scope ?? "legacy"} : previous);
+                      setPreflight(null);
+                    }}
                   >
                     <SelectTrigger className="h-11">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       {catalog.datasets.map((item) => (
-                        <SelectItem value={item.version} key={item.version}>
-                          {item.version} · {item.format} · {formatBytes(item.bytes)} · {item.inspection_status === "structural_only" ? item.schema_engines?.includes(config.engine) ? "Schema matches" : "Schema mismatch" : "Inspection pending"}
+                        <SelectItem value={`${item.scope ?? "legacy"}:${item.version}`} key={`${item.scope ?? "legacy"}:${item.version}`}>
+                          {item.version} · {item.scope === "tenant" ? "Private" : "Shared"} · {item.format} · {formatBytes(item.bytes)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -610,7 +704,7 @@ export default function AdvancedTrainingWorkbench() {
               </div>
 
               {(() => {
-                const chosen = catalog.datasets.find((item) => item.version === config.dataset_version);
+                const chosen = catalog.datasets.find((item) => item.version === config.dataset_version && (item.scope ?? "legacy") === config.dataset_scope);
                 if (!chosen) return null;
                 const matches = chosen.schema_engines?.includes(config.engine) ?? false;
                 return (
