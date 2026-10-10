@@ -1,0 +1,13 @@
+# Optional training worker dependencies for local Transformer LoRA/PEFT.
+# Install only in the governed fine-tuning worker environment.
+# Base torch/transformers may already be installed; match versions to CUDA/runtime.
+#
+# Example (after choosing a compatible PyTorch build for your hardware):
+# python -m pip install -r requirements/training-peft.txt
+#
+# No remote base-model downloads are performed by Karen's LoRA executor.
+torch>=2.2
+transformers>=4.45
+peft>=0.13
+accelerate>=0.34
+safetensors>=0.4

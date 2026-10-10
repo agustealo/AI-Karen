@@ -155,7 +155,6 @@ def test_execution_status_reports_tenant_scoped_leases_without_claiming_worker_h
     assert a["active_leases"] == 1
     assert a["expired_leases"] == 0
     assert a["worker_status"] == "offline"
-    assert a["automatic_dispatch_verified"] is True
     assert a["automatic_dispatch_verified"] is False
 
     b = store.execution_status(tenant_id="tenant-b")

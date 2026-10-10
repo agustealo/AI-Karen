@@ -59,6 +59,12 @@ class TrainingPipeline:
             if executor is None:
                 if job.base_model == "sklearn":
                     executor = SklearnTrainingExecutor()
+                elif job.base_model == "timeseries":
+                    from ai_karen_engine.core.intelligence.ml.training.temporal_executor import TemporalTrainingExecutor
+                    executor = TemporalTrainingExecutor()
+                elif job.base_model == "transformers":
+                    from ai_karen_engine.core.intelligence.ml.training.transformer_executor import TransformerLoRAExecutor
+                    executor = TransformerLoRAExecutor()
                 elif job.base_model == "spacy":
                     from ai_karen_engine.core.intelligence.ml.training.spacy_executor import SpacyTrainingExecutor
                     executor = SpacyTrainingExecutor()
@@ -77,9 +83,27 @@ class TrainingPipeline:
                 await on_state(job.status, job)
             result.evaluation_result = None
 
-            if (int(artifact.metrics.get('test_samples', 0)) < 1 or
-                'macro_f1' not in artifact.metrics or
-                not artifact.artifact_hash):
+            evidence = artifact.metrics
+            if job.base_model in {"sklearn", "spacy"}:
+                valid_evidence = int(evidence.get("test_samples", 0)) > 0 and "macro_f1" in evidence
+            elif job.base_model == "timeseries":
+                valid_evidence = (
+                    int(evidence.get("test_samples", 0)) >= 5
+                    and all(k in evidence for k in ("mae", "rmse", "baseline_mae"))
+                    and evidence.get("temporal_validation") == "chronological_holdout_with_embargo"
+                )
+            elif job.base_model == "transformers":
+                valid_evidence = (
+                    evidence.get("artifact_type") == "peft_lora_adapter"
+                    and int(evidence.get("optimizer_steps", 0)) > 0
+                    and evidence.get("license_accepted") is True
+                    and int(evidence.get("test_samples", 0)) >= 3
+                    and evidence.get("evaluation_method") == "seeded_disjoint_text_holdout"
+                    and "holdout_loss" in evidence
+                )
+            else:
+                valid_evidence = False
+            if not valid_evidence or not artifact.artifact_hash:
                 raise ValueError('Missing held-out evaluation evidence or artifact integrity hash')
             artifact_root = Path(artifact.artifact_path).resolve()
             trusted_root = Path(get_ml_registry_dir()).resolve()

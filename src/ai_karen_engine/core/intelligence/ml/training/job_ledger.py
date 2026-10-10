@@ -159,7 +159,7 @@ class TrainingJobLedger:
             "expired_leases": expired,
             "worker_status": "online" if online else "offline",
             "worker_status_reason": "Recent worker heartbeat" if online else "No recent registered worker heartbeat",
-            "automatic_dispatch_verified": bool(active),
+            "automatic_dispatch_verified": False,
         }
 
     def claim(self, job_id: str, *, tenant_id: str, ttl_seconds: int = 300) -> str | None:
