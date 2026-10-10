@@ -54,6 +54,9 @@ class PlanValidator:
             errors.append("plan has no steps")
             return PlanValidationReport(valid=False, errors=errors)
 
+        if max_steps < 1 or max_parallel_steps < 1:
+            errors.append("plan limits must be positive")
+
         if len(plan.steps) > max_steps:
             errors.append(f"plan step count {len(plan.steps)} exceeds max {max_steps}")
 
@@ -89,12 +92,16 @@ class PlanValidator:
         cycle = self._detect_cycle(plan.steps)
         if cycle:
             errors.append(f"dependency cycle detected: {' -> '.join(cycle)}")
-        else:
-            max_parallel = self._calculate_max_parallelism(plan)
-            if max_parallel > max_parallel_steps:
-                errors.append(
-                    f"plan requires {max_parallel} parallel steps but max_parallelism is {max_parallel_steps}"
-                )
+        elif not errors:
+            try:
+                max_parallel = self._calculate_max_parallelism(plan)
+            except PlanValidationError as exc:
+                errors.append(str(exc))
+            else:
+                if max_parallel > max_parallel_steps:
+                    errors.append(
+                        f"plan requires {max_parallel} parallel steps but max_parallelism is {max_parallel_steps}"
+                    )
 
         capability_errors = self._validate_capability_chains(plan)
         errors.extend(capability_errors)
@@ -134,20 +141,23 @@ class PlanValidator:
         return None
 
     def _calculate_max_parallelism(self, plan: DeepExecutionPlan) -> int:
-        """Calculate maximum parallel steps based on dependency constraints."""
-        step_map = {step.id: step for step in plan.steps}
+        """Return maximum runnable frontier size without revisiting completed nodes."""
+        remaining = {step.id: step for step in plan.steps}
         completed: set[str] = set()
         max_parallel = 0
 
-        while len(completed) < len(plan.steps):
+        while remaining:
             ready = [
-                step for step in plan.steps
-                if step.status.value == "pending" and
-                all(dep in completed for dep in step.dependencies)
+                step_id
+                for step_id, step in remaining.items()
+                if all(dep in completed for dep in step.dependencies)
             ]
+            if not ready:
+                raise PlanValidationError("dependency schedule cannot advance")
             max_parallel = max(max_parallel, len(ready))
-            for step in ready:
-                completed.add(step.id)
+            completed.update(ready)
+            for step_id in ready:
+                del remaining[step_id]
 
         return max_parallel
 
@@ -172,21 +182,35 @@ class PlanValidator:
         return errors
 
     def _validate_input_satisfaction(self, plan: DeepExecutionPlan) -> list[str]:
-        """Validate that all required inputs will be satisfied by some step."""
+        """Require inputs from initial data or transitive upstream dependencies."""
         errors: list[str] = []
-        step_map = {step.id: step for step in plan.steps}
-        all_provided_outputs: set[str] = set()
+        steps = {step.id: step for step in plan.steps}
+
+        def ancestor_ids(step_id: str, visited: set[str]) -> set[str]:
+            if step_id in visited:
+                return set()
+            visited.add(step_id)
+            ancestors: set[str] = set()
+            for dependency in steps[step_id].dependencies:
+                if dependency not in steps:
+                    continue
+                ancestors.add(dependency)
+                ancestors.update(ancestor_ids(dependency, visited))
+            return ancestors
 
         for step in plan.steps:
-            if step.output_contract:
-                all_provided_outputs.update(step.output_contract.outputs_provided or [])
-
-        for step in plan.steps:
-            if step.input_contract:
-                for required_input in step.input_contract.required_inputs:
-                    if required_input not in all_provided_outputs:
-                        errors.append(
-                            f"step {step.id} requires input '{required_input}' but no step provides it"
-                        )
+            if step.input_contract is None:
+                continue
+            available = set(step.input_data)
+            for ancestor_id in ancestor_ids(step.id, set()):
+                upstream = steps[ancestor_id]
+                if upstream.output_contract is not None:
+                    available.update(upstream.output_contract.outputs_provided or [])
+            for required_input in step.input_contract.required_inputs:
+                if required_input not in available:
+                    errors.append(
+                        f"step {step.id} requires input '{required_input}' "
+                        "but no initial input or upstream dependency provides it"
+                    )
 
         return errors
