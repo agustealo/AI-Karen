@@ -37,6 +37,9 @@ async def serve(*, tenant_id: str, poll_seconds: float = 5.0) -> None:
                     await worker.run_claimed(job_id, tenant_id=tenant_id)
                 except (RuntimeError, ValueError):
                     logger.exception("Training dispatch failed job_id=%s", job_id)
+                    # Another worker may have claimed the job, or the lease may
+                    # be unrecoverable. Never spin hot on the same queue entry.
+                    await asyncio.sleep(poll_seconds)
             else:
                 await asyncio.sleep(poll_seconds)
     finally:
