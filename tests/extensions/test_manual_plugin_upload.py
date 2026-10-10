@@ -85,3 +85,21 @@ async def test_registry_rejection_rolls_back_published_package(tmp_path, monkeyp
     with pytest.raises(ValueError, match="runtime registry validation"):
         await service.install_uploaded_archive("demo", _archive({"manifest.json": json.dumps(manifest)}))
     assert not (tmp_path / "demo").exists()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_install_lock_never_overwrites(tmp_path):
+    service = PluginService(tmp_path, tmp_path)
+    manifest = {
+        "id": "demo", "name": "demo", "version": "1.0.0",
+        "display_name": "Demo", "description": "Test plugin",
+        "author": "Tests", "license": "MIT", "category": "integration",
+    }
+    lock = tmp_path / ".plugin-install-demo.lock"
+    lock.write_text("active")
+    with pytest.raises(FileExistsError):
+        await service.install_uploaded_archive(
+            "demo", _archive({"manifest.json": json.dumps(manifest)})
+        )
+    assert not (tmp_path / "demo").exists()
+    assert lock.read_text() == "active"
