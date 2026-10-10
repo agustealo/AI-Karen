@@ -334,9 +334,9 @@ async def test_real_training_worker_end_to_end_persists_candidate(tmp_path, monk
     assert finished["status"] == "SUCCEEDED"
     assert finished["job"]["artifact_hash"]
     assert finished["job"]["artifact_path"]
-    assert registry.list_models()
+    assert registry.list_all()
     model_id = next(
-        model.model_id for model in registry.list_models()
+        model.model_id for model in registry.list_all()
         if model.training_dataset_version == "integration-v1"
     )
     candidate = registry.get(model_id)
