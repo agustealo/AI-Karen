@@ -97,6 +97,9 @@ class TrainingPipeline:
                     evidence.get("artifact_type") == "peft_lora_adapter"
                     and int(evidence.get("optimizer_steps", 0)) > 0
                     and evidence.get("license_accepted") is True
+                    and int(evidence.get("test_samples", 0)) >= 3
+                    and evidence.get("evaluation_method") == "seeded_disjoint_text_holdout"
+                    and "holdout_loss" in evidence
                 )
             else:
                 valid_evidence = False
