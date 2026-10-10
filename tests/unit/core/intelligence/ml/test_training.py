@@ -284,3 +284,63 @@ def test_sklearn_executor_trains_real_model(tmp_path):
     assert "macro_f1" in artifact.metrics
     assert "weighted_f1" in artifact.metrics
     assert artifact.metrics.get("training_samples", 0) > 0
+
+
+@pytest.mark.asyncio
+async def test_real_training_worker_end_to_end_persists_candidate(tmp_path, monkeypatch):
+    """SQLite queue -> governed worker -> real sklearn -> integrity checked candidate."""
+    from dataclasses import replace
+
+    from ai_karen_engine.core.intelligence.ml.training import pipeline as pipeline_module
+    from ai_karen_engine.core.intelligence.ml.training import sklearn_executor as executor_module
+    from ai_karen_engine.core.intelligence.ml.training.job_ledger import TrainingJobLedger
+    from ai_karen_engine.core.intelligence.ml.training.job_worker import TrainingJobWorker
+
+    root = tmp_path / "registry"
+    monkeypatch.setattr(pipeline_module, "get_ml_registry_dir", lambda: str(root))
+    monkeypatch.setattr(executor_module, "get_ml_registry_dir", lambda: str(root))
+    registry = MLModelRegistry(registry_dir=str(root))
+    examples = [
+        replace(example, example_id=f"{example.example_id}-{index}")
+        for index in range(5)
+        for example in _make_examples()
+    ]
+    executor = SklearnTrainingExecutor(
+        dataset_provider=FixtureTrainingDatasetProvider(examples),
+    )
+    pipeline = TrainingPipeline(registry=registry, executor=executor)
+    ledger = TrainingJobLedger(tmp_path / "training_jobs.sqlite3")
+
+    class ApprovedWorkbench:
+        def preflight(self, **configuration):
+            return {"ready": True, "checks": []}
+
+    job = TrainingJob(
+        job_id="integration-real-worker", task="intent",
+        base_model="sklearn", dataset_version="integration-v1",
+        metadata={
+            "tenant_id": "tenant-a",
+            "advanced_config": {
+                "engine": "sklearn", "task": "intent",
+                "dataset_version": "integration-v1", "test_split": 0.25,
+            },
+        },
+    )
+    ledger.submit(job, tenant_id="tenant-a", user_id="operator")
+    worker = TrainingJobWorker(
+        ledger=ledger, pipeline=pipeline, workbench=ApprovedWorkbench(),
+    )
+    finished = await worker.run_claimed(job.job_id, tenant_id="tenant-a")
+    assert finished["status"] == "SUCCEEDED"
+    assert finished["job"]["artifact_hash"]
+    assert finished["job"]["artifact_path"]
+    assert registry.list_models()
+    model_id = next(
+        model.model_id for model in registry.list_models()
+        if model.training_dataset_version == "integration-v1"
+    )
+    candidate = registry.get(model_id)
+    assert candidate.status == "CANDIDATE"
+    assert registry.validate_artifact(candidate)
+    assert ledger.next_queued(tenant_id="tenant-a") is None
+    assert ledger.get(job.job_id, tenant_id="tenant-b") is None
