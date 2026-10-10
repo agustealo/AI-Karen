@@ -73,6 +73,9 @@ async def test_registry_rejection_rolls_back_published_package(tmp_path, monkeyp
         def get_record(self, name):
             return None
 
+        async def refresh(self):
+            return 0
+
     async def initialized():
         service.kernel = Kernel()
 
