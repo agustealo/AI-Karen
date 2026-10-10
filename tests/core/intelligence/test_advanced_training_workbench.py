@@ -134,3 +134,35 @@ def test_preflight_rejects_singleton_class_that_executor_cannot_stratify(tmp_pat
     result = _preflight(AdvancedTrainingWorkbench(root))
     assert result["ready"] is False
     assert "rare_classes" in {check["code"] for check in result["checks"]}
+
+
+def test_catalog_identifies_structural_dataset_engines(tmp_path):
+    root = _dataset(tmp_path)
+    (root / "text_v1.jsonl").write_text(
+        "\\n".join(json.dumps({"text": f"example {index}", "label": "demo"}) for index in range(16)) + "\\n",
+        encoding="utf-8",
+    )
+    catalog = AdvancedTrainingWorkbench(root).catalog()
+    by_version = {item["version"]: item for item in catalog["datasets"]}
+    assert by_version["adaptive_v1"]["schema_engines"] == ["sklearn"]
+    assert by_version["adaptive_v1"]["inspection_status"] == "structural_only"
+    assert by_version["text_v1"]["schema_engines"] == ["spacy", "transformers"]
+    assert by_version["text_v1"]["inspection_status"] == "structural_only"
+
+
+def test_catalog_does_not_mark_incomplete_or_bad_datasets_as_compatible(tmp_path):
+    root = _dataset(tmp_path)
+    (root / "bad.jsonl").write_text("{not json}\\n", encoding="utf-8")
+    (root / "empty.jsonl").write_text("", encoding="utf-8")
+    (root / "large.jsonl").write_text(
+        "".join(json.dumps({"text": f"example {index}"}) + "\\n" for index in range(257)),
+        encoding="utf-8",
+    )
+    by_version = {
+        item["version"]: item for item in AdvancedTrainingWorkbench(root).catalog()["datasets"]
+    }
+    assert by_version["bad"]["inspection_status"] == "invalid"
+    assert by_version["empty"]["inspection_status"] == "empty"
+    assert by_version["large"]["inspection_status"] == "incomplete"
+    for version in ("bad", "empty", "large"):
+        assert by_version[version]["schema_engines"] == []
