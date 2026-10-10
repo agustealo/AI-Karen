@@ -67,7 +67,9 @@ class TrainingJobWorker:
                 workbench = self.workbench
             else:
                 raise ValueError("Unknown training dataset scope")
-            check = workbench.preflight(**config)
+            checked_config = dict(config)
+            checked_config.pop('dataset_scope', None)
+            check = workbench.preflight(**checked_config)
             if config.get('engine') != job.base_model or config.get('task') != job.task or config.get('dataset_version') != job.dataset_version:
                 raise ValueError('Persisted training job and approved configuration differ')
             if not check["ready"]:
