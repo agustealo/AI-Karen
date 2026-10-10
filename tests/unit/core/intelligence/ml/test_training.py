@@ -344,3 +344,22 @@ async def test_real_training_worker_end_to_end_persists_candidate(tmp_path, monk
     assert registry.validate_artifact(candidate)
     assert ledger.next_queued(tenant_id="tenant-a") is None
     assert ledger.get(job.job_id, tenant_id="tenant-b") is None
+
+
+def test_training_engine_catalog_distinguishes_installed_packages_from_executors(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.training.workbench import AdvancedTrainingWorkbench
+
+    inventory = AdvancedTrainingWorkbench(dataset_root=tmp_path).catalog()["engines"]
+    by_id = {item["id"]: item for item in inventory}
+    assert set(by_id) == {"sklearn", "spacy", "transformers", "timeseries"}
+    for engine_id in ("spacy", "transformers", "timeseries"):
+        assert by_id[engine_id]["supported"] is False
+        assert by_id[engine_id]["status"] == "not_implemented"
+        assert by_id[engine_id]["executor"] is None
+    assert by_id["sklearn"]["supported"] == (
+        by_id["sklearn"]["status"] == "ready"
+    )
+    if by_id["sklearn"]["supported"]:
+        assert by_id["sklearn"]["executor"]
+    else:
+        assert by_id["sklearn"]["missing_dependencies"]
