@@ -180,11 +180,13 @@ class AdvancedTrainingWorkbench:
             if precision != "fp64" or optimizer != "lbfgs" or class_weight != "balanced":
                 error("unsupported_configuration", "This spaCy CPU trainer uses its own optimizer; leave legacy UI options at defaults.")
             if evidence.get("mode") == "textcat":
-                from math import ceil
                 counts = evidence.get("class_counts", {})
-                test_count = ceil(evidence["examples_scanned"] * test_split) if math.isfinite(test_split) else 0
-                if test_count < len(counts) or evidence["examples_scanned"] - test_count < len(counts):
-                    error("split_class_support", "Both held-out and training splits must support every class.")
+                if any(count < 2 for count in counts.values()):
+                    error("split_class_support", "Every text category needs at least two rows for train/test splitting.")
+                # Executor stratifies independently per label: one row is held out
+                # per category even for small datasets. Validate this same contract.
+                if not counts:
+                    error("split_class_support", "Text categorization must contain labeled classes.")
             return {
                 "ready": not failures,
                 "checks": failures,
