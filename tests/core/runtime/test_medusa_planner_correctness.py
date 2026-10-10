@@ -196,7 +196,7 @@ class TestHealthAwarePlanning:
         assert plan.steps[0].agent_specialist == "healthy_analyst"
 
     @pytest.mark.asyncio
-    async def test_uses_only_available_when_no_healthy_replacement(self):
+    async def test_rejects_unhealthy_only_candidate(self):
         registry = MedusaRegistry()
         await registry.initialize()
 
@@ -215,15 +215,14 @@ class TestHealthAwarePlanning:
         requirements = _make_requirements(required_capabilities=["reasoning"])
         authorized_plan = _make_authorized_plan(allowed_agents=["only_analyst"])
 
-        plan = await planner.create_plan(
-            request_id="req-1",
-            query="test",
-            requirements=requirements,
-            authorized_plan=authorized_plan,
-            registry=registry,
-        )
-        assert len(plan.steps) == 1
-        assert plan.steps[0].agent_specialist == "only_analyst"
+        with pytest.raises(ValueError, match="no healthy authorized specialists"):
+            await planner.create_plan(
+                request_id="req-1",
+                query="test",
+                requirements=requirements,
+                authorized_plan=authorized_plan,
+                registry=registry,
+            )
 
 
 class TestLifecycleFiltering:
