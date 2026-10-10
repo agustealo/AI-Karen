@@ -123,6 +123,15 @@ def _identity(current_user: Any) -> tuple[str, str]:
     return tenant, user
 
 
+@router.get("/advanced/execution-status")
+async def get_training_execution_status(
+    current_user: Any = Depends(require_permission(Permission.TRAINING_READ)),
+    ledger: TrainingJobLedger = Depends(get_training_job_ledger),
+) -> dict[str, Any]:
+    tenant, _ = _identity(current_user)
+    return ledger.execution_status(tenant_id=tenant)
+
+
 @router.get("/advanced/jobs")
 async def list_advanced_training_jobs(
     limit: int = Query(50, ge=1, le=100),
