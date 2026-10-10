@@ -218,6 +218,9 @@ export default function AdvancedTrainingWorkbench() {
   const [queueing, setQueueing] = useState(false);
   const [queueMessage, setQueueMessage] = useState<string | null>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
+  const [csvTextColumn, setCsvTextColumn] = useState("");
+  const [csvLabelColumn, setCsvLabelColumn] = useState("");
   const [uploadVersion, setUploadVersion] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<string | null>(null);
@@ -265,12 +268,21 @@ export default function AdvancedTrainingWorkbench() {
     setUploadResult(null);
     setError(null);
     try {
-      if (!uploadFile.name.toLowerCase().endsWith(".jsonl") || uploadFile.size > 24 * 1024 * 1024) {
-        throw new Error("Select a JSONL file smaller than 24 MiB.");
+      const isCsv = uploadFile.name.toLowerCase().endsWith(".csv");
+      if (!isCsv && !uploadFile.name.toLowerCase().endsWith(".jsonl")) {
+        throw new Error("Select a CSV or JSONL file.");
+      }
+      if (uploadFile.size > (isCsv ? 12 : 24) * 1024 * 1024) {
+        throw new Error("File exceeds the supported import limit.");
+      }
+      if (isCsv && (!csvTextColumn || !csvLabelColumn || csvTextColumn === csvLabelColumn)) {
+        throw new Error("Map two distinct CSV columns to text and label.");
       }
       const result = await apiClient.post<{ version: string; rows: number }>(
-        "/api/admin/training/advanced/datasets/import",
-        { version: uploadVersion.trim(), content_jsonl: await uploadFile.text() },
+        isCsv ? "/api/admin/training/advanced/datasets/import-csv" : "/api/admin/training/advanced/datasets/import",
+        isCsv
+          ? { version: uploadVersion.trim(), content_csv: await uploadFile.text(), column_mapping: { [csvTextColumn]: "text", [csvLabelColumn]: "label" } }
+          : { version: uploadVersion.trim(), content_jsonl: await uploadFile.text() },
       );
       setUploadResult(`Registered ${result.version}: ${result.rows} records.`);
       setUploadFile(null);
@@ -613,12 +625,44 @@ export default function AdvancedTrainingWorkbench() {
             </CardHeader>
             <CardContent className="space-y-5 pt-6">
               <div className="space-y-3 rounded-xl border border-border/70 p-4">
-                <div className="text-sm font-semibold">Import a private JSONL dataset</div>
+                <div className="text-sm font-semibold">Import a private dataset</div>
                 <p className="text-xs text-muted-foreground">File content is validated and stored as a new immutable version for your authenticated tenant. Import does not approve it for training.</p>
                 <Label htmlFor="dataset-import-version">New dataset version</Label>
                 <Input id="dataset-import-version" value={uploadVersion} onChange={(event) => setUploadVersion(event.target.value)} placeholder="example-v1" maxLength={128} />
-                <Label htmlFor="dataset-import-file">JSONL file</Label>
-                <Input id="dataset-import-file" type="file" accept=".jsonl,application/x-ndjson" onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} />
+                <Label htmlFor="dataset-import-file">CSV or JSONL file</Label>
+                <Input id="dataset-import-file" type="file" accept=".csv,.jsonl,text/csv,application/x-ndjson" onChange={(event) => {
+                  const selected = event.target.files?.[0] ?? null;
+                  setUploadFile(selected);
+                  setCsvHeaders([]);
+                  setCsvTextColumn("");
+                  setCsvLabelColumn("");
+                  if (selected?.name.toLowerCase().endsWith(".csv") && selected.size <= 12 * 1024 * 1024) {
+                    void selected.slice(0, 8192).text().then((sample) => {
+                      const header = sample.split(/\r?\n/, 1)[0] ?? "";
+                      const columns = header.split(",").map((column) => column.trim().replace(/^"|"$/g, ""));
+                      if (columns.every(Boolean) && new Set(columns).size === columns.length) setCsvHeaders(columns);
+                    });
+                  }
+                }} />
+                {uploadFile?.name.toLowerCase().endsWith(".csv") && (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label>CSV text column</Label>
+                      <Select value={csvTextColumn} onValueChange={setCsvTextColumn}>
+                        <SelectTrigger><SelectValue placeholder="Select text column" /></SelectTrigger>
+                        <SelectContent>{csvHeaders.map((header) => <SelectItem key={header} value={header}>{header}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>CSV label column</Label>
+                      <Select value={csvLabelColumn} onValueChange={setCsvLabelColumn}>
+                        <SelectTrigger><SelectValue placeholder="Select label column" /></SelectTrigger>
+                        <SelectContent>{csvHeaders.map((header) => <SelectItem key={header} value={header}>{header}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    <p className="text-xs text-muted-foreground sm:col-span-2">Column preview is a convenience only. Server-side CSV validation is authoritative. This import maps text classification records; numeric and temporal mapping is not yet supported.</p>
+                  </div>
+                )}
                 <Button type="button" onClick={() => void importSelectedDataset()} disabled={uploading || !uploadFile || !uploadVersion.trim()}>
                   {uploading ? "Importing…" : "Register dataset"}
                 </Button>
