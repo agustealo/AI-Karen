@@ -18,6 +18,7 @@ def normalize_personal_query(text: str) -> str:
 _GAP = r"(?:[\w'-]+\s+){0,5}"
 _ATTRIBUTE_QUESTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("preferred_name", (
+        rf"where\s+{_GAP}do\s+i\s+{_GAP}grow\s+up",
         rf"(?:what(?:\s+is|'s|s)|hats|hat's|remember)\s+{_GAP}my\s+{_GAP}name",
         r"my\s+name\s+is\s+(?:what|who)",
         rf"my\s+{_GAP}name\s+is\s+(?:what|who)",
@@ -43,8 +44,21 @@ _ATTRIBUTE_QUESTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+_PROFILE_SUMMARY = re.compile(
+    r"\b(?:who\s+am\s+i|(?:tell|describe|remind)\s+me\s+(?:more\s+)?about\s+myself|"
+    r"what\s+do\s+you\s+(?:know|remember)\s+about\s+me)\b"
+)
+
+
+def is_profile_summary_request(text: str) -> bool:
+    """Detect explicit user-profile summary intent, including mixed requests."""
+    return bool(_PROFILE_SUMMARY.search(normalize_personal_query(text)))
+
+
 def requested_profile_attribute(text: str) -> str | None:
     """Resolve one unambiguous attribute, independent of expressive wording."""
+    if is_profile_summary_request(text):
+        return None
     question = normalize_personal_query(text).strip(" ?.!")
     matches = {
         attribute for attribute, patterns in _ATTRIBUTE_QUESTIONS
@@ -61,6 +75,8 @@ def referenced_profile_attribute(
     No model inference, memory reads, or cross-session guesswork. Only recent
     user turns establish the subject; assistant claims never establish facts.
     """
+    if is_profile_summary_request(text):
+        return None
     explicit = requested_profile_attribute(text)
     if explicit:
         return explicit
@@ -80,4 +96,4 @@ def referenced_profile_attribute(
     return None
 
 
-__all__ = ["normalize_personal_query", "requested_profile_attribute", "referenced_profile_attribute"]
+__all__ = ["normalize_personal_query", "requested_profile_attribute", "referenced_profile_attribute", "is_profile_summary_request"]
