@@ -156,7 +156,7 @@ def test_pipeline_submit_sets_queued(tmp_path):
     registry = MLModelRegistry(registry_dir=str(tmp_path))
     pipeline = TrainingPipeline(registry=registry)
     job = TrainingJob(
-        job_id="job-1", task="intent", base_model="base", dataset_version="ds-v1"
+        job_id="job-1", task="intent", base_model="sklearn", dataset_version="ds-v1"
     )
     result = pipeline.submit(job)
     assert result.job.status == TrainingJobStatus.QUEUED.value
@@ -165,7 +165,7 @@ def test_pipeline_submit_sets_queued(tmp_path):
 @pytest.mark.asyncio
 async def test_pipeline_run_succeeds(tmp_path):
     registry = MLModelRegistry(registry_dir=str(tmp_path))
-    examples = _make_examples()
+    examples = _make_examples() * 5
     provider = FixtureTrainingDatasetProvider(examples)
     pipeline = TrainingPipeline(registry=registry, executor=SklearnTrainingExecutor(dataset_provider=provider))
     job = TrainingJob(
@@ -353,9 +353,12 @@ def test_training_engine_catalog_distinguishes_installed_packages_from_executors
     by_id = {item["id"]: item for item in inventory}
     assert set(by_id) == {"sklearn", "spacy", "transformers", "timeseries"}
     for engine_id in ("transformers", "timeseries"):
-        assert by_id[engine_id]["supported"] is False
-        assert by_id[engine_id]["status"] == "not_implemented"
-        assert by_id[engine_id]["executor"] is None
+        assert by_id[engine_id]["status"] in {"ready", "missing_dependencies"}
+        assert by_id[engine_id]["supported"] == (by_id[engine_id]["status"] == "ready")
+        if by_id[engine_id]["supported"]:
+            assert by_id[engine_id]["executor"]
+        else:
+            assert by_id[engine_id]["missing_dependencies"]
     assert by_id["spacy"]["supported"] == (by_id["spacy"]["status"] == "ready")
     if by_id["spacy"]["supported"]:
         assert by_id["spacy"]["executor"]
