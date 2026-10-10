@@ -60,3 +60,21 @@ def test_ui_state_triggers_verified_bundled_recovery(tmp_path, monkeypatch):
     )
     assert service.get_ui_state("time-query")["status"] == "success"
     assert service._load_baseline("time-query")
+
+
+def test_ui_state_returns_validation_failure_for_unsafe_link(tmp_path):
+    repo = tmp_path / "repo"
+    package = repo / "demo"
+    package.mkdir(parents=True)
+    (package / "manifest.json").write_text('{"entry_file":"demo.tsx"}')
+    (package / "demo.tsx").write_text("valid")
+    service = ui_installer.UIInstallerService(
+        plugins_repo_root=str(repo),
+        backup_dir=str(tmp_path / "backups"),
+    )
+    service.installations["demo"].checksum = "a" * 64
+    (package / "unsafe").symlink_to(tmp_path / "external")
+    state = service.get_ui_state("demo")
+    assert state["status"] == "validation_failed"
+    assert state["error_code"] == "INTEGRITY_VERIFICATION_FAILED"
+    assert "demo" in service.installations
