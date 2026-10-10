@@ -53,6 +53,9 @@ type Dataset = {
   version: string;
   bytes: number;
   format: string;
+  schema_engines?: string[];
+  inspection_status?: string;
+  inspection_reason?: string;
 };
 
 type Catalog = {
@@ -605,6 +608,30 @@ export default function AdvancedTrainingWorkbench() {
                   </Alert>
                 )}
               </div>
+
+              {(() => {
+                const chosen = catalog.datasets.find((item) => item.version === config.dataset_version);
+                if (!chosen) return null;
+                const matches = chosen.schema_engines?.includes(config.engine) ?? false;
+                return (
+                  <div className="rounded-xl border border-border/70 bg-muted/20 p-4 text-sm">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium">Dataset schema inspection</span>
+                      <Badge variant="outline">
+                        {chosen.inspection_status === "structural_only"
+                          ? matches ? "Structure matches" : "Structure mismatch"
+                          : "Not verified"}
+                      </Badge>
+                    </div>
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      {chosen.inspection_status === "structural_only" && !matches
+                        ? `The selected ${title(config.engine)} engine does not match the inspected record shape.`
+                        : chosen.inspection_reason ?? "No dataset inspection was reported."}
+                      {" "}Full backend preflight is required before submission.
+                    </p>
+                  </div>
+                );
+              })()}
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
