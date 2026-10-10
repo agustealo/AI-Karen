@@ -41,7 +41,8 @@ type Preflight = {
   warnings: Finding[];
   evidence: {
     dataset_version: string; examples_scanned: number;
-    class_counts: Record<string, number>; feature_count: number;
+    class_counts?: Record<string, number>; feature_count?: number;
+    holdout_windows?: number;
   };
 };
 
@@ -343,11 +344,18 @@ export default function AdvancedTrainingWorkbench() {
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div className="rounded-lg bg-muted/50 p-3">Samples: {preflight.evidence.examples_scanned}</div>
-                  <div className="rounded-lg bg-muted/50 p-3">Features: {preflight.evidence.feature_count}</div>
-                  <div className="rounded-lg bg-muted/50 p-3 col-span-2">
-                    Classes: {Object.entries(preflight.evidence.class_counts)
-                      .map(([name, count]) => `${name} (${count})`).join(", ") || "Not available"}
-                  </div>
+                  {typeof preflight.evidence.feature_count === "number" && (
+                    <div className="rounded-lg bg-muted/50 p-3">Features: {preflight.evidence.feature_count}</div>
+                  )}
+                  {typeof preflight.evidence.holdout_windows === "number" && (
+                    <div className="rounded-lg bg-muted/50 p-3">Holdout windows: {preflight.evidence.holdout_windows}</div>
+                  )}
+                  {preflight.evidence.class_counts && (
+                    <div className="rounded-lg bg-muted/50 p-3 col-span-2">
+                      Classes: {Object.entries(preflight.evidence.class_counts)
+                        .map(([name, count]) => `${name} (${count})`).join(", ") || "Not available"}
+                    </div>
+                  )}
                 </div>
                 {[...preflight.checks, ...preflight.warnings].map(item => (
                   <div key={item.code} className="rounded-lg border p-3 text-sm">
