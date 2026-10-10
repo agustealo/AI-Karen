@@ -16,7 +16,8 @@ class AuthStub:
     async def get_user_by_id(self, user_id):
         return SimpleNamespace(id=user_id, tenant_id="tenant-a")
 
-    async def list_sessions(self, *, user_id, active_only):
+    async def list_sessions(self, *, user_id, active_only, strict_errors):
+        assert strict_errors is True
         self.calls.append((user_id, active_only))
         return [{
             "session_token": "durable-session-id",
@@ -53,3 +54,15 @@ async def test_cross_tenant_session_listing_rejected_before_query():
     with pytest.raises(PermissionError):
         await service.get_user_sessions("user-a", operator_tenant_id="tenant-b")
     assert auth.calls == []
+
+
+@pytest.mark.asyncio
+async def test_session_read_error_propagates_instead_of_empty_success():
+    class BrokenAuth(AuthStub):
+        async def list_sessions(self, *, user_id, active_only, strict_errors):
+            assert strict_errors is True
+            raise RuntimeError("Session retrieval unavailable")
+
+    service = AdminUserService(BrokenAuth())
+    with pytest.raises(RuntimeError, match="Session retrieval unavailable"):
+        await service.get_user_sessions("user-a", operator_tenant_id="tenant-a")

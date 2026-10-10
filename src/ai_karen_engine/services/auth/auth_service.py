@@ -980,6 +980,7 @@ class AuthService(BaseService):
         active_only: bool = True,
         limit: int = 100,
         offset: int = 0,
+        strict_errors: bool = False,
     ) -> List[Dict[str, Any]]:
         if not self._initialized:
             await self.initialize()
@@ -1016,7 +1017,9 @@ class AuthService(BaseService):
                     for s in sessions
                 ]
         except Exception as e:
-            logger.error("Error listing sessions: %s", e)
+            logger.exception("Error listing sessions")
+            if strict_errors:
+                raise RuntimeError("Session retrieval unavailable") from e
             return []
 
     async def revoke_session(self, session_token: str, reason: str = "manual_revoke") -> bool:
