@@ -29,6 +29,7 @@ on:
       - "tests/auth/**"
       - "tests/security/**"
       - "tests/integration/test_auth_refresh_concurrency_postgres.py"
+      - "tests/integration/test_admin_users_postgres.py"
       - "tests/architecture/test_auth_production_security_contract.py"
       - "tests/architecture/test_auth_session_security_contract.py"
       - "tests/architecture/test_auth_session_validation_contract.py"
@@ -68,6 +69,7 @@ on:
       - "tests/auth/**"
       - "tests/security/**"
       - "tests/integration/test_auth_refresh_concurrency_postgres.py"
+      - "tests/integration/test_admin_users_postgres.py"
       - "tests/architecture/test_auth_production_security_contract.py"
       - "tests/architecture/test_auth_session_security_contract.py"
       - "tests/architecture/test_auth_session_validation_contract.py"
@@ -170,6 +172,12 @@ jobs:
         env:
           PYTHONPATH: src
         run: pytest tests/security/test_tenant_isolation_gauntlet.py -q
+
+      - name: Prove Admin Users durable PostgreSQL paging and sessions
+        env:
+          PYTHONPATH: src
+          AUTH_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/karen_auth_test
+        run: pytest tests/integration/test_admin_users_postgres.py -q
 
       - name: Prove real PostgreSQL concurrent refresh behavior
         env:
