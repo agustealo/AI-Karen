@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+from itertools import islice
 from pathlib import Path
 from time import perf_counter
 
@@ -35,7 +36,8 @@ class SpacyTrainingExecutor:
         limit = int(options.get("max_samples", 10000))
         evidence = validate_spacy_jsonl(dataset, max_samples=limit)
         mode = evidence["mode"]
-        rows = [json.loads(line) for line in dataset.read_text(encoding="utf-8").splitlines() if line.strip()][:limit]
+        with dataset.open("r", encoding="utf-8") as source:
+            rows = [json.loads(line) for line in islice((line for line in source if line.strip()), limit)]
         seed = int(options.get("seed", 42))
         split = float(options.get("test_split", 0.2))
         if not 0.05 <= split <= 0.5:
@@ -59,7 +61,7 @@ class SpacyTrainingExecutor:
         train = [example(row) for row in train_rows]
         optimizer = nlp.initialize(lambda: iter(train))
         start = perf_counter()
-        iterations = min(int(options.get("max_iter", 100)), 1000)
+        iterations = min(int(options.get("max_iter", 100)), 100)
         if iterations < 1:
             raise ValueError("Invalid iterations")
         for _ in range(iterations):
