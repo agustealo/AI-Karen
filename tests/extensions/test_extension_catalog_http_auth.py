@@ -92,3 +92,55 @@ async def test_catalog_get_denies_unprivileged_role(catalog_app, monkeypatch):
     assert response.status_code == 403
     assert response.json()["detail"] == "Extension catalog access denied"
     assert received == []
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,path,json_body",
+    [
+        ("POST", "/api/extensions/install", {"plugin_id": "time-query"}),
+        ("POST", "/api/extensions/time-query/load", None),
+        ("POST", "/api/extensions/time-query/unload", None),
+        ("POST", "/api/extensions/time-query/remove-ui", None),
+        ("GET", "/api/extensions/debug/system-status", None),
+    ],
+)
+async def test_extension_lifecycle_requires_authentication(
+    catalog_app, monkeypatch, method, path, json_body
+):
+    app, _ = catalog_app
+
+    async def guest(_request):
+        return {"user_id": "guest", "authenticated": False}
+
+    monkeypatch.setattr(routes, "get_current_user", guest)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.request(method, path, json=json_body)
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_extension_install_requires_plugin_management_permission(
+    catalog_app, monkeypatch
+):
+    app, _ = catalog_app
+
+    async def viewer(_request):
+        return {
+            "user_id": "user",
+            "tenant_id": "tenant-a",
+            "roles": [],
+        }
+
+    monkeypatch.setattr(routes, "get_current_user", viewer)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/extensions/install", json={"plugin_id": "time-query"}
+        )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Plugin management access denied"
