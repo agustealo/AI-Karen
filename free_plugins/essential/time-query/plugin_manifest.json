@@ -1,0 +1,32 @@
+{
+  "id": "time-query",
+  "name": "time-query",
+  "display_name": "Time Query",
+  "version": "0.2.0",
+  "description": "App-wide time authority: current time, world clocks, stopwatches, alarms, and timezone conversions.",
+  "purpose": "Serve as the central source for all app time needs, including current time, world clocks, stopwatches, scheduled alarms, and timezone arithmetic.",
+  "author": "Kari Team",
+  "license": "MIT",
+  "entrypoint": "handler:MainExtension",
+  "category": "productivity",
+  "tags": ["time", "date", "clock", "stopwatch", "alarm", "timezone", "prompt-first"],
+  "capabilities": {
+    "provides_ui": true,
+    "provides_api": true,
+    "prompt_first": true
+  },
+  "ui": {
+    "hook_zones": [
+      {
+        "zone": "sidebar.plugins",
+        "label": "Time Query",
+        "icon": "clock",
+        "order": 0
+      }
+    ]
+  },
+  "rbac": {
+    "allowed_roles": ["user", "admin", "developer"],
+    "default_enabled": true
+  }
+}

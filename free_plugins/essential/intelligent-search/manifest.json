@@ -1,0 +1,69 @@
+{
+  "id": "intelligent-search",
+  "name": "intelligent-search",
+  "plugin_id": "intelligent-search",
+  "gui_manifest_version": "1.0",
+  "display_name": "Intelligent Search",
+  "version": "2.0.0",
+  "author": "Kari Team",
+  "license": "MIT",
+  "entrypoint": "handler:MainExtension",
+  "description": "Unified intelligent search capability with multiple search modes (general, news, docs, deep research, structured extract, weather, stock market). Now supports live intelligent search with multiple providers.",
+  "category": "integration",
+  "capabilities": {
+    "provides_ui": true,
+    "provides_api": true,
+    "prompt_first": true
+  },
+  "ui": {
+    "hook_zones": [
+      {
+        "zone": "sidebar.plugins",
+        "label": "Intelligent Search",
+        "icon": "search",
+        "order": 50
+      }
+    ]
+  },
+  "settings": {
+    "default_mode": "general",
+    "default_provider": "duckduckgo",
+    "max_urls": 5,
+    "search": {
+      "duckduckgo": {
+        "enabled": true,
+        "priority": 100
+      },
+      "tavily": {
+        "enabled": false,
+        "api_key": null,
+        "priority": 90
+      },
+      "google_custom_search": {
+        "enabled": false,
+        "api_key": null,
+        "cx_id": null,
+        "priority": 80
+      }
+    },
+    "general": {
+      "max_urls": 5,
+      "depth": 1,
+      "freshness_bias": 0.3,
+      "prefer_recent": false,
+      "prefer_official_sources": false,
+      "allow_forum_results": true
+    }
+  },
+  "rbac": {
+    "allowed_roles": ["user", "admin", "developer"],
+    "default_enabled": true
+  },
+  "tags": ["search", "web", "retrieval", "prompt-first"],
+  "purpose": "Unified intelligent search capability with multiple search modes and live data",
+  "entry": {
+    "id": "intelligent-search-main",
+    "default": true,
+    "entry_file": "IntelligentSearchPage.tsx"
+  }
+}

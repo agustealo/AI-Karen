@@ -1,0 +1,32 @@
+{
+  "id": "intelligent-search",
+  "name": "intelligent-search",
+  "display_name": "Intelligent Search",
+  "version": "2.0.0",
+  "entrypoint": "handler:MainExtension",
+  "description": "Unified intelligent search capability with multiple search modes (general, news, docs, deep research, structured extract, weather, stock market).",
+  "author": "Kari Team",
+  "license": "MIT",
+  "category": "integration",
+  "capabilities": {
+    "provides_ui": true,
+    "provides_api": true,
+    "prompt_first": true
+  },
+  "ui": {
+    "hook_zones": [
+      {
+        "zone": "sidebar.plugins",
+        "label": "Intelligent Search",
+        "icon": "search",
+        "order": 50
+      }
+    ]
+  },
+  "rbac": {
+    "allowed_roles": ["user", "admin", "developer"],
+    "default_enabled": true
+  },
+  "tags": ["search", "web", "retrieval", "prompt-first"],
+  "purpose": "Unified intelligent search capability with multiple search modes"
+}

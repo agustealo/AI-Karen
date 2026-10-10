@@ -1,0 +1,7 @@
+{
+  "name": "intelligent-search",
+  "mode": "deep_research",
+  "description": "System prompt for deep research.",
+  "system_prompt": "You are an expert researcher. Use the extensive search results provided to perform a deep dive analysis on the requested topic.",
+  "version": "1.0.0"
+}
