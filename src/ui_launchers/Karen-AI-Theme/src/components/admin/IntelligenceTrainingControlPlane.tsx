@@ -384,47 +384,77 @@ export default function IntelligenceTrainingControlPlane() {
         </TabsContent>
 
         <TabsContent value="models" className="mt-6">
-          <Card className="border-border/70">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><ArrowRight className="h-4 w-4 text-primary" />Candidate → Shadow → Active</CardTitle>
-              <CardDescription>
-                Model artifacts remain governed independently from instant user-memory adaptation.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                {Object.entries(data.registry.status_counts).length === 0 && <p className="text-sm text-muted-foreground">No lifecycle counts reported.</p>}\n                {Object.entries(data.registry.status_counts).map(([status, count]) => (
-                  <div key={status} className="rounded-xl border border-border/70 p-4">
-                    <div className="text-2xl font-semibold">{count}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">{prettify(status)}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="space-y-3">
-                {data.prediction_tasks.map((task) => {
-                  const models = data.registry.models_by_task[task] ?? [];
-                  return (
-                    <div
-                      key={task}
-                      className="flex flex-col gap-2 rounded-xl border border-border/70 p-4 sm:flex-row sm:items-center sm:justify-between"
-                    >
-                      <div>
-                        <div className="font-medium">{prettify(task)}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {models.length
-                            ? models.map((model) => `${model.model_id} v${model.model_version} · ${prettify(model.status)} · ${model.architecture || "unspecified architecture"}`).join(" | ")
-                            : "No trained artifact registered yet"}
+          <div className="space-y-5">
+            <Card className="border-border/70">
+              <CardHeader className="border-b border-border/60 bg-muted/10">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <ArrowRight className="h-4 w-4 text-primary" />Model lifecycle
+                </CardTitle>
+                <CardDescription>
+                  Candidate, shadow, active, and retired artifacts reported by the registry.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-5">
+                {Object.entries(data.registry.status_counts).length === 0 ? (
+                  <p className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">
+                    No lifecycle status counts reported.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                    {Object.entries(data.registry.status_counts).map(([status, count]) => (
+                      <div key={status} className="rounded-xl border border-border/70 bg-muted/10 p-4">
+                        <div className="text-2xl font-semibold tabular-nums">{count}</div>
+                        <div className="mt-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                          {prettify(status)}
                         </div>
                       </div>
-                      <Badge variant={models.length ? "secondary" : "outline"}>
-                        {models.length} artifact{models.length === 1 ? "" : "s"}
-                      </Badge>
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
+                    ))}
+                  </div>
+                )}
+                <p className="mt-4 text-xs leading-5 text-muted-foreground">
+                  Model artifacts remain governed independently from immediate user-memory adaptation.
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="min-w-0 border-border/70">
+              <CardHeader className="border-b border-border/60 bg-muted/10">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <BrainCircuit className="h-4 w-4 text-primary" />Prediction task artifacts
+                </CardTitle>
+                <CardDescription>
+                  Registered models by task. Empty tasks remain visible without implying training has run.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-5">
+                {data.prediction_tasks.length === 0 ? (
+                  <p className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">
+                    No prediction tasks registered.
+                  </p>
+                ) : (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {data.prediction_tasks.map((task) => {
+                      const models = data.registry.models_by_task[task] ?? [];
+                      return (
+                        <div key={task} className="min-w-0 rounded-xl border border-border/70 bg-muted/10 p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="min-w-0 text-sm font-semibold">{prettify(task)}</div>
+                            <Badge variant={models.length ? "secondary" : "outline"}>
+                              {models.length} artifact{models.length === 1 ? "" : "s"}
+                            </Badge>
+                          </div>
+                          <div className="mt-3 break-words text-xs leading-5 text-muted-foreground">
+                            {models.length
+                              ? models.map((model) => `${model.model_id} v${model.model_version} · ${prettify(model.status)} · ${model.architecture || "unspecified architecture"}`).join(" | ")
+                              : "No trained artifact registered yet"}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
 
         <TabsContent value="governance" className="mt-6 grid gap-6 xl:grid-cols-2">
