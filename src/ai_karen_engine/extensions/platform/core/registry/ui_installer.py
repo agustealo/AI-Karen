@@ -11,6 +11,7 @@ import os
 import shutil
 import json
 import hashlib
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
@@ -99,6 +100,57 @@ class UIInstallerService:
         self.installations: Dict[str, UIPackageInfo] = {}
         self._load_installations()
 
+    def _baseline_path(self, plugin_id: str) -> Path:
+        if not plugin_id or any(
+            char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for char in plugin_id
+        ):
+            raise ValueError("Invalid plugin identifier")
+        return self.backup_dir / "integrity" / (plugin_id + ".json")
+
+    def _load_baseline(self, plugin_id: str) -> str:
+        """Read an original installation hash, never certify current bytes."""
+        path = self._baseline_path(plugin_id)
+        if path.is_symlink() or not path.is_file():
+            return ""
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            checksum = record.get("sha256") if isinstance(record, dict) else None
+            if (
+                record.get("plugin_id") == plugin_id
+                and isinstance(checksum, str)
+                and len(checksum) == 64
+                and all(char in "0123456789abcdef" for char in checksum)
+            ):
+                return checksum
+        except (OSError, ValueError, TypeError, AttributeError):
+            logger.warning("Plugin integrity baseline unreadable: %s", plugin_id)
+        return ""
+
+    def _save_baseline(self, plugin_id: str, checksum: str) -> None:
+        """Atomically persist checksum evidence outside the UI package."""
+        if len(checksum) != 64 or any(char not in "0123456789abcdef" for char in checksum):
+            raise ValueError("Invalid checksum")
+        destination = self._baseline_path(plugin_id)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.parent.is_symlink() or destination.is_symlink():
+            raise ValueError("Unsafe integrity baseline path")
+        fd, temporary = tempfile.mkstemp(prefix=".baseline-", dir=destination.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump({"plugin_id": plugin_id, "sha256": checksum}, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, destination)
+            directory_fd = os.open(destination.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
     def _load_installations(self) -> None:
         """Load existing installations from plugin_repo."""
         if not self.plugins_repo_root.exists():
@@ -150,7 +202,7 @@ class UIInstallerService:
                                 entry_file=entry_file,
                                 # Restart discovery is not an integrity attestation.
                                 # The original install checksum is not durable yet.
-                                checksum="",
+                                checksum=self._load_baseline(plugin_id),
                                 size_bytes=self._get_directory_size(plugin_dir),
                                 installed_at=datetime.fromtimestamp(
                                     manifest_path.stat().st_mtime
@@ -323,61 +375,108 @@ class UIInstallerService:
                             error_code="MANIFEST_VALIDATION_FAILED",
                         )
 
-            # Copy UI package to plugin_repo
+            # Stage fully outside the published package name. A reader must
+            # never discover half-copied UI files as an installed plugin.
             target_path = self.plugins_repo_root / plugin_id
             ui_source = source_path / "ui"
+            staging_path = Path(tempfile.mkdtemp(
+                prefix=".install-", dir=self.plugins_repo_root,
+            ))
             try:
-                # Ensure target directory exists
-                target_path.mkdir(parents=True, exist_ok=True)
-
                 if ui_source.exists() and ui_source.is_dir():
-                    # Copy contents of ui directory
                     for item in ui_source.iterdir():
                         if item.is_dir():
-                            shutil.copytree(item, target_path / item.name, dirs_exist_ok=True)
+                            shutil.copytree(item, staging_path / item.name)
                         else:
-                            shutil.copy2(item, target_path / item.name)
-                    
-                    # Also copy manifest.json from root if it exists
+                            shutil.copy2(item, staging_path / item.name)
                     manifest_source = source_path / "manifest.json"
-                    if manifest_source.exists():
-                        shutil.copy2(manifest_source, target_path / "manifest.json")
-                    
-                    logger.info(f"Copied UI artifacts from {ui_source} to {target_path}")
+                    if manifest_source.is_file():
+                        shutil.copy2(manifest_source, staging_path / "manifest.json")
                 else:
-                    # Fallback to copying entire source if no ui directory
-                    shutil.copytree(source_path, target_path, dirs_exist_ok=True)
-                    logger.info(f"Copied entire plugin source from {source_path} to {target_path}")
-            except Exception as e:
-                # No valid package existed before this call. Delete only the
-                # partial directory created by this installation attempt.
+                    shutil.copytree(source_path, staging_path, dirs_exist_ok=True)
+
+                if not (staging_path / "manifest.json").is_file():
+                    raise ValueError("Staged plugin UI manifest is missing")
+                with (staging_path / "manifest.json").open("r", encoding="utf-8") as handle:
+                    manifest = json.load(handle)
+                entry = manifest.get("entry", {})
+                entry_rel = (
+                    entry.get("entry_file") if isinstance(entry, dict) else None
+                ) or manifest.get("entry_file") or f"{plugin_id}.tsx"
+                if (
+                    not isinstance(entry_rel, str)
+                    or not entry_rel
+                    or Path(entry_rel).is_absolute()
+                    or ".." in Path(entry_rel).parts
+                ):
+                    raise ValueError("Invalid staged UI entry")
+                staged_entry = staging_path / entry_rel
+                if not staged_entry.is_file() or staged_entry.is_symlink():
+                    raise ValueError("Staged UI entry is missing or unsafe")
+                # Staging must not allow a manifest entry's ancestor or any
+                # other copied asset to redirect validation outside the package.
+                if any(item.is_symlink() for item in staging_path.rglob("*")):
+                    raise ValueError("Staged UI package contains symbolic links")
+                self._calculate_checksum(staging_path)
+                if target_path.exists() or target_path.is_symlink():
+                    raise FileExistsError("UI package target became occupied")
+                os.rename(staging_path, target_path)
+            except Exception:
+                logger.exception("Failed to stage or publish plugin UI: %s", plugin_id)
+                return UIInstallationResult(
+                    plugin_id=plugin_id,
+                    status=UIInstallationStatus.FAILED,
+                    state=UIInstallationState.ERROR,
+                    message="UI staging or publication failed",
+                    error_code="STAGING_FAILED",
+                )
+            finally:
+                if staging_path.is_dir() and not staging_path.is_symlink():
+                    shutil.rmtree(staging_path, ignore_errors=True)
+
+            # Create package info
+            manifest_path = target_path / "manifest.json"
+            entry_file = target_path / entry_rel
+
+            try:
+                package_info = UIPackageInfo(
+                    plugin_id=plugin_id,
+                    source_path=source_path,
+                    target_path=target_path,
+                    manifest_path=manifest_path,
+                    entry_file=entry_file,
+                    checksum=self._calculate_checksum(target_path),
+                    size_bytes=self._get_directory_size(target_path),
+                    installed_at=datetime.now(),
+                    last_validated=datetime.now(),
+                )
+    
+            except Exception:
+                logger.exception("Plugin UI integrity check failed after publication")
                 if target_path.is_dir() and not target_path.is_symlink():
                     shutil.rmtree(target_path, ignore_errors=True)
                 return UIInstallationResult(
                     plugin_id=plugin_id,
                     status=UIInstallationStatus.FAILED,
                     state=UIInstallationState.ERROR,
-                    message=f"Failed to copy UI package: {e}",
-                    error_code="COPY_FAILED",
+                    message="Published package failed integrity registration",
+                    error_code="POST_PUBLISH_VALIDATION_FAILED",
                 )
 
-            # Create package info
-            manifest_path = target_path / "manifest.json"
-            entry_file = target_path / f"{plugin_id}.tsx"
+            try:
+                self._save_baseline(plugin_id, package_info.checksum)
+            except Exception:
+                logger.exception("Could not persist plugin UI checksum after publication")
+                if target_path.is_dir() and not target_path.is_symlink():
+                    shutil.rmtree(target_path, ignore_errors=True)
+                return UIInstallationResult(
+                    plugin_id=plugin_id,
+                    status=UIInstallationStatus.FAILED,
+                    state=UIInstallationState.ERROR,
+                    message="UI integrity record publication failed",
+                    error_code="INTEGRITY_PERSISTENCE_FAILED",
+                )
 
-            package_info = UIPackageInfo(
-                plugin_id=plugin_id,
-                source_path=source_path,
-                target_path=target_path,
-                manifest_path=manifest_path,
-                entry_file=entry_file,
-                checksum=self._calculate_checksum(target_path),
-                size_bytes=self._get_directory_size(target_path),
-                installed_at=datetime.now(),
-                last_validated=datetime.now(),
-            )
-
-            # Register installation
             self.installations[plugin_id] = package_info
 
             # Update registry to reflect UI installation
@@ -472,7 +571,17 @@ class UIInstallerService:
                     error_code="REMOVAL_FAILED",
                 )
 
-            # Unregister installation
+            try:
+                self._baseline_path(plugin_id).unlink(missing_ok=True)
+            except OSError:
+                logger.exception("Could not clear UI integrity record")
+                return UIInstallationResult(
+                    plugin_id=plugin_id,
+                    status=UIInstallationStatus.FAILED,
+                    state=UIInstallationState.ERROR,
+                    message="UI removed; checksum record cleanup failed",
+                    error_code="INTEGRITY_CLEANUP_FAILED",
+                )
             del self.installations[plugin_id]
 
             # Update registry to reflect UI removal
