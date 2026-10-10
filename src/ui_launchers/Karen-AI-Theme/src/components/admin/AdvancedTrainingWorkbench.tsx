@@ -72,7 +72,7 @@ export default function AdvancedTrainingWorkbench() {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); void loadJobs(); }, [load]);
 
   const change = <K extends keyof Config>(key: K, value: Config[K]) => {
     setConfig(previous => previous ? { ...previous, [key]: value } : previous);
@@ -114,7 +114,7 @@ export default function AdvancedTrainingWorkbench() {
       const queued = await apiClient.post<{ job_id: string; status: string }>(
         "/api/admin/training/advanced/jobs", config,
       );
-      setQueueMessage(`Job ${queued.job_id} queued. Execution requires a connected training worker.`);
+      setQueueMessage(`Job ${queued.job_id} submitted as ${queued.status}. This does not confirm that a worker has started.`);
       await loadJobs();
       setPreflight(null);
     } catch (cause) {
@@ -139,9 +139,9 @@ export default function AdvancedTrainingWorkbench() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 className="text-xl font-semibold">Advanced Training Workbench</h3>
+          <h3 className="text-xl font-semibold">Train a Model</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Backend-validated model, corpus, training and evaluation controls.
+            Choose a supported model type and dataset, validate the configuration, then queue training.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => void load()} disabled={busy}>
@@ -159,7 +159,7 @@ export default function AdvancedTrainingWorkbench() {
             <CardContent className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 {catalog.engines.map(engine => (
-                  <button type="button" key={engine.id}
+                  <button type="button" key={engine.id} disabled={!engine.supported}
                     aria-pressed={config.engine === engine.id}
                     onClick={() => change("engine", engine.id)}
                     className={`rounded-xl border p-4 text-left transition-colors ${config.engine === engine.id ? "border-primary bg-primary/5" : "border-border/70 hover:bg-muted/30"}`}>
@@ -310,6 +310,30 @@ export default function AdvancedTrainingWorkbench() {
           </Card>
         </div>
       </div>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">Training Jobs</CardTitle>
+            <CardDescription>Backend-reported state, not estimated progress.</CardDescription>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => void loadJobs()}>
+            <RefreshCw className="mr-2 h-4 w-4" />Refresh jobs
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {jobs.length === 0 && <p className="text-sm text-muted-foreground">No jobs reported for this tenant.</p>}
+          {jobs.map(job => (
+            <div key={job.job_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
+              <div>
+                <p className="text-sm font-medium">{job.job_id}</p>
+                <p className="text-xs text-muted-foreground">Updated: {job.updated_at || "Unavailable"}</p>
+              </div>
+              <Badge variant="outline">{job.state}</Badge>
+            </div>
+          ))}
+          {queueMessage && <p className="text-sm" role="status">{queueMessage}</p>}
+        </CardContent>
+      </Card>
     </div>
   );
 }
