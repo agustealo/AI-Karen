@@ -77,6 +77,7 @@ class PostgresProfileRecallRetriever:
     def _looks_like_profile_query(text: str) -> bool:
         q = text.casefold()
         cues = (
+            "who am i",
             "about me",
             "my name",
             "what is my name",
