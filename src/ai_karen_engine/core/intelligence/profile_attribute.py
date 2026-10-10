@@ -18,7 +18,6 @@ def normalize_personal_query(text: str) -> str:
 _GAP = r"(?:[\w'-]+\s+){0,5}"
 _ATTRIBUTE_QUESTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("preferred_name", (
-        rf"where\s+{_GAP}do\s+i\s+{_GAP}grow\s+up",
         rf"(?:what(?:\s+is|'s|s)|hats|hat's|remember)\s+{_GAP}my\s+{_GAP}name",
         r"my\s+name\s+is\s+(?:what|who)",
         rf"my\s+{_GAP}name\s+is\s+(?:what|who)",
@@ -26,6 +25,7 @@ _ATTRIBUTE_QUESTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         rf"what\s+{_GAP}do\s+(?:you|people|they)\s+call\s+me",
     )),
     ("upbringing_location", (
+        rf"where\s+{_GAP}do\s+i\s+{_GAP}grow\s+up",
         rf"where\s+{_GAP}i\s+{_GAP}grew\s+up",
         rf"where\s+{_GAP}did\s+i\s+{_GAP}grow\s+up",
         rf"(?:what(?:\s+is|'s|s))\s+{_GAP}my\s+{_GAP}upbringing",
