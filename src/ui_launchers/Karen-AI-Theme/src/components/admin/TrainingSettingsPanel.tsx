@@ -8,6 +8,9 @@ import {
   BrainCircuit,
   Database,
   GitBranch,
+  Archive,
+  FileCheck2,
+  Fingerprint,
   Layers3,
   Loader2,
   RadioTower,
@@ -30,9 +33,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import IntelligenceTrainingControlPlane from "./IntelligenceTrainingControlPlane";
 import AdvancedTrainingWorkbench from "./AdvancedTrainingWorkbench";
@@ -463,35 +464,32 @@ export default function TrainingSettingsPanel() {
             <div className="relative grid min-w-[240px] gap-3 rounded-xl border border-border/70 bg-background/80 p-4 shadow-sm backdrop-blur">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Dataset inventory</span>
-                <span className="font-medium">{datasets.length}</span>
+                <span className="font-medium">{isLoadingDatasets || datasetLoadError || datasetAuthRequired || datasetAccessDenied ? "Unavailable" : datasets.length}</span>
               </div>
 
-              <Progress
-                value={datasets.length > 0 ? Math.min(100, curatedDatasetCount * 20) : 0}
-                className="h-2"
-              />
+              <div className="h-px bg-border/70" />
 
               <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
                 <div className="rounded-lg bg-muted/60 p-2">
-                  <div className="font-medium text-foreground">{datasets.length}</div>
+                  <div className="font-medium text-foreground">{isLoadingDatasets || datasetLoadError || datasetAuthRequired || datasetAccessDenied ? "Unavailable" : datasets.length}</div>
                   dataset records
                 </div>
 
                 <div className="rounded-lg bg-muted/60 p-2">
-                  <div className="font-medium text-foreground">{curatedDatasetCount}</div>
+                  <div className="font-medium text-foreground">{isLoadingDatasets || datasetLoadError || datasetAuthRequired || datasetAccessDenied ? "Unavailable" : curatedDatasetCount}</div>
                   curated packs
                 </div>
 
                 <div className="rounded-lg bg-muted/60 p-2">
                   <div className="font-medium text-foreground">
-                    {formatRecordCount(totalRecords)}
+                    {isLoadingDatasets || datasetLoadError || datasetAuthRequired || datasetAccessDenied ? "Unavailable" : formatRecordCount(totalRecords)}
                   </div>
                   total records
                 </div>
 
                 <div className="rounded-lg bg-muted/60 p-2">
                   <div className="font-medium text-foreground">
-                    {averageQuality == null ? "unscored" : `${averageQuality.toFixed(0)}%`}
+                    {isLoadingDatasets || datasetLoadError || datasetAuthRequired || datasetAccessDenied ? "Unavailable" : averageQuality == null ? "unscored" : `${averageQuality.toFixed(0)}%`}
                   </div>
                   avg quality
                 </div>
@@ -519,14 +517,54 @@ export default function TrainingSettingsPanel() {
           <IntelligenceTrainingControlPlane />
         </TabsContent>
 
-        <TabsContent value="management" className="mt-6">
+        <TabsContent value="management" className="mt-6 space-y-6">
+          <section className="overflow-hidden rounded-2xl border border-border/70 bg-card">
+            <div className="flex flex-col gap-4 border-b border-border/70 bg-gradient-to-br from-primary/10 via-background to-background p-6 lg:flex-row lg:items-start lg:justify-between">
+              <div className="max-w-3xl">
+                <div className="mb-3 flex flex-wrap gap-2">
+                  <Badge variant="outline" className="border-primary/30 bg-primary/5 text-primary">Governed datasets</Badge>
+                  <Badge variant="outline">Tenant scoped</Badge>
+                  <Badge variant="outline">Provenance aware</Badge>
+                </div>
+                <h3 className="flex items-center gap-3 text-2xl font-semibold tracking-tight">
+                  <ShieldCheck className="h-6 w-6 text-primary" />Data &amp; Governance
+                </h3>
+                <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                  Inspect versioned training data, prepare curated memory, and review learning-policy boundaries.
+                  The backend remains the authority for ingestion, permissions and provenance.
+                </p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => void loadDatasets()} disabled={isLoadingDatasets}>
+                {isLoadingDatasets ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Refresh inventory
+              </Button>
+            </div>
+            <div className="grid gap-px bg-border/60 sm:grid-cols-2 xl:grid-cols-4">
+              {[
+                { label: "Datasets", value: datasets.length.toLocaleString(), icon: Database },
+                { label: "Curated packs", value: curatedDatasetCount.toLocaleString(), icon: Archive },
+                { label: "Reported records", value: formatRecordCount(totalRecords), icon: Layers3 },
+                { label: "Average quality", value: averageQuality == null ? "Unscored" : averageQuality.toFixed(0) + "%", icon: FileCheck2 },
+              ].map(metric => {
+                const Icon = metric.icon;
+                return <div key={metric.label} className="bg-card p-5">
+                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.12em] text-muted-foreground">
+                    <span>{metric.label}</span><Icon className="h-4 w-4 text-primary" />
+                  </div>
+                  <div className="mt-3 text-2xl font-semibold tabular-nums">
+                    {isLoadingDatasets || datasetLoadError || datasetAuthRequired || datasetAccessDenied ? "Unavailable" : metric.value}
+                  </div>
+                </div>;
+              })}
+            </div>
+          </section>
           <Tabs defaultValue="datasets" className="w-full">
-            <TabsList className="flex w-full flex-wrap justify-start">
-              <TabsTrigger value="datasets">Datasets</TabsTrigger>
-              <TabsTrigger value="curation">Curated Ingest</TabsTrigger>
-              <TabsTrigger value="overview">Sources &amp; Governance</TabsTrigger>
+            <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-xl border border-border/70 bg-muted/30 p-1.5">
+              <TabsTrigger value="datasets" className="rounded-lg px-4 py-2">Dataset Inventory</TabsTrigger>
+              <TabsTrigger value="curation" className="rounded-lg px-4 py-2">Curated Ingest</TabsTrigger>
+              <TabsTrigger value="overview" className="rounded-lg px-4 py-2">Governance Policy</TabsTrigger>
             </TabsList>
-        <TabsContent value="overview" className="mt-6 space-y-6">
+        <TabsContent value="overview" className="mt-6 space-y-6">\n          <div className="flex items-center gap-2 text-sm text-muted-foreground"><Fingerprint className="h-4 w-4 text-primary" /> Governance reference: backend services enforce permissions, source integrity and approval.</div>
           <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
             {TRAINING_SOURCES.map((source) => {
               const Icon = source.icon;
@@ -628,7 +666,7 @@ export default function TrainingSettingsPanel() {
                   Governance
                 </CardTitle>
                 <CardDescription>
-                  Read-only operational controls expected from the backend training flow.
+                  Documented governance controls. This view does not assert that each enforcement check has passed.
                 </CardDescription>
               </CardHeader>
 
@@ -640,7 +678,7 @@ export default function TrainingSettingsPanel() {
                       Dataset creation stays behind authenticated admin APIs.
                     </div>
                   </div>
-                  <Switch checked disabled />
+                  <Badge variant="outline" className="shrink-0">Policy reference</Badge>
                 </div>
 
                 <div className="flex items-center justify-between gap-4 rounded-xl border border-border/70 p-4">
@@ -650,7 +688,7 @@ export default function TrainingSettingsPanel() {
                       Training packs can be built from autonomous-learning curation.
                     </div>
                   </div>
-                  <Switch checked disabled />
+                  <Badge variant="outline" className="shrink-0">Policy reference</Badge>
                 </div>
 
                 <div className="flex items-center justify-between gap-4 rounded-xl border border-border/70 p-4">
@@ -660,14 +698,14 @@ export default function TrainingSettingsPanel() {
                       Uploads and curated pack generation are emitted through the backend logger.
                     </div>
                   </div>
-                  <Switch checked disabled />
+                  <Badge variant="outline" className="shrink-0">Policy reference</Badge>
                 </div>
 
                 <Alert>
                   <ShieldCheck className="h-4 w-4" />
                   <AlertTitle className="text-xs">Backend ownership</AlertTitle>
                   <AlertDescription className="text-[10px]">
-                    These switches are indicators, not client-side controls. RBAC, audit,
+                    These are policy descriptions, not browser-managed controls. RBAC, audit,
                     provenance, tenant isolation, and training eligibility must be enforced by
                     backend services.
                   </AlertDescription>
@@ -782,10 +820,10 @@ export default function TrainingSettingsPanel() {
                       </div>
 
                       <div className="grid gap-1 text-sm text-muted-foreground lg:text-right">
-                        <div>ID {dataset.dataset_id}</div>
+                        <div className="flex items-center gap-1 lg:justify-end"><Fingerprint className="h-3 w-3" /> ID {dataset.dataset_id}</div>
                         <div>created {formatDateTime(dataset.created_at)}</div>
                         <div>updated {formatDateTime(dataset.updated_at)}</div>
-                        <div>records {formatRecordCount(dataset.size)}</div>
+                        <div>records {formatRecordCount(dataset.size)}</div>\n                        {dataset.provenance && Object.keys(dataset.provenance).length > 0 && <div>Provenance metadata recorded</div>}
                         {dataset.created_by && <div>owner {dataset.created_by}</div>}
                       </div>
                     </div>
