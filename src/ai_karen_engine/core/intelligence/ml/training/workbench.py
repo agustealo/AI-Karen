@@ -50,20 +50,37 @@ class AdvancedTrainingWorkbench:
             except (ImportError, ValueError, AttributeError):
                 return False
 
-        engines = [
-            {"id": "sklearn", "label": "Classical ML classifier", "supported": installed("sklearn"),
-             "executor": "core.intelligence.ml.training.sklearn_executor",
-             "details": "Registry-backed classifier and governed candidate registration."},
-            {"id": "spacy", "label": "spaCy NER / text categorization",
-             "supported": False, "executor": None,
-             "details": "Component freezing and training need a governed spaCy executor."},
-            {"id": "transformers", "label": "Transformer / LoRA / PEFT",
-             "supported": False, "executor": None,
-             "details": "Model-specific training jobs require a durable GPU worker and artifact contract."},
-            {"id": "timeseries", "label": "Temporal forecasting",
-             "supported": False, "executor": None,
-             "details": "Dedicated time-series evaluation and training executor required."},
-        ]
+        # Engine capability inventory is authoritative here. Python package presence
+        # alone is not proof of a governed trainer or a compatible dataset contract.
+        engine_specs = (
+            ("sklearn", "Classical ML classifier",
+             "core.intelligence.ml.training.sklearn_executor",
+             ("sklearn", "joblib"),
+             "Registry-backed classification on numeric-feature JSONL."),
+            ("spacy", "spaCy NER / text categorization", None, ("spacy",),
+             "Requires labeled text/span datasets, an executor, evaluation, and artifact registration."),
+            ("transformers", "Transformer / LoRA / PEFT", None,
+             ("transformers", "peft", "torch"),
+             "Requires a governed fine-tuning executor, base-model license checks, and a compatible dataset."),
+            ("timeseries", "Temporal forecasting", None, (),
+             "Requires time-indexed datasets, temporal validation, a forecasting executor, and predictor contract."),
+        )
+        engines = []
+        for engine_id, label, executor, dependencies, details in engine_specs:
+            missing = [module for module in dependencies if not installed(module)]
+            wired = executor is not None
+            supported = wired and not missing
+            engines.append({
+                "id": engine_id,
+                "label": label,
+                "supported": supported,
+                "executor": executor if supported else None,
+                "status": "ready" if supported else (
+                    "missing_dependencies" if wired and missing else "not_implemented"
+                ),
+                "missing_dependencies": missing,
+                "details": details,
+            })
         datasets = []
         if self.dataset_root.exists():
             for path in sorted(self.dataset_root.glob("*.jsonl")):
@@ -117,8 +134,9 @@ class AdvancedTrainingWorkbench:
         def error(code: str, message: str) -> None:
             failures.append({"code": code, "message": message})
 
-        if engine != "sklearn":
-            error("unsupported_engine", "No governed executor is registered for this engine.")
+        selected_engine = next((item for item in self.catalog()["engines"] if item["id"] == engine), None)
+        if selected_engine is None or not selected_engine["supported"]:
+            error("unsupported_engine", "A governed, dependency-ready executor is not available for this engine.")
         if task not in _ADAPTIVE_TASKS:
             error("unknown_task", "Task is absent from the supported ML prediction registry.")
         if not dataset_version or not all(
