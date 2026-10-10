@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import random
 from pathlib import Path
 
 from ai_karen_engine.config.config_manager import get_ml_registry_dir
@@ -60,6 +62,16 @@ class TransformerLoRAExecutor:
                     raise ValueError("Dataset exceeds configured maximum samples")
         if len(texts) < 16:
             raise ValueError("Fine-tuning requires at least 16 nonempty examples")
+        if len(set(texts)) != len(texts):
+            raise ValueError("Duplicate text records can contaminate the held-out evaluation")
+        seed = int(cfg.get("seed", job.seed))
+        if not 0 <= seed <= 2**32 - 1:
+            raise ValueError("Invalid training seed")
+        random.Random(seed).shuffle(texts)
+        holdout_count = max(3, math.ceil(len(texts) * float(cfg.get("test_split", 0.2))))
+        if holdout_count >= len(texts) - 8:
+            raise ValueError("Insufficient train and evaluation text examples")
+        training_texts, validation_texts = texts[:-holdout_count], texts[-holdout_count:]
         if not torch.cuda.is_available() and not cfg.get("allow_cpu_training", False):
             raise RuntimeError("CUDA is unavailable; CPU training requires explicit opt-in")
         tokenizer = AutoTokenizer.from_pretrained(str(base_path), local_files_only=True, trust_remote_code=False)
@@ -78,8 +90,11 @@ class TransformerLoRAExecutor:
         adapter.to(device).train()
         optimizer = torch.optim.AdamW((p for p in adapter.parameters() if p.requires_grad), lr=2e-4)
         losses = []
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
         for _ in range(epochs):
-            for text in texts:
+            for text in training_texts:
                 batch = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length)
                 if batch["input_ids"].shape[1] < 2:
                     continue
@@ -97,6 +112,22 @@ class TransformerLoRAExecutor:
                 losses.append(float(loss.detach().cpu()))
         if not losses:
             raise ValueError("No trainable text sequences")
+        adapter.eval()
+        evaluation_losses = []
+        with torch.no_grad():
+            for text in validation_texts:
+                batch = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length)
+                if batch["input_ids"].shape[1] < 2:
+                    continue
+                batch = {k: v.to(device) for k, v in batch.items()}
+                labels = batch["input_ids"].clone()
+                labels[batch["attention_mask"] == 0] = -100
+                loss = adapter(**batch, labels=labels).loss
+                if not torch.isfinite(loss):
+                    raise ValueError("Nonfinite holdout loss")
+                evaluation_losses.append(float(loss.detach().cpu()))
+        if not evaluation_losses:
+            raise ValueError("Held-out examples produced no evaluable language-model tokens")
         key = hashlib.sha256(tenant.encode()).hexdigest()[:16]
         model_id = f"tenant-{key}-{job.task}-{job.job_id[:12]}"
         model_version = f"train-{job.job_id[:8]}"
@@ -109,9 +140,10 @@ class TransformerLoRAExecutor:
         metadata = {
             "executor": "transformers", "artifact_type": "peft_lora_adapter",
             "base_model_path": str(base_path), "license_id": cfg["license_id"],
-            "license_accepted": True, "training_samples": len(texts),
+            "license_accepted": True, "training_samples": len(training_texts),
             "training_loss": sum(losses) / len(losses), "optimizer_steps": len(losses),
-            "test_samples": 0, "canonical_benchmark_status": "not_run",
+            "test_samples": len(evaluation_losses), "holdout_loss": sum(evaluation_losses) / len(evaluation_losses),
+            "evaluation_method": "seeded_disjoint_text_holdout", "canonical_benchmark_status": "not_run",
             "model_id": model_id, "model_version": model_version, "task": job.task,
             "tenant_key": key, "tenant_scoped": True, "training_job_id": job.job_id,
             "dataset_version": version, "feature_version": "causal-lm-lora-v1",
