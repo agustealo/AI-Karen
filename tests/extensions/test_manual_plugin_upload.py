@@ -103,3 +103,30 @@ async def test_concurrent_install_lock_never_overwrites(tmp_path):
         )
     assert not (tmp_path / "demo").exists()
     assert lock.read_text() == "active"
+
+
+@pytest.mark.asyncio
+async def test_lock_held_through_registry_validation_and_released(tmp_path, monkeypatch):
+    service = PluginService(tmp_path, tmp_path)
+    observed = []
+
+    class Kernel:
+        async def refresh_with_new_plugin_disabled(self, name):
+            observed.append((tmp_path / ".plugin-install-demo.lock").exists())
+            return 1
+
+        def get_record(self, name):
+            return {"manifest": object(), "error_message": None}
+
+    async def initialized():
+        service.kernel = Kernel()
+
+    monkeypatch.setattr(service, "_ensure_initialized", initialized)
+    manifest = {
+        "id": "demo", "name": "demo", "version": "1.0.0",
+        "display_name": "Demo", "description": "Test plugin",
+        "author": "Tests", "license": "MIT", "category": "integration",
+    }
+    await service.install_uploaded_archive("demo", _archive({"manifest.json": json.dumps(manifest)}))
+    assert observed == [True]
+    assert not (tmp_path / ".plugin-install-demo.lock").exists()
