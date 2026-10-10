@@ -74,16 +74,15 @@ def test_staged_ui_refuses_symlinked_nested_assets(tmp_path, monkeypatch):
     (source / "demo.tsx").write_text("export default null")
     other = tmp_path / "external.tsx"
     other.write_text("external")
-    # The package source is checked for links before copying. Inject a linked
-    # asset into staging immediately before the final staged integrity check.
-    original = service._calculate_checksum
+    original_copytree = ui_installer.shutil.copytree
 
-    def check_staged(path):
-        if path.name.startswith(".install-"):
-            (path / "linked.tsx").symlink_to(other)
-        return original(path)
+    def copy_with_injected_link(src, dst, *args, **kwargs):
+        result = original_copytree(src, dst, *args, **kwargs)
+        if str(dst).split("/")[-1].startswith(".install-"):
+            (dst / "linked.tsx").symlink_to(other)
+        return result
 
-    monkeypatch.setattr(service, "_calculate_checksum", check_staged)
+    monkeypatch.setattr(ui_installer.shutil, "copytree", copy_with_injected_link)
     result = service.install_ui("demo", "integration")
     assert result.error_code == "STAGING_FAILED"
     assert not (tmp_path / "repo/demo").exists()
