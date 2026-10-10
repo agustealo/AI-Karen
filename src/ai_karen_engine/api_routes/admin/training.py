@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from ai_karen_engine.config.config_manager import get_ml_registry_dir
+from ai_karen_engine.core.intelligence.ml.training.csv_adapter import convert_csv_to_jsonl
 from ai_karen_engine.core.intelligence.ml.training.dataset_import import (
     DatasetImportError, import_jsonl_dataset, list_tenant_dataset_versions,
 )
@@ -187,6 +188,32 @@ async def preflight_advanced_training(
 class DatasetImportRequest(BaseModel):
     version: str = Field(min_length=1, max_length=128)
     content_jsonl: str = Field(min_length=1, max_length=32 * 1024 * 1024)
+
+
+class DatasetCSVImportRequest(BaseModel):
+    version: str = Field(min_length=1, max_length=128)
+    content_csv: str = Field(min_length=1, max_length=16 * 1024 * 1024)
+    column_mapping: dict[str, str] = Field(min_length=1, max_length=256)
+    delimiter: str = ","
+
+
+@router.post("/advanced/datasets/import-csv", status_code=201)
+async def import_scoped_training_csv(
+    body: DatasetCSVImportRequest,
+    current_user: Any = Depends(require_permission(Permission.TRAINING_EXECUTE)),
+) -> dict[str, Any]:
+    tenant, _ = _identity(current_user)
+    try:
+        source = convert_csv_to_jsonl(
+            body.content_csv.encode("utf-8"),
+            column_mapping=body.column_mapping, delimiter=body.delimiter,
+        )
+        return import_jsonl_dataset(
+            source=source, root=Path(get_ml_registry_dir()) / "datasets",
+            tenant_id=tenant, version=body.version,
+        )
+    except DatasetImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/advanced/datasets")
