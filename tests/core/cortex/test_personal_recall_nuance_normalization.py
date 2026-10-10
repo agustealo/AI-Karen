@@ -29,7 +29,7 @@ def test_emphasis_cannot_change_personal_recall_intent(plain, emphatic, attribut
 
 
 def test_normalization_does_not_invent_recall_or_change_save_requests():
-    assert normalize_personal_query("What is my fucking name?") == "what is my name?"
+    assert normalize_personal_query("What is my fucking name?") == "what is my fucking name?"
     assert not is_personal_memory_recall_query("Tell me a fucking story")
     assert not is_explicit_memory_save_request("What is my fucking name?")
     assert is_explicit_memory_save_request("Remember my name.")

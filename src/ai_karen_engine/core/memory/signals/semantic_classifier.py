@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from ai_karen_engine.core.intelligence.profile_attribute import normalize_personal_query
+from ai_karen_engine.core.intelligence.profile_attribute import (normalize_personal_query, requested_profile_attribute)
 
 from .general_fact_classifier import classify_general_user_facts
 from .signal_models import MemorySignal
@@ -119,7 +119,7 @@ _PERSONAL_RECALL_QUERY = re.compile(
 def is_personal_memory_recall_query(text: str) -> bool:
     """Recognize a bounded recall cue; authorization remains with policy."""
     normalized = normalize_personal_query(text)
-    return bool(_PERSONAL_RECALL_QUERY.fullmatch(normalized))
+    return bool(_PERSONAL_RECALL_QUERY.fullmatch(normalized)) or requested_profile_attribute(text) is not None
 
 
 def is_explicit_memory_save_request(text: str) -> bool:

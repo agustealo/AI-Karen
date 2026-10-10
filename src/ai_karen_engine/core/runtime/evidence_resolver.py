@@ -144,6 +144,37 @@ class RuntimeEvidenceResolver:
                     return value
         return None
 
+    @staticmethod
+    def _memory_retrieval_query(
+        request: ChatExecutionRequest, requirement: ContextRequirement
+    ) -> str:
+        """Preserve requested semantics across emphatic personal-recall phrasing.
+
+        Normalize only the recall search query. The original utterance remains
+        intact for CORTEX, audit, conversation and persistence. No additional
+        memory source is authorized here.
+        """
+        governed_query = str(requirement.metadata.get("retrieval_query") or "").strip()
+        if governed_query:
+            return governed_query
+        query = RuntimeEvidenceResolver._latest_user_message(request)
+        from ai_karen_engine.core.intelligence.profile_attribute import (
+            requested_profile_attribute,
+        )
+
+        # Query by the requested fact, not by a sanitized user utterance.
+        # The semantic query is internal and the original words are untouched.
+        attribute = requested_profile_attribute(query)
+        canonical_queries = {
+            "preferred_name": "what is my name",
+            "origin_location": "where am i from",
+            "birthplace": "where was i born",
+            "residence_location": "where do i live",
+            "work_location": "where do i work",
+            "current_location": "where am i currently",
+        }
+        return canonical_queries.get(attribute, query)
+
     async def _resolve_memory(
         self,
         request: ChatExecutionRequest,
@@ -165,10 +196,7 @@ class RuntimeEvidenceResolver:
             result = await memory_manager.recall_context(
                 user_id=ctx.user_id,
                 tenant_id=ctx.tenant_id,
-                query=(
-                    str(requirement.metadata.get("retrieval_query") or "").strip()
-                    or self._latest_user_message(request)
-                ),
+                query=self._memory_retrieval_query(request, requirement),
                 top_k=max(0, int(requirement.max_items or 0)),
                 tiers=tuple(requirement.classes),
                 session_id=ctx.session_id,
