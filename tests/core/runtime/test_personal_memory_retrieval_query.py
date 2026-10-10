@@ -55,3 +55,20 @@ def test_explicit_retrieval_query_remains_authoritative_for_unrelated_requests()
     )
     requirement = SimpleNamespace(metadata={"retrieval_query": "project status"})
     assert RuntimeEvidenceResolver._memory_retrieval_query(request, requirement) == "project status"
+
+
+def test_explicit_governed_personal_query_is_preserved_exactly():
+    ctx = ChatExecutionContext(
+        user_id="user", tenant_id="tenant", session_id="session",
+        conversation_id="conversation", request_id="request", correlation_id="correlation",
+    )
+    request = ChatExecutionRequest(
+        messages=[{"role": "user", "content": "Where the fuck am I currently?"}],
+        context=ctx,
+    )
+    requirement = SimpleNamespace(
+        metadata={"semantic_role": "location.current", "retrieval_query": "Where am I currently?"}
+    )
+    assert RuntimeEvidenceResolver._memory_retrieval_query(
+        request, requirement
+    ) == "Where am I currently?"
