@@ -78,6 +78,7 @@ def preflight_advanced_engine(
                 pass
     count = 0
     last = None
+    seen_texts: set[str] = set()
     if dataset is not None:
         try:
             with dataset.open(encoding="utf-8") as source:
@@ -103,14 +104,18 @@ def preflight_advanced_engine(
                         if last is not None and stamp.timestamp() <= last:
                             raise ValueError("Timestamps must be strictly increasing")
                         last = stamp.timestamp()
-                    elif not isinstance(obj.get("text"), str) or not obj["text"].strip():
-                        raise ValueError("Nonempty text required for LoRA dataset")
+                    else:
+                        if not isinstance(obj.get("text"), str) or not obj["text"].strip():
+                            raise ValueError("Nonempty text required for LoRA dataset")
+                        if obj["text"] in seen_texts:
+                            raise ValueError("Duplicate text examples compromise the holdout")
+                        seen_texts.add(obj["text"])
         except (OSError, KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
             reject("invalid_dataset_record", str(exc))
     evidence["examples_scanned"] = count
     if count < (30 if engine == "timeseries" else 16):
         reject("insufficient_samples", "Dataset is too small")
-    if engine == "timeseries" and 2 <= lags <= 128 and 1 <= horizon <= 32 and count:
+    if engine == "timeseries" and isinstance(lags, int) and isinstance(horizon, int) and 2 <= lags <= 128 and 1 <= horizon <= 32 and count:
         windows = count - lags - horizon + 1
         holdout = max(5, math.ceil(windows * test_split))
         if windows - holdout - horizon < 10:
