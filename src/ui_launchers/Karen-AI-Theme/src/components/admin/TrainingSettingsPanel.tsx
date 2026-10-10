@@ -502,17 +502,11 @@ export default function TrainingSettingsPanel() {
       </Card>
 
       <Tabs defaultValue="intelligence" className="w-full">
-        <TabsList className="flex w-full flex-wrap justify-start">
-          <TabsTrigger value="intelligence">Learning Overview</TabsTrigger>
-          <TabsTrigger value="advanced">Train a Model</TabsTrigger>
-          <TabsTrigger value="management">Data &amp; Governance</TabsTrigger>
-        </TabsList>
+        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-xl border border-border/70 bg-muted/30 p-1.5">\n          <TabsTrigger value="intelligence" className="rounded-lg px-4 py-2">Learning Overview</TabsTrigger>\n          <TabsTrigger value="advanced" className="rounded-lg px-4 py-2">Train a Model</TabsTrigger>\n          <TabsTrigger value="management" className="rounded-lg px-4 py-2">Data &amp; Governance</TabsTrigger>\n        </TabsList>
 
         <TabsContent value="advanced" className="mt-6 space-y-3">
           <p className="text-sm text-muted-foreground">
-            Train a supported classifier using a registered dataset. Submission queues a job;
-            actual execution requires a healthy training worker. Unsupported model architectures
-            are not yet trainable here.
+            Configure any executor currently reported as supported by Karen&apos;s training catalog.\n            Preflight, worker availability, persisted queue state, license acknowledgments, and\n            execution eligibility remain service-backed rather than simulated in the browser.
           </p>
           <AdvancedTrainingWorkbench />
         </TabsContent>
