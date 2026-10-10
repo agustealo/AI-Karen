@@ -49,3 +49,17 @@ def test_lora_preflight_requires_selected_license_and_local_model(tmp_path):
     assert not result["ready"]
     codes = {item["code"] for item in result["checks"]}
     assert "base_model_missing" in codes
+
+
+def test_lora_preflight_rejects_duplicate_holdout_candidates(tmp_path):
+    path = tmp_path / "series_v1.jsonl"
+    path.write_text(('{"text":"same training example"}\n') * 20)
+    result = _check(tmp_path, engine="transformers")
+    assert result["ready"] is False
+    assert "invalid_dataset_record" in {item["code"] for item in result["checks"]}
+
+
+def test_temporal_preflight_rejects_invalid_lag_type_without_crashing(tmp_path):
+    result = _check(tmp_path, lags="five")
+    assert result["ready"] is False
+    assert "invalid_lags" in {item["code"] for item in result["checks"]}
