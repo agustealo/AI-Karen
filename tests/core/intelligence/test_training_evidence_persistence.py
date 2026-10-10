@@ -13,13 +13,11 @@ from ai_karen_engine.core.intelligence.ml.evaluation.contracts import (
     BenchmarkResult, MetricResult, PredictionOutcome,
 )
 from ai_karen_engine.core.intelligence.ml.evaluation.evidence import EvaluationEvidenceStore
-from ai_karen_engine.core.intelligence.ml.promotion import PromotionDecision
 from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
 from ai_karen_engine.core.intelligence.ml.training.sklearn_executor import _hash_directory
 
 
-def test_canonical_receipt_survives_registry_restart_and_rejects_tampering(tmp_path, monkeypatch):
-    from ai_karen_engine.core.intelligence.ml.evaluation import evidence
+def test_canonical_receipt_survives_registry_restart_and_rejects_tampering(tmp_path):
 
     registry = MLModelRegistry(registry_dir=str(tmp_path / "registry"))
     artifact = tmp_path / "model"
@@ -40,20 +38,15 @@ def test_canonical_receipt_survives_registry_restart_and_rejects_tampering(tmp_p
     )
     result = BenchmarkResult(
         model_id=model_id, model_version="v1", task=PredictionTask.INTENT,
-        dataset_version="benchmark-v1", sample_count=1,
-        metrics={"accuracy": MetricResult(metric_name="accuracy", value=1.0, sample_count=1)},
+        dataset_version="benchmark-v1", sample_count=100,
+        metrics={"accuracy": MetricResult("accuracy", 1.0, 100), "macro_f1": MetricResult("macro_f1", 1.0, 100), "ece": MetricResult("ece", 0.0, 100)},
         latency_p50_ms=1.0, latency_p95_ms=1.0,
         error_count=0, fallback_count=0, abstention_count=0,
         outcomes=[PredictionOutcome(
-            case_id="case-1", task=PredictionTask.INTENT, prediction=prediction,
+            case_id=f"case-{i}", task=PredictionTask.INTENT, prediction=prediction,
             expected_label="test", correct=True,
-        )],
+        ) for i in range(100)],
     )
-    # Isolate receipt durability from the threshold calculator: the actual
-    # benchmark gate is tested in test_promotion.py.
-    monkeypatch.setattr(evidence, "evaluate_promotion", lambda *args: (
-        PromotionDecision.PROMOTION_ELIGIBLE, ["test fixture threshold approved"],
-    ))
     store = EvaluationEvidenceStore(registry.registry_dir)
     receipt = store._record(manifest, result)
     assert receipt
