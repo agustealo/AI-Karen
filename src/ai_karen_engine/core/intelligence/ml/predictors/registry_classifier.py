@@ -218,7 +218,7 @@ class RegistryBackedClassifier(BasePredictor):
         self,
         manifest: MLModelManifest,
     ) -> tuple[Any, list[str]]:
-        if manifest.architecture != "trained":
+        if manifest.architecture not in {"trained", "logistic_regression"}:
             raise ValueError("RegistryBackedClassifier only accepts canonical sklearn artifacts")
         if self._loaded_manifest == manifest and self._loaded_model is not None:
             if not manifest.artifact_hash or not self._registry.validate_artifact(manifest):
