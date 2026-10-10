@@ -192,3 +192,59 @@ async def test_admin_user_rejects_composite_deactivation_before_writes():
             "user-a", {"full_name": "Changed", "is_active": False},
             operator_tenant_id="tenant-a",
         )
+
+
+@pytest.mark.asyncio
+async def test_admin_user_list_serializes_database_string_roles():
+    from ai_karen_engine.api_routes.admin.users import serialize_user_roles
+
+    assert serialize_user_roles(["admin", UserRole.USER]) == ["admin", "user"]
+
+    class UserService:
+        async def list_users(self, **kwargs):
+            return [SimpleNamespace(
+                id="user-a",
+                email="user@example.com",
+                full_name="A User",
+                username="a-user",
+                tenant_id="tenant-a",
+                roles=["admin", "user"],
+                status=UserStatus.ACTIVE,
+                is_active=True,
+                is_verified=True,
+                created_at=None,
+                updated_at=None,
+                last_login=None,
+            )]
+
+    result = await list_admin_users(
+        current_user={"user_id": "operator", "tenant_id": "tenant-a"},
+        service=UserService(), tenant_id="tenant-a",
+        role=None, status=None, search=None, limit=10, offset=0,
+    )
+    assert result.total == 1
+    assert result.users[0]["roles"] == ["admin", "user"]
+
+
+@pytest.mark.asyncio
+async def test_admin_user_create_serializes_database_string_roles():
+    class UserService:
+        async def create_user(self, **kwargs):
+            return SimpleNamespace(
+                id="user-a",
+                email=kwargs["email"],
+                full_name=kwargs["full_name"],
+                tenant_id="tenant-a",
+                roles=["admin"],
+            )
+
+    from ai_karen_engine.api_routes.admin.users import AdminUserCreateRequest
+    result = await create_admin_user(
+        request=AdminUserCreateRequest(
+            email="user@example.com", password="strong-password",
+            full_name="A User", tenant_id="tenant-a", roles=["admin"],
+        ),
+        current_user={"user_id": "operator", "tenant_id": "tenant-a"},
+        service=UserService(),
+    )
+    assert result["roles"] == ["admin"]
