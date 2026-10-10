@@ -140,3 +140,25 @@ def test_lease_valid_requires_current_unexpired_owner(tmp_path):
             ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), "training-1"),
         )
     assert not store.lease_valid("training-1", tenant_id="tenant-a", token=token)
+
+
+def test_execution_status_reports_tenant_scoped_leases_without_claiming_worker_health(tmp_path):
+    store = TrainingJobLedger(tmp_path / "jobs.sqlite3")
+    store.submit(make_job("queued-a"), tenant_id="tenant-a", user_id="operator")
+    store.submit(make_job("active-a"), tenant_id="tenant-a", user_id="operator")
+    store.submit(make_job("queued-b"), tenant_id="tenant-b", user_id="operator")
+    token = store.claim("active-a", tenant_id="tenant-a")
+    assert token
+
+    a = store.execution_status(tenant_id="tenant-a")
+    assert a["queued_jobs"] == 1
+    assert a["active_leases"] == 1
+    assert a["expired_leases"] == 0
+    assert a["worker_status"] == "unverified"
+    assert a["automatic_dispatch_verified"] is False
+
+    b = store.execution_status(tenant_id="tenant-b")
+    assert b["queued_jobs"] == 1
+    assert b["active_leases"] == 0
+    with pytest.raises(ValueError, match="tenant"):
+        store.execution_status(tenant_id="default")
