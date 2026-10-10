@@ -19,7 +19,7 @@ from enum import Enum
 from contextvars import ContextVar
 import jwt
 import bcrypt
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func, text, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_karen_engine.core.services.base import BaseService
@@ -825,6 +825,62 @@ class AuthService(BaseService):
         except Exception as e:
             logger.error("Error listing users: %s", e)
             return []
+
+    async def list_users_page(
+        self,
+        *,
+        tenant_id: str,
+        role: Optional[UserRole] = None,
+        status: Optional[UserStatus] = None,
+        search: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Tuple[List[UserAccount], int]:
+        """Return a consistently filtered page and count from durable PostgreSQL."""
+        if not tenant_id:
+            raise ValueError("Admin listing requires a tenant")
+        if not 1 <= limit <= 1000 or offset < 0:
+            raise ValueError("Invalid pagination")
+        if not self._initialized:
+            await self.initialize()
+        now = datetime.utcnow()
+        try:
+            tenant_uuid = uuid.UUID(str(tenant_id))
+        except ValueError as exc:
+            raise ValueError("Invalid tenant ID") from exc
+        predicates = [AuthUser.tenant_id == tenant_uuid]
+        if role is not None:
+            predicates.append(AuthUser.roles.contains([UserRole(role).value]))
+        if status is not None:
+            status = UserStatus(status)
+            if status is UserStatus.ACTIVE:
+                predicates.extend((AuthUser.is_active.is_(True),
+                                   or_(AuthUser.locked_until.is_(None), AuthUser.locked_until <= now)))
+            elif status is UserStatus.INACTIVE:
+                predicates.append(AuthUser.is_active.is_(False))
+            elif status is UserStatus.LOCKED:
+                predicates.extend((AuthUser.is_active.is_(True), AuthUser.locked_until > now))
+            else:
+                # Current persisted auth schema does not represent pending verification
+                # as a separate UserAccount.status.
+                return [], 0
+        if search:
+            term = "%" + search.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            predicates.append(or_(
+                AuthUser.email.ilike(term, escape="\\"),
+                AuthUser.username.ilike(term, escape="\\"),
+                AuthUser.full_name.ilike(term, escape="\\"),
+            ))
+        async with self._session_scope() as session:
+            count = await session.scalar(
+                select(func.count()).select_from(AuthUser).where(*predicates)
+            )
+            rows = await session.execute(
+                select(AuthUser).where(*predicates)
+                .order_by(AuthUser.created_at.desc(), AuthUser.user_id)
+                .limit(limit).offset(offset)
+            )
+            return [self._build_user_account(row) for row in rows.scalars().all()], int(count or 0)
 
     async def create_session(
         self,
