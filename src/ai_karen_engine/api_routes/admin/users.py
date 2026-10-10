@@ -94,11 +94,16 @@ async def list_admin_users(
         limit=limit,
         offset=offset,
     )
-    users = await service.list_users(
-        user_filter=user_filter,
-        operator_tenant_id=current_user.get("tenant_id"),
-        operator_id=current_user.get("user_id"),
-    )
+    try:
+        users, total = await service.list_users_page(
+            user_filter=user_filter,
+            operator_tenant_id=current_user.get("tenant_id"),
+            operator_id=current_user.get("user_id"),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Access denied") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     serialized = [
         {
             "user_id": str(u.id),
@@ -118,7 +123,7 @@ async def list_admin_users(
     ]
     return AdminUserListResponse(
         users=serialized,
-        total=len(serialized),
+        total=total,
         limit=limit,
         offset=offset,
     )
