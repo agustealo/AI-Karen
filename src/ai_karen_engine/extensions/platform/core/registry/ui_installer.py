@@ -195,24 +195,32 @@ class UIInstallerService:
     def install_ui(self, plugin_id: str, category: str) -> UIInstallationResult:
         """Install UI for a plugin from canonical source to plugin_repo."""
         try:
+            # Treat plugin IDs as identifiers, never filesystem paths.
+            if (
+                not plugin_id
+                or plugin_id in {".", ".."}
+                or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for char in plugin_id)
+            ):
+                return UIInstallationResult(
+                    plugin_id=plugin_id,
+                    status=UIInstallationStatus.VALIDATION_FAILED,
+                    state=UIInstallationState.ERROR,
+                    message="Invalid plugin identifier",
+                    error_code="INVALID_PLUGIN_ID",
+                )
             source_path = Path("src/ai_karen_engine/extensions/plugins") / plugin_id
             if not source_path.exists():
                 alt_underscore_path = Path("src/ai_karen_engine/extensions/plugins") / plugin_id.replace('-', '_')
                 if alt_underscore_path.exists():
                     source_path = alt_underscore_path
                 else:
-                    # Try alternative path
-                    alt_source_path = Path(plugin_id)
-                    if alt_source_path.exists():
-                        source_path = alt_source_path
-                    else:
-                        return UIInstallationResult(
-                            plugin_id=plugin_id,
-                            status=UIInstallationStatus.NOT_FOUND,
-                            state=UIInstallationState.ERROR,
-                            message=f"Plugin not found in canonical location: {source_path}",
-                            error_code="PLUGIN_NOT_FOUND",
-                        )
+                    return UIInstallationResult(
+                        plugin_id=plugin_id,
+                        status=UIInstallationStatus.NOT_FOUND,
+                        state=UIInstallationState.ERROR,
+                        message=f"Plugin not found in canonical location: {source_path}",
+                        error_code="PLUGIN_NOT_FOUND",
+                    )
 
             # Repeated installation requests are idempotent when the current
             # package still validates. Never label an installed UI as broken.
