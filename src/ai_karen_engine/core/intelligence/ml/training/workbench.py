@@ -7,6 +7,7 @@ freezing, or HF exports without an installed executor.
 from __future__ import annotations
 
 import math
+import json
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,54 @@ class AdvancedTrainingWorkbench:
             dataset_root if dataset_root is not None
             else Path(get_ml_registry_dir()) / "datasets"
         )
+
+    @staticmethod
+    def _inspect_dataset_schema(path: Path) -> dict[str, Any]:
+        """Bounded structural hint, never an execution or preflight approval."""
+        matches = {"sklearn", "spacy", "transformers", "timeseries"}
+        inspected = 0
+        limit = 256
+        try:
+            with path.open("r", encoding="utf-8") as source:
+                for line in source:
+                    if not line.strip():
+                        continue
+                    if inspected >= limit:
+                        return {"schema_engines": [], "inspection_status": "incomplete",
+                                "inspection_reason": "Dataset exceeds bounded catalog inspection"}
+                    record = json.loads(line)
+                    if not isinstance(record, dict):
+                        return {"schema_engines": [], "inspection_status": "invalid",
+                                "inspection_reason": "Dataset contains a non-object record"}
+                    inspected += 1
+                    features = record.get("features")
+                    valid_features = (
+                        isinstance(features, dict) and bool(features)
+                        and all(isinstance(key, str) and isinstance(value, (int, float, bool))
+                                and math.isfinite(float(value)) for key, value in features.items())
+                    )
+                    if not (isinstance(record.get("example_id"), str)
+                            and isinstance(record.get("feature_version"), str)
+                            and valid_features and isinstance(record.get("target"), str)):
+                        matches.discard("sklearn")
+                    if not (isinstance(record.get("text"), str) and record["text"].strip()
+                            and isinstance(record.get("label"), str) and record["label"]):
+                        matches.discard("spacy")
+                    if not (isinstance(record.get("text"), str) and record["text"].strip()):
+                        matches.discard("transformers")
+                    if not (isinstance(record.get("timestamp"), str)
+                            and isinstance(record.get("value"), (int, float))
+                            and not isinstance(record.get("value"), bool)
+                            and math.isfinite(float(record["value"]))):
+                        matches.discard("timeseries")
+        except (OSError, UnicodeError, ValueError, TypeError):
+            return {"schema_engines": [], "inspection_status": "invalid",
+                    "inspection_reason": "Dataset could not be parsed safely"}
+        if inspected == 0:
+            return {"schema_engines": [], "inspection_status": "empty",
+                    "inspection_reason": "No records found"}
+        return {"schema_engines": sorted(matches), "inspection_status": "structural_only",
+                "inspection_reason": "Schema hints only; full preflight remains mandatory"}
 
     def catalog(self) -> dict[str, Any]:
         import importlib.util
@@ -91,6 +140,7 @@ class AdvancedTrainingWorkbench:
                     "version": path.stem,
                     "bytes": path.stat().st_size,
                     "format": "jsonl",
+                    **self._inspect_dataset_schema(path),
                 })
         return {
             "engines": engines,
