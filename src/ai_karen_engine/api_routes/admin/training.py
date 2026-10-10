@@ -86,6 +86,16 @@ class AdvancedPreflightRequest(BaseModel):
     class_weight: str = "balanced"
     optimizer: str = "lbfgs"
     precision: str = "fp64"
+    base_model_path: str | None = None
+    license_id: str | None = None
+    license_accepted: bool = False
+    license_model_path: str | None = None
+    epochs: int = Field(1, ge=1, le=10)
+    sequence_length: int = Field(256, ge=32, le=2048)
+    lora_rank: int = 8
+    allow_cpu_training: bool = False
+    lags: int = Field(5, ge=2, le=128)
+    horizon: int = Field(1, ge=1, le=32)
 
 
 def get_advanced_workbench() -> AdvancedTrainingWorkbench:
@@ -247,6 +257,11 @@ async def evaluate_training_candidate(
     manifest = registry.get(model_id)
     if manifest is None or manifest.status != "CANDIDATE":
         raise HTTPException(status_code=404, detail="Candidate not found")
+    if manifest.metrics.get("executor") in {"timeseries", "transformers"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Engine-specific predictor and benchmark required before promotion",
+        )
     try:
         task = PredictionTask(manifest.purpose)
     except ValueError:
