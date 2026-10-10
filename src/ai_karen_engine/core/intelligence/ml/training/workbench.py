@@ -57,8 +57,9 @@ class AdvancedTrainingWorkbench:
              "core.intelligence.ml.training.sklearn_executor",
              ("sklearn", "joblib"),
              "Registry-backed classification on numeric-feature JSONL."),
-            ("spacy", "spaCy NER / text categorization", None, ("spacy",),
-             "Requires labeled text/span datasets, an executor, evaluation, and artifact registration."),
+            ("spacy", "spaCy text categorization (NER evaluation pending)",
+             "core.intelligence.ml.training.spacy_executor", ("spacy",),
+             "Text categorization runs through the governed worker; NER remains blocked pending entity-span benchmark."),
             ("transformers", "Transformer / LoRA / PEFT", None,
              ("transformers", "peft", "torch"),
              "Requires a governed fine-tuning executor, base-model license checks, and a compatible dataset."),
@@ -166,8 +167,26 @@ class AdvancedTrainingWorkbench:
                     evidence.update(result)
                 except ValueError as exc:
                     error("invalid_spacy_dataset", str(exc))
+            if evidence.get("mode") != "textcat":
+                error("unsupported_spacy_mode", "Only spaCy text categorization has a governed benchmark; NER is not dispatchable.")
+            if not math.isfinite(test_split) or not 0.05 <= test_split <= 0.5:
+                error("invalid_test_split", "spaCy held-out split must be between 0.05 and 0.5.")
+            if not 10 <= max_samples <= 100000:
+                error("invalid_sample_limit", "spaCy sample limit must be between 10 and 100000.")
+            if not 0 <= seed <= 2**32 - 1:
+                error("invalid_seed", "Seed is outside supported range.")
+            if not 1 <= max_iter <= 100:
+                error("invalid_max_iter", "spaCy CPU updates must be between 1 and 100.")
+            if precision != "fp64" or optimizer != "lbfgs" or class_weight != "balanced":
+                error("unsupported_configuration", "This spaCy CPU trainer uses its own optimizer; leave legacy UI options at defaults.")
+            if evidence.get("mode") == "textcat":
+                from math import ceil
+                counts = evidence.get("class_counts", {})
+                test_count = ceil(evidence["examples_scanned"] * test_split) if math.isfinite(test_split) else 0
+                if test_count < len(counts) or evidence["examples_scanned"] - test_count < len(counts):
+                    error("split_class_support", "Both held-out and training splits must support every class.")
             return {
-                "ready": False,
+                "ready": not failures,
                 "checks": failures,
                 "warnings": warnings,
                 "evidence": evidence,
