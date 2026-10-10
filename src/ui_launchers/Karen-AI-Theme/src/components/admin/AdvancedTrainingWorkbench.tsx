@@ -81,6 +81,7 @@ type Config = {
   engine: string;
   task: string;
   dataset_version: string;
+  dataset_scope: "legacy" | "tenant";
   test_split: number;
   max_samples: number;
   seed: number;
