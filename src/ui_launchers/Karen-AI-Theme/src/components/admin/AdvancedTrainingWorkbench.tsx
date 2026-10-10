@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-type Engine = { id: string; label: string; supported: boolean; details: string };
+type Engine = { id: string; label: string; supported: boolean; status: "ready" | "missing_dependencies" | "not_implemented"; missing_dependencies: string[]; details: string };
 type Dataset = { version: string; bytes: number; format: string };
 type Catalog = {
   engines: Engine[];
@@ -173,10 +173,13 @@ export default function AdvancedTrainingWorkbench() {
                     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                       <span className="text-sm font-semibold">{engine.label}</span>
                       <Badge variant={engine.supported ? "secondary" : "outline"}>
-                        {engine.supported ? "Installed" : "Not wired"}
+                        {engine.status === "ready" ? "Executor ready" : engine.status === "missing_dependencies" ? "Dependencies missing" : "Executor not implemented"}
                       </Badge>
                     </div>
                     <p className="text-xs leading-5 text-muted-foreground">{engine.details}</p>
+                    {engine.missing_dependencies.length > 0 && (
+                      <p className="mt-2 text-xs text-muted-foreground">Missing: {engine.missing_dependencies.join(", ")}</p>
+                    )}
                   </button>
                 ))}
               </div>
