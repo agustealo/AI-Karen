@@ -245,7 +245,7 @@ async def evaluate_training_candidate(
         raise HTTPException(status_code=404, detail="Candidate not found")
     registry = MLModelRegistry()
     manifest = registry.get(model_id)
-    if manifest is None or manifest.status != "candidate":
+    if manifest is None or manifest.status != "CANDIDATE":
         raise HTTPException(status_code=404, detail="Candidate not found")
     try:
         task = PredictionTask(manifest.purpose)
