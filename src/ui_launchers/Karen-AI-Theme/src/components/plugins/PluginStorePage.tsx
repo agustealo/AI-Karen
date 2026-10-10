@@ -94,9 +94,12 @@ export default function PluginStorePage() {
     PluginCategory | undefined
   >(searchParams.category);
   const [operationError, setOperationError] = useState('');
+  const [operationSuccess, setOperationSuccess] = useState('');
   const [uploadId, setUploadId] = useState('');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uninstallId, setUninstallId] = useState('');
+  const [uninstalling, setUninstalling] = useState(false);
 
   const installedPlugins = useMemo(() => {
     return Array.isArray(plugins)
@@ -196,6 +199,35 @@ export default function PluginStorePage() {
     void refreshPlugins();
   }, [refreshPlugins]);
 
+  const handleUninstall = useCallback(async () => {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(uninstallId)) {
+      setOperationError('Choose a valid installed plugin ID.');
+      return;
+    }
+    if (!window.confirm('Uninstall plugin ' + uninstallId + '? Its installed package will be removed.')) return;
+    setUninstalling(true);
+    setOperationError('');
+    setOperationSuccess('');
+    try {
+      const response = await fetch('/api/plugins/store/' + encodeURIComponent(uninstallId) + '/installation', {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        const detail: unknown = await response.json().catch(() => null);
+        const message = detail && typeof detail === 'object' ? (detail as { detail?: unknown }).detail : null;
+        throw new Error(typeof message === 'string' ? message : 'Uninstall failed');
+      }
+      setUninstallId('');
+      await refreshPlugins();
+      setOperationSuccess('Plugin package uninstalled successfully.');
+    } catch (cause) {
+      setOperationError(getErrorMessage(cause));
+    } finally {
+      setUninstalling(false);
+    }
+  }, [uninstallId, refreshPlugins]);
+
   const handleUpload = useCallback(async () => {
     if (!uploadFile || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(uploadId)) {
       setOperationError('Select a ZIP file and a valid plugin ID.');
@@ -203,6 +235,7 @@ export default function PluginStorePage() {
     }
     setUploading(true);
     setOperationError('');
+    setOperationSuccess('');
     try {
       const form = new FormData();
       form.append('plugin_id', uploadId);
@@ -222,6 +255,7 @@ export default function PluginStorePage() {
       setUploadFile(null);
       setUploadId('');
       await refreshPlugins();
+      setOperationSuccess('Plugin package installed. It remains disabled until explicitly enabled.');
     } catch (cause) {
       setOperationError(getErrorMessage(cause));
     } finally {
@@ -313,6 +347,28 @@ export default function PluginStorePage() {
           </Button>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Uninstall a Plugin</CardTitle>
+          <CardDescription>Disable the plugin first, then remove its installed package. This does not delete bundled source files in free_plugins.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-sm">Installed plugin ID
+            <select className="rounded border bg-background px-3 py-2" value={uninstallId}
+              onChange={(event) => setUninstallId(event.target.value)}>
+              <option value="">Choose a plugin</option>
+              {installedPlugins.map(plugin =>
+                <option key={plugin.id} value={plugin.id}>{plugin.name}</option>)}
+            </select>
+          </label>
+          <Button type="button" variant="destructive" disabled={!uninstallId || uninstalling}
+            onClick={() => void handleUninstall()}>
+            {uninstalling ? 'Uninstalling...' : 'Uninstall plugin'}
+          </Button>
+        </CardContent>
+      </Card>
+
+      {operationSuccess && <p role="status" className="text-sm text-green-700 dark:text-green-400">{operationSuccess}</p>}
 
       <Tabs
         value={activeTab}

@@ -287,6 +287,9 @@ class PluginKernel:
             if registration.state is ExtensionLifecycleState.DISABLED
         )
         await self.catalog_registry.refresh()
+        # Uninstalled IDs must not retain in-memory lifecycle state. An
+        # installed plugin's persisted disabled marker is read below.
+        self._disabled.intersection_update(self.catalog_registry.list_discovered())
 
         runtime_registry = ExtensionRegistry()
         lifecycle = ExtensionLifecycleManager(runtime_registry)
