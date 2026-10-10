@@ -13,6 +13,7 @@ import joblib
 import numpy as np
 
 from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
+from ai_karen_engine.core.intelligence.ml.contracts import ModelStatus
 
 
 class TemporalForecastPredictor:
@@ -31,7 +32,7 @@ class TemporalForecastPredictor:
             if not candidate_model_id.startswith(f"tenant-{key}-"):
                 raise PermissionError("Candidate does not belong to tenant")
             manifest = self.registry.get(candidate_model_id)
-            if manifest is None or manifest.status != "candidate":
+            if manifest is None or manifest.status != ModelStatus.CANDIDATE.value:
                 raise ValueError("Candidate not available")
         else:
             manifest = self.registry.get_active("outcome_forecast", tenant_id=tenant_id)
