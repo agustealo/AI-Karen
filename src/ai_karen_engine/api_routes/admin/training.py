@@ -18,6 +18,13 @@ from ai_karen_engine.services.admin.admin_training_control_service import (
 
 router = APIRouter(prefix="/admin/training", tags=["admin-training"])
 
+_WORKER_REQUIREMENTS = {
+    "transformers": ("torch", "transformers", "peft", "accelerate", "safetensors"),
+    "timeseries": ("numpy", "sklearn"),
+    "spacy": ("spacy",),
+    "sklearn": ("sklearn",),
+}
+
 
 class TrainingControlPlaneResponse(BaseModel):
     architecture: dict[str, Any]
@@ -111,14 +118,9 @@ async def get_advanced_training_catalog(
     tenant, _ = _identity(current_user)
     catalog = workbench.catalog()
     evidence = ledger.worker_capabilities(tenant_id=tenant)
-    requirements = {
-        "transformers": ("torch", "transformers", "peft", "accelerate", "safetensors"),
-        "timeseries": ("numpy", "sklearn"),
-        "spacy": ("spacy",),
-        "sklearn": ("sklearn",),
-    }
+
     for engine in catalog["engines"]:
-        needed = requirements[engine["id"]]
+        needed = _WORKER_REQUIREMENTS[engine["id"]]
         ready_workers = []
         for worker in evidence["workers"]:
             dependencies = worker["capabilities"].get("dependencies", {})
@@ -145,13 +147,7 @@ async def get_advanced_training_catalog(
 
 def _worker_dependencies(ledger: TrainingJobLedger, *, tenant: str, engine: str) -> dict[str, bool]:
     """Only an online worker satisfying one complete dependency set can admit work."""
-    requirements = {
-        "transformers": ("torch", "transformers", "peft", "accelerate", "safetensors"),
-        "timeseries": ("numpy", "sklearn"),
-        "spacy": ("spacy",),
-        "sklearn": ("sklearn",),
-    }
-    needed = requirements.get(engine, ())
+    needed = _WORKER_REQUIREMENTS.get(engine, ())
     workers = ledger.worker_capabilities(tenant_id=tenant)["workers"]
     for worker in workers:
         dependencies = worker["capabilities"].get("dependencies", {})
@@ -179,8 +175,8 @@ def get_training_job_ledger() -> TrainingJobLedger:
 
 
 def _identity(current_user: Any) -> tuple[str, str]:
-    tenant = str(getattr(current_user, "tenant_id", "") or "")
-    user = str(getattr(current_user, "user_id", "") or "")
+    tenant = str((current_user.get("tenant_id") if isinstance(current_user, dict) else getattr(current_user, "tenant_id", "")) or "")
+    user = str((current_user.get("user_id") if isinstance(current_user, dict) else getattr(current_user, "user_id", "")) or "")
     if not tenant or tenant == "default" or not user:
         raise HTTPException(status_code=403, detail="Explicit user and tenant context required")
     return tenant, user
