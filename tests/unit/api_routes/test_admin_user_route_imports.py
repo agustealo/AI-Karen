@@ -150,3 +150,45 @@ async def test_admin_user_deactivation_uses_canonical_session_revocation():
         "user-a", {"is_active": False}, operator_tenant_id="tenant-a"
     )
     assert calls == [("user-a", False, "admin_user_deactivated")]
+
+
+@pytest.mark.asyncio
+async def test_admin_user_route_converts_cross_tenant_denial_to_403():
+    from fastapi import HTTPException
+    from ai_karen_engine.api_routes.admin.users import get_admin_user
+
+    class DenyingService:
+        async def get_user(self, *args, **kwargs):
+            raise PermissionError("tenant-b secret")
+
+    with pytest.raises(HTTPException) as raised:
+        await get_admin_user(
+            "user-b",
+            current_user={"user_id": "operator", "tenant_id": "tenant-a"},
+            service=DenyingService(),
+        )
+    assert raised.value.status_code == 403
+    assert "tenant-b" not in str(raised.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_admin_user_rejects_composite_deactivation_before_writes():
+    from ai_karen_engine.services.admin.admin_user_service import AdminUserService
+
+    class CanonicalAuth:
+        async def get_user_by_id(self, user_id):
+            return SimpleNamespace(id=user_id, tenant_id="tenant-a")
+
+        async def update_user(self, *args, **kwargs):
+            pytest.fail("partial profile mutation")
+
+        async def set_user_status(self, *args, **kwargs):
+            pytest.fail("partial deactivation")
+
+    service = AdminUserService.__new__(AdminUserService)
+    service._auth_service = CanonicalAuth()
+    with pytest.raises(ValueError, match="separately"):
+        await service.update_user(
+            "user-a", {"full_name": "Changed", "is_active": False},
+            operator_tenant_id="tenant-a",
+        )
