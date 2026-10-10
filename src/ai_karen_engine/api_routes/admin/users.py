@@ -209,12 +209,17 @@ async def update_admin_user(
 ):
     """Update user details (admin only)."""
     updates = request.model_dump(exclude_none=True)
-    success = await service.update_user(
-        user_id,
-        updates,
-        operator_tenant_id=current_user.get("tenant_id"),
-        operator_id=current_user.get("user_id"),
-    )
+    try:
+        success = await service.update_user(
+            user_id,
+            updates,
+            operator_tenant_id=current_user.get("tenant_id"),
+            operator_id=current_user.get("user_id"),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Access denied") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not success:
         raise HTTPException(status_code=400, detail="Failed to update user")
     return {"status": "success", "message": f"User {user_id} updated"}
@@ -229,11 +234,14 @@ async def delete_admin_user(
     """Delete a user (admin only)."""
     if current_user.get("user_id") == user_id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
-    success = await service.delete_user(
-        user_id,
-        operator_tenant_id=current_user.get("tenant_id"),
-        operator_id=current_user.get("user_id"),
-    )
+    try:
+        success = await service.delete_user(
+            user_id,
+            operator_tenant_id=current_user.get("tenant_id"),
+            operator_id=current_user.get("user_id"),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Access denied") from exc
     if not success:
         raise HTTPException(status_code=404, detail="User not found")
     return None
