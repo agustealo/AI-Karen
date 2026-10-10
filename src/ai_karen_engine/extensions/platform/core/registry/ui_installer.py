@@ -11,6 +11,7 @@ import os
 import shutil
 import json
 import hashlib
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
@@ -314,47 +315,64 @@ class UIInstallerService:
                             error_code="MANIFEST_VALIDATION_FAILED",
                         )
 
-            # Copy UI package to plugin_repo
+            # Stage fully outside the published package name. A reader must
+            # never discover half-copied UI files as an installed plugin.
             target_path = self.plugins_repo_root / plugin_id
             ui_source = source_path / "ui"
+            staging_path = Path(tempfile.mkdtemp(
+                prefix=".install-", dir=self.plugins_repo_root,
+            ))
             try:
-                # Ensure target directory exists
-                target_path.mkdir(parents=True, exist_ok=True)
-
                 if ui_source.exists() and ui_source.is_dir():
-                    # Copy contents of ui directory
                     for item in ui_source.iterdir():
                         if item.is_dir():
-                            shutil.copytree(item, target_path / item.name, dirs_exist_ok=True)
+                            shutil.copytree(item, staging_path / item.name)
                         else:
-                            shutil.copy2(item, target_path / item.name)
-                    
-                    # Also copy manifest.json from root if it exists
+                            shutil.copy2(item, staging_path / item.name)
                     manifest_source = source_path / "manifest.json"
-                    if manifest_source.exists():
-                        shutil.copy2(manifest_source, target_path / "manifest.json")
-                    
-                    logger.info(f"Copied UI artifacts from {ui_source} to {target_path}")
+                    if manifest_source.is_file():
+                        shutil.copy2(manifest_source, staging_path / "manifest.json")
                 else:
-                    # Fallback to copying entire source if no ui directory
-                    shutil.copytree(source_path, target_path, dirs_exist_ok=True)
-                    logger.info(f"Copied entire plugin source from {source_path} to {target_path}")
-            except Exception as e:
-                # No valid package existed before this call. Delete only the
-                # partial directory created by this installation attempt.
-                if target_path.is_dir() and not target_path.is_symlink():
-                    shutil.rmtree(target_path, ignore_errors=True)
+                    shutil.copytree(source_path, staging_path, dirs_exist_ok=True)
+
+                if not (staging_path / "manifest.json").is_file():
+                    raise ValueError("Staged plugin UI manifest is missing")
+                with (staging_path / "manifest.json").open("r", encoding="utf-8") as handle:
+                    manifest = json.load(handle)
+                entry = manifest.get("entry", {})
+                entry_rel = (
+                    entry.get("entry_file") if isinstance(entry, dict) else None
+                ) or manifest.get("entry_file") or f"{plugin_id}.tsx"
+                if (
+                    not isinstance(entry_rel, str)
+                    or not entry_rel
+                    or Path(entry_rel).is_absolute()
+                    or ".." in Path(entry_rel).parts
+                ):
+                    raise ValueError("Invalid staged UI entry")
+                staged_entry = staging_path / entry_rel
+                if not staged_entry.is_file() or staged_entry.is_symlink():
+                    raise ValueError("Staged UI entry is missing or unsafe")
+                self._calculate_checksum(staging_path)
+                if target_path.exists() or target_path.is_symlink():
+                    raise FileExistsError("UI package target became occupied")
+                os.rename(staging_path, target_path)
+            except Exception:
+                logger.exception("Failed to stage or publish plugin UI: %s", plugin_id)
                 return UIInstallationResult(
                     plugin_id=plugin_id,
                     status=UIInstallationStatus.FAILED,
                     state=UIInstallationState.ERROR,
-                    message=f"Failed to copy UI package: {e}",
-                    error_code="COPY_FAILED",
+                    message="UI staging or publication failed",
+                    error_code="STAGING_FAILED",
                 )
+            finally:
+                if staging_path.is_dir() and not staging_path.is_symlink():
+                    shutil.rmtree(staging_path, ignore_errors=True)
 
             # Create package info
             manifest_path = target_path / "manifest.json"
-            entry_file = target_path / f"{plugin_id}.tsx"
+            entry_file = target_path / entry_rel
 
             package_info = UIPackageInfo(
                 plugin_id=plugin_id,
