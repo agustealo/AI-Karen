@@ -37,5 +37,5 @@ jobs:
         run: |
           pytest tests/core/intelligence/test_training_job_ledger.py tests/core/intelligence/test_training_job_worker.py -q
           pytest tests/core/intelligence/test_spacy_training_executor.py tests/core/intelligence/test_registry_spacy_predictor.py -q
-          pytest tests/core/intelligence/test_registry_backed_classifier.py -q
+          pytest tests/core/intelligence/test_registry_backed_classifier.py tests/core/intelligence/test_training_evidence_persistence.py -q
           pytest tests/unit/core/intelligence/ml/test_training.py tests/unit/core/intelligence/ml/test_evaluation.py -q
