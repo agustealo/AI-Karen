@@ -9,7 +9,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from ai_karen_engine.core.intelligence.ml.contracts import MLModelManifest, ModelStatus
+from ai_karen_engine.core.intelligence.ml.contracts import MLModelManifest, ModelStatus, Prediction, PredictionTask
 from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
 
 
@@ -65,3 +65,38 @@ class RegistryBackedSpacyPredictor:
                 for ent in doc.ents
             ], "model_id": manifest.model_id, "model_version": manifest.model_version,
         }
+
+
+class SpacyCandidateBenchmarkPredictor:
+    """Classification-only adapter for the canonical benchmark and evidence gate."""
+
+    def __init__(
+        self, *, registry: MLModelRegistry, tenant_id: str,
+        candidate_model_id: str, task: PredictionTask,
+    ) -> None:
+        self._registry = registry
+        self._tenant_id = tenant_id
+        self._candidate_model_id = candidate_model_id
+        self._task = task
+        self._inference = RegistryBackedSpacyPredictor(registry=registry)
+
+    async def predict(self, features: Any) -> Prediction:
+        manifest = self._inference._verified(
+            model_id=self._candidate_model_id,
+            tenant_id=self._tenant_id,
+            allow_candidate=True,
+        )
+        if manifest.metrics.get("mode") != "textcat" or manifest.purpose != self._task.value:
+            raise ValueError("Only matching text categorization models can use classification benchmarks")
+        result = self._inference.predict_text(
+            model_id=manifest.model_id, tenant_id=self._tenant_id,
+            text=features.text, allow_candidate=True,
+        )
+        return Prediction(
+            task=self._task, label=result["label"],
+            probability=result["confidence"], confidence=result["confidence"],
+            model_id=manifest.model_id, model_version=manifest.model_version,
+            feature_version=manifest.feature_version,
+            inference_method="registry_spacy_textcat",
+            metadata={"scores": result["scores"]},
+        )
