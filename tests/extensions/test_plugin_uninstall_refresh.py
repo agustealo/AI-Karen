@@ -18,6 +18,9 @@ async def test_refresh_prunes_uninstalled_plugin_disable_state(tmp_path: Path):
         def list_discovered(self):
             return []
 
+        def get_metadata(self, plugin_id):
+            return None
+
     kernel.catalog_registry = EmptyCatalog()
     await kernel.refresh()
     assert kernel._disabled == set()
