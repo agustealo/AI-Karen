@@ -29,7 +29,7 @@ from ai_karen_engine.learning.training_data_manager import (
     DatasetVersion
 )
 from ai_karen_engine.learning.autonomous_learner import TrainingExample, LearningDataType
-from ai_karen_engine.core.cortex.analysis import SpacyAnalyzer
+from ai_karen_engine.core.intelligence.linguistic.spacy_analyzer import SpacyAnalyzer
 from ai_karen_engine.core.memory.signals.spacy_service import SpacyService
 from ai_karen_engine.core.services.dependencies import get_memory_service
 from ai_karen_engine.auth.rbac_middleware import (
@@ -65,7 +65,8 @@ async def _create_autonomous_learner() -> "AutonomousLearner":
 
     memory_service = await get_memory_service()
     return AutonomousLearner(
-        spacy_analyzer=SpacyAnalyzer(spacy_service=SpacyService()),
+        spacy_analyzer=SpacyAnalyzer(),
+        spacy_service=SpacyService(),
         memory_service=memory_service,
     )
 
