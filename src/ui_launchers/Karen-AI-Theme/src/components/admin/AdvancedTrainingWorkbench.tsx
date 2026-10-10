@@ -31,6 +31,7 @@ type Config = {
 };
 type Finding = { code: string; message: string };
 type JobSummary = { job_id: string; state: string; submitted_at: string; updated_at: string };
+type ExecutionStatus = { queued_jobs: number; active_leases: number; expired_leases: number; worker_status: string; worker_status_reason: string; automatic_dispatch_verified: boolean };
 type Preflight = {
   ready: boolean;
   checks: Finding[];
@@ -50,6 +51,7 @@ export default function AdvancedTrainingWorkbench() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
+  const [executionStatus, setExecutionStatus] = useState<ExecutionStatus | null>(null);
   const [queueing, setQueueing] = useState(false);
   const [queueMessage, setQueueMessage] = useState<string | null>(null);
 
@@ -101,8 +103,11 @@ export default function AdvancedTrainingWorkbench() {
     try {
       const response = await apiClient.get<{ jobs: JobSummary[] }>("/api/admin/training/advanced/jobs");
       setJobs(response.jobs);
+      const status = await apiClient.get<ExecutionStatus>("/api/admin/training/advanced/execution-status");
+      setExecutionStatus(status);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Job inventory unavailable");
+      setExecutionStatus(null);
+      setError(cause instanceof Error ? cause.message : "Job inventory or execution status unavailable");
     }
   }, []);
 
@@ -323,6 +328,19 @@ export default function AdvancedTrainingWorkbench() {
           </Button>
         </CardHeader>
         <CardContent className="space-y-2">
+          {executionStatus && (
+            <Alert>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>Worker availability: {executionStatus.worker_status}</AlertTitle>
+              <AlertDescription>
+                {executionStatus.worker_status_reason}. Queued: {executionStatus.queued_jobs};
+                active job leases: {executionStatus.active_leases};
+                expired leases: {executionStatus.expired_leases}.
+                {executionStatus.expired_leases > 0 && " Operator recovery review required."}
+                {!executionStatus.automatic_dispatch_verified && " Automatic dispatch has not been verified."}
+              </AlertDescription>
+            </Alert>
+          )}
           {jobs.length === 0 && <p className="text-sm text-muted-foreground">No jobs reported for this tenant.</p>}
           {jobs.map(job => (
             <div key={job.job_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
