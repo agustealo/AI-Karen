@@ -181,6 +181,32 @@ class AdminUserService:
         )
         return users
 
+    async def list_users_page(
+        self,
+        user_filter: AdminUserFilter,
+        operator_tenant_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+    ) -> tuple[List[UserAccount], int]:
+        """Delegate filtering and counting to the canonical durable query."""
+        tenant_id = self._enforce_tenant_boundary(
+            user_filter.tenant_id, operator_tenant_id
+        )
+        if not tenant_id:
+            raise PermissionError("Tenant context required")
+        users, total = await self._auth_service.list_users_page(
+            tenant_id=tenant_id,
+            role=user_filter.role,
+            status=user_filter.status,
+            search=user_filter.search,
+            limit=user_filter.limit,
+            offset=user_filter.offset,
+        )
+        self._audit_mutation(
+            action="list", target_user_id=None, tenant_id=tenant_id,
+            operator_id=operator_id, metadata={"count": len(users), "total": total},
+        )
+        return users, total
+
     async def update_user(
         self,
         user_id: str,
