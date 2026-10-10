@@ -47,3 +47,46 @@ def test_tampered_spacy_candidate_is_rejected_before_loading(tmp_path):
     predictor = RegistryBackedSpacyPredictor(registry=registry)
     with pytest.raises(ValueError, match="integrity"):
         predictor._verified(model_id=candidate.model_id, tenant_id="tenant-a", allow_candidate=True)
+
+
+@pytest.mark.asyncio
+async def test_spacy_classification_candidate_uses_canonical_prediction_contract(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from ai_karen_engine.core.intelligence.ml.contracts import PredictionTask
+    from ai_karen_engine.core.intelligence.ml.predictors.registry_spacy import (
+        SpacyCandidateBenchmarkPredictor,
+    )
+
+    registry, candidate = _candidate(tmp_path)
+    adapter = SpacyCandidateBenchmarkPredictor(
+        registry=registry, tenant_id="tenant-a",
+        candidate_model_id=candidate.model_id, task=PredictionTask.INTENT,
+    )
+    monkeypatch.setattr(adapter._inference, "predict_text", lambda **kwargs: {
+        "label": "intent-a", "confidence": 0.85, "scores": {"intent-a": 0.85},
+    })
+    prediction = await adapter.predict(SimpleNamespace(text="hello"))
+    assert prediction.model_id == candidate.model_id
+    assert prediction.model_version == candidate.model_version
+    assert prediction.task == PredictionTask.INTENT
+    assert prediction.label == "intent-a"
+    assert prediction.fallback_used is False
+
+
+@pytest.mark.asyncio
+async def test_spacy_ner_cannot_enter_classification_benchmark(tmp_path):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from ai_karen_engine.core.intelligence.ml.contracts import PredictionTask
+    from ai_karen_engine.core.intelligence.ml.predictors.registry_spacy import (
+        SpacyCandidateBenchmarkPredictor,
+    )
+
+    registry, candidate = _candidate(tmp_path)
+    registry.register(replace(candidate, metrics={"mode": "ner"}))
+    adapter = SpacyCandidateBenchmarkPredictor(
+        registry=registry, tenant_id="tenant-a",
+        candidate_model_id=candidate.model_id, task=PredictionTask.INTENT,
+    )
+    with pytest.raises(ValueError, match="Only matching text categorization"):
+        await adapter.predict(SimpleNamespace(text="Alice"))
