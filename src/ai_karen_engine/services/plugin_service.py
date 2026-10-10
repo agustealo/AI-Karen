@@ -192,6 +192,9 @@ class PluginService:
         try:
             if plugin_id in kernel._active.values():
                 raise RuntimeError("Plugin has active executions")
+            registration = kernel.runtime_registry.get(plugin_id)
+            if registration is not None and registration.state.value != "disabled":
+                raise RuntimeError("Disable the plugin before uninstalling it")
             if not target.is_dir() or target.is_symlink():
                 raise FileNotFoundError("Plugin is not installed")
             quarantine.mkdir(mode=0o700, parents=True, exist_ok=True)
