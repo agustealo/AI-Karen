@@ -233,3 +233,45 @@ def test_broad_identity_fails_closed_with_no_authorized_evidence():
     assert "Aurelia" not in answer
     assert meta["evidence_sufficiency"] == "missing"
     assert meta["actual_model"] is None
+
+
+def test_upbringing_answer_never_invents_family_or_promotes_origin():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={"personal_evidence_attribute": "upbringing_location"},
+    )
+    decision.cognitive_context = context(
+        evidence("upbringing_location", "NYC"),
+        evidence("origin_location", "Jamaica"),
+        evidence("residence_location", "Detroit"),
+    )
+    answer, meta = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="tenant", user_id="user"
+    )
+    assert "NYC" in answer
+    for unrelated in ("Jamaica", "Detroit", "mother", "father", "children"):
+        assert unrelated not in answer
+    assert meta["actual_provider"] is None
+    assert meta["response_source"] == "authorized_memory_evidence"
+    assert meta["evidence_count"] == 1
+
+
+def test_missing_upbringing_is_honest_without_ollama():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={"personal_evidence_attribute": "upbringing_location"},
+    )
+    decision.cognitive_context = context(evidence("origin_location", "Jamaica"))
+    answer, meta = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="tenant", user_id="user"
+    )
+    assert "don't have verified" in answer
+    assert "Jamaica" not in answer
+    assert meta["actual_provider"] is None
+    assert meta["evidence_sufficiency"] == "missing"
