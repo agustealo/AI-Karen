@@ -89,6 +89,30 @@ services:
     networks:
       - ai-karen-net
 
+
+  # Opt-in governed training worker. Shares the canonical registry with the API.
+  # Enable with: docker compose --profile training-worker up -d training-worker
+  training-worker:
+    build:
+      context: .
+      target: app
+      args:
+        PROFILE: ${API_BUILD_TARGET:-runtime}
+    profiles:
+      - training-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: "/app:/app/src"
+      KAREN_TRAINING_WORKER_TENANT: "${KAREN_TRAINING_WORKER_TENANT:?Set an explicit training tenant to enable the worker}"
+    volumes:
+      - "./models:/app/models:rw"
+    command: ["python", "-m", "ai_karen_engine.core.intelligence.ml.training.worker_service"]
+    networks:
+      - ai-karen-net
+
+
   # ──────────────────────────────────────────────────────────────────────
   # vLLM OpenAI-compatible inference server
   # Included in the default stack so `docker compose up` pulls and starts it.
