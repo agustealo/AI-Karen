@@ -139,7 +139,7 @@ def test_preflight_rejects_singleton_class_that_executor_cannot_stratify(tmp_pat
 def test_catalog_identifies_structural_dataset_engines(tmp_path):
     root = _dataset(tmp_path)
     (root / "text_v1.jsonl").write_text(
-        "\\n".join(json.dumps({"text": f"example {index}", "label": "demo"}) for index in range(16)) + "\\n",
+        "\n".join(json.dumps({"text": f"example {index}", "label": "demo"}) for index in range(16)) + "\n",
         encoding="utf-8",
     )
     catalog = AdvancedTrainingWorkbench(root).catalog()
@@ -152,10 +152,10 @@ def test_catalog_identifies_structural_dataset_engines(tmp_path):
 
 def test_catalog_does_not_mark_incomplete_or_bad_datasets_as_compatible(tmp_path):
     root = _dataset(tmp_path)
-    (root / "bad.jsonl").write_text("{not json}\\n", encoding="utf-8")
+    (root / "bad.jsonl").write_text("{not json}\n", encoding="utf-8")
     (root / "empty.jsonl").write_text("", encoding="utf-8")
     (root / "large.jsonl").write_text(
-        "".join(json.dumps({"text": f"example {index}"}) + "\\n" for index in range(257)),
+        "".join(json.dumps({"text": f"example {index}"}) + "\n" for index in range(257)),
         encoding="utf-8",
     )
     by_version = {
