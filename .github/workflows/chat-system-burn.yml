@@ -59,6 +59,9 @@ jobs:
       - name: Verify volunteered personal fact acknowledgment contract
         run: pytest tests/core/runtime/test_volunteered_fact_acknowledgment.py -q
 
+      - name: Prove personal recall search query invariance
+        run: pytest tests/core/runtime/test_personal_memory_retrieval_query.py -q
+
       - name: Run chat architecture contract
         run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
 
