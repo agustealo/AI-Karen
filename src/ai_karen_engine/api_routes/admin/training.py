@@ -106,9 +106,41 @@ def get_advanced_workbench() -> AdvancedTrainingWorkbench:
 async def get_advanced_training_catalog(
     current_user: dict[str, Any] = Depends(require_permission(Permission.TRAINING_READ)),
     workbench: AdvancedTrainingWorkbench = Depends(get_advanced_workbench),
+    ledger: TrainingJobLedger = Depends(lambda: TrainingJobLedger()),
 ) -> dict[str, Any]:
-    del current_user
-    return workbench.catalog()
+    tenant, _ = _identity(current_user)
+    catalog = workbench.catalog()
+    evidence = ledger.worker_capabilities(tenant_id=tenant)
+    requirements = {
+        "transformers": ("torch", "transformers", "peft", "accelerate", "safetensors"),
+        "timeseries": ("numpy", "sklearn"),
+        "spacy": ("spacy",),
+        "sklearn": ("sklearn",),
+    }
+    for engine in catalog["engines"]:
+        needed = requirements[engine["id"]]
+        ready_workers = []
+        for worker in evidence["workers"]:
+            dependencies = worker["capabilities"].get("dependencies", {})
+            if all(dependencies.get(package) is True for package in needed):
+                ready_workers.append(worker["worker_id"])
+        engine["supported"] = bool(ready_workers)
+        engine["status"] = "ready" if ready_workers else (
+            "worker_offline" if not evidence["workers"] else "missing_dependencies"
+        )
+        engine["missing_dependencies"] = (
+            [] if not evidence["workers"] else [
+                package for package in needed
+                if not any(
+                    worker["capabilities"].get("dependencies", {}).get(package) is True
+                    for worker in evidence["workers"]
+                )
+            ]
+        )
+        engine["worker_status"] = evidence["worker_status"]
+        engine["details"] += " Execution availability is determined by the tenant-scoped training worker."
+    catalog["worker_status"] = evidence["worker_status"]
+    return catalog
 
 
 @router.post("/advanced/preflight")
