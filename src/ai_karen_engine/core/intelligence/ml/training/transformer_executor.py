@@ -74,6 +74,9 @@ class TransformerLoRAExecutor:
         training_texts, validation_texts = texts[:-holdout_count], texts[-holdout_count:]
         if not torch.cuda.is_available() and not cfg.get("allow_cpu_training", False):
             raise RuntimeError("CUDA is unavailable; CPU training requires explicit opt-in")
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
         tokenizer = AutoTokenizer.from_pretrained(str(base_path), local_files_only=True, trust_remote_code=False)
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -90,9 +93,6 @@ class TransformerLoRAExecutor:
         adapter.to(device).train()
         optimizer = torch.optim.AdamW((p for p in adapter.parameters() if p.requires_grad), lr=2e-4)
         losses = []
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
         for _ in range(epochs):
             for text in training_texts:
                 batch = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length)
