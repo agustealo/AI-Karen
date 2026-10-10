@@ -22,6 +22,19 @@ class DatasetImportError(ValueError):
     """The proposed import cannot be safely published."""
 
 
+def tenant_dataset_directory(root: Path, tenant_id: str) -> Path:
+    """Resolve an isolated dataset directory without creating or exposing it."""
+    if not isinstance(tenant_id, str) or not tenant_id.strip() or tenant_id == "default":
+        raise DatasetImportError("Explicit tenant identity is required")
+    key = hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:24]
+    directory = root / ("tenant-" + key)
+    # Check the entire existing ancestor chain before creating directories.
+    # Merely checking the leaf permits a symlink at an intermediate root.
+    if any(parent.is_symlink() for parent in (root, *root.parents)) or directory.is_symlink():
+        raise DatasetImportError("Dataset storage cannot use symlinks")
+    return directory
+
+
 def import_jsonl_dataset(
     *,
     source: BinaryIO,
@@ -36,15 +49,13 @@ def import_jsonl_dataset(
     is exposed as globally trainable: the training catalog must be made
     tenant-aware before this storage primitive is wired into training.
     """
-    if not isinstance(tenant_id, str) or not tenant_id.strip() or tenant_id == "default":
-        raise DatasetImportError("Explicit tenant identity is required")
+    directory = tenant_dataset_directory(root, tenant_id)
     if not isinstance(version, str) or not _VERSION.fullmatch(version) or version in {".", ".."}:
         raise DatasetImportError("Invalid dataset version")
     if not 1 <= max_bytes <= _MAX_BYTES:
         raise DatasetImportError("Invalid import size limit")
 
-    key = hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:24]
-    directory = root / ("tenant-" + key)
+    key = directory.name.removeprefix("tenant-")
     directory.mkdir(parents=True, exist_ok=True)
     if directory.is_symlink():
         raise DatasetImportError("Dataset directory cannot be a symlink")
@@ -84,6 +95,8 @@ def import_jsonl_dataset(
         os.link(tmp_name, destination, follow_symlinks=False)
     except FileExistsError as exc:
         raise DatasetImportError("Dataset version already exists") from exc
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise DatasetImportError("Dataset contains an invalid JSON value") from exc
     finally:
         Path(tmp_name).unlink(missing_ok=True)
     return {"version": version, "tenant_key": key, "rows": count,
