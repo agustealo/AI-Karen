@@ -218,25 +218,40 @@ async def list_extensions(user: dict[str, Any] = Depends(require_extension_catal
 
 @router.post("/install")
 async def install_extension(request: InstallRequest, user: dict[str, Any] = Depends(require_extension_mutation_access)):
-    """Extension installation endpoint."""
+    """Install a UI package; never report a failed install as HTTP success."""
     manager = get_extension_manager()
     if not manager:
         raise HTTPException(status_code=503, detail="Extension manager not initialized")
 
-    try:
-        from ai_karen_engine.extensions.platform.core.registry.ui_installer import (
-            install_ui,
-        )
+    from ai_karen_engine.extensions.platform.core.registry.ui_installer import install_ui
 
+    try:
         result = install_ui(request.plugin_id, "integration")
-        return {
-            "success": result.status.value == "success",
-            "message": result.message,
+    except Exception:
+        logger.exception("UI installation failed for plugin %s", request.plugin_id)
+        raise HTTPException(status_code=503, detail={
             "plugin_id": request.plugin_id,
-        }
-    except Exception as e:
-        logger.error(f"Error during UI installation for {request.plugin_id}: {e}")
-        return {"success": False, "message": str(e), "plugin_id": request.plugin_id}
+            "error_code": "INSTALLATION_UNAVAILABLE",
+            "message": "Plugin UI installation unavailable",
+        })
+
+    if result.status.value != "success":
+        status_code = {
+            "conflict": 409,
+            "not_found": 404,
+            "validation_failed": 422,
+        }.get(result.status.value, 503)
+        raise HTTPException(status_code=status_code, detail={
+            "plugin_id": request.plugin_id,
+            "error_code": result.error_code or result.status.value.upper(),
+            "message": result.message,
+        })
+    return {
+        "success": True,
+        "message": result.message,
+        "plugin_id": request.plugin_id,
+        "ui_state": result.state.value,
+    }
 
 
 @router.get("/{extension_name}/ui-state")
