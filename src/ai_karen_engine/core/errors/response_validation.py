@@ -21,6 +21,10 @@ _BLOCKED_PATTERNS = [
     r"^(?:alright,?\s+)?the user (?:just )?(?:said|says|asked|asks|is asking|wants|is testing)\b",
     r"^when (?:asked|responding) .{0,100}\bit(?:'s| is) important to\b",
     r"^(?:i should|i need to|let me) (?:explain how|acknowledge that|respond by|craft a response)\b",
+    # Generated meta-narration about answering the user is not an answer.
+    r"^(?:karen|the assistant)\s+(?:responds?|should respond|would respond)\s+to\s+the\s+user\b",
+    r"^to determine who ['\"]?i am['\"]? and what my name is\b",
+
 
 ]
 
