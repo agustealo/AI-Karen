@@ -441,7 +441,11 @@ class RBACManager:
                 )
                 continue
             self._collect_permissions(role, permissions)
-        # Permission claims are issued by the authenticated token authority.\n        # Do not treat an absent claim as an implicit grant.\n        permissions.update(_resolve_permission_names(user.get("permissions") or []))\n        return permissions\n\n    def has_permission(
+        # Claims originate from the verified authenticated identity.
+        permissions.update(_resolve_permission_names(user.get("permissions") or []))
+        return permissions
+
+    def has_permission(
         self,
         user: Union[UserData, Dict[str, object]],
         permission: Union[Permission, str],
