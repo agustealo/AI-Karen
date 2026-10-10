@@ -41,3 +41,26 @@ def test_valid_package_publishes_complete_entry(tmp_path, monkeypatch):
     assert (tmp_path / "repo/demo/demo.tsx").is_file()
     assert "demo" in service.installations
     assert not list((tmp_path / "repo").glob(".install-*"))
+
+
+def test_post_publish_validation_failure_removes_untracked_package(tmp_path, monkeypatch):
+    service = _service(tmp_path, monkeypatch)
+    source = tmp_path / "src/ai_karen_engine/extensions/plugins/demo"
+    source.mkdir(parents=True)
+    (source / "manifest.json").write_text('{"entry_file":"demo.tsx"}')
+    (source / "demo.tsx").write_text("export default null")
+    original_checksum = service._calculate_checksum
+    calls = []
+
+    def fail_after_publish(path):
+        calls.append(path)
+        if path == tmp_path / "repo/demo":
+            raise OSError("checksum failure after publish")
+        return original_checksum(path)
+
+    monkeypatch.setattr(service, "_calculate_checksum", fail_after_publish)
+    result = service.install_ui("demo", "integration")
+    assert result.error_code == "POST_PUBLISH_VALIDATION_FAILED"
+    assert len(calls) == 2
+    assert not (tmp_path / "repo/demo").exists()
+    assert "demo" not in service.installations
