@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import Image from 'next/image';
 import {
-  Download,
+  PlugZap,
   ExternalLink,
   GitBranch,
   Hash,
@@ -334,8 +334,8 @@ export function PluginCard({
                 </>
               ) : (
                 <>
-                  <Download className="mr-1 h-4 w-4" aria-hidden="true" />
-                  Install
+                  <PlugZap className="mr-1 h-4 w-4" aria-hidden="true" />
+                  Enable
                 </>
               )}
             </Button>
