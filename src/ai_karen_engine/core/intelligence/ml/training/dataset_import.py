@@ -22,6 +22,17 @@ class DatasetImportError(ValueError):
     """The proposed import cannot be safely published."""
 
 
+def tenant_dataset_directory(root: Path, tenant_id: str) -> Path:
+    """Resolve an isolated dataset directory without creating or exposing it."""
+    if not isinstance(tenant_id, str) or not tenant_id.strip() or tenant_id == "default":
+        raise DatasetImportError("Explicit tenant identity is required")
+    key = hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:24]
+    directory = root / ("tenant-" + key)
+    if root.is_symlink() or directory.is_symlink():
+        raise DatasetImportError("Dataset storage cannot use symlinks")
+    return directory
+
+
 def import_jsonl_dataset(
     *,
     source: BinaryIO,
@@ -36,18 +47,14 @@ def import_jsonl_dataset(
     is exposed as globally trainable: the training catalog must be made
     tenant-aware before this storage primitive is wired into training.
     """
-    if not isinstance(tenant_id, str) or not tenant_id.strip() or tenant_id == "default":
-        raise DatasetImportError("Explicit tenant identity is required")
+    directory = tenant_dataset_directory(root, tenant_id)
     if not isinstance(version, str) or not _VERSION.fullmatch(version) or version in {".", ".."}:
         raise DatasetImportError("Invalid dataset version")
     if not 1 <= max_bytes <= _MAX_BYTES:
         raise DatasetImportError("Invalid import size limit")
 
-    key = hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:24]
-    directory = root / ("tenant-" + key)
+    key = directory.name.removeprefix("tenant-")
     directory.mkdir(parents=True, exist_ok=True)
-    if directory.is_symlink():
-        raise DatasetImportError("Dataset directory cannot be a symlink")
     destination = directory / (version + ".jsonl")
     fd, tmp_name = tempfile.mkstemp(prefix=".incoming-", suffix=".tmp", dir=directory)
     count = 0
