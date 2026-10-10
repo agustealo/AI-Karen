@@ -29,7 +29,7 @@ class TemporalTrainingExecutor:
         version = job.dataset_version
         if not version or any(not (c.isascii() and (c.isalnum() or c in "._-")) for c in version) or version in {".", ".."}:
             raise ValueError("Invalid dataset version")
-        path = training_dataset_root(tenant_id=str(job.metadata.get("tenant_id") or ""), scope=str(job.metadata.get("dataset_scope", "legacy"))) / (version + ".jsonl")
+        path = (Path(get_ml_registry_dir()) / "datasets" if job.metadata.get("dataset_scope", "legacy") == "legacy" else training_dataset_root(tenant_id=str(job.metadata.get("tenant_id") or ""), scope=str(job.metadata.get("dataset_scope")))) / (version + ".jsonl")
         if path.is_symlink() or not path.is_file():
             raise ValueError("Canonical temporal dataset missing")
         rows = []
