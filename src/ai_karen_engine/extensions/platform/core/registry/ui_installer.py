@@ -353,6 +353,10 @@ class UIInstallerService:
                 staged_entry = staging_path / entry_rel
                 if not staged_entry.is_file() or staged_entry.is_symlink():
                     raise ValueError("Staged UI entry is missing or unsafe")
+                # Staging must not allow a manifest entry's ancestor or any
+                # other copied asset to redirect validation outside the package.
+                if any(item.is_symlink() for item in staging_path.rglob("*")):
+                    raise ValueError("Staged UI package contains symbolic links")
                 self._calculate_checksum(staging_path)
                 if target_path.exists() or target_path.is_symlink():
                     raise FileExistsError("UI package target became occupied")
