@@ -4,6 +4,9 @@ on:
   push:
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
+      - "src/ai_karen_engine/api_routes/admin/users.py"
+      - "src/ai_karen_engine/services/admin/admin_user_service.py"
+      - "tests/unit/api_routes/test_admin_user_route_imports.py"
       - "src/ai_karen_engine/server/client_identity.py"
       - "src/ai_karen_engine/server/public_origin.py"
       - "src/ai_karen_engine/middleware/rate_limit.py"
@@ -36,6 +39,9 @@ on:
   pull_request:
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
+      - "src/ai_karen_engine/api_routes/admin/users.py"
+      - "src/ai_karen_engine/services/admin/admin_user_service.py"
+      - "tests/unit/api_routes/test_admin_user_route_imports.py"
       - "src/ai_karen_engine/server/client_identity.py"
       - "src/ai_karen_engine/server/public_origin.py"
       - "src/ai_karen_engine/middleware/rate_limit.py"
@@ -109,12 +115,18 @@ jobs:
             src/ai_karen_engine/core/services/base.py \
             src/ai_karen_engine/database/models/session_security.py \
             src/ai_karen_engine/api_routes/auth/auth.py \
+            src/ai_karen_engine/api_routes/admin/users.py \
             src/ai_karen_engine/api_routes/auth/privacy.py \
             src/ai_karen_engine/server/client_identity.py \
             src/ai_karen_engine/server/public_origin.py \
             src/ai_karen_engine/middleware/rate_limit.py \
             src/ai_karen_engine/server/rate_limiter.py \
             src/ai_karen_engine/monitoring
+
+      - name: Prove admin user route canonical authentication imports
+        env:
+          PYTHONPATH: src
+        run: pytest tests/unit/api_routes/test_admin_user_route_imports.py -q
 
       - name: Prove first-run authority boundary
         run: pytest tests/architecture/test_auth_production_security_contract.py -q
