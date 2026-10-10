@@ -63,3 +63,21 @@ def test_import_requires_explicit_tenant(tmp_path):
     for tenant in ("", "default"):
         with pytest.raises(DatasetImportError, match="tenant"):
             _import(tmp_path, tenant=tenant)
+
+
+def test_tenant_catalog_uses_same_directory_as_import(tmp_path, monkeypatch):
+    from ai_karen_engine.core.intelligence.ml.training import workbench as module
+    from ai_karen_engine.core.intelligence.ml.training.workbench import AdvancedTrainingWorkbench
+    from ai_karen_engine.core.intelligence.ml.training.dataset_import import tenant_dataset_directory
+
+    monkeypatch.setattr(module, "get_ml_registry_dir", lambda: str(tmp_path))
+    root = tmp_path / "datasets"
+    _import(root, tenant="tenant-a", version="private-a")
+    _import(root, tenant="tenant-b", version="private-b")
+    catalog_a = AdvancedTrainingWorkbench.for_tenant("tenant-a").catalog()
+    catalog_b = AdvancedTrainingWorkbench.for_tenant("tenant-b").catalog()
+    assert [d["version"] for d in catalog_a["datasets"]] == ["private-a"]
+    assert [d["version"] for d in catalog_b["datasets"]] == ["private-b"]
+    assert tenant_dataset_directory(root, "tenant-a") != tenant_dataset_directory(root, "tenant-b")
+    with pytest.raises(DatasetImportError):
+        AdvancedTrainingWorkbench.for_tenant("default")
