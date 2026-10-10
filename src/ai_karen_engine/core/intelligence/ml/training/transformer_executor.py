@@ -78,6 +78,8 @@ class TransformerLoRAExecutor:
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
         tokenizer = AutoTokenizer.from_pretrained(str(base_path), local_files_only=True, trust_remote_code=False)
+        if tokenizer.eos_token_id is None:
+            raise ValueError("Causal language model tokenizer has no EOS token")
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
         model = AutoModelForCausalLM.from_pretrained(str(base_path), local_files_only=True, trust_remote_code=False)
@@ -91,6 +93,9 @@ class TransformerLoRAExecutor:
         ))
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         adapter.to(device).train()
+        trainable = sum(parameter.numel() for parameter in adapter.parameters() if parameter.requires_grad)
+        if trainable == 0:
+            raise ValueError("LoRA configuration produced no trainable parameters")
         optimizer = torch.optim.AdamW((p for p in adapter.parameters() if p.requires_grad), lr=2e-4)
         losses = []
         for _ in range(epochs):
@@ -142,6 +147,7 @@ class TransformerLoRAExecutor:
             "base_model_path": str(base_path), "license_id": cfg["license_id"],
             "license_accepted": True, "training_samples": len(training_texts),
             "training_loss": sum(losses) / len(losses), "optimizer_steps": len(losses),
+            "trainable_parameters": trainable, "seed": seed,
             "test_samples": len(evaluation_losses), "holdout_loss": sum(evaluation_losses) / len(evaluation_losses),
             "evaluation_method": "seeded_disjoint_text_holdout", "canonical_benchmark_status": "not_run",
             "model_id": model_id, "model_version": model_version, "task": job.task,
