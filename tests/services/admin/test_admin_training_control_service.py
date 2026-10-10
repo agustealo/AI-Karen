@@ -114,6 +114,8 @@ def test_training_preflight_is_read_only_and_job_submission_remains_privileged()
         )
         return inspect.getclosurevars(dependency).nonlocals["target"]
 
+    assert required_permission("/admin/training/control-plane", "GET") == Permission.TRAINING_READ
+    assert required_permission("/admin/training/capabilities", "GET") == Permission.TRAINING_READ
     assert required_permission("/admin/training/advanced/catalog", "GET") == Permission.TRAINING_READ
     assert required_permission("/admin/training/advanced/preflight", "POST") == Permission.TRAINING_READ
     assert required_permission("/admin/training/advanced/jobs", "POST") == Permission.TRAINING_EXECUTE
