@@ -230,6 +230,7 @@ export default function AdvancedTrainingWorkbench() {
           ? "execution_topology"
           : response.tasks[0] ?? "",
         dataset_version: response.datasets[0]?.version ?? "",
+        dataset_scope: response.datasets[0]?.scope ?? "legacy",
         base_model_path: "",
         license_id: "",
         license_accepted: false,
@@ -585,16 +586,21 @@ export default function AdvancedTrainingWorkbench() {
                 <Label>Versioned ML dataset</Label>
                 {catalog.datasets.length ? (
                   <Select
-                    value={config.dataset_version}
-                    onValueChange={(value) => change("dataset_version", value)}
+                    value={`${config.dataset_scope}:${config.dataset_version}`}
+                    onValueChange={(value) => {
+                      const item = catalog.datasets.find((entry) => `${entry.scope ?? "legacy"}:${entry.version}` === value);
+                      if (!item) return;
+                      setConfig((previous) => previous ? {...previous, dataset_version: item.version, dataset_scope: item.scope ?? "legacy"} : previous);
+                      setPreflight(null);
+                    }}
                   >
                     <SelectTrigger className="h-11">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       {catalog.datasets.map((item) => (
-                        <SelectItem value={item.version} key={item.version}>
-                          {item.version} · {item.format} · {formatBytes(item.bytes)}
+                        <SelectItem value={`${item.scope ?? "legacy"}:${item.version}`} key={`${item.scope ?? "legacy"}:${item.version}`}>
+                          {item.version} · {item.scope === "tenant" ? "Private" : "Shared"} · {item.format} · {formatBytes(item.bytes)}
                         </SelectItem>
                       ))}
                     </SelectContent>
