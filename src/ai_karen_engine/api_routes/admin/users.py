@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from ai_karen_engine.services.auth.auth_service import UserRole, UserStatus
+
 from ai_karen_engine.auth.rbac_middleware import (
     Permission,
     require_permission,
@@ -82,7 +84,6 @@ async def list_admin_users(
     offset: int = Query(0, ge=0),
 ):
     """List users across tenants with admin filtering."""
-    from ai_karen_engine.auth.auth_service import UserRole, UserStatus
     from ai_karen_engine.services.admin.admin_user_service import AdminUserFilter
 
     user_filter = AdminUserFilter(
@@ -130,7 +131,6 @@ async def create_admin_user(
     service: AdminUserService = Depends(get_admin_user_service),
 ):
     """Create a new user (admin only)."""
-    from ai_karen_engine.auth.auth_service import UserRole
 
     user = await service.create_user(
         email=request.email,

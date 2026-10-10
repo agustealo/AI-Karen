@@ -87,6 +87,9 @@ jobs:
           python -m py_compile src/ai_karen_engine/auth/models.py src/ai_karen_engine/auth/rbac_middleware.py src/ai_karen_engine/auth/session.py src/ai_karen_engine/api_routes/admin/training.py
           python -c 'from ai_karen_engine.auth.rbac_middleware import RBACManager, Permission; from ai_karen_engine.api_routes.admin.training import router; assert any(route.path == "/admin/training/control-plane" for route in router.routes)'
 
+      - name: Prove admin user route imports and canonical authorization enums
+        run: pytest tests/unit/api_routes/test_admin_user_route_imports.py -q
+
       - name: Ruff correctness baseline
         run: |
           # Historical formatting/style debt is retired in contained slices.
