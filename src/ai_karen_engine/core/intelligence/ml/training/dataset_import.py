@@ -152,3 +152,37 @@ def list_tenant_dataset_versions(
             "format": "jsonl",
         })
     return versions
+
+
+def list_tenant_dataset_versions(
+    *, root: Path, tenant_id: str, max_versions: int = 200
+) -> list[dict[str, object]]:
+    """List only immutable dataset files within one verified tenant directory.
+
+    The caller must have already passed RBAC. Never enumerate other tenants or
+    accept arbitrary paths from a request. Files remain subject to full preflight.
+    """
+    if not 1 <= max_versions <= 200:
+        raise DatasetImportError("Invalid dataset listing limit")
+    directory = tenant_dataset_directory(root, tenant_id)
+    if not directory.is_dir():
+        return []
+    versions: list[dict[str, object]] = []
+    for path in sorted(directory.glob("*.jsonl")):
+        if len(versions) >= max_versions:
+            break
+        if not path.is_file() or path.is_symlink():
+            continue
+        if not _VERSION.fullmatch(path.stem):
+            continue
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            while chunk := handle.read(64 * 1024):
+                digest.update(chunk)
+        versions.append({
+            "version": path.stem,
+            "bytes": path.stat().st_size,
+            "sha256": digest.hexdigest(),
+            "format": "jsonl",
+        })
+    return versions
