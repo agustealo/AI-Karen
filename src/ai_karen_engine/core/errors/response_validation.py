@@ -16,6 +16,12 @@ _BLOCKED_PATTERNS = [
     r"you are karen",
     r"\[transformers:auto\]",
     r"\(joke provider\)",
+    # Whole-response planning narration is not a conversational answer.
+    # Anchor to the opening so ordinary references to "the user" remain valid.
+    r"^(?:alright,?\s+)?the user (?:just )?(?:said|says|asked|asks|is asking|wants|is testing)\b",
+    r"^when (?:asked|responding) .{0,100}\bit(?:'s| is) important to\b",
+    r"^(?:i should|i need to|let me) (?:explain how|acknowledge that|respond by|craft a response)\b",
+
 ]
 
 
