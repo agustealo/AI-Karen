@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any
+from io import BytesIO
+from pathlib import Path
 from uuid import uuid4
 from fastapi import HTTPException, Query
 from ai_karen_engine.core.intelligence.ml.training.contracts import TrainingJob
@@ -10,6 +12,11 @@ from ai_karen_engine.core.intelligence.ml.training.artifact_reconciliation impor
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from ai_karen_engine.config.config_manager import get_ml_registry_dir
+from ai_karen_engine.core.intelligence.ml.training.csv_adapter import convert_csv_to_jsonl
+from ai_karen_engine.core.intelligence.ml.training.dataset_import import (
+    DatasetImportError, import_jsonl_dataset, list_tenant_dataset_versions,
+)
 from ai_karen_engine.core.intelligence.ml.training.workbench import AdvancedTrainingWorkbench
 from ai_karen_engine.auth.rbac_middleware import Permission, require_permission
 from ai_karen_engine.services.admin.admin_training_control_service import (
@@ -86,6 +93,7 @@ class AdvancedPreflightRequest(BaseModel):
     engine: str = Field(min_length=1, max_length=40)
     task: str = Field(min_length=1, max_length=80)
     dataset_version: str = Field(min_length=1, max_length=128)
+    dataset_scope: str = Field(default="legacy", pattern="^(legacy|tenant)$")
     test_split: float = 0.2
     max_samples: int = 10000
     seed: int = 42
@@ -117,6 +125,10 @@ async def get_advanced_training_catalog(
 ) -> dict[str, Any]:
     tenant, _ = _identity(current_user)
     catalog = workbench.catalog()
+    tenant_catalog = AdvancedTrainingWorkbench.for_tenant(tenant).catalog()
+    catalog["datasets"].extend({**item, "scope": "tenant"} for item in tenant_catalog["datasets"])
+    for item in catalog["datasets"]:
+        item.setdefault("scope", "legacy")
     evidence = ledger.worker_capabilities(tenant_id=tenant)
 
     for engine in catalog["engines"]:
@@ -164,10 +176,71 @@ async def preflight_advanced_training(
     ledger: TrainingJobLedger = Depends(lambda: TrainingJobLedger()),
 ) -> dict[str, Any]:
     tenant, _ = _identity(current_user)
-    return workbench.preflight(
-        **body.model_dump(),
+    scoped_workbench = (AdvancedTrainingWorkbench.for_tenant(tenant)
+                        if body.dataset_scope == "tenant" else workbench)
+    payload = body.model_dump(exclude={"dataset_scope"})
+    return scoped_workbench.preflight(
+        **payload,
         dependency_availability=_worker_dependencies(ledger, tenant=tenant, engine=body.engine),
     )
+
+
+class DatasetImportRequest(BaseModel):
+    version: str = Field(min_length=1, max_length=128)
+    content_jsonl: str = Field(min_length=1, max_length=32 * 1024 * 1024)
+
+
+class DatasetCSVImportRequest(BaseModel):
+    version: str = Field(min_length=1, max_length=128)
+    content_csv: str = Field(min_length=1, max_length=16 * 1024 * 1024)
+    column_mapping: dict[str, str] = Field(min_length=1, max_length=256)
+    delimiter: str = ","
+
+
+@router.post("/advanced/datasets/import-csv", status_code=201)
+async def import_scoped_training_csv(
+    body: DatasetCSVImportRequest,
+    current_user: Any = Depends(require_permission(Permission.TRAINING_EXECUTE)),
+) -> dict[str, Any]:
+    tenant, _ = _identity(current_user)
+    try:
+        source = convert_csv_to_jsonl(
+            body.content_csv.encode("utf-8"),
+            column_mapping=body.column_mapping, delimiter=body.delimiter,
+        )
+        return import_jsonl_dataset(
+            source=source, root=Path(get_ml_registry_dir()) / "datasets",
+            tenant_id=tenant, version=body.version,
+        )
+    except DatasetImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/advanced/datasets")
+async def list_scoped_training_datasets(
+    current_user: Any = Depends(require_permission(Permission.TRAINING_READ)),
+) -> dict[str, Any]:
+    tenant, _ = _identity(current_user)
+    root = Path(get_ml_registry_dir()) / "datasets"
+    return {"datasets": list_tenant_dataset_versions(root=root, tenant_id=tenant)}
+
+
+@router.post("/advanced/datasets/import", status_code=201)
+async def import_scoped_training_dataset(
+    body: DatasetImportRequest,
+    current_user: Any = Depends(require_permission(Permission.TRAINING_EXECUTE)),
+) -> dict[str, Any]:
+    tenant, _ = _identity(current_user)
+    root = Path(get_ml_registry_dir()) / "datasets"
+    try:
+        return import_jsonl_dataset(
+            source=BytesIO(body.content_jsonl.encode("utf-8")),
+            root=root,
+            tenant_id=tenant,
+            version=body.version,
+        )
+    except DatasetImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def get_training_job_ledger() -> TrainingJobLedger:
@@ -250,8 +323,11 @@ async def enqueue_advanced_training_job(
     ledger: TrainingJobLedger = Depends(get_training_job_ledger),
 ) -> dict[str, Any]:
     tenant, user = _identity(current_user)
-    check = workbench.preflight(
-        **body.model_dump(),
+    scoped_workbench = (AdvancedTrainingWorkbench.for_tenant(tenant)
+                        if body.dataset_scope == "tenant" else workbench)
+    payload = body.model_dump(exclude={"dataset_scope"})
+    check = scoped_workbench.preflight(
+        **payload,
         dependency_availability=_worker_dependencies(ledger, tenant=tenant, engine=body.engine),
     )
     if not check["ready"]:
@@ -267,6 +343,7 @@ async def enqueue_advanced_training_job(
         seed=body.seed,
         metadata={
             "advanced_config": body.model_dump(),
+            "dataset_scope": body.dataset_scope,
             "submitted_by": user,
             "tenant_id": tenant,
             "preflight": check["evidence"],
