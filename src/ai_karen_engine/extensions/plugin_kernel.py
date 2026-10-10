@@ -298,6 +298,8 @@ class PluginKernel:
         catalog_manifests: Dict[str, CatalogExtensionManifest] = {}
 
         for plugin_id in self.catalog_registry.list_discovered():
+            if (self.extensions_root / plugin_id / ".karen-manual-disabled").is_file():
+                self._disabled.add(plugin_id)
             metadata = self.catalog_registry.get_metadata(plugin_id)
             if metadata is None:
                 continue
