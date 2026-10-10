@@ -267,16 +267,21 @@ class AdminUserService:
         if not user:
             return []
         self._enforce_tenant_boundary(user.tenant_id, operator_tenant_id)
+        # Canonical durable session source. Never expose bearer or refresh tokens.
+        durable_sessions = await self._auth_service.list_sessions(
+            user_id=user_id, active_only=True
+        )
         sessions = [
             {
-                "id": s.id,
-                "user_id": s.user_id,
-                "expires_at": s.expires_at.isoformat(),
-                "ip_address": s.ip_address,
-                "is_active": s.is_active,
+                "id": entry["session_token"],
+                "user_id": entry["user_id"],
+                "created_at": entry.get("created_at"),
+                "last_accessed": entry.get("last_accessed"),
+                "ip_address": entry.get("ip_address"),
+                "user_agent": entry.get("user_agent"),
+                "is_active": entry["is_active"],
             }
-            for s in self._auth_service._active_sessions.values()
-            if s.user_id == user_id
+            for entry in durable_sessions
         ]
         self._audit_mutation(
             action="list_sessions",
