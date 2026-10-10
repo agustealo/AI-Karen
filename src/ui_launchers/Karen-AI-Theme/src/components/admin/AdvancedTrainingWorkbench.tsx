@@ -56,6 +56,7 @@ type Dataset = {
   schema_engines?: string[];
   inspection_status?: string;
   inspection_reason?: string;
+  scope?: "legacy" | "tenant";
 };
 
 type Catalog = {
