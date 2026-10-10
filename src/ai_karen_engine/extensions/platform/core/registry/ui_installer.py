@@ -105,11 +105,14 @@ class UIInstallerService:
             return
 
         for plugin_dir in self.plugins_repo_root.iterdir():
-            if plugin_dir.is_dir():
+            if plugin_dir.is_dir() and not plugin_dir.is_symlink():
                 plugin_id = plugin_dir.name
+                if not plugin_id or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for ch in plugin_id):
+                    logger.warning("Skipping unsafe plugin package identifier")
+                    continue
                 manifest_path = plugin_dir / "manifest.json"
                 
-                if manifest_path.exists():
+                if manifest_path.is_file() and not manifest_path.is_symlink():
                     try:
                         with open(manifest_path, "r") as f:
                             manifest = json.load(f)
@@ -124,9 +127,20 @@ class UIInstallerService:
                         else:
                             entry_file_rel = f"{plugin_id}.tsx"
                         
+                        # A manifest must not escape its own plugin directory.
+                        if not isinstance(entry_file_rel, str) or not entry_file_rel:
+                            continue
                         entry_file = plugin_dir / entry_file_rel
+                        if (
+                            Path(entry_file_rel).is_absolute()
+                            or ".." in Path(entry_file_rel).parts
+                            or entry_file.resolve().is_relative_to(plugin_dir.resolve()) is False
+                            or entry_file.is_symlink()
+                        ):
+                            logger.warning("Skipping plugin with unsafe UI entry path: %s", plugin_id)
+                            continue
 
-                        if entry_file.exists():
+                        if entry_file.is_file():
                             package_info = UIPackageInfo(
                                 plugin_id=plugin_id,
                                 source_path=Path("src/ai_karen_engine/extensions/plugins")
