@@ -124,7 +124,7 @@ class TrainingPipeline:
         manifest = MLModelManifest(
             model_id=artifact.model_id,
             purpose=artifact.task,
-            architecture="trained",
+            architecture="spacy" if job.base_model == "spacy" else "trained",
             artifact_path=artifact.artifact_path,
             artifact_hash=artifact.artifact_hash,
             model_version=artifact.model_version,
