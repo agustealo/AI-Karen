@@ -51,7 +51,7 @@ def get_admin_training_control_service() -> AdminTrainingControlService:
 @router.get("/control-plane", response_model=TrainingControlPlaneResponse)
 async def get_training_control_plane(
     current_user: dict[str, Any] = Depends(
-        require_permission(Permission.ADMIN_READ)
+        require_permission(Permission.TRAINING_READ)
     ),
     service: AdminTrainingControlService = Depends(
         get_admin_training_control_service
@@ -64,7 +64,7 @@ async def get_training_control_plane(
 @router.get("/capabilities", response_model=list[TrainingCapabilityResponse])
 async def list_training_capabilities(
     current_user: dict[str, Any] = Depends(
-        require_permission(Permission.ADMIN_READ)
+        require_permission(Permission.TRAINING_READ)
     ),
     service: AdminTrainingControlService = Depends(
         get_admin_training_control_service
