@@ -14,6 +14,7 @@ async def test_uninstall_removes_package_and_refreshes_kernel(tmp_path: Path, mo
     calls = []
     class Kernel:
         _active = {}
+        runtime_registry = type('Registry', (), {'get': lambda self, name: None})()
         async def refresh(self):
             calls.append("refresh")
         def get_record(self, plugin_id):
@@ -42,6 +43,7 @@ async def test_uninstall_refuses_active_execution(tmp_path: Path, monkeypatch):
     service = PluginService(installed, installed)
     class Kernel:
         _active = {"request-1": "demo"}
+        runtime_registry = type('Registry', (), {'get': lambda self, name: None})()
     async def initialized():
         service.kernel = Kernel()
     monkeypatch.setattr(service, "_ensure_initialized", initialized)
@@ -72,3 +74,25 @@ async def test_registry_rejection_restores_uninstalled_package(tmp_path: Path, m
         await service.uninstall_plugin_package("demo")
     assert (package / "manifest.json").is_file()
     assert not (installed / ".plugin-install-demo.lock").exists()
+
+
+@pytest.mark.asyncio
+async def test_enabled_plugin_must_be_disabled_before_uninstall(tmp_path: Path, monkeypatch):
+    from types import SimpleNamespace
+    root = tmp_path / "plugins"
+    root.mkdir()
+    (root / "demo").mkdir()
+    service = PluginService(root, root)
+    class Registry:
+        def get(self, name):
+            return SimpleNamespace(state=SimpleNamespace(value="enabled"))
+    class Kernel:
+        _active = {}
+        runtime_registry = Registry()
+    async def initialized():
+        service.kernel = Kernel()
+    monkeypatch.setattr(service, "_ensure_initialized", initialized)
+    with pytest.raises(RuntimeError, match="Disable the plugin"):
+        await service.uninstall_plugin_package("demo")
+    assert (root / "demo").is_dir()
+    assert not (root / ".plugin-install-demo.lock").exists()
