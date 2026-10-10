@@ -251,9 +251,23 @@ async def evaluate_training_candidate(
         task = PredictionTask(manifest.purpose)
     except ValueError:
         raise HTTPException(status_code=422, detail="Unsupported benchmark task")
-    predictor = RegistryBackedClassifier(
-        task, registry=registry, tenant_id=tenant, candidate_model_id=model_id,
-    )
+    if manifest.architecture == "spacy":
+        if manifest.metrics.get("mode") != "textcat":
+            raise HTTPException(
+                status_code=422,
+                detail="NER candidates require an entity-span benchmark, not classification evaluation",
+            )
+        from ai_karen_engine.core.intelligence.ml.predictors.registry_spacy import (
+            SpacyCandidateBenchmarkPredictor,
+        )
+        predictor = SpacyCandidateBenchmarkPredictor(
+            task=task, registry=registry, tenant_id=tenant,
+            candidate_model_id=model_id,
+        )
+    else:
+        predictor = RegistryBackedClassifier(
+            task, registry=registry, tenant_id=tenant, candidate_model_id=model_id,
+        )
     try:
         result, receipt = await BenchmarkRunner().run_and_record(
             predictor,
