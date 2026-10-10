@@ -154,7 +154,7 @@ def test_execution_status_reports_tenant_scoped_leases_without_claiming_worker_h
     assert a["queued_jobs"] == 1
     assert a["active_leases"] == 1
     assert a["expired_leases"] == 0
-    assert a["worker_status"] == "unverified"
+    assert a["worker_status"] == "offline"
     assert a["automatic_dispatch_verified"] is False
 
     b = store.execution_status(tenant_id="tenant-b")
@@ -162,3 +162,20 @@ def test_execution_status_reports_tenant_scoped_leases_without_claiming_worker_h
     assert b["active_leases"] == 0
     with pytest.raises(ValueError, match="tenant"):
         store.execution_status(tenant_id="default")
+
+
+def test_worker_registration_and_dispatch_scope_are_durable(tmp_path):
+    database = tmp_path / "jobs.sqlite3"
+    store = TrainingJobLedger(database)
+    store.submit(make_job("tenant-a-pending"), tenant_id="tenant-a", user_id="operator")
+    store.submit(make_job("tenant-b-pending"), tenant_id="tenant-b", user_id="operator")
+    assert store.next_queued(tenant_id="tenant-a") == "tenant-a-pending"
+    assert store.execution_status(tenant_id="tenant-a")["worker_status"] == "offline"
+
+    store.worker_heartbeat(tenant_id="tenant-a", worker_id="worker-1")
+    restarted = TrainingJobLedger(database)
+    assert restarted.execution_status(tenant_id="tenant-a")["worker_status"] == "online"
+    assert restarted.execution_status(tenant_id="tenant-b")["worker_status"] == "offline"
+    assert restarted.next_queued(tenant_id="tenant-b") == "tenant-b-pending"
+    restarted.worker_unregister(tenant_id="tenant-a", worker_id="worker-1")
+    assert restarted.execution_status(tenant_id="tenant-a")["worker_status"] == "offline"
