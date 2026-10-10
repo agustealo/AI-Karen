@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import importlib
 import os
 from uuid import uuid4
 
@@ -24,9 +25,27 @@ async def serve(*, tenant_id: str, poll_seconds: float = 5.0) -> None:
     ledger = TrainingJobLedger()
     worker = TrainingJobWorker(ledger=ledger)
     worker_id = uuid4().hex
+    dependency_names = ("torch", "transformers", "peft", "accelerate", "safetensors", "sklearn", "spacy", "numpy")
+    dependencies = {}
+    for module in dependency_names:
+        try:
+            importlib.import_module(module)
+            dependencies[module] = True
+        except Exception:
+            logger.exception("Training worker dependency import failed: %s", module)
+            dependencies[module] = False
+    cuda_available = False
+    if dependencies.get("torch"):
+        import torch
+        cuda_available = bool(torch.cuda.is_available())
+    capabilities = {
+        "dependencies": dependencies,
+        "cuda_available": cuda_available,
+        "runtime": "governed_training_worker",
+    }
     async def heartbeat() -> None:
         while True:
-            ledger.worker_heartbeat(tenant_id=tenant_id, worker_id=worker_id)
+            ledger.worker_heartbeat(tenant_id=tenant_id, worker_id=worker_id, capabilities=capabilities)
             await asyncio.sleep(20)
     ticker = asyncio.create_task(heartbeat())
     try:

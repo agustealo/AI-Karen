@@ -18,6 +18,13 @@ from ai_karen_engine.services.admin.admin_training_control_service import (
 
 router = APIRouter(prefix="/admin/training", tags=["admin-training"])
 
+_WORKER_REQUIREMENTS = {
+    "transformers": ("torch", "transformers", "peft", "accelerate", "safetensors"),
+    "timeseries": ("numpy", "sklearn"),
+    "spacy": ("spacy",),
+    "sklearn": ("sklearn",),
+}
+
 
 class TrainingControlPlaneResponse(BaseModel):
     architecture: dict[str, Any]
@@ -106,9 +113,47 @@ def get_advanced_workbench() -> AdvancedTrainingWorkbench:
 async def get_advanced_training_catalog(
     current_user: dict[str, Any] = Depends(require_permission(Permission.TRAINING_READ)),
     workbench: AdvancedTrainingWorkbench = Depends(get_advanced_workbench),
+    ledger: TrainingJobLedger = Depends(lambda: TrainingJobLedger()),
 ) -> dict[str, Any]:
-    del current_user
-    return workbench.catalog()
+    tenant, _ = _identity(current_user)
+    catalog = workbench.catalog()
+    evidence = ledger.worker_capabilities(tenant_id=tenant)
+
+    for engine in catalog["engines"]:
+        needed = _WORKER_REQUIREMENTS[engine["id"]]
+        ready_workers = []
+        for worker in evidence["workers"]:
+            dependencies = worker["capabilities"].get("dependencies", {})
+            if all(dependencies.get(package) is True for package in needed):
+                ready_workers.append(worker["worker_id"])
+        engine["supported"] = bool(ready_workers)
+        engine["status"] = "ready" if ready_workers else (
+            "worker_offline" if not evidence["workers"] else "missing_dependencies"
+        )
+        engine["missing_dependencies"] = (
+            [] if not evidence["workers"] else [
+                package for package in needed
+                if not any(
+                    worker["capabilities"].get("dependencies", {}).get(package) is True
+                    for worker in evidence["workers"]
+                )
+            ]
+        )
+        engine["worker_status"] = evidence["worker_status"]
+        engine["details"] += " Execution availability is determined by the tenant-scoped training worker."
+    catalog["worker_status"] = evidence["worker_status"]
+    return catalog
+
+
+def _worker_dependencies(ledger: TrainingJobLedger, *, tenant: str, engine: str) -> dict[str, bool]:
+    """Only an online worker satisfying one complete dependency set can admit work."""
+    needed = _WORKER_REQUIREMENTS.get(engine, ())
+    workers = ledger.worker_capabilities(tenant_id=tenant)["workers"]
+    for worker in workers:
+        dependencies = worker["capabilities"].get("dependencies", {})
+        if needed and all(dependencies.get(item) is True for item in needed):
+            return {**{item: True for item in needed}, "cuda_available": worker["capabilities"].get("cuda_available") is True}
+    return {**{item: False for item in needed}, "cuda_available": False}
 
 
 @router.post("/advanced/preflight")
@@ -116,9 +161,13 @@ async def preflight_advanced_training(
     body: AdvancedPreflightRequest,
     current_user: dict[str, Any] = Depends(require_permission(Permission.TRAINING_READ)),
     workbench: AdvancedTrainingWorkbench = Depends(get_advanced_workbench),
+    ledger: TrainingJobLedger = Depends(lambda: TrainingJobLedger()),
 ) -> dict[str, Any]:
-    del current_user
-    return workbench.preflight(**body.model_dump())
+    tenant, _ = _identity(current_user)
+    return workbench.preflight(
+        **body.model_dump(),
+        dependency_availability=_worker_dependencies(ledger, tenant=tenant, engine=body.engine),
+    )
 
 
 def get_training_job_ledger() -> TrainingJobLedger:
@@ -126,8 +175,8 @@ def get_training_job_ledger() -> TrainingJobLedger:
 
 
 def _identity(current_user: Any) -> tuple[str, str]:
-    tenant = str(getattr(current_user, "tenant_id", "") or "")
-    user = str(getattr(current_user, "user_id", "") or "")
+    tenant = str((current_user.get("tenant_id") if isinstance(current_user, dict) else getattr(current_user, "tenant_id", "")) or "")
+    user = str((current_user.get("user_id") if isinstance(current_user, dict) else getattr(current_user, "user_id", "")) or "")
     if not tenant or tenant == "default" or not user:
         raise HTTPException(status_code=403, detail="Explicit user and tenant context required")
     return tenant, user
@@ -201,7 +250,10 @@ async def enqueue_advanced_training_job(
     ledger: TrainingJobLedger = Depends(get_training_job_ledger),
 ) -> dict[str, Any]:
     tenant, user = _identity(current_user)
-    check = workbench.preflight(**body.model_dump())
+    check = workbench.preflight(
+        **body.model_dump(),
+        dependency_availability=_worker_dependencies(ledger, tenant=tenant, engine=body.engine),
+    )
     if not check["ready"]:
         raise HTTPException(status_code=422, detail={
             "message": "Training preflight did not pass",

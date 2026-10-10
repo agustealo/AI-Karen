@@ -15,6 +15,7 @@ def preflight_advanced_engine(
     license_id: str | None, license_accepted: bool,
     license_model_path: str | None, epochs: int, sequence_length: int,
     lora_rank: int, allow_cpu_training: bool, lags: int, horizon: int,
+    dependency_availability: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     checks: list[dict[str, str]] = []
     evidence: dict[str, Any] = {"dataset_version": dataset_version}
@@ -24,7 +25,9 @@ def preflight_advanced_engine(
     needed = ("numpy", "sklearn") if engine == "timeseries" else ("torch", "transformers", "peft")
     for module in needed:
         try:
-            available = importlib.util.find_spec(module) is not None
+            available = (dependency_availability.get(module, False)
+                         if dependency_availability is not None
+                         else importlib.util.find_spec(module) is not None)
         except (ImportError, ValueError):
             available = False
         if not available:
@@ -70,12 +73,16 @@ def preflight_advanced_engine(
         if lora_rank not in (4, 8, 16, 32):
             reject("invalid_lora_rank", "Unsupported LoRA rank")
         if not allow_cpu_training:
-            try:
-                import torch
-                if not torch.cuda.is_available():
-                    reject("gpu_unavailable", "CUDA unavailable; opt in to CPU training explicitly")
-            except ImportError:
-                pass
+            if dependency_availability is not None:
+                if not dependency_availability.get("cuda_available", False):
+                    reject("gpu_unavailable", "Training worker CUDA unavailable; opt in to CPU training explicitly")
+            else:
+                try:
+                    import torch
+                    if not torch.cuda.is_available():
+                        reject("gpu_unavailable", "CUDA unavailable; opt in to CPU training explicitly")
+                except ImportError:
+                    pass
     count = 0
     last = None
     seen_texts: set[str] = set()
