@@ -275,6 +275,8 @@ export default function AdvancedTrainingWorkbench() {
       setUploadResult(`Registered ${result.version}: ${result.rows} records.`);
       setUploadFile(null);
       await load();
+      setConfig((previous) => previous ? { ...previous, dataset_version: result.version, dataset_scope: "tenant" } : previous);
+      setPreflight(null);
     } catch (cause) {
       setError(trainingError(cause, "execute"));
     } finally {
