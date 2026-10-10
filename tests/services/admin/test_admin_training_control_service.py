@@ -76,3 +76,14 @@ def test_admin_training_routes_are_mounted_by_canonical_router_registry():
     assert "/admin/training/control-plane" in paths
     assert "/admin/training/advanced/catalog" in paths
     assert "/admin/training/advanced/jobs" in paths
+
+
+def test_training_dataset_routes_are_mandatory_in_canonical_registry():
+    from ai_karen_engine.api_routes.training.data import router as data_router
+    from ai_karen_engine.server.routers import CORE_ROUTERS, OPTIONAL_ROUTERS
+
+    assert sum(spec.router is data_router for spec in CORE_ROUTERS) == 1
+    assert not any("api_routes.training.data" in module for module, *_ in OPTIONAL_ROUTERS)
+    paths = {route.path for route in data_router.routes}
+    assert "/api/training-data/datasets" in paths
+    assert "/api/training-data/datasets/from-curated-memory" in paths
