@@ -94,7 +94,7 @@ def get_advanced_workbench() -> AdvancedTrainingWorkbench:
 
 @router.get("/advanced/catalog")
 async def get_advanced_training_catalog(
-    current_user: dict[str, Any] = Depends(require_permission(Permission.ADMIN_READ)),
+    current_user: dict[str, Any] = Depends(require_permission(Permission.TRAINING_READ)),
     workbench: AdvancedTrainingWorkbench = Depends(get_advanced_workbench),
 ) -> dict[str, Any]:
     del current_user
@@ -104,7 +104,7 @@ async def get_advanced_training_catalog(
 @router.post("/advanced/preflight")
 async def preflight_advanced_training(
     body: AdvancedPreflightRequest,
-    current_user: dict[str, Any] = Depends(require_permission(Permission.TRAINING_EXECUTE)),
+    current_user: dict[str, Any] = Depends(require_permission(Permission.TRAINING_READ)),
     workbench: AdvancedTrainingWorkbench = Depends(get_advanced_workbench),
 ) -> dict[str, Any]:
     del current_user
