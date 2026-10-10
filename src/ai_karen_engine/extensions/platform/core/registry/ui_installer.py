@@ -374,17 +374,30 @@ class UIInstallerService:
             manifest_path = target_path / "manifest.json"
             entry_file = target_path / entry_rel
 
-            package_info = UIPackageInfo(
-                plugin_id=plugin_id,
-                source_path=source_path,
-                target_path=target_path,
-                manifest_path=manifest_path,
-                entry_file=entry_file,
-                checksum=self._calculate_checksum(target_path),
-                size_bytes=self._get_directory_size(target_path),
-                installed_at=datetime.now(),
-                last_validated=datetime.now(),
-            )
+            try:
+                package_info = UIPackageInfo(
+                    plugin_id=plugin_id,
+                    source_path=source_path,
+                    target_path=target_path,
+                    manifest_path=manifest_path,
+                    entry_file=entry_file,
+                    checksum=self._calculate_checksum(target_path),
+                    size_bytes=self._get_directory_size(target_path),
+                    installed_at=datetime.now(),
+                    last_validated=datetime.now(),
+                )
+    
+            except Exception:
+                logger.exception("Plugin UI integrity check failed after publication")
+                if target_path.is_dir() and not target_path.is_symlink():
+                    shutil.rmtree(target_path, ignore_errors=True)
+                return UIInstallationResult(
+                    plugin_id=plugin_id,
+                    status=UIInstallationStatus.FAILED,
+                    state=UIInstallationState.ERROR,
+                    message="Published package failed integrity registration",
+                    error_code="POST_PUBLISH_VALIDATION_FAILED",
+                )
 
             # Register installation
             self.installations[plugin_id] = package_info
