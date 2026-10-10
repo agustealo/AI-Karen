@@ -32,3 +32,19 @@ async def test_symlink_gate_refused(tmp_path: Path):
     kernel.runtime_registry = Registry()
     with pytest.raises(ValueError):
         await kernel.disable("demo")
+
+
+@pytest.mark.asyncio
+async def test_failed_disable_keeps_restart_gate(tmp_path: Path):
+    kernel = PluginKernel(tmp_path)
+    (tmp_path / "demo").mkdir()
+    marker = tmp_path / "demo/.karen-manual-disabled"
+    class Registry:
+        def get(self, name):
+            return SimpleNamespace(manifest=SimpleNamespace(id=name))
+        async def update_state(self, name, state):
+            raise RuntimeError("disable rejected")
+    kernel.runtime_registry = Registry()
+    with pytest.raises(RuntimeError, match="disable rejected"):
+        await kernel.disable("demo")
+    assert marker.is_file()
