@@ -81,3 +81,23 @@ def test_tenant_catalog_uses_same_directory_as_import(tmp_path, monkeypatch):
     assert tenant_dataset_directory(root, "tenant-a") != tenant_dataset_directory(root, "tenant-b")
     with pytest.raises(DatasetImportError):
         AdvancedTrainingWorkbench.for_tenant("default")
+
+
+def test_import_rejects_symlinked_dataset_root(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "linked"
+    link.symlink_to(real, target_is_directory=True)
+    with pytest.raises(DatasetImportError, match="symlinks"):
+        _import(link)
+    assert not list(real.rglob("*.jsonl"))
+
+
+def test_import_rejects_nonfinite_json_and_cleans_up(tmp_path):
+    with pytest.raises(DatasetImportError, match="invalid JSON value"):
+        import_jsonl_dataset(
+            source=io.BytesIO(b'{"value":NaN}\n'),
+            root=tmp_path, tenant_id="tenant-a", version="not-finite",
+        )
+    assert list(tmp_path.rglob("*.jsonl")) == []
+    assert list(tmp_path.rglob(".incoming-*")) == []
