@@ -689,12 +689,13 @@ class UIInstallerService:
         )
 
         if not files_exist:
-            # Clean up invalid installation
-            del self.installations[plugin_id]
+            # A missing file is a damaged installation, not proof that a
+            # governed uninstall completed. Keep the inventory evidence.
             return {
-                "state": UIInstallationState.NOT_INSTALLED.value,
-                "status": UIInstallationStatus.NOT_FOUND.value,
-                "message": "UI files missing",
+                "state": UIInstallationState.ERROR.value,
+                "status": UIInstallationStatus.VALIDATION_FAILED.value,
+                "message": "Required UI files missing; repair required",
+                "error_code": "FILES_MISSING",
             }
 
         # Unknown baselines are *not* valid checksums. Never silently trust
