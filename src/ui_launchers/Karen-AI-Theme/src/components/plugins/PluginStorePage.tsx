@@ -94,6 +94,9 @@ export default function PluginStorePage() {
     PluginCategory | undefined
   >(searchParams.category);
   const [operationError, setOperationError] = useState('');
+  const [uploadId, setUploadId] = useState('');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   const installedPlugins = useMemo(() => {
     return Array.isArray(plugins)
@@ -193,6 +196,39 @@ export default function PluginStorePage() {
     void refreshPlugins();
   }, [refreshPlugins]);
 
+  const handleUpload = useCallback(async () => {
+    if (!uploadFile || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(uploadId)) {
+      setOperationError('Select a ZIP file and a valid plugin ID.');
+      return;
+    }
+    setUploading(true);
+    setOperationError('');
+    try {
+      const form = new FormData();
+      form.append('plugin_id', uploadId);
+      form.append('archive', uploadFile);
+      const response = await fetch('/api/plugins/store/upload', {
+        method: 'POST',
+        credentials: 'include',
+        body: form,
+      });
+      if (!response.ok) {
+        const detail: unknown = await response.json().catch(() => null);
+        const message = detail && typeof detail === 'object'
+          ? (detail as { detail?: unknown }).detail
+          : null;
+        throw new Error(typeof message === 'string' ? message : 'Plugin upload failed');
+      }
+      setUploadFile(null);
+      setUploadId('');
+      await refreshPlugins();
+    } catch (cause) {
+      setOperationError(getErrorMessage(cause));
+    } finally {
+      setUploading(false);
+    }
+  }, [uploadFile, uploadId, refreshPlugins]);
+
   const handleBrowseFromInstalled = useCallback(() => {
     setActiveTab('browse');
     void searchPlugins();
@@ -251,6 +287,32 @@ export default function PluginStorePage() {
           </AlertDescription>
         </Alert>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Upload a Plugin</CardTitle>
+          <CardDescription>
+            Upload a ZIP package manually. Karen validates the package and installs it disabled.
+            Enabling it is a separate action.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-sm">
+            Plugin ID
+            <input className="rounded border bg-background px-3 py-2" value={uploadId}
+              onChange={(event) => setUploadId(event.target.value)}
+              placeholder="plugin-id" aria-label="Plugin ID" />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Package (.zip)
+            <input type="file" accept=".zip,application/zip" aria-label="Plugin ZIP package"
+              onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} />
+          </label>
+          <Button type="button" onClick={() => void handleUpload()} disabled={uploading || !uploadFile}>
+            {uploading ? 'Uploading...' : 'Upload & Install'}
+          </Button>
+        </CardContent>
+      </Card>
 
       <Tabs
         value={activeTab}

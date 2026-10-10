@@ -9,6 +9,14 @@ discovery authority.
 from __future__ import annotations
 
 import logging
+import io
+import json
+import os
+import re
+import shutil
+import stat
+import tempfile
+import zipfile
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
@@ -164,6 +172,121 @@ class PluginService:
             is not None
             for record in self._get_kernel().list_records()
         }
+
+    async def install_uploaded_archive(self, plugin_id: str, archive: bytes) -> Dict[str, Any]:
+        """Install a user-uploaded plugin package without enabling it.
+
+        This service owns publication into the canonical kernel root; the API
+        owns auth, bounded upload ingestion and audit.
+        """
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", plugin_id):
+            raise ValueError("Invalid plugin identifier")
+        if len(archive) > 20 * 1024 * 1024:
+            raise ValueError("Plugin archive exceeds 20 MiB")
+        # Initialize discovery before publishing untrusted uploaded files.
+        # First boot must never discover the uploaded package as default-enabled.
+        await self._ensure_initialized()
+        root = self._resolve_root()
+        if root.is_symlink():
+            raise ValueError("Unsafe plugin root")
+        root.mkdir(parents=True, exist_ok=True)
+        target = root / plugin_id
+        if target.exists() or target.is_symlink():
+            raise FileExistsError("Plugin already installed; overwrite refused")
+        staged = Path(tempfile.mkdtemp(prefix=".plugin-upload-", dir=root))
+        published = False
+        try:
+            with zipfile.ZipFile(io.BytesIO(archive)) as uploaded:
+                entries = uploaded.infolist()
+                if len(entries) > 500:
+                    raise ValueError("Too many archive members")
+                total_size = 0
+                seen_paths: set[str] = set()
+                for member in entries:
+                    relative = Path(member.filename)
+                    if (
+                        not member.filename
+                        or relative.is_absolute()
+                        or ".." in relative.parts
+                        or "\\" in member.filename
+                        or member.filename.startswith("/")
+                    ):
+                        raise ValueError("Unsafe package member path")
+                    # Reject duplicate paths and file/directory collisions before
+                    # extraction, including normalized "." path components.
+                    normalized = "/".join(part for part in relative.parts if part != ".")
+                    if not normalized or normalized in seen_paths:
+                        raise ValueError("Duplicate or invalid package member")
+                    seen_paths.add(normalized)
+                    mode = (member.external_attr >> 16) & 0xFFFF
+                    if stat.S_ISLNK(mode):
+                        raise ValueError("Package links are forbidden")
+                    if mode and stat.S_IFMT(mode) not in (0, stat.S_IFDIR, stat.S_IFREG):
+                        raise ValueError("Unsupported package member type")
+                    total_size += member.file_size
+                    if total_size > 80 * 1024 * 1024:
+                        raise ValueError("Uncompressed package exceeds limit")
+                    output = staged.joinpath(*relative.parts)
+                    if member.is_dir():
+                        output.mkdir(parents=True, exist_ok=True)
+                    else:
+                        output.parent.mkdir(parents=True, exist_ok=True)
+                        with uploaded.open(member) as src, output.open("xb") as dst:
+                            shutil.copyfileobj(src, dst)
+            manifest_file = staged / "manifest.json"
+            if not manifest_file.is_file() or manifest_file.is_symlink():
+                raise ValueError("Plugin manifest.json missing at archive root")
+            manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict):
+                raise ValueError("Invalid plugin manifest")
+            # Use the existing canonical manifest schema before publishing files.
+            from ai_karen_engine.extensions.platform.core.manifest import (
+                ExtensionManifest as CatalogExtensionManifest,
+            )
+            validated_manifest = CatalogExtensionManifest.from_dict(manifest)
+            if not validated_manifest.name:
+                raise ValueError("Plugin manifest missing name")
+            declared_id = manifest.get("id") or manifest.get("name")
+            if declared_id and declared_id != plugin_id:
+                raise ValueError("Uploaded plugin manifest identity mismatch")
+            if target.exists() or target.is_symlink():
+                raise FileExistsError("Plugin installation conflict")
+            # Durable opt-in activation gate: marker ships with the package and
+            # survives process restarts. Only explicit enable may clear it.
+            (staged / ".karen-manual-disabled").write_text(
+                "Uploaded plugin requires explicit enable\\n", encoding="utf-8"
+            )
+            # Hold the exclusive lock through runtime validation and rollback.
+            # Releasing it immediately after rename exposed a partial install.
+            lock_path = root / (".plugin-install-" + plugin_id + ".lock")
+            lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                if target.exists() or target.is_symlink():
+                    raise FileExistsError("Plugin installation conflict")
+                os.rename(staged, target)
+                published = True
+                try:
+                    await self._get_kernel().refresh_with_new_plugin_disabled(plugin_id)
+                    record = self._get_kernel().get_record(plugin_id)
+                    if record is None or record.get("error_message"):
+                        raise ValueError("Uploaded plugin did not pass runtime registry validation")
+                except Exception:
+                    # Restore the canonical registry after removing a rejected
+                    # package so failed uploads cannot remain executable.
+                    if target.is_dir() and not target.is_symlink():
+                        shutil.rmtree(target)
+                    try:
+                        await self._get_kernel().refresh()
+                    except Exception:
+                        logger.exception("Unable to reconcile plugin registry after rejected upload")
+                    raise
+                return {"plugin_id": plugin_id, "installed": True, "enabled": False}
+            finally:
+                os.close(lock_fd)
+                lock_path.unlink(missing_ok=True)
+        finally:
+            if not published and staged.exists():
+                shutil.rmtree(staged)
 
     async def refresh_plugins(self) -> int:
         await self._ensure_initialized()

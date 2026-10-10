@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from packaging.version import InvalidVersion, Version
 from pydantic import BaseModel, Field
 
@@ -330,6 +330,53 @@ async def get_plugin_details_endpoint(
         "installed": plugin["status"] == "installed",
         "update_available": None,
     }
+
+
+@router.post("/upload", response_model=Dict[str, Any])
+async def upload_plugin_endpoint(
+    http_request: Request,
+    plugin_id: str = Form(...),
+    archive: UploadFile = File(...),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> Dict[str, Any]:
+    """Explicitly upload a package; never auto-enable it."""
+    _require_admin(current_user)
+    if not archive.filename or not archive.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=422, detail="A ZIP plugin archive is required")
+    data = await archive.read(20 * 1024 * 1024 + 1)
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Plugin archive exceeds 20 MiB")
+    try:
+        result = await plugin_service.install_uploaded_archive(plugin_id, data)
+    except FileExistsError:
+        _audit_plugin_event(
+            request=http_request, current_user=current_user,
+            event_type="plugin_install", action="manual_upload",
+            outcome="error", details={"plugin_id": plugin_id, "reason": "conflict"},
+        )
+        raise HTTPException(status_code=409, detail="Plugin already installed")
+    except (ValueError, __import__("zipfile").BadZipFile):
+        _audit_plugin_event(
+            request=http_request, current_user=current_user,
+            event_type="plugin_install", action="manual_upload",
+            outcome="error", details={"plugin_id": plugin_id, "reason": "invalid_archive"},
+        )
+        raise HTTPException(status_code=422, detail="Invalid or unsafe plugin archive")
+    except Exception:
+        logger.exception("Plugin archive installation unavailable")
+        _audit_plugin_event(
+            request=http_request, current_user=current_user,
+            event_type="plugin_install", action="manual_upload",
+            outcome="error", details={"plugin_id": plugin_id, "reason": "internal_error"},
+        )
+        raise HTTPException(status_code=503, detail="Plugin installation unavailable")
+    _audit_plugin_event(
+        request=http_request, current_user=current_user,
+        event_type="plugin_install", action="manual_upload",
+        outcome="ok", details={"plugin_id": plugin_id},
+    )
+    return {**result, "success": True, **_response_meta(http_request)}
 
 
 @router.post("/install", response_model=Dict[str, Any])
