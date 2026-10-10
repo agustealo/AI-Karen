@@ -771,7 +771,7 @@ export default function AdminSettingsPage() {
 
   return (
     <>
-      <div className="space-y-6">
+      <div className="space-y-6 px-4 sm:px-8 lg:px-[5em]">
         <div>
           <h2 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
             <Shield className="h-6 w-6 text-primary" />
