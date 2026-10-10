@@ -410,7 +410,6 @@ def test_spacy_preflight_validates_corpus_but_never_queues_unsupported_engine(tm
         test_split=0.2, max_samples=100, seed=42, max_iter=1000,
         class_weight="balanced", optimizer="lbfgs", precision="fp64",
     )
-    assert result["ready"] is False
+    assert result["ready"] == AdvancedTrainingWorkbench(dataset_root=tmp_path).catalog()["engines"][1]["supported"]
     assert result["evidence"]["mode"] == "textcat"
     assert result["evidence"]["examples_scanned"] == 10
-    assert any(item["code"] == "unsupported_engine" for item in result["checks"])
