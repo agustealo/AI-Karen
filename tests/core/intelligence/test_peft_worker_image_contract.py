@@ -2,7 +2,7 @@
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_peft_dependencies_are_installed_in_dedicated_image():
