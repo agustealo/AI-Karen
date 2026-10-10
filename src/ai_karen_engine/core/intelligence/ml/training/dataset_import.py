@@ -79,15 +79,9 @@ def import_jsonl_dataset(
                 raise DatasetImportError("Dataset is empty")
             output.flush()
             os.fsync(output.fileno())
-        # Exclusive creation prohibits silent overwrite, including dangling links.
-        with destination.open("xb") as target, open(tmp_name, "rb") as staged:
-            while True:
-                chunk = staged.read(65536)
-                if not chunk:
-                    break
-                target.write(chunk)
-            target.flush()
-            os.fsync(target.fileno())
+        # Atomic no-clobber publication on the same filesystem. A failed
+        # publish never exposes a partially copied dataset version.
+        os.link(tmp_name, destination, follow_symlinks=False)
     except FileExistsError as exc:
         raise DatasetImportError("Dataset version already exists") from exc
     finally:
