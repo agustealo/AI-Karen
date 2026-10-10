@@ -234,6 +234,11 @@ class PluginService:
                 raise ValueError("Uploaded plugin manifest identity mismatch")
             if target.exists() or target.is_symlink():
                 raise FileExistsError("Plugin installation conflict")
+            # Durable opt-in activation gate: marker ships with the package and
+            # survives process restarts. Only explicit enable may clear it.
+            (staged / ".karen-manual-disabled").write_text(
+                "Uploaded plugin requires explicit enable\\n", encoding="utf-8"
+            )
             os.rename(staged, target)
             published = True
             await self._ensure_initialized()
