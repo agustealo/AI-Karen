@@ -16,6 +16,10 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionCont
     [
         ("Who am I?", None),
         ("Whats my name?", "preferred_name"),
+        ("What is my fucking name?", "preferred_name"),
+        ("What is my damn name?!", "preferred_name"),
+        ("What\u2019s my freaking name?", "preferred_name"),
+        ("Where the fuck am I from?", None),
         ("Where am I from?", "origin_location"),
     ],
 )
