@@ -11,6 +11,7 @@ import os
 import shutil
 import json
 import hashlib
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
@@ -99,6 +100,57 @@ class UIInstallerService:
         self.installations: Dict[str, UIPackageInfo] = {}
         self._load_installations()
 
+    def _baseline_path(self, plugin_id: str) -> Path:
+        if not plugin_id or any(
+            char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for char in plugin_id
+        ):
+            raise ValueError("Invalid plugin identifier")
+        return self.backup_dir / "integrity" / (plugin_id + ".json")
+
+    def _load_baseline(self, plugin_id: str) -> str:
+        """Read an original installation hash, never certify current bytes."""
+        path = self._baseline_path(plugin_id)
+        if path.is_symlink() or not path.is_file():
+            return ""
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            checksum = record.get("sha256") if isinstance(record, dict) else None
+            if (
+                record.get("plugin_id") == plugin_id
+                and isinstance(checksum, str)
+                and len(checksum) == 64
+                and all(char in "0123456789abcdef" for char in checksum)
+            ):
+                return checksum
+        except (OSError, ValueError, TypeError, AttributeError):
+            logger.warning("Plugin integrity baseline unreadable: %s", plugin_id)
+        return ""
+
+    def _save_baseline(self, plugin_id: str, checksum: str) -> None:
+        """Atomically persist checksum evidence outside the UI package."""
+        if len(checksum) != 64 or any(char not in "0123456789abcdef" for char in checksum):
+            raise ValueError("Invalid checksum")
+        destination = self._baseline_path(plugin_id)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.parent.is_symlink() or destination.is_symlink():
+            raise ValueError("Unsafe integrity baseline path")
+        fd, temporary = tempfile.mkstemp(prefix=".baseline-", dir=destination.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump({"plugin_id": plugin_id, "sha256": checksum}, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, destination)
+            directory_fd = os.open(destination.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
     def _load_installations(self) -> None:
         """Load existing installations from plugin_repo."""
         if not self.plugins_repo_root.exists():
@@ -150,7 +202,7 @@ class UIInstallerService:
                                 entry_file=entry_file,
                                 # Restart discovery is not an integrity attestation.
                                 # The original install checksum is not durable yet.
-                                checksum="",
+                                checksum=self._load_baseline(plugin_id),
                                 size_bytes=self._get_directory_size(plugin_dir),
                                 installed_at=datetime.fromtimestamp(
                                     manifest_path.stat().st_mtime
@@ -368,7 +420,21 @@ class UIInstallerService:
                 last_validated=datetime.now(),
             )
 
-            # Register installation
+            # Failure to persist the original hash must not report success.
+            try:
+                self._save_baseline(plugin_id, package_info.checksum)
+            except Exception:
+                logger.exception("Failed to persist plugin UI integrity baseline")
+                if target_path.is_dir() and not target_path.is_symlink():
+                    shutil.rmtree(target_path, ignore_errors=True)
+                return UIInstallationResult(
+                    plugin_id=plugin_id,
+                    status=UIInstallationStatus.FAILED,
+                    state=UIInstallationState.ERROR,
+                    message="Could not persist installation integrity",
+                    error_code="INTEGRITY_PERSISTENCE_FAILED",
+                )
+
             self.installations[plugin_id] = package_info
 
             # Update registry to reflect UI installation
@@ -463,7 +529,19 @@ class UIInstallerService:
                     error_code="REMOVAL_FAILED",
                 )
 
-            # Unregister installation
+            # Invalidate prior baseline once files have actually been removed.
+            try:
+                self._baseline_path(plugin_id).unlink(missing_ok=True)
+            except OSError:
+                logger.exception("Failed to clear plugin integrity baseline")
+                return UIInstallationResult(
+                    plugin_id=plugin_id,
+                    status=UIInstallationStatus.FAILED,
+                    state=UIInstallationState.ERROR,
+                    message="UI removed but integrity record cleanup failed",
+                    error_code="INTEGRITY_CLEANUP_FAILED",
+                )
+
             del self.installations[plugin_id]
 
             # Update registry to reflect UI removal
