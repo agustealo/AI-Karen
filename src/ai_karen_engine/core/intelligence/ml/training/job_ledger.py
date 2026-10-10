@@ -93,6 +93,39 @@ class TrainingJobLedger:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def execution_status(self, *, tenant_id: str) -> dict[str, Any]:
+        """Report durable job/lease truth, not speculative worker availability."""
+        if not tenant_id or tenant_id == "default":
+            raise ValueError("Explicit tenant scope required")
+        with self._connect() as db:
+            counts = {
+                row["state"]: row["count"]
+                for row in db.execute(
+                    "SELECT state, COUNT(*) AS count FROM training_jobs "
+                    "WHERE tenant_id=? GROUP BY state", (tenant_id,),
+                ).fetchall()
+            }
+            active = db.execute(
+                "SELECT COUNT(*) AS count FROM training_jobs WHERE tenant_id=? "
+                "AND state IN ('VALIDATING','RUNNING','EVALUATING') "
+                "AND lease_token IS NOT NULL AND lease_expires_at>?",
+                (tenant_id, _now()),
+            ).fetchone()["count"]
+            expired = db.execute(
+                "SELECT COUNT(*) AS count FROM training_jobs WHERE tenant_id=? "
+                "AND state IN ('VALIDATING','RUNNING','EVALUATING') "
+                "AND lease_token IS NOT NULL AND lease_expires_at<=?",
+                (tenant_id, _now()),
+            ).fetchone()["count"]
+        return {
+            "queued_jobs": counts.get("QUEUED", 0),
+            "active_leases": active,
+            "expired_leases": expired,
+            "worker_status": "unverified",
+            "worker_status_reason": "No durable worker registration/heartbeat exists",
+            "automatic_dispatch_verified": False,
+        }
+
     def claim(self, job_id: str, *, tenant_id: str, ttl_seconds: int = 300) -> str | None:
         """Atomically take a queued job. The opaque token fences competing workers."""
         if not tenant_id or tenant_id == "default" or not 30 <= ttl_seconds <= 3600:
