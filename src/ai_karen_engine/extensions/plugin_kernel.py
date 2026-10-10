@@ -528,6 +528,14 @@ class PluginKernel:
         registration = self.runtime_registry.get(plugin_id)
         if registration is None:
             return False
+        marker = self.extensions_root / plugin_id / ".karen-manual-disabled"
+        if marker.is_symlink() or not marker.parent.is_dir() or marker.parent.is_symlink():
+            raise ValueError("Unsafe plugin disabled-state path")
+        # Persist explicit disable before transitioning runtime state.
+        # If transition fails, retaining the marker is fail-closed.
+        if not marker.exists():
+            with marker.open("x", encoding="utf-8") as handle:
+                handle.write("Plugin disabled explicitly; requires enable\n")
         self._disabled.add(plugin_id)
         await self.runtime_registry.update_state(plugin_id, ExtensionLifecycleState.DISABLED)
         return True
