@@ -230,10 +230,10 @@ export default function AdvancedTrainingWorkbench() {
                   <p className="text-sm font-semibold">Local LoRA adapter training</p>
                   <p className="text-xs text-muted-foreground">Requires an already-installed local Hugging Face model, JSONL text records, torch, transformers and peft. No automatic model downloads.</p>
                   <div><Label htmlFor="lora-model">Absolute local base-model path</Label><Input id="lora-model" value={config.base_model_path} onChange={e => change("base_model_path", e.target.value)} placeholder="/models/base-model"/></div>
-                  <div><Label htmlFor="lora-license">Verified model license identifier</Label><Input id="lora-license" value={config.license_id} onChange={e => { change("license_id", e.target.value); }} placeholder="License name or source reference"/></div>
+                  <div><Label htmlFor="lora-license">Model license identifier (operator-declared)</Label><Input id="lora-license" value={config.license_id} onChange={e => { change("license_id", e.target.value); }} placeholder="License name or source reference"/></div>
                   <label className="flex items-start gap-2 text-sm">
                     <input type="checkbox" checked={config.license_accepted} onChange={e => setConfig(previous => previous ? { ...previous, license_accepted: e.target.checked, license_model_path: e.target.checked ? previous.base_model_path : "" } : previous)} />
-                    <span>I reviewed and accept the license terms for this exact installed base model.</span>
+                    <span>I reviewed the model terms from its source and accept them for this exact installed base model. This acknowledgment does not verify the source license automatically.</span>
                   </label>
                   <div className="grid grid-cols-3 gap-3">
                     <div><Label>Epochs</Label><Input type="number" min={1} max={10} value={config.epochs} onChange={e => change("epochs", Number(e.target.value))}/></div>
