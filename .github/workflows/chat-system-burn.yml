@@ -68,6 +68,9 @@ jobs:
       - name: Verify upbringing and inverted name recall
         run: pytest tests/core/runtime/test_upbringing_and_inverted_name_recall.py -q
 
+      - name: Verify profile summaries and upbringing intent
+        run: pytest tests/core/runtime/test_profile_summary_and_upbringing_intent.py -q
+
       - name: Run chat architecture contract
         run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
 

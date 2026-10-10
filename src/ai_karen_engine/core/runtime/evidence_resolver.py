@@ -162,6 +162,12 @@ class RuntimeEvidenceResolver:
             referenced_profile_attribute,
         )
 
+        from ai_karen_engine.core.intelligence.profile_attribute import (
+            is_profile_summary_request,
+        )
+        if is_profile_summary_request(query):
+            return "who am i"
+
         # Query by the requested fact, not by a sanitized user utterance.
         # The semantic query is internal and the original words are untouched.
         attribute = referenced_profile_attribute(query, request.messages)
