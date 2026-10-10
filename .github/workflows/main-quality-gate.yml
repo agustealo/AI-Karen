@@ -90,6 +90,9 @@ jobs:
       - name: Prove admin user route imports and canonical authorization enums
         run: pytest tests/unit/api_routes/test_admin_user_route_imports.py -q
 
+      - name: Prove canonical admin user mutations and tenant isolation
+        run: pytest tests/unit/services/test_admin_user_mutations.py -q
+
       - name: Ruff correctness baseline
         run: |
           # Historical formatting/style debt is retired in contained slices.
