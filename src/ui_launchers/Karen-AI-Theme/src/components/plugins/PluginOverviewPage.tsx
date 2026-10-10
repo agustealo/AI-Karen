@@ -817,6 +817,14 @@ function PluginHealthCard({
         )}
       </div>
 
+      {hasUiCapabilities && uiInstallStatus === 'not_installed' && isUiRegistered && (
+        <p className="text-xs text-muted-foreground" role="note">
+          Frontend registration only confirms that the plugin has a UI entry.
+          Its installable UI package is not confirmed as installed. To upload or
+          uninstall a complete plugin package, use the Plugin Store.
+        </p>
+      )}
+
       {operationError && (
         <Alert variant="destructive" className="px-3 py-2">
           <XCircle className="h-3 w-3" aria-hidden={true} />
