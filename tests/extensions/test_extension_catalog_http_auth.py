@@ -144,3 +144,33 @@ async def test_extension_install_requires_plugin_management_permission(
         )
     assert response.status_code == 403
     assert response.json()["detail"] == "Plugin management access denied"
+
+
+
+@pytest.mark.asyncio
+async def test_load_extension_supports_canonical_dict_status(catalog_app, monkeypatch):
+    app, _ = catalog_app
+
+    async def admin(_request):
+        return {
+            "user_id": "11111111-1111-1111-1111-111111111111",
+            "tenant_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "roles": ["admin"],
+        }
+
+    class Manager:
+        async def load_extension(self, name):
+            assert name == "intelligent-search"
+            return {"status": "enabled", "name": name}
+
+        async def refresh_extensions(self):
+            return []
+
+    monkeypatch.setattr(routes, "get_current_user", admin)
+    monkeypatch.setattr(routes, "get_extension_manager", lambda: Manager())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/api/extensions/intelligent-search/load")
+    assert response.status_code == 200
+    assert response.json()["status"] == "enabled"
