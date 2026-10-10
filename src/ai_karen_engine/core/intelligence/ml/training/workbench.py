@@ -42,6 +42,23 @@ class AdvancedTrainingWorkbench:
             else Path(get_ml_registry_dir()) / "datasets"
         )
 
+    @classmethod
+    def for_tenant(cls, tenant_id: str) -> "AdvancedTrainingWorkbench":
+        """Resolve the same tenant-specific directory used by governed imports.
+
+        The authenticated API must supply tenant_id from verified request context;
+        never accept a caller-provided tenant as authorization.
+        """
+        from ai_karen_engine.core.intelligence.ml.training.dataset_import import (
+            tenant_dataset_directory,
+        )
+
+        return cls(
+            dataset_root=tenant_dataset_directory(
+                Path(get_ml_registry_dir()) / "datasets", tenant_id,
+            ),
+        )
+
     @staticmethod
     def _inspect_dataset_schema(path: Path) -> dict[str, Any]:
         """Bounded structural hint, never an execution or preflight approval."""
