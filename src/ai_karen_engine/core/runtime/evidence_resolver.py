@@ -168,6 +168,7 @@ class RuntimeEvidenceResolver:
         canonical_queries = {
             "preferred_name": "what is my name",
             "origin_location": "where am i from",
+            "upbringing_location": "where did i grow up",
             "birthplace": "where was i born",
             "residence_location": "where do i live",
             "work_location": "where do i work",
