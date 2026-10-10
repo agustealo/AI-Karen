@@ -295,7 +295,7 @@ class AdminUserService:
         self._enforce_tenant_boundary(user.tenant_id, operator_tenant_id)
         # Canonical durable session source. Never expose bearer or refresh tokens.
         durable_sessions = await self._auth_service.list_sessions(
-            user_id=user_id, active_only=True
+            user_id=user_id, active_only=True, strict_errors=True
         )
         sessions = [
             {
