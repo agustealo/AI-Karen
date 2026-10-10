@@ -229,6 +229,13 @@ class PluginService:
             manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
             if not isinstance(manifest, dict):
                 raise ValueError("Invalid plugin manifest")
+            # Use the existing canonical manifest schema before publishing files.
+            from ai_karen_engine.extensions.platform.core.manifest import (
+                ExtensionManifest as CatalogExtensionManifest,
+            )
+            validated_manifest = CatalogExtensionManifest.from_dict(manifest)
+            if not validated_manifest.name:
+                raise ValueError("Plugin manifest missing name")
             declared_id = manifest.get("id") or manifest.get("name")
             if declared_id and declared_id != plugin_id:
                 raise ValueError("Uploaded plugin manifest identity mismatch")
@@ -241,8 +248,18 @@ class PluginService:
             )
             os.rename(staged, target)
             published = True
-            await self._ensure_initialized()
-            await self._get_kernel().refresh_with_new_plugin_disabled(plugin_id)
+            try:
+                await self._ensure_initialized()
+                await self._get_kernel().refresh_with_new_plugin_disabled(plugin_id)
+                record = self._get_kernel().get_record(plugin_id)
+                if record is None or record.get("error_message"):
+                    raise ValueError("Uploaded plugin did not pass runtime registry validation")
+            except Exception:
+                # Installation must not claim success when canonical discovery
+                # rejected the package. Leave no published package behind.
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                raise
             return {"plugin_id": plugin_id, "installed": True, "enabled": False}
         finally:
             if not published and staged.exists():
