@@ -332,6 +332,34 @@ async def get_plugin_details_endpoint(
     }
 
 
+@router.delete("/{plugin_id}/installation", response_model=Dict[str, Any])
+async def uninstall_plugin_endpoint(
+    plugin_id: str,
+    http_request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> Dict[str, Any]:
+    """User-initiated removal of the complete installed package."""
+    _require_admin(current_user)
+    try:
+        result = await plugin_service.uninstall_plugin_package(plugin_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Plugin is not installed")
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="Plugin installation operation in progress")
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception:
+        logger.exception("Plugin package uninstall failed")
+        raise HTTPException(status_code=503, detail="Plugin uninstall unavailable")
+    _audit_plugin_event(
+        request=http_request, current_user=current_user,
+        event_type="plugin_uninstall", action="manual_package_uninstall",
+        outcome="ok", details={"plugin_id": plugin_id},
+    )
+    return {**result, "success": True, **_response_meta(http_request)}
+
+
 @router.post("/upload", response_model=Dict[str, Any])
 async def upload_plugin_endpoint(
     http_request: Request,
