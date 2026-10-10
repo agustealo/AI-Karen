@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -214,6 +215,47 @@ async def list_extensions(user: dict[str, Any] = Depends(require_extension_catal
     except Exception:
         logger.exception("Extension catalog refresh failed")
         raise HTTPException(status_code=503, detail="Extension catalog unavailable")
+
+
+@router.get("/free-catalog")
+async def get_free_plugin_catalog(
+    user: dict[str, Any] = Depends(require_extension_catalog_access),
+):
+    """Offer bundled plugins without installing or enabling them."""
+    catalog = Path(__file__).resolve().parents[4] / "free_plugins"
+    offerings: list[dict[str, Any]] = []
+    for category in ("essential", "premium"):
+        category_dir = catalog / category
+        if not category_dir.is_dir() or category_dir.is_symlink():
+            continue
+        for folder in sorted(category_dir.iterdir()):
+            if not folder.is_dir() or folder.is_symlink():
+                continue
+            plugin_id = folder.name
+            if not plugin_id or any(
+                character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+                for character in plugin_id
+            ):
+                continue
+            manifest_path = folder / "manifest.json"
+            if not manifest_path.is_file() or manifest_path.is_symlink():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                logger.warning("Skipping malformed plugin catalog manifest: %s", plugin_id)
+                continue
+            if not isinstance(manifest, dict):
+                continue
+            offerings.append({
+                "plugin_id": plugin_id,
+                "category": category,
+                "name": str(manifest.get("display_name") or manifest.get("name") or plugin_id),
+                "version": str(manifest.get("version") or "unknown"),
+                "description": str(manifest.get("description") or ""),
+                "installation": "manual",
+            })
+    return {"offerings": offerings, "automatic_installation": False}
 
 
 @router.post("/install")
