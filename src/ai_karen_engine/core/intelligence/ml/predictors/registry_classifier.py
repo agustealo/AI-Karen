@@ -197,7 +197,7 @@ class RegistryBackedClassifier(BasePredictor):
         try:
             if self._candidate_model_id is not None:
                 candidate = self._registry.get(self._candidate_model_id)
-                if candidate is None or candidate.status != "candidate" or candidate.purpose != self._task.value:
+                if candidate is None or candidate.status != "CANDIDATE" or candidate.purpose != self._task.value:
                     return None
                 scope = tenant_id or self._tenant_id
                 if not scope or scope == "default":
