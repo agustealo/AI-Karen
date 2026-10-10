@@ -28,12 +28,13 @@ async def test_upload_requires_explicit_enable(tmp_path, monkeypatch):
 
     class Kernel:
         refresh_with_new_plugin_disabled = staticmethod(no_enable)
+        get_record = staticmethod(lambda plugin_id: {"manifest": object(), "error_message": None})
 
     async def initialized():
         service.kernel = Kernel()
 
     monkeypatch.setattr(service, "_ensure_initialized", initialized)
-    data = _archive({"manifest.json": json.dumps({"id": "demo"}), "handler.py": "pass"})
+    data = _archive({"manifest.json": json.dumps({"id": "demo", "name": "demo", "version": "1.0.0", "display_name": "Demo", "description": "Test plugin", "author": "Tests", "license": "MIT", "category": "integration"}), "handler.py": "pass"})
     result = await service.install_uploaded_archive("demo", data)
     assert result == {"plugin_id": "demo", "installed": True, "enabled": False}
     assert called == ["demo"]
