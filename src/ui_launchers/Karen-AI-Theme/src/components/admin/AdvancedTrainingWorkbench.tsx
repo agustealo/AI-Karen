@@ -28,6 +28,9 @@ type Config = {
   engine: string; task: string; dataset_version: string;
   test_split: number; max_samples: number; seed: number; max_iter: number;
   optimizer: string; class_weight: string; precision: string;
+  base_model_path: string; license_id: string; license_accepted: boolean;
+  license_model_path: string; epochs: number; sequence_length: number;
+  lora_rank: number; allow_cpu_training: boolean; lags: number; horizon: number;
 };
 type Finding = { code: string; message: string };
 type JobSummary = { job_id: string; state: string; submitted_at: string; updated_at: string };
@@ -77,6 +80,9 @@ export default function AdvancedTrainingWorkbench() {
         ...response.defaults,
         task: response.tasks.includes("execution_topology") ? "execution_topology" : response.tasks[0] ?? "",
         dataset_version: response.datasets[0]?.version ?? "",
+        base_model_path: "", license_id: "", license_accepted: false,
+        license_model_path: "", epochs: 1, sequence_length: 256,
+        lora_rank: 8, allow_cpu_training: false, lags: 5, horizon: 1,
       });
       setPreflight(null);
     } catch (cause) {
@@ -91,7 +97,8 @@ export default function AdvancedTrainingWorkbench() {
   const change = <K extends keyof Config>(key: K, value: Config[K]) => {
     setConfig(previous => previous ? {
       ...previous, [key]: value,
-      ...(key === "engine" ? { max_iter: value === "spacy" ? 20 : (catalog?.defaults.max_iter ?? 1000) } : {}),
+      ...(key === "engine" ? { max_iter: value === "spacy" ? 20 : (catalog?.defaults.max_iter ?? 1000), task: value === "timeseries" ? "outcome_forecast" : previous.task } : {}),
+      ...(key === "base_model_path" ? { license_accepted: false, license_model_path: "" } : {}),
     } : previous);
     setPreflight(null);
   };
@@ -207,6 +214,36 @@ export default function AdvancedTrainingWorkbench() {
                   ))}</SelectContent>
                 </Select>
               </div>
+              {config.engine === "timeseries" && (
+                <div className="space-y-3 rounded-lg border p-3">
+                  <p className="text-sm font-semibold">Chronological forecasting</p>
+                  <p className="text-xs text-muted-foreground">JSONL records need a timezone-aware timestamp and finite numeric value, strictly increasing within one series. Holdout is chronological, not randomly shuffled.</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><Label htmlFor="temporal-lags">Observed lag window</Label><Input id="temporal-lags" type="number" min={2} max={128} value={config.lags} onChange={e => change("lags", Number(e.target.value))}/></div>
+                    <div><Label htmlFor="temporal-horizon">Forecast horizon</Label><Input id="temporal-horizon" type="number" min={1} max={32} value={config.horizon} onChange={e => change("horizon", Number(e.target.value))}/></div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Models remain candidates until an engine-specific benchmark approves promotion.</p>
+                </div>
+              )}
+              {config.engine === "transformers" && (
+                <div className="space-y-3 rounded-lg border p-3">
+                  <p className="text-sm font-semibold">Local LoRA adapter training</p>
+                  <p className="text-xs text-muted-foreground">Requires an already-installed local Hugging Face model, JSONL text records, torch, transformers and peft. No automatic model downloads.</p>
+                  <div><Label htmlFor="lora-model">Absolute local base-model path</Label><Input id="lora-model" value={config.base_model_path} onChange={e => change("base_model_path", e.target.value)} placeholder="/models/base-model"/></div>
+                  <div><Label htmlFor="lora-license">Verified model license identifier</Label><Input id="lora-license" value={config.license_id} onChange={e => { change("license_id", e.target.value); }} placeholder="License name or source reference"/></div>
+                  <label className="flex items-start gap-2 text-sm">
+                    <input type="checkbox" checked={config.license_accepted} onChange={e => setConfig(previous => previous ? { ...previous, license_accepted: e.target.checked, license_model_path: e.target.checked ? previous.base_model_path : "" } : previous)} />
+                    <span>I reviewed and accept the license terms for this exact installed base model.</span>
+                  </label>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div><Label>Epochs</Label><Input type="number" min={1} max={10} value={config.epochs} onChange={e => change("epochs", Number(e.target.value))}/></div>
+                    <div><Label>Token length</Label><Input type="number" min={32} max={2048} value={config.sequence_length} onChange={e => change("sequence_length", Number(e.target.value))}/></div>
+                    <div><Label>LoRA rank</Label><Select value={String(config.lora_rank)} onValueChange={value => change("lora_rank", Number(value))}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent>{[4,8,16,32].map(rank => <SelectItem key={rank} value={String(rank)}>{rank}</SelectItem>)}</SelectContent></Select></div>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={config.allow_cpu_training} onChange={e => change("allow_cpu_training", e.target.checked)}/>Permit CPU training when CUDA is unavailable (slow)</label>
+                  <p className="text-xs text-muted-foreground">Adapter candidates are not automatically promoted or used in chat inference.</p>
+                </div>
+              )}
               {selectedEngine && !selectedEngine.supported && (
                 <Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>
                   {selectedEngine.details} Validation will reject unsupported launch requests.
