@@ -58,11 +58,13 @@ class AdvancedTrainingWorkbench:
              "supported": False, "executor": None,
              "details": "Component freezing and training need a governed spaCy executor."},
             {"id": "transformers", "label": "Transformer / LoRA / PEFT",
-             "supported": False, "executor": None,
-             "details": "Model-specific training jobs require a durable GPU worker and artifact contract."},
+             "supported": installed("torch") and installed("transformers") and installed("peft"),
+             "executor": "core.intelligence.ml.training.transformer_executor",
+             "details": "Local-only LoRA adapters; explicit license and preinstalled base model required."},
             {"id": "timeseries", "label": "Temporal forecasting",
-             "supported": False, "executor": None,
-             "details": "Dedicated time-series evaluation and training executor required."},
+             "supported": installed("sklearn") and installed("numpy"),
+             "executor": "core.intelligence.ml.training.temporal_executor",
+             "details": "Time-ordered single-series numeric forecasting with purged chronological holdout."},
         ]
         datasets = []
         if self.dataset_root.exists():
@@ -110,7 +112,28 @@ class AdvancedTrainingWorkbench:
         class_weight: str,
         optimizer: str,
         precision: str,
+        base_model_path: str | None = None,
+        license_id: str | None = None,
+        license_accepted: bool = False,
+        license_model_path: str | None = None,
+        epochs: int = 1,
+        sequence_length: int = 256,
+        lora_rank: int = 8,
+        allow_cpu_training: bool = False,
+        lags: int = 5,
+        horizon: int = 1,
     ) -> dict[str, Any]:
+        if engine in {"transformers", "timeseries"}:
+            from ai_karen_engine.core.intelligence.ml.training.advanced_preflight import preflight_advanced_engine
+            return preflight_advanced_engine(
+                dataset_root=self.dataset_root, engine=engine, task=task,
+                dataset_version=dataset_version, test_split=test_split,
+                max_samples=max_samples, base_model_path=base_model_path,
+                license_id=license_id, license_accepted=license_accepted,
+                license_model_path=license_model_path, epochs=epochs,
+                sequence_length=sequence_length, lora_rank=lora_rank,
+                allow_cpu_training=allow_cpu_training, lags=lags, horizon=horizon,
+            )
         failures: list[dict[str, str]] = []
         warnings: list[dict[str, str]] = []
 
