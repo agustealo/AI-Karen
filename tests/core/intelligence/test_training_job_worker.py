@@ -91,3 +91,52 @@ async def test_worker_never_claims_another_tenants_job(tmp_path):
     with pytest.raises(ValueError, match="already claimed"):
         await worker.run_claimed("candidate-1", tenant_id="tenant-b")
     assert store.get("candidate-1", tenant_id="tenant-a")["status"] == "QUEUED"
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_dataset_scope_not_in_approved_configuration(tmp_path):
+    store = TrainingJobLedger(tmp_path / "jobs.sqlite3")
+    job = TrainingJob(
+        job_id="scope-mismatch", task="affect", base_model="sklearn",
+        dataset_version="test-v1",
+        metadata={
+            "tenant_id": "tenant-a",
+            "dataset_scope": "tenant",
+            "advanced_config": {
+                "engine": "sklearn", "task": "affect",
+                "dataset_version": "test-v1",
+                "dataset_scope": "legacy",
+            },
+        },
+    )
+    store.submit(job, tenant_id="tenant-a", user_id="operator")
+    pipeline = PipelineStub()
+    worker = TrainingJobWorker(ledger=store, pipeline=pipeline, workbench=WorkbenchStub())
+    with pytest.raises(ValueError, match="dataset scope"):
+        await worker.run_claimed("scope-mismatch", tenant_id="tenant-a")
+    assert pipeline.calls == 0
+    assert store.get("scope-mismatch", tenant_id="tenant-a")["status"] == "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_unknown_dataset_scope(tmp_path):
+    store = TrainingJobLedger(tmp_path / "jobs.sqlite3")
+    job = TrainingJob(
+        job_id="scope-unknown", task="affect", base_model="sklearn",
+        dataset_version="test-v1",
+        metadata={
+            "tenant_id": "tenant-a",
+            "dataset_scope": "unapproved",
+            "advanced_config": {
+                "engine": "sklearn", "task": "affect",
+                "dataset_version": "test-v1",
+                "dataset_scope": "unapproved",
+            },
+        },
+    )
+    store.submit(job, tenant_id="tenant-a", user_id="operator")
+    pipeline = PipelineStub()
+    worker = TrainingJobWorker(ledger=store, pipeline=pipeline, workbench=WorkbenchStub())
+    with pytest.raises(ValueError, match="Unknown training dataset scope"):
+        await worker.run_claimed("scope-unknown", tenant_id="tenant-a")
+    assert pipeline.calls == 0
