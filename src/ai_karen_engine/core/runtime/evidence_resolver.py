@@ -144,6 +144,31 @@ class RuntimeEvidenceResolver:
                     return value
         return None
 
+    @staticmethod
+    def _memory_retrieval_query(
+        request: ChatExecutionRequest, requirement: ContextRequirement
+    ) -> str:
+        """Preserve requested semantics across emphatic personal-recall phrasing.
+
+        Normalize only the recall search query. The original utterance remains
+        intact for CORTEX, audit, conversation and persistence. No additional
+        memory source is authorized here.
+        """
+        query = (
+            str(requirement.metadata.get("retrieval_query") or "").strip()
+            or RuntimeEvidenceResolver._latest_user_message(request)
+        )
+        from ai_karen_engine.core.memory.signals.semantic_classifier import (
+            is_personal_memory_recall_query,
+        )
+        from ai_karen_engine.core.intelligence.profile_attribute import (
+            normalize_personal_query,
+        )
+
+        if is_personal_memory_recall_query(query):
+            return normalize_personal_query(query)
+        return query
+
     async def _resolve_memory(
         self,
         request: ChatExecutionRequest,
@@ -165,10 +190,7 @@ class RuntimeEvidenceResolver:
             result = await memory_manager.recall_context(
                 user_id=ctx.user_id,
                 tenant_id=ctx.tenant_id,
-                query=(
-                    str(requirement.metadata.get("retrieval_query") or "").strip()
-                    or self._latest_user_message(request)
-                ),
+                query=self._memory_retrieval_query(request, requirement),
                 top_k=max(0, int(requirement.max_items or 0)),
                 tiers=tuple(requirement.classes),
                 session_id=ctx.session_id,
