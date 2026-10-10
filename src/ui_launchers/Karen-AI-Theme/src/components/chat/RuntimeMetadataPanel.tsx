@@ -33,6 +33,11 @@ interface RuntimeMetadataPanelProps {
   requestId?: string;
   status?: string;
   responseSource?: string;
+  cortexIntent?: string;
+  cortexReasonCodes?: string[];
+  personalEvidenceAttribute?: string;
+  personalRecallGrounded?: boolean;
+  evidenceCount?: number;
   degradedMode?: boolean;
   degradationType?: string;
   degradationReason?: string;
@@ -189,12 +194,22 @@ export default function RuntimeMetadataPanel(props: RuntimeMetadataPanelProps) {
               label="Response source"
               value={safe(props.responseSource)}
             />
+            <Detail label="CORTEX intent" value={safe(props.cortexIntent)} />
+            <Detail label="Personal evidence attribute" value={safe(props.personalEvidenceAttribute)} />
+            <Detail label="Evidence count" value={safe(props.evidenceCount)} />
+            <Detail label="Personal recall grounded" value={props.personalRecallGrounded === undefined ? "n/a" : props.personalRecallGrounded ? "yes" : "no"} />
             <Detail
               label="Correlation"
               value={safe(props.correlationId)}
               mono
             />
           </div>
+
+          {props.cortexReasonCodes && props.cortexReasonCodes.length > 0 && (
+            <p className="mt-3 text-[11px] text-muted-foreground" data-testid="cortex-reason-codes">
+              CORTEX reasons: {props.cortexReasonCodes.join(", ")}
+            </p>
+          )}
 
           {props.providerAttempts && props.providerAttempts.length > 0 && (
             <div className="mt-3 rounded-lg border border-border/60 bg-background/30 p-3">
