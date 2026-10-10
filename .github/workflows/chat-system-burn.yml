@@ -53,6 +53,9 @@ jobs:
       - name: Verify conversational name and output hygiene contracts
         run: pytest tests/core/runtime/test_name_response_prompt_contract.py tests/core/runtime/test_conversational_output_hygiene.py -q
 
+      - name: Prove personal recall intent invariance under emotional phrasing
+        run: pytest tests/core/cortex/test_personal_recall_nuance_normalization.py tests/core/cortex/test_personal_recall_degraded_routing.py -q
+
       - name: Run chat architecture contract
         run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
 
