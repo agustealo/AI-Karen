@@ -65,6 +65,9 @@ jobs:
       - name: Verify conversation reference resolution
         run: pytest tests/core/runtime/test_discourse_profile_reference.py -q
 
+      - name: Verify upbringing and inverted name recall
+        run: pytest tests/core/runtime/test_upbringing_and_inverted_name_recall.py -q
+
       - name: Run chat architecture contract
         run: pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
 
