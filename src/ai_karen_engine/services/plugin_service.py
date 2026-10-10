@@ -236,7 +236,8 @@ class PluginService:
                 raise FileExistsError("Plugin installation conflict")
             os.rename(staged, target)
             published = True
-            await self.refresh_plugins()
+            await self._ensure_initialized()
+            await self._get_kernel().refresh_with_new_plugin_disabled(plugin_id)
             return {"plugin_id": plugin_id, "installed": True, "enabled": False}
         finally:
             if not published and staged.exists():
