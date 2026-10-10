@@ -64,3 +64,27 @@ def test_post_publish_validation_failure_removes_untracked_package(tmp_path, mon
     assert len(calls) == 2
     assert not (tmp_path / "repo/demo").exists()
     assert "demo" not in service.installations
+
+
+def test_staged_ui_refuses_symlinked_nested_assets(tmp_path, monkeypatch):
+    service = _service(tmp_path, monkeypatch)
+    source = tmp_path / "src/ai_karen_engine/extensions/plugins/demo"
+    source.mkdir(parents=True)
+    (source / "manifest.json").write_text('{"entry_file":"demo.tsx"}')
+    (source / "demo.tsx").write_text("export default null")
+    other = tmp_path / "external.tsx"
+    other.write_text("external")
+    # The package source is checked for links before copying. Inject a linked
+    # asset into staging immediately before the final staged integrity check.
+    original = service._calculate_checksum
+
+    def check_staged(path):
+        if path.name.startswith(".install-"):
+            (path / "linked.tsx").symlink_to(other)
+        return original(path)
+
+    monkeypatch.setattr(service, "_calculate_checksum", check_staged)
+    result = service.install_ui("demo", "integration")
+    assert result.error_code == "STAGING_FAILED"
+    assert not (tmp_path / "repo/demo").exists()
+    assert "demo" not in service.installations
