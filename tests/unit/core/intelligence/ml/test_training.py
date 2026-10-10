@@ -410,7 +410,7 @@ def test_spacy_preflight_validates_corpus_but_never_queues_unsupported_engine(tm
     ) + "\n", encoding="utf-8")
     result = AdvancedTrainingWorkbench(dataset_root=tmp_path).preflight(
         engine="spacy", task="intent", dataset_version="spacy-sample",
-        test_split=0.2, max_samples=100, seed=42, max_iter=1000,
+        test_split=0.2, max_samples=100, seed=42, max_iter=2,
         class_weight="balanced", optimizer="lbfgs", precision="fp64",
     )
     assert result["ready"] == AdvancedTrainingWorkbench(dataset_root=tmp_path).catalog()["engines"][1]["supported"]
