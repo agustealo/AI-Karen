@@ -331,3 +331,19 @@ def test_approved_receipt_cannot_promote_modified_candidate_artifact(tmp_path):
     with pytest.raises(ManifestValidationError, match="trusted canonical"):
         registry.register(replace(candidate, status=ModelStatus.SHADOW.value))
     assert registry.get(candidate.model_id).status == ModelStatus.CANDIDATE.value
+
+
+@pytest.mark.parametrize("engine", ["timeseries", "transformers"])
+def test_registry_cannot_promote_unbenchmarked_new_engine(tmp_path, engine):
+    registry = MLModelRegistry(registry_dir=str(tmp_path))
+    manifest = MLModelManifest(
+        model_id=f"tenant-test-{engine}", purpose="outcome_forecast",
+        architecture="trained", artifact_path=str(tmp_path),
+        artifact_hash="not-trusted", model_version="v1", feature_version="v1",
+        status=ModelStatus.CANDIDATE.value,
+        metrics={"executor": engine, "canonical_benchmark_status": "not_run"},
+    )
+    registry.register(manifest)
+    manifest.status = ModelStatus.SHADOW.value
+    with pytest.raises(ManifestValidationError, match="Engine-specific promotion"):
+        registry.register(manifest)
