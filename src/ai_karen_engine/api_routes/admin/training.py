@@ -248,6 +248,11 @@ async def evaluate_training_candidate(
     manifest = registry.get(model_id)
     if manifest is None or manifest.status != "candidate":
         raise HTTPException(status_code=404, detail="Candidate not found")
+    if manifest.metrics.get("executor") in {"timeseries", "transformers"}:
+        raise HTTPException(
+            status_code=409,
+            detail="This candidate requires an engine-specific predictor and benchmark contract before evaluation",
+        )
     try:
         task = PredictionTask(manifest.purpose)
     except ValueError:
