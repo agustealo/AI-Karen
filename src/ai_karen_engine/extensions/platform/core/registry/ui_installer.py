@@ -440,53 +440,29 @@ class UIInstallerService:
             )
 
     def restore_ui(self, plugin_id: str, category: str) -> UIInstallationResult:
-        """Restore UI package from canonical source."""
-        try:
-            source_path = Path("src/ai_karen_engine/extensions/plugins") / plugin_id
-            if not source_path.exists():
-                alt_underscore_path = Path("src/ai_karen_engine/extensions/plugins") / plugin_id.replace('-', '_')
-                if alt_underscore_path.exists():
-                    source_path = alt_underscore_path
-                else:
-                    return UIInstallationResult(
-                        plugin_id=plugin_id,
-                        status=UIInstallationStatus.NOT_FOUND,
-                        state=UIInstallationState.ERROR,
-                        message=f"Plugin not found in canonical location: {source_path}",
-                        error_code="PLUGIN_NOT_FOUND",
-                    )
+        """Safely install a missing UI; never destroy an installed package to repair it.
 
-            # Remove existing installation first
-            if plugin_id in self.installations:
-                remove_result = self.remove_ui(plugin_id)
-                if remove_result.status != UIInstallationStatus.SUCCESS:
-                    return remove_result
-
-            # Install fresh from source
-            install_result = self.install_ui(plugin_id, category)
-            if install_result.status != UIInstallationStatus.SUCCESS:
-                return install_result
-
+        Replacement requires a staged, verified, transactional lifecycle owner.
+        Refusing unsafe replacement is preferable to data loss or false recovery.
+        """
+        if plugin_id in self.installations:
             return UIInstallationResult(
                 plugin_id=plugin_id,
-                status=UIInstallationStatus.SUCCESS,
+                status=UIInstallationStatus.CONFLICT,
                 state=UIInstallationState.INSTALLED,
-                message="UI package restored successfully",
-                details={
-                    "source_path": str(source_path),
-                    "target_path": str(self.installations[plugin_id].target_path),
-                },
+                message="In-place repair requires a verified transactional replacement",
+                error_code="REPAIR_REQUIRES_TRANSACTION",
             )
-
-        except Exception as e:
-            logger.error(f"Failed to restore UI for {plugin_id}: {e}")
-            return UIInstallationResult(
-                plugin_id=plugin_id,
-                status=UIInstallationStatus.FAILED,
-                state=UIInstallationState.ERROR,
-                message=f"Restoration failed: {e}",
-                error_code="RESTORATION_FAILED",
-            )
+        result = self.install_ui(plugin_id, category)
+        if result.status != UIInstallationStatus.SUCCESS:
+            return result
+        return UIInstallationResult(
+            plugin_id=plugin_id,
+            status=UIInstallationStatus.SUCCESS,
+            state=UIInstallationState.INSTALLED,
+            message="UI package restored from canonical source",
+            details=result.details,
+        )
 
     def get_ui_state(self, plugin_id: str) -> Dict[str, Any]:
         """Get current state of UI installation."""
