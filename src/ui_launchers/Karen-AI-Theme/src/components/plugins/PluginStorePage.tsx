@@ -219,8 +219,12 @@ export default function PluginStorePage() {
         throw new Error(typeof message === 'string' ? message : 'Uninstall failed');
       }
       setUninstallId('');
-      await refreshPlugins();
-      setOperationSuccess('Plugin package uninstalled successfully.');
+      try {
+        await refreshPlugins();
+        setOperationSuccess('Plugin package uninstalled successfully.');
+      } catch (refreshError) {
+        setOperationError('Plugin package was uninstalled, but the plugin list could not be refreshed: ' + getErrorMessage(refreshError));
+      }
     } catch (cause) {
       setOperationError(getErrorMessage(cause));
     } finally {
@@ -254,8 +258,12 @@ export default function PluginStorePage() {
       }
       setUploadFile(null);
       setUploadId('');
-      await refreshPlugins();
-      setOperationSuccess('Plugin package installed. It remains disabled until explicitly enabled.');
+      try {
+        await refreshPlugins();
+        setOperationSuccess('Plugin package installed. It remains disabled until explicitly enabled.');
+      } catch (refreshError) {
+        setOperationError('Plugin package was installed disabled, but the plugin list could not be refreshed: ' + getErrorMessage(refreshError));
+      }
     } catch (cause) {
       setOperationError(getErrorMessage(cause));
     } finally {
