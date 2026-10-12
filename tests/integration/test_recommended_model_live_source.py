@@ -53,3 +53,24 @@ async def test_curated_model_metadata_live_source_and_revision(tmp_path) -> None
         assert info.gated is False, (
             f"{entry['id']}: source unexpectedly requires gated access"
         )
+
+        if entry["id"] == "spacy-english-core":
+            # The canonical publisher validates a spaCy directory containing
+            # config.cfg and meta.json; merely downloading a Python wheel is
+            # insufficient to satisfy this contract.
+            files = {str(file["path"]) for file in info.files}
+            config_dirs = {
+                name.removesuffix("/config.cfg") if name != "config.cfg" else ""
+                for name in files
+                if name == "config.cfg" or name.endswith("/config.cfg")
+            }
+            meta_dirs = {
+                name.removesuffix("/meta.json") if name != "meta.json" else ""
+                for name in files
+                if name == "meta.json" or name.endswith("/meta.json")
+            }
+            assert config_dirs & meta_dirs, (
+                "spaCy model source contains no publishable directory with "
+                "config.cfg and meta.json; wheel-only snapshots require a "
+                "governed extraction path before Install Essentials can work"
+            )
