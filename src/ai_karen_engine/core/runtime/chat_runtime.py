@@ -1229,8 +1229,8 @@ class ChatRuntime:
                 ("work_location", "work location"),
             )
             verified = [
-                (label, result)
-                for key, label in fields
+                (key, result)
+                for key, _label in fields
                 if (result := evaluate_personal_evidence(
                     decision.cognitive_context,
                     tenant_id=tenant_id,
@@ -1252,16 +1252,7 @@ class ChatRuntime:
                 compose_identity_summary,
             )
 
-            facts = {
-                key: result.value
-                for key, _label in fields
-                if (result := evaluate_personal_evidence(
-                    decision.cognitive_context,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    attribute=key,
-                )).status is EvidenceSufficiencyStatus.SUPPORTED
-            }
+            facts = {key: result.value for key, result in verified}
             return compose_identity_summary(facts), meta
         result = evaluate_personal_evidence(
             decision.cognitive_context,
