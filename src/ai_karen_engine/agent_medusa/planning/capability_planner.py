@@ -120,6 +120,7 @@ class CapabilityAwareMedusaPlanner:
             allowed_tools=set(authorized_plan.allowed_tools),
             allowed_plugins=set(authorized_plan.allowed_plugins),
             max_parallel_steps=budget.max_parallelism,
+            max_steps=budget.max_agent_turns,
         )
         if not report.valid:
             raise ValueError(f"Medusa plan failed validation: {report.errors}")
@@ -205,7 +206,21 @@ class CapabilityAwareMedusaPlanner:
             )
 
         healthy = [r for r in selected if await _is_healthy(registry, r.agent_id)]
-        return healthy if healthy else selected
+        if not healthy:
+            raise ValueError("PLAN_UNSATISFIABLE: no healthy authorized specialists")
+
+        healthy_capabilities: set[str] = set()
+        healthy_tools: set[str] = set()
+        for reg in healthy:
+            healthy_capabilities.update(required_capabilities & capability_tokens(reg))
+            healthy_tools.update(
+                required_tools & {str(tool).strip() for tool in reg.allowed_tools}
+            )
+        if required_capabilities - healthy_capabilities or required_tools - healthy_tools:
+            raise ValueError(
+                "PLAN_UNSATISFIABLE: healthy specialists do not cover required capabilities and tools"
+            )
+        return healthy
 
     def _build_dependency_graph(
         self,
@@ -367,6 +382,7 @@ async def _safe_get(registry: Any, agent_id: str) -> AgentRegistration | None:
 async def _is_healthy(registry: Any, agent_id: str) -> bool:
     try:
         health = await registry.get_agent_health(agent_id)
-        return health.get("healthy", True)
+        return health.get("healthy") is True
     except Exception:
-        return True
+        logger.exception("Medusa specialist health lookup failed", extra={"agent_id": agent_id})
+        return False
