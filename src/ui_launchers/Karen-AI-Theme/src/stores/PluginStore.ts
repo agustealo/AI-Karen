@@ -67,6 +67,12 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
 
   refreshPlugins: async () => {
     await get().searchPlugins();
+    // searchPlugins preserves its existing UI error state, but lifecycle
+    // callers must not announce a verified refresh when retrieval failed.
+    const refreshError = get().error;
+    if (refreshError) {
+      throw new Error(refreshError);
+    }
   },
 
   getPluginDetails: async (pluginId: string) => {
