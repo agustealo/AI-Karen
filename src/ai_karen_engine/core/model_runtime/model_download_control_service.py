@@ -1134,7 +1134,7 @@ class ModelDownloadControlService:
         if source == "model_registry":
             return "Local model registry metadata is unavailable or invalid. Repair the registry and retry."
         if not isinstance(error, ModelOrchestratorError):
-            return "Model metadata source is unreachable. Check backend network/DNS/TLS and retry."
+            return "Model source metadata connectivity unavailable. Check backend network, DNS, TLS and retry."
         if error.code == E_COMPAT:
             return "Model metadata dependency is missing. Install huggingface_hub in the backend environment and restart."
         if error.code == E_PERM:
