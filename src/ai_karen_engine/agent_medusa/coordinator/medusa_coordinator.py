@@ -83,16 +83,52 @@ class MedusaCoordinator:
             raise PermissionError("Medusa execution requires tenant identity")
         if not user_id:
             raise PermissionError("Medusa execution requires user identity")
+        if not isinstance(request.execution_requirements, dict):
+            raise PermissionError(
+                "Medusa execution requires explicit CORTEX execution requirements"
+            )
+        requirements = ExecutionRequirements(**request.execution_requirements)
+        if not requirements.requires_agent_delegation:
+            raise PermissionError(
+                "Medusa execution requires CORTEX-requested agent delegation"
+            )
+        if requirements.request_id != request.request_id:
+            raise PermissionError("Medusa CORTEX request identity mismatch")
+        execution_context = request.context.get("execution_context")
+        expected_correlation_id = getattr(
+            execution_context, "correlation_id", request.request_id
+        )
+        if requirements.correlation_id != expected_correlation_id:
+            raise PermissionError("Medusa CORTEX correlation identity mismatch")
+
         plan_data = (
             request.authorized_plan if isinstance(request.authorized_plan, dict) else {}
         )
+        if not plan_data:
+            raise PermissionError("Medusa execution requires a RuntimePolicy plan")
         policy_decision_id_raw = plan_data.get("policy_decision_id")
-        policy_decision_id = (
-            str(policy_decision_id_raw) if policy_decision_id_raw is not None else None
-        )
+        policy_decision_id = str(policy_decision_id_raw or "").strip()
+        if not policy_decision_id:
+            raise PermissionError(
+                "Medusa execution requires RuntimePolicy decision identity"
+            )
+        if (
+            str(plan_data.get("authorized_user_id") or "").strip() != user_id
+            or str(plan_data.get("authorized_tenant_id") or "").strip() != tenant_id
+        ):
+            raise PermissionError("Medusa RuntimePolicy principal scope mismatch")
+        authorized_session_id = plan_data.get("authorized_session_id")
+        if (
+            authorized_session_id is not None
+            and str(authorized_session_id) != request.session_id
+        ):
+            raise PermissionError("Medusa RuntimePolicy session scope mismatch")
+        plan_topology = plan_data.get("topology")
+        if getattr(plan_topology, "value", plan_topology) != "multi_agent":
+            raise PermissionError("Medusa RuntimePolicy topology must be multi_agent")
         await self.run_manager.register(
             run_id=request.request_id,
-            correlation_id=request.request_id,
+            correlation_id=requirements.correlation_id,
             request_id=request.request_id,
             session_id=request.session_id,
             policy_decision_id=policy_decision_id,
@@ -104,7 +140,7 @@ class MedusaCoordinator:
             "medusa_run_started",
             extra={
                 "run_id": request.request_id,
-                "correlation_id": request.request_id,
+                "correlation_id": requirements.correlation_id,
                 "request_id": request.request_id,
                 "session_id": request.session_id,
                 "policy_decision_id": policy_decision_id,
@@ -121,7 +157,7 @@ class MedusaCoordinator:
                 "medusa_run_cancelled",
                 extra={
                     "run_id": request.request_id,
-                    "correlation_id": request.request_id,
+                    "correlation_id": requirements.correlation_id,
                     "tenant_id": tenant_id,
                     "user_id": user_id,
                 },
@@ -133,20 +169,20 @@ class MedusaCoordinator:
                 "medusa_run_failed",
                 extra={
                     "run_id": request.request_id,
-                    "correlation_id": request.request_id,
+                    "correlation_id": requirements.correlation_id,
                     "tenant_id": tenant_id,
                     "user_id": user_id,
                     "error_type": type(exc).__name__,
                 },
             )
-            return to_safe_response(exc, correlation_id=request.request_id)
+            return to_safe_response(exc, correlation_id=requirements.correlation_id)
         else:
             await self.run_manager.mark_completed(request.request_id)
             logger.info(
                 "medusa_run_completed",
                 extra={
                     "run_id": request.request_id,
-                    "correlation_id": request.request_id,
+                    "correlation_id": requirements.correlation_id,
                     "tenant_id": tenant_id,
                     "user_id": user_id,
                 },
@@ -167,16 +203,7 @@ class MedusaCoordinator:
         plan_data["budget"] = budget_data
         authorized_plan = AuthorizedExecutionPlan(**plan_data)
 
-        if request.execution_requirements is not None:
-            requirements = ExecutionRequirements(**request.execution_requirements)
-        else:
-            requirements = ExecutionRequirements(
-                request_id=request.request_id,
-                correlation_id=request.request_id,
-                intent="agent.multi_agent",
-                requires_agent_delegation=True,
-                topology_signals={"preferred": "multi_agent"},
-            )
+        requirements = ExecutionRequirements(**request.execution_requirements)
 
         plan = await self.planner.create_plan(
             request_id=request.request_id,
