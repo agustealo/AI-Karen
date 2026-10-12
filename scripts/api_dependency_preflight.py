@@ -5,7 +5,7 @@ No secret contents, auth tokens, or permission grants are printed.
 """
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
 import os
 import sys
@@ -19,8 +19,9 @@ def dependency(name: str, module: str) -> bool:
     except PackageNotFoundError:
         installed = None
     try:
-        importable = importlib.util.find_spec(module) is not None
-    except (ImportError, ValueError):
+        importlib.import_module(module)
+        importable = True
+    except (ImportError, OSError, RuntimeError, ValueError):
         importable = False
     print(json.dumps({"check": "dependency", "package": name, "installed_version": installed, "module_available": importable}))
     return bool(installed and importable)
