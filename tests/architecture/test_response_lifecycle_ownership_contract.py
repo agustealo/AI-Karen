@@ -18,11 +18,12 @@ def test_shared_formatter_has_single_public_facade():
     assert "class ResponseFormattingEngine(" in engine
 
 
-def test_legacy_langgraph_policy_shadow_is_audited_before_convergence():
+def test_langgraph_envelope_policy_has_distinct_ownership():
     pipeline = (SRC / "core/langgraph_orchestrator/formatting/response_formatter_pipeline.py").read_text(encoding="utf-8")
-    # This is a characterization of current debt, not permission to preserve it.
-    assert "class ResponsePolicyEnforcer:" in pipeline
-    assert "from ai_karen_engine.services.formatting.response_policy_enforcer import ResponsePolicyEnforcer" in pipeline
+    assert "class ResponseEnvelopeSanitizer:" in pipeline
+    assert "self.envelope_sanitizer = ResponseEnvelopeSanitizer()" in pipeline
+    assert "class ResponsePolicyEnforcer:" not in pipeline
+    assert "from ai_karen_engine.services.formatting.response_policy_enforcer import ResponsePolicyEnforcer" not in pipeline
 
 
 def test_template_expansion_must_remain_disabled_by_default():
