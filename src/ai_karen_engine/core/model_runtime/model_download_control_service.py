@@ -28,6 +28,9 @@ from ai_karen_engine.core.runtime.platform_resource_service import (
 from ai_karen_engine.core.model_runtime.management.model_orchestrator_service import (
     DownloadRequest,
     E_INVALID,
+    E_COMPAT,
+    E_NET,
+    E_NOT_FOUND,
     E_LICENSE,
     E_PERM,
     E_VERIFY,
@@ -1125,6 +1128,23 @@ class ModelDownloadControlService:
         if path.exists():
             shutil.rmtree(path, ignore_errors=True)
 
+    @staticmethod
+    def _recommendation_verification_error(error: Exception, source: str) -> str:
+        """Actionable, redacted source diagnostics without weakening license gates."""
+        if source == "model_registry":
+            return "Local model registry metadata is unavailable or invalid. Repair the registry and retry."
+        if not isinstance(error, ModelOrchestratorError):
+            return "Model source metadata connectivity unavailable. Check backend network, DNS, TLS and retry."
+        if error.code == E_COMPAT:
+            return "Model metadata dependency is missing. Install huggingface_hub in the backend environment and restart."
+        if error.code == E_PERM:
+            return "Model source rejected access. Check Hugging Face credentials and repository permissions."
+        if error.code == E_NOT_FOUND:
+            return "Model repository or revision was not found. Verify the configured model ID."
+        if error.code == E_NET:
+            return "Model metadata request failed. Check backend internet access, proxy, DNS and TLS configuration."
+        return "Model access terms could not be verified. Inspect backend model-download logs and retry."
+
     async def get_recommendations(self) -> dict[str, Any]:
         """Return config-driven first-run recommendations with live install truth."""
         config = load_model_download_recommendations()
@@ -1180,10 +1200,8 @@ class ModelDownloadControlService:
                 item["metadata_verified"] = False
                 item["verification_state"] = "unavailable"
                 item["verification_source"] = lookup_source
-                item["verification_error"] = (
-                    "Local model registry metadata could not be read or validated. Check the registry integrity before retrying."
-                    if lookup_source == "model_registry"
-                    else "Model source metadata could not be reached or verified. Check backend connectivity and source credentials, then refresh."
+                item["verification_error"] = self._recommendation_verification_error(
+                    exc, lookup_source
                 )
                 item["gated"] = bool(item.get("gated", False))
                 item["resolved_revision"] = None
