@@ -8,6 +8,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      verify_recommended_model_sources:
+        description: "Contact Hugging Face for real recommended-model license and revision metadata"
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -45,6 +51,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements/ci/quality.txt
+
+      - name: Verify real recommended model sources when explicitly requested
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_recommended_model_sources }}
+        env:
+          KAREN_LIVE_MODEL_SOURCE_PROOF: "1"
+        run: |
+          python -m pip install huggingface_hub
+          pytest tests/integration/test_recommended_model_live_source.py -q
 
       - name: Compile durable model download authority
         run: |
