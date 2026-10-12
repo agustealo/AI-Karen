@@ -280,6 +280,27 @@ class TestMedusaNodePlanConsumption:
             await medusa_node(state)
 
 
+class TestWorkflowExecutionRequirements:
+    def test_workflow_uses_typed_cortex_requirements_with_distinct_correlation(self):
+        request = _make_request()
+        decision = _make_decision()
+        decision.requires_agent_delegation = True
+        decision.requires_parallel_execution = True
+
+        config = WorkflowRuntime()._build_config(
+            request, request.context, "conv-1", decision, None
+        )
+        requirements = config["execution_requirements"]
+        from ai_karen_engine.core.runtime.contracts import ExecutionRequirements
+
+        typed = ExecutionRequirements(**requirements)
+        assert typed.request_id == "req-1"
+        assert typed.correlation_id == "corr-1"
+        assert typed.requires_agent_delegation is True
+        assert typed.requires_parallel_execution is True
+        assert config["request_config"]["execution_topology"] == "multi_agent"
+
+
 class TestMedusaCoordinatorUsesAuthorizedPlan:
     @pytest.mark.asyncio
     async def test_coordinator_uses_prebuilt_plan(self):
@@ -287,7 +308,12 @@ class TestMedusaCoordinatorUsesAuthorizedPlan:
         request = MagicMock()
         request.request_id = "req-1"
         request.authorized_plan = _serialize_plan(plan)
-        request.execution_requirements = None
+        request.execution_requirements = {
+            "request_id": "req-1",
+            "correlation_id": "req-1",
+            "intent": "agent.multi_agent",
+            "requires_agent_delegation": True,
+        }
         request.query = "test"
         request.context = {}
         request.user_id = "user-1"
