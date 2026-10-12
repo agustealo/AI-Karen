@@ -205,22 +205,50 @@ class CapabilityAwareMedusaPlanner:
                 "PLAN_UNSATISFIABLE: no eligible specialists after capability filtering"
             )
 
-        healthy = [r for r in selected if await _is_healthy(registry, r.agent_id)]
-        if not healthy:
+        # A declared in-plan capability dependency is a graph edge, not proof
+        # that its provider is runtime-healthy. Preserve the edge for validation,
+        # while the execution gate must still verify actual readiness.
+        selected_capabilities = {
+            str(getattr(capability, "name", "") or "").strip()
+            for reg in selected
+            for capability in reg.capabilities
+        }
+        eligible: list[AgentRegistration] = []
+        for reg in selected:
+            try:
+                health = await registry.get_agent_health(reg.agent_id)
+            except Exception:
+                logger.exception(
+                    "medusa_agent_health_lookup_failed",
+                    extra={"agent_id": reg.agent_id},
+                )
+                continue
+            if health.get("healthy") is True:
+                eligible.append(reg)
+                continue
+            unresolved = set(health.get("unknown_dependencies") or [])
+            declared = set(reg.capability_dependencies or [])
+            if (
+                health.get("readiness_reason") == "dependencies_unverified"
+                and unresolved == declared
+                and declared <= selected_capabilities
+                and reg.lifecycle_state == "active"
+            ):
+                eligible.append(reg)
+        if not eligible:
             raise ValueError("PLAN_UNSATISFIABLE: no healthy authorized specialists")
-
-        healthy_capabilities: set[str] = set()
-        healthy_tools: set[str] = set()
-        for reg in healthy:
-            healthy_capabilities.update(required_capabilities & capability_tokens(reg))
-            healthy_tools.update(
+        eligible_capabilities: set[str] = set()
+        eligible_tools: set[str] = set()
+        for reg in eligible:
+            eligible_capabilities.update(required_capabilities & capability_tokens(reg))
+            eligible_tools.update(
                 required_tools & {str(tool).strip() for tool in reg.allowed_tools}
             )
-        if required_capabilities - healthy_capabilities or required_tools - healthy_tools:
+        if required_capabilities - eligible_capabilities or required_tools - eligible_tools:
             raise ValueError(
-                "PLAN_UNSATISFIABLE: healthy specialists do not cover required capabilities and tools"
+                "PLAN_UNSATISFIABLE: eligible specialists do not cover required capabilities and tools"
             )
-        return healthy
+        return eligible
 
     def _build_dependency_graph(
         self,

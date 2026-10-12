@@ -67,6 +67,17 @@ class MedusaRegistry:
             logger.error(f"Failed to register agent {registration.agent_id}: {error}")
             raise ValueError(error)
 
+        # Re-registration replaces the catalog projection, including its indices.
+        # Otherwise removed capabilities can remain discoverable under this ID.
+        for index in (self._capability_index, self._task_signature_index):
+            for key in list(index):
+                index[key] = [
+                    agent_id for agent_id in index[key]
+                    if agent_id != registration.agent_id
+                ]
+                if not index[key]:
+                    del index[key]
+
         self._agents[registration.agent_id] = registration
         
         # Update capability index
@@ -103,28 +114,50 @@ class MedusaRegistry:
         agent_id: str,
         capability_health: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """Derive agent health from capability_dependencies (A18).
+        """Report registration eligibility and dependency evidence separately.
 
-        An agent may be registered but unusable if a required upstream
-        capability is unavailable. `capability_health(cap) -> bool` is an
-        injectable checker (defaults to "all healthy"). Returns a record the
-        UI can use to show DEGRADED instead of falsely AVAILABLE.
+        A missing dependency resolver never implies healthy dependencies.
+        Dependency errors are treated as unknown/unavailable rather than green.
         """
         reg = self._agents.get(agent_id)
         if reg is None:
             return {"exists": False}
-        deps = getattr(reg, "capability_dependencies", []) or []
-        missing = [
-            dep for dep in deps
-            if capability_health is not None and not capability_health(dep)
-        ]
+
+        dependencies = list(getattr(reg, "capability_dependencies", []) or [])
+        missing: list[str] = []
+        unknown: list[str] = []
+        if dependencies and capability_health is None:
+            unknown = list(dependencies)
+        else:
+            for dependency in dependencies:
+                try:
+                    available = capability_health(dependency)
+                    if not isinstance(available, bool):
+                        unknown.append(dependency)
+                    elif not available:
+                        missing.append(dependency)
+                except Exception:
+                    logger.exception(
+                        "medusa_capability_health_check_failed",
+                        extra={"agent_id": agent_id, "capability": dependency},
+                    )
+                    unknown.append(dependency)
+
+        eligible = reg.lifecycle_state == "active"
         return {
             "exists": True,
             "agent_id": agent_id,
             "status": reg.status,
             "lifecycle_state": reg.lifecycle_state,
-            "healthy": not missing,
+            "healthy": eligible and not missing and not unknown,
             "missing_dependencies": missing,
+            "unknown_dependencies": unknown,
+            "readiness_reason": (
+                "inactive" if not eligible else
+                "dependencies_unavailable" if missing else
+                "dependencies_unverified" if unknown else
+                "ready"
+            ),
         }
 
 _registry: Optional[MedusaRegistry] = None
