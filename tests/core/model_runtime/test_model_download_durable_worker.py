@@ -1008,3 +1008,48 @@ async def test_curated_recommended_model_does_not_queue_without_acknowledgement(
             },
             {"user_id": "authorized-test-user"},
         )
+
+
+@pytest.mark.asyncio
+async def test_recommended_model_ignores_empty_or_symlink_install_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path, FakeModelDownloadRepository())
+    install_root = tmp_path / "empty-install"
+    install_root.mkdir()
+    service._orchestrator.snapshot_registry_entry = AsyncMock(
+        return_value={"install_path": str(install_root)}
+    )
+    service._orchestrator.get_model_info = AsyncMock(return_value=ModelInfo(
+        model_id="spacy/en_core_web_sm",
+        owner="spacy",
+        repository="en_core_web_sm",
+        storage_key="spacy",
+        license="MIT",
+        revision="0123456789abcdef0123456789abcdef01234567",
+    ))
+    monkeypatch.setattr(
+        "ai_karen_engine.core.model_runtime.model_download_control_service.load_model_download_recommendations",
+        lambda: {"recommendations": [{
+            "id": "spacy-english-core",
+            "model_id": "spacy/en_core_web_sm",
+            "tier": "essential",
+            "channel_id": "core_spacy",
+        }]},
+    )
+    result = await service.get_recommendations()
+    assert result["essential_ready"] is False
+    assert result["essential_installed"] == 0
+    assert result["recommendations"][0]["installed"] is False
+
+    (install_root / "config.cfg").write_text("[nlp]", encoding="utf-8")
+    result = await service.get_recommendations()
+    assert result["essential_installed"] == 1
+
+    alias = tmp_path / "install-alias"
+    alias.symlink_to(install_root, target_is_directory=True)
+    service._orchestrator.snapshot_registry_entry = AsyncMock(
+        return_value={"install_path": str(alias)}
+    )
+    result = await service.get_recommendations()
+    assert result["essential_ready"] is False
