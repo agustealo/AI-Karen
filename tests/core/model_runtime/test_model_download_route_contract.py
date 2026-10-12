@@ -58,5 +58,5 @@ def test_recommended_model_missing_metadata_still_fails_closed() -> None:
         error, "remote_model_metadata"
     )
     assert "secret" not in message
-    assert "unreachable" in message
+    assert "connectivity" in message
 
