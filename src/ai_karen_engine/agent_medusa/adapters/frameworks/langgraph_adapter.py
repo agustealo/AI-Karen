@@ -9,6 +9,7 @@ ToolBridge while respecting the AuthorizedExecutionPlan.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
@@ -99,90 +100,36 @@ class MedusaLangGraphAdapter:
     async def execute_plan(
         self, request: RuntimeRequest, plan: AuthorizedExecutionPlan
     ) -> RuntimeResponse:
-        """Execute all steps in an AuthorizedExecutionPlan sequentially."""
-        from ..planning.deep_execution_plan import PlanStep, StepStatus
+        """Delegate whole-plan execution to Medusa's canonical coordinator.
 
-        steps: List[PlanStep] = []
-        step_data = plan.agent_topology or {}
-        if isinstance(step_data, list):
-            for idx, step_def in enumerate(step_data):
-                if isinstance(step_def, dict):
-                    steps.append(
-                        PlanStep(
-                            id=step_def.get("id", f"step_{idx}"),
-                            description=step_def.get("description", ""),
-                            agent_specialist=step_def.get("specialist")
-                    or step_def.get("agent_id"),
-                            agent_version=step_def.get("version"),
-                            input_data=step_def.get("input", {}),
-                            dependencies=step_def.get("dependencies", []),
-                            required_tools=list(plan.allowed_tools),
-                            required_plugins=list(plan.allowed_plugins),
-                        )
-                    )
-                elif isinstance(step_def, str):
-                    steps.append(
-                        PlanStep(
-                            id=f"step_{idx}",
-                            description=f"Execute {step_def}",
-                            agent_specialist=step_def,
-                            agent_version=None,
-                            input_data={},
-                            dependencies=[],
-                            required_tools=list(plan.allowed_tools),
-                            required_plugins=list(plan.allowed_plugins),
-                        )
-                    )
+        This adapter must not schedule plan steps or execute specialists itself.
+        The existing CORTEX requirements and RuntimePolicy plan remain required;
+        no authorization is synthesized at the framework boundary.
+        """
+        from ...coordinator.medusa_coordinator import MedusaCoordinator
+        from ai_karen_engine.core.runtime.workflow_runtime import _serialize_plan
 
-        if not steps:
-            return RuntimeResponse(
-                request_id=request.request_id,
-                status=ResponseStatus.ERROR,
-                content="No steps in execution plan",
-                metadata={"error": "empty_plan"},
+        if not request.execution_requirements:
+            raise PermissionError(
+                "LangGraph Medusa plan execution requires CORTEX requirements"
             )
-
-        outputs: List[Dict[str, Any]] = []
-        completed: Dict[str, Any] = {}
-        for step in steps:
-            input_data = dict(step.input_data)
-            input_data.setdefault("query", request.query)
-            input_data.setdefault("previous_steps", completed)
-
-            response = await self.execute_specialist(
-                request=request,
-                plan=plan,
-                specialist_id=step.agent_specialist,
-                input_data=input_data,
+        if request.authorized_plan is None:
+            raise PermissionError(
+                "LangGraph Medusa plan execution requires RuntimePolicy authorization"
             )
-            if response.status == ResponseStatus.SUCCESS:
-                step.status = StepStatus.COMPLETED
-                step.output_data = {
-                    "content": response.content,
-                    "metadata": response.metadata,
-                }
-                completed[step.id] = step.output_data
-                outputs.append(step.output_data)
-            else:
-                step.status = StepStatus.FAILED
-                step.error = (
-                    response.metadata.get("error")
-                    if response.metadata
-                    else "unknown"
-                )
-                break
+        if request.authorized_plan.get("policy_decision_id") != plan.policy_decision_id:
+            raise PermissionError("LangGraph Medusa policy decision mismatch")
+        if not plan.matches_execution_scope(
+            user_id=str(request.user_id or ""),
+            tenant_id=str(request.tenant_id or ""),
+            session_id=request.session_id,
+            policy_decision_id=plan.policy_decision_id,
+        ):
+            raise PermissionError("LangGraph Medusa execution scope mismatch")
+        if getattr(plan.topology, "value", plan.topology) != "multi_agent":
+            raise PermissionError("LangGraph Medusa requires multi-agent topology")
 
-        from ..response.assembler import ResponseAssembler
-        assembler = ResponseAssembler()
-        return await assembler.assemble(
-            request_id=request.request_id,
-            step_outputs=outputs,
-            agent_trace=[
-                s.agent_specialist
-                for s in steps
-                if s.status == StepStatus.COMPLETED
-            ],
-            latest_user_message=request.query,
-            status=ResponseStatus.SUCCESS if outputs else ResponseStatus.ERROR,
-            metadata={"plan_steps": len(steps), "completed_steps": len(outputs)},
-        )
+        # Use the actual RuntimePolicy plan passed by the caller, not a
+        # framework-local tool list or a reconstructed step graph.
+        governed_request = replace(request, authorized_plan=_serialize_plan(plan))
+        return await MedusaCoordinator().handle_request(governed_request)
