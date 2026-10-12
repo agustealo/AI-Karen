@@ -918,3 +918,93 @@ def test_downloaded_snapshot_rejects_symlink_root(tmp_path: Path) -> None:
     root.symlink_to(real, target_is_directory=True)
     with pytest.raises(ModelOrchestratorError, match="root is a symlink"):
         ModelOrchestratorService._reject_snapshot_symlinks(root)
+
+
+@pytest.mark.asyncio
+async def test_every_curated_recommended_model_queues_with_verified_license_and_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.config.config_asset_loaders import load_model_download_recommendations
+
+    configured = load_model_download_recommendations()["recommendations"]
+    assert {item["id"] for item in configured} == {
+        "spacy-english-core",
+        "distilbert-semantic-encoder",
+        "qwen3-lightweight-chat",
+    }
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    revision = "0123456789abcdef0123456789abcdef01234567"
+    info_by_id = {
+        item["model_id"]: ModelInfo(
+            model_id=item["model_id"],
+            owner=item["model_id"].split("/")[0],
+            repository=item["model_id"].split("/")[1],
+            storage_key="spacy" if item["channel_id"] == "core_spacy" else "transformers",
+            license=item["license"],
+            gated=False,
+            revision=revision,
+        )
+        for item in configured
+    }
+
+    async def get_info(model_id: str, *args: object, **kwargs: object) -> ModelInfo:
+        assert kwargs.get("refresh_remote") is True
+        assert not args or args[0] in (None, revision)
+        return info_by_id[model_id]
+
+    service._orchestrator.get_model_info = AsyncMock(side_effect=get_info)
+    service._orchestrator.snapshot_registry_entry = AsyncMock(return_value=None)
+
+    results = await service.get_recommendations()
+    assert results["essential_installed"] == 0
+    assert results["essential_total"] == 2
+    for item in results["recommendations"]:
+        assert item["metadata_verified"] is True
+        assert item["resolved_revision"] == revision
+        job = await service.start_download(
+            {
+                "model_id": item["model_id"],
+                "channel_id": item["channel_id"],
+                "validated_revision": item["resolved_revision"],
+                "accept_license": True,
+                "include_patterns": item.get("include_patterns") or [],
+            },
+            {"user_id": "authorized-test-user"},
+        )
+        assert job["status"] == "queued"
+        assert job["model_id"] == item["model_id"]
+        assert job["revision"] == revision
+        assert job["license_accepted"] is True
+        assert job["channel_id"] == item["channel_id"]
+        assert job["requested_by"] == "authorized-test-user"
+        assert job["include_patterns"] == (item.get("include_patterns") or None)
+
+    assert len(repository.jobs) == 3
+
+
+@pytest.mark.asyncio
+async def test_curated_recommended_model_does_not_queue_without_acknowledgement(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path, FakeModelDownloadRepository())
+    service._orchestrator.get_model_info = AsyncMock(
+        return_value=ModelInfo(
+            model_id="spacy/en_core_web_sm",
+            owner="spacy",
+            repository="en_core_web_sm",
+            storage_key="spacy",
+            license="MIT",
+            revision="0123456789abcdef0123456789abcdef01234567",
+        )
+    )
+    with pytest.raises(ModelOrchestratorError, match="License acceptance is required"):
+        await service.start_download(
+            {
+                "model_id": "spacy/en_core_web_sm",
+                "channel_id": "core_spacy",
+                "validated_revision": "0123456789abcdef0123456789abcdef01234567",
+                "accept_license": False,
+            },
+            {"user_id": "authorized-test-user"},
+        )
