@@ -161,11 +161,15 @@ class WorkflowRuntime:
                 "token_budget": decision.token_budget,
                 "workflow_id": decision.workflow_id,
                 "workflow_version": decision.workflow_version,
-                "topology": (
-                    decision.topology.value
-                    if hasattr(decision.topology, "value")
-                    else str(decision.topology)
-                ),
+                "requires_agent_delegation": decision.requires_agent_delegation,
+                "requires_parallel_execution": decision.requires_parallel_execution,
+                "topology_signals": {
+                    "preferred": (
+                        decision.topology.value
+                        if hasattr(decision.topology, "value")
+                        else str(decision.topology)
+                    )
+                },
             }
             request_config.update(
                 {
@@ -186,7 +190,7 @@ class WorkflowRuntime:
                     "policy_decision_id": decision.policy_decision_id,
                     "policy_version": decision.policy_version,
                     "policy_reason_codes": list(decision.policy_reason_codes),
-                    "execution_topology": execution_requirements["topology"],
+                    "execution_topology": execution_requirements["topology_signals"]["preferred"],
                     "execution_requirements": execution_requirements,
                 }
             )
