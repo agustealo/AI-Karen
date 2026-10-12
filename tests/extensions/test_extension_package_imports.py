@@ -68,3 +68,24 @@ def test_broken_relative_import_does_not_leave_partial_package(tmp_path: Path) -
         and getattr(module, "__path__", None) == [str(directory.resolve())]
         for name, module in sys.modules.items()
     )
+
+
+@pytest.mark.asyncio
+async def test_real_time_query_world_clocks_and_alarms_use_package_loader() -> None:
+    """Both consumer commands must traverse the real filesystem handler."""
+    import ai_karen_engine.extensions.plugin_kernel as kernel
+
+    plugin_dir = Path(kernel.__file__).resolve().parent / "plugins" / "time-query"
+    module = ExtensionLoader._import_handler(plugin_dir)
+
+    clocks = await module.TimeQueryExtension.run(
+        None, {"mode": "multi_clock", "action": "list"}
+    )
+    alarms = await module.TimeQueryExtension.run(
+        None, {"mode": "alarm", "action": "list"}
+    )
+    assert clocks["status"] == "success"
+    assert isinstance(clocks["clocks"], list)
+    assert alarms["status"] == "success"
+    assert isinstance(alarms["alarms"], list)
+
