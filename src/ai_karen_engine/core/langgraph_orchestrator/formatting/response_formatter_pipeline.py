@@ -51,7 +51,7 @@ class ResponseEnvelope:
             self.timestamp = datetime.now(timezone.utc).isoformat()
 
 
-class ResponsePolicyEnforcer:
+class ResponseEnvelopeSanitizer:
     """Enforces response formatting policies and constraints"""
 
     def __init__(self):
@@ -92,6 +92,7 @@ class ResponseFormatterPipeline:
     def __init__(self):
         self.formatting_engine = ResponseFormattingEngine()
         self.policy_enforcer = ResponsePolicyEnforcer()
+        self.envelope_sanitizer = ResponseEnvelopeSanitizer()
         self.pretty_layer = PrettyOutputLayer()
 
     async def format_response_with_engine(
@@ -113,9 +114,9 @@ class ResponseFormatterPipeline:
         )
 
         # 4. Apply policy enforcement
-        policy_result = await self.policy_enforcer.enforce_policies(
-            formatted_result.formatted_text,
-            intent=state.get("detected_intent", "unknown"),
+        policy_result = await self.policy_enforcer.enforce(
+            user_prompt=str(user_message),
+            content=formatted_result.content,
         )
 
         # 5. Apply pretty output layer
@@ -173,7 +174,7 @@ class ResponseFormatterPipeline:
                 raw_response = self._extract_raw_response(state)
 
             # Apply policy enforcement
-            formatted_data = self.policy_enforcer.enforce_policies(raw_response)
+            formatted_data = self.envelope_sanitizer.enforce_policies(raw_response)
 
             # Add metadata
             metadata = self._generate_metadata(state, formatted_data)
