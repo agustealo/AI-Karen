@@ -325,16 +325,26 @@ def _load_permissions_config() -> Dict[str, Any]:
     env_override = os.getenv("KARI_PERMISSIONS_CONFIG") or os.getenv(
         "PERMISSIONS_CONFIG_PATH"
     )
-    if env_override and Path(env_override).exists():
+    if env_override:
+        override_path = Path(env_override)
+        if not override_path.is_file():
+            logger.error("Configured RBAC permissions file is unavailable: %s", override_path)
+            raise FileNotFoundError("Configured RBAC permissions file is unavailable")
         try:
-            with open(env_override, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.warning(f"Failed to load permissions from {env_override}: {e}")
+            with override_path.open("r", encoding="utf-8") as handle:
+                config = json.load(handle)
+            if not isinstance(config, dict):
+                raise ValueError("RBAC permissions configuration must be a JSON object")
+        except (OSError, ValueError) as exc:
+            logger.error("Configured RBAC permissions file is invalid: %s", override_path)
+            raise ValueError("Configured RBAC permissions file is invalid") from exc
+        logger.info("RBAC permissions source: configured override %s", override_path)
+        return config
 
     # Use canonical loader
     config = load_permissions_config()
     if config:
+        logger.info("RBAC permissions source: canonical config_assets/permissions.json")
         return config
 
     logger.warning("Missing permissions configuration; using built-in RBAC defaults.")
@@ -361,7 +371,11 @@ def _resolve_permission_names(raw_permissions: Iterable[str]) -> Set[Permission]
             if alias is not None:
                 resolved.add(alias)
                 continue
-            logger.warning("Unknown permission '%s' in permissions.json", value)
+            logger.warning(
+                "Unrecognized RBAC permission '%s' (role names are not permissions); "
+                "check the effective permissions source and granted role entries",
+                value,
+            )
     return resolved
 
 
