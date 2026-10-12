@@ -241,6 +241,7 @@ class ExtensionManifest(BaseModel):
     version: str = Field(pattern=SEMVER_PATTERN)
     display_name: str
     description: str
+    purpose: Optional[str] = None
     author: str
     license: str
     category: str
@@ -310,6 +311,7 @@ class ExtensionManifest(BaseModel):
             "version",
             "display_name",
             "description",
+            "purpose",
             "author",
             "license",
             "category",
@@ -348,12 +350,16 @@ class ExtensionManifest(BaseModel):
             "default_enabled",
         }
 
+        declared_id = data.get("id")
+        if declared_id is not None and declared_id != data.get("name"):
+            raise ValueError("Extension manifest id must match canonical name")
+
         normalized: Dict[str, Any] = {}
         stripped: List[str] = []
         for key, value in data.items():
             if key in allowed_keys:
                 normalized[key] = value
-            elif key in legacy_keys:
+            elif key in legacy_keys or key == "id":
                 continue
             else:
                 stripped.append(key)
