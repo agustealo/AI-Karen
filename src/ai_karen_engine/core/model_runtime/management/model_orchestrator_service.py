@@ -452,16 +452,24 @@ class ModelOrchestratorService:
                 revision=revision,
             )
         except ModelOrchestratorError:
-            raise ModelOrchestratorError(
-                E_NOT_FOUND,
-                f"Model not found in local registry and remote lookup unavailable: {model_id}",
-                {"model_id": model_id},
-            )
+            # Preserve missing-dependency and source diagnostics for the
+            # control plane; do not recast every failure as a nonexistent model.
+            raise
         except Exception as exc:
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            if status_code in (401, 403):
+                code = E_PERM
+                message = "Model source credentials or access are insufficient"
+            elif status_code == 404:
+                code = E_NOT_FOUND
+                message = "Model repository or revision was not found"
+            else:
+                code = E_NET
+                message = "Model source metadata request failed"
             raise ModelOrchestratorError(
-                E_NOT_FOUND,
-                f"Model not found: {model_id}",
-                {"model_id": model_id, "error": str(exc)},
+                code,
+                message,
+                {"model_id": model_id, "error_type": type(exc).__name__},
             ) from exc
 
         siblings = getattr(remote, "siblings", None) or []
