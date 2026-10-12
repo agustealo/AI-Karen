@@ -22,6 +22,7 @@ from ai_karen_engine.services.formatting.response_formatting_engine import (
     AccessibilityLevel,
 )
 from ai_karen_engine.services.formatting.response_policy_enforcer import ResponsePolicyEnforcer
+from ai_karen_engine.services.formatting.response_envelope_policy import ResponseEnvelopePolicy
 from ai_karen_engine.services.formatting.pretty_output_layer import (
     PrettyOutputLayer,
 )
@@ -51,47 +52,13 @@ class ResponseEnvelope:
             self.timestamp = datetime.now(timezone.utc).isoformat()
 
 
-class ResponsePolicyEnforcer:
-    """Enforces response formatting policies and constraints"""
-
-    def __init__(self):
-        self.restricted_fields = {
-            "internal_state",
-            "raw_llm_response",
-            "intermediate_steps",
-            "debug_info",
-            "system_metrics",
-        }
-
-    def enforce_policies(self, response_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Apply response formatting policies"""
-        cleaned_response = {}
-
-        # Copy allowed fields
-        for key, value in response_data.items():
-            if key not in self.restricted_fields:
-                cleaned_response[key] = value
-
-        # Ensure required fields
-        if "response" not in cleaned_response:
-            cleaned_response["response"] = cleaned_response.get("content", "")
-
-        # Enforce data limits
-        if isinstance(cleaned_response.get("response"), str):
-            if len(cleaned_response["response"]) > 100000:  # 100k char limit
-                cleaned_response["response"] = (
-                    cleaned_response["response"][:100000] + "... (truncated)"
-                )
-
-        return cleaned_response
-
-
 class ResponseFormatterPipeline:
     """Unified response formatting pipeline for all API responses"""
 
     def __init__(self):
         self.formatting_engine = ResponseFormattingEngine()
         self.policy_enforcer = ResponsePolicyEnforcer()
+        self.envelope_policy = ResponseEnvelopePolicy()
         self.pretty_layer = PrettyOutputLayer()
 
     async def format_response_with_engine(
@@ -113,9 +80,9 @@ class ResponseFormatterPipeline:
         )
 
         # 4. Apply policy enforcement
-        policy_result = await self.policy_enforcer.enforce_policies(
-            formatted_result.formatted_text,
-            intent=state.get("detected_intent", "unknown"),
+        policy_result = await self.policy_enforcer.enforce(
+            user_prompt=user_message,
+            content=formatted_result.content,
         )
 
         # 5. Apply pretty output layer
@@ -173,7 +140,7 @@ class ResponseFormatterPipeline:
                 raw_response = self._extract_raw_response(state)
 
             # Apply policy enforcement
-            formatted_data = self.policy_enforcer.enforce_policies(raw_response)
+            formatted_data = self.envelope_policy.enforce_policies(raw_response)
 
             # Add metadata
             metadata = self._generate_metadata(state, formatted_data)
