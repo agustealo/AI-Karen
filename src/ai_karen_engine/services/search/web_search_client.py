@@ -478,8 +478,8 @@ class WebSearchClient:
                     "action": "query",
                     "titles": "|".join(page_titles[:max_results]),
                     "prop": "extracts",
-                    "exintro": True,
-                    "explaintext": True,
+                    "exintro": "1",
+                    "explaintext": "1",
                     "format": "json",
                     "exsectionformat": "plain",
                 }
