@@ -1229,8 +1229,8 @@ class ChatRuntime:
                 ("work_location", "work location"),
             )
             verified = [
-                (label, result)
-                for key, label in fields
+                (key, result)
+                for key, _label in fields
                 if (result := evaluate_personal_evidence(
                     decision.cognitive_context,
                     tenant_id=tenant_id,
@@ -1248,8 +1248,12 @@ class ChatRuntime:
             }
             if not verified:
                 return "I don't have enough verified information saved to describe who you are.", meta
-            facts = "; ".join(f"{label}: {result.value}" for label, result in verified)
-            return f"Here's what you've shared about yourself: {facts}.", meta
+            from ai_karen_engine.core.runtime.grounded_response_composer import (
+                compose_identity_summary,
+            )
+
+            facts = {key: result.value for key, result in verified}
+            return compose_identity_summary(facts), meta
         result = evaluate_personal_evidence(
             decision.cognitive_context,
             tenant_id=tenant_id,
