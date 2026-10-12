@@ -21,7 +21,6 @@ from ai_karen_engine.services.formatting.response_formatting_engine import (
     DisplayContext,
     AccessibilityLevel,
 )
-from ai_karen_engine.services.formatting.response_policy_enforcer import ResponsePolicyEnforcer
 from ai_karen_engine.services.formatting.pretty_output_layer import (
     PrettyOutputLayer,
 )
@@ -51,8 +50,8 @@ class ResponseEnvelope:
             self.timestamp = datetime.now(timezone.utc).isoformat()
 
 
-class ResponsePolicyEnforcer:
-    """Enforces response formatting policies and constraints"""
+class ResponseEnvelopeSanitizer:
+    """Sanitize LangGraph response-envelope fields without altering response policy."""
 
     def __init__(self):
         self.restricted_fields = {
@@ -91,7 +90,7 @@ class ResponseFormatterPipeline:
 
     def __init__(self):
         self.formatting_engine = ResponseFormattingEngine()
-        self.policy_enforcer = ResponsePolicyEnforcer()
+        self.envelope_sanitizer = ResponseEnvelopeSanitizer()
         self.pretty_layer = PrettyOutputLayer()
 
     async def format_response_with_engine(
@@ -113,7 +112,7 @@ class ResponseFormatterPipeline:
         )
 
         # 4. Apply policy enforcement
-        policy_result = await self.policy_enforcer.enforce_policies(
+        policy_result = await self.envelope_sanitizer.enforce_policies(
             formatted_result.formatted_text,
             intent=state.get("detected_intent", "unknown"),
         )
