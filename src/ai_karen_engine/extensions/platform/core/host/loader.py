@@ -5,8 +5,11 @@ This module handles the discovery, validation, and loading of extensions from th
 unified extensions directory structure.
 """
 
+import hashlib
 import importlib.util
 import sys
+from importlib.machinery import ModuleSpec
+from types import ModuleType
 from pathlib import Path
 from typing import Dict, List, Optional
 import json
@@ -224,6 +227,58 @@ class ExtensionLoader:
             )
         )
 
+    @staticmethod
+    def _import_handler(extension_dir: Path) -> ModuleType:
+        """Import a filesystem extension as a real isolated Python package.
+
+        Extension folders may contain hyphens and can be absolute paths. Neither
+        can safely be translated into a normal dotted source-tree import. A
+        stable path-derived namespace gives relative imports a real parent
+        package without adding plugin directories to sys.path or executing
+        plugin __init__.py before the authorized handler is requested.
+        """
+        resolved_dir = extension_dir.resolve(strict=True)
+        package_name = "_karen_extension_" + hashlib.sha256(
+            str(resolved_dir).encode("utf-8")
+        ).hexdigest()
+        handler_file = resolved_dir / "handler.py"
+        module_name = f"{package_name}.handler"
+
+        package = sys.modules.get(package_name)
+        created_package = package is None
+        if package is None:
+            package = ModuleType(package_name)
+            package.__package__ = package_name
+            package.__path__ = [str(resolved_dir)]
+            package.__spec__ = ModuleSpec(package_name, loader=None, is_package=True)
+            package.__spec__.submodule_search_locations = [str(resolved_dir)]
+            sys.modules[package_name] = package
+        elif list(getattr(package, "__path__", [])) != [str(resolved_dir)]:
+            raise ExtensionLoadError("Extension package namespace collision")
+
+        spec = importlib.util.spec_from_file_location(module_name, handler_file)
+        if spec is None or spec.loader is None:
+            if created_package:
+                sys.modules.pop(package_name, None)
+            raise ExtensionLoadError("Could not load extension handler spec")
+
+        previous = sys.modules.get(module_name)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            if previous is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = previous
+            if created_package:
+                for name in tuple(sys.modules):
+                    if name == package_name or name.startswith(package_name + "."):
+                        sys.modules.pop(name, None)
+            raise
+        return module
+
     def load_extension(self, extension_name: str) -> ExtensionBase:
         """
         Load an extension by name.
@@ -263,32 +318,7 @@ class ExtensionLoader:
             )
 
         try:
-            # Calculate the package name if possible
-            # Extensions are expected to be in src/ai_karen_engine/extensions/plugins/<name>
-            # which maps to package ai_karen_engine.extensions.plugins.<name>
-            
-            try:
-                rel_path = handler_file.relative_to(Path("src").absolute() if Path("src").is_absolute() else Path("src"))
-                package_parts = list(rel_path.parent.parts)
-                package_name = ".".join(package_parts)
-                module_fullname = f"{package_name}.handler"
-            except ValueError:
-                # Fallback if not in src/
-                module_fullname = f"{extension_name}_handler"
-
-            # Load the module
-            spec = importlib.util.spec_from_file_location(
-                module_fullname, handler_file
-            )
-            if spec is None or spec.loader is None:
-                raise ExtensionLoadError(
-                    f"Could not load module spec for extension {extension_name}"
-                )
-
-            module = importlib.util.module_from_spec(spec)
-            # Ensure __package__ is set for relative imports
-            module.__package__ = ".".join(module_fullname.split(".")[:-1])
-            spec.loader.exec_module(module)
+            module = self._import_handler(extension_dir)
 
             # Get the extension class
             if not manifest.entrypoint:
@@ -345,10 +375,6 @@ class ExtensionLoader:
             if isinstance(e, ExtensionLoadError):
                 raise
             raise ExtensionLoadError(f"Error loading extension {extension_name}: {e}")
-        finally:
-            # Remove the extension directory from Python path
-            if str(extension_dir) in sys.path:
-                sys.path.remove(str(extension_dir))
 
     def load_all_extensions(self) -> Dict[str, ExtensionBase]:
         """
