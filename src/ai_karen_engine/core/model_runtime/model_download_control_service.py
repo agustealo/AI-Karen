@@ -1159,7 +1159,14 @@ class ModelDownloadControlService:
 
             entry = await self._orchestrator.snapshot_registry_entry(model_id)
             install_path = str((entry or {}).get("install_path") or "")
-            installed = bool(entry and install_path and Path(install_path).exists())
+            # A stale registry entry or empty directory is not a published model.
+            installed = bool(
+                entry
+                and install_path
+                and not Path(install_path).is_symlink()
+                and Path(install_path).is_dir()
+                and any(Path(install_path).iterdir())
+            )
 
             lookup_source = (
                 "remote_model_metadata"
