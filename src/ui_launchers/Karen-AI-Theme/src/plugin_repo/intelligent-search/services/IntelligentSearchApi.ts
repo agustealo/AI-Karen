@@ -8,13 +8,12 @@ function isSearchResponse(value: unknown): value is IntelligentSearchResponse {
 
   const record = value as Record<string, unknown>;
   return (
-    'summary' in record ||
-    'sources' in record ||
-    'results' in record ||
-    'liveSearch' in record ||
-    'diagnostics' in record ||
-    'metadata' in record ||
-    'extractedData' in record
+    typeof record.summary === 'string' ||
+    Array.isArray(record.sources) ||
+    Array.isArray(record.results) ||
+    (record.diagnostics !== null && typeof record.diagnostics === 'object') ||
+    (record.extractedData !== null && typeof record.extractedData === 'object') ||
+    (record.liveSearch !== null && typeof record.liveSearch === 'object')
   );
 }
 
