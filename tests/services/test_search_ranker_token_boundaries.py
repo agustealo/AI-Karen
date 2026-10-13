@@ -19,7 +19,7 @@ def test_search_ranker_keeps_heading_relevance_boost():
     assert processor._calculate_score("# Clocks and clock", {"clock"}) == 3.0
 
 
-def test_search_ranker_does_not_mutate_input_results():
+def test_search_ranker_preserves_result_shape_and_adds_score():
     processor = SearchResultProcessor()
     chunks = [{"content": "clock clock", "url": "https://example.com"}]
     ranked = processor._rank(chunks, "clock")
