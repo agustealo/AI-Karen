@@ -313,6 +313,7 @@ class InternetCapabilityService:
         crawl_results: List[Dict[str, Any]] = []
         processed_chunks: List[Dict[str, Any]] = []
         search_providers: List[str] = []
+        discovered_sources: List[Dict[str, Any]] = []
 
         logger.info(
             "internet_capability.started",
@@ -340,6 +341,7 @@ class InternetCapabilityService:
                     request,
                     effective_max_urls,
                     provider_sink=search_providers,
+                    discovery_sink=discovered_sources,
                 ),
                 timeout=effective_timeout,
             )
@@ -360,6 +362,7 @@ class InternetCapabilityService:
                     warnings=warnings,
                     execution_context=execution_context,
                     search_providers=search_providers,
+                discovered_sources=discovered_sources,
                 )
 
             crawl_results = await asyncio.wait_for(
@@ -396,6 +399,7 @@ class InternetCapabilityService:
                 warnings=warnings,
                 execution_context=execution_context,
                 search_providers=search_providers,
+                discovered_sources=discovered_sources,
             )
 
         except asyncio.TimeoutError:
@@ -425,6 +429,7 @@ class InternetCapabilityService:
                 warnings=warnings,
                 execution_context=execution_context,
                 search_providers=search_providers,
+                discovered_sources=discovered_sources,
             )
 
         except PermissionError as exc:
@@ -452,6 +457,7 @@ class InternetCapabilityService:
                 warnings=warnings,
                 execution_context=execution_context,
                 search_providers=search_providers,
+                discovered_sources=discovered_sources,
                 status="permission_denied",
             )
 
@@ -481,6 +487,7 @@ class InternetCapabilityService:
                 warnings=warnings,
                 execution_context=execution_context,
                 search_providers=search_providers,
+                discovered_sources=discovered_sources,
                 status="error",
             )
 
@@ -491,6 +498,7 @@ class InternetCapabilityService:
         request: InternetSearchRequest,
         max_urls: int,
         provider_sink: Optional[List[str]] = None,
+        discovery_sink: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[List[str], List[str]]:
         """
         Fetch unique URLs from the configured search provider.
@@ -527,6 +535,15 @@ class InternetCapabilityService:
 
                     if self._is_url_allowed(url, strategy):
                         all_urls.append(url)
+                        if discovery_sink is not None and not any(item["url"] == url for item in discovery_sink):
+                            discovery_sink.append({
+                                "url": url,
+                                "title": str(getattr(result, "title", "") or urlparse(url).netloc),
+                                "snippet": str(getattr(result, "snippet", "") or ""),
+                                "publishedDate": getattr(result, "published_date", None),
+                                "evidence_level": "search_snippet",
+                                "search_provider": provider or "unknown",
+                            })
 
             except Exception as exc:
                 logger.warning(
@@ -618,11 +635,24 @@ class InternetCapabilityService:
         warnings: Sequence[str],
         execution_context: ExecutionContext,
         search_providers: Sequence[str] = (),
+        discovered_sources: Sequence[Dict[str, Any]] = (),
         status: str = "ok",
     ) -> Dict[str, Any]:
         execution_time_ms = int((time.perf_counter() - start_time) * 1000)
 
         sources = self._build_sources(crawl_results)
+        fetched_urls = {item["url"] for item in sources}
+        if status != "permission_denied":
+            for discovered in discovered_sources:
+                if discovered["url"] not in fetched_urls:
+                    sources.append({
+                        "id": f"source_{len(sources)}",
+                        **discovered,
+                        "domain": urlparse(discovered["url"]).netloc,
+                        "content": "",
+                        "full_content": "",
+                    })
+                    fetched_urls.add(discovered["url"])
         results = self._build_results(processed_chunks)
         citations = self._generate_citations(crawl_results, processed_chunks)
         diagnostics = self._build_diagnostics(
