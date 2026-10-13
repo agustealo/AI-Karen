@@ -1366,30 +1366,30 @@ class InternetCapabilityService:
                 )
             return f"No live sources were found for '{query}'."
 
-        top_domains = ", ".join(
-            list(
-                dict.fromkeys(
-                    [
-                        source.get("domain") or source.get("title", "")
-                        for source in list(sources)[:3]
-                        if source.get("domain") or source.get("title")
-                    ]
-                )
-            )[:3]
+        # A retrieval overview is not an answer. Give a short, source-attributed
+        # evidence preview instead of displaying internal crawl statistics.
+        # Only fetched passages may contribute answer-preview text; discovery
+        # snippets are displayed separately with their own evidence labels.
+        excerpts: List[str] = []
+        seen_domains: set[str] = set()
+        for result in results:
+            url = self._normalize_url(result.get("url"))
+            domain = urlparse(url).netloc if url else ""
+            snippet = str(result.get("snippet") or "").strip()
+            if not url or not snippet or domain in seen_domains:
+                continue
+            seen_domains.add(domain)
+            excerpts.append(f"{self._summarize_text(snippet, 220)} (Source: {url})")
+            if len(excerpts) == 3:
+                break
+
+        if excerpts:
+            return "Relevant retrieved excerpts (not a generated answer): " + " ".join(excerpts)
+
+        return (
+            f"Found {len(sources)} search links for '{query}', but no fetched "
+            "passages are available to summarize. Open a source to verify its content."
         )
-
-        base = (
-            f"Live crawl for '{query}' completed in {execution_time_ms}ms using {mode} mode. "
-            f"Collected {len(sources)} sources and ranked {len(results)} candidate passages."
-        )
-
-        if top_domains:
-            base += f" Top domains: {top_domains}."
-
-        if degraded and warnings:
-            base += f" Degraded warning: {warnings[0]}"
-
-        return base
 
     def _build_insights(
         self,
