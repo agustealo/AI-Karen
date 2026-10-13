@@ -556,7 +556,32 @@ class InternetCapabilityService:
 
         unique_urls = list(dict.fromkeys(all_urls))
         unique_providers = list(dict.fromkeys(providers))
-        return unique_urls[:max_urls], unique_providers
+        return self._select_domain_diverse_urls(unique_urls, max_urls), unique_providers
+
+    @staticmethod
+    def _select_domain_diverse_urls(urls: Sequence[str], limit: int) -> List[str]:
+        """Prefer distinct source hosts before repeating any host.
+
+        Keep provider-ranked order within each pass. The second pass fills
+        remaining slots from the original ranking, so scarce-domain queries
+        retain useful results rather than losing evidence.
+        """
+        selected: List[str] = []
+        seen: set[str] = set()
+        for url in urls:
+            hostname = (urlparse(url).hostname or "").lower().removeprefix("www.")
+            if hostname and hostname not in seen:
+                selected.append(url)
+                seen.add(hostname)
+                if len(selected) == limit:
+                    return selected
+        selected_set = set(selected)
+        for url in urls:
+            if url not in selected_set:
+                selected.append(url)
+                if len(selected) == limit:
+                    break
+        return selected
 
     async def _crawl_many(
         self,
