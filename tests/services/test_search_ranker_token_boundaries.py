@@ -16,7 +16,7 @@ def test_search_ranker_caps_keyword_stuffing():
 
 def test_search_ranker_keeps_heading_relevance_boost():
     processor = SearchResultProcessor()
-    assert processor._calculate_score("# Clocks and clock", {"clock"}) == 3.0
+    assert processor._calculate_score("# Clock and clock", {"clock"}) == 3.0
 
 
 def test_search_ranker_preserves_result_shape_and_adds_score():
