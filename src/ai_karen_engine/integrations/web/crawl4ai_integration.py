@@ -1149,6 +1149,7 @@ class Crawl4AIIntegration:
             links=[],
             media={},
             metadata=dict(metadata or {}),
+            extracted_content=None,
             success=False,
             status_code=status_code,
             error=error,
