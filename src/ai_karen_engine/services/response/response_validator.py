@@ -1,6 +1,7 @@
 """Generic response validator for LLM completions."""
 
 import re
+from urllib.parse import urlsplit
 import logging
 from dataclasses import dataclass
 from typing import Optional, List, Any
@@ -40,6 +41,28 @@ class ResponseValidator:
         """
         if not text or not text.strip():
             return ValidationResult(valid=False, reason="empty_response")
+
+        # Citation URLs must be backed by authorized tool evidence.
+        if getattr(contract, "purpose", None) == "tool_synthesis" and getattr(contract, "requires_live_data", False):
+            allowed: set[str] = set()
+            def collect(value: Any) -> None:
+                if isinstance(value, dict):
+                    for key, item in value.items():
+                        if key in {"url", "canonical_url", "final_url"} and isinstance(item, str):
+                            parsed = urlsplit(item)
+                            if parsed.scheme in {"http", "https"} and parsed.netloc:
+                                allowed.add(item.rstrip("/"))
+                        else:
+                            collect(item)
+                elif isinstance(value, list):
+                    for item in value:
+                        collect(item)
+            collect(getattr(contract, "tool_results", []))
+            cited = re.findall(r"https?://[^\\s)\\]>]+", text)
+            if allowed and not cited:
+                return ValidationResult(valid=False, reason="missing_evidence_citation")
+            if any(url.rstrip("/").rstrip(".,;") not in allowed for url in cited):
+                return ValidationResult(valid=False, reason="unverified_citation_url")
 
         # 1. Check for debug/provider prefixes
         if getattr(contract, "disallow_debug_prefixes", True):
